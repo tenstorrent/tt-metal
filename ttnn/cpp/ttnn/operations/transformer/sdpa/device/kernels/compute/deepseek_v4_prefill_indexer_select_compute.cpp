@@ -8,6 +8,8 @@
 // untilized into one 512-wide row per query, then folded into the query's running top-512 (TopK XL, unfused
 // values + uint32 indices) with only the query's visible entries active. Survivors live in L1 between blocks.
 // The leader merges the other splits' survivors and emits the indices, invisible slots as 0xFFFFFFFF.
+// Candidate mode instead folds each chunk of CAND_TOPK candidate-block maxima (staged by the writer) into the
+// query's running top-CAND_TOPK candidate blocks, and the leader emits those ids.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -37,11 +39,13 @@ inline void _indexer_select_mark_neginf_indices_init_() {
         .set(ADDR_MOD_0);
 }
 
-// K = 512 survivor [values, indices]: an index whose value is exactly -inf (an invisible or empty slot) becomes
-// 0xFFFFFFFF.
+// K = 512 / 2048 survivor [values, indices]: an index whose value is exactly -inf (an invisible or empty slot)
+// becomes 0xFFFFFFFF.
+template <uint32_t K>
 inline void _indexer_select_mark_neginf_indices_() {
-    constexpr uint32_t indices_offset = 64;
-    constexpr uint32_t iterations = 16;
+    static_assert(K == 512 || K == 2048);
+    constexpr uint32_t indices_offset = K == 2048 ? 128 : 64;
+    constexpr uint32_t iterations = K / 32;
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xFF80);
@@ -80,8 +84,18 @@ constexpr uint32_t cb_peer = get_compile_time_arg_val(dis::compute_ct_arg::CB_PE
 constexpr uint32_t cb_out = get_compile_time_arg_val(dis::compute_ct_arg::CB_OUT);
 constexpr uint32_t cb_meta = get_compile_time_arg_val(dis::compute_ct_arg::CB_META);
 constexpr uint32_t cb_done = get_compile_time_arg_val(dis::compute_ct_arg::CB_DONE);
+constexpr bool candidates = get_compile_time_arg_val(dis::compute_ct_arg::CANDIDATES) != 0;
+constexpr uint32_t cb_group = get_compile_time_arg_val(dis::compute_ct_arg::CB_GROUP);
+constexpr uint32_t cb_group_ack = get_compile_time_arg_val(dis::compute_ct_arg::CB_GROUP_ACK);
+constexpr uint32_t cb_stage = get_compile_time_arg_val(dis::compute_ct_arg::CB_STAGE);
+constexpr uint32_t cb_csurv_in = get_compile_time_arg_val(dis::compute_ct_arg::CB_CSURV_IN);
+constexpr uint32_t cb_csurv_out = get_compile_time_arg_val(dis::compute_ct_arg::CB_CSURV_OUT);
+constexpr uint32_t cb_cand_out = get_compile_time_arg_val(dis::compute_ct_arg::CB_CAND_OUT);
 
 constexpr uint32_t K = dis::TOPK;
+constexpr uint32_t CK = dis::CAND_TOPK;
+// One query's staged chunk of block maxima spans two bf16 tiles of cb_stage.
+constexpr uint32_t stage_row_tiles = dis::CAND_ROW_BYTES / (TILE_R_DIM * TILE_C_DIM * sizeof(uint16_t));
 constexpr uint32_t step_tiles = dis::STEP_KEY_TILES;
 constexpr uint32_t steps_per_block = K / (step_tiles * TILE_R_DIM);
 constexpr uint32_t heads_per_pass = dis::HEADS_PER_PASS;
@@ -253,7 +267,7 @@ void emit_row(uint32_t s, uint32_t tile_blocks) {
     }
     MATH((ckernel::sfpu::_indexer_select_mark_neginf_indices_init_()));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_indexer_select_mark_neginf_indices_, 0, VectorMode::RC_custom)));
+        ckernel::sfpu::_indexer_select_mark_neginf_indices_<K>, 0, VectorMode::RC_custom)));
     // Indices in rank order, row-major. The transpose moves DEST through the FPU, which does not wait for the SFPU,
     // and carries each 32-bit word as two 16-bit halves through the source registers, where zero flags would flush
     // index halves that look like zeros (e.g. 256 = 0x0100).
@@ -275,6 +289,103 @@ void emit_row(uint32_t s, uint32_t tile_blocks) {
     tile_regs_release();
 }
 
+// Candidate mode. A query's candidate blocks are its top-CK candidate blocks by block maximum; survivors are
+// unfused K = CK [values x2, indices x2] (4 fp32 tiles) passed through the writer between chunks.
+
+// The K = CK sequences are long; these helpers stay out of line so the math RISC binary fits the kernel config
+// buffer.
+
+// Sorts a CK-wide chunk at tile src_tile of src_cb into a survivor at DST dst..dst + 3, ids offset by base.
+__attribute__((noinline)) void cand_sort(
+    uint32_t src_cb, uint32_t src_tile, uint32_t active, uint32_t base, uint32_t dst, bool ascending) {
+    topk_xl_copy_tile_init(src_cb);
+    topk_xl_copy_tile<CK>(src_cb, dst, src_tile, active);
+    topk_xl_add_lsb_indices_init();
+    topk_xl_add_lsb_indices_rt<CK>(dst, 0);
+    topk_xl_init<CK, true>();
+    topk_xl_local_sort<CK>(dst, false);
+    topk_xl_rebuild<CK, true>(dst, ascending);
+    topk_xl_separate_indices_row_major_global_init();
+    topk_xl_separate_indices_row_major_global_base<CK>(dst, base);
+}
+
+// Merges the survivor at DST CAND_SURV_TILES (ascending) into the one at DST 0 (descending).
+__attribute__((noinline)) void cand_merge(bool ascending) {
+    topk_xl_init<CK, false>();
+    topk_xl_merge<CK, false>(0);
+    topk_xl_rebuild<CK, false>(0, ascending);
+}
+
+void cand_load(uint32_t dst) {
+    CircularBuffer in(cb_csurv_in);
+    in.wait_front(dis::CAND_SURV_TILES);
+    reconfig_data_format_srca(cb_csurv_in);
+    copy_init(cb_csurv_in);
+    for (uint32_t t = 0; t < dis::CAND_SURV_TILES; ++t) {
+        copy_tile(cb_csurv_in, t, dst + t);
+    }
+    in.pop_front(dis::CAND_SURV_TILES);
+}
+
+void cand_store(uint32_t dst) {
+    CircularBuffer out(cb_csurv_out);
+    tile_regs_commit();
+    tile_regs_wait();
+    out.reserve_back(dis::CAND_SURV_TILES);
+    pack_reconfig_data_format(cb_csurv_out);
+    for (uint32_t t = 0; t < dis::CAND_SURV_TILES; ++t) {
+        pack_tile(dst + t, cb_csurv_out);
+    }
+    out.push_back(dis::CAND_SURV_TILES);
+    tile_regs_release();
+}
+
+// Folds query s's staged chunk into its survivor (the first chunk it sees seeds it).
+__attribute__((noinline)) void cand_fold(uint32_t s, uint32_t active, uint32_t chunk, bool seeded, bool ascending) {
+    tile_regs_acquire();
+    if (!seeded) {
+        cand_sort(cb_stage, s * stage_row_tiles, active, chunk * CK, 0, ascending);
+        cand_store(0);
+        return;
+    }
+    cand_load(0);
+    cand_sort(cb_stage, s * stage_row_tiles, active, chunk * CK, dis::CAND_SURV_TILES, true);
+    cand_merge(ascending);
+    cand_store(0);
+}
+
+__attribute__((noinline)) void cand_seed(bool ascending) {
+    tile_regs_acquire();
+    cand_sort(cb_neginf, 0, 1, 0, 0, ascending);
+    cand_store(0);
+}
+
+// Leader: merge every split's survivor (its own first) and emit the candidate ids, unused slots as 0xFFFFFFFF.
+__attribute__((noinline)) void cand_emit(uint32_t tile_blocks) {
+    CircularBuffer out(cb_cand_out);
+    tile_regs_acquire();
+    cand_load(0);
+    for (uint32_t p = 1; p < num_splits; ++p) {
+        if (dis::split_first_block(p + 1, tile_blocks, num_splits) ==
+            dis::split_first_block(p, tile_blocks, num_splits)) {
+            continue;
+        }
+        cand_load(dis::CAND_SURV_TILES);
+        cand_merge(false);
+    }
+    MATH((ckernel::sfpu::_indexer_select_mark_neginf_indices_init_()));
+    MATH((_llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_indexer_select_mark_neginf_indices_<CK>, 0, VectorMode::RC_custom)));
+    tile_regs_commit();
+    tile_regs_wait();
+    out.reserve_back(2);
+    pack_reconfig_data_format(cb_cand_out);
+    pack_tile(2, cb_cand_out);
+    pack_tile(3, cb_cand_out);
+    out.push_back(2);
+    tile_regs_release();
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -283,7 +394,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_k, cb_q, cb_qk);
     CircularBuffer meta(cb_meta), q(cb_q), w(cb_w), scores(cb_scores), done(cb_done);
-    CircularBuffer(cb_neginf).wait_front(1);
+    CircularBuffer(cb_neginf).wait_front(dis::NEGINF_TILES);
 
     for (uint32_t unit = 0; unit < num_q_tiles; ++unit) {
         meta.wait_front(1);
@@ -301,6 +412,7 @@ void kernel_main() {
         // GROUP_BLOCKS * K and ORs onto the decoded in-group index.
         const uint32_t first_block = first_entry / K;
         const uint32_t end_block = first_block + num_blocks;
+        bool cand_seeded[dis::ROWS] = {};
         for (uint32_t group = first_block; group < end_block;) {
             const uint32_t group_end_aligned = (group / dis::GROUP_BLOCKS + 1) * dis::GROUP_BLOCKS;
             const uint32_t group_end = group_end_aligned < end_block ? group_end_aligned : end_block;
@@ -316,6 +428,37 @@ void kernel_main() {
             // and starts at its base; the slots of a short group's missing blocks are left unwritten.
             scores.reserve_back((dis::GROUP_BLOCKS - group_blocks) * dis::ROWS);
             scores.push_back((dis::GROUP_BLOCKS - group_blocks) * dis::ROWS);
+            if constexpr (candidates) {
+                // The writer reduces the group's score rows to block maxima, then frees them.
+                CircularBuffer group_token(cb_group), ack(cb_group_ack);
+                group_token.reserve_back(1);
+                group_token.push_back(1);
+                scores.wait_front(dis::GROUP_BLOCKS * dis::ROWS);
+                ack.wait_front(1);
+                ack.pop_front(1);
+                scores.pop_front(dis::GROUP_BLOCKS * dis::ROWS);
+                if (group_end % dis::CAND_CHUNK_BLOCKS == 0 || group_end == end_block) {
+                    const uint32_t chunk = group / dis::CAND_CHUNK_BLOCKS;
+                    CircularBuffer stage(cb_stage);
+                    stage.wait_front(dis::ROWS * stage_row_tiles);
+                    for (uint32_t s = 0; s < dis::ROWS; ++s) {
+                        const uint32_t active = dis::cand_active(limits[s], chunk, first_block, end_block);
+                        if (active == 0) {
+                            continue;
+                        }
+                        cand_fold(
+                            s,
+                            active,
+                            chunk,
+                            cand_seeded[s],
+                            split != 0 && dis::cand_last_chunk(limits[s], chunk, end_block));
+                        cand_seeded[s] = true;
+                    }
+                    stage.pop_front(dis::ROWS * stage_row_tiles);
+                }
+                group = group_end;
+                continue;
+            }
             scores.wait_front(dis::GROUP_BLOCKS * dis::ROWS);
             for (uint32_t s = 0; s < dis::ROWS; ++s) {
                 // Query s sees blocks [first_block, row_end) of the split; its last one finishes its survivor.
@@ -341,7 +484,20 @@ void kernel_main() {
             scores.pop_front(dis::GROUP_BLOCKS * dis::ROWS);
             group = group_end;
         }
-        if (split == 0) {
+        if constexpr (candidates) {
+            if (split == 0 || num_blocks > 0) {
+                for (uint32_t s = 0; s < dis::ROWS; ++s) {
+                    if (!cand_seeded[s]) {
+                        cand_seed(split != 0);
+                    }
+                }
+            }
+            if (split == 0) {
+                for (uint32_t s = 0; s < dis::ROWS; ++s) {
+                    cand_emit(tile_blocks);
+                }
+            }
+        } else if (split == 0) {
             for (uint32_t s = 0; s < dis::ROWS; ++s) {
                 emit_row(s, tile_blocks);
             }

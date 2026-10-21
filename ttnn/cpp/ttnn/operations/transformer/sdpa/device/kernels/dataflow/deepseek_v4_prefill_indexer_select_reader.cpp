@@ -69,15 +69,16 @@ void kernel_main() {
     const uint32_t start =
         trace_metadata::read_metadata_scalar_u32(noc, start_args, start_addr, start_cb.get_write_ptr());
 
-    // The all -inf chunk that seeds the survivors of queries that see nothing in this split.
-    neginf_cb.reserve_back(1);
+    // The all -inf chunk that seeds the survivors of queries that see nothing in this split (two tiles, a
+    // CAND_TOPK-wide chunk).
+    neginf_cb.reserve_back(dis::NEGINF_TILES);
     {
         auto* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(neginf_cb.get_write_ptr());
-        for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
+        for (uint32_t i = 0; i < dis::NEGINF_TILES * tile_bytes / sizeof(uint32_t); ++i) {
             p[i] = 0xFF80FF80u;
         }
     }
-    neginf_cb.push_back(1);
+    neginf_cb.push_back(dis::NEGINF_TILES);
 
     for (uint32_t unit = 0; unit < num_q_tiles; ++unit) {
         const uint32_t q_tile = first_q_tile + unit * q_tile_stride;
@@ -97,11 +98,14 @@ void kernel_main() {
         meta[dis::meta_word::NUM_BLOCKS] = end_block - first_block;
         meta[dis::meta_word::FIRST_ENTRY] = first_block * dis::TOPK;
         meta[dis::meta_word::TILE_BLOCKS] = tile_blocks;
-        meta_cb.push_back(1);
-        // The writer only moves survivors of splits that scanned a block.
+        // The writer follows the same schedule (it moves survivors, and stages block maxima in candidate mode).
         plan_cb.reserve_back(1);
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_cb.get_write_ptr()) = tile_blocks;
+        auto* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_cb.get_write_ptr());
+        for (uint32_t i = 0; i < dis::meta_word::END; ++i) {
+            plan[i] = meta[i];
+        }
         plan_cb.push_back(1);
+        meta_cb.push_back(1);
 
         // q [1, H, T, D] tiles of this query tile, head-major: [head][dim tile].
         q_cb.reserve_back(num_heads * head_dim_tiles);

@@ -31,4 +31,17 @@ ttnn::Tensor deepseek_v4_prefill_indexer_select(
     uint32_t compress_ratio,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
+// The two-level select's level one from the same scores. Entries are grouped into candidate blocks of 8 (block
+// b = entries [8b, 8b + 8)); a block scores its best visible entry, the block holding the query's newest visible
+// entry scores +inf, and each query keeps its top 2048 blocks. A query's top 512 entries always lie in its
+// candidate blocks.
+// Returns [1, 1, T, 2048] uint32 ROW_MAJOR candidate block ids in no particular order, unused slots 0xFFFFFFFF.
+ttnn::Tensor deepseek_v4_prefill_indexer_select_candidates(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& weights,
+    const ttnn::Tensor& idx_keys,
+    const ttnn::Tensor& start,
+    uint32_t compress_ratio,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::transformer

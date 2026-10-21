@@ -18,7 +18,7 @@ namespace ttnn::prim {
 tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::ProgramFactory::create_descriptor(
     const DeepseekV4PrefillIndexerSelectParams& attrs,
     const DeepseekV4PrefillIndexerSelectInputs& t,
-    std::array<Tensor, 2>& outputs) {
+    std::array<Tensor, 4>& outputs) {
     namespace dis = ::deepseek_v4_prefill_indexer_select;
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_HW;
@@ -38,7 +38,14 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
         cb_meta,    // reader -> compute work-unit mailbox
         cb_start,   // reader scratch for the start position
         cb_done,    // split > 0: compute -> writer "survivors final"
-        cb_plan,    // reader -> writer: blocks visible to the work unit's query tile
+        cb_plan,    // reader -> writer: copy of the work-unit mailbox
+        // Candidate mode only.
+        cb_group,      // compute -> writer: a group's score rows are packed
+        cb_group_ack,  // writer -> compute: block maxima taken, the group's scores may be freed
+        cb_stage,      // writer -> compute: one candidate chunk of block maxima per query (bf16 rows)
+        cb_csurv_in,   // writer -> compute: one candidate survivor
+        cb_csurv_out,  // compute -> writer: one candidate survivor
+        cb_cand_out,   // leader: one candidate id row
     };
     constexpr uint32_t semaphore_id = 0;
     tt::tt_metal::ProgramDescriptor desc;
@@ -83,24 +90,34 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
     cb(cb_k, bf, bf_tile, 2 * dis::STEP_KEY_TILES * Dt);
     cb(cb_qk, bf, bf_tile, dis::STEP_KEY_TILES * H);
     cb(cb_scores, bf, bf_tile, dis::GROUP_BLOCKS * dis::ROWS);
-    cb(cb_neginf, bf, bf_tile, 1);
-    cb(cb_surv_v, i32, f32_tile, dis::ROWS);
-    cb(cb_surv_i, i32, f32_tile, dis::ROWS);
-    cb(cb_peer, i32, f32_tile, 2);
+    cb(cb_neginf, bf, bf_tile, dis::NEGINF_TILES);
     cb(cb_meta, tt::DataFormat::UInt32, dis::META_PAGE_BYTES, 2);
     cb(cb_start, tt::DataFormat::UInt32, dis::START_PAGE_BYTES, 1);
-    cb(cb_done, tt::DataFormat::UInt32, dis::TOKEN_PAGE_BYTES, 1);
-    cb(cb_plan, tt::DataFormat::UInt32, dis::TOKEN_PAGE_BYTES, 2);
-    // A K = 512 output row is the top half (two 16-row faces) of an fp32 tile.
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = 2 * dis::TOPK * static_cast<uint32_t>(sizeof(uint32_t)),
-        .core_ranges = cores,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_out),
-            .data_format = f32,
-            .page_size = dis::TOPK * static_cast<uint32_t>(sizeof(uint32_t)),
-            .face_geometry = tt::tt_metal::FaceGeometry{.face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 2}}}},
-    });
+    cb(cb_plan, tt::DataFormat::UInt32, dis::META_PAGE_BYTES, 2);
+    if (attrs.candidates) {
+        cb(cb_group, tt::DataFormat::UInt32, dis::TOKEN_PAGE_BYTES, 1);
+        cb(cb_group_ack, tt::DataFormat::UInt32, dis::TOKEN_PAGE_BYTES, 1);
+        cb(cb_stage, bf, bf_tile, dis::ROWS * dis::CAND_ROW_BYTES / bf_tile);
+        cb(cb_csurv_in, i32, f32_tile, dis::CAND_SURV_TILES);
+        cb(cb_csurv_out, i32, f32_tile, dis::CAND_SURV_TILES);
+        cb(cb_cand_out, i32, f32_tile, 2);
+    } else {
+        cb(cb_surv_v, i32, f32_tile, dis::ROWS);
+        cb(cb_surv_i, i32, f32_tile, dis::ROWS);
+        cb(cb_peer, i32, f32_tile, 2);
+        cb(cb_done, tt::DataFormat::UInt32, dis::TOKEN_PAGE_BYTES, 1);
+        // A K = 512 output row is the top half (two 16-row faces) of an fp32 tile.
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * dis::TOPK * static_cast<uint32_t>(sizeof(uint32_t)),
+            .core_ranges = cores,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_out),
+                .data_format = f32,
+                .page_size = dis::TOPK * static_cast<uint32_t>(sizeof(uint32_t)),
+                .face_geometry =
+                    tt::tt_metal::FaceGeometry{.face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 2}}}},
+        });
+    }
     desc.semaphores.push_back(
         tt::tt_metal::SemaphoreDescriptor{.id = semaphore_id, .core_ranges = cores, .initial_value = 0});
 
@@ -110,6 +127,8 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
     auto* start_buf = t.start.buffer();
     auto* out_buf = outputs[0].buffer();
     auto* scratch_buf = outputs[1].buffer();
+    auto* cand_out_buf = outputs[2].buffer();
+    auto* cand_scratch_buf = outputs[3].buffer();
 
     std::vector<uint32_t> reader_ct = {
         H, D, T, attrs.compress_ratio, splits, cb_q, cb_w, cb_w_in, cb_k_rm, cb_neginf, cb_meta, cb_start, cb_plan};
@@ -122,32 +141,38 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
     tt::tt_metal::TensorAccessorArgs(keys_buf).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(start_buf).append_to(reader_ct, reader_crt);
 
+    const uint32_t candidates = attrs.candidates ? 1 : 0;
     std::vector<uint32_t> writer_ct = {
-        T, splits, cb_surv_v, cb_surv_i, cb_peer, cb_out, cb_done, cb_plan, semaphore_id};
+        T,
+        splits,
+        cb_surv_v,
+        cb_surv_i,
+        cb_peer,
+        cb_out,
+        cb_done,
+        cb_plan,
+        semaphore_id,
+        candidates,
+        cb_scores,
+        cb_group,
+        cb_group_ack,
+        cb_stage,
+        cb_csurv_in,
+        cb_csurv_out,
+        cb_cand_out};
     TT_FATAL(
         writer_ct.size() == dis::writer_ct_arg::END,
         "deepseek_v4_prefill_indexer_select writer compile-time argument layout is out of sync");
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(out_buf).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(scratch_buf).append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(cand_out_buf).append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(cand_scratch_buf).append_to(writer_ct, writer_crt);
 
     const std::vector<uint32_t> compute_ct = {
-        H,
-        Dt,
-        splits,
-        cb_q,
-        cb_w,
-        cb_k_rm,
-        cb_k,
-        cb_qk,
-        cb_scores,
-        cb_neginf,
-        cb_surv_v,
-        cb_surv_i,
-        cb_peer,
-        cb_out,
-        cb_meta,
-        cb_done};
+        H,          Dt,        splits,       cb_q,      cb_w,        cb_k_rm,      cb_k,       cb_qk,
+        cb_scores,  cb_neginf, cb_surv_v,    cb_surv_i, cb_peer,     cb_out,       cb_meta,    cb_done,
+        candidates, cb_group,  cb_group_ack, cb_stage,  cb_csurv_in, cb_csurv_out, cb_cand_out};
     TT_FATAL(
         compute_ct.size() == dis::compute_ct_arg::END,
         "deepseek_v4_prefill_indexer_select compute compile-time argument layout is out of sync");
@@ -179,6 +204,7 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
     unpack_to_dest[cb_surv_v] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[cb_surv_i] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest[cb_peer] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest[cb_csurv_in] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/deepseek_v4_prefill_indexer_select_compute.cpp";
     compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
@@ -192,7 +218,7 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
         .math_approx_mode = math_approx};
 
     reader_desc.emplace_common_runtime_args({q_buf, w_buf, keys_buf, start_buf, E});
-    writer_desc.emplace_common_runtime_args({out_buf, scratch_buf});
+    writer_desc.emplace_common_runtime_args({out_buf, scratch_buf, cand_out_buf, cand_scratch_buf});
     TT_FATAL(
         reader_desc.common_runtime_args.size() == dis::reader_common_arg::END &&
             writer_desc.common_runtime_args.size() == dis::writer_common_arg::END,
@@ -232,7 +258,7 @@ void DeepseekV4PrefillIndexerSelectOperation::ProgramFactory::override_runtime_a
     tt::tt_metal::Program& program,
     const DeepseekV4PrefillIndexerSelectParams& /*operation_attributes*/,
     const DeepseekV4PrefillIndexerSelectInputs& t,
-    std::array<Tensor, 2>& outputs,
+    std::array<Tensor, 4>& outputs,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     namespace dis = ::deepseek_v4_prefill_indexer_select;
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
@@ -244,6 +270,8 @@ void DeepseekV4PrefillIndexerSelectOperation::ProgramFactory::override_runtime_a
     reader_args[dis::reader_common_arg::NUM_ENTRIES] = t.idx_keys.logical_shape()[2];
     writer_args[dis::writer_common_arg::OUTPUT_ADDRESS] = outputs[0].buffer()->address();
     writer_args[dis::writer_common_arg::SCRATCH_ADDRESS] = outputs[1].buffer()->address();
+    writer_args[dis::writer_common_arg::CAND_OUTPUT_ADDRESS] = outputs[2].buffer()->address();
+    writer_args[dis::writer_common_arg::CAND_SCRATCH_ADDRESS] = outputs[3].buffer()->address();
 }
 
 }  // namespace ttnn::prim
