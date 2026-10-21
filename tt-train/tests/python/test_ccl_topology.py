@@ -526,6 +526,19 @@ class TestMeshPartitionTopology:
         _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
         assert np.array_equal(_compose_by_label(result), data)
 
+    @pytest.mark.parametrize("shape,dim", [((1, 1, 64, 48), 3), ((1, 1, 48, 64), 2)], ids=["columns", "rows"])
+    def test_sub_tile_slices_hold_their_own_elements(self, shape, dim):
+        """ttnn partitions a TILE tensor wrongly when a device's slice is not a whole number of tiles (every device
+        but the first gets the wrong elements); the wrapper takes such a slice through ROW_MAJOR."""
+        tensor = _replicated_tensor(shape, seed=42)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, dim, cluster_axis=CLUSTER_AXIS)
+
+        assert result.layout == ttnn.Layout.TILE
+        _assert_shard(result, CLUSTER_AXIS, dim, "mesh_partition output")
+        assert np.array_equal(_compose_by_label(result), data)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

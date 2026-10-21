@@ -17,6 +17,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
@@ -190,7 +191,21 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
 ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
     // so no single-device guard is needed here.
-    return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+    // It slices a TILE tensor wrongly when a device's slice of the last two dims is not a whole number of tiles:
+    // every device but the first gets the wrong elements. Such a slice goes through ROW_MAJOR instead.
+    const auto& shape = tensor.logical_shape();
+    const auto rank = static_cast<int>(shape.rank());
+    const int normalized_dim = dim < 0 ? dim + rank : dim;
+    const auto mesh_shape = tensor.device()->shape();
+    const uint32_t parts = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_shape.mesh_size();
+    const bool sub_tile = tensor.layout() == ttnn::Layout::TILE && normalized_dim >= rank - 2 &&
+                          (shape[normalized_dim] / parts) % tt::constants::TILE_WIDTH != 0U;
+    if (!sub_tile) {
+        return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+    }
+    auto partitioned = ttnn::mesh_partition(
+        ttnn::to_layout(tensor, ttnn::Layout::ROW_MAJOR), dim, cluster_axis, /* memory_config */ std::nullopt);
+    return ttnn::to_layout(partitioned, ttnn::Layout::TILE);
 }
 
 ttnn::Tensor ring_shift(
