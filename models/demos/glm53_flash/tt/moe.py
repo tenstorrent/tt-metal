@@ -73,6 +73,9 @@ TILE = 32
 # the position of every (token, pick) -> ttnn.embedding gathers the token rows into the regions, the kernel runs, a
 # second ttnn.embedding gathers every pick's output row back, post_combine_reduce applies the routing weights
 PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+# regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
+# chunk, which does not fit next to the 1 M caches; the expert weights are re-read once per sub-chunk)
+REGIONS_T = int(os.environ.get("GLM53_REGIONS_T", "4096"))
 PREFILL_BLOCK_GROUP = int(os.environ.get("GLM53_PREFILL_BLOCK_GROUP", "32"))
 
 
@@ -960,6 +963,26 @@ class TtRoutedExperts(LightweightModule):
             y = ttnn.typecast(y, self.activation_dtype)
         return y
 
+    def _forward_regions_chunked(
+        self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """The regions path in row sub-chunks of at most REGIONS_T gathered tokens (memory bound of the region buffer
+        and the per-pick gather tables at long contexts); one call when T fits."""
+        T = x.shape[-2]
+        if T <= REGIONS_T:
+            return self._forward_regions(x, dense_w, idx, w)
+        outs = []
+        for t0 in range(0, T, REGIONS_T):
+            t1 = min(t0 + REGIONS_T, T)
+            parts = [ttnn.slice(t, [0, 0, t0, 0], [1, 1, t1, t.shape[-1]]) for t in (x, dense_w, idx, w)]
+            outs.append(self._forward_regions(*parts))
+            for t in parts:
+                ttnn.deallocate(t)
+        y = ttnn.concat(outs, dim=-2)
+        for o in outs:
+            ttnn.deallocate(o)
+        return y
+
     def _forward_regions(self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 TILE (all gathered tokens), dense_w [1,1,T,E] (the router's dense routing matrix, nonzero
         at the picks), idx / w [1,1,T,k] fp32 TILE -> [1,1,T,H] bf16: the chip's expert partial through the d_p
@@ -1125,7 +1148,7 @@ class TtRoutedExperts(LightweightModule):
             if self._dispatch["fabric"]:
                 y = self._forward_dispatch(x, idx, w)
             else:
-                y = self._forward_regions(x, dense_w, idx, w)
+                y = self._forward_regions_chunked(x, dense_w, idx, w)
         elif self.prefill_experts == "batched" and T > TILE and not self.stream:
             y = self._forward_batched(x, dense_w)
         elif self.stream and self.stream_dispatch and TILE < T <= 256 and T % TILE == 0:
