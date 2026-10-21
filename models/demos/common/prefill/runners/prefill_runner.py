@@ -15,6 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.forward_entries import ENTRY_BYTES
 from models.demos.common.prefill.forward_entries import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
 from models.demos.common.prefill.forward_entries import WARMUP_WORD as WARMUP_METADATA_WORD
 from models.demos.common.prefill.forward_entries import (
@@ -359,6 +360,23 @@ def _d2d_send_indices(
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
 
 
+def _replicated(dev):
+    return ttnn.create_mesh_mapper(
+        dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+    )
+
+
+def _metadata_tensor(words, dev) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=dev,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_replicated(dev),
+    )
+
+
 def _d2d_recv(inbound) -> tuple:
     t0 = time.perf_counter()
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
@@ -378,21 +396,10 @@ def _d2d_send(
     if metadata_msg is not None:
         md_tensor = metadata_msg
     else:
-        backing = outbound.get_backing_tensor()
         words = forward_metadata_words(meta["entries"])
         if MTP_LEVELS:
             words.append(int(meta["provided_levels"]))
-        md_tensor = ttnn.from_torch(
-            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=backing.device(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                backing.device(),
-                ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
-            ),
-        )
+        md_tensor = _metadata_tensor(words, outbound.get_backing_tensor().device())
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
@@ -484,6 +491,55 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         pass
 
 
+def _entry_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
+    """Entry k's rows; dim 2 is the sequence for both token rows and activations."""
+    start = [0] * len(inp.shape)
+    end = list(inp.shape)
+    start[2], end[2] = k * rows, (k + 1) * rows
+    return ttnn.slice(inp, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _prefill_entries(runtime, kv_caches, inp, entries: list, c: int, d2h_service=None):
+    """A packed forward run one non-empty entry at a time through prefill_chunk, entry k as chunk c + k. Returns
+    the activation in the packed layout, empty entries as zero rows."""
+    rows = CHUNK_SIZE // _sp
+    dev = inp.device()
+    real = [e for e in entries if not e.is_empty]
+    outs = []
+    for k, entry in enumerate(real):
+        md = _metadata_tensor([entry.slot, entry.start, entry.end], dev)
+        out = runtime.prefill_chunk(
+            _entry_rows(inp, k, rows),
+            kv_caches,
+            slot_id=entry.slot,
+            actual_start=entry.start,
+            actual_end=entry.end,
+            request_id=c + k,
+            d2h_service=d2h_service,
+            metadata_msg=md,
+        )
+        if md.is_allocated():  # the runtime may have freed it
+            ttnn.deallocate(md)
+        if out is not None:
+            outs.append(out)
+    ttnn.deallocate(inp)
+    if not outs:
+        return None
+    assert len(outs) == len(real), f"prefill_chunk returned {len(outs)} activations for {len(real)} entries"
+    if len(real) < len(entries):
+        shape = list(outs[0].shape)
+        shape[2] = (len(entries) - len(real)) * rows
+        outs.append(
+            ttnn.zeros(
+                shape, dtype=outs[0].dtype, layout=outs[0].layout, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        )
+    act = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for o in outs:
+        ttnn.deallocate(o)
+    return act
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
@@ -508,10 +564,13 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}{_entries_str(meta)}"
     )
 
-    if FORWARD_CHUNKS > 1:
+    if FORWARD_CHUNKS > 1 and ADAPTER.supports_packed_forward:
         out = runtime.prefill_forward(
             inp, kv_caches, meta["entries"], request_id=c, d2h_service=d2h_service, metadata_msg=metadata_msg
         )
+    elif FORWARD_CHUNKS > 1:
+        out = _prefill_entries(runtime, kv_caches, inp, meta["entries"], c, d2h_service=d2h_service)
+        ttnn.deallocate(metadata_msg)
     else:
         mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
         out = runtime.prefill_chunk(
@@ -861,12 +920,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:
+        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
+        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
+        assert FORWARD_CHUNKS == 1 or not (
+            idx_inbound or idx_outbound
+        ), "PREFILL_FORWARD_CHUNKS > 1 does not carry indexer indices between ranks"
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(
             mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
         )
-        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
-        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
         if idx_inbound or idx_outbound:
             idx_in, idx_out = build_d2d_index_endpoints(
                 mesh_device, rank, runtime.indexer_indices_shape(), inbound=idx_inbound, outbound=idx_outbound
@@ -939,7 +1001,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             global_spec=None,
             fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            # A packed forward acks each entry on its own.
+            metadata_size_bytes=(
+                ENTRY_BYTES
+                if FORWARD_CHUNKS > 1
+                else (CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES)
+            ),
             metadata_ring=True,
         )
         # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it
