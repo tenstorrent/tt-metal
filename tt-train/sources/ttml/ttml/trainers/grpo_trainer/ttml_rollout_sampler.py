@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -24,6 +24,7 @@ from ttml.models.llama import Llama
 from ttml.models.qwen3 import Qwen3
 from ttml.models.qwen3.kv_cache import KVCache as Qwen3KVCache
 
+from .distributed import BatchLayout, resolve_batch_layout
 from .grpo_trainer import RolloutBatch, RolloutSampler
 
 TILE_SIZE = 32
@@ -61,6 +62,7 @@ class TTMLRolloutSampler(RolloutSampler):
             the width of ``RolloutBatch.logprobs``.
         temperature: Sampling temperature (0 = greedy).
         completions_per_prompt: Completions generated per prompt.
+        batch_layout: Batch sharding of the open device; resolved from the device when omitted.
     """
 
     def __init__(
@@ -70,6 +72,7 @@ class TTMLRolloutSampler(RolloutSampler):
         max_completion_length: int,
         temperature: float,
         completions_per_prompt: int,
+        batch_layout: Optional[BatchLayout] = None,
     ) -> None:
         if isinstance(model, Qwen3):
             self._kind = "qwen3"
@@ -85,11 +88,13 @@ class TTMLRolloutSampler(RolloutSampler):
         self._completions_per_prompt = completions_per_prompt
 
         self._mesh_device: Any = ttml.autograd.AutoContext.get_instance().get_device()
-        self._num_devices = self._mesh_device.get_num_devices()
-        if self._kind == "llama":
-            self._init_llama_layout()
-        else:
-            self._init_qwen3_layout()
+        self._batch_layout = batch_layout or resolve_batch_layout()
+
+        cfg = self._model.config
+        self._num_layers = cfg.num_hidden_layers
+        self._max_seq_len = cfg.max_position_embeddings
+        self._num_kv_groups = cfg.num_key_value_heads if self._kind == "llama" else None
+        self._head_dim = cfg.hidden_size // cfg.num_attention_heads if self._kind == "llama" else None
 
         self._pad_token = resolve_pad_token_id(tokenizer)
 
@@ -97,59 +102,6 @@ class TTMLRolloutSampler(RolloutSampler):
         self._kv_cache_B: int = 0
 
         self._weight_version: int = 0
-
-    # --------------------------------------------------------------
-    # Batch sharding + KV-cache sizes, read from the open device and model
-    # --------------------------------------------------------------
-
-    def _init_llama_layout(self) -> None:
-        mesh_device = self._mesh_device
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
-
-        ddp_enabled = (
-            autograd_ctx.is_parallelism_context_initialized()
-            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-        )
-        self._dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if ddp_enabled else None
-        self._dp_composer = (
-            ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if ddp_enabled else None
-        )
-        ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if ddp_enabled else None
-        self._seed_axes = [int(ddp_axis)] if ddp_axis is not None else None
-
-        cfg = self._model.config
-        self._num_layers = cfg.num_hidden_layers
-        self._num_kv_groups = cfg.num_key_value_heads
-        self._head_dim = cfg.hidden_size // cfg.num_attention_heads
-        self._max_seq_len = cfg.max_position_embeddings
-
-    def _init_qwen3_layout(self) -> None:
-        mesh = ttml.mesh()
-        mesh_device = self._mesh_device
-
-        # build_mesh only names an axis "fsdp" / "dp" when enable_fsdp / enable_ddp is set.
-        fsdp_enabled = mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
-        ddp_enabled = mesh.has_axis("dp") and mesh.axis_size("dp") > 1
-
-        batch_sharded = fsdp_enabled or ddp_enabled
-        self._dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if batch_sharded else None
-        self._dp_composer = (
-            ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if batch_sharded else None
-        )
-        if not batch_sharded:
-            self._num_devices = 1
-
-        self._seed_axes = []
-        if ddp_enabled:
-            self._seed_axes.append(mesh.axis_index("dp"))
-        if fsdp_enabled:
-            self._seed_axes.append(mesh.axis_index("fsdp"))
-
-        cfg = self._model.config
-        self._num_layers = cfg.num_hidden_layers
-        self._num_kv_groups = None
-        self._head_dim = None
-        self._max_seq_len = cfg.max_position_embeddings
 
     @property
     def temperature(self) -> float:
@@ -281,7 +233,9 @@ class TTMLRolloutSampler(RolloutSampler):
             mask[b, 0, 0, len_b:prefill_end] = 0.0
         # Rows 1..padded_q-1 stay zero (Llama tile-pad; matches today's behavior).
 
-        return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
+        return ttml.autograd.Tensor.from_numpy(
+            mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._batch_layout.mapper
+        )
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> "ttml.autograd.Tensor":
         """Reshape ``tokens_np`` from ``[B, S]`` to ``[B, 1, 1, S]`` and upload
@@ -291,7 +245,7 @@ class TTMLRolloutSampler(RolloutSampler):
             tokens_np.reshape(B, 1, 1, tokens_np.shape[1]).astype(np.uint32),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
-            self._dp_mapper,
+            self._batch_layout.mapper,
         )
 
     def _get_stop_ids(self) -> set:
@@ -327,15 +281,16 @@ class TTMLRolloutSampler(RolloutSampler):
         """
         pad_token = self._pad_token
         temperature = self._temperature
-        seed_axes = self._seed_axes
-        dp_composer = self._dp_composer
+        seed_axes = self._batch_layout.seed_axes
+        dp_composer = self._batch_layout.composer
         mesh_device = self._mesh_device
 
         G = self._completions_per_prompt
         rows: List[List[int]] = [list(p) for p in prompts for _ in range(G)]
         B = len(rows)
-        assert B % self._num_devices == 0, f"batch {B} must be divisible by num_devices {self._num_devices}"
-        B_local = B // self._num_devices
+        num_shards = self._batch_layout.num_shards
+        assert B % num_shards == 0, f"batch {B} must be divisible by num_shards {num_shards}"
+        B_local = B // num_shards
 
         lengths = [len(r) for r in rows]
         W = max(lengths)

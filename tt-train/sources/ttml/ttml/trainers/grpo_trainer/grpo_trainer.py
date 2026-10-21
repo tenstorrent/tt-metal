@@ -37,7 +37,7 @@ from ttml.common.utils import (
 from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
-from .distributed import exit_on_error, init_distributed_training, is_rollout_rank
+from .distributed import BatchLayout, exit_on_error, init_distributed_training, is_rollout_rank, resolve_batch_layout
 from .grpo_ttml_model import CHECKPOINT_FILE, setup_ttml_model
 
 if TYPE_CHECKING:
@@ -121,6 +121,7 @@ def build_rollout_sampler(
     completions_per_prompt: int,
     model: Any = None,
     tokenizer: Any = None,
+    batch_layout: Optional[BatchLayout] = None,
     model_source: Optional[str] = None,
     mesh_device: Any = None,
     remote_rollout: Optional[RemoteRolloutConfig] = None,
@@ -135,7 +136,9 @@ def build_rollout_sampler(
     if source == "ttml":
         from .ttml_rollout_sampler import TTMLRolloutSampler
 
-        return TTMLRolloutSampler(model, tokenizer, max_completion_length, temperature, completions_per_prompt)
+        return TTMLRolloutSampler(
+            model, tokenizer, max_completion_length, temperature, completions_per_prompt, batch_layout
+        )
     if source == "ttt":
         from .remote_rollout.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
         from .remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
@@ -1072,21 +1075,15 @@ class GRPOTrainer:
         # ``train()``, read by ``_publish_step_metrics``.
         self._step_start_time: float = 0.0
 
-        # Resolved-at-setup state, populated by ``_setup()`` at the end of the
-        # constructor. The topology fields default to single-device values (1 device,
-        # no FSDP), so a helper that runs before ``_setup()`` sees a single device.
+        # Resolved-at-setup state. Pre-declared with ``None`` sentinels so the
+        # full trainer lifecycle is visible in one place; populated by
+        # ``_setup()`` at the end of the constructor.
         self._train_called: bool = False
         self._pad_token: int = 0
         self._optimizer: Any = None
         self._lr_scheduler: Any = None
         self._monitor_cb: Optional[GRPOMonitor] = None
-        self._num_devices: int = 1
-        self._fsdp_enabled: bool = False
-        self._ddp_enabled: bool = False
-        self._ddp_context_enabled: bool = False
-        self._fsdp_sync_axes: Tuple[str, ...] = ()
-        self._dp_mapper: Any = None
-        self._grad_sync_world_size: int = 1
+        self._batch_layout: Optional[BatchLayout] = None
         self._completions_per_microbatch: int = 0
         self.rollout_batch_source: Optional[RolloutBatchSource] = None
         self._rollout_client: Any = None
@@ -1118,10 +1115,12 @@ class GRPOTrainer:
 
         if cfg.backend.in_process:
             self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+            self._batch_layout = resolve_batch_layout()
             self.rollout_sampler = build_rollout_sampler(
                 cfg.backend.sampler,
                 model=self.model,
                 tokenizer=self.tokenizer,
+                batch_layout=self._batch_layout,
                 max_completion_length=cfg.max_completion_length,
                 temperature=cfg.temperature,
                 completions_per_prompt=cfg.num_generations,
@@ -1136,6 +1135,7 @@ class GRPOTrainer:
                 autograd_ctx = ttml.autograd.AutoContext.get_instance()
                 autograd_ctx.initialize_distributed_context(*sys.argv)
                 self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+                self._batch_layout = resolve_batch_layout()
                 bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
                 self._rollout_client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
             try:
@@ -1262,98 +1262,7 @@ class GRPOTrainer:
         if grpo_cfg.use_clip_grad_norm:
             validate_clip_grad_norm(tt_model)
 
-        # Device-parallelism state. The trainer currently only handles either
-        # single-device or DDP; tensor parallelism is not supported here. We
-        # gate the multi-device sharding paths on ``ddp_enabled`` rather than
-        # ``num_devices > 1`` so this assumption is explicit at the call sites.
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        device = autograd_ctx.get_device()
-        num_devices: int = device.get_num_devices()
-        mesh = ttml.maybe_mesh()
-        # ttml has two coexisting distributed backends, and DDP can be signalled
-        # through EITHER, so both must count here:
-        #   * Parallelism-context DDP — set up with
-        #     ``initialize_parallelism_context`` and synced with
-        #     ``synchronize_gradients``. This is the general-purpose DDP/TP
-        #     mechanism used across ttml (the shared trainer, the non-GRPO qwen3
-        #     examples, etc.); ``setup_ttml_model`` initializes it for Llama.
-        #   * Named-mesh DDP — ``setup_ttml_model`` opened a named mesh (via
-        #     ``ttml.open_device_mesh``) with a "dp" axis of size > 1 and synced
-        #     with ``sync_gradients`` over that axis. This is the FSDP-oriented
-        #     backend; the Qwen3 path takes ONLY this route and never
-        #     initializes a parallelism context.
-        # Checking the context alone (as the code originally did) leaves
-        # ``ddp_enabled`` False on the Qwen3 path — which then trips
-        # ``num_devices = 1`` below while the sampler still shards the batch
-        # across the whole mesh, blowing up with "batch N must be divisible by
-        # num_devices". Detecting the "dp" axis mirrors the exact DDP signal the
-        # sampler uses (``mesh.has_axis("dp")``).
-        ddp_context_enabled: bool = (
-            autograd_ctx.is_parallelism_context_initialized()
-            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-        )
-        ddp_enabled: bool = ddp_context_enabled or (
-            mesh is not None and mesh.has_axis("dp") and mesh.axis_size("dp") > 1
-        )
-        # FSDP is configured through a named mesh (axis "fsdp"), opened via
-        # ``ttml.open_device_mesh`` by ``setup_ttml_model`` — not the parallelism
-        # context that context-based DDP uses. When an "fsdp" axis is present the
-        # batch is sliced across the whole mesh (dim 0) exactly like DDP, and
-        # gradients are synchronised with ``ttml.sync_gradients`` over the
-        # ("dp", "fsdp") axes (FSDP-managed params are skipped per-axis because
-        # the FSDP backward hook already reduce-scattered them).
-        fsdp_enabled: bool = mesh is not None and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
-        fsdp_sync_axes: Tuple[str, ...] = (
-            tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)
-            if mesh is not None
-            else ()
-        )
-        batch_sharded: bool = ddp_enabled or fsdp_enabled
-        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if batch_sharded else None
-        if not batch_sharded:
-            num_devices = 1
-
-        # World size for the loss normalization. ``synchronize_gradients`` /
-        # ``sync_gradients`` all-reduce (sum) each replicated gradient and then
-        # divide by the product of the sizes of the axes they reduce over,
-        # leaving the mean. ``_compute_grpo_loss`` must divide the loss by that
-        # SAME factor (see its docstring) so the two cancel to the intended
-        # global-mean gradient. Derive it from the exact axes each branch syncs,
-        # rather than blanket ``get_num_devices()``, so the normalization stays
-        # correct even on a mesh whose reduced axes don't span every device
-        # (e.g. a "dp" axis narrower than the full mesh).
-        if fsdp_enabled:
-            # sync_gradients over fsdp_sync_axes -> divide by their size product.
-            grad_sync_world_size = 1
-            for _name in fsdp_sync_axes:
-                grad_sync_world_size *= mesh.axis_size(_name)
-        elif ddp_context_enabled:
-            # C++ synchronize_gradients reduces each replicated grad over ONLY
-            # the context's DDP axis (and CP, if enabled) — never TP: TP-sharded
-            # params hold per-shard-correct grads and TP-replicated params
-            # already match across TP ranks. So the divisor is the DDP-axis
-            # device count, NOT get_num_devices(). Using the whole-mesh count
-            # would over-divide by the TP factor on a DP+TP mesh and normalize
-            # the loss incorrectly. Read the exact DDP size from the context.
-            #
-            # NOTE (CP / forward-looking correctness): the C++ divisor is
-            # ddp_size * cp_size (synchronize_gradients pushes BOTH the CP and
-            # DDP axes into cluster_axes — see core/distributed/distributed.cpp).
-            # get_ddp_size() alone is the *complete* divisor here ONLY because CP
-            # cannot currently be turned on from Python: the DistributedConfig
-            # nanobind binding exposes just enable_ddp / enable_tp (no enable_cp
-            # ctor arg or settable field — see nanobind/nb_autograd.cpp), so
-            # is_cp_enabled() is always false on any Python-driven run and no CP
-            # axis is ever reduced. If enable_cp is ever bound to Python, this
-            # line must become get_ddp_size() * get_cp_size() (and a get_cp_size
-            # accessor would need binding), or the loss will silently mis-
-            # normalize by the CP factor — the same bug this branch fixes for TP.
-            grad_sync_world_size = autograd_ctx.get_parallelism_context().get_ddp_size()
-        elif ddp_enabled:
-            # sync_gradients over ("dp",) -> divide by the "dp" axis size.
-            grad_sync_world_size = mesh.axis_size("dp")
-        else:
-            grad_sync_world_size = 1
+        num_devices = self._batch_layout.num_shards
 
         # Derive the across-mesh micro-batch size (in completions), the per
         # micro-batch prompt count, and the generation (effective) batch size up
@@ -1411,13 +1320,6 @@ class GRPOTrainer:
         # Publish outputs onto self for the per-batch helpers.
         self._pad_token = int(pad_token)
         self._optimizer = optimizer
-        self._num_devices = num_devices
-        self._fsdp_enabled = fsdp_enabled
-        self._ddp_enabled = ddp_enabled
-        self._ddp_context_enabled = ddp_context_enabled
-        self._fsdp_sync_axes = fsdp_sync_axes
-        self._dp_mapper = dp_mapper
-        self._grad_sync_world_size = grad_sync_world_size
         self._completions_per_microbatch = completions_per_microbatch
         self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
         self.rollout_batch_source = build_rollout_batch_source(
@@ -1514,12 +1416,14 @@ class GRPOTrainer:
         """
         B, Tp = inputs.shape
         x = ttml.autograd.Tensor.from_numpy(
-            inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
+            inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
         )
         # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
         B_local = int(x.shape()[0])
         logits = self.model(x, None)
-        tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper)
+        tgt = ttml.autograd.Tensor.from_numpy(
+            targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
+        )
         nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
         return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
 
@@ -1544,14 +1448,16 @@ class GRPOTrainer:
         # Advantages, pi_old, the mask and the policy log-probs are all sharded
         # along axis 0 over the identical host-order rows, so device-local row r
         # of every tensor refers to the same completion.
-        adv_slice_val = upload_micro_advantages(adv_slice, self._dp_mapper, self._num_devices)
+        adv_slice_val = upload_micro_advantages(adv_slice, self._batch_layout.mapper, self._batch_layout.num_shards)
         adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
-        mask = ttml.autograd.Tensor.from_numpy(mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._dp_mapper)
+        mask = ttml.autograd.Tensor.from_numpy(
+            mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._batch_layout.mapper
+        )
         mask.set_requires_grad(False)
 
         nlog_new = self._compute_policy_nlog_probs(inputs, targets)
         new_val = nlog_new.get_value()
-        nlog_old = ttml.autograd.Tensor.from_numpy(old_np, new_val.layout, new_val.dtype, self._dp_mapper)
+        nlog_old = ttml.autograd.Tensor.from_numpy(old_np, new_val.layout, new_val.dtype, self._batch_layout.mapper)
         nlog_old.set_requires_grad(False)
         assert list(nlog_old.shape()) == list(
             nlog_new.shape()
@@ -1564,7 +1470,7 @@ class GRPOTrainer:
             adv_ttml,
             global_len,
             self.config.epsilon,
-            ddp_world_size=self._grad_sync_world_size,
+            ddp_world_size=self._batch_layout.grad_sync_world_size,
         )
         loss.backward(retain_graph=False)
         ttml.autograd.AutoContext.get_instance().reset_graph()
@@ -1583,16 +1489,16 @@ class GRPOTrainer:
           4. ``optimizer.step()`` + ``zero_grad``.
           5. ``self._lr_scheduler.step()`` sets the next step's LR.
         """
-        if self._fsdp_enabled:
-            ttml.sync_gradients(self.model.parameters(), axis_names=self._fsdp_sync_axes)
-        elif self._ddp_context_enabled:
+        if self._batch_layout.fsdp_enabled:
+            ttml.sync_gradients(self.model.parameters(), axis_names=self._batch_layout.fsdp_sync_axes)
+        elif self._batch_layout.ddp_context_enabled:
             # Parallelism-context DDP (Llama): a parallelism context
             # is initialized, so use its gradient sync. ``sync_gradients`` would
             # be a silent no-op here — it reduces over named mesh axes, and this
             # path opens no named mesh (``maybe_mesh()`` is None), so it would
             # leave gradients un-averaged.
             ttml.core.distributed.synchronize_gradients(self.model.parameters())
-        elif self._ddp_enabled:
+        elif self._batch_layout.ddp_enabled:
             # Named-mesh DDP (Qwen3): no parallelism context exists,
             # so all-reduce + average grads over the "dp" mesh axis — the same
             # primitive FSDP uses. The loss normalization divides by
