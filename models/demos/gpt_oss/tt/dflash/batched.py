@@ -1942,6 +1942,10 @@ class BatchedDFlashRunner:
 
             # only the routed (row, expert) pairs (the dense verify MoE computes all 32 experts for all 256 rows)
             self.verify.grouped = GroupedMoE(mesh, self.verify.moe, self.verify.hidden)
+            # the plain batched decode's dense MoE streams the same relaid gate|up pages (experts/decode.py
+            # _dense_gate_up_stream: gate, up and SwiGLU in one program)
+            for li, layer in enumerate(model.layers):
+                layer.mlp.experts.gu_relaid = (self.verify.grouped.layers[li]["gate_up"], self.verify.grouped.gu_split)
         # persistent per-round inputs (the traces' inputs)
         z = torch.zeros(users, dtype=torch.int32)
         self.d_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
@@ -2158,16 +2162,23 @@ class BatchedDFlashRunner:
             self.limit,
         )  # fmt: skip
         t = time.perf_counter()
+        dbg = [] if os.environ.get("B32_LOOP_DEBUG") else None
         pending = [self._enqueue_round()]
         while pending:
             # a round adds at most B tokens: queue the next one unless every user may finish with this one
+            t_a = time.perf_counter()
             if len(pending) == 1 and any(len(ids[u]) - lens[u] + self.block < max_new_tokens for u in range(U)):
                 pending.append(self._enqueue_round())
+            t_b = time.perf_counter()
             host, event = pending.pop(0)
             ttnn.event_synchronize(event)
+            t_c = time.perf_counter()
             dr, post = (ttnn.to_torch(ttnn.get_device_tensors(h)[0]).reshape(-1).long().tolist() for h in host)
+            t_d = time.perf_counter()
             self._accept(ids, accept, done, dr, post)
             now = time.perf_counter()
+            if dbg is not None:
+                dbg.append((t_b - t_a, t_c - t_b, t_d - t_c, now - t_d))
             times.append((now - t, now - t, 0.0, 0.0))
             t = now
             if all(done(u) for u in range(U)):
@@ -2176,6 +2187,18 @@ class BatchedDFlashRunner:
                 pending.append(self._enqueue_round())
         if pending:  # a round queued past the end: let it finish
             ttnn.synchronize_device(self.mesh)
+        G = self.verify.grouped
+        if G is not None and G.dump is not None:
+            ttnn.synchronize_device(self.mesh)
+            for li, d in enumerate(G.dump):
+                tl = ttnn.to_torch(ttnn.get_device_tensors(d)[0]).reshape(-1)[:32].long().tolist()
+                print(f"B32GMOEDUMP layer {li} tiles {','.join(map(str, tl))}", flush=True)
+        if dbg:
+            med = lambda k: sorted(x[k] for x in dbg)[len(dbg) // 2] * 1e3
+            print(
+                f"B32LOOPDBG medians: enqueue {med(0):.2f} wait {med(1):.2f} read {med(2):.2f} accept {med(3):.2f} ms",
+                flush=True,
+            )
 
     def generate(self, prompts, max_new_tokens, firsts):
         """Returns (per-user new tokens, per-user accepted counts, per-round seconds)."""

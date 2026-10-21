@@ -268,6 +268,7 @@ class DenseDecodePlan:
 
 
 _FUSED_SWIGLU = os.environ.get("GPT_OSS_DENSE_FUSED_SWIGLU", "1") == "1"
+_SWIGLU_FP32 = os.environ.get("GPT_OSS_DENSE_SWIGLU_FP32", "1") == "1"
 
 
 def _dense_swiglu(gate, up, w, weights, plan):
@@ -311,7 +312,7 @@ def _dense_swiglu(gate, up, w, weights, plan):
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "dense_swiglu_compute.cpp"), core_ranges=cores,
             compile_time_args=[cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, cb_act, NT], runtime_args=[],
-            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=_SWIGLU_FP32,
                                                 math_approx_mode=False),
         ),
     ]  # fmt: skip
@@ -335,8 +336,73 @@ def _dense_swiglu(gate, up, w, weights, plan):
     return act
 
 
+_GU_STREAM = os.environ.get("GPT_OSS_DENSE_GU_STREAM", "1") == "1"
+
+
+def _dense_gate_up_stream(hidden_states, w, weights, plan, relaid):
+    """act = SwiGLU(x @ gate + gate_bias, x @ up + up_bias) * (w @ expand) in one DRAM-streaming program
+    (fused_decode/kernels/dense_gu_*.cpp) from the grouped MoE's relaid gate|up pages (relaid = (tensor, pages per
+    unit), dflash/grouped_moe.py): replaces the gate and up DRAM-sharded matmuls and _dense_swiglu. Every core of the
+    grid takes an equal share of the activation's column tiles; act lands where the down matmul reads it."""
+    from ..fused_decode.boundary import KERNEL_DIR
+
+    gu, split = relaid
+    mesh = hidden_states.device()
+    grid = mesh.compute_with_storage_grid_size()
+    gx, nc = grid.x, grid.x * grid.y
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    x8 = ttnn.typecast(hidden_states, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)  # (a new tensor)
+    n_act = weights.gate_bias.shape[-1]
+    act = ttnn.empty([1, 1, x8.shape[-2], n_act], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+                     memory_config=plan.act_memory_config)  # fmt: skip
+    kt, na = x8.shape[-1] // ttnn.TILE_SIZE, n_act // ttnn.TILE_SIZE
+    cb_x, cb_w, cb_b, cb_r, cb_e, cb_out = range(6)
+    io = [x8, gu, weights.gate_bias, weights.up_bias, w]
+    rct = [cb_x, cb_w, cb_b, cb_r, cb_e, nc, gx, kt, na, weights.intermediate_local, 23]
+    for t in io:
+        rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    dm = ttnn.DataMovementConfigDescriptor
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in io], defines=[("GMOE_SPLIT", str(split))],
+            config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_gu_writer.cpp"), core_ranges=cores,
+            compile_time_args=[cb_out, na, nc, gx] + ttnn.TensorAccessorArgs(act).get_compile_time_args(),
+            runtime_args=[], common_runtime_args=[act.buffer_address()],
+            config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_gu_compute.cpp"), core_ranges=cores,
+            compile_time_args=[cb_x, cb_w, cb_b, cb_r, cb_e, cb_out, kt, na, nc, gx], runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
+                                                math_approx_mode=False),
+        ),
+    ]  # fmt: skip
+
+    def cb(i, dtype, page, pages):
+        return ttnn.CBDescriptor(total_size=page * pages, core_ranges=cores,
+                                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype,
+                                                                             page_size=page)])  # fmt: skip
+
+    depth = int(os.environ.get("GPT_OSS_DENSE_GU_DEPTH", "2"))  # units buffered (one unit's reads outstanding)
+    cbs = [
+        cb(cb_x, ttnn.bfloat8_b, 1088, kt),
+        cb(cb_w, ttnn.bfloat4_b, 576, depth * 2 * kt),
+        cb(cb_b, ttnn.bfloat16, 2048, depth * 2),
+        cb(cb_r, ttnn.bfloat16, 2048, 1),
+        cb(cb_e, ttnn.bfloat16, 2048, depth),
+        cb(cb_out, ttnn.bfloat16, 2048, 2),
+    ]
+    ttnn.generic_op(io + [act], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    x8.deallocate(True)
+    return act
+
+
 def decode_forward_dense(
-    hidden_states, routing_weights, weights, plan: DenseDecodePlan, config: ExpertConfig, fused_swiglu=True
+    hidden_states, routing_weights, weights, plan: DenseDecodePlan, config: ExpertConfig, fused_swiglu=True, relaid=None
 ):
     """Decode MoE for one 32-token tile per device over every expert (gpt-oss-20b batch 32, TP over the intermediate
     dimension, no expert parallelism).
@@ -355,6 +421,12 @@ def decode_forward_dense(
     UWP, U = ttnn.UnaryWithParam, ttnn.UnaryOpType
     limit, alpha = config.swiglu_limit, config.alpha
     ck = plan.compute_kernel_config
+    if relaid is not None and fused_swiglu and _GU_STREAM and abs(limit - 7.0) < 1e-6 and abs(alpha - 1.702) < 1e-6:
+        # gate|up + biases + SwiGLU + routing weights in one DRAM-streaming program (_dense_gate_up_stream)
+        w = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        w = ttnn.reshape(w, (1, 1, w.shape[-2], w.shape[-1]))
+        act = _dense_gate_up_stream(hidden_states, w, weights, plan, relaid)
+        return _dense_down(act, w, weights, plan, ck)
     x = ttnn.to_memory_config(hidden_states, plan.input_memory_config, dtype=ttnn.bfloat8_b)
     gate = ttnn.matmul(
         x,

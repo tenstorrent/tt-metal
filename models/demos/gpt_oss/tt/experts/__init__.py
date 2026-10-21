@@ -203,8 +203,9 @@ class Experts:
             )
         if is_decode and self.dense_decode_weights is not None:
             partial = decode_forward_dense(
-                hidden_states, topk_expert_weights, self.dense_decode_weights, self.dense_decode_plan, self.config
-            )
+                hidden_states, topk_expert_weights, self.dense_decode_weights, self.dense_decode_plan, self.config,
+                relaid=getattr(self, "gu_relaid", None),
+            )  # fmt: skip
             if getattr(self, "decode_all_reduce", None) is not None:
                 # Batched decode layer (batched_decode.py): one-op all-reduce into the sharded residual layout.
                 return self.decode_all_reduce(partial, "moe")
