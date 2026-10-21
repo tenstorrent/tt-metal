@@ -251,7 +251,7 @@ def test_the_official_floor_is_generated_and_checks_the_tap_map(gspec, monkeypat
     monkeypatch.setattr(
         hooks, "official_taps", _fake_official(s, wrong="attn_norm" if "attn_norm" in steps else steps[0])
     )
-    assert OF.generate(s, write=False)["errors"], "a mis-mapped output fails the check"
+    assert OF.generate(s, write=False)["official_ref_errors"], "a mis-mapped output fails the check (F136 / F145)"
     monkeypatch.setattr(hooks, "official_taps", _fake_official(s, skip=steps[0]))
     assert OF.generate(s, write=False)["unmapped"]
 
@@ -300,24 +300,28 @@ def test_a_stateful_step_reads_the_official_runs_state(gspec, monkeypatch):  # n
     doc = OF.generate(s, write=False)
     assert not doc["errors"] and all(v[str(doc["chunk"])]["state"] == "official" for v in doc["steps"].values())
     monkeypatch.setattr(hooks, "official_taps", _fake_official(s, state="stale"), raising=False)
-    bad = OF.generate(s, write=False)["errors"]
+    doc = OF.generate(s, write=False)
+    bad = doc["errors"] + doc["official_ref_errors"]  # F145: the official numerics on the stale state miss the tap
     assert bad and all("attention" in e for e in bad), bad  # the stateful step read a prefix that is not its own
 
 
-def test_an_explained_step_passes_the_tap_check(gspec, monkeypatch):  # noqa: F811
-    """A step whose official arithmetic exceeds calib x its nudge passes R.5 only with an explanation."""
+def test_an_explanation_never_hides_a_mis_mapped_tap(gspec, monkeypatch):  # noqa: F811
+    """F145: the tap map is checked by the official numerics (F136), so an `explained` entry in official_taps.yaml
+    still records why the official step is far from full precision but cannot hide a mis-mapped output."""
     from models.demos.common.bringup.testing import official_floor as OF
 
     s = gspec()
     hooks = s.hooks()
     monkeypatch.setattr(hooks, "official_taps", _fake_official(s, wrong="attn_norm"), raising=False)
-    assert OF.generate(s, write=False)["errors"]
+    assert OF.generate(s, write=False)["official_ref_errors"]
     s.bringup_dir.mkdir(parents=True, exist_ok=True)
     (s.bringup_dir / NF.TAPS_FILE).write_text(
         "steps:\n  attn_norm: {explained: 'the official code rounds inside; emulated, it reproduces the output'}\n"
     )
     doc = OF.generate(s, write=False)
-    assert not doc["errors"] and any("explained" in v[str(doc["chunk"])]["check"] for v in doc["steps"].values())
+    assert doc["official_ref_errors"] and any(
+        "explained" in v[str(doc["chunk"])]["check"] for v in doc["steps"].values()
+    )
 
 
 def _floor_case(seed=0, rows=2048, cols=256):
@@ -384,3 +388,26 @@ def test_a_waiver_never_passes_a_wrong_module(gspec, monkeypatch):  # noqa: F811
     assert not run_component_test(s, "attn_norm", 0, checks="auto")
     monkeypatch.setenv(IMPL_ENV, "reference")
     assert run_component_test(s, "attn_norm", 0, checks="auto")
+
+
+def test_an_official_step_that_rounds_inside_is_its_margin_not_an_error(gspec, monkeypatch):  # noqa: F811
+    """F145: DeepSeek-V4.1 R.5 failed 40 steps (q_a, kv, attention, experts, shared expert: 1-5 % from the
+    full-precision step) because the official code rounds to fp8 / fp4 inside them; that distance is the margin."""
+    from models.demos.common.bringup.testing import official_floor as OF
+
+    s = gspec()
+    hooks = s.hooks()
+    base = _fake_official(s)
+
+    def rounding(*a, **k):
+        out = base(*a, **k)
+        for L, steps in out.items():
+            for name, t in steps.items():
+                if name != "_state" and t["output"].is_floating_point():
+                    steps[name] = dict(t, output=t["output"].bfloat16().float() * 1.02)
+        return out
+
+    monkeypatch.setattr(hooks, "official_taps", rounding, raising=False)
+    doc = OF.generate(s, write=False)
+    assert not doc["errors"]
+    assert any(v[str(doc["chunk"])]["check"].get("in_step_rounding") for v in doc["steps"].values())
