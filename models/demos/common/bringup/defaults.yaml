@@ -24,7 +24,6 @@ agents:
 
 e2e:                       # F128 (owner): end-to-end limits = calib x the reference's own drift from full precision
   calib: 2.0               # (reference/drift.py, testing/e2e_limits.py); no fixed end-to-end bar exists
-  overlap_res: 0.01        # an index overlap's resolution floor (one miss per hundred)
 reference:
   shipped_dtype: bfloat16  # F128: the dtype the shipped code computes in (the official golden, the margin's source)
 thresholds:                # per-step fallbacks only (component / swap when no noise floor); end-to-end: e2e above

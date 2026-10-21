@@ -174,6 +174,23 @@ def test_an_fp32_output_has_no_bf16_resolution_floor(tmp_path):
     )
 
 
+def test_an_fp32_steps_golden_limit_is_one_fp32_rounding_not_bf16(gspec, monkeypatch):  # noqa: F811
+    """F133: an `out: fp32` step with nothing to nudge (fixed inputs) is limited vs the full-precision golden by one
+    fp32 rounding of its output (~1e-7), not by a bf16 one (~4e-3)."""
+    from models.demos.common.bringup.selftest import fixture_model
+    from models.demos.common.bringup.testing.component import run_component_test
+
+    s = gspec()
+    monkeypatch.setitem(fixture_model.NOISE, "value", 0.0)
+    s.bringup_dir.mkdir(parents=True, exist_ok=True)
+    (s.bringup_dir / NF.TAPS_FILE).write_text("steps:\n  attn_residual: {inputs: [fixed, fixed], out: fp32}\n")
+    assert run_component_test(s, "attn_residual", 0, checks="auto")
+    lim = got()["err_attn_residual_L00_limit"]
+    assert 0 < lim < 1e-5, lim
+    x = torch.randn(256, 64)
+    assert 1e-8 < float((NF.round_to(x, "fp32") - x.double()).norm() / x.double().norm()) < 1e-6
+
+
 def _fake_official(s, wrong: str | None = None, skip: str | None = None, state: str | None = None):
     """official_taps for the fixture: each step on the golden's inputs rounded to bf16, its output in bf16 (the
     'official code' at bf16); ``wrong`` hands that step another step's output, ``skip`` leaves a step out."""

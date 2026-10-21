@@ -66,6 +66,21 @@ def test_drift_measures_the_official_reference_against_full_precision():
     assert set(d) == {"pcc_layer_L00", "pcc_state_kv_L00", "overlap_state_topk_L00"}
 
 
+def test_the_drift_floor_is_one_rounding_in_the_stored_dtype_and_one_miss_per_selection(monkeypatch):
+    """F133: a state the official golden keeps fp32 gets an fp32 floor (not bf16); an exact index state with 10^5
+    selected entries a limit above 0.9999 at calib 2 (not the fixed 0.98 of one miss per hundred)."""
+    monkeypatch.setattr(metrics, "record", lambda *a, **k: None)
+    g = torch.Generator().manual_seed(0)
+    full = torch.randn(256, 64, generator=g)
+    idx = torch.stack([torch.randperm(4096, generator=g)[:1000] for _ in range(100)])
+    target = _G({0: full}, {0: {"rec": full, "topk": idx}})
+    official = _G({0: full.bfloat16()}, {0: {"rec": full.clone(), "topk": idx.clone()}})
+    d = D.drift(target, official, [0], full_stack=False)
+    assert 1 - d["pcc_layer_L00"]["res"] > 1e-7  # stored bf16: a bf16 floor
+    assert 1 - d["pcc_state_rec_L00"]["res"] < 1e-12  # kept fp32
+    assert E.limit(d, "overlap_state_topk_L00") > 0.9999
+
+
 def test_no_hook_without_a_numerics_switch_falls_back_to_rounded_arithmetic():
     class Hooks:
         @staticmethod

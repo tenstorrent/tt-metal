@@ -15,8 +15,8 @@ larger of
 - the input nudge: the fp32 step on its inputs moved uniformly inside their rounding cell, in the dtype the official
   code holds each input (official_taps.yaml; default bf16; quantizer outputs `fixed`), SEEDS seeds, the worst.
 A limit is calib (component_calib; component_calib_low for tests.low_precision_kinds) x that floor on the same
-comparison (vs the CPU step on the same inputs, or vs the golden), never below what one bf16 rounding of the output
-shows (an exact step) or one element of an integer output. For a correlation the miss is 1 - pcc ~ rel^2 / 2, so calib
+comparison (vs the CPU step on the same inputs, or vs the golden), never below what one rounding of the output to
+its official dtype shows (F133: bf16, or fp32 for an fp32 output) (an exact step) or one element of an integer output. For a correlation the miss is 1 - pcc ~ rel^2 / 2, so calib
 applies squared. Selections (top-k): every flip must be explained (both swapped entries within 2x the nudge's spread
 of the top-k cutoff, or within tie_rtol of it), and the count is at most calib x the nudge's; the tie-aware recall
 (F101) is recorded for every top-k output, dense router weights and index lists alike.
@@ -66,17 +66,25 @@ def value(mode: str, got: torch.Tensor, want: torch.Tensor) -> float:
 
 
 def gate_limit(mode: str, model_v: float, res_v: float, k: float, n: int) -> float:
-    """The lower limit of a gate metric: 1 - calib x the miss of the precision model (model_v) or of one bf16 rounding
-    of the output (res_v), whichever is larger; calib squared for pcc; an integer comparison never asks for fewer
+    """The lower limit of a gate metric: 1 - calib x the miss of the precision model (model_v) or of one rounding
+    of the output to its dtype (res_v), whichever is larger; calib squared for pcc; an integer comparison never asks for fewer
     misses than one element of n."""
     miss = max(1.0 - model_v, 1.0 - res_v, 0.0 if mode == "pcc" else 1.0 / max(n, 1))
     return max(0.0, 1.0 - (k * k if mode == "pcc" else k) * miss)
 
 
 def round_to(t: torch.Tensor, dtype: str = "bf16") -> torch.Tensor:
-    """t as the official code hands it on: rounded to bf16, or kept (fp32)."""
-    t = t.float()
-    return t.to(torch.bfloat16).float() if dtype == "bf16" and t.is_floating_point() else t
+    """One rounding of t to the dtype the official code hands it on in: bf16, or fp32 (F133: t moved uniformly inside
+    its fp32 rounding cell, returned in float64 so the move survives; an fp32 output's floor is ~1e-7, not 0 or bf16).
+    The resolution floor of every limit: no output in that dtype can do better."""
+    if not t.is_floating_point():
+        return t
+    if dtype == "bf16":
+        return t.float().to(torch.bfloat16).float()
+    g = torch.Generator().manual_seed(0)
+    x = t.double()
+    cell = torch.pow(2.0, torch.floor(torch.log2(x.abs().clamp_min(1e-38))) - MANT[dtype])
+    return x + (torch.rand(t.shape, generator=g, dtype=torch.float64) - 0.5) * cell
 
 
 def bf16_res(mode: str, ref: torch.Tensor, dtype: str = "bf16") -> float:
