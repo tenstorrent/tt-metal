@@ -2,9 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """A model's switches in one place: `models/demos/<model>/tt/settings.py` builds a ``Settings`` table and every module
-of the model (and its bring-up hooks) reads switches only from it. ``max_precision`` names the value of every
-precision switch at full precision; component and swap tests run with those (testing/model_precision.py). Each switch has a default, its allowed values and
-the reason for the default (owner decisions with their date). An environment variable ``<PREFIX><NAME>`` overrides
+of the model (and its bring-up hooks) reads switches only from it. Each switch has a default (what every test and
+the served model run, F137: there is no separate max-precision setting), its allowed values, the choices that only
+emulate a reference format (``emulation``: never a default, agents' rule 17; testing/settings_lint.py) and the reason
+for the default (owner decisions with their date). An environment variable ``<PREFIX><NAME>`` overrides
 it for experiments and A/B reports; nothing else reads the environment. testing/settings_lint.py enforces this.
 
     from models.demos.common.bringup.core.model_settings import Setting, Settings
@@ -23,17 +24,12 @@ class Setting:
     default: object
     choices: tuple | None = None  # None: any value of the default's type
     why: str = ""
+    emulation: tuple = ()  # choices that round to a format the device neither computes nor stores in (rule 17)
 
 
 class Settings:
-    def __init__(self, prefix: str, table: dict[str, Setting], max_precision: dict | None = None):
-        """max_precision: {name: value} for every precision switch (fidelity, accumulation, KV dtype). Component and
-        swap tests always run with these values (framework rule: they check each step at maximum precision; shipped
-        precision is judged end to end by the ladder and the contract tests)."""
+    def __init__(self, prefix: str, table: dict[str, Setting]):
         self.prefix, self.table = prefix, dict(table)
-        self.max_precision = dict(max_precision or {})
-        unknown = set(self.max_precision) - set(self.table)
-        assert not unknown, f"max_precision names unknown settings: {sorted(unknown)}"
 
     def env_name(self, name: str) -> str:
         return f"{self.prefix}{name}"
@@ -47,10 +43,6 @@ class Settings:
         if s.choices is not None and val not in s.choices:
             raise ValueError(f"{self.env_name(name)}={raw!r}: expected one of {s.choices}")
         return val
-
-    def max_precision_env(self) -> dict[str, str]:
-        """The environment overrides that put every precision switch at its maximum."""
-        return {self.env_name(n): str(v) for n, v in self.max_precision.items()}
 
     def all(self) -> dict:
         """Every switch's current value (the profile and the dashboard record these)."""

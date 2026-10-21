@@ -1,18 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Framework rule: component and swap tests check each step at maximum precision (HiFi4, fp32 accumulation, a bf16
-KV cache), whatever the model ships with. Performance work may lower precision; that is judged end to end by the
-ladder and the contract tests on the shipped defaults, never by the component limits.
+"""A model's settings (tt/settings.py) as the framework uses them: an A/B switch as environment variables (F103) and
+an accepted perf pick shipped as the new default (F104).
 
-``apply(spec)`` sets the model's max-precision overrides (``tt/settings.py``: ``Settings(..., max_precision={...})``)
-in the environment before a component or swap test builds its modules. A variable the caller already set wins.
-Switch: ``tests.component_max_precision`` (defaults.yaml)."""
+F137 (owner): every gated device test runs the shipped defaults; there is no max-precision device run, not even as a
+diagnostic (a failing per-step test is diagnosed on the CPU: testing/devfmt.py)."""
 
 from __future__ import annotations
 
 import importlib
-import os
 from pathlib import Path
 
 
@@ -29,13 +26,6 @@ def model_settings(spec, fresh: bool = False) -> list:
     except ModuleNotFoundError:
         return []
     return [v for v in vars(mod).values() if isinstance(v, Settings)]
-
-
-def overrides(spec) -> dict[str, str]:
-    env = {}
-    for v in model_settings(spec):
-        env.update(v.max_precision_env())
-    return env
 
 
 def switch_env(spec, switch: dict) -> tuple[dict[str, str], list[str]]:
@@ -108,17 +98,3 @@ def set_defaults(spec, switch: dict) -> list[str]:
     if edits:
         path.write_text(src)
     return done
-
-
-def apply(spec) -> dict[str, str]:
-    """Set the max-precision overrides; return the ones applied (printed by the tests)."""
-    if not spec.get("tests.component_max_precision"):
-        return {}
-    applied = {}
-    for k, v in overrides(spec).items():
-        if k not in os.environ:
-            os.environ[k] = v
-            applied[k] = v
-    if applied:
-        print("component test at max precision: " + ", ".join(f"{k}={v}" for k, v in sorted(applied.items())))
-    return applied
