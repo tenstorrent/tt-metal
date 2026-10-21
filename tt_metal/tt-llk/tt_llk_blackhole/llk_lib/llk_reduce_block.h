@@ -30,4 +30,13 @@ constexpr bool reduce_col_paired(const TensorShape& tensor_shape)
     return (reduce_dim == ReduceDim::REDUCE_COL) && (pool_type != PoolType::MAX) && (tensor_shape.total_num_faces() == 4) &&
            (tensor_shape.face_r_dim == FACE_R_DIM);
 }
+
+// Unpack and math must agree on the SCALAR SUM/AVG pair layout (the same face of two tiles in one SrcA bank, rows 0-15 and
+// 16-31); the caller of both block calls passes the same decision, and it holds only when the block accumulates into one tile.
+template <PoolType pool_type, ReduceDim reduce_dim>
+constexpr bool reduce_scalar_paired(const TensorShape& tensor_shape)
+{
+    return (reduce_dim == ReduceDim::REDUCE_SCALAR) && (pool_type != PoolType::MAX) && (tensor_shape.total_num_faces() == 4) &&
+           (tensor_shape.face_r_dim == FACE_R_DIM);
+}
 }
