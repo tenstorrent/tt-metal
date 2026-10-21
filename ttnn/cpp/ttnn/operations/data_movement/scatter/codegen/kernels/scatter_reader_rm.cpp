@@ -60,11 +60,9 @@ void kernel_main() {
     constexpr uint32_t chunk_elems = get_compile_time_arg_val(11);
     constexpr auto index_ta_args = TensorAccessorArgs<12>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
+    // This reader overwrites; every reduce the gate admits is served by scatter_reader_bf16_reduce_rm.cpp.
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
-    constexpr uint32_t value_kind = get_named_compile_time_arg_val("value_kind");
-    // scatter_reduce_value has no bfloat16 (kind 5) arm; a bf16 reduce belongs to
-    // scatter_reader_bf16_reduce_rm.cpp, and here it would drop every update.
-    static_assert(reduction_mode == 0 || value_kind != 5, "bfloat16 reduction is not served by this reader");
+    static_assert(reduction_mode == 0, "this reader does not reduce");
 
     constexpr uint32_t one_page = 1;
 
@@ -93,8 +91,8 @@ void kernel_main() {
         in_cb.wait_front(one_page);
         out_cb.reserve_back(one_page);
 
-        // Copy input → output via NOC L1→L1 (hardware DMA, much faster than
-        // volatile loop). Must complete before any scatter write below.
+        // Copy input → output with one NOC L1→L1 read; it must complete before any
+        // scatter write below.
         const uint32_t in_l1 = in_cb.get_read_ptr();
         const uint32_t out_l1 = out_cb.get_write_ptr();
         constexpr uint32_t stick_bytes = input_stick_elems * output_df_size;
@@ -141,9 +139,7 @@ void kernel_main() {
                 const uint32_t dest_idx = get_value_from_tile(idx_l1, i, index_df_size);
                 if (dest_idx < input_stick_elems) {
                     const uint32_t val = get_value_from_tile(src_l1, i, src_df_size);
-                    const uint32_t output_value = scatter_reduce_value(
-                        get_value_from_tile(out_l1, dest_idx, output_df_size), val, reduction_mode, value_kind);
-                    write_value_to_tile(out_l1, dest_idx, output_df_size, output_value);
+                    write_value_to_tile(out_l1, dest_idx, output_df_size, val);
                 }
             }
         }

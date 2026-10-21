@@ -46,7 +46,6 @@ struct ScatterTileGeometry {
     uint32_t output_logical_w = 0;
     uint32_t idx_valid_h_last = 0;
     uint32_t idx_valid_w_last = 0;
-    uint32_t Ht_per_batch_input = 0;
     uint32_t Ht_per_batch_src = 0;
 };
 ScatterTileGeometry compute_scatter_tile_geometry(
@@ -60,10 +59,6 @@ struct ScatterRmGeometry {
     uint32_t index_stick_elems = 0;
 };
 ScatterRmGeometry compute_scatter_rm_geometry(const Tensor& input_tensor, const Tensor& index_tensor);
-
-// Reduction-arithmetic dtype tag consumed by scatter_common.hpp's scatter_reduce_value (1=float32,
-// 2=int32, 3=uint32, 4=uint16, 5=bfloat16); 0 (unused) when reduction_mode == 0.
-uint32_t scatter_value_kind(tt::tt_metal::DataType dtype);
 
 // The output buffer's ALIGNED page size, usable before the output buffer itself exists.
 // The output spec always carries the input's own dtype and tile, so the unaligned

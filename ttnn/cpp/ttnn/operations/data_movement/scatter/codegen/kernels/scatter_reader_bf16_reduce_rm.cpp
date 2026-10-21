@@ -47,7 +47,6 @@ void kernel_main() {
     constexpr auto index_ta_args = TensorAccessorArgs<12>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
-    constexpr bool packed_bf16_io = get_named_compile_time_arg_val("packed_bf16_io") != 0;
     static_assert(reduction_mode == 1 || reduction_mode == 2);
 
     const auto index_accessor = TensorAccessor(index_ta_args, index_addr, index_page_bytes);
@@ -74,20 +73,8 @@ void kernel_main() {
         const volatile tt_l1_ptr uint16_t* input = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb.get_read_ptr());
         volatile tt_l1_ptr uint16_t* output = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_cb.get_write_ptr());
 
-        if constexpr (packed_bf16_io) {
-            // Requires an even input_stick_elems, which the host must gate before enabling
-            // packed_bf16_io. Two lanes per L1 transaction, same lane order and scalar conversion.
-            const volatile tt_l1_ptr uint32_t* input_packed =
-                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(input);
-            for (uint32_t i = 0; i < input_stick_elems; i += 2) {
-                const uint32_t pair = input_packed[i >> 1];
-                accum[i] = bf16_to_fp32(static_cast<uint16_t>(pair));
-                accum[i + 1] = bf16_to_fp32(static_cast<uint16_t>(pair >> 16));
-            }
-        } else {
-            for (uint32_t i = 0; i < input_stick_elems; ++i) {
-                accum[i] = bf16_to_fp32(input[i]);
-            }
+        for (uint32_t i = 0; i < input_stick_elems; ++i) {
+            accum[i] = bf16_to_fp32(input[i]);
         }
 
         const uint32_t input_stick_id = start_stick + s;
@@ -122,17 +109,8 @@ void kernel_main() {
             }
         }
 
-        if constexpr (packed_bf16_io) {
-            volatile tt_l1_ptr uint32_t* output_packed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output);
-            for (uint32_t i = 0; i < input_stick_elems; i += 2) {
-                const uint32_t lo = fp32_to_bf16(accum[i]);
-                const uint32_t hi = fp32_to_bf16(accum[i + 1]);
-                output_packed[i >> 1] = lo | (hi << 16);
-            }
-        } else {
-            for (uint32_t i = 0; i < input_stick_elems; ++i) {
-                output[i] = fp32_to_bf16(accum[i]);
-            }
+        for (uint32_t i = 0; i < input_stick_elems; ++i) {
+            output[i] = fp32_to_bf16(accum[i]);
         }
         in_cb.pop_front(one_page);
         out_cb.push_back(one_page);
