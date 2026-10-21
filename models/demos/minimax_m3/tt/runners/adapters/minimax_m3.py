@@ -15,9 +15,9 @@ not the DeepSeek merged/replicated kvpe cache. Single-rank AND pipeline-parallel
 prefill are wired: the runtime slices the model by rank (first_layer_idx / is_first_rank / is_last_rank),
 and the D2D activation ships emb-replicated across TP (pipeline_activation_emb_tp_sharded=False) to match
 M3's SP residual layout. KV-chunk-table migration is wired for BOTH: the multi-tensor cache is described
-by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/kv_chunk_table.py``), and
+by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/cache_address_table.py``), and
 with a pipeline the gathered stage layouts merge every stage's layers into one table at global layer
-indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``).
+indices (one layout per cache — k, v, index_k — via ``cache_stages``).
 
 A multi-turn continuation may resume mid-chunk at any 32-token boundary (the KV-cache writer's tile grid),
 as the producer's ``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode does.
@@ -124,7 +124,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # KV cache + runtime build
     # ------------------------------------------------------------------
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
+    def allocate_caches(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Allocate M3's regular TP-head-sharded triple KV cache (K / V / index_k), one shared cache of
         num_users * num_layers user-major slots. The engine owns the returned object and passes it into
         every runtime call."""

@@ -282,7 +282,7 @@ def test_kimi_kv_cache_mock(
 def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers, device_params, monkeypatch):
     from types import SimpleNamespace
 
-    from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+    from models.demos.deepseek_v3_d_p.tt.runners import cache_address_table
     from models.demos.deepseek_v3_d_p.utils.test_utils import preload_cache, tp_stripe_major_cache
 
     sp_axis, tp_axis = 0, 1
@@ -335,8 +335,8 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
         built["table"] = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
         return path
 
-    monkeypatch.setattr(kv_chunk_table, "serialize_kv_chunk_table", _keep_table)
-    kv_chunk_table.build_and_serialize_kv_chunk_table(
+    monkeypatch.setattr(cache_address_table, "serialize_cache_address_table", _keep_table)
+    cache_address_table.build_and_serialize_cache_address_table(
         mesh_device=mesh_device,
         kvpe_cache=kvpe_cache,
         seq_len=seq_len,

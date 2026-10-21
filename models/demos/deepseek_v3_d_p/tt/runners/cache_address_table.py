@@ -5,7 +5,7 @@
 
 This is the MODEL-specific half of migration bring-up: build the KvChunkAddressTable
 from the device KV layout and serialize it to a protobuf file. ``TtPrefillRuntime``
-calls this via ``runtime.build_kv_chunk_table(path)``; the runner then publishes the
+calls this via ``runtime.build_cache_address_table(path)``; the runner then publishes the
 serialized table to the migration worker over the generic handshake in
 ``models.demos.common.prefill.runners.migration`` (the runner owns the comms).
 
@@ -22,9 +22,9 @@ from typing import Optional
 
 import ttnn
 from models.demos.common.prefill.runners.migration import (
-    allgather_kv_stage_layout,
-    serialize_kv_chunk_table,
-    serialize_prebuilt_kv_chunk_table,
+    allgather_cache_stage_layout,
+    serialize_cache_address_table,
+    serialize_prebuilt_cache_address_table,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
@@ -53,8 +53,8 @@ def config_name(config_id: int, num_configs: int) -> str:
     it reject the pair with "KV config '0': name-to-id mismatch across the loaded tables" and exit
     fatally -- decode publishes "00"/"01" while this side published "0"/"1". Sorted names keep ids in
     position order, which the assert below relies on. Same helper as
-    ``minimax_m3.tt.runners.kv_chunk_table.config_name`` and
-    ``gpt_oss_d_p.tt.runners.kv_chunk_table._stable_config_name``."""
+    ``minimax_m3.tt.runners.cache_address_table.config_name`` and
+    ``gpt_oss_d_p.tt.runners.cache_address_table._stable_config_name``."""
     width = max(2, len(str(max(num_configs - 1, 0))))
     return f"{config_id:0{width}d}"
 
@@ -75,7 +75,7 @@ class KdaTableSpec:
 
     ``geometry`` fixes the segment numbering; ``recurrent`` / ``convolution`` are this rank's slabs when it
     holds any (None on a rank that builds the table for KDA layers it does not own); the two layouts are
-    the all-gathered ``KvCacheStage`` layouts in compacted KDA-slot space; ``layer_rows`` maps that
+    the all-gathered ``CacheStage`` layouts in compacted KDA-slot space; ``layer_rows`` maps that
     space to model layers. See ``populate_kv_chunk_address_table_kda``.
     """
 
@@ -124,11 +124,11 @@ def _num_layers_from_cache(cache, num_users: int) -> int:
     """Layer count a KV cache holds, recovered from its folded batch dim. init_kvpe_cache lays caches
     out user-major with shape[0] = num_users * num_layers, so dividing the batch dim by num_users gives
     this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.3 index
-    cache (which allocate_kv_cache sizes to num_full)."""
+    cache (which allocate_caches sizes to num_full)."""
     return cache.shape[0] // num_users
 
 
-def build_and_serialize_kv_chunk_table(
+def build_and_serialize_cache_address_table(
     *,
     mesh_device,
     kvpe_cache,
@@ -178,7 +178,7 @@ def build_and_serialize_kv_chunk_table(
     num_layers, k_stage_layout, v_stage_layout}``. Use it when the rank building the table is not the
     rank that owns the drafter caches (the KV tail), which is every multi-rank run. Geometry comes from
     the drafter checkpoint config (loaded on every rank), the two stage layouts from
-    ``allgather_kv_stage_layout``. Mutually exclusive with ``dflash_caches``.
+    ``allgather_cache_stage_layout``. Mutually exclusive with ``dflash_caches``.
 
     ``dflash_caches`` (DFlash drafter only): ``(k_cache, v_cache)`` for the drafter's context-KV, which
     also joins the merged table — ``2 * num_kv_heads`` further configs, named by
@@ -221,7 +221,7 @@ def build_and_serialize_kv_chunk_table(
         assert index_kv_cache is None, "a DSA index cache and KDA state slabs in one table is not a supported layout"
         all_caches.extend((kind, kda) for kind in KDA_TABLE_KINDS)
     if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None or kda is not None:
-        return _build_and_serialize_merged_kv_chunk_table(
+        return _build_and_serialize_merged_cache_address_table(
             mesh_device=mesh_device,
             caches=all_caches,
             seq_len=seq_len,
@@ -259,7 +259,7 @@ def build_and_serialize_kv_chunk_table(
             tp_axis=tp_axis if kv_dedup else None,
         )
 
-    return serialize_kv_chunk_table(
+    return serialize_cache_address_table(
         table_builder=_builder,
         num_layers=num_layers,
         max_seq_len=seq_len,
@@ -270,7 +270,7 @@ def build_and_serialize_kv_chunk_table(
     )
 
 
-def _build_and_serialize_merged_kv_chunk_table(
+def _build_and_serialize_merged_cache_address_table(
     *,
     mesh_device,
     caches,
@@ -386,7 +386,7 @@ def _build_and_serialize_merged_kv_chunk_table(
         )
     if stage_layouts is None:
         stage_layouts = [
-            allgather_kv_stage_layout(
+            allgather_cache_stage_layout(
                 mesh_device,
                 int(cache.buffer_address()),
                 mesh_shape,
@@ -398,7 +398,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     if len(stage_layouts) != len(block_cyclic):
         raise RuntimeError(
             f"merged table has {len(block_cyclic)} block-cyclic caches but got {len(stage_layouts)} gathered "
-            "stage layouts; the runtime must describe every config it merges (one KvCacheStage per cache, "
+            "stage layouts; the runtime must describe every config it merges (one CacheStage per cache, "
             "in config order)."
         )
     layout_of = {name: layout for (name, _), layout in zip(block_cyclic, stage_layouts)}
@@ -559,4 +559,4 @@ def _build_and_serialize_merged_kv_chunk_table(
             layer_rows=spec.layer_rows,
         )
 
-    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+    return serialize_prebuilt_cache_address_table(table=table, path=path)

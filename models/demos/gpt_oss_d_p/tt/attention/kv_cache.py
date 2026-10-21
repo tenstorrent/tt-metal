@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.adapter import Caches
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 
@@ -118,7 +118,7 @@ def bounded_blockcyclic_positions(sp, chunk_size_global, capacity_global, writte
 
 
 @dataclass
-class GptOssKVCache(KvCaches):
+class GptOssKVCache(Caches):
     """Externally-owned, user-major packed prefill KV caches for the SP chunked-KV path.
 
     Two persistent device caches, each per-chip shape ``[num_users*num_layers, 1, seq_local, head_dim]``:

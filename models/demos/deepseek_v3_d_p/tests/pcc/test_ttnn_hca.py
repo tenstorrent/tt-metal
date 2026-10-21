@@ -81,7 +81,7 @@ def _config(model_config, num_hidden_layers=4):
 # boundaries.
 #
 # TODO: move to a V4 prefill adapter once V4 has a block and a runtime, so build_runtime and
-# allocate_kv_cache become writable. The adapter would own the config, these floors and the golden-trace
+# allocate_caches become writable. The adapter would own the config, these floors and the golden-trace
 # dir, and serve both the `variant` fixture and whatever runtime is built.
 _VARIANTS = [
     ("flash", DeepSeekV4FlashConfig, 0.997, 0.99, 0.998),

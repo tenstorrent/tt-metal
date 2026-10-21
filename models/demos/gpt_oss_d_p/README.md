@@ -132,7 +132,7 @@ request queue, producer, KV migration to decode). GPT-OSS plugs in through
 carries the mesh defaults. The adapter allocates the cache, builds the runtime and points the engine
 at the model's weight-cache layout. Layer completion is reported to the migration layer through the
 host `on_layer_complete` callback (`set_layer_completion_sink`), not through D2H device records.
-`tt/runners/kv_chunk_table.py` builds the KV chunk address table for migration from the packed
+`tt/runners/cache_address_table.py` builds the KV chunk address table for migration from the packed
 cache. The producer/runner e2e scenario `single_user_full_depth`
 (`models/demos/common/prefill/tests/test_producer_runner_e2e.py`, 11 × 5120-token chunks) runs
 GPT-OSS end to end and checks the producer's KV PCC over the first 5000 positions, which is all the
@@ -244,7 +244,7 @@ tt/moe/                      router.py, tt_gpt_oss_moe.py (EP composition), weig
 tt/mlp.py, tt/rms_norm.py, tt/rope.py, tt/ccl.py
 tt/config.py                 MeshConfig (TP axis -> SP/EP axes)
 tt/model_config.py           ModelArgs: HF config, weight loading incl. MXFP4 dequantization, tensor-cache naming
-tt/runners/adapters/gpt_oss.py   common/prefill adapter;  tt/runners/kv_chunk_table.py  migration table
+tt/runners/adapters/gpt_oss.py   common/prefill adapter;  tt/runners/cache_address_table.py  migration table
 reference/                   CPU golden (HF model + memory tiling)
 scripts/                     golden generation and verification
 tests/                       unit tests, KV table device test, galaxy harness, variable-chunk smoke

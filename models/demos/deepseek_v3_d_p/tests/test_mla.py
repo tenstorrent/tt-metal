@@ -1387,7 +1387,7 @@ def test_mla_chunked_prefill(
     if variant.name == "kimi_k3" and not is_blackhole():
         pytest.skip("kimi_k3 is validated on Blackhole only")
     # The metadata contract serves the trace-safe runtime (inbound_socket_service_sync feeds forward
-    # tt_metadata directly). K3 has no runtime -- build_runtime/allocate_kv_cache deliberately raise
+    # tt_metadata directly). K3 has no runtime -- build_runtime/allocate_caches deliberately raise
     # -- so the path is unreachable for it and passes only via the shared arch-agnostic ttMLA.forward.
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:

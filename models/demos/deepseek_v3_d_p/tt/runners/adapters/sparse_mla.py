@@ -15,7 +15,7 @@ family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK
     derives its dims from, so device and truth stay in sync (see reference.cpu_deepseek_v32).
   * No prefill *serving* runtime is wired yet (P0 scope is sparse-MLA reference parity — see
     ``tests/sparse_mla/``). These adapters exist to feed the pytest ``variant`` fixture with
-    config + metadata; ``allocate_kv_cache`` / ``build_runtime`` therefore raise. Wire those
+    config + metadata; ``allocate_caches`` / ``build_runtime`` therefore raise. Wire those
     (and flip ``supports_pretrained``) when a sparse serving path lands.
 
 Kept import-light like the rest of the adapters: the config builder is imported lazily
@@ -56,7 +56,7 @@ class SparseMLAPrefillAdapter(MLAPrefillAdapter):
         object conftest's ``config_only`` path resolves to."""
         return self.config_builder()
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
+    def allocate_caches(self, *, mesh_device, hf_config, params: PrefillRunParams):
         raise NotImplementedError(f"{self.name}: sparse-attention prefill serving not wired (test-only variant)")
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):

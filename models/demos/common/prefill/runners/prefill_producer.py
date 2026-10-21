@@ -187,7 +187,7 @@ def _require_shared_table_path(world_size: int) -> None:
         sys.exit(1)
 
 
-def _read_kv_chunk_table(timeout_s: int):
+def _read_cache_address_table(timeout_s: int):
     table_path = migration_table_path()
     deadline = time.perf_counter() + timeout_s
     while not os.path.exists(table_path):
@@ -1274,7 +1274,7 @@ def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> boo
     The KVPE reader has the equivalent behaviour inline (``except KeyError: continue`` per layer); the
     drafter needs it hoisted because its reader checks every (layer, head) as one unit.
     """
-    from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
+    from models.demos.deepseek_v3_d_p.tt.runners.cache_address_table import dflash_config_name
 
     try:
         config_id = kv_table.config_id_of(dflash_config_name("k", 0))
@@ -1494,7 +1494,7 @@ def _run_validator(rank: int, world_size: int) -> None:
     logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
 
     try:
-        kv_table = _read_kv_chunk_table(timeout_s)
+        kv_table = _read_cache_address_table(timeout_s)
     except Exception as e:
         logger.error(f"[producer] validator: KV table read raised: {type(e).__name__}: {e}")
         kv_table = None
@@ -1561,7 +1561,7 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
+    kv_table = _read_cache_address_table(timeout_s) if cfg.verify else None
 
     # Without verification the completions are left to whatever consumer owns the channel.
     completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None

@@ -19,8 +19,8 @@ from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache, write_k
 from models.demos.llama_3p1_8b_d_p.tt.model_config import resolve_weights_path
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
 from models.demos.llama_3p1_8b_d_p.tt.rope import apply_indexed_rope, build_indexed_rope, build_transformation_mat
-from models.demos.llama_3p1_8b_d_p.tt.runners.kv_chunk_table import (
-    build_and_serialize_kv_chunk_table,
+from models.demos.llama_3p1_8b_d_p.tt.runners.cache_address_table import (
+    build_and_serialize_cache_address_table,
     build_kv_chunk_address_table,
 )
 
@@ -281,7 +281,7 @@ def test_llama_kv_table_reads_all_synthetic_cache_pages(mesh_device, device_para
                         comparisons += 1
         assert comparisons == EXPECTED_PAGES
         table_path = tmp_path / "llama-kv-table.pb"
-        build_and_serialize_kv_chunk_table(
+        build_and_serialize_cache_address_table(
             mesh_device=mesh_device,
             kv_cache=cache,
             chunk_size=GLOBAL_CHUNK,

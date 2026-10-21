@@ -4,7 +4,7 @@
 """KV chunk address table builder for the MiniMax-M3 GQA prefill cache.
 
 Describes the on-device KV layout as a ``KvChunkAddressTable`` so the migration worker can copy the right
-chunks. ``TtPrefillRuntime.build_kv_chunk_table`` calls this; the runner publishes the serialized table.
+chunks. ``TtPrefillRuntime.build_cache_address_table`` calls this; the runner publishes the serialized table.
 
 The worker treats a chunk's device group as REPLICAS (reads one member, writes the same bytes to all
 destinations). M3's ``k`` / ``v`` are TP-head-sharded — column ``c`` holds a different head, not a replica —
@@ -70,7 +70,7 @@ def _make_config(*, num_layers, max_seq_len, num_users, chunk_size_bytes):
     return cfg
 
 
-def build_and_serialize_kv_chunk_table(
+def build_and_serialize_cache_address_table(
     *,
     mesh_device,
     kv_cache,
@@ -94,7 +94,7 @@ def build_and_serialize_kv_chunk_table(
     ``kv_cache`` is the ``MiniMaxKVCache`` (``.k`` / ``.v`` / ``.index_k`` device tensors); ``num_layers``
     is THIS rank's layer count (== the global total single-rank).
 
-    ``stage_layouts`` (one gathered layout per ``kv_migration_stages`` entry — k, v, index_k) selects the
+    ``stage_layouts`` (one gathered layout per ``cache_stages`` entry — k, v, index_k) selects the
     pipeline-parallel merge: one table spanning every stage's layers, each stage's chunks placed on ITS
     mesh at ITS cache's base address, written at the GLOBAL layer index. With stage_layouts None the
     table covers this rank's mesh alone via local ``buffer_address()`` / fabric-node lookups — the
@@ -194,7 +194,7 @@ def build_and_serialize_kv_chunk_table(
         ):
             raise RuntimeError(
                 f"{cache_name} layout's layer ranges differ from k's; M3's caches share one layer-index "
-                f"space, so kv_migration_stages must report the same range for all three."
+                f"space, so cache_stages must report the same range for all three."
             )
 
     table = ttnn.experimental.disaggregation.KvChunkAddressTable(

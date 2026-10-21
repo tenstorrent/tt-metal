@@ -81,12 +81,12 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             raise RuntimeError(
                 "Kimi-K3 KDA state is split: the engine allocated "
                 f"{'no' if slabs is None else 'the'} slabs and the model built "
-                f"{'no' if carries is None else 'its'} carries; allocate_kv_cache and build_runtime "
+                f"{'no' if carries is None else 'its'} carries; allocate_caches and build_runtime "
                 "disagree on which layers are KDA"
             )
         carries.bind_slabs(slabs)
 
-    def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
+    def cache_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution.
 
         Kimi-K3 writes a KV slab on 24 of its 93 layers, so a 12-layer rank owns 3. The shared
@@ -95,13 +95,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         the DRAM bank round-robin once per layer instead of once per slab and address every slab
         wrongly. So the kvpe stage is numbered in compacted MLA-slot space, and the two KDA stages in
         compacted KDA-slot space, each over one consolidated slab (`KdaStates`). The per-stage
-        allgather is collective, so every rank returns exactly three, with `KvCacheStage(0, 0, 0)`
+        allgather is collective, so every rank returns exactly three, with `CacheStage(0, 0, 0)`
         standing in for a cache this rank does not hold.
 
         The compacted numberings are internal: `kv_table_layer_rows` and `kda_table_layer_rows` map
         them back to the model's layer axis before anything is published.
         """
-        from models.demos.common.prefill.runners.migration import KvCacheStage
+        from models.demos.common.prefill.runners.migration import CacheStage
 
         schedule = self._schedule(first_layer_idx, num_my_layers)
         first_layer_idx, last = schedule.first_layer_idx, schedule.first_layer_idx + schedule.num_layers
@@ -118,13 +118,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
 
         # An empty stage still sits at this rank's slot offset: the merged table requires the gathered
         # stages to tile [0, total), and one at 0 would break that on any later rank.
-        null_kda = KvCacheStage(0, first_kda, 0)
-        # `allocate_kv_cache` returns kvpe=None for a rank that owns no full-attention layer, which
+        null_kda = CacheStage(0, first_kda, 0)
+        # `allocate_caches` returns kvpe=None for a rank that owns no full-attention layer, which
         # is reachable: a 1-layer bring-up run is layer 0, and layer 0 is KDA. No slabs, no stage.
         if kv_caches.kvpe is None:
             if my_slots:
                 raise RuntimeError(f"no KVPE cache allocated but layers {my_slots} own MLA slabs")
-            kvpe_stage = KvCacheStage(0, first_slot, 0)
+            kvpe_stage = CacheStage(0, first_slot, 0)
         else:
             slabs_per_user = kv_caches.kvpe.storage.shape[0] // self.config.num_users
             if slabs_per_user != len(my_slots):
@@ -133,7 +133,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                     f"[{first_layer_idx}, {last}) own {len(my_slots)} MLA layers "
                     f"({my_slots}); the table cannot place them unless the cache is sized to the stage"
                 )
-            kvpe_stage = KvCacheStage(self._kvpe_base_address(kv_caches), first_slot, len(my_slots))
+            kvpe_stage = CacheStage(self._kvpe_base_address(kv_caches), first_slot, len(my_slots))
 
         kda = getattr(kv_caches, "kda_states", None)
         if kda is None:
@@ -146,8 +146,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             raise RuntimeError(f"KDA slabs hold {kda.num_slots} slots but the runtime serves {self.config.num_users}")
         return [
             kvpe_stage,
-            KvCacheStage(int(kda.recurrent.buffer_address()), first_kda, len(my_kda)),
-            KvCacheStage(int(kda.convolution.buffer_address()), first_kda, len(my_kda)),
+            CacheStage(int(kda.recurrent.buffer_address()), first_kda, len(my_kda)),
+            CacheStage(int(kda.convolution.buffer_address()), first_kda, len(my_kda)),
         ]
 
     def kv_table_layer_rows(self, stage_layouts):
@@ -168,7 +168,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         total = sum(stage["count"] for stage in stage_layout) if stage_layout else self._schedule().num_kda_layers
         return list(KimiK3Config.kda_layer_ids()[:total])
 
-    def build_kv_chunk_table(
+    def build_cache_address_table(
         self,
         kv_caches,
         path: str,
@@ -179,19 +179,19 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     ) -> str:
         """One merged table over kvpe (config "00") and the KDA slabs (configs "01" and "02").
 
-        `stage_layouts` is one gathered layout per stage of `kv_migration_stages`, in order; None
+        `stage_layouts` is one gathered layout per stage of `cache_stages`, in order; None
         (single-rank / tests) gathers them here. Only the kvpe layout goes to the shared builder as a
         block-cyclic stage; the KDA layouts travel inside `KdaTableSpec`, since their configs sit on
         the contract's synthetic position axis, not the token axis. Under pipeline parallelism rank 0
         builds the table and may hold different KDA layers than a stage it describes, which is why the
         spec carries the geometry and the gathered layouts rather than only this rank's tensors.
         """
-        from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout
+        from models.demos.common.prefill.runners.migration import allgather_cache_stage_layout
         from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
         from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
+        from models.demos.deepseek_v3_d_p.tt.runners.cache_address_table import (
             KdaTableSpec,
-            build_and_serialize_kv_chunk_table,
+            build_and_serialize_cache_address_table,
         )
 
         if kv_caches.kvpe is None:
@@ -201,10 +201,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             )
         if stage_layouts is None:
             stage_layouts = [
-                allgather_kv_stage_layout(
+                allgather_cache_stage_layout(
                     self.mesh_device, stage.base_addr, self.config.mesh_shape, stage.first_layer, stage.count
                 )
-                for stage in self.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+                for stage in self.cache_stages(kv_caches, first_layer_idx, num_my_layers)
             ]
         if len(stage_layouts) != 3:
             raise RuntimeError(
@@ -241,7 +241,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                 layer_rows=self.kda_table_layer_rows(recurrent_layout),
             )
 
-        return build_and_serialize_kv_chunk_table(
+        return build_and_serialize_cache_address_table(
             mesh_device=self.mesh_device,
             kvpe_cache=kv_caches.kvpe,
             seq_len=self.config.max_seq_len,

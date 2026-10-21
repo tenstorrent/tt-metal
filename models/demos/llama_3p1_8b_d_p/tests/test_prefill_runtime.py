@@ -157,7 +157,7 @@ def test_adapter_allocates_the_runner_resolved_two_slot_cache():
         MODEL_PREFIX + "kv_cache": SimpleNamespace(allocate_kv_cache=allocate),
     }
     with patch.dict(sys.modules, stubs):
-        result = get_adapter("llama_3p1_8b").allocate_kv_cache(mesh_device="mesh", hf_config=None, params=_params())
+        result = get_adapter("llama_3p1_8b").allocate_caches(mesh_device="mesh", hf_config=None, params=_params())
 
     assert result is allocated
     assert captured == {
@@ -237,7 +237,7 @@ def test_runtime_failure_emits_no_layer_acknowledgements(failure, expect_error):
 def test_runtime_exposes_all_sixteen_kv_migration_stages_and_table_hook():
     """The common runner must receive eight K then eight V stages and the production table builder."""
     runtime, cache, _, _ = _runtime()
-    stage_type = namedtuple("KvCacheStage", "base_addr first_layer count")
+    stage_type = namedtuple("CacheStage", "base_addr first_layer count")
     captured = {}
 
     def serialize(**kwargs):
@@ -247,18 +247,18 @@ def test_runtime_exposes_all_sixteen_kv_migration_stages_and_table_hook():
     with patch.dict(
         sys.modules,
         {
-            "models.demos.common.prefill.runners.migration": SimpleNamespace(KvCacheStage=stage_type),
-            MODEL_PREFIX + "runners.kv_chunk_table": SimpleNamespace(build_and_serialize_kv_chunk_table=serialize),
+            "models.demos.common.prefill.runners.migration": SimpleNamespace(CacheStage=stage_type),
+            MODEL_PREFIX + "runners.cache_address_table": SimpleNamespace(build_and_serialize_cache_address_table=serialize),
         },
     ):
-        stages = runtime.kv_migration_stages(cache)
+        stages = runtime.cache_stages(cache)
         assert [stage.base_addr for stage in stages] == [0x10000] * 8 + [0x20000] * 8
         assert [(stage.first_layer, stage.count) for stage in stages] == [(0, 32)] * 16
 
         gathered = [
             [{"base_addr": stage.base_addr, "first_layer": stage.first_layer, "count": stage.count}] for stage in stages
         ]
-        assert runtime.build_kv_chunk_table(cache, "table.pb", stage_layouts=gathered) == "table.pb"
+        assert runtime.build_cache_address_table(cache, "table.pb", stage_layouts=gathered) == "table.pb"
 
     assert captured == {
         "mesh_device": "mesh",

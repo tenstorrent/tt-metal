@@ -67,8 +67,8 @@ class MyModelAdapter(PrefillModelAdapter):
         """The TTNN weight-cache dir for this model + mesh (or None if disabled).
         Mirror the layout the cache-populate run wrote so the runner reads the same files."""
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
-        """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your
+    def allocate_caches(self, *, mesh_device, hf_config, params: PrefillRunParams) -> Caches:
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a `Caches` — your
         own concrete subclass (a named struct of one or more device tensors; e.g. M3's k/v/index_k, or
         the DeepSeek family's kvpe + optional DSA index). The single place your model's KV layout is
         defined. The engine treats it as an opaque handle: it allocates it once, passes it into every
@@ -103,7 +103,7 @@ for the H2D producers.
 `build_runtime` returns a runtime handle. This is where the model actually lives: the
 engine compiles it, drives it per chunk, and reads a few attributes off it. The
 runtime knows how to read/write the KV cache but does NOT own it — the engine
-allocates the cache (via the adapter's `allocate_kv_cache`) and passes it into every
+allocates the cache (via the adapter's `allocate_caches`) and passes it into every
 call that touches it. The engine owns the loop, the sockets, the cache lifetime, and
 all comms (migration publish, LayerAck channel lifecycle, shutdown).
 
@@ -148,25 +148,25 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         Must be idempotent (no-op if already captured) since the engine does not track capture
         state itself."""
 
-    # --- REQUIRED KV-table hooks: `build_kv_chunk_table` and `kv_migration_stages`. The engine builds a
+    # --- REQUIRED KV-table hooks: `build_cache_address_table` and `cache_stages`. The engine builds a
     #     chunk table on every run, so a runtime missing them fails at bringup. Keep the heavy table logic
     #     in your model's own module (a thin forwarder on the runtime), not inline here. ---
-    def build_kv_chunk_table(
+    def build_cache_address_table(
         self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None
     ) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
-        `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
+        `serialize_cache_address_table` helper (common/prefill/runners/migration.py) for the config-population +
         protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
-    def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
-        """One `KvCacheStage` (common/prefill/runners/migration.py) per config of your merged table, in
+    def cache_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
+        """One `CacheStage` (common/prefill/runners/migration.py) per config of your merged table, in
         config order — the engine gathers a layout for each, on every rank, and hands them back to
-        `build_kv_chunk_table` as `stage_layouts`. A single-cache model returns a one-element list
+        `build_cache_address_table` as `stage_layouts`. A single-cache model returns a one-element list
         anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
         cannot pick for you. Number a stage in its own space when that is not the model's global layer
         numbering (a cache only some layers write), and map it back to model layers in your
-        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`).
+        `build_cache_address_table` (see DeepSeek's `kv_table_layer_rows`).
 
         Return `[]` only for a cache layout with no table yet (GPT-OSS's bounded sliding cache): the
         engine then serves without a table, which it allows single-rank with both
@@ -287,7 +287,7 @@ and blocks on its ready, so the endpoint must be up (see
 ## Checklist
 
 - [ ] Adapter implements every abstract `PrefillModelAdapter` method (incl.
-      `allocate_kv_cache`); `name`, `model_config`, and the default paths are set.
+      `allocate_caches`); `name`, `model_config`, and the default paths are set.
 - [ ] `build_runtime` returns a runtime satisfying the section-2 interface (cache
       passed in, not stored).
 - [ ] No reference-modeling / heavy imports at module load (lazy inside methods).

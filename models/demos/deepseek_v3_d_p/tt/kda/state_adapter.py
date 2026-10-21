@@ -403,7 +403,7 @@ class KdaStates:
     """The engine-owned contract copy of every KDA layer's state on this rank.
 
     ``recurrent`` and ``convolution`` are the two slabs described in the module docstring; both are
-    single allocations so a ``KvCacheStage`` can name each by one base address. ``layer_ids`` are
+    single allocations so a ``CacheStage`` can name each by one base address. ``layer_ids`` are
     this rank's GLOBAL KDA layer indices in ascending order and fix the layer axis of both slabs.
     """
 

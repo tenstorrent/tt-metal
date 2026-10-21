@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
+from models.demos.common.prefill.runners.migration import allgather_cache_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -324,7 +324,7 @@ def create_kv_chunk_address_table_block_cyclic(
         seq_len, sp_axis, kvpe_cache, chunk_size_bytes, num_users: as before
         first_layer_idx: this rank's first global layer id (from compute_layer_split)
         num_my_layers: this rank's layer count (defaults to config.num_layers for single-stage callers)
-        stage_layout: optional pre-gathered per-rank stage layout from allgather_kv_stage_layout().
+        stage_layout: optional pre-gathered per-rank stage layout from allgather_cache_stage_layout().
             Pass it when the COLLECTIVE all-gather has already run on all ranks (so only rank 0 builds);
             leave None to run the all-gather inline (single-rank / tests).
         layer_rows: table row to publish each dense cache layer at, for a model whose attention is
@@ -344,7 +344,7 @@ def create_kv_chunk_address_table_block_cyclic(
     # KV base + host. The merge below then covers every layer across every stage. The publish path
     # hoists this so all ranks participate while only rank 0 builds; tests/single-rank run it inline.
     if stage_layout is None:
-        stage_layout = allgather_kv_stage_layout(
+        stage_layout = allgather_cache_stage_layout(
             mesh_device, int(kvpe_cache.buffer_address()), mesh_shape, first_layer_idx, num_my_layers
         )
 
@@ -510,7 +510,7 @@ def populate_kv_chunk_address_table_block_cyclic(
 
     # ---- Legacy single-stage path (direct call, stage_layout is None). ----
     # The pre-#48826 behavior, still exercised by direct callers that don't build a stage_layout
-    # (e.g. test_glm53_kv_cache_table and the kv_chunk_table runner): base addr / bank count derived
+    # (e.g. test_glm53_kv_cache_table and the cache_address_table runner): base addr / bank count derived
     # from the cache itself. tp_axis=None (TP-replicated) is tp_factor == 1 below, so both layouts run
     # the same loop: one device group per row, spanning the whole row's slice.
     host_name = socket.gethostname()
@@ -641,7 +641,7 @@ def populate_kv_chunk_address_table_dflash(
         treats a device group as REPLICAS (it reads one member and writes those bytes to every
         destination), so a row-spanning group would migrate one column's heads as if they were the
         whole row. Hence a SINGLE-MEMBER group per (config, SP row), the same shape
-        ``models/demos/minimax_m3/tt/runners/kv_chunk_table.py`` uses for its head-sharded K/V.
+        ``models/demos/minimax_m3/tt/runners/cache_address_table.py`` uses for its head-sharded K/V.
 
       * **Several heads per chip, so the bank walk is strided.** The table key is
         (layer, position, slot) with no head axis, so each head needs its own config — and a per-head
@@ -669,7 +669,7 @@ def populate_kv_chunk_address_table_dflash(
     write with ``is_last_rank``), so unlike the block-cyclic caches it is never layer-partitioned: there
     is no cross-stage layer range to merge. What pipeline parallelism DOES change is *who describes it* --
     rank 0 builds and serializes the table but owns no drafter tensor. So pass ``stage_layout`` (the
-    all-gathered layout for this cache, from ``allgather_kv_stage_layout``) and the base address, bank
+    all-gathered layout for this cache, from ``allgather_cache_stage_layout``) and the base address, bank
     count, fabric nodes and host name come from the owning rank's gathered entry instead of local
     handles; ranks that own no drafter cache contribute ``count == 0`` and are skipped. Omit it
     (single-rank) and those four facts are read from ``kv_cache`` as before. ``kv_cache`` may be None
@@ -679,7 +679,7 @@ def populate_kv_chunk_address_table_dflash(
         lookup_table: an existing KvChunkAddressTable (single- or multi-config).
         config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
         kv_cache: the drafter K or V device tensor this config describes (read for its base address).
-        chunk_size_bytes: bytes of one 32-token block (``kv_chunk_table._dram_chunk_size_bytes``).
+        chunk_size_bytes: bytes of one 32-token block (``cache_address_table._dram_chunk_size_bytes``).
         num_kv_heads: the drafter's GLOBAL kv-head count (8 for Kimi-K2.6-DFlash).
         head_idx: which global head in [0, num_kv_heads) this config describes.
         config_id: which config of the table to populate.
@@ -940,7 +940,7 @@ def populate_kv_chunk_address_table_kda(
         ``[128, 32]`` band per shard (four 4 KiB tile pages); the convolution slab is interleaved
         row-major with one 384-byte page per segment, which is the same address function.
 
-    ``stage_layout`` (required) is the all-gathered layout of this slab's ``KvCacheStage`` -- numbered
+    ``stage_layout`` (required) is the all-gathered layout of this slab's ``CacheStage`` -- numbered
     in compacted KDA-slot space -- and ``layer_rows`` maps that space back to model layers, exactly as
     the kvpe stage does. Ranks whose stage has ``count == 0`` (no KDA layer) are skipped.
 
@@ -1234,7 +1234,7 @@ def allocate_dflash_kv_cache(
     ``init_kvpe_cache`` documents for the verifier's KVPE cache: ``slot = user_id * num_hidden_layers +
     layer_idx``, so each user's draft layers stay contiguous. This is the linearization
     ``update_padded_kv_cache`` computes on device (``batch_idx = slot_idx * num_layers + layer_idx``), and
-    the one ``kv_chunk_table._num_layers_from_cache`` assumes when it derives a cache's layer count as
+    the one ``cache_address_table._num_layers_from_cache`` assumes when it derives a cache's layer count as
     ``shape[0] // num_users``. ``num_users=1`` (the default) reproduces the single-slot shape.
 
     ND-DRAM-sharded with the same spec ``init_kvpe_cache`` uses — ``[1, 1,
@@ -1268,7 +1268,7 @@ def allocate_dflash_kv_cache(
     )
     assert config.head_dim % ttnn.TILE_SIZE == 0, (
         f"head_dim ({config.head_dim}) must be a multiple of {ttnn.TILE_SIZE} so a bank chunk is a whole "
-        f"number of tiles (kv_chunk_table._dram_chunk_size_bytes rejects otherwise)"
+        f"number of tiles (cache_address_table._dram_chunk_size_bytes rejects otherwise)"
     )
 
     # Per-device (post-shard) shape: slot/layer on dim 0 (user-major, NOT sharded), kv-head split across TP

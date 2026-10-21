@@ -10,7 +10,7 @@ M3 stores three cache tensors (`k`, `v`, `index_k`). `k`/`v` are TP-head-sharded
 `c`); `index_k` is replicated across the TP columns. The migration worker treats a chunk's device group as
 *replicas*, so the KV chunk table encodes **one config per (tensor, head-shard)** — 9 configs
 (`k_h0..3`, `v_h0..3`, `index_k`) — with single-member device groups for K/V and a replica group for
-`index_k` (`tt/runners/kv_chunk_table.py`). The migration layer needs no C++ change.
+`index_k` (`tt/runners/cache_address_table.py`). The migration layer needs no C++ change.
 
 | Gate | What it proves | Needs |
 |------|----------------|-------|
@@ -97,7 +97,7 @@ env PREFILL_CHUNKED=1 PREFILL_CHUNK_SIZE=5120 \
 
 ## Gate 1 — mock migration + producer read-back (table addresses only)
 
-The cheapest isolated check of `build_kv_chunk_table`: the runner serializes the 9-config table and the
+The cheapest isolated check of `build_cache_address_table`: the runner serializes the 9-config table and the
 fabric-node→ASIC device map, and the producer reads each chunk **device-lessly** (`read_dram_umd`, the same
 UMD path the migration worker uses) and PCCs it against golden. No endpoint, no worker, no MPI.
 
@@ -203,7 +203,7 @@ memory — the driver guards this and says so.
 The galaxy is carved into two Z-linked 4×4 sub-meshes (rank 0 = layers 0–29, rank 1 = 30–59; the
 TT_VISIBLE_DEVICES splits come from `topology_configuration/pipeline_prefill_request_intragalaxy_2rank.yaml`).
 Migration-wise everything is the same flow at 2 ranks: both ranks join the per-cache stage-layout
-all-gathers (`kv_migration_stages` reports one `KvCacheStage` per cache — k, v, index_k), rank 0
+all-gathers (`cache_stages` reports one `CacheStage` per cache — k, v, index_k), rank 0
 builds ONE merged 60-layer 9-config table (each stage's chunks at ITS cache's base address, global layer
 indices) and publishes it. Both ranks are on this host, so the producer/driver read-backs cover all 60
 layers once they merge the two rank-scoped device maps.

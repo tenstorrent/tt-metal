@@ -178,26 +178,26 @@ class TtPrefillRuntime:
             raise TypeError("sink must implement layers_completed or be None")
         self._layer_completion_sink = sink
 
-    def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
-        from models.demos.common.prefill.runners.migration import KvCacheStage
+    def cache_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
+        from models.demos.common.prefill.runners.migration import CacheStage
 
         self._check_cache(kv_cache)
         if first_layer_idx not in (None, 0) or num_my_layers not in (None, self.config.num_layers):
             raise ValueError("Llama migration supports one full-model rank")
         return tuple(
-            KvCacheStage(int(t.buffer_address()), 0, self.config.num_layers)
+            CacheStage(int(t.buffer_address()), 0, self.config.num_layers)
             for t in (kv_cache.k, kv_cache.v)
             for _ in range(8)
         )
 
-    def build_kv_chunk_table(self, kv_cache, path, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None):
-        from .runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+    def build_cache_address_table(self, kv_cache, path, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None):
+        from .runners.cache_address_table import build_and_serialize_cache_address_table
 
         self._check_cache(kv_cache)
         if first_layer_idx != 0 or num_my_layers not in (None, self.config.num_layers):
             raise ValueError("Llama migration supports one full-model rank")
         if stage_layouts is not None:
-            stages = self.kv_migration_stages(kv_cache)
+            stages = self.cache_stages(kv_cache)
             if len(stage_layouts) != len(stages):
                 raise ValueError("expected 16 gathered K/V config layouts")
             for gathered, stage in zip(stage_layouts, stages):
@@ -210,7 +210,7 @@ class TtPrefillRuntime:
                     )
                 ):
                     raise ValueError("gathered layout must describe this single-rank cache")
-        return build_and_serialize_kv_chunk_table(
+        return build_and_serialize_cache_address_table(
             mesh_device=self.mesh_device, kv_cache=kv_cache, chunk_size=self.config.chunk_size, path=path
         )
 

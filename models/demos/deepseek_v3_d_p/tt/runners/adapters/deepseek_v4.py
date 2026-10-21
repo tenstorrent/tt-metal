@@ -8,7 +8,7 @@ Subclasses ``MLAPrefillAdapter`` for the shared plumbing and replaces what V4 do
 * the config is built from the model-config class (``v4_hf_config``), not read from the checkpoint;
 * there is no ttnn weight cache and no engine-owned KV cache. V4 attention reads its weights off torch
   modules and keeps its own state, so ``build_runtime`` loads the native checkpoint on host, one layer
-  at a time, and ``allocate_kv_cache`` hands back an empty handle;
+  at a time, and ``allocate_caches`` hands back an empty handle;
 * a pipeline rank other than the first may not start inside the hash-routed layers, which need host
   token ids that only the first rank has.
 """
@@ -25,7 +25,7 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
-from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaCaches
 
 _CHECKPOINT_ROOT = "/mnt/models/blaze/deepseek-ai"
 _TRACE_ROOT = "/mnt/models/deepseek-prefill-cache/golden/structured_traces"
@@ -64,9 +64,9 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
             raise FileNotFoundError(f"no DeepSeek-V4 checkpoint index at {path}; set PREFILL_HF_MODEL")
         return path
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
+    def allocate_caches(self, *, mesh_device, hf_config, params) -> MlaCaches:
         """Empty: every V4 attention allocates and owns its own state."""
-        return MlaKvCaches(kvpe=None)
+        return MlaCaches(kvpe=None)
 
     def layer_split_boundaries(self, num_layers: int) -> set:
         """Layer 0, or any layer past the hash-routed ones."""

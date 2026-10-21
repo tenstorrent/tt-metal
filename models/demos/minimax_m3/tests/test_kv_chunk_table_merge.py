@@ -3,7 +3,7 @@
 
 """Device-free checks of the M3 multi-stage (pipeline-parallel) KV chunk table merge.
 
-Drives ``build_and_serialize_kv_chunk_table`` with synthetic 2-stage ``stage_layouts`` (one gathered
+Drives ``build_and_serialize_cache_address_table`` with synthetic 2-stage ``stage_layouts`` (one gathered
 layout per cache — k, v, index_k) and a stub kv_cache (the merged path reads only dtypes/shapes from it —
 addresses, fabric nodes, hosts and bank counts all come from the gathered layouts), then asserts the
 table's addressing against the layouts: per-(stage, cache) base addresses at global layer indices,
@@ -21,7 +21,7 @@ import pytest
 import ttnn
 from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
 from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-from models.demos.minimax_m3.tt.runners.kv_chunk_table import _chunk_size_bytes, build_and_serialize_kv_chunk_table
+from models.demos.minimax_m3.tt.runners.cache_address_table import _chunk_size_bytes, build_and_serialize_cache_address_table
 
 SP = 2
 COLS = 4  # == num_kv_heads (the builder asserts the 1:1 head->column map)
@@ -43,7 +43,7 @@ def _base(stage_idx: int, cache_idx: int) -> int:
 
 
 def _stage_layouts():
-    """One gathered layout per cache (k, v, index_k — the kv_migration_stages order), each spanning the
+    """One gathered layout per cache (k, v, index_k — the cache_stages order), each spanning the
     two pipeline stages. All three share fnids/banks/ranges; only the base address differs per cache."""
     layouts = []
     for cache_idx in range(3):
@@ -85,7 +85,7 @@ def _build(
 ):
     path = os.path.join(str(tmp_path), "m3_merge_table.pb")
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
-    return build_and_serialize_kv_chunk_table(
+    return build_and_serialize_cache_address_table(
         mesh_device=None,
         kv_cache=_stub_cache(STAGE_COUNTS[0], seq_len=seq_len, index_k_tp_axis=index_k_tp_axis),
         seq_len=seq_len,

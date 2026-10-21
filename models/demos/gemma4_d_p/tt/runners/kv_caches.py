@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import ttnn
-from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.adapter import Caches
 from models.demos.gemma4_d_p.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
     init_global_ring_kv_cache,
@@ -18,7 +18,7 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
 
 
 @dataclass
-class Gemma4KvCaches(KvCaches):
+class Gemma4Caches(Caches):
     """One durable migration-ready ring cache per semantic model layer."""
 
     layers: list = field(repr=False)
@@ -52,7 +52,7 @@ def allocate_ring_kv_caches(
     prefill_chunk_size: int = 8192,
     num_layers: int | None = None,
     cache_dtype=ttnn.bfloat8_b,
-) -> Gemma4KvCaches:
+) -> Gemma4Caches:
     """Allocate the sole compute+migration cache family for a CP prefill model."""
     num_layers = num_layers or hf_config.num_hidden_layers
     if num_users <= 0 or num_layers <= 0:
@@ -85,7 +85,7 @@ def allocate_ring_kv_caches(
         else:
             raise ValueError(f"unsupported Gemma 4 layer type {layer_type!r} at layer {layer_idx}")
         caches.append(cache)
-    return Gemma4KvCaches(
+    return Gemma4Caches(
         layers=caches,
         layer_types=layer_types,
         num_users=num_users,

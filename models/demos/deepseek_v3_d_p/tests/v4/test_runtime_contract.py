@@ -177,5 +177,5 @@ def test_adapter_keeps_the_hash_layers_on_the_first_rank(name, model_cfg):
 @pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
 def test_adapter_allocates_no_kv_cache_and_no_weight_cache(name, model_cfg):
     adapter = get_adapter(name)
-    assert adapter.allocate_kv_cache(mesh_device=None, hf_config=None, params=None).kvpe is None
+    assert adapter.allocate_caches(mesh_device=None, hf_config=None, params=None).kvpe is None
     assert adapter.weight_cache_path((8, 4)) is None

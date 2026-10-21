@@ -32,8 +32,8 @@ from models.demos.gpt_oss_d_p.tt.attention.kv_cache import (
     allocate_kv_cache,
     write_kv_chunk,
 )
-from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import (
-    build_and_serialize_kv_chunk_table,
+from models.demos.gpt_oss_d_p.tt.runners.cache_address_table import (
+    build_and_serialize_cache_address_table,
     build_kv_chunk_address_table,
 )
 from tests.ttnn.utils_for_testing import assert_equal
@@ -199,7 +199,7 @@ def test_gpt_oss_kv_chunk_table_protobuf_roundtrip(
         head_dim=HEAD_DIM,
     )
     pb_path = tmp_path / "gpt_oss_kv_chunk_table.pb"
-    build_and_serialize_kv_chunk_table(
+    build_and_serialize_cache_address_table(
         mesh_device=mesh_device,
         kv_cache=kv_cache,
         seq_len=seq_len,

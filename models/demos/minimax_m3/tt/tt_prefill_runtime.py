@@ -7,12 +7,12 @@ Mirrors the DeepSeek ``TtPrefillRuntime`` contract so the model-agnostic prefill
 (``models/demos/common/prefill/runners/prefill_runner.py``) can drive M3 through
 ``MiniMaxM3PrefillAdapter``: build model -> compile(kv_cache) -> prefill_chunk(chunk, kv_cache) per
 chunk. The runtime is STATELESS w.r.t. the KV cache — the engine allocates it (via the adapter's
-``allocate_kv_cache``) and passes it into every call that touches it. A runtime owns one rank's layer
+``allocate_caches``) and passes it into every call that touches it. A runtime owns one rank's layer
 slice (first_layer_idx / is_first_rank / is_last_rank); the config defaults make a single-rank runtime
 own the whole model. For pipeline-parallel prefill the engine ships the cross-rank hidden state over the
 D2D socket: a non-first rank receives an activation (not tokens) and a non-last rank returns its hidden
 state instead of filling the LM head. KV-chunk-table migration is supported (single-rank) via
-``build_kv_chunk_table`` (a multi-config table; see ``tt/runners/kv_chunk_table.py``).
+``build_cache_address_table`` (a multi-config table; see ``tt/runners/cache_address_table.py``).
 
 Input convention (shared with the engine's H2D socket): ``make_forward_input`` returns the forward's
 token IDs as an SP-sharded uint32 tensor — the SAME per-chip layout the request-mode socket delivers.
@@ -439,7 +439,7 @@ class TtPrefillRuntime:
                 or the H2D socket), embedded on device here then deallocated. On a non-first rank, the
                 hidden-state activation handed over the D2D socket — used directly (the first decoder layer
                 consumes/frees it), NOT embedded.
-            kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the chunks'
+            kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_caches); the chunks'
                 KV is written into it. The same object is passed on every call.
             chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
             request_id: the runner's forward index, part of the runner's call contract; unused here.
@@ -559,20 +559,20 @@ class TtPrefillRuntime:
             ),
         )
 
-    def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
-        """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
+    def cache_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
+        """One ``CacheStage`` per migratable device cache, in the order ``build_cache_address_table``
         consumes their gathered layouts: k, v, index_k. All three share one layer-index space (index_k
         allocates a slot for every layer, zeros on dense ones), so every stage carries the same range."""
-        from models.demos.common.prefill.runners.migration import KvCacheStage
+        from models.demos.common.prefill.runners.migration import CacheStage
 
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         return [
-            KvCacheStage(int(t.buffer_address()), first_layer_idx, num_my_layers)
+            CacheStage(int(t.buffer_address()), first_layer_idx, num_my_layers)
             for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
         ]
 
-    def build_kv_chunk_table(
+    def build_cache_address_table(
         self,
         kv_cache,
         path: str,
@@ -586,14 +586,14 @@ class TtPrefillRuntime:
         migration worker (PREFILL_ENABLE_MIGRATION=1) or leaves it on disk.
 
         Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
-        num_my_layers). The runner all-gathers one layout per ``kv_migration_stages`` entry (k, v,
+        num_my_layers). The runner all-gathers one layout per ``cache_stages`` entry (k, v,
         index_k) and passes them as ``stage_layouts`` so ONLY rank 0 builds the table spanning every
         stage; with stage_layouts None the table covers config.num_layers == the full model from this
         rank's own mesh."""
-        from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+        from models.demos.minimax_m3.tt.runners.cache_address_table import build_and_serialize_cache_address_table
 
         c = self.config
-        return build_and_serialize_kv_chunk_table(
+        return build_and_serialize_cache_address_table(
             mesh_device=self.mesh_device,
             kv_cache=kv_cache,
             seq_len=c.max_seq_len,

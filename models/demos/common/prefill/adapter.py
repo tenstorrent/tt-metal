@@ -98,10 +98,10 @@ class PrefillRunParams:
         return self.mesh_shape[self.tp_axis]
 
 
-class KvCaches(ABC):
-    """Opaque handle for a model's on-device KV cache(s), returned by ``allocate_kv_cache``. The engine
+class Caches(ABC):
+    """Opaque handle for a model's on-device caches, returned by ``allocate_caches``. The engine
     never introspects it: it allocates it once, OWNS its lifetime, passes it back into every runtime call
-    that touches it (compile / prefill_chunk / build_kv_chunk_table),
+    that touches it (compile / prefill_chunk / build_cache_address_table),
     and frees it with the mesh at shutdown. Each model returns its own concrete subclass shaped however
     fits its cache (a named struct of one or more device tensors), so the engine imposes no structure and
     growing/renaming a model's caches never touches it."""
@@ -210,11 +210,11 @@ class PrefillModelAdapter(ABC):
         the cache-populate run wrote. None only if the cache is explicitly empty."""
 
     @abstractmethod
-    def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
-        """Allocate (and zero) this model's KV cache(s) on device and return them as a ``KvCaches`` — your
+    def allocate_caches(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> Caches:
+        """Allocate (and zero) this model's caches on device and return them as a ``Caches`` — your
         model's own concrete subclass (a named struct of one or more device tensors). This is the single
-        place a model's KV layout is defined; the engine OWNS the returned handle's lifetime (see
-        ``KvCaches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
+        place a model's cache layout is defined; the engine OWNS the returned handle's lifetime (see
+        ``Caches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
         num_layers, num_users, …)."""
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
@@ -227,9 +227,9 @@ class PrefillModelAdapter(ABC):
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime
-        is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
-        argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
-        it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
+        is stateless w.r.t. its caches — it receives the engine-owned ``Caches`` as an
+        argument on each call. The engine then calls ``.compile(caches)`` and drives
+        it (make_chunk_input, prefill_chunk, and — when enabled — build_cache_address_table /
         set_layer_completion_sink). ``params`` carries the per-rank knobs."""
 
     # =====================================================================

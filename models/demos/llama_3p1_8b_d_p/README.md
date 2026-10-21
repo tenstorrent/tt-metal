@@ -12,7 +12,7 @@ explicit valid ranges and two independent cache slots.
 ## Model and cache
 
 `tt/model.py::PrefillModel` owns weights and shared attention/RoPE resources.
-The caller owns token tensors, the cache returned by `allocate_kv_cache`, and
+The caller owns token tensors, the cache returned by `allocate_caches`, and
 each returned output. Calls through a model instance must be sequential.
 `upload_token_chunk` packs natural-order host IDs into SP-row order.
 `prefill_chunk(..., skip_lm_head=False)` returns vocabulary-sharded logits;

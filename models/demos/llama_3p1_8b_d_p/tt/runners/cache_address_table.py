@@ -77,8 +77,8 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     return table
 
 
-def build_and_serialize_kv_chunk_table(*, mesh_device, kv_cache, chunk_size, path):
-    from models.demos.common.prefill.runners.migration import serialize_prebuilt_kv_chunk_table
+def build_and_serialize_cache_address_table(*, mesh_device, kv_cache, chunk_size, path):
+    from models.demos.common.prefill.runners.migration import serialize_prebuilt_cache_address_table
 
     table = build_kv_chunk_address_table(mesh_device=mesh_device, kv_cache=kv_cache, chunk_size=chunk_size)
-    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+    return serialize_prebuilt_cache_address_table(table=table, path=path)
