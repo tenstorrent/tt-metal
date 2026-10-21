@@ -1841,6 +1841,102 @@ inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint
     bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
 }
 
+// K 4, 8 and fused 16 merges record one group in the replay buffer and replay it with a counter step per group, as K and m_iter
+// fix every group position. It overwrites the sort's and rebuild's windows, so topk_replay_init is cleared after.
+template <std::uint32_t K, std::uint32_t M>
+struct TopkMergeGeometry
+{
+    static constexpr std::uint32_t dist    = (K << M) > 32 ? 32 : (K << M);
+    static constexpr std::uint32_t ld_dist = (dist < 16) ? dist : 2 * dist;
+    static constexpr std::uint32_t total   = ((64 >> M) < 2 * K) ? 2 * K : (64 >> M);
+    static constexpr std::uint32_t groups  = total / 8;
+    static constexpr std::uint32_t per_blk = K >> 2;
+
+    static constexpr std::uint32_t pos(const std::uint32_t g)
+    {
+        const std::uint32_t offset = (g / per_blk) * 2 * dist + (g % per_blk) * 4;
+        return (offset & 0xF) + (offset >> 4) * 32;
+    }
+};
+
+template <std::uint32_t D>
+[[gnu::always_inline]] inline void topk_incr_dest_counter()
+{
+    if constexpr (D > 0)
+    {
+        constexpr std::uint32_t step = D > 15 ? 15 : D;
+        TTI_INCRWC(0, step, 0, 0);
+        topk_incr_dest_counter<D - step>();
+    }
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t K,
+    std::uint32_t M,
+    std::uint32_t G>
+[[gnu::always_inline]] inline void topk_merge_replay_groups()
+{
+    using Geo                          = TopkMergeGeometry<K, M>;
+    constexpr std::uint32_t io         = FUSED ? 2 : 4;
+    constexpr std::uint32_t rank_first = RANK_STAMPED ? 2 : 0; // per-block rank iota, first group of a block only
+    constexpr std::uint32_t body       = io + rank_first + (RANK_STAMPED ? 13 : 0) + (STABLE_SORT ? 5 : 1) + io;
+    if constexpr (G < Geo::groups)
+    {
+        topk_incr_dest_counter<Geo::pos(G) - Geo::pos(G - 1)>();
+        if constexpr (RANK_STAMPED && (G % Geo::per_blk) != 0)
+        {
+            lltt::replay(0, io);
+            lltt::replay(io + rank_first, body - io - rank_first);
+        }
+        else
+        {
+            lltt::replay(0, body);
+        }
+        topk_merge_replay_groups<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, K, M, G + 1>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER, std::uint32_t K, std::uint32_t M>
+inline void topk_merge_replay_quadrants()
+{
+    using Geo                     = TopkMergeGeometry<K, M>;
+    constexpr std::uint32_t io    = FUSED ? 2 : 4;
+    constexpr std::uint32_t body  = io + (RANK_STAMPED ? 2 + 13 : 0) + (STABLE_SORT ? 5 : 1) + io;
+    std::uint32_t dst_addr_offset = 0;
+    bool record                   = true;
+    for (int face = 0; face < 2; face++)
+    {
+        for (int col = 0; col < 2; col++)
+        {
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+            if (record)
+            {
+                load_replay_buf<Exec>(
+                    0,
+                    body,
+                    [] { bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(0, Geo::ld_dist, true); });
+                record = false;
+            }
+            else
+            {
+                lltt::replay(0, body);
+            }
+            topk_merge_replay_groups<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, K, M, 1>();
+            dst_addr_offset += 2;
+            set_dst_write_addr(dst_addr_offset);
+        }
+        dst_addr_offset = 16;
+        set_dst_write_addr(dst_addr_offset);
+    }
+    topk_replay_init = 0;
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1850,7 +1946,8 @@ template <
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
     std::uint32_t TAG_BITS = 16,
-    bool PER_GROUP         = false>
+    bool PER_GROUP         = false,
+    std::uint32_t KT       = 0>
 inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 {
     static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
@@ -1884,6 +1981,39 @@ inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 
     if constexpr (PER_GROUP)
     {
+        if constexpr (KT == 4 || KT == 8 || (KT == 16 && FUSED))
+        {
+            // m_iter past the last distinct case (dist stays 32, the datums stop shrinking) reads like it
+            constexpr std::uint32_t last_m = KT == 4 ? 3 : (KT == 8 ? 2 : 1);
+            const std::uint32_t m          = m_iter < static_cast<int>(last_m) ? static_cast<std::uint32_t>(m_iter) : last_m;
+#define TOPK_MERGE_REPLAY(MM) topk_merge_replay_quadrants<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, KT, MM>()
+            if (m == 0)
+            {
+                TOPK_MERGE_REPLAY(0);
+            }
+            else if constexpr (last_m == 1)
+            {
+                TOPK_MERGE_REPLAY(1);
+            }
+            else if (m == 1)
+            {
+                TOPK_MERGE_REPLAY(1);
+            }
+            else if constexpr (last_m == 2)
+            {
+                TOPK_MERGE_REPLAY(2);
+            }
+            else if (m == 2)
+            {
+                TOPK_MERGE_REPLAY(2);
+            }
+            else
+            {
+                TOPK_MERGE_REPLAY(3);
+            }
+#undef TOPK_MERGE_REPLAY
+            return;
+        }
         std::uint32_t dst_addr_offset = 0;
         for (int face = 0; face < 2; face++)
         {
@@ -2105,7 +2235,8 @@ inline void _bitonic_topk_merge(const int m_iter)
         _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
         return;
     }
-    _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, K < 32 && per_group>(
+    constexpr bool per_group_k = K < 32 && per_group;
+    _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, per_group_k, K>(
         m_iter, static_cast<int>(K));
 }
 
