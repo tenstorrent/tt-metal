@@ -46,9 +46,10 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         reuse_dest_type: EltwiseBinaryReuseDestType = (
             EltwiseBinaryReuseDestType.DEST_TO_SRCA
         ),
+        arch=None,
         blocks=None,
     ):
-        super().__init__(operation, math_fidelity, blocks)
+        super().__init__(operation, math_fidelity, arch, blocks)
         self.reuse_dest_type = reuse_dest_type
         self.op_name = f"reuse_dest:{operation.name.lower()}"
 

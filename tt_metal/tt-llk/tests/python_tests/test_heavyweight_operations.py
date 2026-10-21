@@ -14,25 +14,13 @@ from helpers.format_config import DataFormat
 from helpers.golden_generator.heavyweight.data_transfer_blocks import (
     UnmodelledHardwareWarning,
 )
-from helpers.golden_generator.heavyweight.operations.blackhole_operations.blackhole_matmul import (
+from helpers.golden_generator.heavyweight.operations import (
     BlackholeMatmulGolden,
-)
-from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_datacopy import (
     QuasarDataCopyGolden,
-)
-from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_eltwise import (
     QuasarEltwiseBinaryGolden,
-)
-from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_matmul import (
-    QuasarMatmulGolden,
-)
-from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_reuse_dest import (
     QuasarEltwiseBinaryReuseDestGolden,
-)
-from helpers.golden_generator.heavyweight.operations.wormhole_operations.wormhole_eltwise import (
+    QuasarMatmulGolden,
     WormholeEltwiseBinaryGolden,
-)
-from helpers.golden_generator.heavyweight.operations.wormhole_operations.wormhole_matmul import (
     WormholeMatmulGolden,
 )
 from helpers.llk_params import EltwiseBinaryReuseDestType, MathFidelity, MathOperation
@@ -102,12 +90,14 @@ def _reuse_dest(tiles_a, tiles_b=None, **kwargs):
     ids=["leftover_tile", "past_the_end", "zero_inner_dim", "negative_block"],
 )
 def test_an_incomplete_reuse_dest_block_is_refused(tiles, kwargs):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         _reuse_dest(tiles, **kwargs)
 
 
 def test_reuse_dest_operands_must_match_in_size():
-    with pytest.raises(ValueError, match="differ in size"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="differ in size"
+    ):  # allow-pytest.raises: host-only test
         _reuse_dest([1] * 4, [1] * 2, inner_dim=2)
 
 
@@ -140,14 +130,18 @@ def _eltwise_add(*operands, **kwargs):
 def test_a_trailing_partial_tile_is_refused_on_both_paths(blocked, extra):
     tiles = 2 if blocked else 1
     x = torch.ones(tiles * TILE + extra)
-    with pytest.raises(ValueError, match="whole number"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="whole number"
+    ):  # allow-pytest.raises: host-only test
         _eltwise_add(x, x, num_tiles_per_output=tiles)
 
 
 @pytest.mark.parametrize("blocked", [False, True], ids=["one_tile", "blocked"])
 def test_operands_of_different_sizes_are_refused(blocked):
     tiles = 2 if blocked else 1
-    with pytest.raises(ValueError, match="differ in size"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="differ in size"
+    ):  # allow-pytest.raises: host-only test
         _eltwise_add(torch.ones(2 * TILE), torch.ones(TILE), num_tiles_per_output=tiles)
 
 
@@ -222,7 +216,9 @@ def test_run_l1_takes_the_reuse_dest_seed_by_name():
 
 def test_run_l1_names_the_inputs_a_sequence_cannot_supply():
     golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
-    with pytest.raises(ValueError, match="missing.*in0_t1"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="missing.*in0_t1"
+    ):  # allow-pytest.raises: host-only test
         golden.run_l1(
             [_l1(golden, 1), _l1(golden, 2)], _config(golden, 2, tiles_per_output=2)
         )
@@ -231,7 +227,9 @@ def test_run_l1_names_the_inputs_a_sequence_cannot_supply():
 def test_run_l1_refuses_a_buffer_the_chain_never_reads():
     golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
     buffers = [_l1(golden, 1), _l1(golden, 2), _l1(golden, 3)]
-    with pytest.raises(ValueError, match="never reads.*in2"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="never reads.*in2"
+    ):  # allow-pytest.raises: host-only test
         golden.run_l1(buffers, _config(golden, 2))
 
 
@@ -297,7 +295,9 @@ def test_matmul_writes_dest_once_per_k_face_per_phase():
 
 def test_matmul_refuses_a_tile_that_is_not_32x32():
     golden = QuasarMatmulGolden(MathFidelity.LoFi)
-    with pytest.raises(ValueError, match="one 32x32 tile at a time"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="one 32x32 tile at a time"
+    ):  # allow-pytest.raises: host-only test
         golden.run(
             [torch.ones(512)] * 2,
             DataFormat.Float16_b,
@@ -341,7 +341,9 @@ def test_datacopy_round_trips_its_input():
 
 def test_a_second_operand_a_chain_never_reads_is_refused():
     """The single-tile path checks this the way run_l1 and the blocked path do."""
-    with pytest.raises(ValueError, match="never reads"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="never reads"
+    ):  # allow-pytest.raises: host-only test
         QuasarDataCopyGolden().run(
             [torch.ones(TILE), torch.ones(TILE)],
             DataFormat.Float16_b,
