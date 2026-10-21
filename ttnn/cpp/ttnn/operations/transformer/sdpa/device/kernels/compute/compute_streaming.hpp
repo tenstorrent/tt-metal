@@ -153,6 +153,14 @@ constexpr bool kRingStepProfilingFine = true;
 #else
 constexpr bool kRingStepProfilingFine = false;
 #endif
+// Levels (TT_SOL_STEP_PROFILE): 1 = one zone per visit (RING_STEP around a computed chunk, RING_DRAIN around a
+// dropped one), so the ~10-event per-core profiler buffer holds ~10 visits and the gaps between them are
+// measurable; 2 = plus the two phase zones per Q subblock / row group; 3 = plus the per-key-subblock zones.
+#if defined(SOL_STEP_PROFILE_PHASES) && defined(PROFILE_KERNEL)
+constexpr bool kRingStepProfilingPhases = true;
+#else
+constexpr bool kRingStepProfilingPhases = false;
+#endif
 
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
@@ -3059,8 +3067,10 @@ void sdpa_ring_v2(
                 if (save_to_staging) {
                     q_cur.sum = cb_sum_out;
                 }
+                {
+                    MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
                 sdpa_inner_loop_step<
-                    kRingStepProfiling,  // profiling_enabled (SOL_STEP_PROFILE + device profiler)
+                    kRingStepProfilingPhases,  // profiling_enabled: phase zones (level 2), fine zones (level 3)
                     Sq_chunk_t,
                     Sk_chunk_t,
                     Skt,
@@ -3126,6 +3136,7 @@ void sdpa_ring_v2(
                     q_base_tiles,
                     {},
                     /*apply_col_bias=*/is_pooled);
+                }
                 if (!is_first) {
                     sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
                     sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
@@ -3187,6 +3198,7 @@ void sdpa_ring_v2(
                     }
                     // Dropped chunk: the reader streamed it (chain lockstep); drain K^T and V without computing.
                     if (!sol_is_pooled && !sol_chunk_kept(k_chunk)) {
+                        MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_DRAIN");
                         CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                         sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                         if constexpr (!kt_inplace_v) {
@@ -3450,8 +3462,10 @@ void sdpa_ring_v2(
                     packed_mask = plan.mask;
                 }
 
+                {
+                    MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
                 sdpa_inner_loop_step<
-                    kRingStepProfiling,  // profiling_enabled (SOL_STEP_PROFILE + device profiler)
+                    kRingStepProfilingPhases,  // profiling_enabled: phase zones (level 2), fine zones (level 3)
                     Sq_chunk_t,
                     Sk_chunk_t,
                     Skt,
@@ -3517,6 +3531,7 @@ void sdpa_ring_v2(
                     q_base_tiles,
                     packed_mask,
                     /*apply_col_bias=*/sol_is_pooled);
+                }
 
                 // Post-iteration cleanup: pop previous values and swap aliases
                 // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
