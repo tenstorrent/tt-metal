@@ -14,7 +14,7 @@
 #include "x280_address_map.h"
 #include "x280_hart_protocol.h"
 
-#include <umd/device/types/telemetry.hpp>
+#include <tt-umd/types/telemetry.hpp>
 
 #include <algorithm>
 #include <array>
