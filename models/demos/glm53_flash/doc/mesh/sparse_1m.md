@@ -366,9 +366,58 @@ positions that is 2 x 11 layers x 1.07 GB of latent (+ 1.5 GB of pooled keys) = 
 12.4 GB of weights does not fit the 32 GB chip. The 1 M single-user run therefore runs without partition (one
 slot per chip, replicated over the row's columns; each column attends its own 16 heads).
 
-Fix for multi-user 1 M (not implemented): do the prefill like the decode, with the heads -> users exchange
-(`GLMMesh.all_to_all_cols`) before the attention of a chunk: column c receives all 64 heads of its own users'
-rows and attends over its own cache only; the inverse exchange returns the attention output head-split for
-`o_proj`. The scratch slot disappears (one slot per user per chip, 11.4 GB at 1 M), and the per-chunk
-whole-prefix copy and the scorer run once per owner instead of on every column. For one user the attention
-of a chunk runs on one column; the MLP / KDA / mHC parts stay sequence-parallel over the rows as today.
+Fix for multi-user 1 M (`GLM53_PREFILL_PARTITION=heads2users`, `arg/glm53_mu1m`; default `scratch` = the layout
+above): do the prefill like the decode, attending where the cache is. The users of a row are prefilled one after
+the other (each chunk belongs to one user, the KDA / mHC / MoE parts stay sequence-parallel over the rows), so the
+"heads -> users" exchange of a chunk degenerates into a gather to the owner column, expressed with the existing
+collectives and no per-device program:
+
+| step of a DSA chunk (per sparse sub-block of n rows) | scratch layout | heads2users |
+|---|---|---|
+| latent fill, pool / ring writes | the user's slot on the owner column, the scratch slot elsewhere | the user's slot on the owner column, DUMMY blocks elsewhere (per-column page-table views, one upload per user) |
+| whole-prefix latent copy, scorer, bounded top-k | every column over the scratch slot | every column over its OWN slot `u % users_per_chip` (the owner's = the real selection; the others score their own user's data: same shapes, discarded) |
+| sparse attention | heads -> sequence a2a: 64 heads on n/4 rows per column, inverse a2a | `all_gather_cols(q_lat, dim=1)` -> `[1,64,n,512]` on every column, `sparse_sdpa` (64 heads, no padding) over the column's own kv copy / index rows, `all_to_all_cols(o, in_dim=1, out_dim=0)` (heads split by column, sources stacked on dim 0: `[4,16,n,512]`), slice entry `owner` = the owner's output for this column's head shard (`TtDSA._sparse_attention(owner=...)`) |
+| dense rows (position < 2048) | head-local K/V SDPA; prefix from the scratch slot | the same; a prefix (0 < start < 2048) is all-gathered on dim 0 from the owner's slot and sliced (`_prefix_rows`, < 2 MB) |
+
+Dummies (`TtLatentCache(prefill_partition="heads2users")`): `DUMMY_BLOCKS = 64` spare latent blocks at the end
+of the paged cache (1 MB per layer) that page-table row `users_per_chip` maps every block onto (j % 64; the row a
+non-owner column's traced prefill names through `PrefillSlot.cache_idx`); the pooled-key index rounds
+`pools + 32` (instead of + 8) up to 256, so the LAST 32-pool block of every slot's region never holds a valid pool
+and is the pool dummy (masked -inf by the shared scorer's causal bound, below every top-k bound; the pool page
+table gets one extra row pointing at it); one extra ring block. Non-owner columns write every block of a chunk
+onto those few dummies (racing DRAM writes of garbage that nothing reads). Memory per chip at 1 M: one slot
+(11 layers x (1.07 GB + 67 MB)) next to the weights instead of two. Cost: the owner's `sparse_sdpa` covers all
+n rows of a sub-block with 64 heads (4x the sequence-split kernel's rows; the other three columns run the same
+kernel on their own data: nothing else to do in SPMD); the scorer / top-k / prefix copy cost what they cost with
+the scratch slot (they were replicated over the columns already); the exchanges move 48 x n x 1 KB per chip each
+way per sub-block (24 MB at n = 512). A lockstep multi-user chunk loop (one chunk of each of the row's 4 users
+per pass) would turn the gather into the true heads -> users all-to-all with no discarded work: not done.
+Tests: `tests/test_mesh_heads2users_prefill.py` (block: exchange primitives, layer-3 R4097 and 16 K-at-64 K vs
+the non-partitioned slab path, per-user state integrity after the other users' prefills),
+`tests/test_mesh_long_context.py` with `GLM53_LONG_USERS=all` (every slot prefilled, per-user chains).
+
+Block validation (rows 0-1 (2,4) block, 2026-10-21 13:30-14:20, logs `_logs/agents/mu1m/`):
+
+| test | result |
+|---|---|
+| exchange primitives | all-gather on the heads dim, all-to-all (heads split by column, sources on dim 0) + slice, prefix gather: exact |
+| layer-3 attention, R4097, users 0-3 one after the other, [4097] / [2048, 2048, 1] / [1024, 2048, 1025] | every user 4097/4097 rows bit-exact vs the replicated-slot slab path, 2049/2049 selections identical; after the four prefills each user's latent / pools / rings on its column equal the reference (the dummy writes touch no live slot) |
+| layer-3 attention, 16384 real rows at a 64 K prefix, users 0-1, [16384] / [8192, 8192] | 16384/16384 rows bit-exact, selections identical, state equal; warm chunk-layer wall 176 ms vs 95 ms for the reference (the 64-head `sparse_sdpa` over all rows instead of a quarter: x0.54-0.61) |
+| e2e 16 K needle, 4 users per row, 45 layers bfp4 experts, chunk 8192 | every user first token 15209 'amber', 8/8 greedy tokens == NEEDLE_16384, needle found on all 8 (row, user) chains; TTFT 11.8 s warm per user (1381-1398 tok/s), decode 133 ms = 7.5 tok/s per user (60 tok/s over the 8 slots); DRAM 27.85 GiB allocated / 3.48 free per chip after the build |
+| e2e 64 K needle, 4 users per row, same config | every user first token 15209, 8/8 greedy tokens == NEEDLE_65536, needle found 8/8; TTFT 46.5 s warm per user (1408 tok/s; user 0 69.5 s with the kernel compiles), decode 150.7 ms = 6.6 tok/s per user (53 tok/s aggregate); DRAM 28.40 GiB allocated / 2.93 free per chip after the build (4 x 64 K slots per row = one per chip) |
+
+| the same 16 K e2e under the scratch layout (A/B, same block and config) | first tokens / needles identical; TTFT 11.0 / 11.0 / 11.3 s for users 1-3 against 11.8 / 11.8 / 11.7 s with heads2users: the owner-gather prefill costs ~+0.7 s (+6 %) on a 16 K prompt through 45 layers; DRAM 28.01 GiB after the build (two 16 K slots per chip) vs 27.85 |
+
+8x4, 1 M x 4 users per row (45 layers bfp8, regions prefill in 2048 sub-chunks, QBLOCK 512, 16 K chunks; first
+attempt 2026-10-21 14:41-15:11, `_logs/agents/mu1m/07_8x4_1m_4users.log`): build 493 s; DRAM after the build
+28.85 GiB allocated / 2.48 GiB free per chip with ONE 1 M slot per chip (32748 latent blocks x 32 x 512 bf16 +
+262144 pools x 128 per DSA layer: 1.00 GiB + 64 MiB, x 11 layers = 11.7 GiB) -- the layout the scratch slot could not
+fit. User 0 prefilled the whole 1 047 526-token prompt: TTFT 751.3 s (1394 tok/s), 9.4-9.7 s per 16 K chunk flat from
+131 K to 1 M (the first and the ragged last chunk carry the compiles: 78 / 70 s), first token 785 'The' as in the
+single-user 1 M run (the depth-0.5 model-limit case above). User 1 ran at 7.0-7.4 s per chunk (nothing to compile) and
+OOM'd at chunk [999424, 1015808) in `indexer.select` on the 260 MB score block (66.5 MB free per bank in pieces of
+<= 30.3 MB): the test's multi-user loop had kept every user's last-chunk streams (128 MB per chip) and logits alive
+between prompts (fixed: released per user; the rerun takes QBLOCK 256 for margin).
+
+Found on the way: `PrefillSlot.allocate` uploaded a 1-element `cache_idx` with the column-sharded mapper, so every
+partitioned `GLM53MeshModel` build had failed since the traced prefill landed (fixed: one slot value per column).
