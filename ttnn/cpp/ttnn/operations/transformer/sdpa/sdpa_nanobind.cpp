@@ -19,6 +19,7 @@
 #include "sparse_sdpa_msa.hpp"
 #include "deepseek_v4_prefill_sdpa.hpp"
 #include "deepseek_v4_prefill_indexer_select.hpp"
+#include "deepseek_v4_prefill_write_rows.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -567,6 +568,26 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("compress_ratio"),
         nb::arg("compute_kernel_config") = nb::none());
+
+    ttnn::bind_function<"deepseek_v4_prefill_write_rows", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Writes row i of ``input`` into row ``rows[i]`` of ``output``, in place. ``rows`` is read on device, so a
+        captured trace writes wherever the replay's indices point, and the cost is the rows written rather than the
+        size of ``output``. An index at or past ``output``'s row count is skipped.
+
+        Args:
+            input (ttnn.Tensor): [1, 1, n, W] ROW_MAJOR DRAM.
+            output (ttnn.Tensor): [1, 1, R, W] ROW_MAJOR DRAM, input's dtype; updated in place.
+            rows (ttnn.Tensor): n uint32/int32 ROW_MAJOR DRAM row indices, in its last dimension.
+
+        Returns:
+            ttnn.Tensor: ``output``.
+        )doc",
+        &ttnn::transformer::deepseek_v4_prefill_write_rows,
+        nb::arg("input").noconvert(),
+        nb::arg("output").noconvert(),
+        nb::arg("rows").noconvert());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

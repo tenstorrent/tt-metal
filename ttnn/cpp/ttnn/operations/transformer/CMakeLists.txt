@@ -38,6 +38,7 @@ target_sources(
             sdpa/sparse_sdpa_msa.hpp
             sdpa/deepseek_v4_prefill_sdpa.hpp
             sdpa/deepseek_v4_prefill_indexer_select.hpp
+            sdpa/deepseek_v4_prefill_write_rows.hpp
             sdpa_decode/sdpa_decode.hpp
             split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
