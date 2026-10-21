@@ -297,14 +297,14 @@ def _h3_all_gather_sweep(mesh_device, dim, cluster_axis, width, rows_list, num_w
         full_shape[dim] *= ring
         torch_full = torch.randn(full_shape, dtype=torch.bfloat16)
         shard_dims = (None, dim) if cluster_axis == 1 else (dim, None)
-        tt_input = ttnn.from_torch(
+        # Tilize on the host: a device-side tilize would add a program per new shape.
+        tt_host = ttnn.from_torch(
             torch_full,
-            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
+        tt_input = ttnn.to_device(tt_host, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         i = calls[0] % 2
         calls[0] += 1
         tt_output = ttnn.experimental.all_gather_async(
