@@ -27,6 +27,16 @@ bool has_default_tile(const Tensor& tensor) {
            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
 }
 
+// Whether the tensor is padded exactly as its own dtype, layout, tile and placement pad its logical
+// shape -- tile rounding and nothing beyond it. A tensor can carry more padding than that
+// (tilize_with_val_padding builds one), and only its padded_shape tells.
+bool has_standard_padding(const Tensor& tensor) {
+    const TensorSpec standard(
+        tensor.logical_shape(),
+        TensorLayout(tensor.dtype(), PageConfig(tensor.layout(), tensor.tensor_spec().tile()), tensor.memory_config()));
+    return standard.padded_shape() == tensor.padded_shape();
+}
+
 }  // namespace
 
 bool supported_execution_controls(
@@ -114,6 +124,13 @@ bool supported_by_codegen(
         (!has_default_tile(input_tensor) || !has_default_tile(index_tensor) || !has_default_tile(src_tensor))) {
         return false;
     }
+    // The factories count pages from padded_shape, while the page map folds the logical shape and
+    // compute_output_specs() allocates tile-rounded padding of it: an operand padded further than
+    // that has pages no other part of the plan accounts for, and its updates land on the wrong rows.
+    if (!has_standard_padding(input_tensor) || !has_standard_padding(index_tensor) ||
+        !has_standard_padding(src_tensor)) {
+        return false;
+    }
     // scatter.cpp's scatter_reduction_mode() throws on any reduce string other than add/multiply
     // before routing reaches this gate, so reduction_mode is one of the three named modes here.
     // BFLOAT16 reduction is only correct through the dedicated ROW_MAJOR accumulator (add/multiply,
@@ -153,15 +170,16 @@ bool supported_by_codegen(
     }
     const int32_t axis = dim < 0 ? dim + rank : dim;
 
-    // Device-resource feasibility. Every question above answers for a host or deallocated tensor too,
-    // so only actually probe L1 once there is a real device behind the tensors; the prim's validate
-    // step raises native's structural error for anything else.
+    // Device-resource feasibility. This and every routing helper consulted after this gate
+    // (prefers_row_major_strategy, codegen_plan_fits_live_l1) read L1 geometry off the operands'
+    // device, so a host-resident or deallocated operand is out of scope outright; native raises its
+    // own structural error for it.
     const bool on_device = input_tensor.storage_type() == StorageType::DEVICE &&
                            index_tensor.storage_type() == StorageType::DEVICE &&
                            src_tensor.storage_type() == StorageType::DEVICE && input_tensor.buffer() != nullptr &&
                            index_tensor.buffer() != nullptr && src_tensor.buffer() != nullptr;
     if (!on_device) {
-        return true;
+        return false;
     }
     if (layout == Layout::TILE) {
         // The streaming factory's footprint is a small, FIXED number of tile pages (2 output + 2
