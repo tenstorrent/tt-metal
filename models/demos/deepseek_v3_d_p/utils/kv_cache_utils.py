@@ -535,9 +535,10 @@ def populate_kv_chunk_address_table_block_cyclic(
     # DENSE rows the cache physically holds. With layer_rows the caller has WIDENED the published layer
     # axis to the global count (config.num_layers) while the cache still holds only its compacted rows,
     # so both the loop bound and the batch check below must use the dense count -- otherwise a compacted
-    # cache is rejected for not having num_users * global_layers slots. The stage_layout branch above is
-    # immune because it loops over each stage's own `count`.
-    num_layers = len(layer_rows) if layer_rows is not None else config.num_layers
+    # cache is rejected for not having num_users * global_layers slots. Alias rows widen it the same way
+    # with no cache rows behind them. The stage_layout branch above is immune because it loops over each
+    # stage's own `count`.
+    num_layers = len(layer_rows) if layer_rows is not None else config.num_layers - len(alias_rows or ())
 
     assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
     num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS
