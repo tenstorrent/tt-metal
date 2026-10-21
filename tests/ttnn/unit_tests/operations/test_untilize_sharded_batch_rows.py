@@ -10,9 +10,9 @@ import ttnn
 @pytest.mark.parametrize(
     "shape,cores",
     [
-        ((2, 7, 65), 2),   # One padded matrix per core.
+        ((2, 7, 65), 2),  # One padded matrix per core.
         ((3, 7, 65), 3),
-        ((4, 7, 65), 2),   # Two matrices per core.
+        ((4, 7, 65), 2),  # Two matrices per core.
         ((2, 40, 31), 4),  # Each matrix spans two cores.
         ((3, 40, 65), 2),  # A core boundary splits the middle matrix.
         ((2, 32, 64), 2),  # No interior padding.
