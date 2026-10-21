@@ -127,6 +127,13 @@ def _cfgs():
             for ct in (2, 4, 8):
                 for k in (1, 8):
                     add("blkfid", fi, fo, dacc, ReduceDimension.Row, ReducePool.Sum, fid, CI_RED(call_ct=ct, k_per_out=k))
+    for fi, fo, dacc in ((B16, B16, NO), (B16, B16, YES), (F32, F32, YES)):  # the SCALAR pair path: the other fidelities, odd counts
+        for fid in (FID.HiFi2, FID.HiFi3):
+            for ct in (2, 4, 8):
+                add("scpair", fi, fo, dacc, ReduceDimension.Scalar, ReducePool.Sum, fid, CI_RED(call_ct=ct, k_per_out=8))
+    for fid in (FID.LoFi, FID.HiFi2, FID.HiFi4):
+        for ct in (3, 5):
+            add("scpair", B16, B16, NO, ReduceDimension.Scalar, ReducePool.Sum, fid, CI_RED(call_ct=ct, k_per_out=ct))
     want = os.environ.get("CI_RED_SET", "")
     if want:
         keep = set(want.split(","))

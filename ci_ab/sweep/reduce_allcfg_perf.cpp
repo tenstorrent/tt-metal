@@ -63,6 +63,20 @@ static constexpr bool COL_PAIRED = (REDUCE_DIM == ReduceDim::REDUCE_COL) && (POO
 static constexpr bool COL_PAIRED = false;
 #endif
 static constexpr std::uint32_t DVALIDS  = ROW_SUM_FULL ? 1 : (COL_PAIRED ? 2 : CI_FACES);
+// The SCALAR SUM/AVG pair layout (the side's opt-in, block calls that accumulate into one tile, full tiles): the face of two tiles
+// per bank, so a call of n >= 2 tiles unpacks and releases 4 valids per tile pair (an odd last tile has its own 4) and one valid per
+// source and face
+#ifdef CI_REDUCE_PAIR
+static constexpr bool SC_PAIR = BLOCK_CALL && (REDUCE_DIM == ReduceDim::REDUCE_SCALAR) && (POOL_TYPE != PoolType::MAX) && CI_FULL_TILE && CI_K > 1;
+#define CI_PAIRARG , SC_PAIR
+#else
+static constexpr bool SC_PAIR = false;
+#define CI_PAIRARG
+#endif
+static inline std::uint32_t call_valids(std::uint32_t n)
+{
+    return (SC_PAIR && n > 1) ? 4 * ((n + 1) / 2) : n * DVALIDS;
+}
 
 static inline std::uint32_t out_dst(std::uint32_t call, std::uint32_t section)
 {
@@ -124,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         else
                         {
-                            _perf_unpack_loop_set_valid<true, true>(n * DVALIDS);
+                            _perf_unpack_loop_set_valid<true, true>(call_valids(n));
                         }
                     }
                     else
@@ -133,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         if constexpr (BLOCK_CALL)
                         {
                             _llk_unpack_AB_reduce_block_<POOL_TYPE, REDUCE_DIM>(
-                                PERF_ADDRESS(PERF_INPUT_A, 0) + call * TILE_STRIDE, PERF_ADDRESS(PERF_INPUT_B, 0), n, TILE_STRIDE, formats.unpack_A_src, CI_SHAPE);
+                                PERF_ADDRESS(PERF_INPUT_A, 0) + call * TILE_STRIDE, PERF_ADDRESS(PERF_INPUT_B, 0), n, TILE_STRIDE, formats.unpack_A_src, CI_SHAPE CI_PAIRARG);
                         }
                         else
 #endif
@@ -211,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         else
                         {
-                            _perf_math_loop_clear_valid<true, true>(n * DVALIDS);
+                            _perf_math_loop_clear_valid<true, true>(call_valids(n));
                         }
                     }
                     else
@@ -224,7 +238,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if CI_REDUCE_HEAD == 2
                                 , formats.unpack_A_src
 #endif
-                            );
+                                CI_PAIRARG);
                         }
                         else
 #endif
