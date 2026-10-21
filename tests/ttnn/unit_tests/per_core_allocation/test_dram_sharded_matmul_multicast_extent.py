@@ -31,19 +31,30 @@ def test_dram_sharded_matmul_preserves_nonparticipant_l1(per_core_mesh_device, k
         return ttnn.MemoryConfig(layout, buffer_type, ttnn.ShardSpec(cores, shape, ttnn.ShardOrientation.ROW_MAJOR))
 
     in0 = ttnn.from_torch(
-        a, layout=ttnn.TILE_LAYOUT, device=device,
+        a,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=memory(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, storage, [32, k // 8]),
     )
     in1 = ttnn.from_torch(
-        b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device,
+        b,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         memory_config=memory(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, dram_grid,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            dram_grid,
             [k, (n // 32 + banks - 1) // banks * 32],
         ),
     )
     out_memory = memory(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, storage, [32, n // 8])
-    out = ttnn.from_torch(torch.zeros((1, 1, 32, n), dtype=torch.bfloat16),
-                          layout=ttnn.TILE_LAYOUT, device=device, memory_config=out_memory)
+    out = ttnn.from_torch(
+        torch.zeros((1, 1, 32, n), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=out_memory,
+    )
     live = []
     sentinel = 0x5A5A5A5A
     try:
@@ -52,23 +63,41 @@ def test_dram_sharded_matmul_preserves_nonparticipant_l1(per_core_mesh_device, k
             config.experimental_set_per_core_allocation(True)
             while True:
                 try:
-                    live.append(ttnn.from_torch(
-                        torch.full((1, words), sentinel, dtype=torch.int32), dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                    ))
+                    live.append(
+                        ttnn.from_torch(
+                            torch.full((1, words), sentinel, dtype=torch.int32),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            device=device,
+                            memory_config=config,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                        )
+                    )
                 except RuntimeError:
                     break
         assert live, "No sentinel was allocated on the nonparticipant core"
         program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=k // 8 // 32, per_core_M=1, per_core_N=n // 8 // 32, fused_activation=None,
+            in0_block_w=k // 8 // 32,
+            per_core_M=1,
+            per_core_N=n // 8 // 32,
+            fused_activation=None,
         )
         compute = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=True,
-            fp32_dest_acc_en=True, packer_l1_acc=True,
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
-        result = ttnn.matmul(in0, in1, program_config=program, memory_config=out_memory,
-                             optional_output_tensor=out, dtype=ttnn.bfloat16, compute_kernel_config=compute)
+        result = ttnn.matmul(
+            in0,
+            in1,
+            program_config=program,
+            memory_config=out_memory,
+            optional_output_tensor=out,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute,
+        )
         got = ttnn.to_torch(result).float()
         expected = a.float() @ b.float()
         assert (got - expected).norm() / expected.norm() < 0.02
