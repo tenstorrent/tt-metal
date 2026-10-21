@@ -802,6 +802,16 @@ def test_packer_l1_acc(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
     _check(out, _golden(a, b))
 
 
+def test_C_slice_single_buffered_when_two_do_not_fit_one_dfb(device):
+    """Two C slices of 8x38 tiles per core: double-buffered they would exceed one DFB, so C_slice holds one."""
+    M, K, N = 16 * TILE, 2 * TILE, 38 * TILE
+    torch.manual_seed(13)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=8, C_slice_N_tiles=38)
+    out = _run(device, a, b, config, packer_l1_acc=True)
+    _check(out, _golden(a, b))
+
+
 @pytest.mark.parametrize("K_tiles", [2, 4], ids=["two_K_chunks", "four_K_chunks"])
 @pytest.mark.parametrize("C_slices_per_core", [1, 2], ids=["one_C_slice", "two_C_slices"])
 def test_accumulate_in_C_slice_then_another_op(device, K_tiles, C_slices_per_core):
