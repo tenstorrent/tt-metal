@@ -987,6 +987,40 @@ def test_minimax_h3_transformer_block(
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
 
 
+@GALAXY_RING
+@pytest.mark.parametrize(
+    ("num_text", "num_audio", "num_video"),
+    [
+        pytest.param(512, 256, 1280, id="dyn_s2048"),
+        pytest.param(512, 512, 3072, id="dyn_s4096"),
+    ],
+)
+def test_minimax_h3_transformer_block_dynamic_length(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    num_text: int,
+    num_audio: int,
+    num_video: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    """The dynamic-length block (frozen AGMM/MMRS/SDPA configs, index gathers) matches the reference at two lengths."""
+    MIN_PCC = 0.9995
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, num_text, num_audio, num_video)
+    tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, dynamic_length=True)
+    tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+
+    before = mesh_device.num_program_cache_entries()
+    tt_out = fixture.run(tt_model)
+    logger.info(f"seq_len={fixture.seq_len}: +{mesh_device.num_program_cache_entries() - before} programs")
+    assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
+
+
 # ---- production-geometry block device-perf (Tracy signposts) ----
 #
 # Run under `scripts/run_safe_pytest.sh --profile`, one duration at a time with `-k`.
