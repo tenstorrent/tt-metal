@@ -86,7 +86,7 @@ FORCE_INLINE void for_each_contiguous_input_run(
     uint32_t conversion_block_pages,
     uint32_t local_copy_core_index,
     uint32_t num_local_copy_cores,
-    Visit&& visit) {
+    const Visit& visit) {
     const uint32_t valid_pages = geometry.valid_pages_per_outer_slice;
     const uint32_t valid_pages_in_shard = geometry.num_outer_slices * valid_pages;
     for (uint32_t conversion_block = local_copy_core_index;
