@@ -45,11 +45,14 @@ constexpr const char* kWriterRm =
 constexpr const char* kReaderBf16ReduceRm =
     "ttnn/cpp/ttnn/operations/data_movement/scatter/codegen/kernels/scatter_reader_bf16_reduce_rm.cpp";
 
-// Default RM index/src streaming chunk before scaling to the live L1 frontier; must stay a multiple
-// of 32 so a chunk boundary offset is 32-byte-aligned for every supported (1/2/4-byte) dtype.
+// Default RM index/src streaming chunk before scaling to the live L1 frontier: the generator's
+// default, 48 KiB per core for an int32 index with bf16 sources, small next to the resident sticks.
 constexpr uint32_t kRmDefaultChunkElems = 8192;
+// A chunk boundary's byte offset is its element count times the element size, so a multiple of 32
+// elements of the 2- and 4-byte dtypes in scope is at least 64 B: NOC-aligned on Wormhole (32 B)
+// and Blackhole (64 B) alike.
 constexpr uint32_t kRmChunkAlign = 32;
-// Smallest NOC-alignment-safe chunk; the floor scatter_rm_min_plan_fits_l1() checks against.
+// Smallest chunk the scaling hands out, and the floor scatter_rm_min_plan_fits_l1() checks against.
 constexpr uint32_t kRmMinChunkElems = 32;
 
 std::vector<uint32_t> scatter_page_dims(const ttnn::Shape& shape, bool tiled) {
