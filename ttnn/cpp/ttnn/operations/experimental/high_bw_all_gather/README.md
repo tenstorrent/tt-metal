@@ -223,6 +223,24 @@ problematic trim-derived VC0 fast path, but also gives up VC0 channel-service
 trimming for every op in that Fabric instance. Use a separate process/Fabric
 instance if another workload needs a different trimming policy.
 
+## Measured contribution
+
+Measurements use a Blackhole LoudBox (8x P150b, firmware bundle `19.12.0` with 200G Ethernet links and a 12x10
+worker grid), opened as an 8x1 mesh, two links, a 14,336-byte Fabric payload, 65,536 rows per device (512K rows
+globally), persistent output, and seven cached device-profiler samples. Effective receive bandwidth is
+`local_bytes * (axis_size - 1) / device_program_time`.
+
+| Format | Fabric | Schedule | Median | Effective receive BW |
+| --- | --- | ---: | ---: | ---: |
+| BF16, 1,152-B row | Fabric1D | line | 10.941 ms | 48.304 GB/s |
+| BF16, 1,152-B row | Fabric1D Ring | ring | 5.533 ms | 95.519 GB/s |
+| BF16, 1,152-B row | Fabric2D | direct physical line | 11.005 ms | 48.024 GB/s |
+
+The Fabric2D line is therefore expected to provide line bandwidth, not the
+two-direction ring bandwidth. Fabric2D Torus uses the ring schedule only when
+the active axis has at least three devices and a direct physical wrap edge; a
+size-two dimension such as the Y axis of the 2x4 LoudBox remains a line.
+
 ## Qualification
 
 Run the host allocator invariants:
