@@ -110,8 +110,10 @@ class State:
 
     def load_prefix(self, layer: int, tensors: dict, n: int):
         """Harness boundary: the reference's state for positions [0, n) (key / value [Hkv, >= n, D], NeoX lanes) into
-        slot 0, one chunk at a time through the cache write (rows past n of the last record zero)."""
+        slot 0, one chunk at a time through the cache write (rows past n of the last record zero). The model's next
+        sequential chunk (embed with start None) then starts at n, so embed stages it and not the first layer."""
         m, attn = self.model, self.model.attn[layer]
+        m.next_start = n
         sp, tp = m.sp, m.tp
         mapper = ttnn.ShardTensor2dMesh(m.mesh, (sp, tp), dims=(0, 1))
         for cs in range(0, n, m.chunk):
@@ -315,9 +317,9 @@ class Model:
             self.head_cfg = ttnn.init_device_compute_kernel_config(
                 mesh.arch(),
                 math_fidelity=getattr(ttnn.MathFidelity, settings.get("LM_HEAD_FIDELITY")),
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
+                math_approx_mode=settings.get("MATH_APPROX_MODE"),
+                fp32_dest_acc_en=settings.get("LM_HEAD_FP32_ACC"),
+                packer_l1_acc=settings.get("PACKER_L1_ACC"),
             )
         del embed
         self.load_seconds = time.time() - t0
@@ -448,7 +450,8 @@ class Model:
 
     def embed(self, tokens, start: int | None = None):
         """One chunk of token ids (natural order, PAD_ID past the real tokens) at absolute start -> the residual.
-        start None: the chunk after the one embedded last since new_state (sequential prefill, as the ladder calls it),
+        start None: the chunk after the one embedded last since new_state, or after the prefix State.load_prefix loaded
+        (sequential prefill, as the ladder and the profile call it),
         so its inputs are staged here and not by the first layer (layer() restages a chunk-aligned start that differs).
         """
         if start is None:

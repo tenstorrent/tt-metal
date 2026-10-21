@@ -45,9 +45,9 @@ class MLP:
         self.cfg = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
             math_fidelity=getattr(ttnn.MathFidelity, settings.get("MLP_FIDELITY")),
-            math_approx_mode=False,
+            math_approx_mode=settings.get("MATH_APPROX_MODE"),
             fp32_dest_acc_en=settings.get("MLP_FP32_ACC"),
-            packer_l1_acc=False,
+            packer_l1_acc=settings.get("PACKER_L1_ACC"),
         )
         self.grid = matmul_grid()
         self.act_dtype = ttnn.float32 if settings.get("MLP_FP32_INTERMEDIATE") else ttnn.bfloat16

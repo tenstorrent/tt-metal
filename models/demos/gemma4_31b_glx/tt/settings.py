@@ -178,6 +178,48 @@ TABLE = {
     "LM_HEAD_FIDELITY": Setting(
         "HiFi4", ("HiFi4", "HiFi3", "HiFi2", "LoFi"), "Tied LM head matmul (fp32 accumulation, fp32 logits)."
     ),
+    # Z.1 settings audit: switches that were literals in the code (each keeps the literal's value).
+    "LM_HEAD_FP32_ACC": Setting(
+        True, None, "fp32 accumulation for the tied LM head matmul (was a literal in tt/model.py)."
+    ),
+    "ATTN_AUX_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "Attention's fp32 helper ops, sliding and global: the head-norm mean, the RoPE rotation and K-permutation "
+        "matmuls, the composed global SDPA (QK^T, softmax sum, P V). Was a literal in tt/attention.py and "
+        "tt/global_attention.py (composed global SDPA: all HiFi4 + fp32 acc).",
+    ),
+    "ATTN_AUX_FP32_ACC": Setting(True, None, "fp32 accumulation for the ops of ATTN_AUX_FIDELITY (was a literal)."),
+    "MATH_APPROX_MODE": Setting(
+        False,
+        None,
+        "math_approx_mode of every compute kernel config of the model (norms, attention, MLP, LM head); was a literal "
+        "False in each (gemma4_d_p: False).",
+    ),
+    "PACKER_L1_ACC": Setting(
+        False,
+        None,
+        "packer_l1_acc of every compute kernel config of the model; was a literal False in each. gemma4_d_p turns it "
+        "on for its MLP and projection matmuls (a perf choice for later).",
+    ),
+    "SDPA_EXP_APPROX": Setting(
+        False,
+        None,
+        "exp_approx_mode of the ring SDPA program configs (sliding ring_joint SDPA, global ring_mla); was a literal "
+        "False (gemma4_d_p: False).",
+    ),
+    "ELTWISE_FAST_APPROX": Setting(
+        False,
+        None,
+        "fast_and_approximate_mode of the fp32 rsqrt (head norms) and exp (composed global softmax); was a literal "
+        "False (the fp32 head norms and softmax match the reference to rounding).",
+    ),
+    "ATTN_GLOBAL_K_SPLITS": Setting(
+        1,
+        None,
+        "Global ring_mla max_k_splits (ATTN_GLOBAL_SDPA=ring_mla only); was a literal 1 (gemma4_d_p: 1 with "
+        "segmented accumulation).",
+    ),
 }
 
 MAX_PRECISION = {
@@ -199,6 +241,12 @@ MAX_PRECISION = {
     "RESIDUAL_FP32_SCALE": True,
     "MODEL_ROPE_LOOKUP": "hilo",
     "LM_HEAD_FIDELITY": "HiFi4",
+    "LM_HEAD_FP32_ACC": True,
+    "ATTN_AUX_FIDELITY": "HiFi4",
+    "ATTN_AUX_FP32_ACC": True,
+    "MATH_APPROX_MODE": False,
+    "SDPA_EXP_APPROX": False,
+    "ELTWISE_FAST_APPROX": False,
 }
 
 settings = Settings("GEMMA4_31B_GLX_", TABLE, max_precision=MAX_PRECISION)

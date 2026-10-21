@@ -270,3 +270,58 @@
 - No code change: the existing `tt/rms_norm.py` and `tt/attention.py` (wired through `device_component` in hooks.py) chain as is in the residual layout.
 - Gate: pcc_swap_out 0.999975, swap_margin_min 1.445; attention vs CPU step rel 0.006748 (limit 0.01289), block out with device vs CPU attention rel 0.00692 (limit 0.01); device_ops attn_norm 3, attention 49, host_flops_frac 0.
 - Re-run: `bfw job check --task S.sliding.02`.
+
+## Z.1 settings audit (run 20261019-130132-gemma31-glx-3, attempt 1), 2026-10-20
+- Moved the literals that pick a behaviour into `tt/settings.py`, each with its current value (no behaviour change).
+  Env names are `GEMMA4_31B_GLX_<NAME>`. The 34 switches already in the table kept their names and defaults.
+- New switches (default; where the literal was before):
+  - `LM_HEAD_FP32_ACC` True: `tt/model.py` Model.head_cfg `fp32_dest_acc_en=True`.
+  - `ATTN_AUX_FIDELITY` "HiFi4" / `ATTN_AUX_FP32_ACC` True: `tt/attention.py` and `tt/global_attention.py`
+    `self.norm_cfg = _compute_config(mesh, "HiFi4", True)`. Used by the head-norm mean, the RoPE rotation and
+    K-permutation matmuls, and the composed global SDPA (QK^T, softmax sum, P V).
+  - `MATH_APPROX_MODE` False: `math_approx_mode=False` in `tt/attention.py::_compute_config`, `tt/mlp.py`,
+    `tt/rms_norm.py`, `tt/model.py` (LM head).
+  - `PACKER_L1_ACC` False: `packer_l1_acc=False` at the same four places.
+  - `SDPA_EXP_APPROX` False: `exp_approx_mode=False` in the SDPAProgramConfig of `tt/attention.py` (ring_joint) and
+    `tt/global_attention.py` (ring_mla).
+  - `ELTWISE_FAST_APPROX` False: `fast_and_approximate_mode=False` of the fp32 rsqrt (`attention.py::_head_norm`,
+    `global_attention.py::_norm`) and the exp (`global_attention.py::_composed_sdpa`).
+  - `ATTN_GLOBAL_K_SPLITS` 1: `max_k_splits=1` in `tt/global_attention.py` (ring_mla mode only).
+  - MAX_PRECISION gained: LM_HEAD_FP32_ACC True, ATTN_AUX_FIDELITY HiFi4, ATTN_AUX_FP32_ACC True, MATH_APPROX_MODE
+    False, SDPA_EXP_APPROX False, ELTWISE_FAST_APPROX False. These equal the defaults, so component and swap tests
+    run the same values as before. PACKER_L1_ACC is left out: it changes how partials are accumulated, not the
+    precision ceiling.
+- Left as code, not switches: ring CCL op structure (`topology=Linear`, `use_column_major_ccl`, `is_balanced=False`,
+  `joint_strategy="rear"`, `is_causal`), the served KV layout and dtypes (contract-fixed: bfp8, ND-shard round robin),
+  weight dtypes (spec: bfloat8_b), the rms_norm block-shard limits `_MAX_GRID_Y=8` / `_MAX_BLOCK_TILES=84` (L1
+  capacity, measured), the shard geometry choices `(12, 2) if rows <= 512 else (8, 4)` (geometry), the global attn
+  `MASK=-1e9`, and every DRAM memory config (the only memory choice the model makes).
+- Environment reads: none in `tt/` or `bringup/hooks.py`. The whole-package lint (`bfw testing.settings_lint`) still
+  reports 6 reads, all in frozen SC.1 contract test code outside Z.1's paths:
+  `tests/bringup/contract/serving_helpers.py:255` (env_flag) and `tests/bringup/contract/test_runner_contract.py:46,
+  85, 153, 168, 235` (PREFILL_MODEL, os.environ copies for subprocesses, PREFILL_H2D_SERVICE_ID,
+  PREFILL_MIGRATION_TABLE_PATH). They are the runner's process interface, not model switches. SETTINGS_AUDIT.md says
+  test code is not a switch, but the lint walks every .py of the package, tests/ included. So the Z.1 gate cannot reach
+  settings_violations == 0 within Z.1's allowed paths. A framework fix is needed (the lint should skip
+  `<model>/tests/`, as it already skips `ttnn/ttnn/bringup/**/tests/`), or a person-approved change to those tests.
+- Re-run: `bfw job check --task Z.1`; ladder only:
+  `BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all generated/bringup/gemma4_31b_glx/tests/test_ladder.py`.
+- Result: `bfw job check --task Z.1` FAIL on settings_violations = 6 (the contract-test reads above). The gate's ladder
+  command, run alone on the edited code, passed (760 s) with numbers identical to the previous L.last run: worst layer
+  pcc 0.992740, final hidden 0.999149, top1/top5 1.0, worst state pcc 0.998889.
+- Attempt 2 (2026-10-20): no code change. I checked again that no switch literal or env read is left in `tt/` or
+  `bringup/hooks.py`. `bfw job check --task Z.1` still FAILs on the same 6 contract-test env reads. Blocked on a
+  framework/person decision (lint scope for `<model>/tests/`).
+
+## Z.1 settings audit (run 20261021-050814-gemma31-glx-3, attempt 1), 2026-10-21
+- Re-applied the earlier Z.1 work (run 20261019-130132-gemma31-glx-3 attempt-2.patch; the section above) unchanged.
+  The settings lint no longer counts `<model>/tests/`, so the 6 contract-test env reads no longer block the gate.
+- Model fix (`tt/model.py`, for the profile X.1): `State.load_prefix(layer, tensors, n)` now sets the model's
+  `next_start = n`, so `Model.embed(tokens)` with no start stages the chunk right after the loaded prefix. Before, it
+  staged at 0 and `model.layer()` saw a mismatched start and restaged the chunk inside the layer call (5 host uploads
+  in `_stage`: positions, qpos, kv_actual, valid, kpos), counted by X.1 as `host_transfers_per_layer = 5`.
+  Sequential embed is unchanged: new_state still resets next_start to 0, and the ladder's prefix rung, which calls
+  `embed(tokens[s0:])` with s0 = the prefix length, now stages at s0 in embed (as the layer used to) instead of at 0.
+- Re-run: `bfw job check --task Z.1`.
+- Result: `bfw job check --task Z.1` PASS (ladder 817 s): settings_violations 0; pcc_final_hidden 0.999149 and
+  pcc_state_min 0.998889 (same as the earlier Z.1 ladder run), top5 1.0; every C.*/S.*/M.1/L.*/K.1 regression PASS.

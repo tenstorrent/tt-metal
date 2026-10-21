@@ -64,9 +64,9 @@ def _compute_config(mesh, fidelity, fp32_acc):
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
         math_fidelity=getattr(ttnn.MathFidelity, fidelity),
-        math_approx_mode=False,
+        math_approx_mode=settings.get("MATH_APPROX_MODE"),
         fp32_dest_acc_en=fp32_acc,
-        packer_l1_acc=False,
+        packer_l1_acc=settings.get("PACKER_L1_ACC"),
     )
 
 
@@ -253,7 +253,7 @@ class SlidingAttention:
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=False,
+            exp_approx_mode=settings.get("SDPA_EXP_APPROX"),
             max_k_splits=self.k_splits,
         )
         # Compact halo receive buffers: the window rounded up to whole k chunks (a full-capacity one is rejected).
@@ -275,7 +275,7 @@ class SlidingAttention:
         self.proj_cfg = _compute_config(mesh, settings.get("ATTN_PROJ_FIDELITY"), settings.get("ATTN_PROJ_FP32_ACC"))
         self.grid = matmul_grid()
         self.sdpa_cfg = _compute_config(mesh, settings.get("ATTN_SDPA_FIDELITY"), settings.get("ATTN_SDPA_FP32_ACC"))
-        self.norm_cfg = _compute_config(mesh, "HiFi4", True)
+        self.norm_cfg = _compute_config(mesh, settings.get("ATTN_AUX_FIDELITY"), settings.get("ATTN_AUX_FP32_ACC"))
 
     def chunk_index(self, start: int) -> int:
         assert start % self.chunk == 0 and 0 <= start < self.max_seq, start
@@ -340,7 +340,10 @@ class SlidingAttention:
                 sq, dim=-1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.norm_cfg
             )
             ttnn.deallocate(sq)
-            r = ttnn.rsqrt(ttnn.add(ms, self.eps, dtype=ttnn.float32), fast_and_approximate_mode=False)
+            r = ttnn.rsqrt(
+                ttnn.add(ms, self.eps, dtype=ttnn.float32),
+                fast_and_approximate_mode=settings.get("ELTWISE_FAST_APPROX"),
+            )
             ttnn.deallocate(ms)
             y = ttnn.multiply(x32, r, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for t in (x32, r):
