@@ -92,6 +92,10 @@ inline std::vector<uint32_t> dram_views_for_channel(const metal_SocDescriptor& s
     return views;
 }
 
+inline uint32_t mimir_of_view(const metal_SocDescriptor& soc_desc, uint32_t view) {
+    return static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
+}
+
 // Each Mimir has one view per coordinate, in location order, so CCE 0 uses the first and CCE 1 the second.
 inline uint32_t local_dram_view_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
     const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index_for_cce(cce_index));
