@@ -1453,12 +1453,14 @@ class MiniMaxH3Pipeline:
         def seq_sharded(t):
             # tt_dit's own from_torch, not ttnn's: `mesh_axes` is the wrapper's mesh-distribution
             # spec, and the row axis is fractured on SP exactly as the model fractures the sequence.
-            return from_torch(
+            table = from_torch(
                 t.reshape(1, 1, padded_len, rotary_dim),
                 device=self.mesh_device,
                 dtype=ttnn.float32,
                 mesh_axes=[..., self.sp_axis, None],
+                on_host=self.dynamic_length,  # tilized on the host: no device tilize keyed on the length
             )
+            return ttnn.to_device(table, self.mesh_device) if self.dynamic_length else table
 
         return seq_sharded(cos), seq_sharded(sin)
 

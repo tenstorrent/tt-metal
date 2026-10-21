@@ -21,7 +21,7 @@ from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .time_dispatch import DispatchTimer, timed_block_index
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
+from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -529,7 +529,10 @@ class MiniMaxH3Transformer3DModel(Module):
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
         rows = temb.shape[2] * MODALITY_NUM
         eye_state = self._eye_states.setdefault(rows, StateTensor())
-        eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+        if self.dynamic_length:
+            eye_state.update(onehot_identity(rows, self.mesh_device), traced=traced)
+        else:
+            eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
         eye = eye_state.value
 
         hidden = self.run_blocks(

@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
 
@@ -37,6 +38,13 @@ NUM_MODULATION_PARAMS = 6
     _SCALE_MLP,
     _GATE_MLP,
 ) = range(NUM_MODULATION_PARAMS)
+
+
+def onehot_identity(rows: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """The dynamic-length path's identity table of the one-hot gathers, padded to a tile width and ROW_MAJOR so
+    ttnn.embedding takes the row-free fused factory and writes TILE output in one launch."""
+    width = -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    return bf16_tensor(F.pad(torch.eye(rows), (0, width - rows)), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 class MiniMaxH3TransformerBlock(Module):
@@ -279,10 +287,19 @@ class MiniMaxH3TransformerBlock(Module):
         """
         if eye is None:
             if rows not in self._eye_tables:
-                self._eye_tables[rows] = bf16_tensor(torch.eye(rows), device=self.mesh_device)
+                self._eye_tables[rows] = (
+                    onehot_identity(rows, self.mesh_device)
+                    if self.dynamic_length
+                    else bf16_tensor(torch.eye(rows), device=self.mesh_device)
+                )
             eye = self._eye_tables[rows]
-        out = ttnn.embedding(adaln_indices, eye, layout=ttnn.TILE_LAYOUT)
-        return ttnn.unsqueeze(out, 0)
+        out = ttnn.unsqueeze(ttnn.embedding(adaln_indices, eye, layout=ttnn.TILE_LAYOUT), 0)
+        if self.dynamic_length:
+            # The tile-wide table gives a tile-wide one-hot; view it back to `rows` columns (no program) so the
+            # gathers see the [rows, hidden] tables' K.
+            n_local, width = out.shape[2], out.shape[3]
+            out = ttnn.reshape(out, ttnn.Shape([1, 1, n_local, rows]), ttnn.Shape([1, 1, n_local, width]))
+        return out
 
     @staticmethod
     def _gather_indices(adaln_indices: ttnn.Tensor) -> ttnn.Tensor:
