@@ -15,10 +15,10 @@ from helpers.llk_params import (
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
-from ..data_transfer_blocks.l1_codec import datums_per_tile
-from .chain import Chain, Registers, StageRecord
+from ...data_transfer_blocks.l1_codec import datums_per_tile
+from ..chain import Chain, Registers, StageRecord
+from ..golden import OpConfig, check_source_layout
 from .eltwise import EltwiseBinaryGolden
-from .golden import OpConfig, check_source_layout
 
 
 class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
