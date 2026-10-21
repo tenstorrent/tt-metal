@@ -32,7 +32,13 @@ from models.common.modules.tt_ccl import (
     default_topology,
     get_tt_ccl,
 )
-from models.common.tensor_utils import TILE_SIZE, get_out_subblock_w, get_padded_hidden_dim, pad_dim_to_size
+from models.common.tensor_utils import (
+    TILE_SIZE,
+    get_out_subblock_w,
+    get_padded_hidden_dim,
+    pad_dim_to_size,
+    with_dram_sharded_cores_per_bank,
+)
 from models.tt_transformers.tt.common import Mode
 
 # =============================================================================
@@ -719,12 +725,13 @@ def _dram_matmul_config(
     m: int, k: int, n: int, num_cores: int, tile_size: int = TILE_SIZE, fused_activation=None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
     """Create DRAM-sharded matmul program config."""
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=_find_largest_divisor(k // (tile_size * num_cores)),
         per_core_M=math.ceil(m / tile_size),
         per_core_N=math.ceil(n / (tile_size * num_cores)),
         fused_activation=fused_activation,
     )
+    return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
 
 def _matmul_config(
