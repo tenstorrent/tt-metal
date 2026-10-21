@@ -113,8 +113,7 @@ def main():
         return 1
 
     results = [
-        check(rec, args.perf_json, label, metric, expected, margin)
-        for metric, (expected, margin) in baseline.items()
+        check(rec, args.perf_json, label, metric, expected, margin) for metric, (expected, margin) in baseline.items()
     ]
     return 0 if all(results) else 1
 
