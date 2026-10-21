@@ -17,7 +17,7 @@
 //
 // Outputs: three uint32 row-major pages of E words (``offsets``, ``totals``, ``region``).
 //
-// compile_time_args = [cb_scratch, E, K, REAL_ROWS, H, EPC, MASK_BYTES, TensorAccessorArgs(idx)..., (mask)...,
+// compile_time_args = [cb_scratch, E, K, REAL_ROWS, H, EPC, MASK_BYTES, TPC, TensorAccessorArgs(idx)..., (mask)...,
 //                      (pin)..., (offsets)..., (totals)..., (region)...]
 // runtime args      = [idx_addr, mask_addr, pin_addr, offsets_addr, totals_addr, region_addr]
 
@@ -41,7 +41,8 @@ void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(4);
     constexpr uint32_t EPC = get_compile_time_arg_val(5);
     constexpr uint32_t MASK_BYTES = get_compile_time_arg_val(6);
-    constexpr auto idx_args = TensorAccessorArgs<7>();
+    constexpr uint32_t TPC = get_compile_time_arg_val(7);  // index tiles per chip
+    constexpr auto idx_args = TensorAccessorArgs<8>();
     constexpr auto mask_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
     constexpr auto pin_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<pin_args.next_compile_time_args_offset()>();
@@ -60,14 +61,14 @@ void kernel_main() {
     DataflowBuffer scratch(cb_scratch);
     const uint32_t base = (scratch.get_write_ptr() + 63) & ~63u;
     const uint32_t tiles_l1 = base;
-    const uint32_t mask_l1 = tiles_l1 + H * U16_TILE;
+    const uint32_t mask_l1 = tiles_l1 + H * TPC * U16_TILE;
     const uint32_t pin_l1 = mask_l1 + MASK_L1;
     const uint32_t total_l1 = pin_l1 + 64;
     const uint32_t local_l1 = total_l1 + WORDS;
     const uint32_t out_l1 = local_l1 + WORDS;
 
-    for (uint32_t h = 0; h < H; ++h) {
-        noc_async_read(idx.get_noc_addr(h, 0), tiles_l1 + h * U16_TILE, U16_TILE);
+    for (uint32_t p = 0; p < H * TPC; ++p) {
+        noc_async_read(idx.get_noc_addr(p, 0), tiles_l1 + p * U16_TILE, U16_TILE);
     }
     noc_async_read(mask.get_noc_addr(0, 0), mask_l1, MASK_BYTES);
     noc_async_read(pin.get_noc_addr(0, 0), pin_l1, 32);
@@ -86,9 +87,9 @@ void kernel_main() {
     }
     // uint16 tile: four 16 x 16 faces, (fy, fx) at element fy * 512 + fx * 256; column j < 16 is face column 0
     for (uint32_t h = 0; h < H; ++h) {
-        volatile tt_l1_ptr uint16_t* tile = tiles + h * (U16_TILE / 2);
+        volatile tt_l1_ptr uint16_t* tile = tiles + h * TPC * (U16_TILE / 2);
         for (uint32_t t = 0; t < REAL_ROWS; ++t) {
-            volatile tt_l1_ptr uint16_t* row = tile + ((t >> 4) << 9) + ((t & 15) << 4);
+            volatile tt_l1_ptr uint16_t* row = tile + ((t >> 5) << 10) + (((t >> 4) & 1) << 9) + ((t & 15) << 4);
             for (uint32_t j = 0; j < K; ++j) {
                 const uint32_t e = row[j];
                 if (e < E && in_group[e] >= 0) {

@@ -7,12 +7,12 @@
 // bits fewer, and merges its per-tile results by chain position, so the two differ on near-ties, where the exact
 // one is the reference's), then
 // w_j = bf16(score[t, idx_j] / (sum_j score[t, idx_j] + eps) * scale) with round-to-nearest-even. ``rank`` and
-// ``score`` are fp32 TILE tensors [T, E] (T <= 32: one tile row; E / 32 tiles across); ``rank`` is score + bias.
-// Rows at or past REAL_ROWS are the padding of the decode tile: they get the sentinel index (E) and weight 0, as
+// ``score`` are fp32 TILE tensors [T, E] (T a multiple of 32 or below it; E / 32 tiles across); ``rank`` is score +
+// bias. Rows at or past REAL_ROWS are the padding of the decode tile: they get the sentinel index (E) and weight 0, as
 // ``moe_grouped_topk`` marks them under a padding config, so the dispatch, combine and reduce skip them.
 //
-// Outputs: ``w`` row-major bf16 [T, K] (one page per row of K * 2 bytes) and ``idx`` uint16 TILE [T, K] (one
-// 32 x 32 tile; row t's K indices land at its row of face (t / 16) * 2: 16-element faces, row-major within a face).
+// Outputs: ``w`` row-major bf16 [T, K] (one page per row of K * 2 bytes) and ``idx`` uint16 TILE [T, K] (32 x 32
+// tiles; row t's K indices land at its row of face (t / 16) * 2 of tile t / 32: 16-element faces, row-major within).
 //
 // After models/demos/blackhole/deepseek_v41_flash/tt/mhc_kernels/router_select.cpp (ssinghal/dsv4p1), with the
 // padding sentinel and the tiled index output for the decode step's routing setup (kernels/route_offsets.cpp).
@@ -80,12 +80,13 @@ void kernel_main() {
 
     // the row inside its (only) tile row: fp32 faces are 16 x 16 x 4 B = 1 KB, two across per tile
     const uint32_t tr = t & 31;
+    const uint32_t pbase = (t >> 5) * NT;  // the first tile page of the row's tile row
     const uint32_t roff = ((tr >> 4) << 11) + ((tr & 15) << 6);
     uint32_t bi[K];
     if (t < REAL_ROWS) {
         for (uint32_t n = 0; n < NT; ++n) {
-            noc_async_read(rank.get_noc_addr(n, roff), rank_l1 + n * 128, 64);
-            noc_async_read(rank.get_noc_addr(n, roff + 1024), rank_l1 + n * 128 + 64, 64);
+            noc_async_read(rank.get_noc_addr(pbase + n, roff), rank_l1 + n * 128, 64);
+            noc_async_read(rank.get_noc_addr(pbase + n, roff + 1024), rank_l1 + n * 128 + 64, 64);
         }
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* rk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1);
@@ -111,7 +112,7 @@ void kernel_main() {
         // the unbiased scores at the chosen experts: the 16-element half row holding each
         for (uint32_t j = 0; j < K; ++j) {
             const uint32_t c = bi[j];
-            noc_async_read(score.get_noc_addr(c >> 5, roff + (((c >> 4) & 1) << 10)), score_l1 + j * 64, 64);
+            noc_async_read(score.get_noc_addr(pbase + (c >> 5), roff + (((c >> 4) & 1) << 10)), score_l1 + j * 64, 64);
         }
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(score_l1);
@@ -135,6 +136,6 @@ void kernel_main() {
         }
     }
     noc_async_write(out_l1, w.get_noc_addr(t, 0), K * 2);
-    noc_async_write(out_l1 + 64, idx.get_noc_addr(0, ((tr >> 4) << 10) + ((tr & 15) << 5)), K * 2);
+    noc_async_write(out_l1 + 64, idx.get_noc_addr(t >> 5, ((tr >> 4) << 10) + ((tr & 15) << 5)), K * 2);
     noc_async_write_barrier();
 }

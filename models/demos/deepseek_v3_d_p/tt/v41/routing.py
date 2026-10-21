@@ -26,6 +26,7 @@ unchanged. The tile needs no 64-row padding any more: ``tt/v41/decode.py`` sets 
 32 rows when the path is on (``V41_DECODE_ROUTING=1``).
 """
 
+import os
 import struct
 
 import torch
@@ -37,6 +38,10 @@ from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS
 
 _KERNELS = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
 _TILE = 32
+# the index tile is gathered repeated: ``ttnn.all_gather`` of one or two pages a chip hangs the traced step now and
+# then; four pages (two a link) have not. The knobs are for bisecting it.
+_GATHER_TILES = int(os.environ.get("V41_DECODE_ROUTING_GATHER_TILES", 4))
+_GATHER_LINKS = int(os.environ.get("V41_DECODE_ROUTING_GATHER_LINKS", 0))  # 0: the fabric's links
 
 
 def _bits(v: float) -> int:
@@ -62,7 +67,7 @@ def router_select(rank, score, k: int, eps: float, scale: float, real_rows: int)
     Returns ``(weights, indices)``: row-major bf16 ``[T, k]`` and uint16 TILE ``[T, k]``, DRAM."""
     T, E = int(rank.shape[-2]), int(rank.shape[-1])
     assert len(rank.shape) == 2 and tuple(score.shape) == (T, E), (tuple(rank.shape), tuple(score.shape))
-    assert T <= _TILE and E % _TILE == 0 and k <= 16, (T, E, k)
+    assert (T <= _TILE or T % _TILE == 0) and E % _TILE == 0 and k <= 16, (T, E, k)
     assert rank.dtype == ttnn.float32 and score.dtype == ttnn.float32, (rank.dtype, score.dtype)
     assert rank.layout == ttnn.TILE_LAYOUT and score.layout == ttnn.TILE_LAYOUT, (rank.layout, score.layout)
     assert 0 < real_rows <= T, (real_rows, T)
@@ -96,14 +101,15 @@ def router_select(rank, score, k: int, eps: float, scale: float, real_rows: int)
     return weights, indices
 
 
-def route_offsets(gathered, mask, pin, num_experts: int, k: int, real_rows: int, experts_per_chip: int):
-    """``gathered``: uint16 TILE ``[1, 1, H * 32, k]`` DRAM, the SP all-gather of the column's index tiles (page
-    ``h`` = chip ``h``; rows below ``real_rows`` of each real). ``mask``: int32 row-major ``[1, E]`` or ``[1, E + 1]``
+def route_offsets(gathered, mask, pin, num_experts: int, k: int, real_rows: int, experts_per_chip: int, rows: int):
+    """``gathered``: uint16 TILE ``[1, 1, H * T, k]`` DRAM (``T`` a multiple of 32), the SP all-gather of the
+    column's index tiles (pages ``h * T / 32 ..`` = chip ``h``'s; rows below ``real_rows`` of each chip real). ``mask``: int32 row-major ``[1, E]`` or ``[1, E + 1]``
     (this group's row of the expert dispatch table). ``pin``: uint32 row-major ``[1, 1, 1, 8]`` per chip, element 0
     the chip's position in the column. Returns ``(offsets, totals, region)``, uint32 row-major ``[1, E]`` DRAM, as
     ``offset_cumsum`` returns them."""
     E = num_experts
-    H = int(gathered.shape[2]) // _TILE
+    tpc = -(-rows // _TILE)  # index tiles per chip
+    H = int(gathered.shape[2]) // (tpc * _TILE)
     assert gathered.dtype == ttnn.uint16 and gathered.layout == ttnn.TILE_LAYOUT, (gathered.dtype, gathered.layout)
     assert int(gathered.shape[2]) % _TILE == 0 and int(gathered.shape[3]) == k, tuple(gathered.shape)
     assert mask.dtype == ttnn.int32 and mask.layout == ttnn.ROW_MAJOR_LAYOUT and int(mask.shape[-1]) >= E, mask
@@ -132,12 +138,12 @@ def route_offsets(gathered, mask, pin, num_experts: int, k: int, real_rows: int,
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{_KERNELS}/route_offsets.cpp",
         core_ranges=cores,
-        compile_time_args=[0, E, k, real_rows, H, experts_per_chip, mask_bytes]
+        compile_time_args=[0, E, k, real_rows, H, experts_per_chip, mask_bytes, tpc]
         + _accessors(gathered, mask, pin, offsets, totals, region),
         runtime_args=args,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    scratch = 64 + H * 2048 + (mask_bytes + 63) // 64 * 64 + 64 + 3 * E * 4
+    scratch = 64 + H * tpc * 2048 + (mask_bytes + 63) // 64 * 64 + 64 + 3 * E * 4
     cbs = [_cb(0, scratch, cores)]
     ttnn.generic_op(
         [gathered, mask, pin, offsets, totals, region], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
@@ -247,20 +253,23 @@ class DecodeRoutingSetup:
         return getattr(self._setup, name)
 
     def _gather(self, tile):
-        """The SP column's index tiles on every chip: ``[1, 1, H * rows, k]`` (page h = chip h)."""
+        """The SP column's index tiles on every chip, each repeated ``_GATHER_TILES`` times:
+        ``[1, 1, H * rows * _GATHER_TILES, k]`` (pages ``h * _GATHER_TILES ..`` = chip h's)."""
+        if _GATHER_TILES > 1:
+            tile = ttnn.concat([tile] * _GATHER_TILES, dim=2)
         return ttnn.all_gather(
             tile,
             dim=2,
             cluster_axis=SP_AXIS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=self._num_links,
+            num_links=_GATHER_LINKS or self._num_links,
         )
 
     def __call__(self, ttnn_top_k_experts_indices, num_routed_experts: int, num_experts_per_tok: int):
         indices = ttnn_top_k_experts_indices
         assert indices.layout == ttnn.TILE_LAYOUT and indices.dtype == ttnn.uint16, (indices.layout, indices.dtype)
         T, K = int(indices.shape[-2]), int(indices.shape[-1])
-        assert T <= _TILE and K == num_experts_per_tok, (T, K, num_experts_per_tok)
+        assert (T <= _TILE or T % _TILE == 0) and K == num_experts_per_tok, (T, K, num_experts_per_tok)
         rows = self._real_rows or T
         # ``ttnn.all_gather`` as ``offset_cumsum`` gathers its histogram (its own resident semaphores, see __init__);
         # on ``TtCCL``'s two cycled ``all_gather_async`` semaphore pairs of the SP axis, which the sampler's gather
@@ -274,6 +283,7 @@ class DecodeRoutingSetup:
             K,
             rows,
             self._setup.experts_per_chip,
+            T * _GATHER_TILES,
         )
         ttnn.deallocate(gathered)
         return offsets, totals, region, None

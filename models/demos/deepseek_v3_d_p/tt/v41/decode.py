@@ -17,7 +17,8 @@ partitioned back by group. The caches are already replicated on every chip in na
 token reads the whole context without a collective. The MoE runs on a second ``TtV41Moe`` built for ``MOE_ROWS`` rows
 per chip, sharing the expert tensors of the prefill block: 64 rows (the tile repeated) with the prefill routing setup,
 which counts tokens in multiples of 64, or the tile's 32 with the decode routing of ``tt/v41/routing.py``
-(``V41_DECODE_ROUTING=1``: the gate's selection one core per row, the routing setup from one all-gathered index tile).
+(``V41_DECODE_ROUTING=1``: the gate's selection one core per row, the routing setup from one all-gathered index tile)
+and the decode MoE tail of ``tt/v41/moe_tail.py`` (``V41_DECODE_TAIL=1``: the combine's weighted sum on 80 cores).
 
 Fixed shapes. Every step runs the same device graph for its position parity, so it can be traced: the indexer scores
 the whole index-K cache (``-inf`` added to the columns not yet written, a mask row the host uploads per step) and
@@ -57,6 +58,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
+from models.demos.deepseek_v3_d_p.tt.v41.moe_tail import install_decode_tail
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.tt.v41.routing import install_decode_routing
@@ -68,7 +70,11 @@ ROWS = 32  # the decode tile: the token on every row (every fused V4.1 op works 
 # the decode routing (tt/v41/routing.py) runs the MoE on the tile itself; the prefill routing setup (masked_bincount)
 # wants a multiple of 64 tokens per chip, so the tile is repeated for it
 DECODE_ROUTING = os.environ.get("V41_DECODE_ROUTING", "0") == "1"
-MOE_ROWS = ROWS if DECODE_ROUTING else 64
+# V41_DECODE_ROUTING_ROWS=64 keeps the repeated 64-row tile with the decode routing (a bisection knob)
+MOE_ROWS = int(os.environ.get("V41_DECODE_ROUTING_ROWS", ROWS)) if DECODE_ROUTING else 64
+# the decode MoE tail (tt/v41/moe_tail.py) sums the combine buffer's slots on 80 cores; it takes the 32-row tile
+DECODE_TAIL = os.environ.get("V41_DECODE_TAIL", "0") == "1"
+assert not DECODE_TAIL or DECODE_ROUTING, "V41_DECODE_TAIL=1 needs V41_DECODE_ROUTING=1 (the 32-row MoE tile)"
 
 
 def _round_up(x: int, m: int) -> int:
@@ -175,6 +181,8 @@ class TtV41Decoder:
         moe.moe.shared_expert.topology = ttnn.Topology.Linear
         if DECODE_ROUTING:
             install_decode_routing(moe, self.moe_real_rows())
+        if DECODE_TAIL:
+            install_decode_tail(moe)
         return moe
 
     def moe_real_rows(self) -> int | None:
