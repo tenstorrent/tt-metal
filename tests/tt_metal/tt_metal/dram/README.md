@@ -140,7 +140,7 @@ Notes on the rows:
 
 ## MM-8 DM-suite dispositions
 
-Every source in the existing DM suite gets exactly one disposition, picked by the first value in the rule below that fits. The MM8 ports are `TEST_P` suites instantiated as `MM8`, so their filters are written `*MimirDm<Name>*`. They passed on `mimir_2x_package` on 2026-10-20; the `mimir_1x1` descriptor has not been run.
+Every source in the existing DM suite gets exactly one disposition, picked by the first value in the rule below that fits. The MM8 ports are `TEST_P` suites instantiated as `MM8`, so their filters are written `*MimirDm<Name>*`. They passed on `mimir_2x_package` (2026-10-20) and `mimir_1x1` (2026-10-21).
 
 | Value | Rule |
 |---|---|
@@ -156,7 +156,7 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 
 | Source | Disposition | Covered by: 2x | Covered by: 1x1 | Reason / prerequisite | Case overrides |
 |---|---|---|---|---|---|
-| `data_movement/dram_unary/test_unary_dram.cpp` | B-port | `*MimirDmDramUnary*`; interim: `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*`, `*MimirLocalDram.LoopbackChecksIntermediate*` | `*MimirDmDramUnary*` (not run on 1x1 yet); interim: `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*`, `*MimirLocalDram.LoopbackChecksIntermediate*` | Two harts of one CCE, SPA data path, DRAM semaphore (D2) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `data_movement/dram_unary/test_unary_dram.cpp` | B-port | `*MimirDmDramUnary*`; interim: `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*`, `*MimirLocalDram.LoopbackChecksIntermediate*` | `*MimirDmDramUnary*`; interim: `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*`, `*MimirLocalDram.LoopbackChecksIntermediate*` | Two harts of one CCE, SPA data path, DRAM semaphore (D2) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/one_to_all/test_one_to_all.cpp` | covered | `*MimirRemoteMixed.FanOutFanIn*`, `MimirPrefetcher.MM7T2FanOut0To123`, `MimirPrefetcher.MM7T2FanOut3To012` | gap | Unicast cases only; 1x1 gap: one_to_all unicast fan-out (D4) | Multicast* and *Semaphore* cases: C (no multicast, no NoC semaphore atomics); `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/one_to_all/test_multicast_schemes.cpp` | C | — | — | No multicast on Mimir | — |
 | `data_movement/loopback/test_loopback.cpp` | covered | `*MimirLocalTl1.SameChipletControl*` | `*MimirLocalTl1.SameChipletControl*` | No CCE NoC; same-chiplet TL1 copy is the intent | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
@@ -188,11 +188,11 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `data_movement/matmul/test_matmul_1d.cpp` | C | — | — | Compute; no Tensix | — |
 | `data_movement/matmul/test_matmul_1d_v2.cpp` | C | — | — | Compute; no Tensix | — |
 | `data_movement/matmul/test_matmul_2d.cpp` | C | — | — | Compute; no Tensix | — |
-| `data_movement/quasar_cache/test_quasar_cache.cpp` | B-port | `*MimirDmCache*` | `*MimirDmCache*` (not run on 1x1 yet) | cce_cache_ops on TL1; cache probes done | — |
-| `data_movement/quasar_cache_perf/test_quasar_cache_perf.cpp` | B-port | `*MimirDmCachePerf*` | `*MimirDmCachePerf*` (not run on 1x1 yet) | Functional only, nightly; no timing asserts; cache probes done | — |
-| `data_movement/quasar_examples/quasar_idma/test_idma_example.cpp` | B-port | `*MimirDmIdma*` | `*MimirDmIdma*` (not run on 1x1 yet) | cce_idma_copy; iDMA probes done | — |
-| `data_movement/quasar_examples/quasar_addrgen/test_addrgen_example.cpp` | B-port | `*MimirDmAddrgen*` | `*MimirDmAddrgen*` (not run on 1x1 yet) | Pop addresses into TL1 and compare on host; `addrgen_reset` probe done; needs explicit-count pops (`pop_*_addrgen<ADDRGEN_0>(1)`) and a one-bank banking loop on a CCE (probe) | Interleaved_Banking: C (encodes ATT endpoint IDs 20..23) |
-| `data_movement/quasar_examples/quasar_im2col/test_im2col_example.cpp` | B-port | `*MimirDmIm2col*` | `*MimirDmIm2col*` (not run on 1x1 yet) | Pop addresses into TL1 and compare on host; `addrgen_reset` probe done; loop index restarts at 0 at loop end, observed on the emulator, which differs from the `addrgen_api.hpp` comment | — |
+| `data_movement/quasar_cache/test_quasar_cache.cpp` | B-port | `*MimirDmCache*` | `*MimirDmCache*` | cce_cache_ops on TL1; cache probes done | — |
+| `data_movement/quasar_cache_perf/test_quasar_cache_perf.cpp` | B-port | `*MimirDmCachePerf*` | `*MimirDmCachePerf*` | Functional only, nightly; no timing asserts; cache probes done | — |
+| `data_movement/quasar_examples/quasar_idma/test_idma_example.cpp` | B-port | `*MimirDmIdma*` | `*MimirDmIdma*` | cce_idma_copy; iDMA probes done | — |
+| `data_movement/quasar_examples/quasar_addrgen/test_addrgen_example.cpp` | B-port | `*MimirDmAddrgen*` | `*MimirDmAddrgen*` | Pop addresses into TL1 and compare on host; `addrgen_reset` probe done; needs explicit-count pops (`pop_*_addrgen<ADDRGEN_0>(1)`) and a one-bank banking loop on a CCE (probe) | Interleaved_Banking: C (encodes ATT endpoint IDs 20..23) |
+| `data_movement/quasar_examples/quasar_im2col/test_im2col_example.cpp` | B-port | `*MimirDmIm2col*` | `*MimirDmIm2col*` | Pop addresses into TL1 and compare on host; `addrgen_reset` probe done; loop index restarts at 0 at loop end, observed on the emulator, which differs from the `addrgen_api.hpp` comment | — |
 | `data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp` | C | — | — | Compute; no Tensix | — |
 | `data_movement/dm_common.cpp` | out-of-scope | — | — | Helper, not a test | — |
 
@@ -201,7 +201,7 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | Source | Disposition | Covered by: 2x | Covered by: 1x1 | Reason / prerequisite | Case overrides |
 |---|---|---|---|---|---|
 | `api/test_direct.cpp` | covered | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*` | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*` | ReaderOnly and WriterOnly only | ReaderWriter: B-blocked (DFB); Datacopy cases: C; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
-| `api/test_runtime_args.cpp` | B-port | `*MimirKernelLoad.ArgsReplaceStale*`, `*MimirDmRuntimeArgs*` | `*MimirKernelLoad.ArgsReplaceStale*`, `*MimirDmRuntimeArgs*` (not run on 1x1 yet) | TensixIllegalTooManyRuntimeArgs and TensixIllegallyModifyRTArgs ported as MM3 analogues; ArgsReplaceStale keeps the arg count, so it does not cover the second | Legacy RTA/CRTA: covered by MM3 (ArgsReplaceStale, cce_args_echo); Quasar CRTA: B-blocked (KernelSpec is TENSIX-only); Compute and Eth cases: C; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `api/test_runtime_args.cpp` | B-port | `*MimirKernelLoad.ArgsReplaceStale*`, `*MimirDmRuntimeArgs*` | `*MimirKernelLoad.ArgsReplaceStale*`, `*MimirDmRuntimeArgs*` | TensixIllegalTooManyRuntimeArgs and TensixIllegallyModifyRTArgs ported as MM3 analogues; ArgsReplaceStale keeps the arg count, so it does not cover the second | Legacy RTA/CRTA: covered by MM3 (ArgsReplaceStale, cce_args_echo); Quasar CRTA: B-blocked (KernelSpec is TENSIX-only); Compute and Eth cases: C; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `api/dataflow_buffer/test_alias_dataflow_buffer.cpp` | B-blocked | — | — | `supports_dfbs=false` on DRAM cores; DFB spec is TENSIX-only | DM-Tensix and INTRA cases: C |
 | `api/dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp` | B-blocked | — | — | `supports_dfbs=false` on DRAM cores; DFB spec is TENSIX-only | DM-Tensix and INTRA cases: C |
 | `api/dataflow_buffer/test_dataflow_buffer_apis.cpp` | B-blocked | — | — | `supports_dfbs=false` on DRAM cores; DFB spec is TENSIX-only | DM-Tensix and INTRA cases: C |
@@ -213,7 +213,7 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `api/dataflow_buffer/test_dataflow_buffer_multinode.cpp` | B-blocked | — | — | `supports_dfbs=false` on DRAM cores; DFB spec is TENSIX-only | DM-Tensix and INTRA cases: C; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `api/dataflow_buffer/test_dataflow_buffer_overrides.cpp` | B-blocked | — | — | `supports_dfbs=false` on DRAM cores; DFB spec is TENSIX-only | DM-Tensix and INTRA cases: C |
 | `api/dataflow_buffer/dfb_init_timing_bench.cpp` | out-of-scope | — | — | Separate executable (`api/CMakeLists.txt:107`) | — |
-| `api/test_scoped_lock_cache.cpp` | B-port | `*MimirDmScopedLockClm*` | `*MimirDmScopedLockClm*` (not run on 1x1 yet) | CLM cases (`:540-555`) on two harts of one CCE; cache probes done | DFB and handshake cases: B-blocked; Scratchpad and LTA cases: C (Tensix-DM abstractions) |
+| `api/test_scoped_lock_cache.cpp` | B-port | `*MimirDmScopedLockClm*` | `*MimirDmScopedLockClm*` | CLM cases (`:540-555`) on two harts of one CCE; cache probes done | DFB and handshake cases: B-blocked; Scratchpad and LTA cases: C (Tensix-DM abstractions) |
 | `test_quasar_trace.cpp` | B-blocked | — | — | Trace needs fast dispatch; same as `MM7T5TraceCaptureReplay`, a bare skip | — |
 | `test_quasar_mesh_workloads.cpp` | C | — | — | Every mesh workload includes compute | — |
 | `test_quasar_compute_kernels.cpp` | C | — | — | Compute; no Tensix | — |
@@ -227,7 +227,7 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `test_dram_loopback_single_core.cpp` | covered | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*` | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*` | Tensix loopback; Mimir DRAM-to-TL1-to-DRAM copies cover the intent | Eth cases: C |
 | `api/test_dram.cpp` | covered | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*` | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirLocalDram.CceWritesTl1ToDram*` | Tensix loopback x2 and double-buffered | Eth cases: C |
 | `test_single_dm_l1_write.cpp` | covered | `MM3/MimirKernelLoad.*` | `MM3/MimirKernelLoad.*` | SingleDmL1Write only | Grid, Compute and GridMulticastFanOut cases: C |
-| `test_quasar_mesh_buffers.cpp` | B-port | `*MimirDmMeshBufferDram*` | `*MimirDmMeshBufferDram*` (not run on 1x1 yet) | MeshBufferWriteReadDRAM and MeshBufferMultipleWriteReadRoundsDRAM (`:67,88`); host DRAM MeshBuffer placement probe done (D3) | L1 and sharded L1: C; MeshBufferCrossCQWriteReadRoundsDRAM: B-blocked (multi-CQ) |
+| `test_quasar_mesh_buffers.cpp` | B-port | `*MimirDmMeshBufferDram*` | `*MimirDmMeshBufferDram*` | MeshBufferWriteReadDRAM and MeshBufferMultipleWriteReadRoundsDRAM (`:67,88`); host DRAM MeshBuffer placement probe done (D3) | L1 and sharded L1: C; MeshBufferCrossCQWriteReadRoundsDRAM: B-blocked (multi-CQ) |
 | `test_quasar_semaphores.cpp` | C | — | — | NoC semaphore increments and NoC reads; no NoC semaphore atomic on Mimir | — |
 | `test_quasar_events.cpp` | B-blocked | — | — | Multi-CQ / fast dispatch | — |
 | `test_quasar_fds.cpp` | C | — | — | No Tensix FDS | — |
@@ -242,7 +242,7 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 
 ### Probe results
 
-Each probe was run by the user on the `mimir_2x_package` emulator (soc-zebu-03). Columns: probe, result (yes/no/hang), date, commit and run log (paths are relative to the session scratchpad). The 1x1 probes were not run.
+Each probe was run on the `mimir_2x_package` emulator (soc-c-30 and soc-zebu-03). Columns: probe, result (yes/no/hang), date, commit and run log (paths are relative to the session scratchpad). The probes ran on 2x only; the ports that replaced them passed on `mimir_1x1` on 2026-10-21.
 
 | Probe | Result | Date | Run log and commit | Rows that depend on it |
 |---|---|---|---|---|
@@ -268,7 +268,7 @@ The table is kept by hand, with no checker script. These three checks are redone
 
 ## MM-8 DM regression
 
-These rows are the plan's `mm_data_movement_regression`. They continue from row 71, with the same environment and timeout prefix as rows 2b onward. Each case runs as its own invocation (list them with `--gtest_list_tests --gtest_filter='MM8/*'`). Add `--gtest_output=xml:<dir>/<descriptor>_<row>.xml` to each command; it is the Gate 6 evidence, read against the covered-by columns above. The 1x1 descriptor has not been run.
+These rows are the plan's `mm_data_movement_regression`. They continue from row 71, with the same environment and timeout prefix as rows 2b onward. Each case runs as its own invocation (list them with `--gtest_list_tests --gtest_filter='MM8/*'`). Add `--gtest_output=xml:<dir>/<descriptor>_<row>.xml` to each command; it is the Gate 6 evidence, read against the covered-by columns above. On `mimir_1x1` (2026-10-21), 80 cases ran (the 44 `MM8/*` cases and the 36 MM-7 rows marked "all"): 75 passed, 5 skipped, 0 failed. The skips are `MimirDmIdma.Copy/RemoteTl1` and `Copy/RemoteGddr` (need two Mimirs), `MimirDmDramUnary.ReaderWriterHandshake/Cce2` and `Cce3` (1x1 has 2 CCEs), and `MM7T5TraceCaptureReplay` (always skips).
 
 New rule: after any row that ends on a host deadline, start a fresh emulator session and run bring-up before the next row (MIM-601).
 
