@@ -47,3 +47,8 @@ unit_tests_api:
     config: 1x3
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  - filter: "PrefetcherPipeFixture.PrefetcherPipe_CtorWritesBackDirtyCreditLine"
+    config: 1x3
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
