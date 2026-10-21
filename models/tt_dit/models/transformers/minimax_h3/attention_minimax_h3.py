@@ -26,6 +26,30 @@ from .agmm_config import agmm_block_size, agmm_pin
 DYNAMIC_RING_SDPA_CHUNKS = (256, 512)
 
 
+_RING_SDPA_DYNAMIC_KWARG = "dynamic_local_n"
+_ring_sdpa_dynamic_supported: bool | None = None
+
+
+def _run_ring_sdpa(dynamic_local_n: bool, **kwargs):
+    """`ring_joint_scaled_dot_product_attention`, asking the op to take the per-chip padded length as a
+    runtime word when `dynamic_local_n`; an op without that parameter runs the length-keyed program."""
+    global _ring_sdpa_dynamic_supported
+    op = ttnn.transformer.ring_joint_scaled_dot_product_attention
+    if not dynamic_local_n or _ring_sdpa_dynamic_supported is False:
+        return op(**kwargs)
+    try:
+        output = op(**kwargs, **{_RING_SDPA_DYNAMIC_KWARG: True})
+    except TypeError as error:
+        # nanobind lists the op's signatures after "Available signatures"; the kwarg is absent there only
+        # when the op lacks it (the "Called with" echo always names it).
+        if _ring_sdpa_dynamic_supported or _RING_SDPA_DYNAMIC_KWARG in str(error).partition("Available signatures")[2]:
+            raise
+        _ring_sdpa_dynamic_supported = False
+        return op(**kwargs)
+    _ring_sdpa_dynamic_supported = True
+    return output
+
+
 def norm_capacity_kwargs(row_capacity: int | None) -> dict:
     """`DistributedRMSNorm` constructor kwargs that size the fused norm's program, workers and stats scratch
     for `row_capacity` per-device rows (one program for every row count up to it), or `{}` when the layer
@@ -603,13 +627,14 @@ class MiniMaxH3Attention(Module):
                 num_buffers_per_channel=32,
             )
         elif self.use_ring:
-            spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
+            spatial_BHNE, _prompt, _lse = _run_ring_sdpa(
+                self.dynamic_length,
+                input_tensor_q=q_BHNE,
+                input_tensor_k=k_BHNE,
+                input_tensor_v=v_BHNE,
+                joint_tensor_q=self.dummy_joint_input,
+                joint_tensor_k=self.dummy_joint_input,
+                joint_tensor_v=self.dummy_joint_input,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                     k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
                 ),
