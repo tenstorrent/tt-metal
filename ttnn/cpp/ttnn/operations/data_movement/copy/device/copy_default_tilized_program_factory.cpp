@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = KERNEL_COMPUTE_ELTWISE_COPY,
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = {{"LLK_PACK_ADDR_RMW", "1"}}, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
