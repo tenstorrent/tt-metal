@@ -75,6 +75,21 @@ TILE = 32
 # the position of every (token, pick) -> ttnn.embedding gathers the token rows into the regions, the kernel runs, a
 # second ttnn.embedding gathers every pick's output row back, post_combine_reduce applies the routing weights
 PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+
+
+def prefill_experts_mode() -> str:
+    """The prefill expert path, read at construction time (``GLM53_PREFILL_EXPERTS``): blocks | batched | dispatch |
+    regions | auto. ``auto`` = the regions path (5x the blocks path's prefill rate, exact) with the stacked expert copy
+    kept for the decode block op whenever the memory planner says it fits; ``GLM53MeshModel`` resolves it from its
+    (users, max_seq_len) before the layers are built (tt/mesh_model.py), a bare layer treats it as ``regions``."""
+    mode = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+    return "regions" if mode == "auto" else mode
+
+
+def regions_keep_stacked() -> bool:
+    return os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
+
+
 # regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
 # chunk, which does not fit next to the 1 M caches; the expert weights are re-read once per sub-chunk)
 REGIONS_T = int(os.environ.get("GLM53_REGIONS_T", "4096"))
@@ -605,7 +620,7 @@ class TtRoutedExperts(LightweightModule):
             self.w2 = self.mesh.upload_cached(
                 make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
             )
-        self.prefill_experts = PREFILL_EXPERTS if not (dense or stream) else "blocks"
+        self.prefill_experts = prefill_experts_mode() if not (dense or stream) else "blocks"
         self._dispatch = None
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
@@ -873,7 +888,7 @@ class TtRoutedExperts(LightweightModule):
             gate.append(ttnn.reshape(g, [H, I]))
             up.append(ttnn.reshape(u, [H, I]))
             down.append(ttnn.reshape(d, [I, H]))
-        if not REGIONS_KEEP_STACKED:
+        if not regions_keep_stacked():
             ttnn.deallocate(self.w13)
             ttnn.deallocate(self.w2)
             self.w13 = self.w2 = None
