@@ -76,7 +76,7 @@
 #
 # 2. One basic case per op, across the op families, so that an op dropping out of dispatch is
 #    caught here rather than in nightly sanity:
-#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p, sin
+#   unary ........................... int32 neg, and log1p over non-tile-aligned and rank-0 shapes
 #   binary .......................... left/right shift, atan2, nextafter, arithmetic operator
 #                                     overloads
 #   div family (whole file) ......... fp32 remainder/fmod, div_no_nan scalar memory-config
@@ -95,17 +95,20 @@
 #                                     fixed shapes rather than a full sweep
 #   ternary category1 (whole file) .. mac, lerp, addcmul, addcdiv and where, over the full 256^3
 #                                     grid per op with its exception stages asserted
+#   unary category1-6 (whole files) . the unary op surface: math and trig, activations, sqrt/exp/
+#                                     log/gelu, parametric activations, the GLU family, and clamp/
+#                                     round/unary_chain. Also row-major dispatch (category3) and
+#                                     the preallocated output_tensor=/queue_id= path (category4)
 #
 # Deliberately excluded: the heavy sweeps inside those same files (celu, inverse trig,
 # fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
 # minutes even with warm kernels, and they belong in the nightly eltwise groups where they already
 # run.
 #
-# 1393 tests selected -- 1366 pass, 19 skip, 8 xfail. 172s of pytest on wh_n300_civ2 in CI; 60s
-# locally on an N300 with a warm kernel cache and 282s on a cold one, the spread being kernel
-# compilation. test_ternary_category1_bfloat16 is ~21s of that and subtile ~6s; nothing else
-# reaches 2.5s. One pytest invocation on purpose: device bring-up is ~7s, so splitting this into
-# per-file entries would cost more than the tests do.
+# 1805 tests selected -- 1775 pass, 22 skip, 8 xfail. 564s locally on an N300 with a cold kernel
+# cache, the bulk of it kernel compilation; the unary category files are 427 of those tests, ~270s
+# cold and ~8s warm. One pytest invocation on purpose: device bring-up is ~7s, so splitting this
+# into per-file entries would cost more than the tests do.
 #
 # Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
 # gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
@@ -117,7 +120,6 @@
     tests/ttnn/unit_tests/operations/eltwise/test_binary_scalar.py
     tests/ttnn/unit_tests/operations/eltwise/test_ternary.py
     tests/ttnn/unit_tests/operations/eltwise/test_where.py
-    tests/ttnn/unit_tests/operations/eltwise/test_unary.py
     tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
     tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
@@ -128,9 +130,14 @@
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category4_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category6_bfloat16.py
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
-    or test_gelu or test_silu or test_01_volume_sin or test_unary_mish
     or test_div_ops or test_binary_scalar
     or test_binary_atan2_ttnn or test_floor_div or test_modulo_ops
     or test_logical_ops or test_binary_nextafter_ttnn
@@ -138,9 +145,9 @@
     or test_ternary_category1_bfloat16
     or test_arithmetic_operators
     or test_binary_category1_bfloat16 or test_binary_category2_bfloat16 or test_binary_category4_bfloat16
-    or test_unary_relu_ttnn or test_unary_relu6_ttnn or test_unary_sigmoid_ttnn
-    or test_unary_tanh_ttnn or test_unary_neg_ttnn
-    or test_unary_log2_ttnn or test_unary_log1p_ttnn)
+    or test_unary_category1_bfloat16 or test_unary_category2_bfloat16 or test_unary_category3_bfloat16
+    or test_unary_category4_bfloat16 or test_unary_category5_bfloat16 or test_unary_category6_bfloat16
+    or test_unary_neg_ttnn or test_unary_log1p_ttnn)
     and not fused_relu_with_broadcast"
     -m "not disable_fast_runtime_mode"
   skus:
