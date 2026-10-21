@@ -19,6 +19,11 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
+namespace {
+// The one common runtime word of the interleaved program: input rows in tiles.
+constexpr const char* kLengthArg = "h_tiles";
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_program_artifacts(
     const NlpConcatHeadsParams& /*operation_attributes*/, const Tensor& input, Tensor& output) {
     const auto& a = input;
@@ -50,17 +55,13 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    // Block is a unit of work; ie. num of per_tensor_tiles per core
-    uint32_t num_blocks = ashape[0] * ashape[2] / TILE_HEIGHT;
-    uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-    CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet(), core_group_2 = CoreRangeSet();
+    uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0;
+    CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet();
     bool row_major = false;
-    // Fewer tile rows than cores: split each row by head too. Blocks are then (row, head) in row-major order, so each
-    // block's output tiles are contiguous and the writer is unchanged.
-    const bool head_parallel = !in_sharded && !out_sharded && in0_c > 1 &&
-                               num_blocks < compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    // The reader walks (row, head) blocks either way: a whole-row block is in0_c of them.
-    const uint32_t heads_per_block = head_parallel ? 1 : in0_c;
+    // Interleaved: the program owns the full grid and every core derives its (row, head) block range
+    // on device from the common row count; a core past the end of a short input runs zero blocks.
+    // Fewer tile rows than cores splits each row by head too, decided on device from the same word.
+    const bool head_parallel_ok = !in_sharded && !out_sharded && in0_c > 1;
     if (in_sharded) {
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
@@ -69,18 +70,11 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
         row_major = a.shard_spec().value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(
-                compute_with_storage_grid_size, head_parallel ? num_blocks * in0_c : num_blocks);
+        all_cores = CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
+        num_cores = num_cores_x * num_cores_y;
+        core_group_1 = all_cores;
+        row_major = true;
     }
-    const uint32_t block_tiles = head_parallel ? in0_w_tiles : per_tensor_tiles;
-    uint32_t g1_numcores = core_group_1.num_cores();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -96,6 +90,17 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
     const DFBSpecName OUT0_DFB{"out0"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
+
+    // Interleaved reader and writer share the split inputs: static per-core index, common row count.
+    const KernelSpec::CompileTimeArgs split_compile_time_args = {
+        {"in0_w_tiles", in0_w_tiles},
+        {"in0_c", in0_c},
+        {"batch", ashape[0]},
+        {"num_cores", num_cores},
+        {"head_parallel_ok", static_cast<uint32_t>(head_parallel_ok)},
+    };
+    const KernelSpec::RuntimeArgSchema split_runtime_arg_schema = {
+        .runtime_arg_names = {"core_idx"}, .common_runtime_arg_names = {kLengthArg}};
 
     KernelSpec reader_spec;
     KernelSpec writer_spec;
@@ -171,24 +176,15 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                 .tensor_parameter_name = INPUT,
                 .accessor_name = "src",
             }},
-            .compile_time_args =
-                {
-                    {"in0_h_tiles", in0_h_tiles},
-                    {"in0_w_tiles", in0_w_tiles},
-                    {"in0_c", in0_c},
-                    {"in0_HtWt", in0_HtWt},
-                },
-            .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "start_block"}},
+            .compile_time_args = split_compile_time_args,
+            .runtime_arg_schema = split_runtime_arg_schema,
             .hw_config = create_reader_datamovement_config(),
         };
-        // The interleaved writer reuses the shared Metal 2.0 fork of
-        // writer_unary_interleaved_start_id.cpp; its binding vocabulary (dfb::out, tensor::dst,
-        // args num_pages / start_id) is the fork's interface and this factory conforms to it.
         writer_spec = KernelSpec{
             .unique_id = WRITER,
             .source =
-                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                "writer_unary_interleaved_start_id_metal2.cpp",
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                "writer_tm_tile_layout_nlp_concat_heads.cpp",
             .dfb_bindings = {DFBBinding{
                 .dfb_spec_name = IN0_DFB,
                 .accessor_name = "out",
@@ -198,7 +194,8 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                 .tensor_parameter_name = OUTPUT,
                 .accessor_name = "dst",
             }},
-            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+            .compile_time_args = split_compile_time_args,
+            .runtime_arg_schema = split_runtime_arg_schema,
             .hw_config = create_writer_datamovement_config(),
         };
     }
@@ -256,26 +253,11 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
         }
 
     } else {
-        for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
-            const CoreCoord& core = cores[i];
-            uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
-
-            AddRuntimeArgsForNode(
-                reader_run_args.runtime_arg_values,
-                core,
-                {
-                    {"num_blocks", num_blocks_per_core * heads_per_block},
-                    {"start_block", num_blocks_written * heads_per_block},
-                });
-
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {
-                    {"num_pages", num_blocks_per_core * block_tiles},
-                    {"start_id", num_blocks_written * block_tiles},
-                });
-            num_blocks_written += num_blocks_per_core;
+        reader_run_args.common_runtime_arg_values = {{kLengthArg, in0_h_tiles}};
+        writer_run_args.common_runtime_arg_values = {{kLengthArg, in0_h_tiles}};
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
         }
     }
 
@@ -306,6 +288,28 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
+}
+
+// A hit re-binds the two tensors and, on the interleaved path, rewrites the common row count the
+// kernels derive their block ranges from (the hash leaves the row count out).
+tt::tt_metal::experimental::ProgramRunArgs NLPConcatHeadsProgramFactory::override_runtime_arguments(
+    const NlpConcatHeadsParams& /*operation_attributes*/,
+    const Tensor& input,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    ProgramRunArgs params;
+    if (!input.is_sharded()) {
+        const uint32_t h_tiles = input.padded_shape()[2] / TILE_HEIGHT;
+        params.kernel_run_args = {
+            KernelRunArgs{.kernel = KernelSpecName{"reader"}, .common_runtime_arg_values = {{kLengthArg, h_tiles}}},
+            KernelRunArgs{.kernel = KernelSpecName{"writer"}, .common_runtime_arg_values = {{kLengthArg, h_tiles}}},
+        };
+    }
+    params.tensor_args = {
+        {TensorParamName{"input"}, TensorArgument{input.mesh_tensor()}},
+        {TensorParamName{"output"}, TensorArgument{output.mesh_tensor()}},
+    };
+    return params;
 }
 
 }  // namespace ttnn::experimental::prim
