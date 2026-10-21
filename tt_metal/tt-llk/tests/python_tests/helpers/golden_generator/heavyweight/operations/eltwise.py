@@ -121,7 +121,7 @@ class EltwiseBinaryGolden(Golden):
         if self.operation is MathOperation.Elwsub:
             return a - b
         if self.operation is MathOperation.Elwmul:
-            # The exact product, reached only where MANTISSA_SPLIT is None --
+            # The exact product, reached only where mantissa_split is None --
             # i.e. on an architecture whose split is not modelled, at every
             # fidelity. Where the split *is* modelled, as on Quasar, the
             # multiply always goes through partial_product and never arrives
