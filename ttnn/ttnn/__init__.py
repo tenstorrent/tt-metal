@@ -496,6 +496,7 @@ from ttnn.operations.matmul import (
     MatmulDeviceOperation,
     create_matmul_attributes,
     matmul_select_program_factory,
+    matmul_model_last_pick,
 )
 
 from ttnn.operations.normalization import (

@@ -16,6 +16,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/model/matmul_model_hook.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
@@ -332,6 +333,18 @@ static ttnn::Tensor bound_matmul(
     auto attributes = ttnn::prim::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
 
+    // Opt-in (ttnn.CONFIG.matmul_model_config): the matmul config model chooses the program config, once per matmul,
+    // for the inputs, bias and attributes the device op gets. The compute kernel config stays the one resolved above
+    // without a program config; nullopt keeps the default selection (prim::matmul's get_program_config).
+    if (!attributes.program_config.has_value()) {
+        attributes.program_config = model::model_program_config(
+            input_tensor_a_adjusted,
+            input_tensor_b_adjusted,
+            post_process_bias ? std::nullopt : bias,
+            optional_output_tensor,
+            attributes);
+    }
+
     auto output_tensor = ttnn::prim::matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
@@ -622,6 +635,8 @@ Tensor addmm(
 
     return out_tensor;
 }
+
+std::string matmul_model_last_pick() { return model::last_pick(); }
 
 Tensor sparse_matmul(
     const Tensor& input_tensor_a,

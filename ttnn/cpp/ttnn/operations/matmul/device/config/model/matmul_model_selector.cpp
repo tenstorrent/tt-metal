@@ -1,0 +1,123 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/matmul/device/config/model/matmul_model_selector.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <exception>
+#include <fstream>
+#include <iterator>
+#include <limits>
+#include <numeric>
+
+namespace ttnn::operations::matmul::model {
+
+std::unique_ptr<const ConfigModel> ConfigModel::load_file(const std::string& path, std::string& error) {
+    if (path.empty()) {
+        error = "no model path (ttnn.CONFIG.matmul_model_path)";
+        return nullptr;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = "cannot open " + path;
+        return nullptr;
+    }
+    const std::vector<char> bytes{std::istreambuf_iterator<char>(file), {}};
+    if (!file.good() && !file.eof()) {
+        error = "cannot read " + path;
+        return nullptr;
+    }
+    auto model = from_blob(std::as_bytes(std::span<const char>(bytes.data(), bytes.size())), error);
+    if (!model) {
+        error = path + ": " + error;
+    }
+    return model;
+}
+
+std::unique_ptr<const ConfigModel> ConfigModel::from_blob(std::span<const std::byte> blob, std::string& error) {
+    try {
+        auto storage = config::model::GbdtModelStorage::from_blob(blob);
+        const auto& names = storage.feature_names();
+        if (names.size() != kNumFeatures || storage.model().num_features != kNumFeatures) {
+            error = "model has " + std::to_string(names.size()) + " features, expected " + std::to_string(kNumFeatures);
+            return nullptr;
+        }
+        for (std::size_t i = 0; i < kNumFeatures; ++i) {
+            if (names[i] != kFeatureNames[i]) {
+                error =
+                    "feature " + std::to_string(i) + " is " + names[i] + ", expected " + std::string(kFeatureNames[i]);
+                return nullptr;
+            }
+        }
+        return std::unique_ptr<const ConfigModel>(new ConfigModel(std::move(storage)));
+    } catch (const std::exception& e) {
+        error = e.what();
+        return nullptr;
+    }
+}
+
+std::vector<double> ConfigModel::predict_ns(const MatmulProblem& problem, std::span<const Candidate> candidates) const {
+    const DeviceParams& device = device_params(Arch::kBlackholeP150);
+    // The memo of placement link loads and L1 compute tables is problem independent; one per thread
+    thread_local ModelCache cache;
+    std::vector<double> predicted(candidates.size(), std::numeric_limits<double>::quiet_NaN());
+    std::vector<double> rows;
+    std::vector<double> base;
+    std::vector<std::size_t> scored;
+    rows.reserve(candidates.size() * kNumFeatures);
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const ModelInput in = compute_model_input(problem, to_model_candidate(candidates[i]), device, &cache);
+        if (in.status != ScoreStatus::kOk || !std::isfinite(in.base_ns)) {
+            continue;
+        }
+        rows.insert(rows.end(), in.features.begin(), in.features.end());
+        base.push_back(in.base_ns);
+        scored.push_back(i);
+    }
+    std::vector<double> raw(scored.size());
+    storage_.model().predict_batch(rows, raw);
+    for (std::size_t j = 0; j < scored.size(); ++j) {
+        predicted[scored[j]] = base[j] * std::exp(raw[j]);
+    }
+    return predicted;
+}
+
+std::vector<std::size_t> rank_by_prediction(std::span<const double> predicted_ns) {
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < predicted_ns.size(); ++i) {
+        if (std::isfinite(predicted_ns[i])) {
+            order.push_back(i);
+        }
+    }
+    std::stable_sort(
+        order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return predicted_ns[a] < predicted_ns[b]; });
+    return order;
+}
+
+std::optional<Pick> PickCache::find(const std::string& key) const {
+    std::lock_guard lock(mutex_);
+    const auto it = picks_.find(key);
+    if (it == picks_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+Pick PickCache::insert(const std::string& key, Pick pick) {
+    std::lock_guard lock(mutex_);
+    return picks_.try_emplace(key, std::move(pick)).first->second;
+}
+
+std::size_t PickCache::size() const {
+    std::lock_guard lock(mutex_);
+    return picks_.size();
+}
+
+void PickCache::clear() {
+    std::lock_guard lock(mutex_);
+    picks_.clear();
+}
+
+}  // namespace ttnn::operations::matmul::model
