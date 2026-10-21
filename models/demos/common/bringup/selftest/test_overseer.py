@@ -261,3 +261,20 @@ def test_a_fix_may_write_the_paths_it_names_even_when_its_gate_tasks_own_none(tm
     assert OV.fix_task(job, tasks)["paths"] == ["models/demos/m/tt"]
     plain = OV.queue_fix(tmp_path, "Another.", ["X.3"], tasks=tasks)
     assert OV.fix_task(plain, tasks)["paths"] == [] and "paths" not in plain
+
+
+def test_only_can_name_a_queued_fix(orch):  # noqa: F811
+    """F143: `resume --only FIX.<n>` with the fix still queued said "nothing left to run" (DeepSeek-V4.1 FIX.8): the
+    --only filter ran before the queued fixes were placed."""
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}},
+            "FIX.1.overseer.1.md": {"write": {"src/impl.txt": "0.9995"}},
+        },
+    )
+    assert o.run() == DONE
+    led = {t: o.led.task(t) for t in o.led.tasks()}
+    OV.queue_fix(o.spec.bringup_dir, "Store the weights at load.", ["C.1"], tasks=led)
+    assert o.run(only="FIX.1") == DONE
+    assert o.led.state()["FIX.1"]["status"] == "PASS"

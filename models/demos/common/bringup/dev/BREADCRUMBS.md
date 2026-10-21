@@ -1620,3 +1620,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   pattern. Only the verify dir is written (state.json, results/ untouched, as before).
   - Selftest: test_verify.py::test_a_batched_verify_judges_every_task_as_its_own_gate (fixture model: the same
     verdicts and metrics batched and unbatched, one process for the three test files, a failing task attributed).
+- F143 (overseer, 2026-10-21): the run loop places queued overseer fixes before anything else, so `resume --only
+  FIX.<n>` can name a fix still in the queue (DeepSeek-V4.1 FIX.8 printed "nothing left to run": the --only filter ran
+  before placement). Note: `--until X` stops only X's downstream tasks; independent tasks still run (use --only).
+  Selftest: test_overseer.py::test_only_can_name_a_queued_fix.
