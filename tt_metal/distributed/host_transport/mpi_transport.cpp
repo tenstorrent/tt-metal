@@ -76,8 +76,8 @@ void MpiTransport::post_receive() {
 }
 
 bool MpiTransport::can_send(uint32_t /*pages*/) const {
-    // A batch is at most two messages (one each side of the wrap).
-    return pending_send_.size() + 2 <= kMaxOutstanding;
+    // A batch that straddles the wrap is two messages; let it through whole.
+    return pending_send_.size() < kMaxInFlight;
 }
 
 bool MpiTransport::send(uint64_t first_page, uint32_t pages) {
