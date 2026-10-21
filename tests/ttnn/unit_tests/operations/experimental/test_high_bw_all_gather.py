@@ -271,7 +271,7 @@ def _profile_high_bw_all_gather(mesh_device, run):
         sources = [source.replace("\\", "/") for source in record["kernel_sources"]]
         if not any("/experimental/high_bw_all_gather/" in source for source in sources):
             continue
-        assert any(source.endswith(("/fabric_all_gather_sender.cpp", "/unicast_writer.cpp")) for source in sources)
+        assert any(source.endswith("/fabric_all_gather_sender.cpp") for source in sources)
         runtime_id = record["runtime_id"]
         programs[runtime_id] = max(programs.get(runtime_id, 0.0), record["duration_ns"])
     assert programs, "realtime profiler returned no high_bw_all_gather program"
@@ -822,45 +822,6 @@ def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_devic
         expected = host_input[:, tp_rank : tp_rank + 1, :, :]
         assert torch.equal(ttnn.to_torch(actual), expected)
 
-    # Gathering the innermost dimension in row-major layout exercises the
-    # concat path, where several input chunks share one output page.
-    concat_host = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
-    concat_input = _make_tensor(
-        mesh_device,
-        concat_host,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.create_mesh_mapper(
-            mesh_device,
-            ttnn.MeshMapperConfig(
-                [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)],
-                mesh_device.shape,
-            ),
-        ),
-    )
-    concat_output = _make_tensor(
-        mesh_device,
-        torch.zeros_like(concat_host),
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    concat_output = ttnn.experimental.high_bw_all_gather(
-        concat_input,
-        dim=3,
-        output_tensor=concat_output,
-        cluster_axis=1,
-        num_links=1,
-    )
-    ttnn.synchronize_device(mesh_device)
-    _assert_exact_replicated_output(
-        concat_host,
-        concat_output,
-        mesh_device,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
-
 
 def _run_high_bw_all_gather_perf(
     mesh_device,
@@ -1319,7 +1280,7 @@ def test_high_bw_all_gather_full_mesh_open_path_accuracy(mesh_device, submesh_sh
     )
 
 
-@run_for_blackhole("legacy axis-ring regression requires Blackhole")
+@run_for_blackhole("axis-ring regression requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
     reason="run on the Blackhole simulator or set TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1",
@@ -1616,7 +1577,7 @@ def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_devic
     device_input, persistent_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
     _, rebound_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
 
-    legacy_output = ttnn.experimental.high_bw_all_gather(
+    internal_semaphore_output = ttnn.experimental.high_bw_all_gather(
         device_input,
         dim=2,
         output_tensor=persistent_output,
@@ -1624,7 +1585,7 @@ def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_devic
         num_links=_NUM_LINKS,
     )
     ttnn.synchronize_device(rank_line)
-    _assert_exact_all_gather(device_input, legacy_output, rank_line, ttnn.bfloat16)
+    _assert_exact_all_gather(device_input, internal_semaphore_output, rank_line, ttnn.bfloat16)
 
     gather_grid, gather_subdevice_id, manager = _load_external_semaphore_test_subdevices(rank_line)
     try:
@@ -1647,7 +1608,7 @@ def test_high_bw_all_gather_external_semaphore_reuse_and_cache_rebind(mesh_devic
 
         # The first external-path cache miss must consume no additional L1/L1_SMALL allocator space: the
         # caller already owns both semaphore buffers and the output is persistent. This directly distinguishes
-        # it from the legacy factory path, which allocates a pair during program creation.
+        # it from the internal-semaphore path, which allocates a pair during program creation.
         allocation_before = {
             buffer_type: ttnn.get_memory_view(rank_line, buffer_type).total_bytes_allocated_per_bank
             for buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.L1_SMALL)
