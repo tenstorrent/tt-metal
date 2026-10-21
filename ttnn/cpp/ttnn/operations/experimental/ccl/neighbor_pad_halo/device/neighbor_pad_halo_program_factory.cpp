@@ -337,16 +337,16 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
     // --------------------------------------------------------------------- FABRIC-MUX W path
     if (use_w_mux) {
         using tt::tt_fabric::FabricMuxChannelType;
-        const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-        // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp)
+        // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp). The mux's map goes in
+        // program-local L1 (placed below, once the mux cores are known); its addresses are offsets until then.
         auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
             /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/np_num_buffers,
             /*num_buffers_header_only_channel=*/0,
             mux_buf_size,
-            l1_base);
+            /*base_l1_address=*/0);
 
         // Core layout (halo-only op: cols>=1 are free)
 
@@ -364,10 +364,6 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         std::vector<uint32_t> mux_writer_ct = {sender_cb_index, page_size};
         TensorAccessorArgs(*halo_buffer).append_to(mux_writer_ct);
         mux_writer_ct.push_back(w_coalesce_n);
-        ttnn::ccl::fabric_mux_connection_ct_args(
-            num_w_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_cfg, mux_writer_ct);
-        auto mux_writer_cfg = WriterDataMovementConfig{};
-        mux_writer_cfg.compile_args = mux_writer_ct;
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         // Reuse the hoisted core lists (flat: [link*2+dir][worker] for workers, [link*2+dir] for mux).
@@ -389,6 +385,11 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         CoreRangeSet mux_crset(mux_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : mux_crs);
         occ_w_workers = worker_crset;
         occ_wmux = mux_crset;
+        mux_cfg.place_in_program_local_l1(program, mux_crset, tt::CBIndex::c_31);
+        ttnn::ccl::fabric_mux_connection_ct_args(
+            num_w_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_cfg, mux_writer_ct);
+        auto mux_writer_cfg = WriterDataMovementConfig{};
+        mux_writer_cfg.compile_args = mux_writer_ct;
 
         // Send CB (c_in0) on the mux WORKER cores — the base cb_w_sender_config was created only on the standard
         {
@@ -1221,10 +1222,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
     if (use_h_mux) {
         using tt::tt_fabric::FabricMuxChannelType;
-        const uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        // The mux's map goes in program-local L1 (placed below, once the mux cores are known).
         auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
-            static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, l1_base);
+            static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, /*base_l1_address=*/0);
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         std::set<CoreRange> hw_crs, hm_crs;
@@ -1242,6 +1243,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         CoreRangeSet hm_crset(hm_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : hm_crs);
         occ_hw_workers = hw_crset;
         occ_hmux = hm_crset;
+        hmux_cfg.place_in_program_local_l1(program, hm_crset, tt::CBIndex::c_31);
 
         // Send CB (hsend) + sender CB (c_in0) on the H worker cores
         {

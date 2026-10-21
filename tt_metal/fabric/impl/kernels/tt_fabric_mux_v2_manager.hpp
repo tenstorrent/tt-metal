@@ -154,8 +154,16 @@ inline void run_manager() {
     uint32_t finalized_client_count = 0;
     uint32_t shared_ring_read_count = 0;
 
+    if constexpr (ct_args::in_program_local_l1) {
+        // Publish the map's address for the clients as early as possible: an eager client stages into its channel
+        // before READY. The status word sits in a fresh circular buffer, so clear it first so that a stale value
+        // cannot read as READY. Dispatch zeroes the semaphore at every launch.
+        status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            get_semaphore<ProgrammableCoreType::TENSIX>(ct_args::l1_base_semaphore_id)) = l1_base_address;
+    }
     zero_per_channel_scalar_region(
-        ct_args::connection_handshake_region_base_address,
+        map_address(ct_args::connection_handshake_region_base_address),
         ct_args::per_channel_scalar_region_stride_bytes,
         ct_args::num_channels);
     initialize_shared_ring_header();

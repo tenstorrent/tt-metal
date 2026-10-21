@@ -7,6 +7,10 @@
 
 void kernel_main() {
     set_l1_data_cache<false>();
+    if constexpr (tt::tt_fabric::mux_v2::ct_args::in_program_local_l1) {
+        tt::tt_fabric::mux_v2::kernel::l1_base_address =
+            get_write_ptr(tt::tt_fabric::mux_v2::ct_args::program_local_l1_cb_index);
+    }
 
 #ifdef COMPILE_FOR_NCRISC
     tt::tt_fabric::mux_v2::kernel::run_manager();
