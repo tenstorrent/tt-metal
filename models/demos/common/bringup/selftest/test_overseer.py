@@ -226,3 +226,29 @@ def test_a_resumed_fix_gates_before_an_agent(orch, sandbox):  # noqa: F811
     before = len(orch.calls())
     assert o.run() == DONE
     assert o.led.status("FIX.1") == "PASS" and not [c for c in orch.calls()[before:] if c.startswith("FIX.1")]
+
+
+def test_a_fix_gated_on_an_unpassed_task_runs_before_it(orch):  # noqa: F811
+    """F126: a fix whose gate task has not passed yet (DeepSeek-V4.1 X.3's timeline check) takes that task's deps and
+    runs first; the task then follows the fix instead of failing its gate once more before the fix may start."""
+    o = orch(
+        [impl_task(), impl_task(id="C.2", deps=["C.1"])],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}},
+            "FIX.1.overseer.1.md": {"write": {"src/impl.txt": "0.9995"}},
+        },
+    )
+    real = o.run_agent
+
+    def overseer_queues_meanwhile(task, role, attempt, brief, **kw):
+        if task["id"] == "C.1":
+            led = {t: o.led.task(t) for t in o.led.tasks()}
+            OV.queue_fix(o.spec.bringup_dir, "Clear the memo at every chunk start.", ["C.2"], tasks=led)
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = overseer_queues_meanwhile
+    assert o.run() == DONE
+    order = [x.split("]")[0].strip("[ ") for x in orch.lines if x.startswith("[")]
+    assert order.index("FIX.1") < order.index("C.2"), order
+    assert o.led.task("FIX.1")["deps"] == ["C.1"] and "FIX.1" in o.led.task("C.2")["deps"]
+    assert o.led.state()["FIX.1"]["status"] == "PASS" and o.led.state()["C.2"]["status"] == "PASS"
