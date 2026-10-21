@@ -1425,6 +1425,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     if (block_pack) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
+    // Sharded column and scalar broadcast B: A and the output sit whole in L1, so B's tile is held while A goes through
+    // DEST in blocks.
+    if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op && !has_operand_activations && !has_post_activations &&
+        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+        (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
+         compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) &&
+        a_sharded && c_sharded && bf16_or_bfp8(a_data_format) && a_data_format == b_data_format &&
+        bf16_or_bfp8(c_data_format) && block_tiles >= 4) {
+        compute_kernel_defines["BINARY_NG_BCAST_BLOCK"] = fp32_dest_acc_en ? "4" : "8";
+    }
     // Blackhole sharded sections are compute bound, so they keep the binary init across a post activation.
     if (arch == tt::ARCH::BLACKHOLE && !is_sfpu_op && has_post_activations && num_tiles_per_cycle > 1 &&
         compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
