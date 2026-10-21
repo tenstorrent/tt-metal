@@ -11,7 +11,6 @@
 #include <fmt/format.h>
 
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -30,104 +29,6 @@
 #include "tt_metal/tt_metal/test_kernels/cce/cce_gcb_receiver_abi.h"
 
 namespace tt::tt_metal::mimir_test::prefetcher {
-
-// Owns one open MeshDevice. The destructor closes it on every path; a throw from close() is reported, not propagated.
-class ScopedMesh {
-public:
-    explicit ScopedMesh(std::shared_ptr<distributed::MeshDevice> mesh) : mesh_(std::move(mesh)) {}
-    ScopedMesh(const ScopedMesh&) = delete;
-    ScopedMesh& operator=(const ScopedMesh&) = delete;
-    ~ScopedMesh() { close(); }
-
-    void close() {
-        std::shared_ptr<distributed::MeshDevice> mesh = std::move(mesh_);
-        mesh_.reset();
-        if (mesh != nullptr) {
-            try {
-                EXPECT_TRUE(mesh->close());
-            } catch (const std::exception& error) {
-                ADD_FAILURE() << "MeshDevice::close threw: " << error.what();
-            }
-        }
-    }
-
-private:
-    std::shared_ptr<distributed::MeshDevice> mesh_;
-};
-
-inline uint64_t go_message_tl1_offset() {
-    return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
-}
-
-// The whole GO_MSG word of one CCE.
-inline uint32_t read_go_word(IDevice* device, uint32_t cce_index) {
-    return read_cce_tl1(
-               MetalContext::instance().get_cluster(),
-               device->id(),
-               cce_index,
-               go_message_tl1_offset(),
-               sizeof(uint32_t),
-               Tl1Range::WholeTl1)
-        .front();
-}
-
-inline uint8_t go_signal_of(uint32_t go_word) {
-    dev_msgs::go_msg_t go_message =
-        MetalContext::instance().hal().get_dev_msgs_factory(HalProgrammableCoreType::DRAM).create<dev_msgs::go_msg_t>();
-    TT_FATAL(go_message.size() == sizeof(uint32_t), "go_msg_t is {} bytes, not one word", go_message.size());
-    std::memcpy(go_message.data(), &go_word, sizeof(go_word));
-    return go_message.view().signal();
-}
-
-inline uint8_t read_go_signal(IDevice* device, uint32_t cce_index) {
-    return go_signal_of(read_go_word(device, cce_index));
-}
-
-// The hart an MM-7 test kernel runs on unless its launch names another.
-inline constexpr uint32_t kCceKernelHart = 0;
-
-// One kernel of a CCE Program. Kernels on one CCE run on different harts.
-struct CceKernelLaunch {
-    uint32_t cce_index = 0;
-    std::string kernel_path;
-    std::vector<uint32_t> runtime_args;
-    uint32_t hart = kCceKernelHart;
-};
-
-// A launch onto a CCE that is still running a kernel is lost: when that kernel finishes, firmware overwrites the new GO
-// with DONE. So every CCE must read RUN_MSG_DONE first.
-inline void require_idle_cces(IDevice* device, const std::vector<CceKernelLaunch>& launches) {
-    for (const CceKernelLaunch& launch : launches) {
-        const uint8_t signal = read_go_signal(device, launch.cce_index);
-        TT_FATAL(
-            signal == dev_msgs::RUN_MSG_DONE,
-            "CCE {} GO_MSG signal is 0x{:02x}, not RUN_MSG_DONE (0x{:02x}); it is still running a kernel or lost "
-            "its firmware",
-            launch.cce_index,
-            signal,
-            dev_msgs::RUN_MSG_DONE);
-    }
-}
-
-// Checks that every CCE is idle, then launches one Program holding every kernel and returns without waiting. The
-// caller ends it with detail::WaitProgramDone; a blocking slow-dispatch mesh workload would stall every later host
-// access instead.
-inline std::unique_ptr<Program> launch_cce_program(IDevice* device, const std::vector<CceKernelLaunch>& launches) {
-    require_idle_cces(device, launches);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
-    std::unique_ptr<Program> program = std::make_unique<Program>(CreateProgram());
-    for (const CceKernelLaunch& launch : launches) {
-        const CoreCoord logical_core = logical_cce_core(soc_desc, launch.cce_index);
-        const KernelHandle kernel = CreateKernel(
-            *program,
-            launch.kernel_path,
-            logical_core,
-            DramConfig{.processor = static_cast<DataMovementProcessor>(launch.hart), .noc = NOC::NOC_0});
-        SetRuntimeArgs(*program, kernel, logical_core, launch.runtime_args);
-    }
-    detail::LaunchProgram(device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-    return program;
-}
 
 // Receiver kernels (cce_gcb_receiver_abi.h) running as their own Program while the test drives a sender. Declare it
 // after the GlobalCircularBuffer it serves, so it stops before the GCB is freed. Launch zeroes each receiver's command
