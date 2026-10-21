@@ -7,6 +7,8 @@
 
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 namespace {
@@ -219,8 +221,62 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+// Only the row-dependent invariants: the row count is not in the Interleaved hash.
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
+    const auto& input_shape = tensor_args.input_tensor_q.padded_shape();
+    TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
+    TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
+    if (tensor_args.input_tensor_kv.has_value()) {
+        const auto& kv_shape = tensor_args.input_tensor_kv->padded_shape();
+        TT_FATAL(
+            kv_shape[0] == input_shape[0] && kv_shape[1] == 1 && kv_shape[2] == input_shape[2],
+            "KV tensor shape {} must match the Q tensor shape {} outside the width",
+            kv_shape,
+            input_shape);
+    }
+    if (tensor_args.optional_output_tensors.size() == 3) {
+        const auto& outputs = tensor_args.optional_output_tensors;
+        const uint32_t k_rows_dim = operation_attributes.transpose_k_heads ? 3 : 2;
+        TT_FATAL(
+            outputs.at(0)->padded_shape()[2] == input_shape[2] &&
+                outputs.at(1)->padded_shape()[k_rows_dim] == input_shape[2] &&
+                outputs.at(2)->padded_shape()[2] == input_shape[2],
+            "Preallocated outputs must have {} rows",
+            input_shape[2]);
+    }
+}
+
+ttsl::hash::hash_t NlpCreateHeadsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using ttnn::operations::common::hash_spec_without_rows;
+    constexpr uint64_t kSalt = 0x6e6c705f63716b76ULL;  // "nlp_cqkv"
+    const bool sharded = tensor_args.input_tensor_q.is_sharded();
+    const auto hash_tensor = [&](const Tensor& tensor) {
+        return sharded ? ttsl::hash::hash_objects_with_default_seed(kSalt, tensor.tensor_spec())
+                       : hash_spec_without_rows(tensor, kSalt);
+    };
+    auto hash = tt::tt_metal::operation::hash_operation<NlpCreateHeadsDeviceOperation>(
+        operation_attributes.num_q_heads,
+        operation_attributes.num_kv_heads,
+        operation_attributes.head_dim,
+        operation_attributes.transpose_k_heads,
+        operation_attributes.kv_tied,
+        operation_attributes.output_mem_config,
+        operation_attributes.q_head_split,
+        sharded,
+        hash_tensor(tensor_args.input_tensor_q),
+        tensor_args.input_tensor_kv.has_value(),
+        tensor_args.optional_output_tensors.size());
+    if (tensor_args.input_tensor_kv.has_value()) {
+        hash = ttsl::hash::hash_objects(hash, hash_tensor(*tensor_args.input_tensor_kv));
+    }
+    for (const auto& output : tensor_args.optional_output_tensors) {
+        hash = ttsl::hash::hash_objects(hash, output.has_value(), output.has_value() ? hash_tensor(*output) : 0);
+    }
+    return hash;
+}
 
 NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
