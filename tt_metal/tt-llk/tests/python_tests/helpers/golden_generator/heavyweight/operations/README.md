@@ -12,9 +12,7 @@ Writing a test never touches the data-transfer blocks. Pick the golden for your
 architecture and hand it tensors:
 
 ```python
-from helpers.golden_generator.heavyweight.operations.quasar_operations import (
-    QuasarDataCopyGolden,
-)
+from helpers.golden_generator.heavyweight.operations import QuasarDataCopyGolden
 
 result = QuasarDataCopyGolden().run(stimuli, in_format, out_format)
 ```
@@ -30,7 +28,7 @@ result = QuasarDataCopyGolden().run(stimuli, in_format, out_format)
 | `fidelity.py` | Phase tables, `split_mantissa`, the pre-carry flush — shared by eltwise and matmul |
 | `eltwise.py` | `EltwiseBinaryGolden` |
 | `reuse_dest.py` | `EltwiseBinaryReuseDestGolden` |
-| `quasar_operations/` `wormhole_operations/` `blackhole_operations/` | Per-architecture bindings |
+| `arch.py` | `ArchProfile`, the three architectures, and the per-architecture factories |
 
 Layering, each knowing strictly less about the hardware than the one below:
 
@@ -41,7 +39,7 @@ Golden · OpConfig               blocks → steps          ──self.blocks─�
         ↓                                                                        ↓
 DataCopyGolden · MatmulGolden · Eltwise…                          Quasar… · Wormhole… · Blackhole…
         ↓
-QuasarEltwiseBinaryGolden · …   binds blocks_class + arch constants
+QuasarEltwiseBinaryGolden · …   the op bound to an ArchProfile
 ```
 
 ---
@@ -222,9 +220,10 @@ the chain is *built* from, fixed before it runs. Data flows through `Registers`.
 
 | Member | Notes |
 |---|---|
-| `blocks_class` | Class attribute, set by the architecture subclass. Construction takes no arguments. |
+| `arch` | The `ArchProfile` this golden runs on: its blocks and the FPU's mantissa split. Supplied by the factories in `arch.py`. |
 | `op_name` | Used as the math step's trace name. |
-| `Golden(blocks=None)` | Falls back to `blocks_class`; raises a pointed `TypeError` if neither is set, so using an arch-independent class by accident fails loudly. |
+| `Golden(arch=None, blocks=None)` | `blocks` overrides the profile's blocks, for a test driving one architecture's op through another's. Raises a pointed `TypeError` if neither is given, so using an arch-independent class by accident fails loudly. |
+| `mantissa_split` | Read off `arch`, not restated per op — it is a property of the FPU, and three ops used to carry identical copies. |
 | `build_chain(cfg)` | **Abstract.** Every op declares its own pipeline. |
 | `source(operand, tile=0)` | Slot name for one operand's buffer in one tile: `in0`, `in1`, then `in0_t1`, `in0_t2`. Tile 0 keeps the plain name so a non-folding op's trace stays uncluttered. |
 
@@ -591,13 +590,20 @@ Custom, because the kernel walks a block at a time.
 
 # Architecture bindings
 
-A subclass exists to bind `blocks_class` and state the constants that differ.
+There is no subclass. An architecture states its facts once in `arch.py`, and
+every operation takes one as an argument:
 
 ```python
-class QuasarEltwiseBinaryGolden(EltwiseBinaryGolden):
-    blocks_class = QuasarDataTransferBlocks
-    MANTISSA_SPLIT = (7, 7)
+QUASAR = ArchProfile(
+    name="Quasar", blocks=QuasarDataTransferBlocks, mantissa_split=(7, 7)
+)
+
+QuasarEltwiseBinaryGolden = _factory(EltwiseBinaryGolden, QUASAR)
 ```
+
+Before this each fact was restated per operation — `blocks` in five files, the
+Quasar mantissa split in three — so the file count grew as `ops x architectures`
+for information that is `ops + architectures`.
 
 | Architecture | Has | Lacks |
 |---|---|---|
@@ -616,7 +622,7 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
    with `chain.dry_run([...pre-loaded slots...])`.
 2. If the maths is not one of the existing `apply` implementations, pass your own
    `fn` to `src_to_dest`, and make `reads` match what it touches.
-3. Subclass per architecture, setting `blocks_class` and any arch constants.
+3. Add a factory per architecture in `arch.py`: `QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)`. If the op models fidelity, read the split from `self.mantissa_split`.
 4. Validate against silicon at **full Dest width first** — run with a `Float16`
    output so the packed result *is* Dest, and compare in ULPs. Only then move to
    an MX output, where a lattice step is hundreds of ULPs wide and will hide a

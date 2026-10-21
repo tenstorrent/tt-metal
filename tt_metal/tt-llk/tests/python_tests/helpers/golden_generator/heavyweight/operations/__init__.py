@@ -3,9 +3,10 @@
 
 """Operations, each declaring a chain of data-transfer blocks.
 
-Use an architecture's golden — ``quasar_operations``, ``blackhole_operations``,
-``wormhole_operations``. The classes here are the architecture-independent
-pipelines they share.
+Use an architecture's golden -- ``QuasarMatmulGolden``,
+``WormholeEltwiseBinaryGolden`` and so on, all exported from here. Each is the
+architecture-independent pipeline bound to an ``ArchProfile`` from
+:mod:`.arch`; the classes themselves take the architecture as an argument.
 """
 
 from .arch import (
