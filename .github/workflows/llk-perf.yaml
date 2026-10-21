@@ -31,6 +31,11 @@ on:
         required: false
         default: false
         type: boolean
+      offload-compile:
+        description: "With shadow-compile-runner: the board measures the CPU build and does not compile"
+        required: false
+        default: false
+        type: boolean
       debug-symbols:
         description: "Build the ELFs with -g (the nightly builds without)"
         required: false
@@ -72,6 +77,7 @@ jobs:
       upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
       # Report-only shadow compile on CPU runners (#60901).
       shadow-compile-runner: ${{ github.event_name == 'schedule' && 'tt-ubuntu-2204-xlarge-stable' || inputs.shadow-compile-runner }}
+      offload-compile: ${{ github.event_name == 'schedule' || inputs.offload-compile }}
     secrets: inherit
 
   gate:
