@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Scratch op-level A/B (not for merge): ttnn.tilize cases of ol/test_tz_ol.py under the device profiler, arms swapped as
+# device files into /work and the installed package (ci_ab/files.txt, ci_ab/v/<arm>), fresh JIT cache per arm, order
+# <arms> forward then backward, twice. The last arm is the A/A copy of the one before it. Prints RAB OPC lines and ELF hashes.
+# usage: run_ol.sh "<arms>"  (e.g. "M B X3 X3b"; an arm ending in b uses the files of the arm without it)
+set +e +o pipefail
+cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 R3_REPS=${R3_REPS:-6} AB_NODES_FILE=/work/ci_ab/ol/nodes.txt
+S=/work/ci_ab; OUT=/work/generated/tz; rm -rf $OUT; mkdir -p $OUT
+python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
+SP=$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")
+echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' | cut -c1-60) package root $SP $(hostname)"
+OBJ=$(find /work/runtime /opt -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1)
+suffix() { echo "$1" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'; }
+declare -A PK
+while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); done < $S/files.txt
+echo "== package copies found: $(for r in "${!PK[@]}"; do echo ${PK[$r]}; done | wc -w) for $(wc -l < $S/files.txt) files"
+true
+python3 -c "import ttnn, tracy; print('== imports ok')" 2>&1 | tail -2
+use() {  # use <arm>
+  local v=${1%b}
+  while read -r rel; do
+    [[ -f $S/v/$v/$rel ]] || continue
+    cp "$S/v/$v/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$v/$rel" "$p"; done
+    if [[ -z ${PK[$rel]} && $rel == tt_metal/* && -d $SP/ttnn/tt_metal ]]; then mkdir -p "$SP/ttnn/$(dirname $rel)"; cp "$S/v/$v/$rel" "$SP/ttnn/$rel"; fi
+  done < $S/files.txt
+  export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
+}
+D=tests/ttnn/unit_tests/operations/data_movement
+UT="$D/test_tilize.py $D/test_tilize_with_val_padding.py $D/test_tilize_with_zero_padding.py $D/test_tilizer.py $D/test_untilize.py $D/test_untilize_with_unpadding.py"
+for a in $1; do
+  use $a; o=$OUT/ut_$a; mkdir -p $o
+  timeout -s INT -k 60 3000 python3 -m pytest -q -p no:cacheprovider -o addopts= -rfE $UT > $o.log 2>&1
+  echo "== unit tests $a rc=$?: $(grep -aE '[0-9]+ (passed|failed|error|skipped)' $o.log | tail -1)"
+  grep -a -E "^(FAILED|ERROR)" $o.log | cut -c1-220 | head -40
+done
+echo "== DONE $(date -u +%T)"

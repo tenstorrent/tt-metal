@@ -12,6 +12,8 @@ CASES = {
     "uint8_2048x64": (ttnn.uint8, (1, 1, 2048, 64)),
     "uint8_32x128256": (ttnn.uint8, (1, 1, 32, 128256)),
     "uint8_1024x96": (ttnn.uint8, (1, 1, 1024, 96)),
+    "uint8_2048x32": (ttnn.uint8, (1, 1, 2048, 32)),
+    "twvp_fp8_2048x64": (ttnn.fp8_e4m3, (1, 1, 2048, 63)),
     "int32_512x1024": (ttnn.int32, (1, 1, 512, 1024)),
     "fp32_512x1024": (ttnn.float32, (1, 1, 512, 1024)),
     "bf16_4096x32": (ttnn.bfloat16, (1, 1, 4096, 32)),
@@ -20,12 +22,6 @@ CASES = {
     "bf16_to_bfp8_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
     "bf16_to_bfp8_512x96": (ttnn.bfloat16, (1, 1, 512, 96)),
     "conv2d_rn50_l2_3x3": None,
-    "conv2d_rn50_l3_1x1": None,
-    "matmul_2k2k2k_bf16_hifi2": None,
-    "matmul_2k2k4k_bfp8_lofi": None,
-    "sum_rm_w_bf16_2048x1024": None,
-    "sum_rm_h_bf16_2048x1024": None,
-    "sdpa_decode_b32_s2k": None,
 }
 _CW = {}
 
@@ -138,7 +134,13 @@ def test_tz(device, case):
     elif dt in (ttnn.int32, ttnn.uint32):
         t = torch.randint(0, 2**20, shape, generator=g, dtype=torch.int32)
     else:
-        t = torch.randn(shape, generator=g).to(torch.float32 if dt == ttnn.float32 else torch.bfloat16)
+        t = torch.randn(shape, generator=g).to(torch.float32 if dt in (ttnn.float32, ttnn.fp8_e4m3) else torch.bfloat16)
+    if case == "twvp_fp8_2048x64":
+        x = ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        out = ttnn.to_torch(ttnn.untilize(ttnn.tilize_with_val_padding(x, [1, 1, 2048, 64], 2.0, use_multicore=True))).float()
+        assert torch.all(out[..., 63:] == 2.0)
+        _record(case, out)
+        return
     if case.startswith("twvp"):
         padded = list(shape[:-2]) + [(shape[-2] + 31) // 32 * 32, (shape[-1] + 31) // 32 * 32]
         x = ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
