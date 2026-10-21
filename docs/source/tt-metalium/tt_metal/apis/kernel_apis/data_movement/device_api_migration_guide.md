@@ -13,6 +13,7 @@ This guide helps developers migrate from legacy data movement APIs to the new De
    - [Circular Buffer Operations](#circular-buffer-operations)
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
+     - [Local-to-Local Copies (NoC Loopback)](#local-to-local-copies-noc-loopback)
    - [Zeroing Memory](#zeroing-memory)
 5. [Complete Migration Examples](#complete-migration-examples)
 6. [Troubleshooting](#troubleshooting)
@@ -74,8 +75,9 @@ CoreLocalMem<uint32_t> mem(address);
 mem[0] = value;              // Array-style access
 auto val = *mem;             // Dereference
 mem++;                       // Pointer arithmetic
-auto addr = mem.get_address();
 ```
+
+`CoreLocalMem<T>` (like `Scratchpad<T>` and `LocalTensorAccessor<T>`) does not expose its raw address; see [Raw Addresses](#raw-addresses).
 
 ### `Semaphore`
 
@@ -501,12 +503,49 @@ CoreLocalMem<uint32_t> mem(base_addr);
 // Navigate through memory
 auto mid = mem + offset;           // Offset by elements
 auto diff = mid - mem;             // Difference in elements
-auto addr = mid.get_address();     // Get raw address
 
 // Iteration
 for (auto ptr = mem; ptr < end; ++ptr) {
     *ptr = value;
 }
+```
+
+#### Raw Addresses
+
+`CoreLocalMem<T>`, `Scratchpad<T>` and `LocalTensorAccessor<T>` have no raw-address getter. Instead of extracting the address:
+
+- **Element access:** `mem[i]`, `*mem`, `mem->field`. Use `&mem[i]` where an API needs a `T*` (e.g. `__atomic_*` builtins).
+- **Pointer arithmetic:** `pad.local_mem()` returns the region as a `CoreLocalMem<T>`, so `pad.local_mem() + i` points at element `i`.
+- **NoC transfers:** pass the handle itself as either endpoint, with `{.offset_bytes = off}` (bytes). See [Local-to-Local Copies](#local-to-local-copies-noc-loopback) for copies within this core.
+
+#### Local-to-Local Copies (NoC Loopback)
+
+To copy between two buffers in this core's L1 using the NoC, pass the local handles (`CoreLocalMem<T>`, `Scratchpad<T>`, `LocalTensorAccessor<T>`) directly as both endpoints. Do **not** build a loopback `UnicastEndpoint` from this core's own coordinates (`{.noc_x = my_x[...], .noc_y = my_y[...], .addr = ...}`): that needs the raw address, and the handle already says it is local.
+
+A local handle means "this core's L1" in either position:
+- **Local side** (write source / read destination): the handle's L1 address.
+- **NoC side** (read source / write destination): the same region addressed through the NoC from this core, i.e. a loopback.
+
+A `DataflowBuffer` / `CircularBuffer` can be the local side of such a copy, but not the NoC side.
+
+**Legacy API** (loopback read out of a scratchpad into a CB):
+```cpp
+uint32_t pad_addr = ...;
+noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], pad_addr + off), get_write_ptr(cb_id), size_bytes);
+```
+
+**Avoid** (Device 2.0 API, but hand-built loopback endpoint):
+```cpp
+noc.async_read(UnicastEndpoint{}, dfb, size_bytes,
+               {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = pad_addr + off}, {});
+```
+
+**New API:**
+```cpp
+Scratchpad<uint32_t> pad(scratch::my_pad);
+noc.async_read(pad, dfb, size_bytes, {.offset_bytes = off}, {});          // pad -> DFB entry
+noc.async_write(dfb, pad, size_bytes, {}, {.offset_bytes = off});         // DFB entry -> pad
+noc.async_read(pad, CoreLocalMem<uint32_t>(dst_addr), size_bytes, {}, {}); // pad -> any local region
 ```
 
 ---
@@ -544,9 +583,8 @@ dfb.push_back(1);
 | `dst` | base |
 |---|---|
 | `CircularBuffer` / `DataflowBuffer` | `get_write_ptr()` |
-| `Scratchpad<T>` | `get_base_address()` |
-| `LocalTensorAccessor<T>` | `get_bank_base_address()` |
-| `CoreLocalMem<T>` | `get_address()` |
+| `Scratchpad<T>` / `LocalTensorAccessor<T>` | start of the local region |
+| `CoreLocalMem<T>` | where the handle points |
 
 `offset_bytes` is in **bytes** for every type, including the typed handles whose `operator[]` indexes in elements.
 

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <limits>
 
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -24,7 +23,8 @@
 // The logistic factor 1 / (1 + e^-x) is sel / (1 + e^-|x|), with sel = 1 for x >= 0 and e^-|x| below.
 //
 // The leaves' magnitudes multiply unscaled, and one reciprocal divides by the product of their denominators.
-// A NaN input gives NaN; a result below the smallest normal float is 0.
+// A NaN input gives NaN with FP32 DEST and +inf with BF16 DEST (the BF16 round turns a NaN into an
+// infinity); a result below the smallest normal float is 0.
 
 namespace ckernel::sfpu {
 
@@ -34,20 +34,21 @@ struct SituGluConfigKimi {
     static constexpr float beta_up = 25.0f;
 };
 
-// One Newton step: the denominator is a positive normal value.
+// One Newton step on SFPARECIP's estimate: the denominator is a positive normal value. The 2.0f is a
+// literal rather than a programmable constant, so it does not depend on what the init loads.
 sfpi_inline sfpi::vFloat _situ_glu_reciprocal_(const sfpi::vFloat a) {
     sfpi::vFloat y = sfpi::approx_recip(a);
     sfpi::vFloat t = a * y - 2.0f;
     return y * -t - 0.0f;
 }
 
-// The Blackhole BF16 whole-tile call on DEST tiles 0, 1 -> 0 as tt-polynomial-fitter's scheduler issues it
-// (ttpoly/sfpu_schedule.py in tenstorrent/tt-polynomial-fitter, not in this repository):
-// the compiled instructions of the body below in a stall-filling order, rows addressed by their
-// immediates. It stores the same word for every input.
-inline void calculate_situ_glu_scheduled() {
-    // A loop, not unrolled: the body stays in the instruction cache.
-    #pragma GCC unroll 1
+// The Blackhole BF16 whole-tile call on DEST tiles g, u -> g, any up tile u past the gate tile g, as
+// tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py in tenstorrent/tt-polynomial-fitter, not in this
+// repository): the compiled instructions of the body below in a stall-filling order, rows addressed by their
+// immediates, the up tile's from up_address. It stores the same word for every input.
+inline void calculate_situ_glu_scheduled(const std::uint32_t up_address) {
+// A loop, not unrolled: the body stays in the instruction cache.
+#pragma GCC unroll 1
     for (int pass = 0; pass < 8; ++pass) {
         TTI_SFPLOAD(0, 0, 7, 0);
         TTI_SFPSETSGN(0, 0, 1, 1);
@@ -57,7 +58,7 @@ inline void calculate_situ_glu_scheduled() {
         TTI_SFPLOADI(7, 0, 0x419c);
         TTI_SFPSWAP(0, 2, 4, 1);
         TTI_SFPSWAP(0, 7, 1, 1);
-        TTI_SFPLOAD(6, 0, 7, 0x40);
+        TT_SFPLOAD(6, 0, 7, up_address + 0);
         TTI_SFPEXMAN(0, 2, 4, 0);
         TTI_SFPEXEXP(0, 2, 2, 0);
         TTI_SFPMOV(0, 1, 5, 2);
@@ -125,7 +126,7 @@ inline void calculate_situ_glu_scheduled() {
         TTI_SFPMAD(4, 1, 7, 1, 0);
         TTI_SFPLOADI(7, 0, 0x419c);
         TTI_SFPSWAP(0, 7, 6, 1);
-        TTI_SFPLOAD(4, 0, 7, 0x42);
+        TT_SFPLOAD(4, 0, 7, up_address + 2);
         TTI_SFPSETSGN(0, 6, 3, 0);
         TTI_SFPMULI(0x3e80, 6, 0);
         TTI_SFPMULI(0x4b80, 3, 0);
@@ -193,7 +194,7 @@ inline void calculate_situ_glu_scheduled() {
         TTI_SFPMAD(5, 2, 7, 2, 0);
         TTI_SFPLOADI(7, 0, 0x419c);
         TTI_SFPSWAP(0, 7, 6, 1);
-        TTI_SFPLOAD(5, 0, 7, 0x44);
+        TT_SFPLOAD(5, 0, 7, up_address + 4);
         TTI_SFPSETSGN(0, 6, 3, 0);
         TTI_SFPMULI(0x3e80, 6, 0);
         TTI_SFPMULI(0x4b80, 3, 0);
@@ -260,7 +261,7 @@ inline void calculate_situ_glu_scheduled() {
         TTI_SFPLOADI(6, 0, 0x8000);
         TTI_SFPMAD(4, 2, 6, 2, 0);
         TTI_SFPLOADI(4, 0, 0x419c);
-        TTI_SFPLOAD(6, 0, 7, 0x46);
+        TT_SFPLOAD(6, 0, 7, up_address + 6);
         TTI_SFPSWAP(0, 4, 5, 1);
         TTI_SFPSETSGN(0, 5, 7, 0);
         TTI_SFPMULI(0x3e80, 5, 0);
@@ -331,87 +332,94 @@ template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SituGluCo
 inline void calculate_situ_glu(
     const std::uint32_t gate_tile_idx, const std::uint32_t up_tile_idx, const std::uint32_t out_tile_idx) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (up_tile_idx == gate_tile_idx + 1 && out_tile_idx == gate_tile_idx + 0) {
+        if (out_tile_idx == gate_tile_idx && up_tile_idx > gate_tile_idx &&
+            (up_tile_idx - gate_tile_idx) * 64 + 6 < 8192) {
             if (gate_tile_idx != 0) {
                 math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(gate_tile_idx - 0);
                 TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
             }
-            calculate_situ_glu_scheduled();
+            calculate_situ_glu_scheduled((up_tile_idx - gate_tile_idx) * 64);
             return;
         }
     }
     static_assert(
         Config::beta_gate == 4.0f && Config::beta_up == 25.0f,
         "calculate_situ_glu is fitted for beta_gate = 4, beta_up = 25");
-    using namespace sfpi;
     constexpr std::uint32_t dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat gate_x = dst_reg[gate_tile_idx * dst_tile_size];
-        vFloat gate_a = sfpi::setsgn(gate_x, 0);
-        auto [gate_c, gate_m] = sfpi::min_max(gate_a, vFloat(19.5f));
-        vFloat gate_t = gate_c * 0.25f;
-        vFloat gate_s = gate_t * gate_t;
-        vFloat num = sfpi::copysgn(gate_c, gate_x) * 16777216.0f;
-        vFloat up_x = dst_reg[up_tile_idx * dst_tile_size];
-        auto [up_c, up_m] = sfpi::min_max(sfpi::setsgn(up_x, 0), vFloat(121.875f));
-        vFloat up_t = up_c * vConstFloatPrgm0;
-        vFloat up_s = up_t * up_t;
+        sfpi::vFloat gate_x = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat gate_a = sfpi::setsgn(gate_x, 0 /*sgn*/);
+        auto [gate_c, gate_m] = sfpi::min_max(gate_a, sfpi::vFloat(19.5f));
+        sfpi::vFloat gate_t = gate_c * 0.25f;
+        sfpi::vFloat gate_s = gate_t * gate_t;
+        sfpi::vFloat num = sfpi::copysgn(gate_c, gate_x) * 16777216.0f;
+        sfpi::vFloat up_x = sfpi::dst_reg[up_tile_idx * dst_tile_size];
+        auto [up_c, up_m] = sfpi::min_max(sfpi::setsgn(up_x, 0 /*sgn*/), sfpi::vFloat(121.875f));
+        sfpi::vFloat up_t = up_c * sfpi::vConstFloatPrgm0;
+        sfpi::vFloat up_s = up_t * up_t;
         // 0, or NaN where an input is NaN: -(|x0| + |x1|) is otherwise at most 0, and SFPSWAP ranks the
         // multiply-add's positive NaN above 0.
-        vFloat nan_z = sfpi::max(gate_m * -1.0f - up_m, 0.0f);
+        sfpi::vFloat nan_z = sfpi::max(gate_m * -1.0f - up_m, 0.0f);
         num = num * sfpi::copysgn(up_c, up_x);
-        vFloat pk = 0.000690968707203865f;
-        vFloat pc = 0.1031409502029419f;
-        vFloat p0 = gate_s * pk + pc;
-        vFloat p1 = up_s * pk + pc;
+        sfpi::vFloat pk = 0.000690968707203865f;
+        sfpi::vFloat pc = 0.1031409502029419f;
+        sfpi::vFloat p0 = gate_s * pk + pc;
+        sfpi::vFloat p1 = up_s * pk + pc;
         p0 = p0 * gate_s + 1.0f;
         p1 = p1 * up_s + 1.0f;
         num = num * p0;
         num = num * p1;
-        vFloat qk = 0.013031005859375f;
-        vFloat qc = 0.436279296875f;
-        vFloat q0 = gate_s * qk + qc;
-        vFloat q1 = up_s * qk + qc;
+        sfpi::vFloat qk = 0.013031005859375f;
+        sfpi::vFloat qc = 0.436279296875f;
+        sfpi::vFloat q0 = gate_s * qk + qc;
+        sfpi::vFloat q1 = up_s * qk + qc;
         q0 = q0 * gate_s + 1.0f;
         q1 = q1 * up_s + 1.0f;
-        vFloat den = q0 * q1;
-        vFloat w_c = gate_a * vConstFloatPrgm1 + 127.0f;
-        vFloat w_z = sfpi::max(w_c, 0.5f);
-        vInt w_m = sfpi::exman(w_z, sfpi::MantissaMode::ImplicitOne);
-        vInt w_s = sfpi::shft(w_m, sfpi::exexp(w_z), sfpi::ShiftMode::Logical);
-        vFloat w_y = sfpi::as<vFloat>(w_s);
-        vMag w_q = sfpi::exman(w_y);
-        vFloat w_f = sfpi::convert<vFloat>(w_q, RoundMode::Nearest);
-        vFloat w = w_f * vConstFloatPrgm2 + 3.235038207097512e-15f;
+        sfpi::vFloat den = q0 * q1;
+        // e^-|z| through the exponent ALU: w_c = |z| * (-log2(e)) + 127 is the biased binary32 exponent of e^-|z| (127
+        // is the bias), held at 0.5 so e^-|z| underflows to 0. w_f is the fraction of w_c as an integer (0 to 2^23),
+        // and the polynomial in w_f is 2^fraction: its coefficients are those of
+        // data/coefficients/situ_glu_p3_s1_uniform_lsq_relative_block-exp2_fraction.csv, each times 2^(-23 k).
+        sfpi::vFloat w_c = gate_a * sfpi::vConstFloatPrgm1 + 127.0f;
+        sfpi::vFloat w_z = sfpi::max(w_c, 0.5f);
+        sfpi::vInt w_m = sfpi::exman(w_z, sfpi::MantissaMode::ImplicitOne);
+        sfpi::vInt w_s = sfpi::shft(w_m, sfpi::exexp(w_z), sfpi::ShiftMode::Logical);
+        sfpi::vFloat w_y = sfpi::as<sfpi::vFloat>(w_s);
+        sfpi::vMag w_q = sfpi::exman(w_y);
+        sfpi::vFloat w_f = sfpi::convert<sfpi::vFloat>(w_q, sfpi::RoundMode::Nearest);
+        sfpi::vFloat w = w_f * sfpi::vConstFloatPrgm2 + 3.235038207097512e-15f;
         w = w * w_f + 8.286510677635306e-08f;
         w = w * w_f + 1.0f;
-        w = sfpi::setexp(w, sfpi::exexp(w_y, ExponentMode::Biased));
+        w = sfpi::setexp(w, sfpi::exexp(w_y, sfpi::ExponentMode::Biased));
         den = den * (w + 1.0f);
-        v_if(vFloat(dst_reg[gate_tile_idx * dst_tile_size]) < 0.0f) { num = num * w; }
+        v_if(sfpi::vFloat(sfpi::dst_reg[gate_tile_idx * dst_tile_size]) < 0.0f) { num = num * w; }
         v_endif;
-        vFloat out = num * _situ_glu_reciprocal_(den) + nan_z;
+        sfpi::vFloat out = num * _situ_glu_reciprocal_(den) + nan_z;
         // out is 2^24 times the result: round it to BF16 while it is normal, then scale back.
         if constexpr (!is_fp32_dest_acc_en) {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             out = out * 5.960464477539063e-08f;
         } else {
-            vFloat lowered = out * 5.960464477539063e-08f;
+            sfpi::vFloat lowered = out * 5.960464477539063e-08f;
             // Below the smallest normal the scaled result flushes; where the pack would round it
             // to the smallest normal, keep that.
-            vFloat magnitude = sfpi::setsgn(out, 0);
+            sfpi::vFloat magnitude = sfpi::setsgn(out, 0 /*sgn*/);
             v_if(magnitude >= 1.9644485432749806e-31f && magnitude < 1.9721522630525295e-31f) {
-                lowered = sfpi::copysgn(vFloat(1.1754943508222875e-38f), out);
+                lowered = sfpi::copysgn(sfpi::vFloat(1.1754943508222875e-38f), out);
             }
             v_endif;
             out = lowered;
         }
-        dst_reg[out_tile_idx * dst_tile_size] = out;
-        dst_reg++;
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = out;
+        sfpi::dst_reg++;
     }
 }
 
-// Within the state tanh_init<false, false> writes: 3 of its programmable constants.
+// The init resets the SFPU address counters and loads vConstFloatPrgm0 = 1 / s of the up leaf, which scales x to its
+// ratio's t; vConstFloatPrgm1 = -factor_scale * log2(e), which scales |x| to the base-2 exponent of e^-|x|;
+// vConstFloatPrgm2 = the top coefficient of the 2^f polynomial. The body reads them, so situ_glu_init runs after any
+// other SFPU op's init and before this kernel.
 inline void situ_glu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 0.03999999910593033f;

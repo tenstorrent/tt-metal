@@ -57,7 +57,7 @@ def _coverage_inputs(num_tiles, seed=0):
     return gate[perm].to(torch.bfloat16), up[perm].to(torch.bfloat16)
 
 
-def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0):
+def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0, dst_gate=0, dst_up=1):
     num_tiles = gate_t.numel() // TILE_ELEMS
     shape = [1, num_tiles, 32, 32]
 
@@ -123,7 +123,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0):
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/situ_glu.cpp",
             core_ranges=core,
-            compile_time_args=[num_tiles, dst_out],
+            compile_time_args=[num_tiles, dst_out, dst_gate, dst_up],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),
@@ -299,6 +299,9 @@ _GENERATED_BOUNDARY_FLUSH = 0.0  # relative distance above the smallest normal a
 # DEST sweep checks the result's class and sign, not its ULP.
 _GENERATED_FP32_DEST_TINY_INPUT = 2.0**-110
 _SMALLEST_NORMAL = 2.0**-126
+# (gate, up, out) DEST tiles each case calls the kernel on: adjacent, the fused routed-expert kernels' (j, c + j, j),
+# a separate output, and an up tile before the gate (the compiled body's path).
+_GENERATED_SLOTS = [(0, 1, 0), (0, 4, 0), (3, 7, 3), (0, 1, 2), (1, 0, 1)]
 
 
 def _generated_exact(first, second):
@@ -352,8 +355,11 @@ def _generated_ulp(actual, first, second, fp32_dest=False):
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu SFPU op is implemented for Blackhole only")
 @pytest.mark.parametrize("swept", ["gate", "up"])
 @pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16_dst", "fp32_dst"])
-def test_situ_glu_sfpu_generated_bf16_sweep(device, swept, fp32_dest):
+@pytest.mark.parametrize("slots", _GENERATED_SLOTS, ids=lambda s: "dst%d_%d_%d" % s)
+def test_situ_glu_sfpu_generated_bf16_sweep(device, swept, fp32_dest, slots):
     """Every finite BF16 encoding of one input against the declared values of the other, in pure ULP."""
+    if fp32_dest and max(slots) >= 4:
+        pytest.skip("FP32 DEST holds 4 tiles in half sync")
     every = _generated_finite_bf16()
     other = "up" if swept == "gate" else "gate"
     held = torch.tensor(_GENERATED_HELD[other], dtype=torch.float32).to(torch.bfloat16)
@@ -361,7 +367,17 @@ def test_situ_glu_sfpu_generated_bf16_sweep(device, swept, fp32_dest):
     held_values = held.repeat_interleave(every.numel())
     first, second = (swept_values, held_values) if swept == "gate" else (held_values, swept_values)
     first_t, second_t, n = _generated_pad(first, second)
-    actual = _run(device, first_t, second_t, ttnn.bfloat16, TILE_ELEMS * 2, fp32_dest)[:n]
+    actual = _run(
+        device,
+        first_t,
+        second_t,
+        ttnn.bfloat16,
+        TILE_ELEMS * 2,
+        fp32_dest,
+        dst_gate=slots[0],
+        dst_up=slots[1],
+        dst_out=slots[2],
+    )[:n]
     ulp, declared, (kept, tiny) = _generated_ulp(actual, first, second, fp32_dest)
     logger.info(
         f"swept {swept} fp32_dst={fp32_dest}: max {ulp.max().item():.4f} ULP, {declared} declared flush lanes, "
@@ -372,14 +388,25 @@ def test_situ_glu_sfpu_generated_bf16_sweep(device, swept, fp32_dest):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu SFPU op is implemented for Blackhole only")
-def test_situ_glu_sfpu_generated_specials(device):
+@pytest.mark.parametrize("slots", _GENERATED_SLOTS, ids=lambda s: "dst%d_%d_%d" % s)
+def test_situ_glu_sfpu_generated_specials(device, slots):
     """NaN gives NaN (stored as +inf); the other classes as torch, or as the stock path where the two differ."""
     names = list(_GENERATED_CLASSES)
     pairs = [(a, b) for a in names for b in names if (a, b) in _GENERATED_SPECIAL_RESULTS]
     first = torch.tensor([_GENERATED_CLASSES[a] for a, _ in pairs], dtype=torch.float32).to(torch.bfloat16)
     second = torch.tensor([_GENERATED_CLASSES[b] for _, b in pairs], dtype=torch.float32).to(torch.bfloat16)
     first_t, second_t, n = _generated_pad(first, second)
-    actual = _run(device, first_t, second_t, ttnn.bfloat16, TILE_ELEMS * 2, False)[:n].to(torch.float32)
+    actual = _run(
+        device,
+        first_t,
+        second_t,
+        ttnn.bfloat16,
+        TILE_ELEMS * 2,
+        False,
+        dst_gate=slots[0],
+        dst_up=slots[1],
+        dst_out=slots[2],
+    )[:n].to(torch.float32)
 
     def kind(v):
         if torch.isnan(v):
