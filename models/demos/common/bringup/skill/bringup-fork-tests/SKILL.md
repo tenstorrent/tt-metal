@@ -81,8 +81,12 @@ semantics from the op's docstring, its program factory and kernels, and the sour
 them from the model's output.
 - Data movement (dispatch, combine, gather, layout changes): compare exactly, over every valid output element. Say in
   the test which elements are don't-care (padding, slots routed elsewhere) and skip only those.
-- Math: PCC plus a max relative error. Set the limit from the measured error on a few seeds, with a margin; state the
-  measured numbers in a comment.
+- Math: rel L2 (PCC as a diagnostic) against the torch reference in fp64, limit = calib x the same torch op at the
+  op's real input dtypes and accumulation (bf16 / bfp8 / bfp4 inputs rounded, fp32 sums) vs fp64
+  (`models.demos.common.bringup.testing.fork_cases.noise_limit(fn_ref, inputs, dtypes, out_dtype)`). The case
+  declares those formats as `"noise": {"inputs": [...], "out": "bf16"}`, never a `pcc` / `rtol` of its own; never a
+  number read off the device's own error (F139, owner). `fork_cases --lint` (task O.1) refuses a math case with a
+  numeric tolerance and no `noise`.
 - Check once, by hand, that the test can fail: temporarily corrupt the device output (scale it by 1.01, or zero one
   row) and see the case fail. Do not commit that change.
 

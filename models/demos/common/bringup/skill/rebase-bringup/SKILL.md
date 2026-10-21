@@ -84,9 +84,10 @@ and `BRINGUP_TASK=<task>` set: each ladder rung (`BRINGUP_RUNG=<rung> scripts/ru
 models/demos/common/bringup/tests/test_ladder.py`), the contract test (`tests/test_contract.py`), and the fork-call
 capture + coverage (`BRINGUP_CAPTURE_FORKS=<scratch>/fork_calls.json BRINGUP_RUNG=last ... -p
 models.demos.common.bringup.testing.fork_capture`, then `python -m models.demos.common.bringup.testing.fork_cases
---capture <scratch>/fork_calls.json` with `--run-tests` once). Compare every `pcc*` / `top*` metric with step 1's
-baseline (or the committed final `X.3.json` / `K.1.json`, noting their date): bit-identical or explained. Models whose
-mesh this box cannot open are listed as not verified.
+--capture <scratch>/fork_calls.json` with `--run-tests` once). Every gated metric within its recorded limit; list
+each metric's move vs step 1's baseline (or the committed final `X.3.json` / `K.1.json`, noting their date) as a
+fraction of its margin; investigate moves over a quarter of the margin; never require identical bits (owner: identity
+with an older device path is never a criterion). Models whose mesh this box cannot open are listed as not verified.
 
 ## 8. Knowledge staleness
 Follow `staleness.md` (in this folder): list the entries whose code changed, verify, fix or remove them, report.
