@@ -3,13 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Re-verify passed tasks under the current framework, without touching the run (F82).
 
-    python -m models.demos.common.bringup.core.verify --spec S --tasks 'C.*' S.swa.15 [--status PASS] [--out DIR]
+    python -m models.demos.common.bringup.core.verify --spec S --tasks M.1 'L.*' K.1 'C.*' [--batch] [--status PASS]
+        [--out DIR]
 
 Runs each matching task's gate command as its gate would (same env, the safe runner), but with the metrics going to
 ``runs/<run>/verify/<stamp>/results`` and the logs next to them: state.json, results/ and the commits are untouched,
 so a step that passed under older limits keeps its status while the overseer sees whether it still passes (after a
-change of limits, F76-F81). Prints one line per task and writes summary.json; exit 1 if any task fails. A failure is
-the overseer's to act on (a fix job, overseer.py), never an automatic re-run of the task.
+change of limits, F76-F81). Tasks run in the order of the --tasks patterns (dependency order within one). Prints one
+line per task and writes summary.json; exit 1 if any task fails. A failure is the overseer's to act on (a fix job,
+overseer.py), never an automatic re-run of the task.
+
+F142 ``--batch``: the C.* / S.* tasks whose gate is one test command over their frozen test files run grouped by
+block type (and runner command) in ONE pytest process (the mesh opened and the layer's weights loaded once, not once
+per task; ``--no-precompile``); testing/batch_tasks.py points each test's metrics at its own task and records each
+task's outcome. Every task is then judged exactly as unbatched (its outcome and its gate metrics). A task whose test
+never reported (the batch died: a hang, a crash) fails with the batch's exit code: rerun it unbatched. Anything else
+(a compound gate, the ladder, the contract) runs as before.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -25,20 +35,99 @@ from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.gate import check_metrics, gate_command, gate_env, run_name
 from models.demos.common.bringup.core.ledger import Ledger
 
+BATCH_PLUGIN = "models.demos.common.bringup.testing.batch_tasks"
 
-def verify(spec, patterns: list[str], status: str | None = "PASS", out: Path | None = None) -> dict:
+
+def selected(led, patterns: list[str], status: str | None) -> list[str]:
+    """The tasks matching the patterns, in the patterns' order (dependency order within one)."""
+    state, order, out = led.state(), led.topo_order(), []
+    for p in patterns:
+        out += [
+            t
+            for t in order
+            if fnmatch.fnmatchcase(t, p)
+            and t not in out
+            and (status is None or state.get(t, {}).get("status") == status)
+        ]
+    return out
+
+
+def batch_key(task: dict) -> tuple | None:
+    """(block type, the runner's words) for a gate that is one test command over the task's frozen files; else None."""
+    cmd, files = task["gate"]["cmd"], list(task.get("tests") or [])
+    if not files or not task["id"].startswith(("C.", "S.")) or any(c in cmd for c in ("&&", "||", ";", "|")):
+        return None
+    words = shlex.split(cmd)
+    if not all(f in words for f in files):
+        return None
+    return ((task.get("brief") or {}).get("block_type"), tuple(w for w in words if w not in files))
+
+
+def judge(task: dict, rc: int | None, got: dict) -> tuple[str, list[str]]:
+    ok, lines = check_metrics(task["gate"].get("metrics", {}), got)
+    return ("PASS" if rc == 0 and ok else "FAIL"), lines
+
+
+def run_batch(spec, led, tids: list[str], out: Path, n: int) -> list[dict]:
+    """One pytest process over the tasks' frozen test files (F142); a row per task, judged as unbatched."""
+    tasks = [led.task(t) for t in tids]
+    runner = list(batch_key(tasks[0])[1])
+    if any(Path(w).name == "run_safe_pytest.sh" for w in runner) and "--no-precompile" not in runner:
+        i = next(k for k, w in enumerate(runner) if Path(w).name == "run_safe_pytest.sh")
+        runner.insert(i + 1, "--no-precompile")
+    files = [f for t in tasks for f in t["tests"]]
+    owner = {str((spec.repo / f).resolve()): t["id"] for t in tasks for f in t["tests"]}
+    outcomes = out / f"batch_{n}.outcomes.json"
+    env = gate_env(spec, led, tids[0])
+    env.update({M.RESULTS_ENV: str(out / "results"), "BRINGUP_BATCH_TASKS": json.dumps(owner)})
+    env["BRINGUP_BATCH_OUTCOMES"] = str(outcomes)
+    cmd = " ".join(shlex.quote(w) for w in [*runner, "-p", BATCH_PLUGIN, *files])
+    log, t0 = out / f"batch_{n}.log", time.time()
+    with open(log, "w") as f:
+        f.write(f"$ {cmd}\n")
+        f.flush()
+        rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+    seen = json.loads(outcomes.read_text()) if outcomes.exists() else {}
+    rows, dt = [], round((time.time() - t0) / len(tasks), 1)
+    for task in tasks:
+        tid = task["id"]
+        o = seen.get(tid)
+        trc = 0 if o == "passed" else (1 if o == "failed" else rc or 1)
+        verdict, lines = judge(task, trc, M.load(tid, out / "results"))
+        if o is None:
+            lines = [
+                f"  no test outcome: the batch exited {rc} before this task's test reported (rerun unbatched)"
+            ] + lines
+        rows.append({"task": tid, "verdict": verdict, "rc": trc, "s": dt, "lines": lines, "log": str(log), "batch": n})
+    return rows
+
+
+def verify(
+    spec, patterns: list[str], status: str | None = "PASS", out: Path | None = None, batch: bool = False
+) -> dict:
     led = Ledger(spec.bringup_dir)
-    state = led.state()
-    tids = [
-        t
-        for t in led.topo_order()
-        if any(fnmatch.fnmatchcase(t, p) for p in patterns)
-        and (status is None or state.get(t, {}).get("status") == status)
-    ]
+    tids = selected(led, patterns, status)
     out = Path(out or spec.run_dir(run_name(led)) / "verify" / time.strftime("%Y%m%dT%H%M%S"))
     (out / "results").mkdir(parents=True, exist_ok=True)
+    groups: dict[tuple, list[str]] = {}
+    for tid in tids if batch else []:
+        key = batch_key(led.task(tid))
+        if key is not None:
+            groups.setdefault(key, []).append(tid)
+    first = {g[0]: g for g in groups.values()}
+    batched = {t for g in groups.values() for t in g}
     rows = []
     for tid in tids:
+        if tid in first:
+            new = run_batch(spec, led, first[tid], out, len({r.get("batch") for r in rows if "batch" in r}))
+            for r in new:
+                print(f"{r['verdict']} {r['task']} (batched, rc {r['rc']}, log {r['log']})", flush=True)
+                for line in r["lines"] if r["verdict"] == "FAIL" else []:
+                    print(line, flush=True)
+            rows += new
+            continue
+        if tid in batched:
+            continue
         task = led.task(tid)
         env = gate_env(spec, led, tid)
         env[M.RESULTS_ENV] = str(out / "results")
@@ -49,9 +138,7 @@ def verify(spec, patterns: list[str], status: str | None = "PASS", out: Path | N
             f.write(f"$ {cmd}\n")
             f.flush()
             rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
-        got = M.load(tid, out / "results")
-        ok, lines = check_metrics(task["gate"].get("metrics", {}), got)
-        verdict = "PASS" if rc == 0 and ok else "FAIL"
+        verdict, lines = judge(task, rc, M.load(tid, out / "results"))
         rows.append({"task": tid, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "lines": lines})
         print(f"{verdict} {tid} (rc {rc}, {time.time() - t0:.0f}s, log {log})", flush=True)
         for line in lines if verdict == "FAIL" else []:
@@ -69,11 +156,14 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
-    ap.add_argument("--tasks", nargs="+", required=True, help="task id globs")
+    ap.add_argument("--tasks", nargs="+", required=True, help="task id globs, run in this order")
     ap.add_argument("--status", default="PASS", help="only tasks in this status ('' for any)")
     ap.add_argument("--out")
+    ap.add_argument(
+        "--batch", action="store_true", help="F142: C.* / S.* frozen tests grouped by block type, one process"
+    )
     a = ap.parse_args(argv)
-    res = verify(Spec.load(a.spec), a.tasks, a.status or None, Path(a.out) if a.out else None)
+    res = verify(Spec.load(a.spec), a.tasks, a.status or None, Path(a.out) if a.out else None, a.batch)
     return 1 if res["failed"] else 0
 
 

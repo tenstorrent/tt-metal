@@ -286,8 +286,9 @@ input nudge (the fp32 step on its inputs moved inside their official dtype's rou
 and never below one rounding of the output to its official dtype. A selection flip must be explained by the nudge. The
 gated metrics are errors (rel L2 for float outputs, the missed fraction for integer ones, `err_*` `<= limit`); PCC is
 recorded as a diagnostic only, being blind to a scale or an offset. After a change of limits, rerun every passed step's
-gates once without touching the run (`python -m models.demos.common.bringup.core.verify --spec <spec> --tasks 'C.*'
-...`) and queue a fix job for each failure.
+gates once without touching the run (`python -m models.demos.common.bringup.core.verify --spec <spec> --tasks M.1
+'L.*' K.1 'C.*' 'S.*' --batch`: the end-to-end tasks first, the per-step tests one process per block type, F142) and
+queue a fix job for each failure.
 
 **Numerics that cannot be fixed: leave them, with a note (owner's general guidance).** When a step misses its noise
 floor and no bug or lower-precision choice explains it at the device's normal settings, do not chase it with
