@@ -34,6 +34,14 @@ the adapter's own position counter), and its tokens are read back without blocki
 eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
+
+Speculative decoding (MIMO_SPEC_DECODE=mtp; the plugin's model-owned drafter contract, docs/SPEC_DECODE_CONTRACT.md,
+with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter",
+"num_speculative_tokens": 3}'``): the MTP layer drafts up to MAX_DRAFTS tokens for a lane that ran one request in its
+last step, and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
+with several requests decline to draft and decode as usual; a verify block that still carries drafts beside other
+rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. Greedy requests only (the
+plugin's accept walk compares token ids).
 """
 
 import math
@@ -48,6 +56,7 @@ import ttnn
 
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
+from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource, draft_source, plan_mtp, plan_verify_passes
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
@@ -71,6 +80,10 @@ PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
 # (1M would cost 1.6 GB per chip); MIMO_DEVICE_ROPE=0 uploads them every step instead.
 DEVICE_ROPE = os.environ.get("MIMO_DEVICE_ROPE", "1") == "1"
 DEVICE_ROPE_MAX_LEN = 131072
+# MIMO_SPEC_DECODE=mtp: load the MTP layer (MIMO_MTP_LAYER, default 0, vLLM's MTP proposer's layer) and serve the
+# plugin's model-owned drafter contract (module docstring).
+SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
+MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
 
 
 def _model_path(hf_config):
@@ -98,6 +111,12 @@ class MiMoV2ForCausalLM:
         "max_device_top_k": 1,
         "supports_device_penalties": False,
         "supports_device_logprobs": False,
+        # The MTP drafter (spec_plan, propose_draft_tokens): it keeps the target hidden on device, so it needs no
+        # hidden feed. A verify is read back before the step returns (no async speculative decode).
+        "supports_spec_decode": True,
+        "spec_requirements": ("device_propose",),
+        "output_tokens_per_step": 1,
+        "supports_async_spec_decode": False,
     }
     # The four reload commands of the plugin's decode reload contract (docs/DECODE_RELOAD_CONTRACT.md).
     decode_input_update_contract = 1
@@ -127,6 +146,9 @@ class MiMoV2ForCausalLM:
         # Per lane: int32 [max_batch] positions the next decode step reads (-1: idle slot), set by a reloading step
         # and advanced with every step, as the trace advances its own (a steady step reads no host positions).
         self.decode_positions = [None] * self.dp
+        # Per lane: where the last step left its one request's committed tokens (reference.spec_decode.DraftSource),
+        # None when that step ran no request or several; propose_draft_tokens drafts from it.
+        self.spec_sources = [None] * self.dp
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -150,6 +172,16 @@ class MiMoV2ForCausalLM:
         num_layers = hf_config.num_hidden_layers
         if num_layers > cfg.num_hidden_layers:
             raise ValueError(f"num_hidden_layers {num_layers} > the checkpoint's {cfg.num_hidden_layers}")
+        mtp_layer = None
+        if SPEC_DECODE:
+            if SPEC_DECODE != "mtp":
+                raise ValueError(f"MIMO_SPEC_DECODE={SPEC_DECODE!r}: MiMo drafts with its MTP layer (mtp)")
+            if max_batch_size // dp < SPEC_SLOTS:
+                raise ValueError(
+                    f"a verify runs one request in {SPEC_SLOTS} decode slots: launch with --max-num-seqs >= "
+                    f"{SPEC_SLOTS} per lane (got {max_batch_size // dp})"
+                )
+            mtp_layer = MTP_LAYER
         logger.info(f"MiMo vLLM: {dp} replicas x {max_batch_size // dp} users, {num_layers} layers, {path}")
         generator = MiMoGalaxyGenerator(
             mesh_device,
@@ -162,8 +194,32 @@ class MiMoV2ForCausalLM:
             num_layers=num_layers,
             block_size=BLOCK_SIZE,
             setup_kv=False,
+            mtp_layer=mtp_layer,
         )
         return cls(generator, max_seq_len)
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
+        """MTP drafts up to MAX_DRAFTS tokens: the last committed token and its drafts fill one verify pass."""
+        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
+
+        if SPEC_DECODE != "mtp":
+            return SpecReject(
+                reason="MiMo drafts with its MTP layer: launch with MIMO_SPEC_DECODE=mtp", supported_k=(MAX_DRAFTS,)
+            )
+        if requested_k < 1:
+            return SpecReject(reason=f"num_speculative_tokens {requested_k} < 1", supported_k=(MAX_DRAFTS,))
+        k = min(requested_k, MAX_DRAFTS)
+        return SpecPlan(
+            effective_k=k,
+            lanes_per_request=k + 1,
+            # The MTP ring cache is per lane, not per request; its weights are the replica's.
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=("argmax_ids",),
+            drafter_state="internal",
+            supports_narrow_decode=True,
+        )
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name="", num_devices=TP, tt_data_parallel=1, **kwargs):
@@ -251,6 +307,8 @@ class MiMoV2ForCausalLM:
                     ]
                 )
             model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_width)
+            if model.mtp is not None:
+                model.mtp.setup_cache()
             if DEVICE_ROPE and self.max_seq_len <= DEVICE_ROPE_MAX_LEN:
                 model.setup_decode_rope_tables()
             self.kv_caches.append(caches)
@@ -341,6 +399,11 @@ class MiMoV2ForCausalLM:
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
                 self.models[lane].set_vllm_page_tables(rows_of_lane)
+                # A lane taking a prompt drafts again only after a decode step of one request; its MTP ring starts
+                # empty for the new request.
+                self.spec_sources[lane] = None
+                if self.models[lane].mtp is not None:
+                    self.models[lane].mtp.reset()
         # A lane's first chunks of one padded length (at most PREFILL_BATCH_MAX_PADDED) go in one pass
         # (TtMiMoModel.prefill_enqueue_batch, which pads every chunk to the longest); the other rows one by one. Every
         # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
@@ -402,6 +465,9 @@ class MiMoV2ForCausalLM:
             new = model.mesh_device.num_program_cache_entries() - programs[lane]
             model.release_decode_trace()
             model.capture_decode_trace()
+            if model.mtp is not None:
+                model.release_spec_traces()
+                model.capture_spec_traces()
             self.decode_recaptures += 1
             logger.info(
                 f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new prefill programs "
@@ -427,9 +493,14 @@ class MiMoV2ForCausalLM:
         reload_page_table=False,
         reload_sampling_params=False,
         reset_sampling_state=False,
+        spec_mode=None,
+        num_valid_drafts=None,
+        accepted_counts=None,
         **kwargs,
     ):
         """One decode step for every lane's slots: tokens [B, 1], start_pos [B] (-1: idle slot), B = lanes x per_lane.
+        With ``spec_mode`` it is a verify of the plugin's [B, 1 + K] candidate block (``_verify``); a plain decode
+        ignores ``accepted_counts`` (it keeps no per-candidate state).
 
         ``sampling_params`` None: host sampling, every step reloads the inputs and the step returns logits
         [B, 1, vocab]. Otherwise device sampling (greedy only, ``max_device_top_k`` 1): the step returns the greedy
@@ -443,6 +514,8 @@ class MiMoV2ForCausalLM:
             raise ValueError("MiMo implements decode_input_update_contract 1; got the legacy reset_batch keyword")
         if kwargs.get("defer_device_sampling"):
             raise ValueError("MiMo has no deferred device sampling (no device grammar)")
+        if spec_mode is not None:
+            return self._verify(tokens, start_pos, page_table, page_tables_per_layer, num_valid_drafts, spec_mode)
         if reload_inputs and reload_page_table:
             raise ValueError("reload_inputs already copies the page tables; got reload_page_table too")
         if reset_sampling_state and not reload_inputs:
@@ -465,6 +538,7 @@ class MiMoV2ForCausalLM:
             if rows > self.dp * self.per_lane:
                 raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
         handles = []
+        self.spec_sources = [None] * self.dp
         for lane, model in enumerate(self.models):
             first = lane * self.per_lane
             last = min(first + self.per_lane, rows)
@@ -495,6 +569,9 @@ class MiMoV2ForCausalLM:
             handle = model.decode_enqueue(tok, pos) if reload_inputs else model.decode_enqueue_resident(pos)
             self.decode_positions[lane] = torch.where(active, pos + 1, pos)
             handles.append((lane, last - first, handle))
+            live = [s for s in range(last - first) if active[s]]
+            if len(live) == 1:
+                self.spec_sources[lane] = DraftSource(row=first + live[0], slots=live)
         out = {"rows": rows, "handles": handles, "tokens": on_device}
         if TIMING:
             self._decode_timing(t0, reload_inputs, on_device)
@@ -519,6 +596,94 @@ class MiMoV2ForCausalLM:
             )
             stats = None
         self._timing = stats
+
+    # ------------------------------------------------------------------ speculative decoding
+    def _verify(self, tokens, start_pos, page_table, page_tables_per_layer, num_valid_drafts, spec_mode):
+        """A verify of the plugin's candidate block tokens / start_pos [B, 1 + K] (-1: no position): each lane's
+        active rows packed into verify passes (reference.spec_decode.plan_verify_passes), a lane's passes one after
+        another, the lanes side by side. Returns argmax_ids [B, 1 + K]: column j the target's greedy token after
+        column j (unused columns 0)."""
+        from vllm_tt_plugin.spec_decode import VerifyOutput
+
+        if spec_mode != "argmax_ids":
+            raise ValueError(f"MiMo verifies greedy argmax ids; got spec_mode {spec_mode!r}")
+        if any(model.verify_trace is None for model in self.models):
+            raise RuntimeError("a verify before warmup_model_decode captured the verify traces (MIMO_SPEC_DECODE=mtp)")
+        tables = self._layer_tables(page_table, page_tables_per_layer)
+        tokens = torch.as_tensor(tokens).to(torch.int64)
+        positions = torch.as_tensor(start_pos).to(torch.int64)
+        counts = torch.as_tensor(num_valid_drafts).reshape(-1)
+        rows = tokens.shape[0]
+        if rows > self.dp * self.per_lane:
+            raise ValueError(f"{rows} verify rows > {self.dp} lanes x {self.per_lane} slots")
+        argmax = torch.zeros(tokens.shape, dtype=torch.int32)
+        lanes = []
+        for lane in range(self.dp):
+            first, last = lane * self.per_lane, min((lane + 1) * self.per_lane, rows)
+            active = [
+                (r, tokens[r].tolist(), positions[r].tolist(), int(counts[r]))
+                for r in range(first, last)
+                if int(positions[r, 0]) >= 0
+            ]
+            passes = plan_verify_passes(active)
+            lanes.append(passes)
+            self.spec_sources[lane] = draft_source(passes)
+            # The decode trace's resident tokens and positions are stale now: the plugin reloads after a verify.
+            self.decode_positions[lane] = None
+        for k in range(max(map(len, lanes))):
+            pending = [
+                (lane, p[k], self._enqueue_verify_pass(lane, p[k], tables))
+                for lane, p in enumerate(lanes)
+                if k < len(p)
+            ]
+            for lane, vp, handle in pending:
+                out = self.models[lane].read_next_tokens(handle)
+                for s, row, col in vp.answers:
+                    argmax[row, col] = int(out[s])
+        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=argmax)
+
+    def _enqueue_verify_pass(self, lane, vp, tables):
+        model = self.models[lane]
+        tok = torch.zeros(model.max_batch, dtype=torch.int32)
+        pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
+        tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
+        pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
+        model.set_vllm_page_tables(
+            {s: self._group_rows(tables, row) for s, row in enumerate(vp.table_rows) if row is not None}
+        )
+        return model.verify_enqueue(tok, pos)
+
+    def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
+        """Drafts for the next step: the MTP layer drafts for each lane whose last step ran one request
+        (reference.spec_decode.plan_mtp), from that step's resident final hidden; every other row offers none."""
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        committed_tokens = torch.as_tensor(committed_tokens)
+        committed_positions = torch.as_tensor(committed_positions)
+        counts = torch.as_tensor(accepted_counts).reshape(-1)
+        rows = committed_tokens.shape[0]
+        drafts = torch.zeros(rows, num_drafts, dtype=torch.int32)
+        valid = torch.zeros(rows, dtype=torch.int32)
+        jobs = []
+        for lane, source in enumerate(self.spec_sources):
+            mtp = self.models[lane].mtp
+            if source is None or mtp is None or source.row >= rows or not 1 <= num_drafts <= MAX_DRAFTS:
+                continue
+            r, m = source.row, int(counts[source.row])
+            # The next verify writes the bonus token and the drafts at positions bonus .. bonus + num_drafts.
+            if int(committed_positions[r, m - 1]) + num_drafts >= self.max_seq_len:
+                continue
+            plan = plan_mtp(source, committed_positions[r].tolist(), m)
+            slot_tokens = [0] * SPEC_SLOTS
+            for c in range(m):
+                slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
+            mtp.enqueue(slot_tokens, plan)
+            jobs.append((lane, r, plan.anchor))
+        for lane, r, anchor in jobs:
+            drafts[r] = torch.tensor(self.models[lane].mtp.read_drafts(anchor)[:num_drafts], dtype=torch.int32)
+            valid[r] = num_drafts
+        self.spec_sources = [None] * self.dp
+        return DraftOutput(draft_token_ids=drafts, num_valid=valid)
 
     @staticmethod
     def _check_greedy(sampling_params, first, slots):
@@ -678,6 +843,11 @@ class MiMoV2ForCausalLM:
                     model.capture_prefill_batch_trace(users, padded)
                 if pending:
                     logger.info(f"MiMo vLLM: replica {lane} prefill traces captured for (users, length) {pending}")
+                if model.mtp is not None and model.verify_trace is None:
+                    model.capture_spec_traces()
+                    logger.info(f"MiMo vLLM: replica {lane} verify and MTP draft traces captured")
+            elif model.mtp is not None:
+                raise ValueError("speculative decoding replays its verify and draft traces: trace_mode decode_only")
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
@@ -686,3 +856,4 @@ class MiMoV2ForCausalLM:
         for model in self.models:
             model.release_decode_trace()
             model.release_prefill_traces()
+            model.release_spec_traces()

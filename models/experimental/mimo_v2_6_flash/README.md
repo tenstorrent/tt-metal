@@ -24,6 +24,8 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/kernels/` | `generic_op` kernels: `moe_*` / `fabric_*` (decode MoE and reductions), `attn/`, `proj/`, `prefill/` (MoE prefill) |
 | `tt/decoder.py`, `tt/model.py` | Decoder layer and full model for one 1x8 replica |
 | `tt/generator.py` | `MiMoGalaxyGenerator`: four replicas on the Galaxy rows (DP=4), traced decode with a device-resident greedy loop |
+| `reference/mtp.py`, `reference/spec_decode.py` | fp32 MTP layer (vLLM's `MiMoV2MTP`); host bookkeeping of MTP speculative decoding (verify passes, draft positions, the MTP ring) |
+| `tt/mtp.py` | `TtMiMoMTP`: the MTP layer as a traced 3-token drafter on one replica |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
@@ -61,4 +63,5 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 - Non-greedy sampling on device (the device loop is greedy; the host loop reads per-chip top-k candidates).
 - Serving gaps (doc/vllm_integration/README.md): device sampling is greedy only (other sampling runs on the host);
   chunked prefill's slot parity is not measured.
-- Speculative decoding.
+- Speculative decoding: MTP drafting through vLLM is implemented but not yet run on hardware
+  (doc/vllm_integration/README.md, Speculative decoding); DFlash is not started.

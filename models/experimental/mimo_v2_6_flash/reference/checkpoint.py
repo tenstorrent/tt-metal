@@ -122,7 +122,7 @@ class MiMoCheckpoint:
     def attention(self, layer_idx):
         cfg = self.config
         dims = cfg.attention_dims(layer_idx)
-        prefix = f"model.layers.{layer_idx}.self_attn"
+        prefix = f"{self._layer_prefix(layer_idx)}.self_attn"
         w = self.get(f"{prefix}.qkv_proj.weight")
         s = self.get(f"{prefix}.qkv_proj.weight_scale_inv")
         q, k, v = split_fused_qkv(
@@ -144,16 +144,35 @@ class MiMoCheckpoint:
         out["attention_sink_bias"] = self.get(sink_name).float() if self.has(sink_name) else None
         return out
 
+    def _layer_prefix(self, layer_idx):
+        """``model.layers.i``, or ``model.mtp.layers.j`` for an MTP layer index (MiMoConfig.mtp_layer_index)."""
+        cfg = self.config
+        if cfg.is_mtp(layer_idx):
+            return f"model.mtp.layers.{layer_idx - cfg.num_hidden_layers}"
+        return f"model.layers.{layer_idx}"
+
     def norms(self, layer_idx):
-        prefix = f"model.layers.{layer_idx}"
+        prefix = self._layer_prefix(layer_idx)
+        # An MTP layer's norm before its MLP is ``pre_mlp_layernorm``, where a decoder layer has its post-attention
+        # norm.
+        post = "pre_mlp_layernorm" if self.config.is_mtp(layer_idx) else "post_attention_layernorm"
         return {
             "input_layernorm": self.get(f"{prefix}.input_layernorm.weight").float(),
-            "post_attention_layernorm": self.get(f"{prefix}.post_attention_layernorm.weight").float(),
+            "post_attention_layernorm": self.get(f"{prefix}.{post}.weight").float(),
         }
 
     def dense_mlp(self, layer_idx):
-        prefix = f"model.layers.{layer_idx}.mlp"
+        prefix = f"{self._layer_prefix(layer_idx)}.mlp"
         return {name: self._fp8_or_bf16(f"{prefix}.{name}") for name in ("gate_proj", "up_proj", "down_proj")}
+
+    def mtp_head(self, i):
+        """MTP layer ``i``'s tensors around its decoder block: ``eh_proj`` [hidden, 2 * hidden] (its input is
+        cat(enorm(embedding), hnorm(hidden))), ``enorm``, ``hnorm`` and its own ``final_layernorm``."""
+        prefix = f"model.mtp.layers.{i}"
+        return {
+            name: self.get(f"{prefix}.{name}.weight").float()
+            for name in ("eh_proj", "enorm", "hnorm", "final_layernorm")
+        }
 
     def router(self, layer_idx):
         prefix = f"model.layers.{layer_idx}.mlp.gate"
