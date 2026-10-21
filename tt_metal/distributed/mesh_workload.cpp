@@ -216,8 +216,10 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             if (!current_allocation_context().starts_with(kProgramCacheAllocationContextPrefix)) {
                 program_cache_context.emplace(std::string(kProgramCacheAllocationContextPrefix) + " kernel binaries");
             }
-            kernel_bin_buf_ =
+            auto kernel_bin_buf =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
+            mesh_device->impl().validate_program_binary_buffer(*kernel_bin_buf->get_backing_buffer());
+            kernel_bin_buf_ = std::move(kernel_bin_buf);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
                 std::size_t kernel_bin_size =

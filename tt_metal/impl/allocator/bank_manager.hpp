@@ -190,7 +190,7 @@ private:
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
 
     // High water mark tracking for allocations and deallocations
-    bool tracking_high_water_mark_ = false;
+    uint32_t tracking_high_water_mark_ = 0;
     DeviceAddr allocation_high_water_mark_ = 0;
     DeviceAddr deletion_high_water_mark_ = 0;
 

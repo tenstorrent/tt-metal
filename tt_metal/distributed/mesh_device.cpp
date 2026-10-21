@@ -338,6 +338,23 @@ void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
+void MeshDeviceImpl::validate_program_binary_buffer(const Buffer& buffer) {
+    TT_FATAL(
+        std::none_of(
+            mesh_command_queues_.begin(),
+            mesh_command_queues_.end(),
+            [](const auto& cq) { return cq->trace_id().has_value(); }),
+        "Cannot load new binaries while a command queue is capturing a trace. Warm up before capture.");
+    validate_sub_device_manager_tracker();
+    const auto high_water_mark = sub_device_manager_tracker_->get_max_trace_high_water_mark();
+    TT_FATAL(
+        buffer.address() >= high_water_mark,
+        "Kernel binary buffer at address {} overlaps a live trace's DRAM footprint ending at {}. "
+        "Warm up this program before capturing traces, or release the traces before loading it.",
+        buffer.address(),
+        high_water_mark);
+    remove_unsafe_tracked_id(buffer.unique_id());
+}
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
     tt::tt_metal::push_corruptible_allocation_scope(this->trace_allocators());
 }
@@ -1732,11 +1749,8 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         trace_desc = active_sub_device_manager->create_trace(trace_id)->desc;
     }
 
-    // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
-    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
-    if (trace_region_size == 0) {
-        this->allocator_impl()->begin_dram_high_water_mark_tracking();
-    }
+    // Late kernel binaries need the footprint even when trace storage uses a reserved region.
+    this->allocator_impl()->begin_dram_high_water_mark_tracking();
     this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
 
@@ -1762,15 +1776,9 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         active_sub_device_manager->id());
     this->mesh_command_queues_[cq_id]->record_end();
 
-    // End DRAM high water mark tracking if trace_region_size is 0 (dynamic allocation mode)
-    auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
-    DeviceAddr dram_allocation_high_water_mark = 0;
-    DeviceAddr dram_deletion_high_water_mark = 0;
-    if (trace_region_size == 0) {
-        this->allocator_impl()->end_dram_high_water_mark_tracking();
-        dram_allocation_high_water_mark = this->allocator_impl()->get_dram_allocation_high_water_mark();
-        dram_deletion_high_water_mark = this->allocator_impl()->get_dram_deletion_high_water_mark();
-    }
+    this->allocator_impl()->end_dram_high_water_mark_tracking();
+    const auto dram_allocation_high_water_mark = this->allocator_impl()->get_dram_allocation_high_water_mark();
+    const auto dram_deletion_high_water_mark = this->allocator_impl()->get_dram_deletion_high_water_mark();
 
     const DeviceAddr max_live_trace_high_water_mark = sub_device_manager_tracker_->get_max_trace_high_water_mark();
     MeshTrace::populate_mesh_buffer(

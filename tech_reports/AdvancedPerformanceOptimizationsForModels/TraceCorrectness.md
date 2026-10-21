@@ -59,7 +59,7 @@ If we capture multiple traces, we may want to persist the input tensors as place
 
 Buffer allocations may not be explicit!
 For example `ttnn.reshape`, when first executed with a new shape, may allocate a lookup table to speed up future executions. If this happens after some trace has already been captured, executing that trace may corrupt this table. This will lead to undefined behavior, including data corruption and hangs.
-When a new program is compiled, the compilation result is saved in program cache. Program cache buffers share the address space with regular buffers - they may also be corrupted, if not allocated before all trace capture.
+When a new program is compiled, the compilation result is saved in program cache. Program cache buffers share the address space with regular buffers. MeshWorkload kernel binaries are allocated top-down in DRAM and checked against the allocation/deletion high-water marks of every live trace before upload. Binaries outside all trace footprints can be loaded after capture; an overlapping allocation is rejected. This applies to both reserved and dynamically allocated trace storage. Other persistent program-owned buffers still need to be allocated before capture.
 
 ### Concurrent execution
 
@@ -114,7 +114,7 @@ The checker supports these environment variables:
 
 The checker will attempt to provide a traceback to the part of the code which allocated the unsafe buffer. It will also perform a scan, attempting to find where a reference to the buffer is being held and keeping it alive.
 
-Program-cache buffers are checked by default because they share device address space with ordinary buffers and can genuinely be corrupted by trace replay. If they are known to be irrelevant for a particular investigation, they can be filtered out with:
+Program-cache buffers are checked by default because they share device address space with ordinary buffers and can genuinely be corrupted by trace replay. Kernel binary buffers are removed from accounting only after Metal validates their addresses against every live trace's DRAM footprint. Other program-cache allocations remain checked. If they are known to be irrelevant for a particular investigation, they can be filtered out with:
 
 ```sh
 TT_METAL_TRACE_ALLOC_TRACKING=1 \

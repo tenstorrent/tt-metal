@@ -689,13 +689,16 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
 }
 
 void BankManager::begin_high_water_mark_tracking() {
-    tracking_high_water_mark_ = true;
-    allocation_high_water_mark_ = 0;
-    deletion_high_water_mark_ = 0;
+    // Overlapping captures retain the union of their footprints until the last capture ends.
+    if (tracking_high_water_mark_++ == 0) {
+        allocation_high_water_mark_ = 0;
+        deletion_high_water_mark_ = 0;
+    }
 }
 
 DeviceAddr BankManager::end_high_water_mark_tracking() {
-    tracking_high_water_mark_ = false;
+    TT_FATAL(tracking_high_water_mark_ > 0, "No active high-water-mark tracking scope");
+    --tracking_high_water_mark_;
     return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
 }
 

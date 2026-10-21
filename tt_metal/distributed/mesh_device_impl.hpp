@@ -298,6 +298,7 @@ public:
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
         SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    void validate_program_binary_buffer(const Buffer& buffer);
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 
