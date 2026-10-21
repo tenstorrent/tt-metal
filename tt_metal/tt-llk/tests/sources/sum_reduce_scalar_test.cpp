@@ -108,13 +108,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "params.h"
 
-// NOTE: we deliberately do NOT include "sfpu/ckernel_sfpu_fill.h" here. In this
+// NOTE: we deliberately do NOT include "llk_sfpu/ckernel_sfpu_fill.h" here. In this
 // environment the installed SFPI predates the sfpi::DataLayout enum, so the
 // header's _calculate_fill_int_ template body fails to parse under
 // -Wtemplate-body -Werror (sfpi::DataLayout::I32 / ::U16 are unknown), which
 // breaks the whole translation unit even though this kernel only needs the
 // float fill. We redeclare just the float _calculate_fill_ (identical to the
-// header's lines 16-27) in the same namespace; it depends only on sfpi::vFloat
+// header's version) in the same namespace; it depends only on sfpi::vFloat
 // and sfpi::dst_reg and never touches DataLayout.
 namespace ckernel::sfpu
 {
