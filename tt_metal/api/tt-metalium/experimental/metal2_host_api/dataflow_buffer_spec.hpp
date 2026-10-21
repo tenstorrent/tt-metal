@@ -102,7 +102,7 @@ struct DataflowBufferSpec {
 
     // Build DFB on borrowed memory.
     //
-    // Instead of allocating Program execution-lifetime DFB storage in L1/SRAM (default),
+    // Instead of allocating Program execution-lifetime DFB storage in SRAM (default),
     // build the DFB on top of a user-managed memory object. The DFB gets a non-owning view
     // of the memory for the duration of Program execution.
     //

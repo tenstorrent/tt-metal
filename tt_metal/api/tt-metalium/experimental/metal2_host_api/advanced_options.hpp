@@ -291,7 +291,7 @@ struct DFBAdvancedOptions {
     //  - The DFB must fit within the RawAllocation on every node it occupies, i.e.
     //    borrowed_memory_offset plus size_per_node cannot exceed the RawAllocation's
     //    per-node size.
-    //  - borrowed_memory_offset must be a multiple of the L1 alignment.
+    //  - borrowed_memory_offset must be a multiple of the SRAM alignment.
     //  - A DFB that borrows from a MeshTensor must have a zero offset; this is a
     //    constraint of the programming model.
     //  - Specifying an offset for a non-borrowed DFB will trigger an error.
@@ -384,7 +384,7 @@ struct ScratchpadAdvancedOptions {
     // CONSTRAINTS:
     //  - The scratchpad must fit within the RawAllocation on every node it occupies, i.e.
     //    borrowed_from->offset plus size_per_node cannot exceed the RawAllocation's per-node size.
-    //  - borrowed_from->offset must be a multiple of the L1 alignment.
+    //  - borrowed_from->offset must be a multiple of the SRAM alignment.
     //
     // CAUTION:
     //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
