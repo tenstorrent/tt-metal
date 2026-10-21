@@ -177,8 +177,8 @@ PRIOR_TEXT = {
     "component say what changes (sharding, collectives and their axes, MoE dispatch groups, memory per chip) and why, "
     "and what carries over unchanged. A collective or op the new layout needs that TTNN lacks or cannot do goes through "
     "agent rule 6 (a fork or a new op in ttnn/ttnn/bringup), never an edit of an existing op.",
-    "test": "The prior's frozen test for the same component is a reference for comparison modes and thresholds; the "
-    "golden is the same, so its limits are a good starting point.",
+    "test": "The prior's frozen test for the same component shows the comparison mode and the structural checks that "
+    "mattered; its numeric limits are not reused (limits come from this run's noise floor).",
     "implement": "Start from the prior's module for the same component (in its `tt/`): copy it into this model's "
     "`tt/` and change what this plan changes. Do not import from the prior's `tt/`: each bring-up's device code "
     "stands alone.",
@@ -1612,8 +1612,8 @@ class Orchestrator:
                 self.led.update(tid, full_pending=True)  # F122: its full gate runs before the final task
             return self._after(task)
         why = (
-            f"accepted, but the gate fails with the change on:\n{res.summary()}\nDrop the failing frozen test from the "
-            f"gate in tasks.yaml or change a threshold (the owner's edit), then resume; or decide --task {tid} --reject"
+            f"accepted, but the gate fails with the change on:\n{res.summary()}\nThe change misses a recorded limit: "
+            f"reject it (decide --task {tid} --reject), or fix it and measure again; limits are never edited"
         )
         return self._human(task, why)
 

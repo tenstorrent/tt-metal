@@ -32,11 +32,6 @@ state:
   # by_block_type: {<block type>: [names]}   # layer types with different state (e.g. MLA latent vs recurrent state)
   # fixed: [names]                           # tensors that do not grow along the sequence (recurrent state, conv
   #                                          #   tail): goldens snapshot them at chunk starts (F50)
-thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
-                                   # swap tests (F49) also gate each swapped step vs the CPU step on the same inputs:
-                                   #   swap_step_rel 0.02 (rel L2; tightened to 2x the step's component-gate error,
-                                   #   not below 0.005), swap_step_row 0.05 (worst row), swap_step_ratio 0.02 (every
-                                   #   row norm within 1 +- this); optional keys, add them here to override
 reference:
   shipped_dtype: bfloat16          # the dtype the released code runs in on its own hardware (intake asks; F128 margin)
 text:                              # the canonical prompt, built once at R.1 (reference/prompt.py)
