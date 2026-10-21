@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#ifdef SOL_PACK_DEBUG
+#if defined(SOL_PACK_DEBUG) || defined(SOL_DEBUG)
 #include "api/debug/dprint.h"
 #endif
 #include "api/dataflow/endpoints.h"
@@ -1581,6 +1581,23 @@ void kernel_main() {
                     }
                 }
             }
+#ifdef SOL_DEBUG
+            // TT_SOL_DEBUG=1 (factory define): one line per (core, ring iteration) with what was decided and
+            // pushed. Compute pops exactly KV_chunks_processed_in_iter entries (plus the same dummy padding) if the
+            // two sides agree; a count that differs from a chain neighbour's is a phase fault.
+            DPRINT(
+                "RES it={} rid={} n={} heads={}/{} own0={} union0={} pushed={} pooled={} qread={}\n",
+                ring_iter,
+                ring_id,
+                n_res,
+                n_res ? res_nq[0] : 0u,
+                n_res ? res_nq[n_res - 1] : 0u,
+                n_res ? res_lo[0] : 0u,
+                n_res ? seg_ulo[0] : 0u,
+                KV_chunks_processed_in_iter,
+                do_pooled,
+                q_pushed ? 1u : 0u);
+#endif
         } else if constexpr (sol_enabled && !sol_chunk_mode) {
             // ---- Sol-Attn block gathering: per Q chunk, gather this shard's kept 64-token blocks into dense
             // Sk-sized K/V chunks (8 blocks each); on the first active ring iteration also stream the pooled

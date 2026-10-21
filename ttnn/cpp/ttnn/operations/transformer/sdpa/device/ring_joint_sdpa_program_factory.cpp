@@ -1172,7 +1172,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // The store-and-forward chains are scheduled per head, not per (batch, head).
     // Until their batch-aware scheduling is restored, multi-batch requests read K/V
     // independently on each core. This preserves the established B>1 functional path.
-    const bool build_kv_chains = enable_kv_chains && B == 1;
+    // Debug A/B (not hashed; set for the whole process, clear the program cache between A and B): TT_SOL_NO_CHAIN=1
+    // builds no store-and-forward chains at all, so every core reads its own K/V from DRAM. Correctness only: it
+    // multiplies the K/V DRAM reads by the chain length. Separates a chain-protocol fault from a compute fault.
+    const bool sol_no_chain = std::getenv("TT_SOL_NO_CHAIN") && std::string(std::getenv("TT_SOL_NO_CHAIN")) == "1";
+    const bool build_kv_chains = enable_kv_chains && B == 1 && !sol_no_chain;
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -3369,6 +3373,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (sol_pack && std::getenv("TT_SOL_PACK_DEBUG") && std::string(std::getenv("TT_SOL_PACK_DEBUG")) == "1") {
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
+    }
+    // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
+    // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
+    if (sol_resident && std::getenv("TT_SOL_DEBUG") && std::string(std::getenv("TT_SOL_DEBUG")) == "1") {
+        reader_kernel.defines.emplace_back("SOL_DEBUG", "1");
     }
     // Per-phase device-profiler zones inside sdpa_inner_loop_step (Q@KT, reduce, exp, V matmul, SALAD, ...). They
     // only emit under TT_METAL_DEVICE_PROFILER=1 (PROFILE_KERNEL); this define flips the template gate that is

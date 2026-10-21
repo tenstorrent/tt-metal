@@ -459,8 +459,8 @@ def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, t
 @pytest.mark.parametrize("tau", [-1e4, 2.0], ids=["keepall", "tau2"])
 @pytest.mark.parametrize(
     "rows,logical_n,k_chunk",
-    [(1024, 8192, 512), (1024, 8192, 256), (1184, 9472, 512), (1184, 9472, 256)],
-    ids=["r1024k512", "r1024k256", "r1184k512", "r1184k256"],
+    [(512, 4096, 512), (1024, 8192, 512), (1024, 8192, 256), (1184, 9472, 512), (1184, 9472, 256)],
+    ids=["r512k512", "r1024k512", "r1024k256", "r1184k512", "r1184k256"],
 )
 def test_resident_matches_chunk(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, tau, reset_seeds, capfd
@@ -484,29 +484,94 @@ def test_resident_matches_chunk(
         f"[resident] rows={rows} k_chunk={k_chunk} tau={tau} density {res.density:.4f}; "
         f"pcc(resident, chunk) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}; pcc(chunk, dense) {p_chunk_dense:.5f}"
     )
-    # Where does it go wrong? PCC per (shard, 64-row query chunk), worst first: a bad chunk position (first / last
-    # per core, the partial tail, one head) points at the loop structure; uniform noise points at the step.
+    # Where does it go wrong? PCC per (shard, 64-row query chunk) for each pair, worst first: a bad chunk position
+    # (first / last per core, the partial tail, one head) points at the loop structure; uniform noise at the step;
+    # the same regions in chunk-vs-dense point at the shared q_chunk=64 path rather than at resident mode.
     S = tuple(mesh_device.shape)[sp_axis]
     nqc = -(-rows // Q1_CHUNK)
-    worst = []
-    for sh in range(S):
-        for qc in range(nqc):
-            r0 = sh * rows + qc * Q1_CHUNK
-            r1 = min(r0 + Q1_CHUNK, sh * rows + rows, logical_n)
-            if r1 <= r0:
-                continue
-            a_, b_ = base.sol[:, r0:r1], res.sol[:, r0:r1]
-            bad = not torch.isfinite(b_).all()
-            worst.append((float("-inf") if bad else _pcc(a_, b_), sh, qc, bad))
-    worst.sort()
-    logger.info(
-        "[resident] worst (pcc, shard, q_chunk, nonfinite): "
-        + ", ".join(f"({p:.4f},{sh},{qc}{',NaN' if bad else ''})" for p, sh, qc, bad in worst[:12])
-        + f"; chunks below 0.99: {sum(1 for w in worst if w[0] < 0.99)} of {len(worst)}"
-    )
+    outs = {"dense": base.dense, "chunk": base.sol, "resident": res.sol}
+    for name, t in outs.items():
+        per_shard = []
+        for sh in range(S):
+            blk = t[:, sh * rows : min(sh * rows + rows, logical_n)]
+            per_shard.append(f"{int((~torch.isfinite(blk)).sum())}nan/{float(blk.float().std()):.3g}sd")
+        logger.info(f"[resident] {name}: per-shard nonfinite count / std: {' '.join(per_shard)}")
+    # The factory's flat split: chunk-heads [h * nqc + qc] over 120 cores, the first (total % 120) cores one extra.
+    # A head's cores form its chain in core order; position = index among them, slot = index within the core.
+    num_cores = 120
+    total = H * nqc
+    base_per_core, n_extra = divmod(total, num_cores)
+    core_start = [c * base_per_core + min(c, n_extra) for c in range(num_cores + 1)]
+
+    def flat_to_core_slot(flat):
+        for c in range(num_cores):
+            if core_start[c] <= flat < core_start[c + 1]:
+                return c, flat - core_start[c], core_start[c + 1] - core_start[c]
+        raise AssertionError(flat)
+
+    for name, (x, y) in {
+        "res-chunk": (res.sol, base.sol),
+        "res-dense": (res.sol, base.dense),
+        "chunk-dense": (base.sol, base.dense),
+    }.items():
+        worst = []
+        by_pos, by_slot = {}, {}
+        for sh in range(S):
+            for h in range(H):
+                chain_cores = []
+                for qc in range(nqc):
+                    c, slot, n_on_core = flat_to_core_slot(h * nqc + qc)
+                    if c not in chain_cores:
+                        chain_cores.append(c)
+                    r0 = sh * rows + qc * Q1_CHUNK
+                    r1 = min(r0 + Q1_CHUNK, sh * rows + rows, logical_n)
+                    if r1 <= r0:
+                        continue
+                    a_, b_ = x[h : h + 1, r0:r1], y[h : h + 1, r0:r1]
+                    bad = not (torch.isfinite(a_).all() and torch.isfinite(b_).all())
+                    p = float("-inf") if bad else _pcc(a_, b_)
+                    worst.append((p, sh, h, qc, bad))
+                    pos = chain_cores.index(c)
+                    by_pos.setdefault((sh, pos), []).append(p)
+                    by_slot.setdefault((slot, n_on_core), []).append(p)
+        worst.sort()
+        logger.info(
+            f"[resident] {name} worst (pcc, shard, head, q_chunk): "
+            + ", ".join(f"({p:.4f},{sh},{h},{qc}{',NaN' if bad else ''})" for p, sh, h, qc, bad in worst[:10])
+            + f"; below 0.99: {sum(1 for w in worst if w[0] < 0.99)} of {len(worst)}"
+        )
+        fin = lambda v: [q for q in v if q > float("-inf")]
+        mean = lambda v: (sum(fin(v)) / len(fin(v))) if fin(v) else float("nan")
+        shards_bad = sorted({sh for (sh, _), v in by_pos.items() if mean(v) < 0.999})
+        for sh in shards_bad[:3]:
+            logger.info(
+                f"[resident] {name} shard {sh} mean pcc by chain position: "
+                + " ".join(f"{pos}:{mean(by_pos[(sh, pos)]):.4f}" for (s_, pos) in sorted(by_pos) if s_ == sh)
+            )
+        logger.info(
+            f"[resident] {name} mean pcc by (slot within core, chunks on core): "
+            + " ".join(f"{k}:{mean(v):.4f}" for k, v in sorted(by_slot.items()))
+        )
     assert res.modes_logged == {"resident"}, f"factory compiled {sorted(res.modes_logged)}"
     assert base.density == res.density, "the mask must be the chunk-mode one"
     assert p_chunk > 0.999, p_chunk
+
+
+@GALAXY_RING
+def test_q64_base_determinism(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
+    """Is the 64-row-chunk path deterministic WITHOUT resident mode? Dense ring op and chunk mode, each run twice at
+    q_chunk=64 with identical inputs. If either differs between runs, the run-to-run variation seen in resident
+    mode on 2026-10-21 is inherited from the shared q_chunk=64 path, not introduced by the resident loop."""
+    kw = dict(mode="chunk", tau=-1e4, q_chunk=Q1_CHUNK)
+    a = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
+    b = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
+    d_dense = (a.dense - b.dense).abs().max().item()
+    d_chunk = (a.sol - b.sol).abs().max().item()
+    logger.info(
+        f"[q64] run-to-run max |diff|: dense {d_dense:.3e}, chunk {d_chunk:.3e}; pcc(chunk, dense) {_pcc(a.sol, a.dense, LOGICAL_N):.6f}"
+    )
+    assert d_dense == 0.0, f"dense ring op at q_chunk=64 is not deterministic: {d_dense:.3e}"
+    assert d_chunk == 0.0, f"chunk mode at q_chunk=64 is not deterministic: {d_chunk:.3e}"
 
 
 @GALAXY_RING
