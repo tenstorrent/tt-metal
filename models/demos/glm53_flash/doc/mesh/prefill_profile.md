@@ -117,29 +117,37 @@ Weights: the per-expert tensors are sliced once at build from the stacked hybrid
 (`dispatch`, the d_p `dispatch` / `combine` ops along the row axis) stays in the code behind its knob for the EP
 layout work but is not used.
 
-**Status: written and unit-tested host-side only** — the single-chip A/B (`J8`) could not open a device (the block's
-Ethernet cores are stuck since the hung fabric op, pending the board reset); the chunk-level before/after (J7) and the
-Tracy per-op tables (J5) are queued behind the reset. Expected from the kernel's own numbers (d_p: every expert
-weight read once, only routed rows computed): the routed-expert share of a MoE layer should fall from ~470-510 ms to
-tens of ms per 8 K chunk on this block (useful work 413 GFLOP + 0.96 GB of weights per chip per layer).
+**Status: validated on the rows 6-7 block after the reset (2026-10-21 03:35-03:58, merged into arg/glm53_mesh).**
+`tests/test_moe_prefill_paths.py` (layer-4 weights, 4096 tokens = 2048 per row gathered, (2,4) block): regions **32.6 ms**
+(125 K tok/s) vs blocks 297.1 ms, PCC vs HF 0.999269 (blocks 0.999741; regions vs blocks 0.999469).
+`tests/test_mesh_sp_prefill.py` (`GLM53_PREFILL_EXPERTS=regions`, S=1000 per row, layers 0/3/4): 3/3 passed, prefill PCC vs HF
+0.999842 / 0.999915 / 1.000000 and the two decode steps after it 0.99981-0.99999 (the regions path serves decode too once
+built: its per-expert lists replace the stacked tensors). Two kernel checks surfaced on the first device run and are fixed in
+`_forward_regions`: `unified_routed_expert_moe` wants the region buffer rows and `post_combine_reduce` the token count as
+multiples of 32 (decode gathers 2 tokens x 72 local experts = 2320 rows; a ragged last prefill chunk any T): the gathered rows
+(x, dense routing, top-k ids / weights) are zero-padded through ROW_MAJOR to a tile multiple, the buffer rounded up, the
+output sliced back.
 
 ## Before / after (what is measured, what is projected)
 
 | | routed experts per MoE layer (8 K chunk, per chip) | 8 K chunk, 22 layers | 1 M tokens, 128 chunks (22 layers / 45 layers) |
 |---|---|---|---|
 | before (`blocks`, measured J4) | 473 ms (KDA+MoE) / 509 ms (DSA+MoE): 256 x 32-token sparse_matmul pairs | **12.50 s** (656 tok/s) | ~2900 s / ~5900 s |
-| after (`regions`, projected from the kernel's work: 0.96 GB of weights read once + 413 GFLOP of routed rows per chip per layer, plus ~1 GB of row gathers) | ~15-40 ms | ~3.5-4 s (the MoE 9.2 s -> ~0.5 s; the DSA scorer 1.2 s, mHC 0.9 s, the rest unchanged) | ~800-1000 s / ~1600-2000 s |
+| after (`regions`, measured J7 = `tests/test_mesh_prefill_profile.py` with `GLM53_PREFILL_EXPERTS=regions`, 03:47) | MoE share of the chunk 9.2 s -> ~0.5 s (per kind below) | **3.60 s** free pass (2273 tok/s), 3.91 s attributed, 15.4 s compile pass | ~460 s / ~950 s chunk cost (the prefix-dependent attention terms add on top) |
 
-The "after" column is a projection until the block is back (the tests to run are listed in `_agents/prefillprof/STATUS.md`):
-the regions path is written, its routing math host-validated, its kernels are the d_p production kernels, but it has
-not executed on a device (the block's Ethernet cores are stuck since the hung fabric op).
+Measured chunk [65536, 73728) of 8192 tokens through 22 layers + head on the rows 6-7 block (free pass, regions):
+chunk [65536, 73728) of 8192 tokens through 22 layers + head: 3.60 s (2273 tok/s); first token 118556 '又将'; per kind KDA+dense: 0.16 s over 3 layers (53 ms each); DSA+MoE: 1.96 s over 5 layers (393 ms each); KDA+MoE: 1.47 s over 14 layers (105 ms each)
+
+The chunk is 3.5x faster than the `blocks` baseline (12.50 s -> 3.60 s); the next terms are the DSA index scorer and the
+attention (slab path), mHC (0.9 s) and the KDA scan. `blocks` stays the default; the long-context runs on the 8x4 use
+`GLM53_PREFILL_EXPERTS=regions` (chain `_logs/mesh/sched_v14.sh`, PX knob) and the 1 M run reports its chunk times.
 
 ## Not done (2026-10-21 03:10)
 
 - Tracy per-op device tables of the chunk (deliverable 1's per-op part): the capture needs the block; the per-module
   attribution above is from the host-synchronized pass. `tests/test_mesh_prefill_profile.py` (`GLM53_PROF_TRACY=1`) and
   `tests/perf_prefill_report.py` are ready to produce them.
-- MoE swap: device validation (PCC vs HF and vs the block path) and the chunk re-measure.
+- MoE swap: done (above); the 8x4 chunk times come from the 1 M chain run.
 - mHC prefill: measured only (0.9 s of the 12.5 s chunk; the composite `TtMHCWrap` IS the reference); no swap.
 - DSA stems / absorb (`deepseek_v3` MLA prefill matmul configs): not started; they are ~80 ms of the 1236 ms DSA layer
   (absorb q/o 38 ms, stems 15 ms, o_proj 11 ms), below the index scorer (246 ms) which belongs to the slab-attention
