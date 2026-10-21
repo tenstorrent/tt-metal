@@ -22,9 +22,9 @@ There is one DRAM bank per DRAM channel. For example, on Wormhole there are 12 ~
 
 There is one SRAM bank per Tensix compute core, as shown in *Figure 1*.
 
-<img src="images/sram-banks-per-core.png" style="width:300px;"/>
+<img src="images/sram-banks-per-core.png" style="width:170px;"/>
 
-*Figure 1: One SRAM bank per compute core*
+*Figure 1: SRAM bank in a compute core*
 
 The SRAM bank size is `total SRAM size - reserved size`. Reserved region in SRAM is used to hold FW, Kernels, and related runtime metadata.
 
