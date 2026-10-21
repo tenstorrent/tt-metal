@@ -674,25 +674,28 @@ decode composite.
 The user count is not a fixed target: after the weights, the per-chip DRAM left is the budget for
 `users x (ISL x cache_per_token + fixed_per_user)` plus a prefill working set. `tt/memory_plan.py` computes it from the
 config (host side, `MemoryPlan.estimate`) or from the allocator after the weights are built (`MemoryPlan.from_device`);
-`tests/test_memory_plan.py` pins it to the observed outcomes (the 1 M single-slot run fits, the stacked expert copy at
-1 M does not, the partitioned cache at 1 M fits only without the SP-prefill scratch slot). 8x4, bfp8 experts:
-weights 11.7 GiB per chip, cache 11.69 KiB per user per token (11 DSA layers x 512 bf16 latent + pooled index keys),
-35 MiB of KDA state per user, headroom at 1 M 17.1 GiB (trace region 512 MB, regions buffers, score block, the
-per-chunk whole-prefix latent copy of ISL x 576 bf16).
+`tests/test_memory_plan.py` pins it to the observed outcomes (the 1 M single-slot run fits by ~60 MB, the stacked
+expert copy at 1 M does not, the partitioned cache at 1 M fits only without the SP-prefill scratch slot, 4 users per
+row at 64 K with both expert forms ran). Calibration: 28.85 GiB allocated after a 45-layer bfp8 build with one 1 M
+slot per chip (the `mu1m` 8x4 run) -> 17.6 GiB of weights + fixed buffers per chip (9.4 GiB of bfp8 experts + 8.2 GiB
+of dense TP4 weights, expert layouts, embedding / head shards, the traced-prefill slot, tables; attribution pending),
+cache 11.69 KiB per user per token (11 DSA layers x 512 bf16 latent + pooled index keys), 35 MiB of KDA state per
+user, working set = trace region + max(whole-prefix latent copy of ISL x 576 bf16, regions buffers + score block).
 
-| ISL | replicated cache (today's long runs): users per row / on the mesh | partitioned + scratch slot (today) | partitioned, no scratch slot (heads -> users prefill, `mu1m`) | replicated + keep_stacked (stream decode) |
+| ISL | replicated cache (today's long runs): users per row / on the mesh | partitioned + scratch slot | partitioned, no scratch slot (heads -> users prefill, merged) | replicated + keep_stacked (stream decode) |
 |---|---|---|---|---|
-| 16384 | 84 / 672 | 332 / 2656 | 336 / 2688 | 41 / 328 |
-| 65536 | 23 / 184 | 88 / 704 | 92 / 736 | 11 / 88 |
-| 131072 | 12 / 96 | 44 / 352 | 48 / 384 | 5 / 40 |
-| 262144 | 6 / 48 | 20 / 160 | 24 / 192 | 2 / 16 |
-| 524288 | 3 / 24 | 8 / 64 | 12 / 96 | 1 / 8 |
+| 16384 | 57 / 456 | 224 / 1792 | 228 / 1824 | 14 / 112 |
+| 65536 | 16 / 128 | 60 / 480 | 64 / 512 | 4 / 32 |
+| 131072 | 8 / 64 | 28 / 224 | 32 / 256 | 2 / 16 |
+| 262144 | 4 / 32 | 12 / 96 | 16 / 128 | 1 / 8 |
+| 524288 | 2 / 16 | 4 / 32 | 8 / 64 | 0 |
 | 1048576 | 1 / 8 | 0 | 4 / 32 | 0 |
 
-Reading: the partitioned cache without the scratch slot is the envelope (32 users at 1 M, 96 at 512 K, 192 at 256 K);
-the stacked-expert decode copy is a 9.5 GiB trade against it (fine up to ~512 K at one user per row, or 11 users per
-row at 64 K). The decode-speed work therefore has two regimes: few users at very long context (the sparse DSA decode
-and the per-layer fixed costs: mHC, router, CCL) and many users at short context (expert compute: EP32 dispatch).
+Reading: the partitioned cache without the scratch slot is the envelope (32 users at 1 M with ~0.6 GiB to spare, so the
+per-user release discipline and a 256-query score block matter there; 64 at 512 K, 128 at 256 K); the stacked-expert
+decode copy is a 9.4 GiB trade against it (4 users per row at 64 K). The decode-speed work therefore has two regimes:
+few users at very long context (the sparse DSA decode and the per-layer fixed costs: mHC, router, CCL) and many users
+at short context (expert compute: EP32 dispatch).
 
 ### Optimization-phase agents, first deliveries (2026-10-21 14:00-14:45)
 

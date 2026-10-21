@@ -63,7 +63,12 @@ def weights_bytes_estimate(
 ) -> float:
     """Experts (x2 with keep_stacked) + the TP4-sharded dense weights (attention, shared expert, mHC, embedding, head)."""
     experts = expert_bytes_per_chip(cfg, rows, cols, expert_bytes) * (2 if keep_stacked else 1)
-    other = 2.3 * GIB  # measured on the 8x4: 12.4 GB total with 10.1 GB of bfp8 experts
+    # the non-expert static footprint, calibrated on the 8x4 (2026-10-21): 28.85 GiB allocated after a 45-layer bfp8
+    # build with ONE 1 M slot per chip (11.15 GiB of latent + pools) -> 17.7 GiB of weights + fixed buffers, i.e. ~8.2 GiB
+    # beyond the bfp8 experts (dense TP4 weights, the stream / block expert layouts, embedding + head shards, the traced
+    # prefill slot and its per-length inputs, page tables, CCL semaphores; attribution pending). With this term the
+    # single-user 1 M run fits by ~60 MB, as observed (4.0 of 4.2 GB per bank in use at the first chunk).
+    other = 8.2 * GIB
     return experts + other
 
 
@@ -76,7 +81,9 @@ def reserve_bytes(
     score = qblock * (isl / 4) * 2  # the index scorer's [qblock, pools] bf16 block
     prefix_copy = isl * 576 * 2  # the per-chunk whole-prefix ROW_MAJOR latent copy (sparse_sdpa contract)
     misc = 256 * 2**20
-    return trace + regions + score + prefix_copy + misc
+    # the regions buffers and the score block are released before the attention of a sub-block takes the whole-prefix
+    # copy; the observed peak transient at 1 M (QBLOCK 512, regions 2048) was ~1.5 GB with ~1 GB left at the last chunk
+    return trace + misc + max(prefix_copy, regions + score)
 
 
 @dataclass(frozen=True)
