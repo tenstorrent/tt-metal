@@ -5,17 +5,21 @@
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <unordered_set>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
-std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
+// Validate all addresses before creating non-owning buffer wrappers.
+std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
@@ -23,61 +27,69 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     TT_FATAL(local_config.buffer_type == BufferType::L1, "L1 view requires L1 memory");
     TT_FATAL(is_sharded(local_config.sharding_args.buffer_layout()), "L1 view requires sharded memory");
     TT_FATAL(!placements.empty(), "L1 view requires addresses");
-    std::vector<distributed::MeshCoordinate> coords;
-    std::unordered_set<distributed::MeshCoordinate> seen;
+    std::map<distributed::MeshCoordinate, std::vector<std::pair<CoreCoord, DeviceAddr>>> by_device;
     for (const auto& [location, address] : placements) {
         TT_FATAL(mesh.impl().is_local(location.device_coord), "L1 view device must be local");
-        if (seen.insert(location.device_coord).second) {
-            coords.push_back(location.device_coord);
-        }
+        by_device[location.device_coord].emplace_back(location.core_coord, address);
     }
     const auto* replicated = std::get_if<distributed::ReplicatedBufferConfig>(&mesh_config);
     TT_FATAL(replicated != nullptr, "L1 view requires replicated mesh buffer configuration");
     const bool per_core = is_per_core_allocation(local_config.sharding_args);
-    std::optional<DeviceAddr> lockstep_address;
+    const auto lockstep_address = placements.front().second;
+    std::vector<CoreCoord> expected_cores;
+    uint64_t pages_per_core;
+    const auto& args = local_config.sharding_args;
+    if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
+        expected_cores = distribution->cores_with_data();
+        pages_per_core = distribution->max_num_dev_pages_per_core();
+    } else {
+        TT_FATAL(args.shard_spec().has_value(), "L1 view requires a shard specification");
+        const auto& spec = *args.shard_spec();
+        expected_cores = corerange_to_cores(spec.grid(), std::nullopt, spec.orientation() == ShardOrientation::ROW_MAJOR);
+        pages_per_core = spec.num_pages();
+    }
+    const std::unordered_set<CoreCoord> core_set(expected_cores.begin(), expected_cores.end());
+    for (const auto& [coord, entries] : by_device) {
+        auto* device = mesh.impl().get_device(coord);
+        const uint64_t alignment = device->allocator()->get_alignment(BufferType::L1);
+        const uint64_t aligned_page = ((uint64_t(local_config.page_size) + alignment - 1) / alignment) * alignment;
+        TT_FATAL(
+            pages_per_core == 0 || aligned_page <= std::numeric_limits<DeviceAddr>::max() / pages_per_core,
+            "L1 view size overflows");
+        const auto bytes_per_core = pages_per_core * aligned_page;
+        std::unordered_set<CoreCoord> seen;
+        for (const auto& [core, address] : entries) {
+            TT_FATAL(seen.insert(core).second, "Duplicate L1 view placement");
+            TT_FATAL(core_set.contains(core), "L1 view placement core is not in the buffer configuration");
+            TT_FATAL(address % alignment == 0, "L1 view address must be aligned");
+            TT_FATAL(address <= std::numeric_limits<DeviceAddr>::max() - bytes_per_core, "L1 view address overflows");
+            TT_FATAL(
+                address <= device->l1_size_per_core() && bytes_per_core <= device->l1_size_per_core() - address,
+                "L1 view exceeds device SRAM");
+            TT_FATAL(per_core || address == lockstep_address, "Lockstep tensor view requires one address on every core");
+        }
+        TT_FATAL(seen.size() == core_set.size(), "L1 view placements must cover every configured data core");
+    }
+    // The constructor is private; this friend owns the wrapper, not the addressed SRAM.
     auto result = std::shared_ptr<distributed::MeshBuffer>(
         new distributed::MeshBuffer(mesh_config, local_config, 0, replicated->size, &mesh));
-    for (const auto& coord : coords) {
-        std::unordered_map<CoreCoord, DeviceAddr> addresses;
-        for (const auto& [location, address] : placements) {
-            if (location.device_coord != coord) {
-                continue;
-            }
-            TT_FATAL(addresses.emplace(location.core_coord, address).second, "Duplicate L1 view placement");
-        }
-        const auto first = std::find_if(placements.begin(), placements.end(), [&](const auto& placement) {
-            return placement.first.device_coord == coord;
-        });
+    for (const auto& [coord, entries] : by_device) {
         auto local = BufferImpl::create(
             mesh.impl().get_device(coord),
-            first->second,
+            entries.front().second,
             replicated->size,
             local_config.page_size,
             BufferType::L1,
             local_config.sharding_args,
             local_config.bottom_up,
             local_config.sub_device_id);
-        for (const auto& [location, address] : placements) {
-            if (location.device_coord != coord) {
-                continue;
-            }
-            TT_FATAL(address % local->alignment() == 0, "L1 view address must be aligned");
-            TT_FATAL(
-                address <= std::numeric_limits<DeviceAddr>::max() - local->aligned_size_per_bank(),
-                "L1 view address overflows");
-            if (!per_core) {
-                if (!lockstep_address.has_value()) {
-                    lockstep_address = address;
-                }
-                TT_FATAL(address == *lockstep_address, "Lockstep tensor view requires one address on every shard");
-            }
-        }
         if (per_core) {
+            std::unordered_map<CoreCoord, DeviceAddr> addresses(entries.begin(), entries.end());
             local->impl().set_per_core_addresses(std::move(addresses));
         }
         result->buffers_.at(coord) = distributed::MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(local));
     }
-    result->address_ = per_core ? result->get_reference_buffer()->address() : *lockstep_address;
+    result->address_ = per_core ? result->get_reference_buffer()->address() : lockstep_address;
     return result;
 }
 
