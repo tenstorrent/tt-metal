@@ -24,6 +24,8 @@ set(UNIT_TESTS_LLK_SRC
     test_quasar_mailboxes.cpp
     test_quasar_bfd_datacopy.cpp
     test_quasar_2_0_datacopy.cpp
+    test_quasar_2_0_eltwise_binary.cpp
+    test_quasar_2_0_matmul.cpp
     test_reconfig.cpp
     test_reduce.cpp
     test_rmsnorm_chunked.cpp
