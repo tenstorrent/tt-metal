@@ -51,7 +51,7 @@ static std::uint32_t throttled_mop_status = 0;
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
 // clang-format on
-template <bool row_mop = false, bool tile_mop = true>
+template <bool row_mop = false, bool tile_mop = true, int in1_order = 0>
 ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -66,14 +66,14 @@ ALWI void matmul_block_math_dynamic_throttle(
     volatile std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
-            MATH((
-                llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX, false, true, in1_order>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop, tile_mop>(
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop, tile_mop, in1_order>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
@@ -222,7 +222,8 @@ template <
     bool row_mop = false,
     bool unpack_auto_ttsync = false,
     std::uint32_t kt_per_section = 0,
-    DataFormat out_format = DataFormat::Invalid>
+    DataFormat out_format = DataFormat::Invalid,
+    int in1_order = 0>
 ALWI void matmul_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -240,8 +241,8 @@ ALWI void matmul_block_init(
           MATH_FIDELITY,
           MM_THROTTLE,
           row_mop,
-          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>()>(
-        in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+          in1_order>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -266,7 +267,7 @@ ALWI void matmul_block_init(
  * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
  * size is limited by DST size and sync mode (see matmul_block_init for the valid ct_dim/rt_dim ranges).
  * A call may use smaller ct_dim and rt_dim than matmul_block_init but not flip ct_dim >= rt_dim, which fixes the held
- * operand; row_mop and unpack_auto_ttsync must be the values matmul_block_init was called with.
+ * operand; row_mop, unpack_auto_ttsync and in1_order must be the values matmul_block_init was called with.
  *
  * Return value: None
  *
@@ -287,7 +288,8 @@ template <
     bool row_mop = false,
     bool unpack_auto_ttsync = false,
     std::uint32_t kt_per_section = 0,
-    DataFormat out_format = DataFormat::Invalid>
+    DataFormat out_format = DataFormat::Invalid,
+    int in1_order = 0>
 ALWI void matmul_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -306,8 +308,10 @@ ALWI void matmul_block(
     UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_per_section, out_format>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
-    MATH((matmul_block_math_dynamic_throttle<row_mop, llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>()>(
-        in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+    MATH((matmul_block_math_dynamic_throttle<
+          row_mop,
+          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+          in1_order>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));

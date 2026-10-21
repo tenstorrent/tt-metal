@@ -45,6 +45,15 @@ constexpr bool bmm_main_form =
     unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp4_b &&
     unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp4_b;
 #endif
+#if defined(UCK_CHLKC_PACK)
+constexpr int bmm_in1_order = 0;
+#else
+// in1 32x16 tiles write the DEST row groups in turn; LoFi with a 32-bit DEST is pack bound and keeps the pair order
+constexpr bool bmm_in1_32x16 = unpack_tile_r_dim[dfb::in1] > 16 && unpack_tile_c_dim[dfb::in1] <= 16 &&
+                               !(unpack_tile_r_dim[dfb::in0] <= 16 && unpack_tile_c_dim[dfb::in0] > 16);
+constexpr int bmm_in1_order =
+    bmm_in1_32x16 && !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && DST_ACCUM_MODE) ? 1 : 0;
+#endif
 // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread; not for
 // one tile row of in0 either (decode), which reads slower with it
 constexpr bool bmm_unpack_auto_ttsync = !bmm_main_form && get_arg(args::out_subblock_w) <= 2 &&
@@ -163,7 +172,7 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init<row_mop, unpack_auto_ttsync, kt_per_section, out_format>(
+    matmul_block_init<row_mop, unpack_auto_ttsync, kt_per_section, out_format, bmm_in1_order>(
         in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -369,7 +378,7 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
-    matmul_block_init<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format>(
+    matmul_block_init<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
         in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
@@ -437,7 +446,7 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
-                        matmul_block_init<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format>(
+                        matmul_block_init<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
 #ifdef ARCH_QUASAR
@@ -510,7 +519,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                matmul_block<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format>(
+                                matmul_block<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -783,7 +792,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format>(
+                    matmul_block_init<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
                         in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
             }

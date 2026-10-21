@@ -130,6 +130,36 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         )
 
 
+@dataclass
+class MATMUL_IN1_ALT(TemplateParameter):
+    """Blackhole matmul with in1 32x16 tiles whose body alternates the DEST row groups (in1_order 1)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_IN1_ALT"
+
+    @staticmethod
+    def for_tiles(
+        formats,
+        dest_acc,
+        math_fidelity,
+        in0_r_dim: int,
+        in0_c_dim: int,
+        in1_r_dim: int,
+        in1_c_dim: int,
+    ) -> list:
+        """[MATMUL_IN1_ALT()] for in1 32x16 with in0 other than 16x32, except LoFi with 32-bit DEST, else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if not (in1_r_dim > 16 and in1_c_dim <= 16):
+            return []
+        if in0_r_dim <= 16 and in0_c_dim > 16:
+            return []
+        fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+        if math_fidelity == MathFidelity.LoFi and fp32_dest:
+            return []
+        return [MATMUL_IN1_ALT()]
+
+
 @dataclass(init=False, repr=False, eq=False)
 class MATMUL_FORM_KEYS(TemplateParameter):
     """Blackhole matmul: the k steps per DEST section and output format matmul_default_form picks the forms by.

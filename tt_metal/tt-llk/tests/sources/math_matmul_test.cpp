@@ -148,6 +148,11 @@ constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync,
 #else
 constexpr bool matmul_tile_mop = false;
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_IN1_ALT)
+constexpr int matmul_in1_order = 1;
+#else
+constexpr int matmul_in1_order = 0;
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -178,7 +183,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(
+        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_in1_order>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
