@@ -23,6 +23,9 @@ CASES = {
     "conv2d_rn50_l3_1x1": None,
     "matmul_2k2k2k_bf16_hifi2": None,
     "matmul_2k2k4k_bfp8_lofi": None,
+    "sum_rm_w_bf16_2048x1024": None,
+    "sum_rm_h_bf16_2048x1024": None,
+    "sdpa_decode_b32_s2k": None,
 }
 _CW = {}
 
@@ -87,8 +90,38 @@ def _conv3d(device):
     return ttnn.to_torch(y)
 
 
+def _sum_rm(device, case):
+    g = torch.Generator().manual_seed(7)
+    x = ttnn.from_torch(torch.randn(1, 1, 2048, 1024, generator=g).to(torch.bfloat16), dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return ttnn.to_torch(ttnn.sum(x, dim=-1 if "_w_" in case else -2))
+
+
+def _sdpa_decode(device, case):
+    import numpy as np
+    b, s, nh, nkv, d = 32, 2048, 8, 1, 128
+    g = torch.Generator().manual_seed(7)
+    mk = lambda sh, dt: ttnn.from_torch(torch.randn(sh, generator=g), dtype=dt, layout=ttnn.TILE_LAYOUT, device=device,
+                                        memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    q = mk((1, b, nh, d), ttnn.bfloat16)
+    k, v = mk((b, nkv, s, d), ttnn.bfloat8_b), mk((b, nkv, s, d), ttnn.bfloat8_b)
+    pos = np.linspace(0, s - 1, b, dtype=np.int32).tolist()
+    pc = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(8, 8), q_chunk_size=32, k_chunk_size=256, exp_approx_mode=False)
+    o = ttnn.transformer.scaled_dot_product_attention_decode(
+        q, k, v, cur_pos=pos, scale=d ** -0.5, program_config=pc,
+        compute_kernel_config=_ckc(device, ttnn.MathFidelity.HiFi2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.to_torch(o)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("case", list(CASES))
 def test_tz(device, case):
+    if case.startswith("sum_rm"):
+        _record(case, _sum_rm(device, case))
+        return
+    if case.startswith("sdpa_decode"):
+        _record(case, _sdpa_decode(device, case))
+        return
     if case.startswith("conv2d"):
         _record(case, _conv2d(device, case))
         return
