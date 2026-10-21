@@ -11,6 +11,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -19,7 +20,7 @@
 namespace tt::tt_metal::experimental::per_core_allocation {
 
 // Validate all addresses before creating non-owning buffer wrappers.
-std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
+distributed::MeshBuffer create_sram_buffer_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
@@ -70,9 +71,9 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
         }
         TT_FATAL(seen.size() == core_set.size(), "L1 view placements must cover every configured data core");
     }
-    // The constructor is private; this friend owns the wrapper, not the addressed SRAM.
-    auto result = std::shared_ptr<distributed::MeshBuffer>(
-        new distributed::MeshBuffer(mesh_config, local_config, 0, replicated->size, &mesh));
+    // Construct metadata directly; this view never owns the addressed SRAM.
+    distributed::MeshBuffer result(mesh_config, local_config, 0, replicated->size, &mesh);
+    Inspector::mesh_buffer_allocated(&result);
     for (const auto& [coord, entries] : by_device) {
         auto local = BufferImpl::create(
             mesh.impl().get_device(coord),
@@ -87,9 +88,9 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
             std::unordered_map<CoreCoord, DeviceAddr> addresses(entries.begin(), entries.end());
             local->impl().set_per_core_addresses(std::move(addresses));
         }
-        result->buffers_.at(coord) = distributed::MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(local));
+        result.buffers_.at(coord) = distributed::MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(local));
     }
-    result->address_ = per_core ? result->get_reference_buffer()->address() : lockstep_address;
+    result.address_ = per_core ? result.get_reference_buffer()->address() : lockstep_address;
     return result;
 }
 

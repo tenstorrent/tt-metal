@@ -525,11 +525,11 @@ void pytensor_module(nb::module_& mod) {
         nb::arg("tensor_spec"),
         "Return tensor data cores and page-aligned L1 geometry without allocating.");
     mod.def(
-        "experimental_create_l1_tensor_view",
+        "experimental_create_sram_tensor_view",
         [](distributed::MeshDevice& mesh,
            const TensorSpec& spec,
            const std::vector<SRAMTensorViewAddress>& placements) {
-            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_buffer_view(
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
                 mesh,
                 tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
                 tt::tt_metal::distributed::DeviceLocalBufferConfig{
@@ -547,7 +547,7 @@ void pytensor_module(nb::module_& mod) {
             TensorTopology topology(
                 distributed::MeshShape(coords.size()), {distributed::MeshMapperConfig::Replicate{}}, coords);
             return Tensor(DeviceStorage(
-                mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), coords));
+                mesh_tensor_from_buffer_with_topology(std::move(buffer), spec, std::move(topology)), coords));
         },
         nb::arg("mesh_device").noconvert(),
         nb::arg("tensor_spec"),

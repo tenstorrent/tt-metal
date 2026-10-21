@@ -163,28 +163,28 @@ TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
     const MeshCoordinate coord(0, 0);
     const std::vector<SRAMTensorViewAddress> valid{
         {MeshCoreCoord{coord, CoreCoord(0, 0)}, address}, {MeshCoreCoord{coord, CoreCoord(1, 0)}, address}};
-    EXPECT_EQ(create_l1_buffer_view(*mesh_device_, replicated, local, valid)->address(), address);
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, {}), std::exception);
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, {valid.front()}), std::exception);
+    EXPECT_EQ(create_sram_buffer_view(*mesh_device_, replicated, local, valid).address(), address);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, {}), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, {valid.front()}), std::exception);
     auto invalid = valid;
     invalid.push_back(valid.front());
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
     invalid = valid;
     invalid.back().first.core_coord = CoreCoord(2, 0);
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
     invalid = valid;
     invalid.back().second += 1;
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
     invalid.back().second = address + 256;
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
     invalid = valid;
     invalid.front().first.device_coord = MeshCoordinate(0, 1);
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
     invalid = valid;
     for (auto& [location, value] : invalid) {
         value = mesh_device_->get_device(coord)->l1_size_per_core();
     }
-    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
 }
 
 // Different per-core addresses must survive transfers and view destruction without touching neighbors.
@@ -204,10 +204,13 @@ TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
     config.num_pages_per_core = {1, 1};
     local.sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config);
     set_per_core_allocation(local.sharding_args, true);
-    auto view = create_l1_buffer_view(
-        *mesh_device_, ReplicatedBufferConfig{.size = 512}, local,
+    // These legacy transfer helpers require shared ownership; the view factory itself does not.
+    auto view = std::make_shared<MeshBuffer>(create_sram_buffer_view(
+        *mesh_device_,
+        ReplicatedBufferConfig{.size = 512},
+        local,
         {{MeshCoreCoord{coord, CoreCoord(0, 0)}, owner->address()},
-         {MeshCoreCoord{coord, CoreCoord(1, 0)}, owner->address() + 256}});
+         {MeshCoreCoord{coord, CoreCoord(1, 0)}, owner->address() + 256}}));
     std::vector<uint32_t> values(128, 17);
     std::fill(values.begin() + 64, values.end(), 29);
     WriteShard(mesh_device_->mesh_command_queue(), view, values, coord, true);
