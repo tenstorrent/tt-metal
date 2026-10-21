@@ -8,6 +8,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -15,6 +16,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/shard_data_transfer.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -47,6 +49,19 @@ std::shared_ptr<MeshBuffer> sharded_buffer(uint32_t bytes_per_device) {
         .shard_shape = {shard_rows, shard_cols}};
     const DeviceLocalBufferConfig local{.page_size = PAGE_SIZE, .buffer_type = BufferType::DRAM};
     return MeshBuffer::create(config, local, &mesh_device());
+}
+
+// Height-sharded over the whole compute grid, so a read issues one command sequence per core.
+std::shared_ptr<MeshBuffer> l1_sharded_buffer(uint32_t pages_per_core) {
+    const auto grid_size = mesh_device().compute_with_storage_grid_size();
+    const CoreRangeSet grid(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    const uint32_t num_pages = grid.num_cores() * pages_per_core;
+    const ShardSpecBuffer shard_spec(grid, {pages_per_core, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_pages, 1});
+    const DeviceLocalBufferConfig local{
+        .page_size = PAGE_SIZE,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)};
+    return MeshBuffer::create(ReplicatedBufferConfig{.size = num_pages * PAGE_SIZE}, local, &mesh_device());
 }
 
 std::vector<ShardDataTransfer> transfers_for_every_device(void* host_data) {
@@ -108,6 +123,45 @@ void BM_ReadShards(benchmark::State& state) {
     state.SetBytesProcessed(state.iterations() * static_cast<int64_t>(bytes) * mesh_device().num_devices());
 }
 
+// Times only the non-blocking enqueue_read_shards call, which issues the read commands on the calling thread.
+// The device round trip and the copy out of the completion queues finish in Finish, outside the timed region
+// but in total_us. The second argument reads from every device (0) or from the first one only (1).
+void time_read_issue(benchmark::State& state, const std::shared_ptr<MeshBuffer>& buffer) {
+    const bool one_device = state.range(1) != 0;
+    const auto bytes = static_cast<uint32_t>(buffer->device_local_size());
+    std::vector<std::vector<uint32_t>> data;
+    std::vector<ShardDataTransfer> transfers;
+    for (const auto& coord : MeshCoordinateRange(mesh_device().shape())) {
+        data.emplace_back(bytes / sizeof(uint32_t));
+        transfers.push_back(ShardDataTransfer{coord}.host_data(data.back().data()));
+        if (one_device) {
+            break;
+        }
+    }
+    auto& cq = mesh_device().mesh_command_queue();
+    double total_s = 0;
+    for ([[maybe_unused]] auto _ : state) {
+        const auto start = std::chrono::steady_clock::now();
+        cq.enqueue_read_shards(transfers, buffer, /*blocking=*/false);
+        const auto issued = std::chrono::steady_clock::now();
+        Finish(cq);
+        const auto done = std::chrono::steady_clock::now();
+        state.SetIterationTime(std::chrono::duration<double>(issued - start).count());
+        total_s += std::chrono::duration<double>(done - start).count();
+    }
+    state.counters["devices"] = static_cast<double>(transfers.size());
+    state.counters["bytes_per_device"] = static_cast<double>(bytes);
+    state.counters["total_us"] = total_s * 1e6 / static_cast<double>(state.iterations());
+}
+
+void BM_ReadIssueInterleaved(benchmark::State& state) {
+    time_read_issue(state, sharded_buffer(static_cast<uint32_t>(state.range(0))));
+}
+
+void BM_ReadIssueL1Sharded(benchmark::State& state) {
+    time_read_issue(state, l1_sharded_buffer(static_cast<uint32_t>(state.range(0))));
+}
+
 BENCHMARK(BM_RecordEvent)
     ->Name("BM_MeshFanOut/RecordEvent")
     ->Iterations(20000)
@@ -137,6 +191,20 @@ BENCHMARK(BM_ReadShards)
     ->Arg(64 << 10)
     ->Iterations(1000)
     ->UseRealTime()
+    ->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_ReadIssueInterleaved)
+    ->Name("BM_MeshFanOut/ReadIssueInterleaved")
+    ->ArgNames({"bytes_per_device", "one_device"})
+    ->ArgsProduct({{4 << 10, 64 << 10}, {0, 1}})
+    ->Iterations(2000)
+    ->UseManualTime()
+    ->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_ReadIssueL1Sharded)
+    ->Name("BM_MeshFanOut/ReadIssueL1Sharded")
+    ->ArgNames({"pages_per_core", "one_device"})
+    ->ArgsProduct({{1, 4}, {0, 1}})
+    ->Iterations(2000)
+    ->UseManualTime()
     ->Unit(benchmark::kMicrosecond);
 
 }  // namespace
