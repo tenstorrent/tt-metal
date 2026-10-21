@@ -9,6 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -57,26 +58,22 @@ void validate_external_semaphores(const HighBwAllGatherParams& args, const Tenso
 tt::tt_metal::TensorTopology derive_output_topology(
     const Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis, uint32_t gather_dim) {
     const auto& input_topology = input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
     if (cluster_axis.has_value()) {
-        TT_FATAL(
-            *cluster_axis < output_placements.size() && *cluster_axis < input_topology.distribution_shape().dims(),
-            "high_bw_all_gather requires the tensor distribution axes to match the device mesh axes; "
-            "cluster_axis={}, distribution rank={}, placement count={}",
-            *cluster_axis,
-            input_topology.distribution_shape().dims(),
-            output_placements.size());
-
-        // Only the participating mesh axis becomes replicated. Another mesh axis may
-        // independently shard the same tensor dimension and must remain sharded.
-        output_placements[*cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-    } else {
-        // A full-mesh ring consumes every shard placement of the gather dimension.
-        const uint32_t rank = input_tensor.logical_shape().rank();
-        for (auto& placement : output_placements) {
-            if (ttnn::operations::ccl::common::placement_shards_tensor_dim(placement, gather_dim, rank)) {
-                placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            }
+        // The same rule as all_gather: only the participating mesh axis becomes replicated, and another
+        // mesh axis that independently shards the same tensor dimension stays sharded. The shared helper
+        // first expands a collapsed 1-D label -- e.g. mesh_partition's output when both mesh axes now
+        // shard one dimension -- to one placement per mesh axis. When no label describes the result
+        // (nullopt, already reported) the output keeps the input's label, as all_gather does.
+        return ttnn::operations::ccl::common::all_gather_output_topology(
+                   input_tensor, cluster_axis, static_cast<int32_t>(gather_dim))
+            .value_or(input_topology);
+    }
+    // A full-mesh ring consumes every shard placement of the gather dimension.
+    auto output_placements = input_topology.placements();
+    const uint32_t rank = input_tensor.logical_shape().rank();
+    for (auto& placement : output_placements) {
+        if (ttnn::operations::ccl::common::placement_shards_tensor_dim(placement, gather_dim, rank)) {
+            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
         }
     }
     return tt::tt_metal::TensorTopology(
