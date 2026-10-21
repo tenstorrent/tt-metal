@@ -323,9 +323,13 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 
 HostTensor to_row_major_layout(const HostTensor& tensor) {
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        if constexpr (
+        if constexpr (std::is_same_v<T, tensor_impl::mx_tiles>) {
+            // MX formats are TILE-only and, unlike BFP, have no legacy callers relying on a silent no-op.
+            TT_THROW("to_layout: {} supports TILE layout only; convert to a non-MX dtype first", tensor.dtype());
+            return tensor;
+        } else if constexpr (
             std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
-            std::is_same_v<T, tensor_impl::mx_tiles> || std::is_same_v<T, float8_e4m3>) {
+            std::is_same_v<T, float8_e4m3>) {
             // bfloat4_b / bfloat8_b: TODO(#43763):
             // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
             // This silent fail has a high impact area and should be studied and addressed asap.
@@ -334,7 +338,6 @@ HostTensor to_row_major_layout(const HostTensor& tensor) {
             // TODO: Flip to assert when we remove use cases in python and c++
             //
             // FP8_E4M3 is constrained to ROW_MAJOR at construction, so it is already row-major.
-            // MX formats are TILE-only, like BFP.
             return tensor;
         } else {
             return CMAKE_UNIQUE_NAMESPACE::to_row_major_layout_impl<T>(tensor);
