@@ -97,6 +97,7 @@ tests:
   waivers:                         # owner waivers (F85), signed 2026-10-16: noise-floor checks reported WAIVED, never hidden
     attn_hc: &hc_waiver "hc_fn is fp32 in the official model; the FPU holds at most 10 mantissa bits of a matmul weight (9 at HiFi4), and its fixed rounding is a per-column bias no single-pass format removes (DS41-43; split matmuls ruled out). Debug once the model produces tokens."
     ffn_hc: *hc_waiver
+    ladder.state_overlap: "owner 2026-10-21 (F124): native numerics (F112) select top-k from unrounded index scores; the goldens' selection uses the reference's fp4 index key / query q-dq (NUMERICS=official: 0.875 PASS at s55296, native: L24 0.695), near-tie flips at 55k; every layer PCC >= 0.9944. Proper fix: F118 goldens that follow NUMERICS."
 thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
 text:                              # the canonical prompt, built once at R.1 (reference/prompt.py)
   source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
