@@ -137,10 +137,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output).
 
-        `request_id` is the engine's chunk counter; the runner ALWAYS passes it, so accept it
-        even if unused. Only the pipelined layer-completion sink consumes it (to build a
-        globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
-        channel carries no payload and can ignore it."""
+        `request_id` is the runner's chunk counter, increasing by one per chunk; the runner ALWAYS
+        passes it, so accept it even if unused."""
 
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
@@ -188,14 +186,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
         PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
-        Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
-        `prefill_chunk` (or `prefill_forward`) was given -- bind it per call rather than reading mutable
-        state, since the callback fires synchronously mid-forward.
+        Per KV-writing layer, call `sink.layers_completed(layer, layer + 1, slot_id, actual_start,
+        actual_end)` naming the chunk `prefill_chunk` was given -- bind it per call rather than reading
+        mutable state, since the callback fires synchronously mid-forward. The consumer retires a chunk
+        once completions cover all of its KV-writing layers.
 
-        `layer_idx` MUST be the layer's GLOBAL index. The sink keys on
-        seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
-        layer k collide on one seq and all but one completion is dropped -- silently, since the
-        router just sees a duplicate. If your model enumerates only its own slice, add
+        `layer` MUST be the layer's GLOBAL index: with rank-local indices every rank reports the same
+        layers and the chunk never retires. If your model enumerates only its own slice, add
         `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
 ```
 
@@ -213,11 +210,15 @@ the runtime then gets `prefill_forward` instead of `prefill_chunk`:
         of every entry's rotated chunk, in entry order: `chunk_layout.pack_forward_tokens`), or the
         `[1, 1, forward_tokens, H]` activation from the previous rank. Return the forward_tokens-row
         activation on a non-last rank, None on the last. Size the non-first-rank placeholder input to
-        forward_tokens. Call the layer-completion sink once per KV-writing layer per forward, after every
-        entry of that layer ran, with this `request_id` (the runner's forward counter)."""
+        forward_tokens. Per KV-writing layer, call `sink.layers_completed(layer, layer + 1, slot, start, end)`
+        once for each non-empty entry, after that entry's layer ran. `request_id` is the runner's chunk
+        counter at the forward's first entry; it advances by the forward's non-empty entries."""
 ```
 
-Metadata: tt-d-gen's `PrefillBatchMetadata` layout (`forward_entries`), today's 12 bytes at F = 1. F is at most 16.
+Metadata (`forward_entries`), little-endian uint32: at F = 1 today's 12 B `(slot, start, end)` record; at
+F > 1 tt-d-gen's 200 B `PrefillBatchMetadata`, `{num_chunks, 0}` then 16 `(slot, start, end)` records, those
+past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. F is at most 16. `num_chunks` (1..F) is the forward's entry
+count; the runtime gets F entries, the ones past `num_chunks` empty.
 `[start, end)` keeps its single-chunk meaning; `start == end` is an empty entry (no attention, no KV
 write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order contract,
 validated on the first rank (`forward_entries.validate_forward_entries`):
@@ -228,7 +229,7 @@ validated on the first rank (`forward_entries.validate_forward_entries`):
 - `start % 32 == 0`, `start < end <= start + chunk_size`, `start + chunk_size <= max_seq_len`;
 - runs of different slots may come in any order.
 
-A layer ack for forward c means that layer's KV is written for every non-empty entry of forward c.
+Each layer completion names one entry, so a consumer retires each chunk on its own.
 
 The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
 `PREFILL_DFLASH=1`, `PREFILL_USE_TRACE=1` or `PREFILL_LAYER_ACK_D2H=1`.
