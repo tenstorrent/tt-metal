@@ -138,25 +138,30 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
     reader.core_ranges = all_cores;
     // The scratch layout and the repacked page pitch come from the plan, so the reader fills exactly the CBs sized
     // for it.
-    reader.compile_time_args = {
-        kCbIn,
-        p.old_stick,
-        p.old_aligned,
-        p.can_coalesce ? 0u : 1u,
-        rcg::kRmScratchSticks,
-        kCbMid,
-        p.cb_page,
-        rcg::kRmScratchSlackBytes};
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"cb_id", kCbIn},
+        {"stick_bytes", p.old_stick},
+        {"aligned_page_size", p.old_aligned},
+        {"nonaligned", p.can_coalesce ? 0u : 1u},
+        {"nonaligned_batch", rcg::kRmScratchSticks},
+        {"cb_scratch_id", kCbMid},
+        {"cb_page_bytes", p.cb_page},
+        {"read_alignment", rcg::kRmScratchSlackBytes},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_rm.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kCbIn, p.new_stick, p.new_aligned};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
-    writer.compile_time_args.push_back(tt::tt_metal::hal::get_noc_max_burst_size_bytes());
+    writer.named_compile_time_args = {
+        {"cb_out0", kCbIn},
+        {"new_stick_size", p.new_stick},
+        {"aligned_page_size", p.new_aligned},
+        {"noc_max_burst_bytes", tt::tt_metal::hal::get_noc_max_burst_size_bytes()},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf});
@@ -203,28 +208,37 @@ ProgramDescriptor build_rm_arbitrary(
     reader.kernel_source = op_kernel("reader_reshape_rm_arbitrary.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    reader.compile_time_args = {
-        kCbIn,
-        kCbMid,
-        p.old_stick,
-        p.old_page,
-        p.new_stick,
-        p.slab,
-        p.slot,
-        p.slabs_per_stick,
-        p.in_alignment,
-        tt::tt_metal::hal::get_noc_max_burst_size_bytes(),
-        p.batch,
-        p.region_stride};
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"cb_out", kCbIn},
+        {"cb_scratch", kCbMid},
+        {"old_stick_bytes", p.old_stick},
+        {"old_page_bytes", p.old_page},
+        {"new_stick_bytes", p.new_stick},
+        {"slab_bytes", p.slab},
+        {"slot_bytes", p.slot},
+        {"slabs_per_stick", p.slabs_per_stick},
+        {"input_alignment", p.in_alignment},
+        {"noc_max_burst_bytes", tt::tt_metal::hal::get_noc_max_burst_size_bytes()},
+        {"batch", p.batch},
+        {"region_stride", p.region_stride},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_rm_arbitrary.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kCbIn, p.new_stick, p.new_page, p.slab, p.slot, p.slabs_per_stick, p.batch};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.named_compile_time_args = {
+        {"cb_out", kCbIn},
+        {"new_stick_bytes", p.new_stick},
+        {"new_page_bytes", p.new_page},
+        {"slab_bytes", p.slab},
+        {"slot_bytes", p.slot},
+        {"slabs_per_stick", p.slabs_per_stick},
+        {"batch", p.batch},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf});

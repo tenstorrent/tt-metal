@@ -38,29 +38,27 @@ void kernel_main() {
     const uint32_t start_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
-    constexpr uint32_t old_stick_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t old_page_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t new_stick_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t slab_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t slot_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t slabs_per_stick = get_compile_time_arg_val(7);
-    constexpr uint32_t input_alignment = get_compile_time_arg_val(8);
-    constexpr uint32_t noc_max_burst_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t batch = get_compile_time_arg_val(10);
-    constexpr uint32_t region_stride = get_compile_time_arg_val(11);
-    constexpr auto src_args = TensorAccessorArgs<12>();
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t cb_scratch = get_named_compile_time_arg_val("cb_scratch");
+    constexpr uint32_t old_stick_bytes = get_named_compile_time_arg_val("old_stick_bytes");
+    constexpr uint32_t old_page_bytes = get_named_compile_time_arg_val("old_page_bytes");
+    constexpr uint32_t new_stick_bytes = get_named_compile_time_arg_val("new_stick_bytes");
+    constexpr uint32_t slab_bytes = get_named_compile_time_arg_val("slab_bytes");
+    constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
+    constexpr uint32_t slabs_per_stick = get_named_compile_time_arg_val("slabs_per_stick");
+    constexpr uint32_t input_alignment = get_named_compile_time_arg_val("input_alignment");
+    constexpr uint32_t noc_max_burst_bytes = get_named_compile_time_arg_val("noc_max_burst_bytes");
+    constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
+    constexpr uint32_t region_stride = get_named_compile_time_arg_val("region_stride");
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     const auto source = TensorAccessor(src_args, src_addr, old_page_bytes);
     Noc noc;
     CircularBuffer scratch_buffer(cb_scratch);
     CircularBuffer out_buffer(cb_out);
 
-    // The scratch CB has no consumer; this kernel keeps its single page for its whole run.
-    scratch_buffer.reserve_back(1);
+    // Private scratch that is never pushed, so the write pointer stays at the buffer base.
     const uint32_t scratch_base = (scratch_buffer.get_write_ptr() + input_alignment - 1) & ~(input_alignment - 1);
-    scratch_buffer.push_back(1);
 
     uint32_t unit = start_unit;
     uint32_t units_left = num_units;

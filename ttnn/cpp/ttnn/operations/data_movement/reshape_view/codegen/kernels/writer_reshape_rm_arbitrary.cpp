@@ -11,14 +11,14 @@ void kernel_main() {
     const uint32_t start_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
-    constexpr uint32_t new_stick_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t new_page_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t slab_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t slot_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t slabs_per_stick = get_compile_time_arg_val(5);
-    constexpr uint32_t batch = get_compile_time_arg_val(6);
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t new_stick_bytes = get_named_compile_time_arg_val("new_stick_bytes");
+    constexpr uint32_t new_page_bytes = get_named_compile_time_arg_val("new_page_bytes");
+    constexpr uint32_t slab_bytes = get_named_compile_time_arg_val("slab_bytes");
+    constexpr uint32_t slot_bytes = get_named_compile_time_arg_val("slot_bytes");
+    constexpr uint32_t slabs_per_stick = get_named_compile_time_arg_val("slabs_per_stick");
+    constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     const auto destination = TensorAccessor(dst_args, dst_addr, new_page_bytes);
     Noc noc;
