@@ -175,6 +175,7 @@ def load_input(
     version = _get(snapshot, "snapshot_version", int, snapshot_path)
     if version != SNAPSHOT_VERSION:
         raise InputError(f"snapshot {snapshot_path} is version {version}; decode reads version {SNAPSHOT_VERSION}")
+    _get(snapshot, "capture", dict, snapshot_path)
     for path, entry in _get(snapshot, "routers", dict, snapshot_path).items():
         for key, kind in ROUTER_KEYS.items():
             _get(snapshot, f"routers.{path}.{key}", kind, snapshot_path)
