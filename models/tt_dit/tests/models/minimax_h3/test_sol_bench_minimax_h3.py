@@ -132,6 +132,12 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             # SOL_BENCH_MODE: gather | chunk | compact | pack (pack = compact + Q2 packing; pair it with
             # SOL_BENCH_CHUNKS=64xK, the 64-row Q chunk Q1 needs and the only size whose L1 fits the staging).
             tt_model.sol_mode = os.environ.get("SOL_BENCH_MODE", "compact")
+            # SOL_BENCH_DENSE_PREFIX=0 switches off the rule that makes the prefix (text + condition) query rows
+            # attend every block. Profiled 2026-10-21: that rule puts fully dense query chunks on ~15 cores of each
+            # shard-0 chip, and the chain lockstep drags every core on those 4 chips to dense pace (26.6 ms at 10 s)
+            # while the other 28 chips finish in ~9 ms. Read with the module time next to the op time.
+            if os.environ.get("SOL_BENCH_DENSE_PREFIX", "1") == "0":
+                tt_model.sol_dense_prefix = False
 
         op_times = []
         orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
