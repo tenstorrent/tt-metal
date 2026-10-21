@@ -1730,6 +1730,9 @@ struct SfpuConfig {
     size_t dst_tile_start = 0;
     size_t section_ntiles = 0;
     bool section_use_copy_tile = false;
+    // A compute kernel other than eltwise_sfpu_2_0.cpp, and the number of tiles it produces (0 = num_tiles).
+    std::string compute_kernel;
+    size_t num_output_tiles = 0;
 };
 
 // Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
@@ -1768,7 +1771,9 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const std::vector<uint32_t>& packed_input) {
     auto& cq = mesh_device.mesh_command_queue();
     const size_t in_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
-    const size_t out_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
+    const size_t num_output_tiles =
+        test_config.num_output_tiles != 0 ? test_config.num_output_tiles : test_config.num_tiles;
+    const size_t out_bytes = num_output_tiles * tt::tile_size(test_config.l1_output_data_format);
 
     auto input_dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = in_bytes},
@@ -1800,6 +1805,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         make_dfb_spec(IN_DFB, test_config, test_config.l1_input_data_format);
     experimental::DataflowBufferSpec out_dfb_spec =
         make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
+    out_dfb_spec.num_entries = static_cast<uint32_t>(num_output_tiles);
     if (test_config.out_dfb_entries != 0) {
         out_dfb_spec.num_entries = static_cast<uint32_t>(test_config.out_dfb_entries);
     }
@@ -1904,7 +1910,9 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
+        .source = test_config.compute_kernel.empty()
+                      ? "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp"
+                      : test_config.compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = to_kernel_defines(compute_defines)},
         .dfb_bindings =
@@ -1955,7 +1963,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                 node,
                 {{"dst_addr", output_dram_buffer->address()},
                  {"bank_id", 0u},
-                 {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
+                 {"num_tiles", static_cast<uint32_t>(num_output_tiles)}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -2108,6 +2116,71 @@ bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig
     sfpu_defines["SFPU_UNARY_OP"] = "1";
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
     return dest_buffer_data == packed_golden;
+}
+
+// ---- welford ------------------------------------------------------------------------------------
+//
+// welford_sfpu_2_0.cpp: mean and population variance of each column over the rows of num_tiles stacked input
+// tiles, in row 0 of two output tiles. sfpu_op "welford" runs Welford's online update, "welford_two_pass"
+// the shifted two-pass kernels.
+bool run_sfpu_welford(distributed::MeshDevice& mesh_device, SfpuConfig test_config) {
+    const size_t num_tiles = test_config.num_tiles;
+    const size_t numel = num_tiles * 1024;
+    // Offset from zero, so a shift-free sum of squares would lose the variance to cancellation.
+    const auto packed_input =
+        generate_packed_uniform_random_vector<uint32_t, bfloat16>(6.0f, 10.0f, numel, sfpu_test_seed);
+    const auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
+
+    std::array<double, 32> mean{};
+    std::array<double, 32> variance{};
+    const double rows = 32.0 * num_tiles;
+    for (size_t col = 0; col < 32; ++col) {
+        for (size_t base = 0; base < numel; base += 1024) {
+            for (size_t row = 0; row < 32; ++row) {
+                mean[col] += static_cast<float>(input[base + sfpu_util::tile_order_index(row, col)]);
+            }
+        }
+        mean[col] /= rows;
+        for (size_t base = 0; base < numel; base += 1024) {
+            for (size_t row = 0; row < 32; ++row) {
+                const double d = static_cast<float>(input[base + sfpu_util::tile_order_index(row, col)]) - mean[col];
+                variance[col] += d * d;
+            }
+        }
+        variance[col] /= rows;
+    }
+
+    std::map<std::string, std::string> defines;
+    if (test_config.sfpu_op == "welford_two_pass") {
+        defines["WELFORD_TWO_PASS"] = "1";
+        defines["WELFORD_TWO_PASS_RECIPROCAL_BITS"] =
+            fmt::format("{:#x}u", std::bit_cast<uint32_t>(static_cast<float>(1.0 / rows)));
+    }
+    test_config.compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/welford_sfpu_2_0.cpp";
+    test_config.num_output_tiles = 2;
+    const auto out =
+        unpack_vector<bfloat16, uint32_t>(run_sfpu_pipeline(mesh_device, test_config, defines, packed_input));
+
+    // Only row 0 of each output tile is written.
+    bool ok = true;
+    for (size_t col = 0; col < 32; ++col) {
+        const float got_mean = static_cast<float>(out[sfpu_util::tile_order_index(0, col)]);
+        const float got_variance = static_cast<float>(out[1024 + sfpu_util::tile_order_index(0, col)]);
+        if (!is_close(got_mean, static_cast<float>(mean[col]), 0.01f, 0.01f) ||
+            !is_close(got_variance, static_cast<float>(variance[col]), 0.02f, 0.01f)) {
+            log_error(
+                tt::LogTest,
+                "{}: column {} mean {} (expected {}), variance {} (expected {})",
+                test_config.sfpu_op,
+                col,
+                got_mean,
+                mean[col],
+                got_variance,
+                variance[col]);
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 namespace {
@@ -3575,6 +3648,41 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sum_int_row"),
         std::make_tuple(1, "abs_int32"),
         std::make_tuple(1, "fill_int32")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
+// welford: (num_tiles, op), through a 32-bit Dest.
+class SingleCoreSingleMeshDeviceSfpuWelfordParameterizedFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuWelfordParameterizedFixture, TensixSfpuCompute) {
+    const auto& [num_tiles, sfpu_op] = GetParam();
+    CoreRange core_range({0, 0}, {0, 0});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = CoreRangeSet({core_range}),
+        .sfpu_op = sfpu_op,
+        .approx_mode = false,
+        .en_32bit_dest = true};
+    log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_welford(*device, test_config));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCompute,
+    SingleCoreSingleMeshDeviceSfpuWelfordParameterizedFixture,
+    ::testing::Values(
+        std::make_tuple(1, "welford"),
+        std::make_tuple(2, "welford"),
+        std::make_tuple(1, "welford_two_pass"),
+        std::make_tuple(2, "welford_two_pass")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
