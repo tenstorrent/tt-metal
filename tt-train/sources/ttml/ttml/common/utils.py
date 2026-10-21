@@ -376,15 +376,17 @@ class no_grad:
 
 @contextmanager
 def run_mode(module, mode: "ttml.modules.RunMode"):
-    """Temporarily set ``module`` (and all its submodules) to ``mode``, restoring the previous mode on exit.
+    """Temporarily set ``module`` (and all its submodules) to ``mode``, restoring each one's previous mode on exit.
 
     Usage:
         with run_mode(model, RunMode.EVAL), no_grad():
             # dropout off, no graph building; previous mode restored afterwards
     """
-    prev = module.get_run_mode()
+    prev = [(m, m.get_run_mode()) for m in module.modules()]
     module.set_run_mode(mode)
     try:
         yield module
     finally:
-        module.set_run_mode(prev)
+        # modules() yields parents first, so each child's restore overrides its parent's recursive one.
+        for m, m_mode in prev:
+            m.set_run_mode(m_mode)
