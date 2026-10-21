@@ -45,6 +45,7 @@ from helpers.sfpu_domains import (
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
+    swept_unary_ops,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
@@ -117,7 +118,7 @@ BROAD_SWEEP_OPS = [
 # ops sfpu_domains marks as deliberately unswept. Sorted so the parametrize ids are stable
 # across runs.
 STANDARD_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(BROAD_SWEEP_OPS) - set(_UNARY_OPS_NOT_SWEPT),
+    swept_unary_ops() - set(BROAD_SWEEP_OPS),
     key=lambda op: op.name,
 )
 
@@ -346,9 +347,7 @@ def test_eltwise_unary_sfpu(
 # what varies is whether specials can be injected, which specials_safe() decides per
 # (input, output, dest_acc).
 
-_EDGE_SWEEP_OPS = sorted(
-    sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
-)
+_EDGE_SWEEP_OPS = sorted(swept_unary_ops(), key=lambda o: o.name)
 
 # What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
 # still executes and reports XPASS if the behaviour changes.
@@ -728,7 +727,7 @@ def _int_unary_stimuli_spec(mathop):
     if not edges:
         raise AssertionError(
             f"{mathop.name} has no op_edge_points() entry, so the int sweep cannot probe "
-            "its comparison scalar — add one in sfpu_domains._OP_EDGE_POINTS"
+            "its comparison scalar — add one in sfpu_domains._OP_EDGES"
         )
     straddle = [float(v + d) for v in edges for d in (-1, 0, 1)]
     # Positive-only keeps signed and unsigned interpretations identical (safe under
@@ -1298,7 +1297,7 @@ def _threshold_op_stimuli_spec(mathop):
     if threshold is None:
         raise AssertionError(
             f"{mathop.name} has no op_threshold() entry, so the threshold sweep cannot "
-            "land on its comparison threshold — add one in sfpu_domains._OP_COMPARISON_THRESHOLD"
+            "land on its comparison threshold — add one in sfpu_domains._OP_EDGES"
         )
 
     def dist(size, dtype, generator):

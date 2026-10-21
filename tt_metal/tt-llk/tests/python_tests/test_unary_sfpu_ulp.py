@@ -26,7 +26,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import accuracy_contract, domains_of, enrolled_ops
-from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops, unpacks_to_dest
+from helpers.sfpu_domains import swept_unary_ops, unpacks_to_dest
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -136,8 +136,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
 def _sweep_ops():
     """Every unary op with a row in the table, gating or emitting: the row is the
     enrolment, and an op without one has nowhere to be written."""
-    unary = set(sfpu_unary_ops()) - set(_UNARY_OPS_NOT_SWEPT)
-    return sorted(set(enrolled_ops()) & unary, key=lambda op: op.name)
+    return sorted(set(enrolled_ops()) & swept_unary_ops(), key=lambda op: op.name)
 
 
 def _skip_measured(cell, why):
