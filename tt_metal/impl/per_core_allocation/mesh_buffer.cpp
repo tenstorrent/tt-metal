@@ -10,7 +10,6 @@
 #include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/allocator/allocator.hpp"
-#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <algorithm>
 #include <limits>
 #include <unordered_set>
@@ -18,7 +17,8 @@
 namespace tt::tt_metal::experimental::per_core_allocation {
 
 namespace {
-std::vector<CoreCoord> shard_cores(const BufferShardingArgs& args) {
+// Return the cores carrying this tensor's data.
+std::vector<CoreCoord> tensor_cores(const BufferShardingArgs& args) {
     if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
         return distribution->cores_with_data();
     }
@@ -33,66 +33,21 @@ uint32_t l1_tensor_allocation_alignment(const IDevice& device) {
     return config.allocator_mode == AllocatorMode::HYBRID ? config.dram_alignment : config.l1_alignment;
 }
 
-std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
-    const distributed::MeshBuffer& buffer, const std::vector<distributed::MeshCoordinate>& coords) {
-    TT_FATAL(buffer.is_allocated(), "Cannot inspect deallocated L1 storage");
-    auto mesh = buffer.mesh_device_.lock();
-    TT_FATAL(mesh != nullptr, "L1 owner MeshDevice is closed");
-    const bool owned = std::holds_alternative<distributed::MeshBuffer::OwnedBufferState>(buffer.state_);
-    std::vector<L1TensorExtent> result;
-    for (const auto& coord : coords) {
-        TT_FATAL(mesh->impl().is_local(coord), "L1 owner device must be local");
-        const auto* local = buffer.get_device_buffer(coord);
-        TT_FATAL(local != nullptr && local->is_l1(), "L1 owner requires live L1 storage");
-        const auto& allocator = local->impl().allocator_;
-        const bool independent = is_per_core_allocation(*local);
-        const bool range = range_lockstep_allocation::is_range_lockstep_allocation(*local);
-        std::vector<CoreCoord> cores;
-        if (owned && !independent && !range) {
-            std::unordered_set<CoreCoord> seen;
-            for (uint32_t bank = 0; bank < allocator->get_num_banks(BufferType::L1); ++bank) {
-                auto core = allocator->get_logical_core_from_bank_id(bank);
-                if (seen.insert(core).second) {
-                    cores.push_back(core);
-                }
-            }
-        } else {
-            cores = shard_cores(buffer.device_local_config_.sharding_args);
-        }
-        DeviceAddr size = local->aligned_size_per_bank();
-        if (owned || local->impl().owns_data_) {
-            // Match the existing bank manager's reservation alignment without changing its API.
-            const auto& config = allocator->get_config();
-            const auto alignment =
-                config.allocator_mode == AllocatorMode::HYBRID ? config.dram_alignment : config.l1_alignment;
-            size = detail::calculate_bank_size_spread(
-                local->aligned_size(),
-                local->aligned_page_size(),
-                local->num_cores().value_or(allocator->get_num_banks(BufferType::L1)),
-                alignment);
-        }
-        for (const auto& core : cores) {
-            result.push_back({coord, core, get_shard_base_address(*local, core), size});
-        }
-    }
-    return result;
-}
-
 std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
-    const std::vector<L1TensorViewPlacement>& placements) {
+    const std::vector<SRAMTensorViewAddress>& placements) {
     TT_FATAL(local_config.buffer_type == BufferType::L1, "L1 view requires L1 memory");
     TT_FATAL(is_sharded(local_config.sharding_args.buffer_layout()), "L1 view requires sharded memory");
-    const auto cores = shard_cores(local_config.sharding_args);
+    const auto cores = tensor_cores(local_config.sharding_args);
     TT_FATAL(!cores.empty(), "L1 view shard grid is empty");
     std::vector<distributed::MeshCoordinate> coords;
     std::unordered_set<distributed::MeshCoordinate> seen;
-    for (const auto& placement : placements) {
-        TT_FATAL(mesh.impl().is_local(placement.device_coord), "L1 view device must be local");
-        if (seen.insert(placement.device_coord).second) {
-            coords.push_back(placement.device_coord);
+    for (const auto& [location, address] : placements) {
+        TT_FATAL(mesh.impl().is_local(location.device_coord), "L1 view device must be local");
+        if (seen.insert(location.device_coord).second) {
+            coords.push_back(location.device_coord);
         }
     }
     TT_FATAL(
@@ -106,11 +61,11 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
         new distributed::MeshBuffer(mesh_config, local_config, 0, replicated->size, &mesh));
     for (const auto& coord : coords) {
         std::unordered_map<CoreCoord, DeviceAddr> addresses;
-        for (const auto& placement : placements) {
-            if (placement.device_coord != coord) {
+        for (const auto& [location, address] : placements) {
+            if (location.device_coord != coord) {
                 continue;
             }
-            TT_FATAL(addresses.emplace(placement.core_coord, placement.address).second, "Duplicate L1 view placement");
+            TT_FATAL(addresses.emplace(location.core_coord, address).second, "Duplicate L1 view placement");
         }
         TT_FATAL(addresses.size() == cores.size(), "L1 view requires complete shard coverage");
         for (const auto& core : cores) {
@@ -125,21 +80,19 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
             local_config.sharding_args,
             local_config.bottom_up,
             local_config.sub_device_id);
-        for (const auto& placement : placements) {
-            if (placement.device_coord != coord) {
+        for (const auto& [location, address] : placements) {
+            if (location.device_coord != coord) {
                 continue;
             }
-            TT_FATAL(addresses.at(placement.core_coord) % local->alignment() == 0, "L1 view address must be aligned");
+            TT_FATAL(address % local->alignment() == 0, "L1 view address must be aligned");
             TT_FATAL(
-                placement.address <= std::numeric_limits<DeviceAddr>::max() - local->aligned_size_per_bank(),
+                address <= std::numeric_limits<DeviceAddr>::max() - local->aligned_size_per_bank(),
                 "L1 view address overflows");
             if (!per_core) {
                 if (!lockstep_address.has_value()) {
-                    lockstep_address = addresses.at(placement.core_coord);
+                    lockstep_address = address;
                 }
-                TT_FATAL(
-                    addresses.at(placement.core_coord) == *lockstep_address,
-                    "Lockstep tensor view requires one address on every shard");
+                TT_FATAL(address == *lockstep_address, "Lockstep tensor view requires one address on every shard");
             }
         }
         if (per_core) {

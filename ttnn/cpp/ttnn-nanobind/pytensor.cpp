@@ -25,6 +25,7 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
@@ -70,8 +71,7 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
-using tt::tt_metal::experimental::per_core_allocation::L1TensorExtent;
-using tt::tt_metal::experimental::per_core_allocation::L1TensorViewPlacement;
+using tt::tt_metal::experimental::per_core_allocation::SRAMTensorViewAddress;
 
 struct L1TensorGeometry {
     DeviceAddr packed_size, page_size, aligned_shard_size, allocation_shard_size;
@@ -436,16 +436,6 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void pytensor_module_types(nb::module_& mod) {
-    nb::class_<L1TensorExtent>(mod, "L1TensorExtent", "Physical half-open L1 owner extent on one device/core.")
-        .def_ro("device_coord", &L1TensorExtent::device_coord)
-        .def_ro("core_coord", &L1TensorExtent::core_coord)
-        .def_ro("address", &L1TensorExtent::address)
-        .def_ro("size", &L1TensorExtent::size);
-    nb::class_<L1TensorViewPlacement>(mod, "L1TensorViewPlacement", "Absolute non-owning address on one device/core.")
-        .def(nb::init<distributed::MeshCoordinate, CoreCoord, DeviceAddr>())
-        .def_ro("device_coord", &L1TensorViewPlacement::device_coord)
-        .def_ro("core_coord", &L1TensorViewPlacement::core_coord)
-        .def_ro("address", &L1TensorViewPlacement::address);
     nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Logical shard footprint and physical allocator alignment.")
         .def_ro("packed_size", &L1TensorGeometry::packed_size)
         .def_ro("page_size", &L1TensorGeometry::page_size)
@@ -535,20 +525,10 @@ void pytensor_module(nb::module_& mod) {
         nb::arg("tensor_spec"),
         "Return Metal-derived L1 page, shard and allocation geometry without allocating.");
     mod.def(
-        "experimental_l1_tensor_owned_extents",
-        [](const Tensor& tensor) {
-            TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "L1 owner must be a device tensor");
-            const auto& storage = tensor.device_storage();
-            return tt::tt_metal::experimental::per_core_allocation::get_l1_tensor_owner_extents(
-                storage.get_mesh_buffer(), {storage.get_coords().begin(), storage.get_coords().end()});
-        },
-        nb::arg("tensor"),
-        "Return exact physical L1 owner extents; views expose only their logical bytes.");
-    mod.def(
         "experimental_create_l1_tensor_view",
         [](distributed::MeshDevice& mesh,
            const TensorSpec& spec,
-           const std::vector<L1TensorViewPlacement>& placements) {
+           const std::vector<SRAMTensorViewAddress>& placements) {
             auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_tensor_view(
                 mesh,
                 tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
@@ -559,9 +539,9 @@ void pytensor_module(nb::module_& mod) {
                 placements);
             std::vector<distributed::MeshCoordinate> coords;
             std::unordered_set<distributed::MeshCoordinate> seen;
-            for (const auto& placement : placements) {
-                if (seen.insert(placement.device_coord).second) {
-                    coords.push_back(placement.device_coord);
+            for (const auto& [location, address] : placements) {
+                if (seen.insert(location.device_coord).second) {
+                    coords.push_back(location.device_coord);
                 }
             }
             TensorTopology topology(
