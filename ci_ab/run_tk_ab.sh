@@ -17,7 +17,7 @@ nopkg=0; while read -r rel; do [[ -f $RT/$rel ]] || { nopkg=$((nopkg+1)); echo "
 echo "OPS FILES $(wc -l < $S/files_ops.txt) files, $nopkg without a package copy, runtime root $RT"
 use() {
   while read -r rel; do
-    cp "$S/variants/${2%2}/$rel" "/work/$rel"; [[ -f $RT/$rel ]] && cp "$S/variants/${2%2}/$rel" "$RT/$rel"
+    cp "$S/variants/${2%2}/$rel" "/work/$rel"; { [[ -f $RT/$rel || -d $(dirname $RT/$rel) ]] && cp "$S/variants/${2%2}/$rel" "$RT/$rel"; }
   done < $S/files_ops.txt
   echo "OPS USE $1 $(while read -r rel; do cat /work/$rel; done < $S/files_ops.txt | md5sum | cut -c1-8) $(while read -r rel; do [[ -f $RT/$rel ]] && cat $RT/$rel; done < $S/files_ops.txt | md5sum | cut -c1-8)"
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE

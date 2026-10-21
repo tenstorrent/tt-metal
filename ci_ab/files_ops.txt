@@ -13,3 +13,4 @@ ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs
 ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp
 ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp
 ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_common.hpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_fused_raw16.hpp
