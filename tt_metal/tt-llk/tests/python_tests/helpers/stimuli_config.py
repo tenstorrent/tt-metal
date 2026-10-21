@@ -24,6 +24,7 @@ from .pack import (
     pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
+    pack_int4,
     pack_int8,
     pack_int16,
     pack_int32,
@@ -33,6 +34,7 @@ from .pack import (
     pack_mxint2,
     pack_mxint4,
     pack_mxint8,
+    pack_uint4,
     pack_uint8,
     pack_uint16,
     pack_uint32,
@@ -185,18 +187,19 @@ class StimuliConfig:
             self._operand_tile_size_bytes(name),
             self.num_faces,
             self.face_r_dim,
-            location,
         )
         if dense:
             StimuliConfig.write_matrix_w_tile_dimensions(
                 *common_args,
                 self.tile_dimensions,
+                location,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
             )
         else:
             StimuliConfig.write_matrix(
                 *common_args,
+                location,
                 self.write_full_tiles,
                 use_srcs=self._operand_use_srcs(name),
                 twos_complement=self.twos_complement,
@@ -413,6 +416,8 @@ class StimuliConfig:
             DataFormat.UInt16: pack_uint16,
             DataFormat.Int8: pack_int8,
             DataFormat.UInt8: pack_uint8,
+            DataFormat.Int4: pack_int4,
+            DataFormat.UInt4: pack_uint4,
         }
         return packers.get(data_format)
 

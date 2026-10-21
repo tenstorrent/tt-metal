@@ -41,6 +41,12 @@ _INTEGER_FORMAT_DTYPE: Dict[DataFormat, torch.dtype] = {
     DataFormat.UInt32: torch.uint32,
 }
 
+# 4-bit formats have no torch dtype of their own. Int4 is sign-magnitude, so -8 has no encoding.
+_SUB_BYTE_INTEGER_BOUNDS: Dict[DataFormat, tuple[int, int]] = {
+    DataFormat.Int4: (-7, 7),
+    DataFormat.UInt4: (0, 15),
+}
+
 
 def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     """Return the valid integer range (min, max) inclusive for *stimuli_format*.
@@ -49,6 +55,8 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     integer paths use sign-magnitude encoding, and the INT_MIN bit pattern cannot
     be represented correctly in that scheme.
     """
+    if stimuli_format in _SUB_BYTE_INTEGER_BOUNDS:
+        return _SUB_BYTE_INTEGER_BOUNDS[stimuli_format]
     if stimuli_format not in _INTEGER_FORMAT_DTYPE:
         raise ValueError(f"Unsupported integer format: {stimuli_format}")
 

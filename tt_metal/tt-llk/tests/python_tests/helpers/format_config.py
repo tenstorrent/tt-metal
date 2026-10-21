@@ -66,6 +66,12 @@ class DataFormat(Enum):
     UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
     Int8 = DataFormatInfo("Int8", 1)
     UInt8 = DataFormatInfo("UInt8", 1)
+    Int4 = DataFormatInfo(
+        "Int4", Fraction(1, 2)
+    )  # QSR specific - sign-magnitude S1.3, 2 per byte; L1-only, unpacks to Int8
+    UInt4 = DataFormatInfo(
+        "UInt4", Fraction(1, 2)
+    )  # QSR specific - 4-bit unsigned, 2 per byte; L1-only, unpacks to UInt8
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
     MxFp4 = DataFormatInfo(
@@ -118,6 +124,8 @@ class DataFormat(Enum):
             DataFormat.UInt16,
             DataFormat.Int8,
             DataFormat.UInt8,
+            DataFormat.Int4,
+            DataFormat.UInt4,
         }
 
     def needs_int8_math_config(self) -> bool:
@@ -684,6 +692,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,
+    DataFormat.Int4: 23,
+    DataFormat.UInt4: 25,
     DataFormat.UInt16: 130,
     DataFormat.Int16: 9,
 }
