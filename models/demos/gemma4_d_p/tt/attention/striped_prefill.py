@@ -7,7 +7,36 @@ import ttnn
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_prefill_program_config, ring_sdpa_chunk_sizes
 
 
-def striped_prefill_attention(attention, q, k, v, requests, compute_config):
+def striped_prefill_program_config(attention, length, num_heads, cache_rows):
+    mesh, ccl = attention.mesh_config, attention.ccl_manager
+    global_attention = not attention.config.is_sliding
+    local_length = length // mesh.cp_degree
+    q_chunk = next(size for size in (128, 64, 32) if local_length % size == 0)
+    k_chunk = next(size for size in ((256, 128, 64, 32) if global_attention else (32,)) if cache_rows % size == 0)
+    grid = ccl.compute_grid_size
+    num_cores = (grid.x - 1) * grid.y
+    splits = 3 if num_heads * (local_length // q_chunk) * 3 <= num_cores else 1
+    segmented = False
+    # Keep ragged slabs on divisor-Q tuning; legacy's policy is validated on 128-row-aligned slabs.
+    if global_attention and local_length % 128 == 0:
+        q_chunk, _, splits, segmented = ring_sdpa_chunk_sizes(
+            local_length, sliding=False, num_heads=num_heads, num_cores=num_cores
+        )
+    return ring_prefill_program_config(
+        mesh.device,
+        ccl,
+        attention.config.head_dim,
+        q_chunk,
+        k_chunk,
+        max_k_splits=splits,
+        matmul_math_fidelity=ttnn.MathFidelity.LoFi if global_attention else ttnn.MathFidelity.HiFi2,
+        segmented_accumulation=segmented,
+    )
+
+
+def striped_prefill_attention(
+    attention, q, k, v, requests, compute_config, *, output_tensor=None, stats_tensor=None, program_configs=None
+):
     mesh, ccl = attention.mesh_config, attention.ccl_manager
     cache = attention.ring_kv_cache
     global_attention = not attention.config.is_sliding
@@ -17,13 +46,17 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
     allocate_output = (
         ttnn.empty_like if sum(length for length, _ in requests) == q.shape[2] * mesh.cp_degree else ttnn.zeros_like
     )
-    output = allocate_output(q, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    stats = ttnn.empty(
-        (q.shape[0], q.shape[1], 2 * max(length for length, _ in requests) // mesh.cp_degree, 1),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh.device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    output = output_tensor if output_tensor is not None else allocate_output(q, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    stats = (
+        stats_tensor
+        if stats_tensor is not None
+        else ttnn.empty(
+            (q.shape[0], q.shape[1], 2 * max(length for length, _ in requests) // mesh.cp_degree, 1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     )
     for length, metadata in requests:
         local_length = length // mesh.cp_degree
@@ -40,28 +73,10 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
                 cluster_axis=mesh.cp_axis,
             )
 
-        q_chunk = next(size for size in (128, 64, 32) if local_length % size == 0)
-        k_chunk = next(
-            size for size in ((256, 128, 64, 32) if global_attention else (32,)) if cache_k.shape[2] % size == 0
-        )
-        grid = ccl.compute_grid_size
-        num_cores = (grid.x - 1) * grid.y
-        splits = 3 if q.shape[1] * (local_length // q_chunk) * 3 <= num_cores else 1
-        segmented = False
-        # Keep ragged slabs on divisor-Q tuning; legacy's policy is validated on 128-row-aligned slabs.
-        if global_attention and local_length % 128 == 0:
-            q_chunk, _, splits, segmented = ring_sdpa_chunk_sizes(
-                local_length, sliding=False, num_heads=q.shape[1], num_cores=num_cores
-            )
-        config = ring_prefill_program_config(
-            mesh.device,
-            ccl,
-            attention.config.head_dim,
-            q_chunk,
-            k_chunk,
-            max_k_splits=splits,
-            matmul_math_fidelity=ttnn.MathFidelity.LoFi if global_attention else ttnn.MathFidelity.HiFi2,
-            segmented_accumulation=segmented,
+        config = (
+            program_configs[length]
+            if program_configs is not None
+            else striped_prefill_program_config(attention, length, q.shape[1], cache_k.shape[2])
         )
         key = "striped_global" if global_attention else "striped_sliding_k"
         gather_k = ccl.get_ring_gather_buffer(
@@ -116,7 +131,8 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
             kv_cache_layer_idx=attention.ring_layer_idx,
             **sliding_args,
         )
-    stats.deallocate(True)
+    if stats_tensor is None:
+        stats.deallocate(True)
     if keys is not k:
         keys.deallocate(True)
     if values is not None and values is not v:

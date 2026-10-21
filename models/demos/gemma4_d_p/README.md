@@ -80,6 +80,28 @@ The packed runner shares projection and MLP work across requests, with stripe=32
 
 Request lengths and tuning remain fixed per trace layout. The host `prefill_lengths` must match the staged descriptor spans; changing lengths selects another trace. Updating slots, prefixes, or offsets does not change the compiled configuration. Inactive entries are reserved for future dynamic-count support and are not dispatched.
 
+`tt/hybrid_prefill.py::Gemma4HybridPrefill` provides a separate model-level path with two traces per layer and eager per-request KV updates/SDPA between them. The first trace includes normalization, projection, RoPE, and conversion into the cache dtype. The second includes output projection, TP reduction, residuals, and the MLP. Embedding and shared RoPE lookup are captured in the first layer's first trace; the final TP gather is captured in the last layer's second trace. The prefill runner continues to use its existing full-model traces.
+
+The hybrid path fixes the total chunk capacity while allowing request count, spans, prefixes, and slots to change without recapture. It chooses the existing tuning by request span and attention type on the host, and caches those choices. SDPA programs compile on first use of a variant; warm the intended layouts before measuring steady-state latency. Metal checks newly loaded kernel binaries against every live trace's DRAM footprint and rejects overlaps before upload. Calls are enqueued on CQ0 without synchronization between layers.
+
+The caller owns the token and RoPE-position buffers and updates their contents, together with `model.packed_prefill_metadata`, before `hybrid.run()`. Their addresses must remain fixed. Call `hybrid.capture()` once after staging the initial batch, and `hybrid.close()` before closing the device. `run(blocking=False)` returns an owned output buffer that the next run overwrites. Shared DRAM boundary buffers keep trace inputs alive independently of eager allocation; projection and residual results are copied into those buffers inside the traces. The full packed attention output is cleared on every replay to handle changing unused capacity.
+
+The full-model hybrid sanity changes from one full-chunk request to five mixed requests and then two partial requests, including rotated prefixes, while reusing the same 120 traces:
+
+```bash
+HF_MODEL=google/gemma-4-31B-it \
+HF_HOME=/mnt/models/huggingface \
+TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it \
+HF_HUB_OFFLINE=1 \
+pytest 'models/demos/gemma4_d_p/demo/hybrid_prefill.py::test_prefill_hybrid_traced[blackhole-8x4]' -sv
+```
+
+The default total chunk is 8192; set `GEMMA4_HYBRID_CHUNK_SIZE=4096` for 4k. The numerical hybrid test uses two synthetic layers and checks changed request layouts, cache continuation at rotated prefixes, partial requests, and reuse of compiled programs:
+
+```bash
+pytest 'models/demos/gemma4_d_p/tests/test_hybrid_prefill.py::test_hybrid_prefill_layout_changes[blackhole-8x4]' -sv
+```
+
 The full-model packed sanity test uses five requests totaling 4096 tokens with fixed, nonzero rotated prefixes:
 
 ```bash

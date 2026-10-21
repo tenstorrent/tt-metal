@@ -128,6 +128,16 @@ class Gemma4DecoderLayer:
             packed_sliding_rope=packed_sliding_rope,
         )
 
+        return self.finish_attention(residual, attn_output)
+
+    def prepare_attention(self, hidden_states, packed_global_rope=None, packed_sliding_rope=None):
+        normed = self.input_layernorm.forward(hidden_states)
+        normed = self._gather_rows(normed)
+        return self.self_attn.project(normed, packed_global_rope, packed_sliding_rope)
+
+    def finish_attention(self, hidden_states, attn_output, *, preserve_input=False):
+        input_residual = hidden_states
+        residual = hidden_states
         act_mc = prefill_short_lived_memcfg()
         # The residual stream stays in the norms' block-sharded layout from here to the next layer's input norm, so
         # the norms and adds skip their reshards.
@@ -136,10 +146,12 @@ class Gemma4DecoderLayer:
         attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=out_mc)
         if shard_mc is not None and residual.memory_config() != shard_mc:
             sharded_residual = ttnn.to_memory_config(residual, shard_mc)
-            residual.deallocate(True)
+            if not preserve_input:
+                residual.deallocate(True)
             residual = sharded_residual
         hidden_states = ttnn.add(residual, attn_output, memory_config=out_mc)
-        residual.deallocate(True)
+        if residual is not input_residual or not preserve_input:
+            residual.deallocate(True)
         attn_output.deallocate(True)
 
         # 2. Dense MLP block

@@ -120,20 +120,16 @@ class Gemma4Attention:
                 )
             self.ring_max_seq_len = max_seq_len
 
-    def __call__(
+    def project(
         self,
         hidden_states,
-        prefill_metadata,
-        chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
-        prefill_batch=None,
     ):
-        """Project the full token batch, then attend each request's cached prefix."""
+        """Project and position the full token batch; consumes hidden_states."""
         if self.ring_kv_cache is None:
             raise ValueError("Galaxy prefill requires a ring KV cache")
         tp = self.mesh_config.tp_degree
-        chunk_offset = int(chunk_start_idx)
         kv_tied = self.config.is_kv_tied
         xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied)
         hidden_states.deallocate(True)
@@ -215,9 +211,7 @@ class Gemma4Attention:
                 k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
             )
             k_unrotated.deallocate(True)
-        sliding_window_size = self.config.sliding_window_size
         if is_global:
-            packed_q = tt_q
             packed_kv = pack_global_kv_device(
                 tt_v,
                 self.weights.k_norm_rotary_weight,
@@ -226,14 +220,21 @@ class Gemma4Attention:
                 value_is_packed=True,
                 memory_config=act_mc,
             )
-        else:
-            packed_q = None
+            if tt_k is not None:
+                tt_k.deallocate(True)
+            tt_v.deallocate(True)
+            return tt_q, packed_kv, None
+        return tt_q, tt_k, tt_v
 
+    def attend(self, tt_q, tt_k, tt_v, prefill_metadata, chunk_start_idx=0, prefill_batch=None):
+        is_global = not self.config.is_sliding
+        chunk_offset = int(chunk_start_idx)
+        sliding_window_size = self.config.sliding_window_size
         if prefill_batch is None:
             if is_global:
                 write_chunk_to_global_ring_cache(
                     self.ring_kv_cache.kv,
-                    packed_kv,
+                    tt_k,
                     self.mesh_config,
                     kv_actual_global=chunk_offset,
                     layer_idx=self.ring_layer_idx,
@@ -260,18 +261,16 @@ class Gemma4Attention:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-        num_local_kv_heads_ring = tt_v.shape[1]
+        num_local_kv_heads_ring = tt_k.shape[1]
         ring_logical_n = self.ring_max_seq_len
         if prefill_batch is not None:
             from models.demos.gemma4_d_p.tt.attention.striped_prefill import striped_prefill_attention
 
-            tt_sdpa = striped_prefill_attention(
-                self, tt_q, packed_kv if is_global else tt_k, tt_v, prefill_batch, sdpa_compute_config
-            )
+            tt_sdpa = striped_prefill_attention(self, tt_q, tt_k, tt_v, prefill_batch, sdpa_compute_config)
         else:
             if is_global:
                 tt_sdpa = global_ring_prefill_attention(
-                    packed_q,
+                    tt_q,
                     self.ring_kv_cache.kv,
                     mesh_config=self.mesh_config,
                     prefill_metadata=prefill_metadata,
@@ -305,13 +304,9 @@ class Gemma4Attention:
                     layer_idx=self.ring_layer_idx,
                     num_layers=self.ring_num_layers,
                 )
-        if is_global:
-            packed_kv.deallocate(True)
-        tt_q.deallocate(True)
-        if tt_k is not None:
-            tt_k.deallocate(True)
-        tt_v.deallocate(True)
+        return tt_sdpa
 
+    def project_output(self, tt_sdpa):
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         projected = apply_output_projection(tt_out, self.weights)
@@ -319,3 +314,21 @@ class Gemma4Attention:
         tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
 
         return tt_out
+
+    def __call__(
+        self,
+        hidden_states,
+        prefill_metadata,
+        chunk_start_idx=0,
+        packed_global_rope=None,
+        packed_sliding_rope=None,
+        prefill_batch=None,
+    ):
+        q, k, v = self.project(hidden_states, packed_global_rope, packed_sliding_rope)
+        output = self.attend(q, k, v, prefill_metadata, chunk_start_idx, prefill_batch)
+        for tensor in (q, k, v):
+            if tensor is not None:
+                tensor.deallocate(True)
+        result = self.project_output(output)
+        output.deallocate(True)
+        return result

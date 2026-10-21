@@ -236,6 +236,21 @@ class Gemma4Model:
         """Set the CP-sharded absolute positions that the caller updates before each replay."""
         self._rope_prefill_positions = position_idx
 
+    def prefill_requests(self, prefill_lengths):
+        prefill_lengths = tuple(prefill_lengths)
+        if self.stripe_size is None:
+            raise ValueError("Packed prefill requires a striped model")
+        if not 1 <= len(prefill_lengths) <= len(self.request_metadata):
+            raise ValueError("Packed request count exceeds the model's metadata capacity or is empty")
+        quantum = self.mesh_config.cp_degree * self.stripe_size
+        if any(length <= 0 or length % quantum for length in prefill_lengths):
+            raise ValueError(f"Packed request lengths must be positive multiples of {quantum}")
+        if sum(prefill_lengths) > self.prefill_chunk_size:
+            raise ValueError("Packed request lengths exceed the model's chunk size")
+        if prefill_lengths != self.packed_prefill_metadata.layout:
+            raise ValueError("Packed request lengths must match the staged descriptor spans")
+        return tuple(zip(prefill_lengths, self.request_metadata))
+
     def __call__(
         self,
         hidden_states,
@@ -260,19 +275,7 @@ class Gemma4Model:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
         prefill_batch = None
         if prefill_lengths is not None:
-            prefill_lengths = tuple(prefill_lengths)
-            if self.stripe_size is None:
-                raise ValueError("Packed prefill requires a striped model")
-            if not 1 <= len(prefill_lengths) <= len(self.request_metadata):
-                raise ValueError("Packed request count exceeds the model's metadata capacity or is empty")
-            quantum = self.mesh_config.cp_degree * self.stripe_size
-            if any(length <= 0 or length % quantum for length in prefill_lengths):
-                raise ValueError(f"Packed request lengths must be positive multiples of {quantum}")
-            if sum(prefill_lengths) > self.prefill_chunk_size:
-                raise ValueError("Packed request lengths exceed the model's chunk size")
-            if prefill_lengths != self.packed_prefill_metadata.layout:
-                raise ValueError("Packed request lengths must match the staged descriptor spans")
-            prefill_batch = tuple(zip(prefill_lengths, self.request_metadata))
+            prefill_batch = self.prefill_requests(prefill_lengths)
         elif not self._prefill_metadata_external:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 

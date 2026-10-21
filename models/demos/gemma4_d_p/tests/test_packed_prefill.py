@@ -21,20 +21,15 @@ from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-def _natural_output(runtime):
-    tensors = ttnn.get_device_tensors(runtime.output)
+def _natural_output(output):
+    tensors = ttnn.get_device_tensors(output)
     rows = torch.stack([ttnn.to_torch(tensors[rank * 4]).float().squeeze(0).squeeze(0) for rank in range(8)])
     return rows.reshape(8, -1, 32, rows.shape[-1]).permute(1, 0, 2, 3).reshape(-1, rows.shape[-1])
 
 
-@torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 32 * 1024 * 1024})
-@pytest.mark.timeout(600)
-def test_packed_prefill_runner(mesh_device, monkeypatch):
+def synthetic_model_inputs():
     from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextModel
-
-    import models.demos.gemma4_d_p.tt.runners.runtime as runtime_module
 
     torch.manual_seed(771)
     torch.set_num_threads(8)
@@ -77,6 +72,16 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
         layer_types=tuple(config.layer_types),
     )
     args._hf_text_config = config
+    return args, state, reference
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 32 * 1024 * 1024})
+@pytest.mark.timeout(600)
+def test_packed_prefill_runner(mesh_device, monkeypatch):
+    import models.demos.gemma4_d_p.tt.runners.runtime as runtime_module
+
+    args, state, reference = synthetic_model_inputs()
     mesh = MeshConfig(mesh_device)
     caches = allocate_ring_kv_caches(mesh, args, num_users=6, max_seq_len=16384)
 
@@ -133,7 +138,7 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
                     runtime.trace_id == first_trace
                 ), "Same sizes must reuse the trace across different slots/prefixes"
             assert len(runtime.traces) <= 2
-            output = _natural_output(runtime)
+            output = _natural_output(runtime.output)
             offset = 0
             for segment in segments:
                 expected = reference(torch.tensor([histories[segment.slot_id]]), use_cache=False).last_hidden_state[0]
