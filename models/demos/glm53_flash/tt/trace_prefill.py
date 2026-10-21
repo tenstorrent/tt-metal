@@ -134,7 +134,14 @@ class PrefillSlot:
         # non-owner columns' ``cache_idx`` names the dummy row ``users_per_chip`` of the page tables instead)
         has_scratch = partition and dsa[0].cache.scratch is not None
         rm, i32 = ttnn.ROW_MAJOR_LAYOUT, ttnn.int32
-        cache_idx = _upload(mesh, torch.zeros(1, dtype=torch.int32), i32, rm, mapper=cls._cache_mapper(mesh, partition))
+        # one slot value per column when partitioned (the column-sharded upload needs ``cols`` chunks): user 0's
+        cache_idx = _upload(
+            mesh,
+            cls._cache_slots_host(partition, users_per_chip, mesh.cols, 0),
+            i32,
+            rm,
+            mapper=cls._cache_mapper(mesh, partition),
+        )
         scratch_idx = _upload(mesh, torch.tensor([users_per_chip], dtype=torch.int32), i32, rm) if has_scratch else None
         user_idx = _upload(mesh, torch.zeros(1, dtype=torch.int32), i32, rm)
         rec_pt, kda_zero, taps = None, None, 3
@@ -172,16 +179,18 @@ class PrefillSlot:
         mask[:, user, 0] = 1.0
         return mask, 1.0 - mask
 
-    def _cache_slots(self, user: int) -> torch.Tensor:
-        """The slot every column chip's fills write: the user's slot (non-partitioned), or its slot on the
-        owner column and the scratch slot / dummy row (``users_per_chip`` either way) elsewhere
+    @staticmethod
+    def _cache_slots_host(partition: bool, users_per_chip: int, cols: int, user: int) -> torch.Tensor:
+        """The slot every column chip's fills write: the user's slot (non-partitioned, [1]), or ([cols]) its slot on
+        the owner column and the scratch slot / dummy row (``users_per_chip`` either way) elsewhere
         (``TtLatentCache._prefill_views_for``)."""
-        if not self.partition:
+        if not partition:
             return torch.tensor([user], dtype=torch.int32)
-        owner, slot = divmod(user, self.users_per_chip)
-        return torch.tensor(
-            [slot if c == owner else self.users_per_chip for c in range(self.mesh.cols)], dtype=torch.int32
-        )
+        owner, slot = divmod(user, users_per_chip)
+        return torch.tensor([slot if c == owner else users_per_chip for c in range(cols)], dtype=torch.int32)
+
+    def _cache_slots(self, user: int) -> torch.Tensor:
+        return self._cache_slots_host(self.partition, self.users_per_chip, self.mesh.cols, user)
 
     def set_user(self, user: int):
         if not 0 <= user < self.max_batch:
