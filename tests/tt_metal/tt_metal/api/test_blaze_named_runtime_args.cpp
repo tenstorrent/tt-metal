@@ -726,6 +726,44 @@ TEST(RuntimeArgCountCacheHit, CPU_PaddedDispatchCapacityIsNotTheLogicalCount) {
     EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], 9u);
 }
 
+TEST(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
+    // Two equal-length entries for one core are legal; growing only the first must still be rejected.
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{0, 1};
+    const std::vector<uint32_t> core0_args{1u, 2u, 3u, 4u};
+    const std::vector<uint32_t> core1_args{5u, 6u, 7u, 8u};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+            .runtime_args = {{core0, core0_args}, {core0, core0_args}, {core1, core1_args}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), 4u);
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), 4u);
+
+    ProgramDescriptor grown = desc;
+    grown.kernels[0].runtime_args[0].second = {1u, 2u, 3u, 4u, 90u, 91u, 92u, 93u};
+    EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc), std::hash<ProgramDescriptor>{}(grown))
+        << "A duplicate core entry keeps the entry count, so the default hash is unchanged";
+    EXPECT_THROW(apply_descriptor_runtime_args(program, grown), std::runtime_error);
+    for (uint32_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[i], core0_args[i]);
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[i], core1_args[i]);
+    }
+
+    ProgramDescriptor same_count = desc;
+    same_count.kernels[0].runtime_args[0].second = {9u, 10u, 11u, 12u};
+    same_count.kernels[0].runtime_args[1].second = {13u, 14u, 15u, 16u};
+    same_count.kernels[0].runtime_args[2].second = {17u, 18u, 19u, 20u};
+    apply_descriptor_runtime_args(program, same_count);
+    for (uint32_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[i], same_count.kernels[0].runtime_args[1].second[i]);
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[i], same_count.kernels[0].runtime_args[2].second[i]);
+    }
+}
+
 TEST(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{0, 1};
