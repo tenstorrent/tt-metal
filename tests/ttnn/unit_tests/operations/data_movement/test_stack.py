@@ -20,6 +20,12 @@ from tests.ttnn.utils_for_testing import assert_equal
         ([(120, 1, 253, 3), (120, 1, 253, 3), (120, 1, 253, 3), (120, 1, 253, 3)], 3, ttnn.ROW_MAJOR_LAYOUT),
         ([(57, 83), (57, 83), (57, 83), (57, 83), (57, 83), (57, 83), (57, 83)], -1, ttnn.TILE_LAYOUT),
         ([(24, 50, 83), (24, 50, 83), (24, 50, 83), (24, 50, 83), (24, 50, 83), (24, 50, 83)], 2, ttnn.TILE_LAYOUT),
+        # Row-major stacks on a new trailing axis take the leading-axis concat plus permute route.
+        ([(13600,), (13600,), (13600,), (13600,)], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([(1444,)] * 8, -1, ttnn.ROW_MAJOR_LAYOUT),
+        ([(8732, 2), (8732, 2)], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([(1, 23, 40, 64), (1, 23, 40, 64)], 4, ttnn.ROW_MAJOR_LAYOUT),
+        ([(5, 7)], -1, ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 def test_stack(device, input_shapes, dim, layout):
