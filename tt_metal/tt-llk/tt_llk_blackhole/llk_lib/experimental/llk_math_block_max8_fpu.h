@@ -27,6 +27,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 #include "sfpu/experimental/ckernel_sfpu_block_max8.h"
@@ -37,8 +38,8 @@ namespace ckernel
 namespace block_max8_gmpool
 {
 
-// All-zero address modifier for the FPU instructions below, programmed by _llk_math_block_max8_fpu_init_.
-constexpr std::uint32_t ADDR_MOD = ADDR_MOD_3;
+// All-zero address modifier for the FPU instructions below: the SFPU init programs ADDR_MOD_7 to zero.
+constexpr std::uint32_t ADDR_MOD = ADDR_MOD_7;
 // Scores per block: each GMPOOL reduces this many transposed SrcB rows.
 constexpr std::uint32_t BLOCK_WIDTH = 8;
 // Output rows per tile. The odd-block maxima are gathered ODD_ROWS rows below the even-block maxima.
@@ -131,14 +132,13 @@ inline void gather_all(std::integer_sequence<std::uint32_t, P...>)
 } // namespace block_max8_gmpool
 
 /**
- * @brief Initialize SFPU state for masking and the final merge, plus the zero FPU address modifier.
+ * @brief Initialize SFPU state for masking and the final merge, including the all-zero ADDR_MOD_7 the FPU moves also use.
  *
  * @note Call before @ref _llk_math_block_max8_fpu_.
  */
 inline void _llk_math_block_max8_fpu_init_()
 {
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(block_max8_gmpool::ADDR_MOD);
 }
 
 /**
@@ -152,10 +152,16 @@ inline void _llk_math_block_max8_fpu_init_()
  * @param valid_scores: Length of the valid row-major prefix, from zero through 1024.
  * @note Call @ref _llk_math_block_max8_fpu_init_ first. The unpack thread must
  *       issue @ref _llk_unpack_block_max8_fpu_ for each call.
+ * @note SrcA and SrcB must be configured as Float16_b. The moves and GMPOOL read
+ *       them in their configured format, and Float16 gives wrong maxima.
  */
 inline void _llk_math_block_max8_fpu_(std::uint32_t dst_index, std::uint32_t valid_scores)
 {
     using namespace block_max8_gmpool;
+
+    LLK_ASSERT(
+        math::src_zero_flag_srca_fmt == to_underlying(DataFormat::Float16_b) && math::src_zero_flag_srcb_fmt == to_underlying(DataFormat::Float16_b),
+        "FPU block max8 requires Float16_b SrcA and SrcB");
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -167,7 +173,9 @@ inline void _llk_math_block_max8_fpu_(std::uint32_t dst_index, std::uint32_t val
     // MOVD2B does not wait for SrcB, and MOVB2A does not wait for SrcA. Drain math first so that a
     // pending SETRWC(CLR_AB) bank flip lands before the bank-validity check.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-    // Keep exponent-zero BF16 bit patterns intact through the moves, as transpose_dest does.
+    // Keep exponent-zero BF16 bit patterns intact through the moves, as transpose_dest does. Save the
+    // caller's flag first: a following matmul asserts the operand default, while a copy_init caller keeps it set.
+    const std::uint32_t saved_zero_flag = math::src_zero_flag_hw;
     math::_configure_preserve_zero_flag_state_();
 
     pool_all(std::make_integer_sequence<std::uint32_t, OUTPUT_ROWS> {});
@@ -180,6 +188,15 @@ inline void _llk_math_block_max8_fpu_(std::uint32_t dst_index, std::uint32_t val
     TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD, p_movb2d::MOV_4_ROWS, 12 /*dst*/);
     // SET_ABD also returns the DST row counter to zero for the SFPU pass below.
     TTI_SETRWC(p_setrwc::CLR_AB, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
+    // Restore the caller's flag so the next op needs no re-init. An unknown saved value stays unknown.
+    if (saved_zero_flag == 0xff)
+    {
+        math::_invalidate_src_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_src_zero_flag_(saved_zero_flag != 0);
+    }
 
     // Rows 0..7 hold even-block maxima in every lane; odd lanes (address + 2) come from rows 8..15.
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);

@@ -53,22 +53,50 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "sfpu/experimental/ckernel_sfpu_fill_negative_zero.h"
 
 /**
- * @brief Make a negative-zero bit pattern that leaks through the FPU path observable through the packer.
+ * @brief Make an exponent-zero result (-0.0 or a denormal) that leaks through the FPU path observable through the packer.
  *
- * GMPOOL flushes -0.0 to +0.0, so the host expects +0.0. This encodes an exact
- * -0.0 as -1 before packing, which otherwise canonicalizes zeros, so a leaked
- * -0.0 fails the check instead of passing as zero.
+ * GMPOOL flushes exponent-zero inputs to +0.0, so the host expects +0.0. The
+ * packer also flushes them, so this encodes every nonzero exponent-zero bit
+ * pattern as -1 before packing, and a leaked value fails the check instead of
+ * passing as zero.
  */
-inline void encode_negative_zero()
+inline void encode_exponent_zero()
 {
     for (std::uint32_t row = 0; row < 8; row += 4)
     {
         for (std::uint32_t parity = 0; parity < 2; ++parity)
         {
             sfpi::vFloat value = sfpi::dst_reg[row / 2 + parity];
-            v_if (sfpi::as<sfpi::vUInt>(value) == 0x80000000u)
+            v_if ((sfpi::as<sfpi::vUInt>(value) & 0x7F800000u) == 0u && sfpi::as<sfpi::vUInt>(value) != 0u)
             {
                 value = -1.0f;
+            }
+            v_endif;
+            sfpi::dst_reg[row / 2 + parity] = value;
+        }
+    }
+}
+
+/**
+ * @brief Replace the host markers 0.375 and -0.375 with BF16 denormals in the current DST tile.
+ *
+ * The unpack/datacopy path flushes denormal stimuli, so the host sends normal
+ * markers. 0.375 becomes 0x007F and -0.375 becomes 0x8001.
+ */
+inline void inject_denormals()
+{
+    for (std::uint32_t row = 0; row < TILE_NUM_FACES * FACE_R_DIM; row += 4)
+    {
+        for (std::uint32_t parity = 0; parity < 2; ++parity)
+        {
+            sfpi::vFloat value = sfpi::dst_reg[row / 2 + parity];
+            v_if (value == 0.375f)
+            {
+                value = sfpi::as<sfpi::vFloat>(sfpi::vUInt(0x007F0000u));
+            }
+            v_elseif (value == -0.375f)
+            {
+                value = sfpi::as<sfpi::vFloat>(sfpi::vUInt(0x80010000u));
             }
             v_endif;
             sfpi::dst_reg[row / 2 + parity] = value;
@@ -106,10 +134,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_math_eltwise_unary_sfpu_params_(sfpu::_calculate_fill_negative_zero_, dst_index, VectorMode::RC_custom);
             }
-            _llk_math_block_max8_fpu_(dst_index, params.VALID_SCORES);
-            if (params.INJECT_NEGATIVE_ZERO)
+            if (params.INJECT_DENORMAL)
             {
-                _llk_math_eltwise_unary_sfpu_params_(encode_negative_zero, dst_index, VectorMode::RC_custom);
+                _llk_math_eltwise_unary_sfpu_params_(inject_denormals, dst_index, VectorMode::RC_custom);
+            }
+            const std::uint32_t zero_flag = math::src_zero_flag_hw;
+            _llk_math_block_max8_fpu_(dst_index, params.VALID_SCORES);
+            // The next op (for example matmul, which asserts the operand default) must see the caller's zero flag.
+            LLK_ASSERT(math::src_zero_flag_hw == zero_flag, "FPU block max8 changed the Src zero flag");
+            if (params.INJECT_NEGATIVE_ZERO || params.INJECT_DENORMAL)
+            {
+                _llk_math_eltwise_unary_sfpu_params_(encode_exponent_zero, dst_index, VectorMode::RC_custom);
             }
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -20,6 +20,8 @@ namespace ckernel
  *
  * @note Call once per @ref _llk_math_block_max8_fpu_ call, after any unpack that
  *       the math thread consumes before it.
+ * @note Unpackers A and B must be configured to write Float16_b, which
+ *       @ref _llk_math_block_max8_fpu_ requires.
  */
 inline void _llk_unpack_block_max8_fpu_()
 {
@@ -39,7 +41,7 @@ inline void _llk_unpack_block_max8_fpu_()
         0 /*Stream_Id*/,
         0 /*Msg_Clr_Cnt*/,
         p_unpacr_nop::SET_DVALID,
-        0 /*Clr_to1_fmt_Ctrl*/,
+        p_unpacr::UNP_CLRSRC_ONE_FP16B,
         p_unpacr_nop::WAIT_LIKE_UNPACR,
         0 /*Bank_Clr_Ctrl*/,
         p_unpacr_nop::CLR_SRC_1,
