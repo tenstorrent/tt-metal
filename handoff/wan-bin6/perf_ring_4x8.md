@@ -65,32 +65,47 @@ Every frame range is 0–255 (not the flat grey of `main` on this hardware). The
 
 The PR runs are `main` plus the fix, not this branch: 8 banks, full-T VAE, no PR #60190. Both landed on `d07` hosts. Forcing 130 W on `d07u02` (run 39523036841) didn't change its speed, so those hosts run at 130 W by default. That was measured on `d07u02` only; `d07u08` matches it, so it is assumed to be the same.
 
-Seconds, lower is better.
+Runs and power limits:
 
-**T2V** ([run 39527173942](https://github.com/tenstorrent/tt-metal/actions/runs/39527173942), VAE targets 0.42 s at 480p and 0.85 s at 720p):
+| Run | Host | DRAM banks | VAE mode | Power limit |
+|---|---|---|---|---|
+| PR #61784 T2V ([run 39527173942](https://github.com/tenstorrent/tt-metal/actions/runs/39527173942)) | bh-glx-120-d07u08 | 8 | full-T | 130 W (`d07` default; measured on `d07u02`, assumed for `d07u08`) |
+| PR #61784 I2V ([run 39527176210](https://github.com/tenstorrent/tt-metal/actions/runs/39527176210)) | bh-glx-120-d07u02 | 8 | full-T | 130 W (`d07` default; forcing 130 W there changed nothing) |
+| this branch | bh-glx-120-b10u20 | 7 | chunk 7 | 130 W (`TT_METAL_TDP_LIMIT_WATTS=130`, all 32 chips confirmed) |
 
-| Run | Host | DRAM banks | VAE mode | Power limit | 480p denoise | 480p VAE | 480p total | 720p denoise | 720p VAE | 720p total |
-|---|---|---|---|---|---|---|---|---|---|---|
-| PR #61784 on CI | bh-glx-120-d07u08 | 8 | full-T | 130 W (host default) | 39.08 | 0.278 | 39.46 | 123.86 | 0.591 | 124.57 |
-| this branch | bh-glx-120-b10u20 | 7 | chunk 7 | 130 W | 40.99 | 0.492 | 41.56 | 128.41 | 1.006 | 129.49 |
-| **b10u20 minus CI** | | | | | **+1.91 (+4.9%)** | **+0.214** | **+2.10 (+5.3%)** | **+4.55 (+3.7%)** | **+0.415** | **+4.92 (+3.9%)** |
-| this branch | bh-glx-120-b10u20 | 7 | chunk 7 | 75 W (bh-mod override) | 55.75 | 0.523 | 56.34 | 154.97 | 1.096 | 156.14 |
+Seconds, lower is better. Difference = b10u20 minus CI.
 
-**I2V 720p** ([run 39527176210](https://github.com/tenstorrent/tt-metal/actions/runs/39527176210); the bh_sc1 I2V job runs 720p only; VAE target 0.85 s):
+**T2V 480p** (VAE target 0.42 s):
 
-| Run | Host | DRAM banks | VAE mode | Power limit | Text enc | Image enc | Denoise | VAE | Total |
-|---|---|---|---|---|---|---|---|---|---|
-| PR #61784 on CI | bh-glx-120-d07u02 | 8 | full-T | 130 W (host default) | 0.080 | 1.085 | 124.20 | 0.602 | 125.97 |
-| this branch | bh-glx-120-b10u20 | 7 | chunk 7 | 130 W | 0.062 | 0.954 | 128.63 | 1.009 | 130.66 |
-| **b10u20 minus CI** | | | | | −0.018 | −0.131 | **+4.43 (+3.6%)** | **+0.407** | **+4.69 (+3.7%)** |
-| this branch | bh-glx-120-b10u20 | 7 | chunk 7 | 75 W (bh-mod override) | 0.061 | 1.068 | 154.78 | 1.079 | 157.00 |
+| Stage | CI, d07u08, 130 W | b10u20, 130 W | Difference (s) | Difference (%) |
+|---|---|---|---|---|
+| Denoise | 39.08 | 40.99 | +1.91 | +4.9% |
+| VAE | 0.278 | 0.492 | +0.214 | +77% |
+| Total | 39.46 | 41.56 | +2.10 | +5.3% |
+
+**T2V 720p** (VAE target 0.85 s):
+
+| Stage | CI, d07u08, 130 W | b10u20, 130 W | Difference (s) | Difference (%) |
+|---|---|---|---|---|
+| Denoise | 123.86 | 128.41 | +4.55 | +3.7% |
+| VAE | 0.591 | 1.006 | +0.415 | +70% |
+| Total | 124.57 | 129.49 | +4.92 | +3.9% |
+
+**I2V 720p** (the bh_sc1 I2V job runs 720p only; VAE target 0.85 s):
+
+| Stage | CI, d07u02, 130 W | b10u20, 130 W | Difference (s) | Difference (%) |
+|---|---|---|---|---|
+| Image encode | 1.085 | 0.954 | −0.131 | −12% |
+| Denoise | 124.20 | 128.63 | +4.43 | +3.6% |
+| VAE | 0.602 | 1.009 | +0.407 | +68% |
+| Total | 125.97 | 130.66 | +4.69 | +3.7% |
 
 What this shows:
 
 1. **Denoise: b10u20 is 3.6–4.9% slower than an 8-bank CI Galaxy at the same 130 W,** consistently across T2V 480p, T2V 720p and I2V 720p. Power is ruled out. What's left is the missing DRAM bank, PR #60190's DRAM endpoints (which cost nothing on 8 banks, see below), or the machines themselves. Unharvesting b10u20 (`gddr/README.md`) would show which.
 2. **VAE: with the readback fixed, full-T is the same on both machines, and the chunking is the whole gap.** At 480p, CI's full-T (0.278 s) is within 0.02 s of b10u20's full-T at 130 W (0.299 s in the A/B below). b10u20's chunked decode is 0.21 s slower at 480p and 0.41 s slower at 720p. The 720p figure compares chunked on 7 banks with full-T on 8, because full-T runs out of memory on 7 banks (#59504). With the fix, CI meets both VAE targets. b10u20 misses both, only because it chunks.
 3. **Totals: b10u20 is 3.7–5.3% slower,** about 90% of it denoise.
-4. **Local b10u20 runs don't show #60670 even though b10u20 runs the same Weka pollers** (two `wekanode` threads at 100%). Full-T took 0.30–0.35 s here without the fix. Why is not known; one unverified guess is that CI's container and `mpirun` leave the job different CPUs. The b10u20 numbers in this file don't include PR #61784.
+4. **Local b10u20 runs don't show #60670 because Weka walls its poller cores off from everything else here.** `/etc/wekaio/service.conf` has `isolate_cpusets=true`, re-applied every 5 minutes. The two pollers are pinned to CPUs 1 and 2. Every other process, including a login shell and pytest, may only use `0,3-32,35-63`, which leaves out CPUs 1 and 2 and their SMT siblings 33 and 34. So none of pytest's 64 torch threads can share a core with a poller, and the OpenMP barriers in `_reassemble_2d` never wait on one. The CI job runs in a runner container whose CPU set apparently isn't covered by that isolation, so its threads do land on those cores. That last part is inferred from the slowdown and not checked on a CI host (a `grep Cpus_allowed_list /proc/self/status` in the job would show it). The b10u20 numbers in this file don't include PR #61784, and on this machine it shouldn't change them.
 
 ### Older CI runs, before the VAE readback fix
 
