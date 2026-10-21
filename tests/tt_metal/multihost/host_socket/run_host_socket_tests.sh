@@ -225,6 +225,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             -x TT_HOST_SOCKET_CSV_BURST -x TT_HOST_SOCKET_BURSTS -x TT_HOST_SOCKET_BURST_ITERS \
             -x TT_HOST_SOCKET_RING_CAP_BYTES -x TT_HOST_SOCKET_ACK_PAGE_SIZE \
             -x TT_HOST_SOCKET_L1_RING_BUDGET -x TT_H2D_DMA_DOORBELL -x TT_H2D_DMA_DEBUG \
+            -x TT_HOST_SOCKET_HOST_RING_PAGES -x TT_H2D_DMA_ASYNC -x TT_METAL_ALLOCATOR_MODE_HYBRID \
             -x OMPI_MCA_btl_tcp_if_include -x OMPI_MCA_oob_tcp_if_include \
             -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude "${MPI_X[@]}" \
             "$HERE/rank_env.sh" "$BIN" --gtest_filter="$filter" 2>&1 | tee "$log"

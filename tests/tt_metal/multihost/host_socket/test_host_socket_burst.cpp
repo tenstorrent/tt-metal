@@ -67,9 +67,8 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
     Params params = params_from_env(Params{.page_size = 14336, .fifo_pages = 64});
-    // HOST_DMA keeps the forward ring in L1 and HostMeshSocket adds a ring-sized
-    // receiver data buffer on top, so both must fit one bank alongside the ack ring.
-    fit_fifo_to_l1(params, 2, 0, false);
+    // HOST_DMA keeps the forward ring in L1, so it must fit one bank alongside the ack ring.
+    fit_fifo_to_l1(params, 1, 0, false);
     const uint32_t page_size = params.page_size;
     // The receiver mirrors D2D and allocates fifo_size of L1 as a landing buffer,
     // so the ring is capped in bytes; bursts that no longer fit are dropped.
@@ -100,6 +99,7 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
     fwd_transport.h2d_mode = env_h2d_mode();
     fwd_transport.page_size = page_size;
     fwd_transport.max_batch_pages = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_BATCH_PAGES", 0));
+    fwd_transport.host_ring_pages = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_HOST_RING_PAGES", 0));
     HostMeshSocket::TransportConfig rev_transport;
     rev_transport.h2d_mode = env_h2d_mode();
     rev_transport.page_size = ack_page_size;

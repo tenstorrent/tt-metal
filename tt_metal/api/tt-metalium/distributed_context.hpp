@@ -215,11 +215,7 @@ public:
         ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
 
     virtual void reduce(
-        ttsl::Span<std::byte> send_buf,
-        ttsl::Span<std::byte> recv_buf,
-        ReduceOp op,
-        DType dtype,
-        Rank root) const = 0;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const = 0;
 
     virtual void reduce_scatter(
         ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
@@ -264,6 +260,10 @@ public:
     //--- Message snooping -----------------------------------------------
     // Probe for an incoming message from 'source' with 'tag'. Return the size of the message in bytes
     virtual std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const = 0;
+    // Non-blocking form: the size of the next message from 'source' with 'tag' if one has
+    // arrived (its envelope is queued), nullopt otherwise. Repeated calls report the same
+    // message until a receive matches it.
+    virtual std::optional<std::size_t> try_snoop_incoming_msg_size(Rank source, Tag tag) const = 0;
 
     virtual ~DistributedContext() = default;
 

@@ -539,3 +539,113 @@ The 1.71 GB/s `DEVICE_PULL` figure is the deeper ring, not the faster leg. So on
 `HOST_DMA` buys nothing and costs L1 (which caps the ring, which caps the bandwidth), and
 `DEVICE_PULL` stays the default. It becomes interesting when the host hop is RDMA (§4) and
 the receiver core's NOC reads of host memory are what is left on the critical path.
+
+## 8. RDMA measurements (UCX over RoCE), 21 October 2026
+
+Everything in §7 went over the TCP-only ULFM MPI. The Galaxy nodes also carry the system OpenMPI
+4.1.2 with `pml ucx` / `osc ucx` over the 100 GbE RoCE port (`rocep201s0f0`), which is the MPI
+ctaylor's `D2H2H2DSocket` numbers come from. Built against it (`-DULFM_PREFIX=/nonexistent`;
+the host-socket test main no longer requires ULFM) and driven with
+`HOST_SOCKET_MPIRUN=/usr/bin/mpirun HOST_SOCKET_MPI_X="UCX_TLS UCX_NET_DEVICES OMPI_MCA_pml
+OMPI_MCA_osc OMPI_MCA_btl"`, `UCX_TLS=rc,sm,self UCX_NET_DEVICES=rocep201s0f0:1`, both sockets
+were measured on the same two hosts (`bh-glx-120-a04u02` + `a04u08`, x8 chip 5). Jobs 142244,
+142274, 142328, 142350, 142364, 142392 (this socket) and 142244 (ctaylor's
+`d2h2h2d_leg_benchmark`, per-rank CSV).
+
+Four changes were made along the way, all on this branch:
+
+- **Adaptive batching.** The relay forwards everything ready at each poll as one MPI message
+  up to the end of the ring (`max_batch_pages` 0 = no cap, the default), and the receiver
+  probes each arrived message's size (`DistributedContext::try_snoop_incoming_msg_size`,
+  `MPI_Iprobe`) and posts a receive of exactly that length, so any number of messages can be
+  outstanding on both sides. A lone page leaves at once; when the link falls behind, what
+  piled up leaves together. The relay's idle back-off sleeps at most 5 µs.
+- **HOST_DMA worker.** Commits queue to a per-socket thread that drives UMD's synchronous DMA
+  engine back to back, merging whatever queued while it was busy into one span, and rings the
+  doorbell after each span lands. The relay thread never blocks on the engine. HostMeshSocket no
+  longer allocates its duplicate D2D-shaped receiver buffer under HOST_DMA.
+- **Deep host rings.** `TransportConfig::host_ring_pages` (default 16 MiB worth) sizes the
+  pinned rings on both ends and the host hop's credit ring, independently of the socket's
+  `fifo_size`, which under HOST_DMA sizes only the L1 ring. The worker drains the staging ring
+  into L1 as the device frees room, and the host ring is released to the peer as it is drained,
+  so the sender runs a whole host ring ahead.
+- **Ring warm-up.** One whole-ring message at construction registers each ring with the NIC as a
+  single region. Without it UCX's registration cache merged every new page into the growing
+  region by re-registering it all, ~150 µs on every zero-copy message for the socket's lifetime
+  (176 µs per 14 KiB round trip; 26 µs with `UCX_IB_REG_METHODS=direct`). An RMA window over
+  the ring did not help: OpenMPI 4.1's one-sided component has its own UCX context and cache.
+
+### Steady-state bandwidth, 14336 B pages, 64-page L1 ring, 16 MiB host rings
+
+| sender cores | HostMeshSocket DEVICE_PULL | HostMeshSocket HOST_DMA | ctaylor D2H2H2D (ring 64) |
+|---|---|---|---|
+| 1 | 8.9 | 10.1 | 6.1 |
+| 2 | 10.7 | 11.2 | 8.9 |
+| 4 | 11.3 | 11.2 | — |
+| 8 | 11.8 | 11.4 | 10.8 |
+| 16 | — | — | 11.2 |
+
+GB/s of payload; the NIC's ceiling is ~12.1. Multi-core HOST_DMA rows use the hybrid allocator
+(`TT_METAL_ALLOCATOR_MODE_HYBRID=1`) so each core's L1 ring sits on that core alone; with the
+lockstep allocator the rings must be shrunk to share one bank's budget and the figure collapses
+(2 / 4 / 8 cores: 9.7 / 6.6 / 3.1 GB/s). HOST_DMA's L1 ring depth no longer matters (16 / 32 /
+64 pages: 9.8 / 10.0 / 9.8 GB/s) because the deep staging ring carries the bandwidth-delay
+product. Before the batching change the one-core figure was bimodal, 1.7 or 6.5 GB/s, and with
+a two-message in-flight cap it was 7.4; the ring sweep is now monotonic (4 / 8 / 16 / 32 / 48 /
+64 pages: 3.2 / 5.0 / 6.0 / 7.1 / 8.0 / 8.4 GB/s with a host ring equal to the L1 ring).
+
+### Single message
+
+Kernel-to-kernel ping-pong round trip on the initiator's Tensix clock, p50 (min / p99), one core:
+
+| page | DEVICE_PULL | HOST_DMA |
+|---|---|---|
+| 64 B | 15.2 (14.6 / 17.6) | 26.1 (24.5 / 46.9) |
+| 1 KiB | 17.9 (17.3 / 24.0) | 27.9 (26.0 / 37.8) |
+| 4 KiB | 19.8 (19.2 / 24.8) | 31.8 (30.1 / 50.0) |
+| 14336 B | 25.4 (24.3 / 33.0) | 36.9 (34.8 / 50.1) |
+| 64 KiB | 53.7 (52.7 / 60.4) | 66.6 (64.4 / 85.5) |
+
+The host hop alone (`HostTransportTest.PingPongLatency`, no device) is 8.5 – 9.1 µs at 64 B and
+11.6 – 12.2 µs at 14336 B. ctaylor's closest figure is 22.0 µs at 14336 B / 21.9 µs at 16 KiB
+for host put → peer device drained → credit back (cores 1, ring 1), about three quarters of a
+round trip, so the two agree within a few microseconds. HOST_DMA pays ~5 – 6 µs more per hop:
+UMD's DMA write programs the engine over MMIO and busy-polls it, ~5.4 µs fixed per call. A
+descriptor queue with asynchronous submit and completion in UMD is what would close that.
+
+### Bursts
+
+`BurstToLastCredit`, 14336 B pages, remote credit for the last page, p50 µs, with the implied
+rate for the burst:
+
+| burst | DEVICE_PULL | HOST_DMA |
+|---|---|---|
+| 1 | 21.1 | 35.7 |
+| 2 | 24.8 | 38.6 |
+| 4 | 31.2 | 41.4 |
+| 8 | 46.4 | 50.8 |
+| 16 | 58.2 | 66.0 |
+| 32 | 90.0 | 93.2 |
+| 64 | 168.1 (2.6 µs / page, 5.4 GB/s) | 148.5 (2.3 µs / page, 6.2 GB/s) |
+
+ctaylor's benchmark has no burst mode; its amortized headway at one core is 3.6 µs per message
+on a 16-page ring and 2.4 µs on 64, comparable to the 64-page rows.
+
+### Under load
+
+With 16 MiB host rings the ack round trip under a saturating stream is ~1.7 ms (DEVICE_PULL) /
+~1.4 ms (HOST_DMA): that is the deep ring doing what it is for, 16 MiB at ~10 GB/s of queueing,
+not distance. A latency-sensitive socket should set `host_ring_pages` to a few times the
+bandwidth-delay product instead (64 pages gives ~110 µs). ctaylor's loaded put-to-credit is
+144 – 734 µs on rings of 64 – 95 pages.
+
+### What limits one core now
+
+The per-leg kernels move one page per round trip: the DEVICE_PULL kernel issues one non-posted
+PCIe read, waits for it, pops and notifies (isolated: 10 GB/s at 16 KiB, 1.65 µs per page of
+which 1.1 µs is the read round trip); the D2H kernel writes one page and barriers (10.2 GB/s).
+The chain's one-core figure sits below both because the receiver drains a message's worth and
+waits for the next. Under HOST_DMA the device does no PCIe reads and the one-core figure is the
+DMA path's: 10 GB/s with the worker and merged spans, against 2.6 GB/s for the isolated leg
+benchmark that issues one synchronous DMA per page. If DEVICE_PULL is kept, its reads should
+be issued under transaction IDs with several pages in flight.

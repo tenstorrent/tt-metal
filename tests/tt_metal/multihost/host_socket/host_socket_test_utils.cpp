@@ -34,11 +34,24 @@ uint64_t env_u64(const char* name, uint64_t fallback) {
     return std::strtoull(raw, nullptr, 0);
 }
 
+// Core i of a multi-core run. Rows of 8, so a 16-core run fits any worker grid
+// (Wormhole is 8 wide) instead of running off the end of row 0.
+constexpr uint32_t kCoresPerRow = 8;
+CoreCoord test_core(uint32_t i) { return CoreCoord(i % kCoresPerRow, i / kCoresPerRow); }
+
+CoreRangeSet test_cores(uint32_t num_cores) {
+    std::vector<CoreRange> ranges;
+    ranges.reserve(num_cores);
+    for (uint32_t i = 0; i < num_cores; i++) {
+        ranges.emplace_back(test_core(i), test_core(i));
+    }
+    return CoreRangeSet(ranges);
+}
+
 // One buffer sharded across the cores, one page each. A buffer per core would
 // reserve its range on *every* core under the default allocator and exhaust L1.
 std::shared_ptr<MeshBuffer> make_sharded_l1_buffer(MeshDevice* device, uint32_t num_cores, uint32_t page_size) {
-    auto grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0)));
-    auto shard = ShardSpecBuffer(grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+    auto shard = ShardSpecBuffer(test_cores(num_cores), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
     const DeviceLocalBufferConfig local{
         .page_size = page_size,
         .buffer_type = BufferType::L1,
@@ -54,8 +67,7 @@ std::vector<SocketConnection> make_connections(uint32_t num_cores) {
     connections.reserve(num_cores);
     const MeshCoordinate device_coord(0, 0);
     for (uint32_t i = 0; i < num_cores; i++) {
-        connections.emplace_back(
-            MeshCoreCoord(device_coord, CoreCoord(i, 0)), MeshCoreCoord(device_coord, CoreCoord(i, 0)));
+        connections.emplace_back(MeshCoreCoord(device_coord, test_core(i)), MeshCoreCoord(device_coord, test_core(i)));
     }
     return connections;
 }
@@ -152,10 +164,10 @@ void run_transfer(
     double* gbps_out,
     std::vector<uint64_t>* ack_latency_ns_out,
     HostMeshSocket::HopSamples* hops_out) {
-    // Receiver L1 under HOST_DMA: one H2D ring per core, the socket's own D2D-shaped data buffer
-    // (one ring's worth per bank), and, when verifying, a landing buffer of one ring per core.
+    // Receiver L1 under HOST_DMA: one H2D ring per core (charged to every bank by the lockstep
+    // allocator), and, when verifying, a landing buffer of one ring per core.
     Params params = params_in;
-    fit_fifo_to_l1(params, params.num_cores + 1, 1, verify && params.bytes_per_core == 0);
+    fit_fifo_to_l1(params, params.num_cores, 1, verify && params.bytes_per_core == 0);
     const auto& context = multihost::DistributedContext::get_current_world();
     const auto rank = context->rank();
     const bool is_sender = rank == kSenderRank;
@@ -177,6 +189,7 @@ void run_transfer(
     transport.h2d_mode = env_h2d_mode();
     transport.page_size = page_size;
     transport.max_batch_pages = static_cast<uint32_t>(env_u64("TT_HOST_SOCKET_BATCH_PAGES", 0));
+    transport.host_ring_pages = static_cast<uint32_t>(env_u64("TT_HOST_SOCKET_HOST_RING_PAGES", 0));
 
     HostMeshSocket socket(mesh_device, config, transport);
     if (ack_latency_ns_out != nullptr || hops_out != nullptr) {
@@ -212,7 +225,7 @@ void run_transfer(
         CreateKernel(
             program,
             is_sender ? kSenderKernel : kReceiverKernel,
-            CoreCoord(i, 0),
+            test_core(i),
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,

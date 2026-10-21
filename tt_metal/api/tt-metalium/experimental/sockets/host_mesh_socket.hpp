@@ -54,6 +54,12 @@ public:
         /// PCIe. HOST_DMA: the relay DMAs each arrived page into the receiver's L1 ring and the
         /// kernel reads it locally (same kernel path as a D2D socket).
         H2DMode h2d_mode = H2DMode::DEVICE_PULL;
+        /// Depth of the pinned host rings, in pages: the sender's D2H ring and the receiver's
+        /// landing ring, which is also the ring the host hop's credits run over. Host memory is
+        /// cheap and deep rings are what let the sender run far ahead of the link, so this is
+        /// independent of (and at least) the socket's fifo_size, which under HOST_DMA sizes only
+        /// the L1 ring the DMA engine drains into. 0: 16 MiB worth of pages.
+        uint32_t host_ring_pages = 0;
     };
 
     HostMeshSocket(

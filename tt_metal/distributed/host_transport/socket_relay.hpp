@@ -117,6 +117,7 @@ private:
     std::atomic<uint64_t> forwarded_{0};
     std::atomic<uint64_t> retired_{0};
     std::atomic<uint32_t> unforwarded_{0};  // pages seen available at the last poll
+    std::atomic<uint64_t> sends_{0};        // transport messages issued
 
     struct Sample {
         uint64_t total;  // forwarded total this batch reached

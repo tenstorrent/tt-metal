@@ -26,10 +26,10 @@ TEST(HostSocketLatencyTest, RoundTrip) {
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
     Params params = params_from_env();
-    // Under HOST_DMA each receiver socket keeps an H2D ring plus its D2D-shaped data buffer in L1;
-    // this rank receives on one socket and the peer on the other, but both rings are sized
-    // identically, so budget for the larger side: two rings' worth per socket, plus a payload page each.
-    fit_fifo_to_l1(params, 4, 2, false);
+    // Under HOST_DMA each receiver socket keeps its H2D ring in L1; this rank receives on one
+    // socket and the peer on the other, both sized identically, so budget both rings plus a
+    // payload page each.
+    fit_fifo_to_l1(params, 2, 2, false);
     const uint32_t page_size = params.page_size;
     const uint32_t fifo_size = params.fifo_size();
     const uint32_t iterations = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_LAT_ITERS", 200));
@@ -47,6 +47,7 @@ TEST(HostSocketLatencyTest, RoundTrip) {
     HostMeshSocket::TransportConfig transport;
     transport.h2d_mode = env_h2d_mode();
     transport.page_size = page_size;
+    transport.host_ring_pages = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_HOST_RING_PAGES", 0));
     // A latency probe must not batch.
     transport.max_batch_pages = 1;
 
