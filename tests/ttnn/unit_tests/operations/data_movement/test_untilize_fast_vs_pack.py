@@ -67,13 +67,14 @@ FAST_COMPUTE = """
 void kernel_main() {
     constexpr uint32_t width = get_compile_time_arg_val(0);
     constexpr uint32_t num_rows = get_compile_time_arg_val(1);
-    constexpr bool dense_input = get_compile_time_arg_val(2) != 0;
+    constexpr bool allow_face_passes = get_compile_time_arg_val(2) != 0;
+    constexpr bool block_float_input = get_compile_time_arg_val(3) != 0;
     compute_kernel_hw_startup(0, 16);
-    fast_untilize_init<width, DST_ACCUM_MODE, false, dense_input>(0, 16);
+    fast_untilize_init<width, DST_ACCUM_MODE, false, allow_face_passes, block_float_input>(0, 16);
     for (uint32_t r = 0; r < num_rows; ++r) {
         cb_wait_front(0, width);
         cb_reserve_back(16, width);
-        fast_untilize_block<width, DST_ACCUM_MODE, false, dense_input>(0, 16);
+        fast_untilize_block<width, DST_ACCUM_MODE, false, allow_face_passes, block_float_input>(0, 16);
         cb_push_back(16, width);
         cb_pop_front(0, width);
     }
@@ -177,7 +178,7 @@ def _block(width):
 
 
 def _compare(device, tt_in, in_dtype, num_rows, width):
-    fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [int(in_dtype == ttnn.bfloat16)])
+    fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [1, int(in_dtype != ttnn.bfloat16)])
     pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)])
     mismatched = (fast != pack).nonzero()
     assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
