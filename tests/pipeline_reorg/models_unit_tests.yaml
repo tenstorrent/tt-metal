@@ -2146,6 +2146,7 @@
       --cov=models.common.modules.sampling.sampling_1d \
       --cov-report=term-missing \
       --cov-config=models/common/tests/setup.cfg || exit $?
+    pytest models/common/tests/modules/sampling/test_sampling_1d_logprob_output.py --tb=short || exit $?
   model: tt-transformers-common
   model_family: TTTv2
   skus:

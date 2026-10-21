@@ -33,7 +33,7 @@ def _sampler(monkeypatch, calculator, deallocated):
     sampler._sampling_sub_core_grids = None
     sampler._log_probs_calculator = calculator
     shape = SimpleNamespace(shape=(1, 1, 32, 32))
-    monkeypatch.setattr(sampling_1d.ttnn, "typecast", lambda value, **kw: shape)
+    monkeypatch.setattr(sampling_1d.ttnn, "typecast", lambda value, **kw: value if isinstance(value, float) else shape)
     monkeypatch.setattr(sampling_1d.ttnn, "add", lambda *a, **kw: object())
     monkeypatch.setattr(sampling_1d.ttnn, "deallocate", lambda value: deallocated.append(value))
     monkeypatch.setattr(sampling_1d.ttnn, "to_memory_config", lambda value, *a, **kw: value)
