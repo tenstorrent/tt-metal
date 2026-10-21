@@ -39,15 +39,17 @@ def _read(tensor):
 
 def _view(mesh, spec, owner, placements):
     """Create an address-based view after resolving this test's backing offsets."""
-    extents = {
-        (tuple(e.device_coord), (e.core_coord.x, e.core_coord.y)): e
-        for e in ttnn.experimental_l1_tensor_owned_extents(owner)
-    }
     addresses = [
-        ttnn.L1TensorViewPlacement(coord, core, extents[tuple(coord), (core.x, core.y)].address + offset)
-        for coord, core, offset in placements
+        (ttnn.MeshCoreCoord(coord, core), _address(owner, coord, core) + offset) for coord, core, offset in placements
     ]
     return ttnn.experimental_create_l1_tensor_view(mesh, spec, addresses)
+
+
+def _address(tensor, coord, core):
+    """Read the tensor's existing address API without inspecting its owner."""
+    if tensor.is_per_core_allocated():
+        return tensor.experimental_per_core_buffer_address(coord, core)
+    return tensor.buffer_address()
 
 
 @pytest.mark.parametrize("per_core", [True, False])
@@ -80,12 +82,12 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     owner = _owner(mesh, core)
     spec = _spec([core], 256)
-    (extent,) = ttnn.experimental_l1_tensor_owned_extents(owner)
-    placement = ttnn.L1TensorViewPlacement(coord, core, extent.address)
+    address = _address(owner, coord, core)
+    placement = (ttnn.MeshCoreCoord(coord, core), address)
     if bad == "core":
-        placement = ttnn.L1TensorViewPlacement(coord, ttnn.CoreCoord(1, 0), extent.address)
+        placement = (ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(1, 0)), address)
     elif bad == "alignment":
-        placement = ttnn.L1TensorViewPlacement(coord, core, extent.address + 1)
+        placement = (ttnn.MeshCoreCoord(coord, core), address + 1)
     placements = [] if bad == "missing" else [placement]
     if bad == "duplicate":
         placements.append(placement)
@@ -93,18 +95,18 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
         ttnn.experimental_create_l1_tensor_view(mesh, spec, placements)
 
 
-def test_nested_view_reports_only_its_own_extent(per_core_mesh_device):
+def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
+    """Nested views expose their own spec and offset without changing their backing."""
     mesh = per_core_mesh_device
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     owner = _owner(mesh, core)
     spec = _spec([core], 256)
     view = _view(mesh, spec, owner, [(coord, core, 256)])
-    (extent,) = ttnn.experimental_l1_tensor_owned_extents(view)
-    assert extent.size == ttnn.experimental_l1_tensor_geometry(mesh, coord, spec).aligned_shard_size
+    assert view.spec == spec
+    assert _address(view, coord, core) == _address(owner, coord, core) + 256
     nested = _view(mesh, _spec([core], 64), view, [(coord, core, 64)])
-    (child,) = ttnn.experimental_l1_tensor_owned_extents(nested)
-    assert child.address == extent.address + 64
-    assert child.size == 64
+    assert _address(nested, coord, core) == _address(owner, coord, core) + 320
+    assert ttnn.experimental_l1_tensor_geometry(mesh, coord, nested.spec).aligned_shard_size == 64
 
 
 def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
@@ -119,7 +121,7 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
         ttnn.experimental_create_l1_tensor_view(
             mesh,
             spec,
-            [ttnn.L1TensorViewPlacement(coord, core, owner.buffer_address() + i * 256) for i, core in enumerate(cores)],
+            [(ttnn.MeshCoreCoord(coord, core), owner.buffer_address() + i * 256) for i, core in enumerate(cores)],
         )
 
 
@@ -131,7 +133,7 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     owner = ttnn.experimental_to_single_device(host, mesh, coord, spec.memory_config)
     view = _view(mesh, spec, owner, [(coord, core, 0)])
     assert view.device_coords() == [coord]
-    assert all(extent.device_coord == coord for extent in ttnn.experimental_l1_tensor_owned_extents(view))
+    assert _address(view, coord, core) == _address(owner, coord, core)
     torch.testing.assert_close(_read(view), torch.arange(256, dtype=torch.uint8).reshape(1, 256))
     value = torch.full((1, 256), 41, dtype=torch.uint8)
     mapper = ttnn.create_mesh_mapper(
@@ -154,7 +156,7 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     baseline = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
     owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, _spec([core], 768))
     assert owner.device_coords() == [coord]
-    (extent,) = ttnn.experimental_l1_tensor_owned_extents(owner)
+    address = _address(owner, coord, core)
     mapper = ttnn.create_mesh_mapper(
         mesh, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, 1), coord)
     )
@@ -170,14 +172,12 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     spec = _spec([core], 17)
     view = _view(mesh, spec, owner, [(coord, core, 256)])
     geometry = ttnn.experimental_l1_tensor_geometry(mesh, coord, spec)
-    assert ttnn.experimental_l1_tensor_owned_extents(view)[0].size == geometry.aligned_shard_size
+    assert view.spec == spec
     upload(torch.full((1, 17), 7, dtype=torch.uint8), view)
     submesh = mesh.create_submesh(ttnn.MeshShape(1, 1), coord)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-    sem = ttnn.experimental_create_global_semaphore_at_address(
-        submesh, grid, 37, ttnn.BufferType.L1, extent.address + 512
-    )
-    assert ttnn.get_global_semaphore_address(sem) == extent.address + 512
+    sem = ttnn.experimental_create_global_semaphore_at_address(submesh, grid, 37, ttnn.BufferType.L1, address + 512)
+    assert ttnn.get_global_semaphore_address(sem) == address + 512
     del sem
     data = _read(owner).reshape(-1)
     assert torch.all(data[:256] == 91)
