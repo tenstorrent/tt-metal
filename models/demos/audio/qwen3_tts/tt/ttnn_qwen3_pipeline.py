@@ -41,6 +41,7 @@ from models.demos.audio.qwen3_tts import frontend, sampling
 from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.frontend import AUTO_LANGUAGE
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
+    DEVICE_TOP_K_LIMIT,
     TtCodePredictorCachedDecoder,
     preprocess_cached_predictor_parameters,
 )
@@ -576,7 +577,16 @@ class Qwen3TTSPipeline:
     then captures the two step traces, since the two cannot coexist.
     """
 
-    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False, kv_cache=None, codec=True):
+    def __init__(
+        self,
+        device,
+        max_frames=DEFAULT_MAX_FRAMES,
+        seed=None,
+        profile=False,
+        kv_cache=None,
+        codec=True,
+        predictor_on_device=True,
+    ):
         """`kv_cache` hands the talker a paged cache the caller owns (see
         `TtTalkerCachedDecoder`). `codec=False` skips the codec decoder, for a caller that only
         wants frames: the `generate*` methods need it, `codes` and the frame steps do not."""
@@ -616,6 +626,7 @@ class Qwen3TTSPipeline:
 
         self.generation = checkpoint.generation_config()
         self.generator = None if seed is None else torch.Generator().manual_seed(seed)
+        self.predictor_on_device = predictor_on_device and self._sample_predictor_on_device()
         # Filled in by every generate, so a caller can see where the time went. The first
         # utterance at any new prompt length or frame count also compiles its kernels, and
         # that lands inside whichever stage triggered it.
@@ -662,6 +673,20 @@ class Qwen3TTSPipeline:
             generator=self.generator,
             suppress=suppress,
         )
+
+    def _sample_predictor_on_device(self):
+        """Hand the code predictor the checkpoint's `subtalker_*` settings, if its device
+        sampler covers them; it then runs each frame as one trace. Returns whether it did."""
+        settings = self.generation
+        if not settings.get("subtalker_dosample", settings.get("do_sample", True)):
+            temperature, top_k = 1.0, 1
+        else:
+            temperature = settings.get("subtalker_temperature", 1.0)
+            top_k = settings.get("subtalker_top_k", 0)
+            if settings.get("subtalker_top_p", 1.0) < 1.0 or not 0 < top_k <= DEVICE_TOP_K_LIMIT or temperature <= 0:
+                return False
+        self.predictor.sample_on_device(temperature, top_k)
+        return True
 
     def _inner_pick(self):
         """The code predictor's sampler, which reads the `subtalker_*` settings."""
@@ -780,7 +805,9 @@ class Qwen3TTSPipeline:
 
     def predict(self, request, first, pick=None, watch=None):
         """Codebooks 1 to 15 of the frame whose codebook 0 is `first`. Returns all 16."""
-        return [int(first)] + list(self.predictor.generate(request.last, first, pick=pick, watch=watch))
+        return [int(first)] + list(
+            self.predictor.generate(request.last, first, pick=pick, watch=watch, generator=self.generator)
+        )
 
     def feed_back(self, request, frame, watch=None):
         """Step the talker over a completed frame, so the request is ready for the next."""
