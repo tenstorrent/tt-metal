@@ -74,7 +74,7 @@ using DeviceIds = std::vector<int>;
 //
 // num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
 // from it is open, other open_* calls must pass the same values.
-struct CreateMeshDeviceOptions {
+struct OpenMeshDeviceOptions {
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
     uint8_t num_command_queues = 1;
