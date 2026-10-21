@@ -645,7 +645,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     // legacy's silent UnpackToSrc instead of a TT_FATAL.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const DFBSpecName& dfb, DataFormat df) {
-        if (operation_attributes.preserve_fp32_precision && operation_attributes.fp32_dest_acc_en) {
+        const bool bitcast_to_float32 = ops_chain[0].type() == unary::UnaryOpType::BITCAST && df == DataFormat::Float32;
+        if (operation_attributes.fp32_dest_acc_en &&
+            (operation_attributes.preserve_fp32_precision || bitcast_to_float32)) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
         } else if (operation_attributes.fp32_dest_acc_en && df == DataFormat::Float32) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
