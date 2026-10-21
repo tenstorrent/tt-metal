@@ -39,8 +39,7 @@ inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std
     return chunk < num_chunks && stage < (chunk == 0 ? STAGES_FIRST_CHUNK : STAGES_MERGING_CHUNK);
 }
 
-// K 1024 and 2048 rows of two or more chunks open with chunks 0 and 1 side by side (chunk 0 on even steps, chunk 1 on odd steps
-// up to their stage 6 merge), so no chunk starts alone; K 512 rows keep the straight-line order.
+// K 1024 and 2048 rows of two or more chunks run chunks 0 and 1 side by side up to stage 6; K 512 rows keep the straight-line order.
 constexpr std::uint32_t HEAD_STEPS = 14;
 
 template <std::uint32_t K>
@@ -189,6 +188,11 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk, con
                 }
                 if (chunk > 0)
                 {
+                    if (paired && step == 1)
+                    {
+                        // Copy 0's valid flags may not be set yet, and the release would clear them first.
+                        TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCA_VLD | ckernel::p_stall::SRCB_VLD);
+                    }
                     release_src();
                     half_release_due  = true;
                     half_release_step = step + 5;

@@ -85,9 +85,8 @@ constexpr bool can_prefetch(const std::uint32_t num_chunks) {
     return (num_chunks & 1) == 0 && !(K == 512 && num_chunks == 2);
 }
 
-// K 1024 and 2048 rows of two or more chunks run chunk 0 on even steps and chunk 1 on odd steps up to their stage 6
-// (HEAD_STEPS), then slot 2 on: chunk 2's stages 0 to 4 with chunk 1's stages 7 and 8 two steps early (chunk 1's stages
-// 5 and 6 are done), and every later slot as decode_step. K 512 and Classic rows keep decode_step's order.
+// K 1024 and 2048 rows of two or more chunks run chunks 0 and 1 side by side up to stage 6 (HEAD_STEPS); slot 2 on
+// follows, with chunk 1's stages 7 and 8 two steps early. K 512 and Classic rows keep decode_step's order.
 constexpr std::uint32_t HEAD_STEPS = 14;
 
 template <std::uint32_t K, bool classic>
@@ -157,8 +156,8 @@ inline void math_row(
             }
             const std::uint32_t step = head ? r : c1 * STEPS_PER_CHUNK + r + slot_step0;
             // Wait for every SFPU part at least two steps back: that covers this chunk's previous stage, the survivor
-            // rebuild before a merge and the merge that frees a tile before its next copy. Chunk 1's copy follows
-            // chunk 0's first step only once the SFPU has finished it.
+            // rebuild before a merge and the merge that frees a tile before its next copy. Chunk 1's copy waits for the
+            // SFPU to finish step 0.
             const std::uint32_t need = (paired && step == 1) ? posted : posted - (prev_step_busy ? 1 : 0);
             for (; taken < need; taken++) {
                 take_pack_token();
@@ -175,6 +174,11 @@ inline void math_row(
                     cfg_open = false;
                 }
                 if (chunk > 0) {
+                    if (paired && step == 1) {
+                        // Copy 0's valid flags may not be set yet, and the release would clear them first.
+                        TTI_STALLWAIT(
+                            ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCA_VLD | ckernel::p_stall::SRCB_VLD);
+                    }
                     release_src();
                     half_release_due = true;
                     half_release_step = step + 5;
