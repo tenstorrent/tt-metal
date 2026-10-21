@@ -448,7 +448,7 @@ class _ExchangeCall:
             sender = ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "boundary_sender.cpp"),
                 core_ranges=ex.cores,
-                compile_time_args=[ex.payload, ex.payload, ex.fwd_hops, ex.bwd_hops, 1, ex.SEND_SEM, 0, 1, 1],
+                compile_time_args=[ex.payload, ex.payload, ex.fwd_hops, ex.bwd_hops, 1, ex.SEND_SEM, 0, 1, 1, 0, 0],
                 runtime_args=srt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
