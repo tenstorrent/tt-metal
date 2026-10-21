@@ -17,7 +17,6 @@ the wrong row is a silently wrong gate rather than an error, so the file guards:
 
 import functools
 import math
-import re
 import textwrap
 from dataclasses import fields
 from itertools import product
@@ -63,12 +62,9 @@ from helpers.ulp import (
     has_ulp_gate,
     ulp_dtype,
 )
+from helpers.ulp_provenance import BudgetTable
 from helpers.ulp_sweep import (
-    _DATED,
-    _EMITTED_NOTE,
     _is_exact,
-    _row_fields,
-    _split_key_line,
     _verdict,
     is_exhaustive,
     rounds_at_pack,
@@ -106,6 +102,10 @@ QUERYABLE_INPUT_FORMATS = sorted(
 def _refuses(match, kind=ValueError):
     """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
     return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
+
+
+#: A measurement for a test row's budget, which the loader requires.
+_MEASURED_FIELDS = ", measured: 0, sampled: 2026-01-01"
 
 
 def _table(tmp_path, text):
@@ -920,7 +920,8 @@ def test_arch_must_be_passed_explicitly():
         ),
         # Two list items with one key: nothing collapses them, the later would win.
         (
-            "Abs:\n  - {out: Float16_b, max_ulp: 1}\n  - {out: Float16_b, max_ulp: 4}\n",
+            f"Abs:\n  - {{out: Float16_b, max_ulp: 1{_MEASURED_FIELDS}}}\n"
+            f"  - {{out: Float16_b, max_ulp: 4{_MEASURED_FIELDS}}}\n",
             "repeats BudgetKey",
         ),
         ("Nope:\n  - {max_ulp: 1}\n", "'Nope' is not a MathOperation"),
@@ -941,6 +942,44 @@ def test_arch_must_be_passed_explicitly():
         ("Abs:\n  - {approx: 1, max_ulp: 1}\n", "is not a ApproximationMode"),
         ("Abs:\n  - {approx: 0, max_ulp: 1}\n", "is not a ApproximationMode"),
         ("Abs:\n  - {approx: 1.0, max_ulp: 1}\n", "is not a ApproximationMode"),
+        # A step budget is a measurement, and the row says which.
+        ("Abs:\n  - {max_ulp: 1}\n", "needs the `measured` figure"),
+        ("Abs:\n  - {max_ulp: 1, measured: 1}\n", "needs the `run` or `sampled`"),
+        # The headroom baseline is a recorded figure too.
+        (
+            "Abs:\n  - {in: Float16_b, out: Float16_b, metric: tolerance, nonfinite: 7}\n",
+            "`nonfinite` needs the `run` or `sampled`",
+        ),
+        (
+            "Abs:\n  - {max_ulp: 1, measured: 1, run: 2026-01-01, sampled: 2026-01-01}\n",
+            "or sampled, not both",
+        ),
+        ('Abs:\n  - {max_ulp: 1, measured: 1, run: "2026-01-01"}\n', "must be a date"),
+        ("Abs:\n  - {max_ulp: 1, measured: true, run: 2026-01-01}\n", "integer >= 0"),
+        ("Abs:\n  - {max_ulp: 1, measured: -1, run: 2026-01-01}\n", "integer >= 0"),
+        (
+            "Abs:\n  - {max_ulp: 1, measured: 1, nonfinite: 2, run: 2026-01-01}\n",
+            "belongs on a `metric: tolerance` row",
+        ),
+        (
+            "Abs:\n  - {max_ulp: 1, measured: 1, measured_all: 9, run: 2026-01-01}\n",
+            "the row has no floor",
+        ),
+        # `null` is the contract's "no floor", so it rescues nothing either.
+        (
+            "Abs:\n  - {max_ulp: 1, near_zero_atol: null, measured: 1, "
+            "measured_all: 9, run: 2026-01-01}\n",
+            "the row has no floor",
+        ),
+        (
+            "Abs:\n  - {max_ulp: 2, near_zero_atol: 1.0e-07, measured: 5, "
+            "measured_all: 3, run: 2026-01-01}\n",
+            "cannot be below it",
+        ),
+        ("Abs:\n  - {metric: tolerance, sampled: 2026-01-01}\n", "without the"),
+        # Doubled braces, pasted from an f-string: the row's one key is a mapping.
+        ("Abs:\n  - {{max_ulp: 1}}\n", "a key that is a mapping"),
+        ("Abs: &rows\n  - *rows\n", "contains itself"),
     ],
     ids=[
         "repeated-op",
@@ -955,6 +994,20 @@ def test_arch_must_be_passed_explicitly():
         "approx-1",
         "approx-0",
         "approx-1.0",
+        "budget-without-measured",
+        "measured-without-date",
+        "nonfinite-without-date",
+        "run-and-sampled",
+        "date-as-a-string",
+        "measured-bool",
+        "measured-negative",
+        "nonfinite-on-a-budget",
+        "measured-all-without-floor",
+        "measured-all-with-a-null-floor",
+        "measured-all-below-measured",
+        "sampled-without-measured",
+        "doubled-braces",
+        "self-containing-anchor",
     ],
 )
 def test_the_loader_refuses_what_it_cannot_represent(tmp_path, text, match):
@@ -964,7 +1017,8 @@ def test_the_loader_refuses_what_it_cannot_represent(tmp_path, text, match):
 
 def test_rows_with_different_keys_are_kept(tmp_path):
     table = _table(
-        tmp_path, "Abs:\n  - {max_ulp: 4}\n  - {out: Float16_b, max_ulp: 1}\n"
+        tmp_path,
+        f"Abs:\n  - {{max_ulp: 4{_MEASURED_FIELDS}}}\n  - {{out: Float16_b, max_ulp: 1{_MEASURED_FIELDS}}}\n",
     )
     assert len(table[MathOperation.Abs]) == 2
 
@@ -975,10 +1029,10 @@ def test_anchors_and_merge_keys_load_and_may_override(tmp_path):
         tmp_path,
         """\
         Abs:
-          - &base {out: Float16_b, max_ulp: 2}
+          - &base {out: Float16_b, max_ulp: 2, measured: 2, run: 2026-01-01}
         Neg:
           - *base
-          - {<<: *base, out: Float32, max_ulp: 5}
+          - {<<: *base, out: Float32, max_ulp: 5, measured: 4, run: 2026-01-02}
         """,
     )
     neg = table[MathOperation.Neg]
@@ -986,10 +1040,35 @@ def test_anchors_and_merge_keys_load_and_may_override(tmp_path):
     assert neg[BudgetKey(output_format=DataFormat.Float32)].max_ulp == 5
 
 
+@pytest.mark.parametrize(
+    "own", ["", ", measured: 4"], ids=["no-provenance", "measured-but-no-date"]
+)
+def test_a_merge_key_row_may_not_borrow_its_anchors_measurement(tmp_path, own):
+    """A ``<<`` row is a cell of its own: taking the anchor's ``measured`` and ``run``
+    through the merge would credit a different budget with the anchor's measurement,
+    and the guard would count the new row as re-measured. A plain ``*alias`` row is the
+    anchor's own row, so it shares the measurement and loads."""
+    with _refuses("only through a `<<` merge key"):
+        _table(
+            tmp_path,
+            f"""\
+            Abs:
+              - &base {{out: Float16_b, max_ulp: 2, measured: 2, run: 2026-01-01}}
+            Neg:
+              - {{<<: *base, out: Float32, max_ulp: 5{own}}}
+            """,
+        )
+
+
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
     """YAML 1.1 reads bare ``No`` as ``False``; both spellings must load the same."""
-    quoted = _table(tmp_path, 'Abs:\n  - {approx: "No", dest: "Yes", max_ulp: 1}\n')
-    bare = _table(tmp_path, "Abs:\n  - {approx: No, dest: Yes, max_ulp: 1}\n")
+    quoted = _table(
+        tmp_path,
+        f'Abs:\n  - {{approx: "No", dest: "Yes", max_ulp: 1{_MEASURED_FIELDS}}}\n',
+    )
+    bare = _table(
+        tmp_path, f"Abs:\n  - {{approx: No, dest: Yes, max_ulp: 1{_MEASURED_FIELDS}}}\n"
+    )
     assert quoted == bare
     key = next(iter(quoted[MathOperation.Abs]))
     assert key.approx_mode is ApproximationMode.No
@@ -1643,70 +1722,42 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
 
 # ── Every step budget records the measurement it came from ────────────────────
 #
-# The measurement lives in the YAML comment beside the row (or on the op's header line),
-# so it is read from the text: YAML discards comments. Widening a budget without
-# re-measuring then has to falsify that comment.
+# The measurement is the row's own `measured` field, with the `run` (the sweep) or
+# `sampled` (a functional driver) date it came from; the loader refuses a step budget
+# without one. Widening a budget without re-measuring then has to falsify `measured`.
 
-#: How far a *sampled* row's budget may sit above its measurement. Its comment records
-#: a sample, and the hand-set headroom over the tail the sample did not see varies; an
-#: exhaustive row saw every value and carries exactly the emitter's budget instead.
+#: How far a *sampled* row's budget may sit above its measurement. A sample's
+#: hand-set headroom over the tail it did not see varies; an exhaustive row saw every
+#: value and carries exactly the emitter's budget instead.
 MEASUREMENT_HEADROOM = 2
 
-#: ``max 65536 ULP`` in the emitted rows, ``0 ULP`` in the hand-measured ones.
-_MEASUREMENT = re.compile(r"(?:max )?(\d+) ULP")
 
-#: What marks a row's comment as the exhaustive sweep's: ``write_table``'s suffix.
-_EXHAUSTIVE = "exhaustive"
-
-
-def _run_of(note, key_run):
-    """The run a row's measurement came from, read as the emitter writes it.
-
-    A dated note names its own run (``_DATED``, the emitter's own test). An undated one
-    is credited to the ``measured by:`` run on the key line only when it is a note the
-    emitter writes (``_EMITTED_NOTE``), the rule ``_stamp_kept`` applies before a
-    re-emit replaces that clause. Any other undated note, or none, names no run: a
-    hand-written ``max 0 ULP over 2048 pts`` under an exhaustive key line is a sample,
-    and is held to the sampled rules."""
-    note = note.strip()
-    if _DATED.search(note):
-        return note
-    return key_run if _EMITTED_NOTE.fullmatch(note) else ""
+def _strided(row) -> bool:
+    """Whether *row* pins an input the sweep walks with a stride (``is_exhaustive``): a
+    Float32 row with a ``run`` date saw 65,280 of 2**32 values."""
+    pinned = row.pinned
+    return "in" in pinned and not is_exhaustive(DataFormat[pinned["in"]])
 
 
 def _measured_budget_rows(path=_TABLE_PATH):
-    """``(op_name, row_text, max_ulp, measured_or_None, exhaustive)`` for every
-    ``max_ulp`` row. *exhaustive* is whether :func:`_run_of` the row is the sweep.
+    """``(row, measured, swept)`` for every ``max_ulp`` row: its ``measured`` figure,
+    and whether the sweep measured it (``run``) or a sample did (``sampled``).
 
-    Deciding that by "the row has a number" instead read every emitted row -- which has
-    a number and no label -- as a sampled one, and the exhaustive audit below then
-    covered only the handful of rows that carry their own exhaustive label. Acosh's
-    ``max_ulp: 7  # max 6 ULP`` raised to 12 with its comment untouched passed."""
-    rows, op, op_measured, op_run = [], None, None, ""
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if not line.startswith(" "):  # `OpName:`, optionally with a header comment
-            head, header, op_run = _split_key_line(line)
-            op = head.split(":")[0].strip()
-            found = _MEASUREMENT.search(header)
-            op_measured = int(found.group(1)) if found else None
-            continue
-        body, _, comment = line.strip().partition("#")
-        declared = re.search(r"max_ulp:\s*(\d+)", body)
-        if not declared:
-            continue  # a tolerance row has no step budget to back
-        found = _MEASUREMENT.search(comment)
-        measured = int(found.group(1)) if found else op_measured
-        exhaustive = _EXHAUSTIVE in _run_of(comment, op_run)
-        rows.append((op, body.strip(), int(declared.group(1)), measured, exhaustive))
-    return rows
+    Deciding that by "the row has a number" once read every emitted row as a sampled
+    one, and the exhaustive audit below then covered only the handful of rows that
+    carried their own exhaustive label: Acosh's ``max_ulp: 7`` measured at 6 raised to
+    12 with its measurement untouched passed."""
+    return [
+        (row, row.provenance.measured, row.provenance.swept)
+        for row in BudgetTable.load(path).rows
+        if row.max_ulp is not None
+    ]
 
 
 def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
-    """A row the regex misses (``max_ulp : 5``, ``+5``, ``0x10``) would silently escape
-    the two audits below, so tie the parse back to the loaded table."""
-    parsed = sorted((op, budget) for op, _, budget, _, _ in _measured_budget_rows())
+    """A row the walk misses would silently escape the two audits below, so tie it back
+    to the loaded table."""
+    parsed = sorted((row.op, row.max_ulp) for row, _, _ in _measured_budget_rows())
     loaded = sorted(
         (op.name, contract.max_ulp)
         for op, table in _SFPU_ACCURACY_BUDGET.items()
@@ -1714,15 +1765,6 @@ def test_the_provenance_parser_sees_every_budget_the_registry_enforces():
         if contract.metric is Metric.ULP
     )
     assert parsed == loaded
-
-
-def test_every_step_budget_names_the_measurement_it_came_from():
-    rows = _measured_budget_rows()
-    assert rows, "no max_ulp rows found -- the parser has drifted from the table"
-    unbacked = [(op, body) for op, body, _, measured, _ in rows if measured is None]
-    assert not unbacked, "budgets with no recorded measurement:\n" + "\n".join(
-        f"  {op}: {body}" for op, body in unbacked
-    )
 
 
 #: Exact by construction without being canaries: a clamp returns one of its operands,
@@ -1759,30 +1801,18 @@ def test_the_emitter_and_the_guards_agree_on_which_ops_are_exact():
 
 
 def _sampled_zero_budgets(path=_TABLE_PATH):
-    """``(op_name, row_text)`` for every ``max_ulp: 0`` row whose measurement was a
-    sample: :func:`_run_of` it is not the exhaustive sweep, or its input is one the
-    sweep strides (``is_exhaustive``) -- a Float32 row under an "exhaustive ... + strided
-    Float32" key line saw 65,280 of 2**32 values, whatever the clause's first word."""
-    found, op, key_run = [], None, ""
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if not line.startswith(" "):
-            head, _, key_run = _split_key_line(line)
-            op = head.split(":")[0].strip()
-            continue
-        body, _, note = line.strip().partition("#")
-        if not re.search(r"max_ulp:\s*0\b", body):
-            continue
-        fields = _row_fields(body)
-        strided = "in" in fields and not is_exhaustive(DataFormat[fields["in"]])
-        if strided or _EXHAUSTIVE not in _run_of(note, key_run):
-            found.append((op, body.strip()))
-    return found
+    """Every ``max_ulp: 0`` row whose measurement was a sample: the row says so
+    (``sampled:``, not ``run:``), or its input is one the sweep strides
+    (:func:`_strided`)."""
+    return [
+        row
+        for row, _, swept in _measured_budget_rows(path)
+        if row.max_ulp == 0 and (not swept or _strided(row))
+    ]
 
 
-def _rounds_at_pack(body) -> bool:
-    """Whether *body* pins a cell whose output holds fewer mantissa bits than its input
+def _rounds_at_pack(row) -> bool:
+    """Whether *row* pins a cell whose output holds fewer mantissa bits than its input
     still has in Dest: there the operand an exact op returns -- a selected value, an
     integer -- is rounded at pack, as Abs, Neg and Identity's 1-step Float32 -> Float16_b
     cells record. Dest keeps the input's precision except where a 32-bit input meets a
@@ -1791,7 +1821,7 @@ def _rounds_at_pack(body) -> bool:
     Abs and ReluMin. A row that leaves `in` or `out` unpinned is an op-wide canary; the
     narrowing cells it would cover are pinned by rows of their own.
     """
-    fields = _row_fields(body)
+    fields = row.pinned
     if "in" not in fields or "out" not in fields:
         return False
     return rounds_at_pack(fields["in"], fields["out"], fields.get("dest"))
@@ -1801,12 +1831,18 @@ def test_only_a_32_bit_input_is_narrowed_before_a_16_bit_dest():
     """A Float16 operand stays fp16 in a 16-bit Dest and is rounded to bf16 at pack, so
     a sampled 0 there cannot be an exact op's guarantee; a Float32 one was narrowed by
     the unpack, leaving the pack nothing to round."""
-    row = "- {{in: {}, out: Float16_b, dest: {}, max_ulp: 0}}"
-    assert _rounds_at_pack(row.format("Float16", '"No"'))
-    assert _rounds_at_pack(row.format("Float32", '"Yes"'))
-    assert _rounds_at_pack(row.format("Float32", "Any").replace(", dest: Any", ""))
-    assert not _rounds_at_pack(row.format("Float32", '"No"'))
-    assert not _rounds_at_pack(row.format("Float16_b", '"No"'))
+
+    def row(in_fmt, dest=None):
+        pinned = f", dest: {dest}" if dest else ""
+        text = f"Abs:\n  - {{in: {in_fmt}, out: Float16_b{pinned}, max_ulp: 0}}\n"
+        (only,) = BudgetTable(text).rows
+        return only
+
+    assert _rounds_at_pack(row("Float16", '"No"'))
+    assert _rounds_at_pack(row("Float32", '"Yes"'))
+    assert _rounds_at_pack(row("Float32"))
+    assert not _rounds_at_pack(row("Float32", '"No"'))
+    assert not _rounds_at_pack(row("Float16_b", '"No"'))
 
 
 def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
@@ -1824,39 +1860,40 @@ def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
         *EXACT_SELECTIONS,
     }
     unfloored = [
-        f"{op}: {body}"
-        for op, body in _sampled_zero_budgets()
-        if MathOperation[op] not in EXACT_IN_EVERY_FORMAT
-        and (MathOperation[op] not in exact or _rounds_at_pack(body))
+        row.describe()
+        for row in _sampled_zero_budgets()
+        if MathOperation[row.op] not in EXACT_IN_EVERY_FORMAT
+        and (MathOperation[row.op] not in exact or _rounds_at_pack(row))
     ]
     assert not unfloored, "\n".join(unfloored)
 
 
 def _budgets_past_their_measurement(path=_TABLE_PATH):
     """Every ``max_ulp`` row in *path* whose budget is not the one its measurement
-    allows, as messages. An exhaustive row carries exactly the budget the emitter
-    derives from its measurement -- ``_verdict``'s rule: 0 for an exhaustive 0, 1 for a
-    strided Float32 0 on an op not exact on that cell, and otherwise ``EMIT_HEADROOM``
-    rounded up -- so a budget widened by hand has to falsify the
-    comment beside it, which is the table header's rule for raising one. A sampled row
+    allows, as messages. A swept row carries exactly the budget the emitter derives
+    from its measurement -- ``_verdict``'s rule: 0 for an exhaustive 0, 1 for a strided
+    Float32 0 on an op not exact on that cell, and otherwise ``EMIT_HEADROOM`` rounded
+    up -- so a budget widened by hand has to come with a new ``measured`` figure, which
+    is the table header's rule for raising one. A sampled row
     may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``, and at 1 over
     a measured 0: a finite sample cannot assert exactness."""
 
     problems = []
-    for op, body, budget, measured, exhaustive in _measured_budget_rows(path):
+    for row, measured, swept in _measured_budget_rows(path):
         if measured is None:
-            continue  # owned by test_every_step_budget_names_the_measurement_it_came_from
-        where = f"{op}: {body} (records {measured} ULP)"
-        if exhaustive:
+            continue  # the loader refuses such a row (check_provenance)
+        budget = row.max_ulp
+        where = f"{row.describe()} (records {measured} ULP)"
+        if swept:
             # The emitter's own call: the input format decides whether a 0 was seen on
             # every value (kept) or on a stride of Float32 (written as 1, unless the op
             # is exact by construction).
-            fields = _row_fields(body)
+            fields = row.pinned
             verdict = _verdict(
                 measured,
                 fields["out"],
                 fields.get("in"),
-                _is_exact(op, fields.get("in"), fields["out"], fields.get("dest")),
+                _is_exact(row.op, fields.get("in"), fields["out"], fields.get("dest")),
             )
             if ("ulp", budget) != verdict:
                 problems.append(
@@ -1876,31 +1913,27 @@ def _budgets_past_their_measurement(path=_TABLE_PATH):
     return problems
 
 
-def test_a_demotion_note_names_the_budget_the_emitter_computes():
-    """A tolerance row the emitter demoted says ``budget B > ceiling C``, and both
-    numbers are checkable: B is ``_verdict``'s budget for the measurement beside it,
-    and it does cross C. A block kept verbatim is never re-rendered, so a
-    stale figure there -- Gelu's 31406 from the old float ceil, where 28550 x 1.1 is
-    exactly 31405 -- survives every re-emit unless something reads it."""
-
-    note = re.compile(r"max (\d+) ULP, budget (\d+) > ceiling (\d+)")
-    wrong, op = [], None
-    for line in _TABLE_PATH.read_text(encoding="utf-8").splitlines():
-        if line and not line[0].isspace() and not line.startswith("#"):
-            op = line.split(":")[0].strip()
-        found = note.search(line)
-        if not found:
+def test_a_demoted_row_measured_past_the_ceiling():
+    """A tolerance row the sweep measured on a step-gateable output is a demotion only
+    if its ``measured`` is past ``usable_budget_ceiling`` -- ``_verdict``'s call for that
+    figure, so the budget it would have needed is derived, never written down to go
+    stale (Gelu's kept-verbatim 31406 from the old float ceil, where 28550 x 1.1 is
+    exactly 31405, once was). One inside the ceiling should have been enrolled."""
+    wrong = []
+    for row in BudgetTable.load(_TABLE_PATH).rows:
+        p, fields = row.provenance, row.pinned
+        if row.metric != "tolerance" or not p.swept or p.unmeasurable:
             continue
-        measured, budget, ceiling = (int(g) for g in found.groups())
-        fields = _row_fields(line)
-        expected = _verdict(
-            measured,
+        if not _step_gateable_output(DataFormat[fields["out"]]):
+            continue  # block-quantized: never enrolled from this sweep
+        verdict = _verdict(
+            p.measured,
             fields["out"],
             fields.get("in"),
-            _is_exact(op, fields.get("in"), fields["out"], fields.get("dest")),
+            _is_exact(row.op, fields.get("in"), fields["out"], fields.get("dest")),
         )
-        if expected != ("tolerance", budget) or budget <= ceiling:
-            wrong.append(f"{op}: {line.split('#', 1)[0].strip()} -> {expected}")
+        if verdict[0] != "tolerance":
+            wrong.append(f"{row.describe()} measured {p.measured} -> {verdict}")
     assert not wrong, "\n".join(wrong)
 
 
@@ -1909,21 +1942,19 @@ def test_no_step_budget_exceeds_the_measurement_it_records():
     assert not problems, "\n".join(problems)
 
 
-#: One op as the emitter writes it: the run label once on the key line, each row with
-#: its number alone, and a row from another run naming that run itself.
+#: One op as the emitter writes it, beside a row a functional driver sampled.
 _LABELLED_OP = """\
-Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-30, except where a row says otherwise
-  - {{in: Float16, out: Float16, dest: "No", max_ulp: {exhaustive}}}  # max 6 ULP
-  - {{in: Float32, out: Float16, dest: "No", max_ulp: {sampled}}}  # max 6 ULP, wormhole, 2026-09-21
+Acosh:
+  - {{in: Float16, out: Float16, dest: "No", max_ulp: {exhaustive}, measured: 6, run: 2026-09-30}}
+  - {{in: Float32, out: Float16, dest: "No", max_ulp: {sampled}, measured: 6, sampled: 2026-09-21}}
 """
 
 
-def test_an_emitted_row_is_held_to_the_run_on_its_key_line(tmp_path):
+def test_a_swept_row_is_held_to_the_emitters_budget(tmp_path):
     """The raise the audit exists to reject: a row the sweep wrote, its budget edited
-    and its comment untouched. The row carries no label of its own, so the run it is
-    held to is the key line's, and the key line says exhaustive: only the emitter's
-    own number passes. The dated row beside it names a sampled run and keeps the 2x
-    envelope, so a raise within it is not this audit's to reject."""
+    and its measurement untouched. Only the emitter's own number passes. The sampled
+    row beside it keeps the 2x envelope, so a raise within it is not this audit's to
+    reject."""
     path = tmp_path / "budget.yaml"
     path.write_text(_LABELLED_OP.format(exhaustive=7, sampled=12), encoding="utf-8")
     assert _budgets_past_their_measurement(path) == []
@@ -1931,27 +1962,7 @@ def test_an_emitted_row_is_held_to_the_run_on_its_key_line(tmp_path):
     path.write_text(_LABELLED_OP.format(exhaustive=12, sampled=12), encoding="utf-8")
     problems = _budgets_past_their_measurement(path)
     assert len(problems) == 1 and "the emitter writes 7" in problems[0], problems
-    assert _measured_budget_rows(path)[0][4] is True, "the emitted row read as sampled"
-
-
-def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_path):
-    """The other half of that rule, and the one ``_stamp_kept`` applies before a re-emit
-    replaces the clause: an undated *hand-written* note under an exhaustive key line was
-    not measured by that run. Credited to it, a sampled bit-exact gate would read as
-    exhaustive, escape the sampled-zero floor, and pass the exact-budget audit 0 for 0.
-    """
-    path = tmp_path / "budget.yaml"
-    path.write_text(
-        "Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, "
-        "2026-09-30, except where a row says otherwise\n"
-        '  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP over 2048 pts\n'
-        '  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP\n',
-        encoding="utf-8",
-    )
-    assert [row[4] for row in _measured_budget_rows(path)] == [False, True]
-    assert _sampled_zero_budgets(path) == [
-        ("Acosh", '- {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}')
-    ]
+    assert _measured_budget_rows(path)[0][2] is True, "the swept row read as sampled"
 
 
 # ── A gated cell is not quietly parked ────────────────────────────────────────
@@ -2121,20 +2132,17 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
 def _not_measurable_cells(path=_TABLE_PATH):
     """``(op, in, out, approx_or_None, dest_or_None)`` for every ``not measurable`` row
     on an output a step budget could gate."""
-
-    cells, op = [], None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line and not line[0].isspace() and not line.startswith("#"):
-            op = line.split(":")[0].strip()
-        if "not measurable" not in line or not line.lstrip().startswith("- "):
+    cells = []
+    for row in BudgetTable.load(path).rows:
+        if not row.provenance.unmeasurable:
             continue
-        fields = _row_fields(line)
+        fields = row.pinned
         out_fmt = DataFormat[fields["out"]]
         if not _step_gateable_output(out_fmt):
             continue
         cells.append(
             (
-                MathOperation[op],
+                MathOperation[row.op],
                 DataFormat[fields["in"]],
                 out_fmt,
                 ApproximationMode[fields["approx"]] if "approx" in fields else None,
@@ -2161,22 +2169,32 @@ def test_the_table_fits_the_repos_file_size_limit():
     )
 
 
+#: Rows whose every claimed lane disagreed with the golden about being finite: there
+#: is no rest of the cell to measure, so `nonfinite_verdict` records no `measured` (a 0
+#: would claim it bit-exact). The table cannot tell such a row from one that lost its
+#: figure, so each is listed by hand after reading the emit. Empty today.
+_EVERY_CLAIMED_LANE_NONFINITE: frozenset = frozenset()
+
+
 def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
-    """`nonfinite_reason` writes the step count over the measurable lanes beside the
+    """`nonfinite_verdict` keeps the step count over the measurable lanes beside the
     lanes that park a cell, so a cell parked by four lanes still says what the other
     tens of thousands measure, and the headroom report (from #57527) has a figure to
     hold it to. A row written before the emitter kept that figure records nothing for
-    them; re-emit its op."""
-    shape = re.compile(r"; max \d+ ULP over the \d+ measurable lanes")
-    bare, op = [], None
-    for line in _TABLE_PATH.read_text(encoding="utf-8").splitlines():
-        if line and not line[0].isspace() and not line.startswith("#"):
-            op = line.split(":")[0].strip()
-        if "lane(s) disagreeing" in line and not shape.search(line):
-            bare.append(f"{op}: {line.split('#', 1)[0].strip()}")
+    them; re-emit its op. A cell with no measurable lane left is listed in
+    `_EVERY_CLAIMED_LANE_NONFINITE` instead."""
+    bare = [
+        row.describe()
+        for row in BudgetTable.load(_TABLE_PATH).rows
+        if row.provenance.nonfinite is not None
+        and row.provenance.measured is None
+        and row.describe() not in _EVERY_CLAIMED_LANE_NONFINITE
+    ]
     assert not bare, (
         f"{len(bare)} row(s) name the lanes that park their cell but not the maximum "
-        "over the rest of it; re-emit their ops:\n  " + "\n  ".join(bare)
+        "over the rest of it: re-emit their ops, or, where the emit still records no "
+        "figure (no lane of the cell is finite on both sides), list the row in "
+        "_EVERY_CLAIMED_LANE_NONFINITE:\n  " + "\n  ".join(bare)
     )
 
 

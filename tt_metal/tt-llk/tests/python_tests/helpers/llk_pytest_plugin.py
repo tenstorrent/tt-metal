@@ -1190,6 +1190,8 @@ def pytest_testnodedown(node, error):
 def _finish_ulp_emit(session):
     """Under ``--ulp-emit``, write the whole session's measurements into the table once,
     after every cell of an op has been seen. A refusal fails the session."""
+    import yaml
+
     from . import ulp_sweep
 
     if not ulp_sweep.EMIT:
@@ -1215,8 +1217,11 @@ def _finish_ulp_emit(session):
             get_chip_architecture(),
             session.testsfailed,
             exitstatus=session.exitstatus,
-        )
-    except (RuntimeError, ValueError) as exc:
+        ).summary()
+    except (RuntimeError, ValueError, yaml.YAMLError) as exc:
+        # A ValueError or YAMLError can only come from the first read of the table,
+        # when the one on disk does not load and nothing was written; a rewrite that
+        # would not load is refused before the write, as an `EmitRefused`.
         message = f"--ulp-emit: {exc}"
         # Escalate only a clean session: a refusal *because* the run was interrupted, hit
         # an internal error or called pytest.exit(returncode=N) keeps that status, which a
