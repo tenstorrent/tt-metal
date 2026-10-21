@@ -119,6 +119,7 @@ static_assert(CHANNEL_TILES % CHUNK_TILES == 0, "the channels split into whole c
 // when a pass reads whole pages the two corners of one input row come in a single read, which
 // costs the reader less to issue than two.
 constexpr bool PAIR_CORNERS = INPUT_SHARDED && CHUNKS == 1 && input_page_nbytes == STICK_NBYTES;
+static_assert(!PAIR_CORNERS || STICK_NBYTES <= MEM_ZEROS_SIZE, "a paired gather zeros a stick in one read");
 
 // Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in compute's order: fp32
 // [row, kernel position].
@@ -551,16 +552,59 @@ void kernel_main() {
                 }
             };
             if constexpr (PAIR_CORNERS) {
-                for (uint32_t c = 0; c < CORNERS; c += 2) {
-                    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-                        // Both read, and the right one is the next page of the same shard.
-                        const uint32_t right_page = page[r] + (c >> 1) * IN_W + 1;
-                        if ((present[c] >> r) & (present[c + 1] >> r) & 1 && right_page % INPUT_SHARD_PAGES != 0) {
-                            gather(c, r, 2 * STICK_NBYTES);
-                        } else {
-                            gather(c, r, STICK_NBYTES);
-                            gather(c + 1, r, STICK_NBYTES);
+                // The page's source and NoC, and its index within its shard. The core's own shard
+                // and its neighbours hold nearly every corner; any other page goes through the
+                // accessor and is never paired.
+                auto locate = [&](uint32_t page_id, uint64_t& src, uint8_t& read_noc)
+                                  __attribute__((always_inline)) -> uint32_t {
+                    uint32_t in_shard = page_id - shard_first;
+                    if (in_shard < INPUT_SHARD_PAGES) {
+                        src = own_base + in_shard * input_page_nbytes;
+                        read_noc = noc_index;
+                        return in_shard;
+                    }
+                    in_shard = page_id - prev_first;
+                    if (prev_base != 0 && in_shard < INPUT_SHARD_PAGES) {
+                        src = prev_base + in_shard * input_page_nbytes;
+                        read_noc = 0;
+                        return in_shard;
+                    }
+                    in_shard = page_id - next_first;
+                    if (next_base != 0 && in_shard < INPUT_SHARD_PAGES) {
+                        src = next_base + in_shard * input_page_nbytes;
+                        read_noc = 1;
+                        return in_shard;
+                    }
+                    read_noc = page_id < shard_first ? 0 : 1;
+                    src = input_acc.get_noc_addr(page_id, 0, read_noc);
+                    return INPUT_SHARD_PAGES - 1;
+                };
+                const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+                // Corners 2 * y and 2 * y + 1 of a row are pages x0 and x0 + 1 of one input row.
+                for (uint32_t y = 0; y < 2; ++y) {
+                    const uint32_t left_present = present[2 * y];
+                    const uint32_t right_present = present[2 * y + 1];
+                    uint32_t dst_l1 = block_l1 + 2 * y * STICK_NBYTES;
+                    for (uint32_t r = 0; r < TILE_ROWS; ++r, dst_l1 += BLOCK_ROW_NBYTES) {
+                        const bool left = (left_present >> r) & 1;
+                        const bool right = (right_present >> r) & 1;
+                        const uint32_t left_page = page[r] + y * IN_W;
+                        uint64_t src = zeros;
+                        uint8_t read_noc = noc_index;
+                        if (left) {
+                            const uint32_t in_shard = locate(left_page, src, read_noc);
+                            if (right && in_shard + 1 < INPUT_SHARD_PAGES) {
+                                noc_async_read<NOC_MAX_BURST_SIZE>(src, dst_l1, 2 * STICK_NBYTES, read_noc);
+                                continue;
+                            }
                         }
+                        noc_async_read<NOC_MAX_BURST_SIZE>(src, dst_l1, STICK_NBYTES, read_noc);
+                        src = zeros;
+                        read_noc = noc_index;
+                        if (right) {
+                            locate(left_page + 1, src, read_noc);
+                        }
+                        noc_async_read<NOC_MAX_BURST_SIZE>(src, dst_l1 + STICK_NBYTES, STICK_NBYTES, read_noc);
                     }
                 }
             } else {
