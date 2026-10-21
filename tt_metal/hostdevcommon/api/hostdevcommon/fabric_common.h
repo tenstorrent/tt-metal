@@ -26,6 +26,8 @@ static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
+static constexpr uint16_t MAX_HORIZON_MESHES = 1;
+static constexpr uint16_t MAX_HORIZON_DEVS_PER_MESH = 16;
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
@@ -990,6 +992,38 @@ static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed ro
 static_assert(
     sizeof(routing_l1_info_t) == 2704,
     "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)");
+
+// ============================================================
+// Horizon-specific L1 routing table
+// ============================================================
+// Horizon uses a flat (global) AXI address scheme: Tensix cores write directly
+// to a remote device's L1 via noc_async_write with a flat 64-bit address.
+// No ERISC hop-by-hop routing is required.
+//
+// Address layout (from ATT, endpoint_shift=26, endpoint_size=6):
+//   bits[25: 0]  = L1 offset (set by caller)
+//   bits[31:26]  = endpoint_id (tile selector, set by caller)
+//   bits[63:32]  = device window (stored here as node_base_address)
+//
+// node_base_address stores bits[63:32] of the remote device's base address.
+// Reconstruct: (uint64_t)node_base_address[mesh][dev] << 32
+//              | (endpoint_id << 26) | l1_offset
+
+struct horizon_routing_l1_info_t {
+    uint16_t my_mesh_id = 0;
+    uint16_t my_device_id = 0;
+    // bits[63:32] of the flat base address for each (mesh, device) pair.
+    // Entry for this device itself is populated so a core can address its own tiles uniformly.
+    uint32_t node_base_address[MAX_HORIZON_MESHES][MAX_HORIZON_DEVS_PER_MESH] = {};
+};
+// Total: 4 + 1*16*4 = 68 bytes
+
+static_assert(sizeof(horizon_routing_l1_info_t) == 68, "horizon_routing_l1_info_t must be 68 bytes");
+// Multi-mesh not currently supported on Horizon
+static_assert(MAX_HORIZON_MESHES == 1, "Multi-mesh not currently supported on Horizon");
+
+static_assert(offsetof(horizon_routing_l1_info_t, node_base_address) == 4);
+static_assert(sizeof(horizon_routing_l1_info_t) % 4 == 0);
 
 // Fabric connection synchronization region in L1
 // Used for multi-RISC synchronization when opening fabric connections
