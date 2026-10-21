@@ -178,10 +178,7 @@ Tensor pre_scatter_transform_tensor(
     }
 
     Tensor processed_tensor = input_tensor;
-    // Only materialize the source-prefix slice when source is actually wider than index on some
-    // axis -- when the shapes already match this is an identity slice that would still dispatch a
-    // real data-movement kernel over the whole tensor for no effect.
-    if (index_shape.has_value() && processed_tensor.logical_shape() != index_shape.value()) {
+    if (index_shape.has_value()) {
         const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
         const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
         const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
