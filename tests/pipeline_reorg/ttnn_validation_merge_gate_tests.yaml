@@ -7,7 +7,8 @@
 # Note: wh_n150_civ2 is intentionally omitted here (PR-gate smoke covers n150).
 
 - name: ttnn validation smoke
-  cmd: /usr/bin/tt-nn-validation-smoke
+  # CPU_ tests run on the github_hosted_cpu entries below.
+  cmd: /usr/bin/tt-nn-validation-smoke --gtest_filter='-*CPU_*'
   skus:
     wh_n300_civ2:
       timeout: 15
@@ -18,3 +19,41 @@
   team: ttnn
   budget_type: merge_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+# Kernel compile on mock devices, per arch: hand-picked cases + unary sweep, and the binary sweep.
+# An empty TT_METAL_CACHE makes every kernel compile.
+- name: ttnn kernel compile wormhole
+  cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile/*wormhole_*:CPU_KernelCompileSweep/*wormhole_unary_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 15
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
+
+- name: ttnn kernel compile wormhole binary sweep
+  cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompileSweep/*wormhole_binary_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 15
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
+
+- name: ttnn kernel compile blackhole
+  cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile/*blackhole_*:CPU_KernelCompileSweep/*blackhole_unary_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 15
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
+
+- name: ttnn kernel compile blackhole binary sweep
+  cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompileSweep/*blackhole_binary_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 15
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
