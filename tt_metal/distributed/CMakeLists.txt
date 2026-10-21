@@ -15,7 +15,8 @@ if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
 endif()
 
-set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
+# Overridable (-DULFM_PREFIX=/nonexistent) to build against the system MPI instead, e.g. one with UCX.
+set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm CACHE PATH "ULFM OpenMPI install prefix")
 
 # Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
 if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
