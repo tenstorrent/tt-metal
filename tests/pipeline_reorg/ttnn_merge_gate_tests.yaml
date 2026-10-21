@@ -35,6 +35,7 @@
     tests/ttnn/unit_tests/operations/data_movement/test_gather.py
     tests/ttnn/unit_tests/operations/data_movement/test_pad.py
     tests/ttnn/unit_tests/operations/data_movement/test_reshape_codegen.py
+    tests/ttnn/unit_tests/operations/data_movement/test_scatter_codegen.py
     -k codegen
   skus:
     wh_n300_civ2:
