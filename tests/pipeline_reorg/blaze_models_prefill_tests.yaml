@@ -2124,9 +2124,9 @@
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
 # Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
 # no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
-# Traced, and the request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the
-# tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
-# prefill SC4 perf" summary job.
+# 83 slots (manifest), so eager: traced K3 holds one KDA slot. The request runs to 1M like GLM-5.3's:
+# only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands on the run page
+# through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
