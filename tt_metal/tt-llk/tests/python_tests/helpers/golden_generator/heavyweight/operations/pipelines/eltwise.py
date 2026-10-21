@@ -46,11 +46,20 @@ class EltwiseBinaryGolden(Golden):
 
     # ------------------------------------------------------------------
 
-    @property
-    def models_fidelity(self) -> bool:
-        """Whether this op runs the multiply as accumulated partial products."""
+    def models_fidelity(self, cfg: OpConfig) -> bool:
+        """Whether this op runs the multiply as accumulated partial products.
+
+        Needs the input format, not just the operation: the fidelity split is a
+        property of the **float** multiplier. It slices a mantissa, and an
+        integer datum has none to slice -- applying it anyway truncates the
+        operand's low bits, so an Int16 ``3 * 10922`` came back 32640 instead
+        of 32766. The FPU's integer path does not decompose into phases, so an
+        integer multiply takes the single exact product in :meth:`apply`.
+        """
         return (
-            self.operation is MathOperation.Elwmul and self.mantissa_split is not None
+            self.operation is MathOperation.Elwmul
+            and self.mantissa_split is not None
+            and not cfg.in_formats[0].is_integer()
         )
 
     def build_chain(self, cfg: OpConfig) -> Chain:
@@ -69,7 +78,7 @@ class EltwiseBinaryGolden(Golden):
         Accumulates into Dest when this tile is not the first of its block, or
         when a fidelity phase has already written Dest.
         """
-        if self.models_fidelity:
+        if self.models_fidelity(cfg):
             for phase in fidelity_phases(self.math_fidelity):
                 chain.then(
                     self.src_to_dest(
@@ -115,7 +124,18 @@ class EltwiseBinaryGolden(Golden):
         )
 
     def apply(self, regs: Registers) -> torch.Tensor:
-        a, b = regs["srcA"].float(), regs["srcB"].float()
+        """The operation, computed in a type exact for the operands it was given.
+
+        The unpacker already landed the operands in the register's own dtype, so
+        an integer input really is an integer tensor here. Computing it in
+        float32 would be exact for Int8 but not for Int16 -- 32767 * 32767 loses
+        its low bit past float32's 2**24 -- and the point of the model is that
+        the type is the hardware's, not the convenient one. int64 covers every
+        product reachable through SrcA/SrcB, since Int32 never lands in one.
+        """
+        a, b = regs["srcA"], regs["srcB"]
+        wide = torch.int64 if not a.dtype.is_floating_point else torch.float32
+        a, b = a.to(wide), b.to(wide)
         if self.operation is MathOperation.Elwadd:
             return a + b
         if self.operation is MathOperation.Elwsub:
