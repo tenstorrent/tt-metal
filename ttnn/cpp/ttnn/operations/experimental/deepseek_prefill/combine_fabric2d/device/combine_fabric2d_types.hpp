@@ -29,7 +29,12 @@ struct CombineFabric2dParams {
     // count, so it means the same thing for every model, and an op parameter rather than a constant
     // because where the throughput curve bends is a per-model measurement: the caller is the one who
     // knows whether DRAM or microseconds is the scarcer thing for the model it is running.
-    uint32_t fwd_reduction = 8;
+    //
+    // 16 is what the models routing to many experts over a wide embedding settle on, and so the right
+    // thing for a caller that has not thought about it to inherit. Every caller that reaches the op
+    // through ttnn::prim sets it explicitly, so this initializer is the sibling-style fallback for a
+    // params struct built some other way, not a value the op path falls back to.
+    uint32_t fwd_reduction = 16;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // Set only when combine runs overlapped inside the routed expert: its threshold decides the order
     // experts are walked, and its writers report completion to the collector.
