@@ -116,8 +116,9 @@ run_58718_readout_check() {
     # report one ref cnt per op, i.e. stay frozen through the BRISC readout.
     for i in 1 2 3; do
         rm -rf generated/profiler/.logs
-        TT_METAL_PROFILE_PERF_COUNTERS=47 python -m tracy -r -v -m pytest \
-            tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul -k "1375 and width" -q
+        # tracy runs the -m string through a shell, so the -k expression keeps its inner quotes
+        TT_METAL_PROFILE_PERF_COUNTERS=47 python -m tracy -r -v -m \
+            "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul -k '1375 and width' -q"
         python tests/scripts/single_card/check_58718_readout.py
     done
 }
