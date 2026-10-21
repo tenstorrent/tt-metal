@@ -76,6 +76,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName final_decay_dfb_name{"final_decay"};
     const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
     const tt::tt_metal::experimental::DFBSpecName output_intermediate_dfb_name{"output_intermediate"};
+    const tt::tt_metal::experimental::DFBSpecName query_projection_dfb_name{"query_projection"};
     const tt::tt_metal::experimental::DFBSpecName k_decay_transposed_dfb_name{"k_decay_transposed"};
     const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
@@ -130,6 +131,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(final_decay_dfb_name, 2 * Kt, input_format(in.final_decay)),
         make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
         make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
+        // The recurrence's q_decay @ state, computed early so its latency hides behind the dependent stages.
+        make_dfb(query_projection_dfb_name, summary ? 1 : cv, fp32),
         make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
         make_dfb(final_state_dfb_name, state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
@@ -277,6 +280,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
           final_decay_dfb_name,
           output_dfb_name,
           output_intermediate_dfb_name,
+          query_projection_dfb_name,
           k_decay_transposed_dfb_name,
           final_state_dfb_name,
           scratch_dfb_name,
@@ -308,6 +312,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(output_dfb_name, "output"),
                 tt::tt_metal::experimental::ProducerOf(output_intermediate_dfb_name, "output_intermediate"),
                 tt::tt_metal::experimental::ConsumerOf(output_intermediate_dfb_name, "output_intermediate"),
+                tt::tt_metal::experimental::ProducerOf(query_projection_dfb_name, "query_projection"),
+                tt::tt_metal::experimental::ConsumerOf(query_projection_dfb_name, "query_projection"),
                 tt::tt_metal::experimental::ConsumerOf(k_decay_transposed_dfb_name, "k_decay_transposed"),
                 tt::tt_metal::experimental::ProducerOf(final_state_dfb_name, "final_state"),
                 tt::tt_metal::experimental::ProducerOf(transport_state_dfb_name, "transport_state"),

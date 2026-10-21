@@ -799,3 +799,25 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     # adjacent storage, which surfaced here as a final_decay mismatch.
     assert torch.isfinite(actual).all()
     torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)
+
+
+@pytest.mark.parametrize("work_items_per_core,short", [(4, 1), (8, 13), (32, 61)])
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x26], ids=["all-fp32", "production"])
+def test_prepare_chunk_recurrence_uneven_split_inverse(
+    device: ttnn.Device, work_items_per_core: int, short: int, output_bf16_mask: int
+) -> None:
+    """Cores with fewer work items than the largest share still invert in whole-buffer transactions."""
+    grid = device.compute_with_storage_grid_size()
+    chunks = grid.x * grid.y * work_items_per_core - short
+    chunk = _t_inv_numerical_stress_inputs()
+    outputs = _run(
+        _device_inputs(tuple(x.repeat(1, chunks, 1) for x in chunk), device),
+        1,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    # Every chunk has the same inputs, so every chunk's T_inv must match the first: an inverse transaction that
+    # crossed a ring end corrupted the items of the cores with a smaller share.
+    t_inv = ttnn.to_torch(outputs[6]).float().reshape(chunks, -1)
+    assert torch.isfinite(t_inv).all()
+    torch.testing.assert_close(t_inv, t_inv[:1].expand_as(t_inv), rtol=0, atol=0)
