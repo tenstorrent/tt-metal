@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import numpy as np
 import pytest
 from conftest import blackhole_only
@@ -16,7 +18,18 @@ from helpers.compressed_utils import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import TemplateParameter
 from helpers.tile_constants import FACE_C_DIM
+
+
+@dataclass
+class FACE_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the face_compressed_mm init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define FACE_MM_PRESERVE_SRC_ZERO_FLAG {str(self.preserve).lower()}"
 
 
 def promote_assignment(assignment, ct):
@@ -231,7 +244,7 @@ SUPPORTED_M = {1, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4")}
 
 
-def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
+def run_face_compressed(M, K, N, assignment, pcc_threshold=None, extra_templates=()):
     run_compressed(
         M,
         K,
@@ -245,6 +258,7 @@ def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        extra_templates=extra_templates,
     )
 
 
@@ -307,6 +321,25 @@ FACE_SWITCH_MULTS = [1.0, 2.0, 3.0]
 
 SHAPES = BASE_SHAPES + DEEPSEEK_SHAPES + EXT_SHAPES
 MULTI_FORMATS = BASE_MULTI_FORMATS  # EXT_MULTI_FORMATS are not supported
+
+
+@blackhole_only
+def test_matmul_face_compressed_init_restores_src_zero_flag_after_keep():
+    """The init must re-apply the Src zero-flag default a preceding copy_tile_init left at keep.
+
+    The flag is set to keep right before the init; the execute asserts the operand-driven value under LLK
+    asserts, so without the restore the run fails with an LLK assert (the gate), and with it the product must
+    still match the golden. Smallest supported shape, one format: the restore does not depend on them.
+    """
+    M, K, N = 1, 64, 32
+    assignment = assign_clustered(K, N, ("bfp4",), COMPRESSION_GRANULARITY)
+    run_face_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        extra_templates=[FACE_MM_PRESERVE_SRC_ZERO_FLAG(True)],
+    )
 
 
 @blackhole_only

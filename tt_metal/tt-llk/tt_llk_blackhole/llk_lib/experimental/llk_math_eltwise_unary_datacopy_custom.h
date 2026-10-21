@@ -8,11 +8,36 @@
 
 #include "cmath_common.h"
 
-// Uses ADDR_MOD_4 only ({srca=8, dest=8}), preserving matmul's ADDR_MOD 0,1,2
-// and reduce's ADDR_MOD 2,3. ADDR_MOD_4 is a "don't care" — matmul restores it
-// on next reinit. Assumes full 32x32 tile (4 faces, 8 rows each).
-inline void _llk_math_eltwise_unary_datacopy_custom_(const std::uint32_t dest_index = 0)
+/**
+ * @brief Copy one 32x32 tile from SrcA into DEST with eight MOVA2D, without a MOP.
+ *
+ * Uses ADDR_MOD_4 only ({srca=8, dest=8}), preserving matmul's ADDR_MOD 0,1,2 and reduce's ADDR_MOD 2,3.
+ * ADDR_MOD_4 is a "don't care" -- matmul restores it on next reinit. Assumes a full 32x32 tile (4 faces,
+ * 8 rows each).
+ *
+ * @param dest_index: Tile index in DEST that the copy is written to.
+ * @param src_dst_format: Format of the copied operand as unpacked into SrcA (the CB's unpack destination format, which
+ *                        copy_init derives from the CB), as @ref math::_configure_copy_zero_flag_state_ takes it. Keyed on
+ *                        the copied operand rather than on the cached math-side SrcA format: the legacy custom_mm /
+ *                        compressed_custom_mm / sdpa_custom_mm compute inits configure unpack as (in1, in0) but math as
+ *                        (in0, in1), so after one of them the math cache can hold the other operand's format.
+ * @note Sets the Src zero-substitution flag to the copy policy for src_dst_format (keep, so bf16 -0.0 and denormals
+ *       land in DEST unchanged; flush for fp8 sources), as copy_init does, and LEAVES it there. The flag stays at keep
+ *       until an init / reinit calls math::_configure_default_zero_flag_state_(), as the no-mop matmul, reduce_block_max_row,
+ *       custom_mm / compressed_custom_mm / sdpa_custom_mm / sdpa_custom_mm_reuse_dest_srcb, face_compressed_mm,
+ *       hadamard_h128 and eltwise-binary inits / reinits do. Any FPU init that does not call it inherits keep and its
+ *       MVMUL / GMPOOL then keeps denormal Src operands, e.g. @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_,
+ *       @ref _llk_math_deepseek_moe_gate_eltwise_binary_init_, @ref _llk_math_generalized_moe_gate_eltwise_binary_init_,
+ *       @ref _llk_math_eltwise_mul_scalar_block_init_, @ref _llk_math_sdpa_bcast_col_srcb_reuse_init_,
+ *       @ref _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_ and @ref _llk_math_custom_mm_reuse_dest_srcb_init_.
+ */
+inline void _llk_math_eltwise_unary_datacopy_custom_(const std::uint32_t dest_index, const std::uint32_t src_dst_format)
 {
+    // MOVA2D flushes any SrcA datum with a zero exponent byte (bf16 -0.0, denormals) while the Src
+    // zero-substitution flag holds the operand default. Apply the copy policy for the copied operand's format
+    // (keep, except fp8 whose zero carries a residual); skip-if-set.
+    math::_configure_copy_zero_flag_state_(src_dst_format);
+
     addr_mod_t {
         .srca = {.incr = 8},
         .srcb = {.incr = 0},

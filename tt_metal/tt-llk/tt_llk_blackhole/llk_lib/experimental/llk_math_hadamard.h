@@ -110,6 +110,15 @@ inline void _llk_math_hadamard_h128_configure_addrmod_()
 static constexpr float kH128NormScale        = 0.08838834764831843f;
 static constexpr std::uint32_t kH128NormBits = __builtin_bit_cast(std::uint32_t, kH128NormScale);
 
+/**
+ * @brief Configure the math thread for the H128 Hadamard transform: programs the address mods and, under normalize, the SFPU scale.
+ *
+ * @tparam math_fidelity: LoFi issues one MVMUL per matmul pass; HiFi2/3/4 issue two.
+ * @tparam normalize: Scale the result by 1/sqrt(128) (writes LREG12, see the file header).
+ * @note Call before @ref _llk_math_hadamard_h128_ and pair with @ref _llk_math_hadamard_h128_uninit_. Establishes the
+ *       operand-driven default Src zero-substitution state, which the execute asserts under LLK asserts; re-run this
+ *       init after any math op that leaves the flag at keep (a copy init does).
+ */
 template <MathFidelity math_fidelity = MathFidelity::HiFi4, bool normalize = true>
 inline void _llk_math_hadamard_h128_init_()
 {
@@ -122,6 +131,9 @@ inline void _llk_math_hadamard_h128_init_()
         sfpu::_init_sfpu_config_reg();
         sfpu::_sfpu_load_config32_(p_sfpu::LREG12, (kH128NormBits >> 16) & 0xFFFF, kH128NormBits & 0xFFFF);
     }
+
+    // A preceding datacopy leaves the Src zero flag at keep; the MVMULs need the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 // One H128 transform on the tile at dst_index (see the file header for
@@ -134,6 +146,11 @@ template <MathFidelity math_fidelity = MathFidelity::HiFi4, bool normalize = tru
 inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "hadamard_h128: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
 
     // dst row 16 = face 1 (MM1 target), row 0 = face 0 (MM2 target).
 

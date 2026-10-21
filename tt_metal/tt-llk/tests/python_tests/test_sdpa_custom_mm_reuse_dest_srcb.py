@@ -58,6 +58,9 @@ No Blackhole card is available in this environment; this is validated by a clean
 Blackhole compile plus the ttsim numeric result on the derivable region.
 """
 
+from dataclasses import dataclass
+
+import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
@@ -66,15 +69,27 @@ from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import StimuliMode, TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     SDPA_CUSTOM_MM_REUSE_DEST,
+    TemplateParameter,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
+
+
+@dataclass
+class SDPA_REUSE_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the P preload and the reuse init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SDPA_REUSE_PRESERVE_SRC_ZERO_FLAG {str(self.preserve).lower()}"
+
 
 TILE_DIM = 32
 FACE_DIM = 16
@@ -98,7 +113,11 @@ FACE0_TOP_ROWS = 8
 DEFINED_LANES = FACE0_TOP_ROWS * FACE_DIM  # 128
 
 
-def _run(math_fidelity, formats, dest_acc):
+def _run(math_fidelity, formats, dest_acc, preserve_zero_flag=False, operands=None):
+    """Run the op; return (golden, device) on the defined lanes.
+
+    ``operands`` optionally supplies row-major ``(P, V)`` float tensors instead of the layout-robust stimulus.
+    """
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.output_format]
@@ -129,9 +148,13 @@ def _run(math_fidelity, formats, dest_acc):
     # performs internally and to any M-face fold, so the top-8-row face-0 output the op
     # actually computes matches the tiled MatmulGolden. Distinct random V columns keep
     # it a real per-column dot product rather than a degenerate constant fill.
-    src_P = torch.full_like(src_P, 1.0)
-    v_cols = torch.rand(1, input_B_dimensions[1])
-    src_V = v_cols.expand(input_B_dimensions[0], input_B_dimensions[1]).contiguous()
+    if operands is None:
+        src_P = torch.full_like(src_P, 1.0)
+        v_cols = torch.rand(1, input_B_dimensions[1])
+        src_V = v_cols.expand(input_B_dimensions[0], input_B_dimensions[1]).contiguous()
+    else:
+        # Caller-supplied row-major (P, V) replace the layout-robust stimulus; the golden follows them.
+        src_P, src_V = (t.reshape(-1).to(src_P.dtype) for t in operands)
 
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
@@ -159,6 +182,7 @@ def _run(math_fidelity, formats, dest_acc):
         templates=[
             MATH_FIDELITY(math_fidelity),
             SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=KT_DIM, nt_dim=NT_DIM),
+            SDPA_REUSE_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -197,4 +221,63 @@ def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc):
     assert passed_test(golden, device, formats.output_format), (
         "sdpa_custom_mm_reuse_dest_srcb did not reproduce the tiled P@V golden on the "
         "defined (top 8 rows of face 0) output lanes"
+    )
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# V is scaled up so a kept denormal gives a visibly nonzero product.
+OPERAND_SCALE = 2.0**100
+
+
+# Positive control: the smallest normal-range P that still gives O(1) products with V ~ 2^100.
+NORMAL_P = 2.0**-100
+
+
+def test_sdpa_custom_mm_reuse_dest_srcb_flushes_denormal_srcb_after_keep_flag():
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    P is all bf16 denormals. With the flag at keep the P preload carries them into DEST (as a copy_tile
+    would), MOVD2B pulls them into SrcB, and a bf16 MVMUL must flush them: scaled by V ~ 2^100 the products
+    are visibly nonzero if kept, so every defined output lane must come out exactly 0.
+
+    Positive control: the same keep-flag run with a constant normal P (2^-100, so the products stay O(1))
+    must match the P@V golden, which pins that the zero result above comes from the flush and not from a dead
+    V / MVMUL / pack path or a stale result buffer. Mixed P is not golden-comparable for this op (see the
+    module docstring), so the two runs are separate.
+    """
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
+        # The stimuli cache keys on the pytest node id, one slot per test: --stimuli-only would save the
+        # denormal run and skip before the control, and --use-stimuli would feed the denormal inputs and
+        # golden to both runs, so the control would silently repeat the denormal case.
+        pytest.skip("this test cannot use the stimuli cache")
+    M, K, N = TILE_DIM, KT_DIM * TILE_DIM, NT_DIM * TILE_DIM
+    torch.manual_seed(0)
+    P = BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (M, K)).float()
+    V = (torch.rand(1, N) * OPERAND_SCALE).expand(K, N).contiguous()
+
+    formats = FORMATS[0]
+    _, device = _run(
+        MathFidelity.LoFi,
+        formats,
+        DestAccumulation.No,
+        preserve_zero_flag=True,
+        operands=(P, V),
+    )
+    kept = device.float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
+
+    golden, device = _run(
+        MathFidelity.LoFi,
+        formats,
+        DestAccumulation.No,
+        preserve_zero_flag=True,
+        operands=(torch.full((M, K), NORMAL_P), V),
+    )
+    assert passed_test(golden, device, formats.output_format), (
+        "positive control: constant normal P did not reproduce the P@V golden on the defined lanes, so the "
+        "flush check above is not evidence"
     )

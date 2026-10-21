@@ -100,7 +100,9 @@ ALWI void matmul_block_no_mop(
 // clang-format off
 /**
  * Lightweight no-MOP matmul reinit for steady-state loops where tile formats/dim assumptions
- * are unchanged. Reprograms unpack matmul setup and restores math addrmods without full init.
+ * are unchanged. Reprograms unpack matmul setup and restores math addrmods without full init; on
+ * Blackhole the math side also re-applies the operand-driven Src zero-flag default (a preceding
+ * copy_tile_custom leaves the flag at keep).
  * On Wormhole, this reinit path is only intended for the SDPA full-tile, throttle-0 use case.
  *
  * Return value: None

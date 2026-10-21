@@ -95,8 +95,13 @@ def _config(
     formats=FORMATS,
     h16_tile_index=0,
     padding=None,
+    preserve_src_zero_flag=False,
 ):
-    """One kernel variant. `inputs` is a [num_tiles, 128] tensor, one transform per row."""
+    """One kernel variant. `inputs` is a [num_tiles, 128] tensor, one transform per row.
+
+    `preserve_src_zero_flag` makes the math thread set the Src zero flag to keep before the init, as a
+    preceding copy_tile_init does.
+    """
     num_tiles = inputs.shape[0]
 
     # buffer_A is the h16 operand and buffer_B the inputs, matching the LLKs' own operand naming
@@ -110,7 +115,11 @@ def _config(
         "sources/hadamard_test.cpp",
         formats,
         templates=[
-            HADAMARD(hadamard_normalize=normalize, h16_tile_index=h16_tile_index),
+            HADAMARD(
+                hadamard_normalize=normalize,
+                h16_tile_index=h16_tile_index,
+                hadamard_preserve_src_zero_flag=preserve_src_zero_flag,
+            ),
             MATH_FIDELITY(fidelity),
             DEST_SYNC(dest_sync),
         ],
@@ -192,6 +201,27 @@ def test_hadamard_h128(fidelity, normalize, num_tiles):
         )
     else:
         _assert_exact(device, inputs)
+
+
+def test_hadamard_h128_init_restores_src_zero_flag_after_keep():
+    """The init must re-apply the Src zero-flag default a preceding copy_tile_init left at keep.
+
+    The flag is set to keep right before the init; the execute asserts the operand-driven value under LLK
+    asserts, so without the restore the run fails with an LLK assert (the gate), and with it the transform
+    must still be exact. One tile, LoFi, no normalize: the restore does not depend on them.
+    """
+    inputs = _signs(seed=101, count=1)
+
+    device = _run(
+        _config(
+            inputs,
+            normalize=False,
+            fidelity=MathFidelity.LoFi,
+            preserve_src_zero_flag=True,
+        )
+    )
+
+    _assert_exact(device, inputs)
 
 
 @parametrize(

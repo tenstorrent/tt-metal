@@ -146,7 +146,8 @@ ALWI void reduce_block_max_row(
 // clang-format off
 /**
  * Lightweight Blackhole-only reinit path used when reduce follows custom SDPA sub path.
- * Reprograms reduce MOP and restores only the reduce addrmods.
+ * Reprograms reduce MOP, restores the reduce addrmods and re-applies the operand-driven Src zero-flag
+ * default (a preceding copy_tile_custom leaves the flag at keep).
  *
  * respect_trigger parameter enables an optimization used in SDPA (Scaled Dot-Product Attention)
  * kernels to increase utilization. When enabled, it splits the unpack MOP (Macro Operation) into two halves
@@ -183,8 +184,9 @@ ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
 
 #ifdef ARCH_BLACKHOLE
 /**
- * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
- * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
+ * Minimal reinit: ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6, plus the operand-driven Src zero-flag default
+ * (a preceding copy_tile_custom leaves the flag at keep). Requires copy_tile_custom (which uses
+ * ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
  */
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
@@ -201,9 +203,9 @@ ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
 }
 
 /**
- * Minimal reinit (runtime variant): only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6.
- * Requires copy_tile_custom (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved
- * from the previous reduce.
+ * Minimal reinit (runtime variant): ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6, plus the operand-driven
+ * Src zero-flag default (a preceding copy_tile_custom leaves the flag at keep). Requires
+ * copy_tile_custom (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
@@ -225,8 +227,9 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
 }
 
 /**
- * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
- * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
+ * Short reinit (runtime variant): Reprograms reduce MOP, restores addrmods and re-applies the
+ * operand-driven Src zero-flag default. Used when reduce follows custom SDPA sub path with runtime
+ * block_ct_dim.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_block_max_row_reinit_short_runtime(

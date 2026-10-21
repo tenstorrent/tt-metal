@@ -362,6 +362,10 @@ template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "reduce_block_max_row_runtime: Src zero-substitution flag does not hold the operand-driven value; an op between the "
+        "init / reinit and this call left it at keep, so denormal Src operands would not be flushed");
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
@@ -417,23 +421,26 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
 /**
  * Reinitializes the block-based reduce_max_row operation after a matmul.
  *
- * This LLK API function is used only to re-initialize the address modifiers after a
- * matmul operation in an SDPA inner loop. Please don't use this function as a substitute for
- * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
- * for a certain use case and the LLK team does not guarantee any degree of generality.
+ * Re-initializes the four address modifiers the reduce consumes (ADDR_MOD_1/2/3/6) after a matmul
+ * operation in an SDPA inner loop and re-applies the operand-driven Src zero-flag default (a cfg RMW
+ * only when the value differs); the MOP and replay buffer must still be intact. Please don't use this
+ * function as a substitute for the native llk_math_reduce_block_max_row_init LLK. This function is
+ * highly specialized for a certain use case and the LLK team does not guarantee any degree of generality.
  */
 inline void _llk_math_reduce_block_max_row_reinit_runtime_()
 {
     reduce_max_row_configure_addrmod_reinit_runtime();
+    // A preceding copy_tile_custom leaves the Src zero flag at keep; the GMPOOL needs the operand default.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
  * Short reinitialization for block-based reduce_max_row operation after a matmul.
- * Reprograms address modifiers and MOP configuration. Used when MOP was clobbered
- * but full init is not needed.
+ * Reprograms address modifiers and MOP configuration and re-applies the operand-driven Src
+ * zero-flag default. Used when MOP was clobbered but full init is not needed.
  *
- * This LLK API function is used only to re-initialize the address modifiers and MOP
- * after a matmul operation in an SDPA inner loop.
+ * This LLK API function is used only to re-initialize the address modifiers, the MOP and the
+ * Src zero flag after a matmul operation in an SDPA inner loop.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape)
@@ -442,16 +449,21 @@ inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t b
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
     _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
+    // A preceding copy_tile_custom leaves the Src zero flag at keep; the GMPOOL needs the operand default.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
  * Minimal reinitialization for block-based reduce_max_row operation.
- * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
- * Used when only specific addrmods were clobbered by previous operations.
+ * Reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3) and re-applies the
+ * operand-driven Src zero-flag default. Used when only specific addrmods were clobbered by previous
+ * operations (and a copy_tile_custom left the flag at keep).
  */
 inline void _llk_math_reduce_block_max_row_reinit_minimal_runtime_()
 {
     reduce_max_row_configure_addrmod_reinit_minimal_runtime();
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+    // A preceding copy_tile_custom leaves the Src zero flag at keep; the GMPOOL needs the operand default.
+    math::_configure_default_zero_flag_state_();
 }
