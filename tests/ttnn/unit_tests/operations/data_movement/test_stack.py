@@ -41,3 +41,35 @@ def test_stack(device, input_shapes, dim, layout):
     assert_equal(torch_result, ttnn_result_torch)
 
     assert torch_result.shape == ttnn_result_torch.shape
+
+
+@pytest.mark.parametrize(
+    "input_shapes, dim, torch_dtype, ttnn_dtype",
+    [
+        # Trailing axis, 4-byte and float dtypes: concat and permute pick different kernels per element size.
+        ([(1444,)] * 8, -1, torch.int32, ttnn.int32),
+        ([(8732, 2), (8732, 2)], 2, torch.int32, ttnn.uint32),
+        ([(1, 23, 40, 64), (1, 23, 40, 64)], 4, torch.float32, ttnn.float32),
+        # A negative dim that is not the trailing axis stays on the unsqueeze-then-concat path.
+        ([(2, 32, 64), (2, 32, 64)], -2, torch.bfloat16, ttnn.bfloat16),
+        ([(13600,), (13600,), (13600,)], -2, torch.int32, ttnn.int32),
+    ],
+)
+def test_stack_row_major_dtypes(device, input_shapes, dim, torch_dtype, ttnn_dtype):
+    if torch_dtype.is_floating_point:
+        torch_tensors = [torch.rand(shape, dtype=torch_dtype) for shape in input_shapes]
+    else:
+        torch_tensors = [torch.randint(0, 1000, shape, dtype=torch_dtype) for shape in input_shapes]
+
+    ttnn_tensors = [
+        ttnn.from_torch(
+            tensor, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        for tensor in torch_tensors
+    ]
+    torch_result = torch.stack(torch_tensors, dim=dim)
+    ttnn_result = ttnn.stack(ttnn_tensors, dim=dim)
+
+    ttnn_result_torch = ttnn.to_torch(ttnn_result)
+    assert torch_result.shape == ttnn_result_torch.shape
+    assert_equal(torch_result, ttnn_result_torch.to(torch_dtype))

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "stack.hpp"
+
+#include <algorithm>
+
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -46,7 +49,13 @@ Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
         rank,
         -(rank + 1),
         rank);
-    if (first.layout() == Layout::ROW_MAJOR && rank >= 1 && normalized_dim == rank) {
+    // Sharded or mixed-layout inputs keep the unsqueeze-then-concat path, where concat's own checks
+    // decide what is supported; the leading-axis route is only measured for interleaved row-major.
+    const bool all_row_major_interleaved =
+        std::all_of(input_tensors.begin(), input_tensors.end(), [](const Tensor& tensor) {
+            return tensor.layout() == Layout::ROW_MAJOR && !tensor.memory_config().is_sharded();
+        });
+    if (all_row_major_interleaved && rank >= 1 && normalized_dim == rank) {
         return stack_row_major_on_trailing_axis(input_tensors, rank);
     }
     std::vector<Tensor> expanded_tensors;
