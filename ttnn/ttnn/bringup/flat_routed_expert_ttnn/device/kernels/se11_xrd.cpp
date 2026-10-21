@@ -59,7 +59,11 @@ void kernel_main() {
     auto read_seg = [&](uint32_t row, uint32_t j, uint32_t dst) {
         const uint32_t b = j * seg;
         for (uint32_t q = 0; q < seg; q += pread) {
+#ifdef XRD_HALF  // (perf probe MIMO_FL_XRD_HALF: half of each read - fp8 x's DRAM bytes, the same requests; garbage)
+            noc_async_read(get_noc_addr(row * ppr + (b + q) / row_bytes, xg, (b + q) % row_bytes), dst + q, pread / 2);
+#else
             noc_async_read(get_noc_addr(row * ppr + (b + q) / row_bytes, xg, (b + q) % row_bytes), dst + q, pread);
+#endif
         }
     };
 #ifdef XRD_INDEXED

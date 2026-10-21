@@ -979,6 +979,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         if (const char* skip = cstr(pr.xrd_skip)) {
             xrd_def["XRD_SKIP_READS"] = skip;
         }
+        if (on(pr.xrd_half)) {
+            xrd_def["XRD_HALF"] = "1";
+        }
         uint32_t xrd_batch = XRD_BATCH;
         if (const char* b = cstr(pr.xrd_batch)) {
             xrd_batch = static_cast<uint32_t>(std::stoul(b));

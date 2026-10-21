@@ -103,6 +103,7 @@ struct FlatProbes {
     // relays' row-major chunks (credits / arrival counts, se_drisc.hpp), the relays read no DRAM. Pure DRISC, indexed
     // x, one row per x page. (Probe while it is new: read at plan / program build, not in the program hash)
     std::optional<std::string> drisc_x;
+    std::optional<std::string> xrd_half;  // MIMO_FL_XRD_HALF: the relays read half of each x segment (fp8 x's bytes)
     std::optional<std::string> dump_rt;             // MIMO_FL_DUMP_RT (debug output)
     std::optional<std::string> dw_rot;              // MIMO_FL_DW_ROT
     std::optional<std::string> dyn_pull;            // MIMO_FL_DYN_PULL

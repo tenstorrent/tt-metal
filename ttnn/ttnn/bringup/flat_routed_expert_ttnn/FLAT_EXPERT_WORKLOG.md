@@ -1318,3 +1318,12 @@ garbage, which hung the first, arena-word version).
   writes across relays - and even then each 2 KB segment costs the DRISC ~25-40 register accesses (DMA, write,
   increment), against a read-side gain of ~90 / 136 us (M 80 / 160) in the emulation. Not pursued further: the DRISC is
   the wrong engine for x's scatter-gather; kept as a probe.
+
+### fp8 x (half the bytes), emulated (2026-10-21, GLM-5.3, one chip, real path)
+Probe MIMO_FL_XRD_HALF: the relays read the first half of each 2 KB segment - the same requests at fp8 x's bytes
+(garbage x, perf only). us, M 80 / 160: default (bf16 x) 1667 / 1926; half bytes 1615 / 1800 (-3.1 / -6.5%); no x
+reads at all 1612 / 1742; half + UB 2 1574 / 1851. So x's cost is bytes as well as queueing: half the bytes recovers
+95% of it at M 80 and 68% at M 160; with UB 2 at small M another 2.5% (UB 2 still loses at M 160). In the block it also
+halves the dispatch's fabric bytes and its x write to DRAM. Open: fp8 x needs the dispatch to send fp8 rows and the
+relays' tilizer to read fp8 (to the bfp8 tiles the gate/up cores take) - the accuracy of fp8 then bfp8 x needs the
+golden check.
