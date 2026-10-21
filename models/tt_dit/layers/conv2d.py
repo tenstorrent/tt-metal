@@ -442,8 +442,18 @@ class Conv2d(Module):
         # Prepared (device-resident) weight/bias tensors.  Populated lazily on the first
         # forward call so they are ready before any trace capture begins.  Stored as plain
         # attributes (not Parameter) because their shape differs from the raw OIHW weights.
+        # ``ttnn.prepare_conv_weights`` lays the weight out for ONE conv program: the input
+        # height / width, memory config, dtype and DRAM slice config of that call. A module
+        # that sees several input shapes (a VAE decoder warmed at 1024x1024, then run at
+        # 2048x2048: the FLUX 3 Klein pipeline, 2026-10-21) must keep one prepared copy per
+        # shape; reusing the first one silently produced striped, saturated images. The
+        # cache below is keyed by that shape tuple; ``_prepared_weight`` / ``_prepared_bias``
+        # always point at the entry of the last call. ``FLUX3_KLEIN_CONV_PREP_CACHE=single``
+        # restores the old single-copy behaviour for the regression probe.
         self._prepared_weight: ttnn.Tensor | None = None
         self._prepared_bias: ttnn.Tensor | None = None
+        self._prepared_by_shape: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
+        self._prepared_key: tuple | None = None
 
     @classmethod
     def from_torch(
@@ -498,6 +508,15 @@ class Conv2d(Module):
         if self._prepared_bias is not None:
             ttnn.deallocate(self._prepared_bias)
             self._prepared_bias = None
+        for key, (weight, bias) in self._prepared_by_shape.items():
+            if key == self._prepared_key:
+                continue  # already released above
+            if weight is not None:
+                ttnn.deallocate(weight)
+            if bias is not None:
+                ttnn.deallocate(bias)
+        self._prepared_by_shape = {}
+        self._prepared_key = None
         super().deallocate_weights()
 
     def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
@@ -556,6 +575,26 @@ class Conv2d(Module):
             act_block_h_override=32, weights_dtype=self.weight.dtype, **self.conv_config_overrides
         )
 
+        prep_key = (
+            int(b),
+            int(h),
+            int(w),
+            str(x.memory_config()),
+            str(x.get_layout()),
+            str(x.dtype),
+            None if slice_config is None else (int(slice_config.num_slices), str(slice_config.slice_type)),
+            tuple(sorted((k, str(v)) for k, v in self.conv_config_overrides.items())),
+        )
+        import os as _os
+
+        single = _os.environ.get("FLUX3_KLEIN_CONV_PREP_CACHE", "per_shape") == "single"
+        if not single and self._prepared_key != prep_key:
+            # switch to (or create) this shape's prepared copy
+            if self._prepared_key is not None:
+                self._prepared_by_shape[self._prepared_key] = (self._prepared_weight, self._prepared_bias)
+            cached = self._prepared_by_shape.get(prep_key)
+            self._prepared_weight, self._prepared_bias = cached if cached is not None else (None, None)
+            self._prepared_key = prep_key
         if self._prepared_weight is None:
             base_kwargs = {
                 "in_channels": in_channels,

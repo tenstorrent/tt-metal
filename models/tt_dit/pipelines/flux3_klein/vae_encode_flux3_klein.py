@@ -39,6 +39,7 @@ from .packing import FLUX3_KLEIN_LATENT_CHANNELS, FLUX3_KLEIN_VAE_CHANNELS, late
 from .references import PreparedReferences, reference_ids_for, to_tensor
 from .vae_flux3_klein import (
     FLUX3_KLEIN_VAE_SCALE,
+    _config_tensors_in_dram,
     load_vae_torch_state,
     register_klein_conv_slices,
     release_module_trace,
@@ -64,7 +65,7 @@ def build_flux3_klein_vae_encoder(
         ccl_manager=ccl_manager,
         use_conv3d=False,
     )
-    set_conv_config_overrides(encoder, config_tensors_in_dram=True)
+    set_conv_config_overrides(encoder, config_tensors_in_dram=_config_tensors_in_dram())
     return encoder, parallel_config
 
 

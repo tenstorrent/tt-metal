@@ -44,6 +44,7 @@ import os
 import time
 from pathlib import Path
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -54,7 +55,7 @@ from ...models.vae.vae import VaeAttention
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 from .packing import FLUX3_KLEIN_IN_CHANNELS, FLUX3_KLEIN_PATCH, FLUX3_KLEIN_VAE_CHANNELS, latent_shape
 
 VAE_SUBFOLDER = "vae"
@@ -178,7 +179,39 @@ def decoder_slice_count(rows: int, width: int, cin: int, cout: int, tensor_paral
     # slice), so the widest slice decides; step up until it fits or the cap is reached.
     while count < cap and row_bytes * (-(-int(width) // count)) > DECODER_SLICE_BUDGET_BYTES:
         count += 1
-    return min(count, cap)
+    return aligned_slice_count(min(count, cap), width)
+
+
+def aligned_slice_count(wanted: int, width: int) -> int:
+    """The smallest slice count >= ``wanted`` that cuts ``width`` into TILE-aligned (32-column) slices: a divisor of
+    ``width // 32``. Every shipped Flux2 entry has this property (16 / 32 / 64 / 128 slices of 1024 / 2048 / 4096),
+    and the sweep of 2026-10-20 23:40 showed what happens without it: counts like 17 / 33 / 9 (slice widths of 120-121
+    px) rendered 2048x2048 and 4096x2304 with vertical striping and blown colours over the whole frame. A width that
+    is not a multiple of 32 has no aligned cut, so the cap (ttnn's ``ceil(width / 32)``) is returned unchanged.
+    ``0`` (auto) passes through."""
+    wanted, width = int(wanted), int(width)
+    if wanted <= 0 or width % 32:
+        return wanted if wanted <= 0 else conv_slice_cap(width)
+    tiles = width // 32
+    for n in range(max(1, wanted), tiles + 1):
+        if tiles % n == 0:
+            return n
+    return tiles
+
+
+def _slice_mode() -> str:
+    """``FLUX3_KLEIN_VAE_SLICE_MODE``: ``aligned`` (default: explicit TILE-aligned counts above ``AUTO_SLICE_MAX_AREA``),
+    ``explicit`` (the unaligned budget counts, for the 2026-10-20 regression probe only) or ``auto`` (ttnn's auto
+    slicer at every size, the pre-fix behaviour)."""
+    mode = os.environ.get("FLUX3_KLEIN_VAE_SLICE_MODE", "aligned").strip().lower()
+    if mode not in ("aligned", "explicit", "auto"):
+        raise ValueError(f"FLUX3_KLEIN_VAE_SLICE_MODE must be aligned, explicit or auto, got {mode!r}")
+    return mode
+
+
+def _config_tensors_in_dram() -> bool:
+    """``FLUX3_KLEIN_VAE_CONFIG_TENSORS_DRAM`` (default 1): where the conv halo / sliding-window config tensors live."""
+    return os.environ.get("FLUX3_KLEIN_VAE_CONFIG_TENSORS_DRAM", "1").strip() not in ("0", "false", "no")
 
 
 def klein_partitioned_decoder_slices(
@@ -189,15 +222,29 @@ def klein_partitioned_decoder_slices(
     ``AUTO_SLICE_MAX_AREA``, the measured ones); larger canvases get ``decoder_slice_count``."""
     if h_factor <= 1:
         return {}
-    explicit = int(height) * int(width) > AUTO_SLICE_MAX_AREA
+    mode = _slice_mode()
+    explicit = mode != "auto" and int(height) * int(width) > AUTO_SLICE_MAX_AREA
     out, h, w = {}, int(height), int(width)
     for level in KLEIN_DECODER_CONVS_PER_LEVEL:
         rows = partitioned_conv_rows(h, h_factor)
         for cin, cout, tensor_parallel in level:
             count = decoder_slice_count(rows, w, cin, cout, tensor_parallel, tp_factor) if explicit else 0
+            if explicit and mode == "explicit":  # the unaligned regression variant
+                count = _unaligned_slice_count(rows, w, cin, cout, tensor_parallel, tp_factor)
             out[(rows, w, cin, cout)] = count
         h, w = downsample_extent(h), downsample_extent(w)
     return out
+
+
+def _unaligned_slice_count(rows: int, width: int, cin: int, cout: int, tensor_parallel: bool, tp_factor: int) -> int:
+    """The 2026-10-20 budget count WITHOUT the tile alignment (probe variant ``explicit``)."""
+    cin_device = cin // tp_factor if (tensor_parallel and tp_factor > 1 and cin >= cout) else cin
+    cap = conv_slice_cap(width)
+    row_bytes = int(rows) * int(cin_device) * 2
+    count = max(1, -(-(row_bytes * int(width)) // DECODER_SLICE_BUDGET_BYTES))
+    while count < cap and row_bytes * (-(-int(width) // count)) > DECODER_SLICE_BUDGET_BYTES:
+        count += 1
+    return min(count, cap)
 
 
 def register_klein_conv_slices(
@@ -218,6 +265,125 @@ def register_klein_conv_slices(
     ).items():
         table.setdefault(shape, slices)
     _registered_conv_slices.add(key)
+
+
+def _exact_group_norm_mode() -> str:
+    """``FLUX3_KLEIN_VAE_GN``: ``fused`` (the shipped ``dit_fused_distributed_groupnorm``: bf16 Welford partials and
+    bf16 cross-device [mean, var]) or ``exact`` (:func:`set_exact_group_norm`: fp32 statistics, reduced across the
+    H devices in fp32). Default ``fused`` until the 2048+ decode is gated (2026-10-21)."""
+    mode = os.environ.get("FLUX3_KLEIN_VAE_GN", "fused").strip().lower()
+    if mode not in ("fused", "exact"):
+        raise ValueError(f"FLUX3_KLEIN_VAE_GN must be fused or exact, got {mode!r}")
+    return mode
+
+
+def set_exact_group_norm(decoder, *, mesh_device, h_axis: int | None, ccl_manager) -> int:
+    """Replace every spatial group norm of ``decoder`` (``_VaeSpatialGroupNorm`` over a ``DistributedGroupNorm`` on
+    the fused path) with an fp32, device-only, traceable computation of the same function:
+
+        per device: x fp32 -> per-channel sum and sum of squares over the H_dev x W rows (fp32 reductions)
+        -> per-group sums through a constant 0/1 matmul -> all-gathered over the H axis and summed (fp32, split into
+        bf16 hi/lo pairs for the collective) -> mean, var, rstd per group -> per-channel scale / shift (gamma, beta
+        unpacked from the module's packed row-major parameters) -> y = x * scale + shift -> bf16 -> activation.
+
+    Why: the fused op accumulates its Welford statistics in bf16 for bf16 input and exchanges bf16 [mean, var]
+    pairs; on the 2048x2048+ per-device row counts that collapsed the statistics per virtual column (saturated,
+    vertically banded renders, ledger 2026-10-21 04:5x) while the CPU reference decode of the same latent was clean.
+    Per instance; nothing in the shared layers changes. Returns the number of norms replaced."""
+    from ...models.vae.vae import _VaeSpatialGroupNorm
+
+    h_factor = int(mesh_device.shape[h_axis]) if h_axis is not None else 1
+    fp32 = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    replaced = 0
+    for module in _walk_modules(decoder):
+        if not isinstance(module, _VaeSpatialGroupNorm) or getattr(module.inner, "inner", None) is not None:
+            continue  # only the fused path carries packed gamma / beta on ``module.inner`` itself
+        gn = module.inner
+        c_dev, g_dev = gn.num_local_channels, gn.num_local_groups
+        cg = c_dev // g_dev
+        padded = int(gn.weight.data.shape[-2]) * 32
+
+        # gamma / beta: packed [1, 1, ceil(C_dev / 32), 32] row-major per device -> [1, 1, 1, C_dev] fp32 TILE
+        def unpack(param):
+            flat = ttnn.reshape(param.data, [1, 1, 1, padded])
+            flat = ttnn.slice(flat, [0, 0, 0, 0], [1, 1, 1, c_dev]) if padded != c_dev else flat
+            return ttnn.to_layout(ttnn.typecast(ttnn.to_layout(flat, ttnn.TILE_LAYOUT), ttnn.float32), ttnn.TILE_LAYOUT)
+
+        eps = float(gn.eps)
+        activation = gn.fused_activation or gn.activation_fn
+        state: dict = {}  # gamma / beta / E / E^T, built on the first forward (the weights load after construction)
+
+        def build_state(_st=state, _gn=gn, _unpack=unpack, _c_dev=c_dev, _g_dev=g_dev, _cg=cg) -> None:
+            _st["gamma"], _st["beta"] = _unpack(_gn.weight), _unpack(_gn.bias)
+            # constant 0/1 matrices: channels -> groups (E) and groups -> channels (E^T), replicated on every device
+            e = torch.zeros(_c_dev, _g_dev, dtype=torch.float32)
+            for c in range(_c_dev):
+                e[c, c // _cg] = 1.0
+            _st["E"] = tensor.from_torch(e[None, None], device=mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            _st["Et"] = tensor.from_torch(
+                e.t().contiguous()[None, None], device=mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
+
+        def exact_forward(
+            x: ttnn.Tensor, _st=state, _cg=cg, _eps=eps, _act=activation, _gn=gn, _build=build_state
+        ) -> ttnn.Tensor:
+            if not _st:
+                _build()
+            if x.layout != ttnn.TILE_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            b, hh, ww, cc = x.shape
+            x4 = ttnn.reshape(x, [b, 1, hh * ww, cc])
+            xf = ttnn.typecast(x4, ttnn.float32)
+            s1 = ttnn.sum(xf, dim=2, keepdim=True, compute_kernel_config=fp32)  # [1, 1, 1, C_dev]
+            s2 = ttnn.sum(
+                ttnn.multiply(xf, xf, compute_kernel_config=fp32), dim=2, keepdim=True, compute_kernel_config=fp32
+            )
+            gs1 = ttnn.matmul(s1, _st["E"], compute_kernel_config=fp32)  # [1, 1, 1, G_dev]
+            gs2 = ttnn.matmul(s2, _st["E"], compute_kernel_config=fp32)
+            if h_factor > 1:
+                # fp32 collective as bf16 hi/lo pairs (~16 mantissa bits), summed back in fp32
+                parts = []
+                for t in (gs1, gs2):
+                    hi = ttnn.typecast(t, ttnn.bfloat16)
+                    lo = ttnn.typecast(
+                        ttnn.subtract(t, ttnn.typecast(hi, ttnn.float32), compute_kernel_config=fp32), ttnn.bfloat16
+                    )
+                    for p in (hi, lo):
+                        g = ccl_manager.all_gather(p, dim=1, mesh_axis=h_axis, use_hyperparams=True)  # [1, F, 1, G]
+                        parts.append(
+                            ttnn.sum(ttnn.typecast(g, ttnn.float32), dim=1, keepdim=True, compute_kernel_config=fp32)
+                        )
+                gs1 = ttnn.add(parts[0], parts[1], compute_kernel_config=fp32)
+                gs2 = ttnn.add(parts[2], parts[3], compute_kernel_config=fp32)
+            n = float(hh * ww * h_factor * _cg)
+            mean = ttnn.multiply(gs1, 1.0 / n)
+            var = ttnn.subtract(
+                ttnn.multiply(gs2, 1.0 / n),
+                ttnn.multiply(mean, mean, compute_kernel_config=fp32),
+                compute_kernel_config=fp32,
+            )
+            rstd = ttnn.rsqrt(ttnn.add(var, _eps))
+            mean_c = ttnn.matmul(mean, _st["Et"], compute_kernel_config=fp32)  # [1, 1, 1, C_dev]
+            rstd_c = ttnn.matmul(rstd, _st["Et"], compute_kernel_config=fp32)
+            scale = ttnn.multiply(rstd_c, _st["gamma"], compute_kernel_config=fp32)
+            shift = ttnn.subtract(
+                _st["beta"], ttnn.multiply(mean_c, scale, compute_kernel_config=fp32), compute_kernel_config=fp32
+            )
+            y = ttnn.add(ttnn.multiply(xf, scale, compute_kernel_config=fp32), shift, compute_kernel_config=fp32)
+            y = ttnn.typecast(y, ttnn.bfloat16)
+            y = ttnn.reshape(y, [b, hh, ww, cc])
+            if _act == "silu":
+                y = ttnn.silu(y)
+            elif _act is not None:
+                raise ValueError(f"exact group norm: unsupported activation {_act!r}")
+            return y
+
+        module.forward = exact_forward
+        replaced += 1
+    logger.info(f"exact fp32 group norm installed on {replaced} decoder norms (h_factor {h_factor})")
+    return replaced
 
 
 def set_conv_config_overrides(module, **overrides) -> int:
@@ -295,7 +461,9 @@ def build_flux3_klein_vae_decoder(
         ccl_manager=ccl_manager,
         use_conv3d=False,
     )
-    set_conv_config_overrides(decoder, config_tensors_in_dram=True)
+    set_conv_config_overrides(decoder, config_tensors_in_dram=_config_tensors_in_dram())
+    if _exact_group_norm_mode() == "exact" and h_axis is not None:
+        set_exact_group_norm(decoder, mesh_device=mesh_device, h_axis=h_axis, ccl_manager=ccl_manager)
     return decoder, parallel_config
 
 
