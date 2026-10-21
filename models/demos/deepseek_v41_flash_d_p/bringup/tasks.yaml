@@ -1540,6 +1540,13 @@ tasks:
     kind: op
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-21T22:13:36'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py: bf2761763262865ed5fee62be46ea9e7ec5cfce7cd49a987ca2173ac82dc520c
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.swa_engram.08
   title: 'swa_engram block with steps 1-8 on device (last: kv)'
   step: implement
