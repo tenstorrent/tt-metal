@@ -63,11 +63,11 @@ const char* scope_violation(
     }
     // Every program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
     switch (input.dtype()) {
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32:
-        case DataType::INT32:
-        case DataType::UINT32:
-        case DataType::UINT16: break;
+        case tt::tt_metal::DataType::BFLOAT16:
+        case tt::tt_metal::DataType::FLOAT32:
+        case tt::tt_metal::DataType::INT32:
+        case tt::tt_metal::DataType::UINT32:
+        case tt::tt_metal::DataType::UINT16: break;
         default: return "dtype is not bfloat16, float32, int32, uint32 or uint16";
     }
     if (!is_plain_interleaved(input.memory_config()) || !is_plain_interleaved(output_mem_config)) {
@@ -80,11 +80,11 @@ const char* scope_violation(
     if (in_shape.volume() == 0 || in_shape.volume() != logical_output_shape.volume()) {
         return "input is empty or the volume changes";
     }
-    if (input.layout() == Layout::TILE) {
+    if (input.layout() == tt::tt_metal::Layout::TILE) {
         if (!standard_tile_with_tight_padding(input)) {
             return "input is not TILE with 32x32 tiles padded only in the last two dims";
         }
-    } else if (input.layout() != Layout::ROW_MAJOR || input.padded_shape() != in_shape) {
+    } else if (input.layout() != tt::tt_metal::Layout::ROW_MAJOR || input.padded_shape() != in_shape) {
         // Row-major programs address input sticks by the logical shape.
         return "input is neither TILE nor unpadded ROW_MAJOR";
     }
@@ -104,7 +104,7 @@ constexpr uint64_t kTileRowsMinReadsSavedPerTile = 16;
 constexpr uint64_t kWholeHalfRunsPerTile = 2;
 
 bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t num_cores) {
-    if (input.dtype() == DataType::UINT16) {
+    if (input.dtype() == tt::tt_metal::DataType::UINT16) {
         return false;
     }
     // A width change copies one row per run and loses below the read cut unless the reads it saves outweigh the runs;
@@ -139,7 +139,7 @@ TileRouteChoice choose_tile_route(
     uint32_t num_cores,
     bool winners_only) {
     const auto& in_shape = input.logical_shape();
-    const bool native_rejects = input.dtype() == DataType::UINT16;
+    const bool native_rejects = input.dtype() == tt::tt_metal::DataType::UINT16;
     const bool row_permutation = is_tile_row_permutation(in_shape, logical_output_shape);
     auto rows = plan_tile_rows(in_shape, logical_output_shape);
     const bool rows_win = rows.has_value() && !native_faster(input, *rows, num_cores);
@@ -329,7 +329,8 @@ bool rm_native_faster(
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     uint32_t num_cores) {
-    if (input.layout() != Layout::ROW_MAJOR || output_mem_config.buffer_type() != input.memory_config().buffer_type()) {
+    if (input.layout() != tt::tt_metal::Layout::ROW_MAJOR ||
+        output_mem_config.buffer_type() != input.memory_config().buffer_type()) {
         return false;
     }
     const uint32_t elem = input.element_size();
@@ -438,7 +439,7 @@ const char* call_contract_violation(
     // A rank-one output is a single row, so its tile pads the height from 1 to 32.
     const bool padded_tile_output = logical_shape.rank() < 2 || logical_shape[-1] % tt::constants::TILE_WIDTH != 0 ||
                                     logical_shape[-2] % tt::constants::TILE_HEIGHT != 0;
-    if (input.layout() == Layout::TILE && pad_value.has_value() && padded_tile_output) {
+    if (input.layout() == tt::tt_metal::Layout::TILE && pad_value.has_value() && padded_tile_output) {
         return "explicit pad_value on a padded tile output";
     }
     return nullptr;
@@ -458,7 +459,7 @@ const char* unsupported_reason(
     if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
         return violation;
     }
-    if (input.layout() == Layout::ROW_MAJOR) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         RmGeometry geometry(input, logical_output_shape, output_mem_config, rm_grid_cores(input, sub_core_grids));
         return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
     }
@@ -484,9 +485,9 @@ bool is_demoted(
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (input.layout() == Layout::ROW_MAJOR) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         // Native's device operation rejects uint16.
-        if (input.dtype() == DataType::UINT16) {
+        if (input.dtype() == tt::tt_metal::DataType::UINT16) {
             return false;
         }
         const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
@@ -524,7 +525,7 @@ LaunchPlan launch_plan(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids);
     TT_FATAL(violation == nullptr, "reshape_codegen: outside the codegen scope: {}", violation);
-    if (input.layout() == Layout::ROW_MAJOR) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         RmGeometry geometry(input, logical_output_shape, output_mem_config, rm_grid_cores(input, sub_core_grids));
         TT_FATAL(geometry.fits_static(), "reshape_codegen: outside the codegen scope: {}", kRmStaticFitViolation);
         return geometry.launch_plan();
