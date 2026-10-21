@@ -9290,7 +9290,7 @@ def test_ring_joint_attention_dynamic_local_n_rehashes_on_width_change():
 
 
 @pytest.mark.timeout(1800)
-def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features():
+def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features(expect_error):
     """With the dynamic program cached, a call adding a feature the path does not serve (causal attention, an
     attention sink) must raise from validation, never dispatch the cached program or add one."""
     mesh_config = _h3_dynamic_mesh_config()
@@ -9332,7 +9332,7 @@ def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features():
         _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), sq - 100, [0, heads - 1], "warm")
         entries = mesh.num_program_cache_entries()
         for overrides in ({"is_causal": True}, {"attention_sink": sink}):
-            with pytest.raises(RuntimeError, match="dynamic_local_n"):
+            with expect_error(RuntimeError, "dynamic_local_n"):
                 call(**overrides)
         assert mesh.num_program_cache_entries() == entries
     finally:
