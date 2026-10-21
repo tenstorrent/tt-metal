@@ -416,8 +416,23 @@ class TtLatentCache:
                 ttnn.deallocate(p)
         return ttnn.reshape(blocks, [1, 1, n_blocks * self.block_size, self.latent_dim])
 
-    def user_rows_rm(self, user: int, n_rows: int) -> ttnn.Tensor:
-        """``user_rows`` as a fresh ROW_MAJOR [1, 1, rows, 512] tensor (the sparse_sdpa kv contract)."""
+    # The whole-prefix copy below is bandwidth-bound (~90 GB/s: 1.5 ms at 131 K, 13 ms at 1 M positions on one chip,
+    # tests/test_prefix_rows.py), so it is a negligible part of a long-context prefill chunk; the direct untilize of the
+    # cache pages (no slice) is 1.4-1.6x cheaper from ~512 K positions on but has a ~2.7 ms floor, hence the threshold.
+    DIRECT_UNTILIZE_MIN_ROWS = 524288
+
+    def user_rows_rm(self, user: int, n_rows: int, direct: bool = True) -> ttnn.Tensor:
+        """``user_rows`` as a fresh ROW_MAJOR [1, 1, rows, 512] tensor (the sparse_sdpa kv contract). ``direct``:
+        when the user's pages are the cache's first blocks (slot 0 of an identity table, the single-slot long-context
+        state) and the prefix is long, untilize them straight out of the paged cache (``untilize_with_unpadding``
+        of the leading block range, no TILE slice copy); bit-identical to the slice + untilize path."""
+        n_blocks = min(self.blocks_per_seq, -(-n_rows // self.block_size))
+        ids = self.page_table_host[self.prefill_slot(user), :n_blocks].tolist()
+        if direct and n_blocks * self.block_size >= self.DIRECT_UNTILIZE_MIN_ROWS and ids == list(range(n_blocks)):
+            rm = ttnn.untilize_with_unpadding(
+                self.cache, [n_blocks - 1, 0, self.block_size - 1, self.latent_dim - 1]
+            )  # ROW_MAJOR [n_blocks, 1, 32, L]
+            return ttnn.reshape(rm, [1, 1, n_blocks * self.block_size, self.latent_dim])  # a row-major view
         rows = self.user_rows(user, n_rows)
         rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(rows)
@@ -783,7 +798,6 @@ class TtDSA(LightweightModule):
         # 2048 rows at 1 M positions) that the top-k reads back, so a 32 K-token chunk cannot be scored in one
         # call; one whole-prefix ROW_MAJOR kv copy (the sparse_sdpa contract) serves every sub-block of the chunk
         idx = self.indexer
-        rows_form = idx.prefill_scorer_custom  # the custom scorer's query layout (multi-row meshes; knob)
         kv_rm = cache.user_rows_rm(user, start + T)
         self._mark("kv_copy")
         qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
@@ -793,6 +807,11 @@ class TtDSA(LightweightModule):
             whole = (q0, q1) == (0, T)
             x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
             qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
+            # the scorer form of this sub-block (the custom scorer's query layout: the knob, or a multi-row
+            # superset that would start past the pooled-key allocation)
+            rows_form = idx.prefill_rows_form(
+                cache.index, query_start=start + q0, T=q1 - q0, num_pools_valid=end // idx.P
+            )
             q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
             if not whole:
                 ttnn.deallocate(x_s)
