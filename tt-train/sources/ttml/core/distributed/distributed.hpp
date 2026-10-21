@@ -24,6 +24,14 @@ ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placem
 // True when `value` is Shard rather than Replicate on mesh axis `axis`, read through placements_per_axis.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 
+// True when no two devices hold the same values of `value`: it is sharded on every mesh axis of size > 1.
+bool differs_on_every_device(const ttnn::Tensor& value);
+
+// Labels `value` with `placements`, one per mesh axis, over its own device coordinates. For an op that knows its
+// output's layout better than ttnn's default rule, which carries each input's shard dim over unchanged.
+void set_placements_per_axis(
+    ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements);
+
 // What the ranks along a mesh axis share, which decides how a gradient is combined across them.
 enum class AxisKind {
     // Each rank computes the loss of its own samples (dp, fsdp, cp): the global gradient is the mean of the ranks'.

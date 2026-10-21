@@ -10,15 +10,18 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/operations/experimental/dropout/dropout.hpp"
 
 namespace ttml::ops {
 
-autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability, bool use_per_device_seed) {
+autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability, std::optional<bool> per_device_seed) {
     if (probability == 0.0F) {
         return tensor;
     }
+    const bool use_per_device_seed =
+        per_device_seed.value_or(core::distributed::differs_on_every_device(tensor->get_value()));
 
     auto dropout_seed = autograd::ctx().get_generator()();
     auto scaler = 1.0F / (1.0F - probability);

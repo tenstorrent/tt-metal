@@ -205,7 +205,9 @@ void py_module(nb::module_& m) {
             &ttml::ops::dropout,
             nb::arg("tensor"),
             nb::arg("probability"),
-            nb::arg("use_per_device_seed") = false);
+            nb::arg("use_per_device_seed") = nb::none(),
+            "Dropout with a different mask on every device when use_per_device_seed is set; by default only when no "
+            "two devices hold the same values of `tensor`, so replicas drop the same elements.");
     }
 
     {

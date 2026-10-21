@@ -7,6 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/distributed.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
@@ -87,6 +88,34 @@ void moreh_linear_backward(
     }
 }
 
+namespace {
+
+// ttnn labels the output with each input's shard dim. A weight [.., out, in] sharded on its output features gives the
+// output those features in its last dim, so on such an axis the output is sharded there, not on the weight's dim.
+void label_output_features(const ttnn::Tensor& weight, ttnn::Tensor& output) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    if (weight.device() == nullptr || weight.device()->shape().mesh_size() == 1U) {
+        return;
+    }
+    const auto weight_placements = core::distributed::placements_per_axis(weight);
+    const int out_features_dim = static_cast<int>(weight.logical_shape().rank()) - 2;
+    std::optional<ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>> placements;
+    for (size_t axis = 0; axis < weight_placements.size(); ++axis) {
+        const auto* shard = std::get_if<Shard>(&weight_placements[axis]);
+        if (shard != nullptr && shard->dim == out_features_dim) {
+            if (!placements.has_value()) {
+                placements = core::distributed::placements_per_axis(output);
+            }
+            (*placements)[axis] = Shard{static_cast<int>(output.logical_shape().rank()) - 1};
+        }
+    }
+    if (placements.has_value()) {
+        core::distributed::set_placements_per_axis(output, *placements);
+    }
+}
+
+}  // namespace
+
 autograd::TensorPtr linear_op(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
     auto out = autograd::create_tensor();
@@ -94,7 +123,7 @@ autograd::TensorPtr linear_op(
     const auto grid_size = tensor->get_value().device()->compute_with_storage_grid_size();
     auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
-    out->set_value(ttnn::linear(
+    auto value = ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
         bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
@@ -105,7 +134,9 @@ autograd::TensorPtr linear_op(
         /* program_config */ std::nullopt,
         /* activation */ std::nullopt,
         /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
-        /* core_grid */ core_grid));
+        /* core_grid */ core_grid);
+    label_output_features(weight->get_value(), value);
+    out->set_value(value);
 
     autograd::GradFunction grad = [weight, bias, tensor, out]() {
         auto tensor_shape = tensor->get_value().logical_shape();

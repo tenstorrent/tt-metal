@@ -39,6 +39,30 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
 }
 
+bool differs_on_every_device(const ttnn::Tensor& value) {
+    const auto placements = placements_per_axis(value);
+    const auto mesh_shape = value.device()->shape();
+    for (uint32_t axis = 0; axis < placements.size(); ++axis) {
+        if (mesh_shape[axis] > 1U &&
+            !std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void set_placements_per_axis(
+    ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements) {
+    const auto mesh_shape = value.device()->shape();
+    TT_FATAL(
+        placements.size() == mesh_shape.dims(),
+        "set_placements_per_axis: {} placements for the {} device mesh",
+        placements.size(),
+        mesh_shape);
+    value.update_tensor_topology(
+        tt::tt_metal::TensorTopology(mesh_shape, placements, value.tensor_topology().mesh_coords()));
+}
+
 std::vector<GradientReduction> gradient_reductions(const autograd::TensorPtr& parameter, const AxisKinds& kinds) {
     const auto mesh_shape = autograd::ctx().get_device().shape();
     TT_FATAL(
