@@ -1399,32 +1399,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
         "fp32_dest_acc_en=true is not supported.");
 
-    // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
-    // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
-    // rows so each row still consumes one K sequence through its multicast. See kernels/ring_joint_ksplit.hpp.
-    uint32_t ksplit_count = 1;
-    uint32_t ksplit_rows_per_split = 0;
-    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->max_k_splits : 1;
-    // Sliding bands split each unit's work plan (local slab, then halo): every band needs two K chunks, since the
-    // oldest halo chunk can mask a Q chunk's later rows entirely, and the halo alone is window / k_chunk chunks.
-    const uint32_t sliding_ksplit_cap =
-        has_sliding_window
-            ? ring_joint::chunked_sliding_halo_tile_rows(sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
-                  Sk_chunk_t / 2
-            : ring_joint::kKSplitMaxCount;
-    // Split KV slices packed source streams, not one source's local K chunks: no K split.
-    if (ksplit_requested > 1 && kernel_chunked && !kernel_is_causal && !args.is_balanced && use_streaming_compute &&
-        B == 1 && L == 0 && (has_sliding_window || (gqa_grouped_kv && NHK == 1)) && max_q_per_core == 1 &&
-        args.kv_stripe_split == 1) {
-        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
-        ksplit_count = std::max(
-            1u,
-            std::min(
-                {ksplit_requested,
-                 uint32_t(grid_size.y) / ksplit_rows_per_split,
-                 ring_joint::kKSplitMaxCount,
-                 sliding_ksplit_cap}));
-    }
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1464,31 +1438,108 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute
             ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
             : out_out_subblock_h;
-    // The K-split merge walks whole row groups (static_assert in ring_joint_sdpa.cpp); odd Q chunks stay unsplit.
-    if (Sq_chunk_t % writer_out_row_group_h != 0) {
-        ksplit_count = 1;
+    // K split and segmented accumulation apply only to chunked calls; others ignore them, so one config serves every
+    // chunk. Both need one Q chunk per core and whole output row groups (static_assert in ring_joint_sdpa.cpp).
+    // Returns why this call cannot apply them, or "".
+    const auto single_q_chunk_blocker = [&]() -> std::string {
+        if (args.is_balanced) {
+            return "is_balanced is set";
+        }
+        if (!use_streaming_compute) {
+            return "fp32_dest_acc_en is set";
+        }
+        if (B != 1) {
+            return fmt::format("the batch is {}", B);
+        }
+        if (L != 0) {
+            return fmt::format("there is a joint sequence of {} rows", L);
+        }
+        if (max_q_per_core > 1) {
+            return fmt::format("{} Q chunks share {} cores", all_heads_num_q_chunks, num_cores);
+        }
+        if (Sq_chunk_t % writer_out_row_group_h != 0) {
+            return fmt::format(
+                "the {}-tile Q chunk is not a whole number of {}-tile row groups", Sq_chunk_t, writer_out_row_group_h);
+        }
+        return {};
+    };
+
+    // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
+    // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
+    // rows so each row still consumes one K sequence through its multicast. See kernels/ring_joint_ksplit.hpp.
+    uint32_t ksplit_count = 1;
+    uint32_t ksplit_rows_per_split = 0;
+    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->k_splits : 1;
+    if (ksplit_requested > 1 && kernel_chunked) {
+        const std::string blocker = single_q_chunk_blocker();
+        TT_FATAL(blocker.empty(), "k_splits={} cannot be applied: {}. Set k_splits=1.", ksplit_requested, blocker);
+        TT_FATAL(
+            has_sliding_window || (gqa_grouped_kv && NHK == 1),
+            "k_splits={} cannot be applied: dense attention needs one grouped K/V head, but there are {}. Set "
+            "k_splits=1.",
+            ksplit_requested,
+            NHK);
+        // Split KV slices packed source streams, not one source's local K chunks.
+        TT_FATAL(
+            args.kv_stripe_split == 1,
+            "k_splits={} cannot be applied: kv_stripe_split is {}. Set k_splits=1.",
+            ksplit_requested,
+            args.kv_stripe_split);
+        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
+        uint32_t max_ksplit = std::min(uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount);
+        std::string sliding_limit;
+        if (has_sliding_window) {
+            // Every sliding band needs two K chunks: the oldest halo chunk can mask a Q chunk's later rows entirely.
+            const uint32_t sliding_cap = std::max(
+                1u,
+                ring_joint::chunked_sliding_halo_tile_rows(
+                    sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
+                    Sk_chunk_t / 2);
+            max_ksplit = std::min(max_ksplit, sliding_cap);
+            sliding_limit = fmt::format(", sliding window {} allows {}", sliding_window_size, sliding_cap);
+        }
+        TT_FATAL(
+            ksplit_requested <= max_ksplit,
+            "k_splits={}, but at most {} can be applied: {} (head, Q chunk) units take {} rows per band of the "
+            "{}x{} grid; the kernel caps it at {}{}.",
+            ksplit_requested,
+            max_ksplit,
+            all_heads_num_q_chunks,
+            ksplit_rows_per_split,
+            grid_size.x,
+            grid_size.y,
+            ring_joint::kKSplitMaxCount,
+            sliding_limit);
+        ksplit_count = ksplit_requested;
     }
-    log_debug(tt::LogOp, "ring_joint K split: requested={} splits={}", ksplit_requested, ksplit_count);
+    log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
-    // restore CBs, on single-Q-chunk cores that do not split K. Its merge walks whole row groups too.
-    const bool seg_accum = args.program_config.has_value() && args.program_config->segmented_accumulation &&
-                           ksplit_count == 1 && !has_sliding_window && kernel_chunked && !args.is_balanced &&
-                           use_streaming_compute && B == 1 && L == 0 && max_q_per_core == 1 &&
-                           Sq_chunk_t % writer_out_row_group_h == 0;
+    // restore CBs, so no bf16 running sum spans the whole prefix.
+    const bool seg_accum =
+        args.program_config.has_value() && args.program_config->segmented_accumulation && kernel_chunked;
+    if (seg_accum) {
+        TT_FATAL(
+            ksplit_count == 1,
+            "segmented_accumulation is not supported with K split (k_splits={}). Set k_splits=1 or turn "
+            "segmented_accumulation off.",
+            ksplit_count);
+        TT_FATAL(
+            !has_sliding_window,
+            "segmented_accumulation is not supported with a sliding window. Turn segmented_accumulation off.");
+        TT_FATAL(
+            max_q_per_core == 1,
+            "segmented_accumulation needs one Q chunk per core, but {} Q chunks ({} per head of {} rows) share {} "
+            "cores. Raise q_chunk_size so that ceil(local Q rows / q_chunk_size) x heads <= cores, give the op more "
+            "cores, or turn segmented_accumulation off.",
+            all_heads_num_q_chunks,
+            num_q_chunks,
+            Sq_chunk_t * tt::constants::TILE_HEIGHT,
+            num_cores);
+        const std::string blocker = single_q_chunk_blocker();
+        TT_FATAL(
+            blocker.empty(), "segmented_accumulation cannot be applied: {}. Turn segmented_accumulation off.", blocker);
+    }
     log_debug(tt::LogOp, "ring_joint segmented accumulation: {}", seg_accum);
-    // A core that holds several Q chunks runs them unsegmented, so the bf16 running sums span the whole prefix again
-    // and long-prefix accuracy drops (Gemma4 at chunk 12288 with q 96: 128 Q chunks on 110 cores, RRMSE 0.19 -> 0.25).
-    // The K-split exclusion above is by design; this one is a config the caller can avoid, so refuse it.
-    TT_FATAL(
-        !(args.program_config.has_value() && args.program_config->segmented_accumulation && ksplit_count == 1 &&
-          max_q_per_core > 1),
-        "segmented_accumulation needs one Q chunk per core, but {} Q chunks ({} per head of {} rows) share {} cores. "
-        "Raise q_chunk_size so that ceil(local Q rows / q_chunk_size) x heads <= cores, give the op more cores, or "
-        "turn segmented_accumulation off.",
-        all_heads_num_q_chunks,
-        num_q_chunks,
-        Sq_chunk_t * tt::constants::TILE_HEIGHT,
-        num_cores);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
