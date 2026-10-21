@@ -2071,6 +2071,13 @@ tasks:
     kind: mlp
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-21T22:16:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py: 5637261a12e415180baacf15eb1b3ed452a11840f49ddea3db44337a24b1b22d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.swa_engram.16
   title: 'swa_engram block with steps 1-16 on device (last: shared_expert)'
   step: implement
