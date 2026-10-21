@@ -4,20 +4,16 @@
 
 """Gradient synchronisation trusts TensorTopology placements: this module pins what it reads.
 
-``synchronize_gradients`` decides per (parameter, mesh axis) whether to all-reduce the gradient along that axis by
+``gradient_reductions`` decides per (parameter, mesh axis) whether the gradient is all-reduced along that axis by
 reading the parameter's label through ``is_sharded_on_axis``: sharded there (TP, FSDP) means the gradient is already
-per-shard-correct, replicated means it must be averaged. The reader takes an N-D label as is, expands the default
-mappers' collapsed 1-D label per axis, and refuses a label it cannot read.
+per-shard-correct, replicated on a data axis means it is averaged. The reader takes an N-D label as is, expands the
+default mappers' collapsed 1-D label per axis, and refuses a label it cannot read.
 
 For tiny TP / DDP / FSDP / HSDP models after one backward, the tests assert that every parameter label has one
-placement per mesh axis, which axes ``is_sharded_on_axis`` reports per parameter, and that after
-``synchronize_gradients`` each gradient reads Replicate on the reduced axis, keeps its Shard on the other axis and
-holds the mean of the per-device gradients. Negative controls: a collapsed Shard label reads as Shard on the
-non-trivial axis, and a label that does not cover the mesh raises instead of being guessed.
-
-The ParallelismContext overload of ``synchronize_gradients`` cannot be exercised for several layouts in one process
-(the context is a one-shot singleton), so its axis filter is checked through the reader and the collectives through
-the explicit-axes overload.
+placement per mesh axis, which axes each gradient is reduced along, and that after ``ttml.sync_gradients`` each
+gradient reads Replicate on the reduced axes, keeps its Shard on the others and holds the mean of the per-device
+gradients. Negative controls: a collapsed Shard label reads as Shard on the non-trivial axis, and a label that does
+not cover the mesh raises instead of being guessed.
 
 Meshes: the conftest's ``tp_mesh`` / ``fsdp_mesh`` ``[1, 2]`` fixtures, a local ``[1, 2]`` with the data-parallel
 axis on axis 1, and ``[2, 2]`` meshes for DP x TP and HSDP that open or skip like ``test_ccl_topology.py``. Every
@@ -247,9 +243,11 @@ def _shards(value) -> list:
     return [ttnn.to_torch(shard).float().numpy() for shard in ttnn.get_device_tensors(value)]
 
 
-def _reduce_set(value, data_axes) -> set:
-    """The axes synchronize_gradients reduces a gradient along: the data axes the parameter is not sharded on."""
-    return {axis for axis in data_axes if not is_sharded_on_axis(value, axis)}
+def _reduce_set(param) -> set:
+    """The axes ttml.sync_gradients reduces ``param``'s gradient along, all of them data axes here."""
+    reductions = ttml.core.distributed.gradient_reductions(param, ttml.mesh().axis_kinds)
+    assert all(r.kind == ttml.core.distributed.AxisKind.Data for r in reductions)
+    return {r.axis for r in reductions}
 
 
 def _links_per_axis(mesh) -> dict:
@@ -258,8 +256,9 @@ def _links_per_axis(mesh) -> dict:
     return {axis: int(ttnn.get_num_links(device, axis)) for axis in range(len(tuple(mesh.shape)))}
 
 
-def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, what: str) -> None:
-    """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale).
+def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis, what: str) -> None:
+    """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale),
+    or over every axis of a tuple ``axis``.
 
     On a mismatch the message names ``what`` and, per device in mesh row-major order, how many elements are off and
     whether that device's ``before`` equals the first device's of its group along the other axes (identical copies
@@ -267,11 +266,12 @@ def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, wha
     shape = tuple(mesh_shape)
     b = np.stack(before).reshape(shape + before[0].shape)
     a = np.stack(after).reshape(shape + after[0].shape)
-    expected = np.broadcast_to(b.mean(axis=axis, keepdims=True), b.shape)
+    axes = axis if isinstance(axis, tuple) else (axis,)
+    expected = np.broadcast_to(b.mean(axis=axes, keepdims=True), b.shape)
     off = ~np.isclose(a, expected, rtol=2e-2, atol=1e-4)
     per_device = {coord: int(off[coord].sum()) for coord in np.ndindex(shape) if off[coord].any()}
     same_before = {
-        coord: bool(np.array_equal(b[coord], b[tuple(c if i == axis else 0 for i, c in enumerate(coord))]))
+        coord: bool(np.array_equal(b[coord], b[tuple(c if i in axes else 0 for i, c in enumerate(coord))]))
         for coord in np.ndindex(shape)
     }
     if per_device:
@@ -324,10 +324,10 @@ class TestTP:
             tp_sharded = name.endswith(TP_SHARDED_SUFFIXES)
             assert is_sharded_on_axis(value, tp) == tp_sharded, name
             assert not is_sharded_on_axis(value, dp), name
-            # DDP (were it enabled on "dp") reduces every parameter; nothing is ever reduced along "tp".
-            assert _reduce_set(value, (dp,)) == {dp}, name
-            assert _reduce_set(value, (dp, tp)) == ({dp} if tp_sharded else {dp, tp}), name
             assert t.is_grad_initialized(), name
+            # Every tp rank holds the whole gradient of a TP-replicated parameter, and "dp" has a single rank.
+            assert not is_sharded_on_axis(t.get_grad(), tp) or tp_sharded, name
+            assert _reduce_set(t) == set(), name
             assert len(_placements(t.get_grad())) == 2, f"{name}: gradient label is not per axis"
 
     def test_collapsed_shard_label_reads_as_shard_on_the_tp_axis(self, tp_mesh, expect_error):
@@ -368,26 +368,27 @@ class TestFSDP:
             managed = ttml.fsdp.is_fsdp_managed(t)
             assert is_sharded_on_axis(value, fsdp) == managed, name
             assert not is_sharded_on_axis(value, dp), name
-            # HSDP reduces a managed parameter on "dp" only (its backward hook reduce-scattered "fsdp"), the
-            # unmanaged head on both.
-            assert _reduce_set(value, (dp, fsdp)) == ({dp} if managed else {dp, fsdp}), name
+            # The backward hook already reduce-scattered a managed parameter over "fsdp"; "dp" has a single rank.
+            assert _reduce_set(t) == (set() if managed else {fsdp}), name
             # The reduce-scattered gradient of a managed parameter is labelled Shard on "fsdp" by the collective.
             assert is_sharded_on_axis(t.get_grad(), fsdp) == managed, name
 
     def test_forged_shard_label_drops_the_axis_from_the_reduce_set(self, fsdp_mesh):
-        """Negative control: the reader trusts the label. Forging Shard on the fsdp axis of the replicated head flips
-        its reduce set from {dp, fsdp} to {dp}."""
-        fsdp, dp = fsdp_mesh.axis_index("fsdp"), fsdp_mesh.axis_index("dp")
+        """Negative control: the reader trusts the label. Forging Shard on the fsdp axis of the replicated head empties
+        its reduce set."""
+        fsdp = fsdp_mesh.axis_index("fsdp")
         model = Model()
-        head = model.parameters()["Model/head/weight"].get_value(NATIVE)
-        assert _reduce_set(head, (dp, fsdp)) == {dp, fsdp}
-        placements = _placements(head)
+        _backward(model, _input((1, 1, DIM, DIM)))
+        head = model.parameters()["Model/head/weight"]
+        assert _reduce_set(head) == {fsdp}
+        value = head.get_value(NATIVE)
+        placements = _placements(value)
         placements[fsdp] = ttnn.PlacementShard(2)
-        topology = head.tensor_topology()
-        head.update_tensor_topology(
+        topology = value.tensor_topology()
+        value.update_tensor_topology(
             ttnn.TensorTopology(topology.distribution_shape(), placements, list(topology.mesh_coords()))
         )
-        assert _reduce_set(head, (dp, fsdp)) == {dp}
+        assert _reduce_set(head) == set()
 
     def test_fully_shard_refuses_a_collapsed_shard_label(self, fsdp_mesh, expect_error):
         """A parameter carrying the collapsed ``{2}, [Shard(2)]`` label of the whole-mesh 1-D mapper is sharded over
@@ -432,9 +433,9 @@ class TestDDP:
             if name.endswith("weight"):
                 assert not np.array_equal(shards[0], shards[1]), f"{name}: precondition, the two devices agree"
         for name, t in params.items():
-            assert _reduce_set(t.get_value(NATIVE), (dp,)) == {dp}, name
+            assert _reduce_set(t) == {dp}, name
 
-        ttml.core.distributed.synchronize_gradients(params, [dp])
+        ttml.sync_gradients(params)
 
         for name, t in params.items():
             grad = t.get_grad()
@@ -467,7 +468,7 @@ class TestDDP:
             assert is_sharded_on_axis(t.get_grad(), dp), name
             assert not is_sharded_on_axis(t.get_grad(), 1 - dp), name
 
-        ttml.core.distributed.synchronize_gradients(params, [dp])
+        ttml.sync_gradients(params)
 
         for name, t in params.items():
             grad = t.get_grad()
@@ -494,9 +495,9 @@ class TestDPxTP:
         for name, t in params.items():
             value = t.get_value(NATIVE)
             assert is_sharded_on_axis(value, tp) == name.endswith(TP_SHARDED_SUFFIXES), name
-            assert _reduce_set(value, (dp,)) == {dp}, name
+            assert _reduce_set(t) == {dp}, f"{name}: TP gradients are whole on every tp rank"
 
-        ttml.core.distributed.synchronize_gradients(params, [dp])
+        ttml.sync_gradients(params)
 
         links = _links_per_axis(dp_tp_mesh)
         for name, t in params.items():
@@ -543,23 +544,21 @@ class TestHSDP:
             managed = ttml.fsdp.is_fsdp_managed(t)
             assert is_sharded_on_axis(value, fsdp) == managed, name
             assert not is_sharded_on_axis(value, dp), name
-            assert _reduce_set(value, (dp, fsdp)) == ({dp} if managed else {dp, fsdp}), name
+            assert _reduce_set(t) == ({dp} if managed else {dp, fsdp}), name
             assert is_sharded_on_axis(t.get_grad(), dp), f"{name}: every device computed a different gradient"
 
-        ttml.core.distributed.synchronize_gradients(params, [dp])
+        ttml.sync_gradients(params)
 
         links = _links_per_axis(hsdp_mesh)
         for name, t in params.items():
             grad = t.get_grad()
+            managed = ttml.fsdp.is_fsdp_managed(t)
             assert not is_sharded_on_axis(grad, dp), name
-            assert is_sharded_on_axis(grad, fsdp), name
-            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, f"{name} (links per axis {links})")
-
-        head = params["Model/head/weight"]
-        reduced = ttnn.multiply(ttml.core.distributed.all_reduce(head.get_grad(), cluster_axis=fsdp), 1.0 / F)
-        assert not is_sharded_on_axis(reduced, dp)
-        assert not is_sharded_on_axis(reduced, fsdp)
-        _assert_mean_over_axis(_shards(head.get_grad()), _shards(reduced), hsdp_mesh.shape, fsdp, "head over fsdp")
+            assert is_sharded_on_axis(grad, fsdp) == managed, name
+            axes = dp if managed else (dp, fsdp)
+            _assert_mean_over_axis(
+                before[name], _shards(grad), hsdp_mesh.shape, axes, f"{name} (links per axis {links})"
+            )
 
     def test_causal_lm_collate_hsdp(self, hsdp_mesh):
         """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh

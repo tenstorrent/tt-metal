@@ -6,11 +6,19 @@ import functools, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
-from .parallel import is_sequence_parallel
 
 
 def prod(x: Iterable[int]) -> int:
     return functools.reduce(operator.mul, x, 1)
+
+
+# How the ranks along a conventionally named axis share the loss, which decides how gradients are combined there.
+AXIS_KINDS = {
+    "dp": ttml.core.distributed.AxisKind.Data,
+    "fsdp": ttml.core.distributed.AxisKind.Data,
+    "cp": ttml.core.distributed.AxisKind.Data,
+    "tp": ttml.core.distributed.AxisKind.Model,
+}
 
 
 class Mesh:
@@ -23,15 +31,25 @@ class Mesh:
 
     shape: tuple[int, ...]
     axis_names: tuple[str, ...]
+    axis_kinds: list[ttml.core.distributed.AxisKind | None]
     _axis_map: dict[str, int]
 
-    def __init__(self, shape: tuple[int, ...], axis_names: tuple[str, ...]):
+    def __init__(
+        self,
+        shape: tuple[int, ...],
+        axis_names: tuple[str, ...],
+        axis_kinds: dict[str, ttml.core.distributed.AxisKind] | None = None,
+    ):
+        """``axis_kinds`` declares how gradients are combined along axes whose names are not one of
+        ``AXIS_KINDS``; it may also override those."""
         if len(shape) != len(axis_names):
             raise ValueError("each axis in a mesh must have an assigned name")
 
         self.shape = shape
         self.axis_names = axis_names
         self._axis_map = {name: i for i, name in enumerate(axis_names)}
+        kinds = {**AXIS_KINDS, **(axis_kinds or {})}
+        self.axis_kinds = [kinds.get(name) for name in axis_names]
 
     def num_devices(self) -> int:
         return prod(self.shape)
@@ -232,76 +250,16 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters):
-    """Turn each device's local gradient into the global one; call once per step."""
-    average_gradients(parameters, axis_names=("dp", "fsdp"))
-    sum_sp_gradients(parameters, axis_name="tp")
+def sync_gradients(parameters) -> None:
+    """Turn each device's local gradient into the global one; call once per optimizer step.
 
-
-def average_gradients(parameters, axis_names: tuple[str, ...]):
-    """Average parameter gradients across one or more mesh axes.
-
-    Axes listed in ``axis_names`` but not present on the active mesh are
-    silently skipped. If none are present (or ``axis_names`` is empty, or
-    no mesh is open), the function is a no-op.
-
-    FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
-    mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
-    backward hook already reduce-scattered the grad into shard shape.
-
-    Args:
-        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
-        axis_names: Tuple of mesh axis names to reduce over.
+    Each gradient is reduced only along mesh axes where its parameter is replicated: averaged over the data axes,
+    and summed over a model axis where it differs across ranks (the partial gradients of sequence parallelism).
+    Both are read off the topologies, see ``ttml.core.distributed.gradient_reductions``. Without a named mesh the
+    ParallelismContext's axes are used, and without either this is a no-op.
     """
     m = maybe_mesh()
-    if m is None or not axis_names:
+    if m is None:
+        ttml.core.distributed.synchronize_gradients(parameters)
         return
-
-    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
-    if not axes:
-        return
-
-    for _, param in parameters.items():
-        if not param.is_grad_initialized():
-            continue
-
-        # Drop axes on which this particular parameter is FSDP-sharded
-        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
-        if not axes_for_param:
-            continue
-
-        scaler = prod(m.shape[axis] for axis in axes_for_param)
-        if scaler == 1:
-            continue
-        inv_scaler = 1.0 / float(scaler)
-
-        grad = param.get_grad()
-        for axis in axes_for_param:
-            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
-        grad = ttnn.multiply(grad, inv_scaler)
-        param.set_grad(grad)
-
-
-def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
-    """True if ``param`` is FSDP-sharded on the given mesh axis."""
-    if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
-        return True
-    return False
-
-
-def sum_sp_gradients(parameters, axis_name: str):
-    """Sum the gradients of sequence-parallel parameters across the tensor-parallel axis.
-    No-op when ``axis_name`` is absent or has size 1.
-
-    Args:
-        parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
-        axis_name: The tensor-parallel mesh axis name.
-    """
-    m = maybe_mesh()
-    if m is None or not m.has_axis(axis_name) or m.axis_size(axis_name) == 1:
-        return
-    axis = m.axis_index(axis_name)
-
-    for _, param in parameters.items():
-        if is_sequence_parallel(param) and param.is_grad_initialized():
-            param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))
+    ttml.core.distributed.synchronize_gradients(parameters, m.axis_kinds)

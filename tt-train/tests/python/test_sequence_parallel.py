@@ -16,7 +16,7 @@ import ttml
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraColumnParallelLinear, LoraConfig, LoraModel
-from ttml.parallel import TPStrategy, is_sequence_parallel
+from ttml.parallel import TPStrategy
 from bf16_ulp import assert_within_bf16_ulp
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
@@ -95,6 +95,35 @@ def backward(model, ids, mask) -> None:
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+def reductions(model) -> dict:
+    """The gradient reductions ``ttml.sync_gradients`` would run, by parameter name."""
+    kinds = ttml.mesh().axis_kinds
+    plan = {name: ttml.core.distributed.gradient_reductions(p, kinds) for name, p in model.parameters().items()}
+    return {name: [(r.axis, r.kind) for r in rs] for name, rs in plan.items() if rs}
+
+
+def sum_over_tp(names) -> dict:
+    return {name: [(ttml.mesh().axis_index("tp"), ttml.core.distributed.AxisKind.Model)] for name in names}
+
+
+def sequence_sharded_params(prefix: str = "Llama", attention_bias: bool = True) -> set:
+    """The parameters applied to the sequence-sharded stream: each rank sees only its tokens."""
+    per_block = ("attention_norm/gamma", "mlp_norm/gamma") + (("attention/out_linear/bias",) if attention_bias else ())
+    return {f"{prefix}/blocks/{i}/{suffix}" for i in range(N_LAYERS) for suffix in per_block} | {
+        f"{prefix}/ln_fc/gamma"
+    }
+
+
+def perturb_lora_B(model) -> None:
+    """lora_B starts at zero, which zeroes every gradient upstream of it; give it values so all LoRA paths are live."""
+    for name, param in model.parameters().items():
+        if name.endswith("lora_B"):
+            sharding = ttml.Sharding.from_tensor(param)
+            full = sharding.gather(param)
+            values = (np.random.default_rng(1).standard_normal(full.shape) * 0.05).astype(np.float32)
+            ttml.autograd.assign_numpy(param, values, layout=ttnn.Layout.TILE, mapper=sharding.derive_mapper())
+
+
 def assert_same_grads(sp_model, tp_model, label: str = "") -> None:
     tp_params, sp_params = tp_model.parameters(), sp_model.parameters()
     assert set(tp_params.keys()) == set(sp_params.keys())
@@ -139,13 +168,12 @@ class TestMatchesTensorParallel:
         ids, mask = token_ids(1, SEQ_LEN, seed=77), causal_mask(SEQ_LEN)
         for model in (tp_model, sp_model):
             backward(model, ids, mask)
-
-        ttml.sync_gradients(sp_model.parameters())
+            ttml.sync_gradients(model.parameters())
 
         assert_same_grads(sp_model, tp_model)
 
     def test_gradients_after_an_optimizer_step(self):
-        """The optimizer rewrites each parameter's mesh topology in place; the sync must not read it."""
+        """The sync reads each parameter's topology, which an optimizer step must leave as it was."""
         tp_model, sp_model = paired_models()
         optimizers = [adamw(model) for model in (tp_model, sp_model)]
         for step in range(2):
@@ -153,7 +181,7 @@ class TestMatchesTensorParallel:
             for model, optimizer in zip((tp_model, sp_model), optimizers):
                 optimizer.zero_grad()
                 backward(model, ids, mask)
-            ttml.sync_gradients(sp_model.parameters())
+                ttml.sync_gradients(model.parameters())
             assert_same_grads(sp_model, tp_model, f"step {step}")
             for optimizer in optimizers:
                 optimizer.step()
@@ -171,19 +199,30 @@ class TestMatchesTensorParallel:
         for model in (tp_model, sp_model):
             np.random.seed(0)  # lora_A is drawn from numpy's global RNG
             wrapped.append(LoraModel(model, lora))
+            perturb_lora_B(wrapped[-1])
         tp_lora, sp_lora = wrapped
-        optimizers = [adamw(model) for model in wrapped]
-        for step in range(2):
-            ids, mask = token_ids(1, SEQ_LEN, seed=step), causal_mask(SEQ_LEN)
-            for model, optimizer in zip(wrapped, optimizers):
-                optimizer.zero_grad()
-                backward(model, ids, mask)
-            ttml.sync_gradients(sp_lora.parameters())
-            if step == 0:
-                for optimizer in optimizers:
-                    optimizer.step()
+        ids, mask = token_ids(1, SEQ_LEN, seed=3), causal_mask(SEQ_LEN)
+        for model in wrapped:
+            backward(model, ids, mask)
+
+        # Column-parallel lora_A and row-parallel lora_B see the sequence-sharded stream like the norms do.
+        lora_partials = {
+            f"LoraModel/model/blocks/{i}/{suffix}"
+            for i in range(N_LAYERS)
+            for suffix in (
+                "attention/qkv_linear/lora_A",
+                "mlp/w_gate_up/lora_A",
+                "attention/out_linear/lora_B",
+                "mlp/w2/lora_B",
+            )
+        }
+        assert reductions(tp_lora) == {}
+        assert reductions(sp_lora) == sum_over_tp(
+            sequence_sharded_params("LoraModel/model", attention_bias=False) | lora_partials
+        )
 
         for model in wrapped:
+            ttml.sync_gradients(model.parameters())
             column = [(n, m) for n, m in model.named_modules() if isinstance(m, LoraColumnParallelLinear)]
             assert len(column) == 2 * N_LAYERS  # qkv_linear and w_gate_up per block
             for name, module in column:
@@ -193,15 +232,16 @@ class TestMatchesTensorParallel:
         if dropout == 0.0:  # SP draws a mask per sequence shard, so with dropout the two sample different masks
             assert_same_grads(sp_lora, tp_lora)
 
-    def test_marks_the_parameters_of_the_sequence_sharded_region(self):
-        """Exactly the norm gains and the row-parallel bias see a per-rank slice of the sequence."""
-        tp_model, sp_model = paired_models(attention_bias=True)
-        assert not any(is_sequence_parallel(p) for _, p in tp_model.parameters().items())
+    @pytest.mark.parametrize("placement", PLACEMENTS, ids=lambda p: p.name)
+    def test_reduces_exactly_the_parameters_of_the_sequence_sharded_region(self, placement):
+        """Their gradients are partial over tp, the sequence being split across it; TP's are whole on every rank."""
+        tp_model, sp_model = paired_models(placement, attention_bias=True)
+        ids, mask = token_ids(1, SEQ_LEN, seed=5), causal_mask(SEQ_LEN)
+        for model in (tp_model, sp_model):
+            backward(model, ids, mask)
 
-        marked = {name for name, p in sp_model.parameters().items() if is_sequence_parallel(p)}
-        per_block = ("attention_norm/gamma", "mlp_norm/gamma", "attention/out_linear/bias")
-        expected = {f"Llama/blocks/{i}/{suffix}" for i in range(N_LAYERS) for suffix in per_block}
-        assert marked == set.union(expected, {"Llama/ln_fc/gamma"})
+        assert reductions(tp_model) == {}
+        assert reductions(sp_model) == sum_over_tp(sequence_sharded_params())
 
 
 @pytest.mark.requires_device

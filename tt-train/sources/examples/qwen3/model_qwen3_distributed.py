@@ -36,7 +36,7 @@ DP+TP support:
   every device in the mesh.
 
   After backward, call:
-    ttml.core.distributed.synchronize_gradients(model.parameters(), 0)
+    ttml.sync_gradients(model.parameters())
   to average gradients across DP groups.
 
 Usage (TP only):

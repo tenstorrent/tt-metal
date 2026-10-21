@@ -12,7 +12,6 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.parallel import mark_sequence_parallel
 
 from .linear import (
     ColumnParallelLinear,
@@ -143,8 +142,6 @@ class LoraColumnParallelLinear(AbstractModuleBase):
             self.bias.tensor.set_requires_grad(config.is_bias_trainable)
 
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
-        if self.sequence_parallel:
-            mark_sequence_parallel(self.lora_A)
         lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
 
@@ -204,9 +201,6 @@ class LoraRowParallelLinear(AbstractModuleBase):
         lora_A_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=3)
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank, mapper=lora_A_mapper))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
-        if self.sequence_parallel:
-            # lora_B multiplies the sequence-sharded sum, so its grad is per-rank partial like the base bias.
-            mark_sequence_parallel(self.lora_B)
 
     def forward(self, x):
         if not self.input_is_parallel:

@@ -5,6 +5,7 @@
 #include "nb_core.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/operators.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -52,6 +53,8 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ttnn::distributed::SocketType>(py_distributed);
     // Expose multihost DistributedContext under core.distributed as a non-owning type (not exposed by ttnn)
     nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
+    ttml::nanobind::util::export_enum<ttml::core::distributed::AxisKind>(py_distributed);
+    nb::class_<ttml::core::distributed::GradientReduction>(py_distributed, "GradientReduction");
 
     // TTProfiler binding
     nb::class_<ttml::core::TTProfiler>(m, "TTProfiler");
@@ -182,18 +185,38 @@ void py_module(nb::module_& m) {
             },
             nb::arg("dims"),
             nb::arg("mesh_shape_override"));
-        // Synchronize gradients across devices for DDP
+        {
+            using ttml::core::distributed::GradientReduction;
+            auto py_reduction = static_cast<nb::class_<GradientReduction>>(py_distributed.attr("GradientReduction"));
+            py_reduction.def_ro("axis", &GradientReduction::axis);
+            py_reduction.def_ro("kind", &GradientReduction::kind);
+            py_reduction.def(nb::self == nb::self);
+            py_reduction.def("__repr__", [](const GradientReduction& r) {
+                return fmt::format("GradientReduction(axis={}, kind={})", r.axis, enchantum::to_string(r.kind));
+            });
+        }
+        py_distributed.def(
+            "gradient_reductions",
+            &ttml::core::distributed::gradient_reductions,
+            nb::arg("parameter"),
+            nb::arg("kinds"),
+            "The mesh axes along which `parameter`'s gradient must be reduced, one GradientReduction per axis. `kinds` "
+            "holds one AxisKind (or None) per mesh axis.");
+        py_distributed.def(
+            "synchronize_gradients",
+            static_cast<void (*)(
+                const ttml::serialization::NamedParameters&, const ttml::core::distributed::AxisKinds&)>(
+                &ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"),
+            nb::arg("kinds"),
+            "Reduce every gradient along its gradient_reductions: averaged over data axes, partial sums added over "
+            "model axes.");
         py_distributed.def(
             "synchronize_gradients",
             static_cast<void (*)(const ttml::serialization::NamedParameters&)>(
                 &ttml::core::distributed::synchronize_gradients),
-            nb::arg("parameters"));
-        py_distributed.def(
-            "synchronize_gradients",
-            static_cast<void (*)(const ttml::serialization::NamedParameters&, const std::vector<uint32_t>&)>(
-                &ttml::core::distributed::synchronize_gradients),
             nb::arg("parameters"),
-            nb::arg("cluster_axes"));
+            "synchronize_gradients over the ParallelismContext's axes: ddp and cp are data axes, tp a model axis.");
 
         // Raw (non-autograd) CCL collectives on ttnn tensors.
         // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be

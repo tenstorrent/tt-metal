@@ -13,7 +13,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
-from ttml.parallel import TPStrategy, mark_sequence_parallel
+from ttml.parallel import TPStrategy
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -185,9 +185,6 @@ class LlamaBlock(AbstractModuleBase):
         )
         self.attention_norm = RMSNormLayer(hidden_size, rms_norm_eps)
         self.mlp_norm = RMSNormLayer(hidden_size, rms_norm_eps)
-        if tp_strategy.sequence_parallel:
-            mark_sequence_parallel(self.attention_norm)
-            mark_sequence_parallel(self.mlp_norm)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,

@@ -26,7 +26,7 @@ from ttml.modules import (
 
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
-from ttml.parallel import SEQUENCE_DIM, TPStrategy, mark_sequence_parallel
+from ttml.parallel import SEQUENCE_DIM, TPStrategy
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
@@ -327,8 +327,6 @@ class Llama(AbstractModuleBase):
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
-        if sequence_parallel:
-            mark_sequence_parallel(self.ln_fc)
 
     def forward(
         self,

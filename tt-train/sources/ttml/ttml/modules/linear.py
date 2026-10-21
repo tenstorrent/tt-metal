@@ -8,7 +8,7 @@ import math
 import ttnn
 import ttml
 
-from ttml.parallel import SEQUENCE_DIM, mark_sequence_parallel
+from ttml.parallel import SEQUENCE_DIM
 
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
@@ -219,8 +219,6 @@ class RowParallelLinear(AbstractModuleBase):
         if has_bias:
             bias_shape = (1, 1, 1, out_features)
             self.bias = Parameter(bias_init(bias_shape))
-            if sequence_parallel:
-                mark_sequence_parallel(self.bias)
         else:
             self.bias = None
 

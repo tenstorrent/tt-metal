@@ -289,9 +289,9 @@ Call `ttml.sync_gradients(model.parameters())`, as `SFTTrainer` and
 `GRPOTrainer` do. Axes missing from the mesh are skipped, so the same call
 works for DDP, FSDP and HSDP. Each parameter is filtered per axis:
 
-- FSDP-sharded parameters skip `"fsdp"`, since `backward_post` already
-  reduce-scattered their gradients. Under HSDP they still all-reduce over
-  `"dp"`.
+- FSDP-sharded parameters are `Shard` on `"fsdp"` and skip it, since
+  `backward_post` already reduce-scattered their gradients. Under HSDP they
+  still all-reduce over `"dp"`.
 - Replicated parameters (from `replicate=`, or ones that couldn't be
   sharded) all-reduce over both axes.
 
@@ -352,11 +352,11 @@ In this layout:
 - During backward:
   - The FSDP backward-post hook reduce-scatters grads across the
     `"fsdp"` axis (size F) — same as pure FSDP.
-  - `ttml.sync_gradients(params)` then runs
-    a per-param filter: FSDP-managed grads skip the `"fsdp"` axis
-    (already reduce-scattered) but all-reduce across `"dp"` to average
-    each shard over DP replicas. Any non-FSDP / replicated parameter
-    all-reduces on both axes.
+  - `ttml.sync_gradients(params)` then averages each gradient over the
+    data axes its parameter is replicated on, read from the parameter's
+    topology: an FSDP-managed parameter is `Shard` on `"fsdp"`, so its
+    (already reduce-scattered) gradient is averaged over `"dp"` only. Any
+    non-FSDP / replicated parameter is averaged over both axes.
 
 ---
 
@@ -387,8 +387,10 @@ In this layout:
   wrapped module. Useful to manually inspect a parameter's full value
   outside the training loop.
 - **`ttml.fsdp.is_fsdp_managed(param.tensor)`** returns `True` for any
-  parameter `fully_shard` has touched. The marker is what
-  `average_gradients` uses to decide which axes to skip per parameter.
+  parameter `fully_shard` has touched.
+- **`ttml.core.distributed.gradient_reductions(param, ttml.mesh().axis_kinds)`**
+  lists the axes `ttml.sync_gradients` will reduce a parameter's gradient
+  along.
 
 ---
 

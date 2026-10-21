@@ -17,28 +17,6 @@
 
 namespace ttml::core::distributed {
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes) {
-    auto* device = &autograd::ctx().get_device();
-    if (cluster_axes.size() == 0) {
-        return tensor;
-    }
-    uint32_t scaler = 1U;
-    for (const auto& cluster_axis : cluster_axes) {
-        TT_FATAL(cluster_axis < device->shape().dims(), "Cluster axis must be within mesh shape");
-        scaler *= device->shape()[cluster_axis];
-    }
-    if (scaler == 1U) {
-        return tensor;
-    }
-    auto result = tensor;
-    for (const auto& cluster_axis : cluster_axes) {
-        result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
-    }
-
-    result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));
-    return result;
-}
-
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     // The tensor's own mesh when it is on a device; the context's device otherwise (a host tensor).
     const auto* device = value.device();
@@ -59,48 +37,79 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>((*placements)[axis]);
 }
 
+std::vector<GradientReduction> gradient_reductions(const autograd::TensorPtr& parameter, const AxisKinds& kinds) {
+    const auto mesh_shape = autograd::ctx().get_device().shape();
+    TT_FATAL(
+        kinds.size() == mesh_shape.dims(),
+        "gradient_reductions: {} axis kinds for the {} device mesh; give one per mesh axis",
+        kinds.size(),
+        mesh_shape);
+    std::vector<GradientReduction> reductions;
+    if (!parameter->is_grad_initialized()) {
+        return reductions;
+    }
+    const auto& value = parameter->get_value(autograd::PreferredPrecision::NATIVE);
+    const auto& grad = parameter->get_grad();
+    for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        // A sharded parameter's gradient is its own shard's, complete: TP and FSDP reduced it in the backward pass.
+        if (mesh_shape[axis] == 1U || is_sharded_on_axis(value, axis)) {
+            continue;
+        }
+        const auto& kind = kinds[axis];
+        if (kind == AxisKind::Data) {
+            reductions.push_back({axis, AxisKind::Data});
+            continue;
+        }
+        if (!is_sharded_on_axis(grad, axis)) {
+            continue;
+        }
+        TT_FATAL(
+            kind.has_value(),
+            "gradient_reductions: the gradient of a parameter replicated on mesh axis {} differs across that axis, "
+            "which has no declared kind; declare it a data axis (averaged) or a model axis (summed)",
+            axis);
+        reductions.push_back({axis, AxisKind::Model});
+    }
+    return reductions;
+}
+
+void synchronize_gradients(const serialization::NamedParameters& parameters, const AxisKinds& kinds) {
+    const auto mesh_shape = autograd::ctx().get_device().shape();
+    for (const auto& [name, parameter] : parameters) {
+        const auto reductions = gradient_reductions(parameter, kinds);
+        if (reductions.empty()) {
+            continue;
+        }
+        auto grad = parameter->get_grad();
+        uint32_t data_ranks = 1U;
+        for (const auto& [axis, kind] : reductions) {
+            grad = ttml::ttnn_fixed::distributed::all_reduce(grad, axis);
+            if (kind == AxisKind::Data) {
+                data_ranks *= mesh_shape[axis];
+            }
+        }
+        if (data_ranks > 1U) {
+            grad = ttnn::multiply(grad, 1.0F / static_cast<float>(data_ranks));
+        }
+        parameter->set_grad(grad);
+    }
+}
+
 void synchronize_gradients(const serialization::NamedParameters& parameters) {
     if (!autograd::ctx().is_parallelism_context_initialized()) {
         return;
     }
     const auto& pctx = autograd::ctx().get_parallelism_context();
-    ttsl::SmallVector<uint32_t> cluster_axes;
-    if (pctx.is_cp_enabled()) {
-        cluster_axes.push_back(pctx.get_cp_axis().value());
-    }
-    if (pctx.is_ddp_enabled()) {
-        cluster_axes.push_back(pctx.get_ddp_axis().value());
-    }
-    for (auto& [name, tensor] : parameters) {
-        if (!tensor->is_grad_initialized()) {
-            continue;
-        }
-        // Build per-param axes, dropping any axis on which this parameter is
-        // sharded: FSDP already reduce-scattered the grad over the DDP axis in
-        // its backward-post hook. The all_reduce result carries its own per-axis
-        // label (Replicate on the reduced axis, the other axes as the gradient had
-        // them, a collapsed label expanded per axis), so nothing is relabelled here.
-        ttsl::SmallVector<uint32_t> axes_for_param;
-        for (uint32_t axis : cluster_axes) {
-            if (!is_sharded_on_axis(tensor->get_value(), axis)) {
-                axes_for_param.push_back(axis);
-            }
-        }
-        if (axes_for_param.empty()) {
-            continue;
-        }
-        tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes_for_param));
-    }
-}
-
-void synchronize_gradients(
-    const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes) {
-    ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
-    for (auto& [name, tensor] : parameters) {
-        if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes));
+    AxisKinds kinds(autograd::ctx().get_device().shape().dims());
+    for (const auto axis : {pctx.get_ddp_axis(), pctx.get_cp_axis()}) {
+        if (axis.has_value()) {
+            kinds[*axis] = AxisKind::Data;
         }
     }
+    if (const auto axis = pctx.get_tp_axis()) {
+        kinds[*axis] = AxisKind::Model;
+    }
+    synchronize_gradients(parameters, kinds);
 }
 
 }  // namespace ttml::core::distributed

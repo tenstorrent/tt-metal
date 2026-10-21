@@ -404,12 +404,15 @@ TEST_F(Mesh1x2CommOpsTest, TestScatterFullyTiled) {
     EXPECT_TRUE(xt::allclose(grad_data, grad_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 }
 
-// synchronize_gradients decides per mesh axis whether a gradient is reduced by reading the parameter's label through
-// is_sharded_on_axis, and trusts the all_reduce result's own label afterwards. On the 1x2 mesh axis 1 is the only axis
-// with more than one device.
+// synchronize_gradients decides per mesh axis whether a gradient is reduced by reading the parameter's and the
+// gradient's labels through is_sharded_on_axis, and trusts the all_reduce result's own label afterwards. On the 1x2
+// mesh axis 1 is the only axis with more than one device.
 namespace {
 
 using MeshMapperConfig = ttnn::distributed::MeshMapperConfig;
+using ttml::core::distributed::AxisKind;
+using ttml::core::distributed::AxisKinds;
+using ttml::core::distributed::GradientReduction;
 
 bool all_replicate(const ttnn::Tensor& tensor) {
     const auto& placements = tensor.tensor_topology().placements();
@@ -432,10 +435,34 @@ ttml::autograd::TensorPtr parameter_with_gradient(
     return parameter;
 }
 
+xt::xarray<float> sum_of_the_two_slices(const xt::xarray<float>& grad_data) {
+    return xt::view(grad_data, xt::range(0, 1), xt::all(), xt::all(), xt::all()) +
+           xt::view(grad_data, xt::range(1, 2), xt::all(), xt::all(), xt::all());
+}
+
 xt::xarray<float> mean_of_the_two_slices(const xt::xarray<float>& grad_data) {
-    return (xt::view(grad_data, xt::range(0, 1), xt::all(), xt::all(), xt::all()) +
-            xt::view(grad_data, xt::range(1, 2), xt::all(), xt::all(), xt::all())) *
-           0.5F;
+    return sum_of_the_two_slices(grad_data) * 0.5F;
+}
+
+// Every device holds a different [1, 1, 32, 32] gradient, labelled [Replicate, Shard{0}].
+ttml::autograd::TensorPtr parameter_with_varying_gradient(const xt::xarray<float>& grad_data) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto mapper = ttnn::distributed::create_mesh_mapper(
+        *device, MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{0}}});
+    return parameter_with_gradient(grad_data, *mapper);
+}
+
+xt::xarray<float> two_random_slices() {
+    auto& rng = ttml::autograd::ctx().get_generator();
+    return ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{2U, 1U, 32U, 32U}, 0.0F, 1.0F, rng());
+}
+
+void expect_on_both_devices(const ttnn::Tensor& tensor, const xt::xarray<float>& expected) {
+    auto shards = ttml::core::to_xtensor<float>(tensor, ttml::core::IdentityComposer{});
+    ASSERT_EQ(shards.size(), 2U);
+    EXPECT_TRUE(xt::allclose(expected, shards[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+    EXPECT_TRUE(xt::allclose(expected, shards[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 }
 
 }  // namespace
@@ -460,7 +487,7 @@ TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsCollapsedGradientIsAveragedAndRea
     EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(parameter->get_value(), 1U));
 
     ttml::serialization::NamedParameters parameters{{"weight", parameter}};
-    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{1U});
+    ttml::core::distributed::synchronize_gradients(parameters, AxisKinds{std::nullopt, AxisKind::Data});
 
     const auto& synced = parameter->get_grad();
     EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(synced, 0U));
@@ -488,7 +515,7 @@ TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsRepli
     EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 0U));
 
     ttml::serialization::NamedParameters parameters{{"weight", parameter}};
-    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{1U});
+    ttml::core::distributed::synchronize_gradients(parameters, AxisKinds{std::nullopt, AxisKind::Data});
 
     const auto& synced = parameter->get_grad();
     EXPECT_EQ(synced.tensor_topology().placements().size(), 2U);
@@ -502,9 +529,8 @@ TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsRepli
 
 TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
     // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only. A label
-    // that does not cover the mesh is refused rather than guessed. A reduction request over the size-1 axis 0 is a
-    // no-op (synchronize_tensor's early
-    // return) and leaves the TP shard alone.
+    // that does not cover the mesh is refused rather than guessed. Data axes on the size-1 axis 0 and on axis 1, where
+    // the weight is sharded, reduce nothing and leave the TP shard alone.
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> weight = xt::zeros<float>({1U, 1U, 32U, 64U});
     const auto nd_mapper = ttnn::distributed::create_mesh_mapper(
@@ -532,7 +558,63 @@ TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
 
     auto parameter = ttml::autograd::create_tensor(nd, /* requires_grad */ true);
     parameter->set_grad(nd);
+    const AxisKinds data_everywhere{AxisKind::Data, AxisKind::Data};
+    EXPECT_TRUE(ttml::core::distributed::gradient_reductions(parameter, data_everywhere).empty());
     ttml::serialization::NamedParameters parameters{{"weight", parameter}};
-    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{0U});
+    ttml::core::distributed::synchronize_gradients(parameters, data_everywhere);
     EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 1U));
+}
+
+TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsSumsPartialGradientsOverAModelAxis) {
+    // A replicated parameter whose gradient differs across a model axis holds partial sums (sequence parallelism):
+    // they are added, not averaged.
+    const auto grad_data = two_random_slices();
+    auto parameter = parameter_with_varying_gradient(grad_data);
+    const AxisKinds kinds{std::nullopt, AxisKind::Model};
+    EXPECT_EQ(
+        ttml::core::distributed::gradient_reductions(parameter, kinds),
+        (std::vector<GradientReduction>{{1U, AxisKind::Model}}));
+
+    ttml::serialization::NamedParameters parameters{{"gamma", parameter}};
+    ttml::core::distributed::synchronize_gradients(parameters, kinds);
+
+    EXPECT_TRUE(all_replicate(parameter->get_grad()));
+    expect_on_both_devices(parameter->get_grad(), sum_of_the_two_slices(grad_data));
+}
+
+TEST_F(Mesh1x2CommOpsTest, GradientReductionsLeaveAWholeGradientAloneOnAModelAxis) {
+    // Under plain TP every rank computes a replicated parameter's whole gradient: summing it would multiply it by tp.
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> grad = xt::ones<float>({1U, 1U, 32U, 32U});
+    const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto parameter = parameter_with_gradient(grad, *mapper);
+    EXPECT_FALSE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 1U));
+    EXPECT_TRUE(
+        ttml::core::distributed::gradient_reductions(parameter, AxisKinds{std::nullopt, AxisKind::Model}).empty());
+}
+
+TEST_F(Mesh1x2CommOpsTest, GradientReductionsAverageOverADataAxisWhateverTheGradientLabel) {
+    // Averaging equal gradients changes nothing, so a data axis does not depend on the gradient's label being right.
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> grad = xt::ones<float>({1U, 1U, 32U, 32U});
+    const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto parameter = parameter_with_gradient(grad, *mapper);
+    const AxisKinds kinds{std::nullopt, AxisKind::Data};
+    EXPECT_EQ(
+        ttml::core::distributed::gradient_reductions(parameter, kinds),
+        (std::vector<GradientReduction>{{1U, AxisKind::Data}}));
+
+    ttml::serialization::NamedParameters parameters{{"weight", parameter}};
+    ttml::core::distributed::synchronize_gradients(parameters, kinds);
+    expect_on_both_devices(parameter->get_grad(), grad);
+}
+
+TEST_F(Mesh1x2CommOpsTest, GradientReductionsRefuseAVaryingGradientOnAnAxisWithNoKind) {
+    // Averaging and summing would both be a guess.
+    auto parameter = parameter_with_varying_gradient(two_random_slices());
+    EXPECT_THROW(
+        ttml::core::distributed::gradient_reductions(parameter, AxisKinds{std::nullopt, std::nullopt}),
+        std::runtime_error);
+    EXPECT_THROW(
+        ttml::core::distributed::gradient_reductions(parameter, AxisKinds{AxisKind::Data}), std::runtime_error);
 }

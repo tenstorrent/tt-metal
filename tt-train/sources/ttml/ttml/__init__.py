@@ -55,8 +55,6 @@ from ._mesh import (
     maybe_mesh,
     mesh,
     sync_gradients,
-    average_gradients,
-    sum_sp_gradients,
 )
 
 from . import fsdp
