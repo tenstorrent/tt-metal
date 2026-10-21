@@ -89,9 +89,6 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _MAX_CONTEXT = 1048576  # default --max-context (prompt + reply)
-# Default --prefill-max-len when a larger context is asked for. Prefill's DRAM shares the chips with decode's caches,
-# which grow with the context: a 262144-token tier fit beside a 524288-token decode but not beside a 1M one.
-_MAX_PREFILL_LEN = 131072
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -282,21 +279,10 @@ class V41ChatEngine(ChatEngine):
 class _V41Prefiller(_Prefiller):
     """:class:`_Prefiller` with V4.1's prefill model, which has no CSA position bias for the commit.
 
-    The prefill selects two-level past ``candidate_topk_blocks * candidate_block_size`` compressed entries, as
-    decode does. Attention reads only the selected entries, but the indexer scores every one, so the score tensors of
-    the last position tier span the whole ``--prefill-max-len``. Unset, ``--prefill-max-len`` is therefore the
-    context capped at ``_MAX_PREFILL_LEN``, and decode replays the rest of a longer prompt; an explicit value is used
-    as given.
+    The prefill selects two-level, as decode does, and every chunk reads only the entries it can see (or its
+    candidates' pool), so its device memory past the weights is the entry buffers ``--prefill-max-len`` sizes
+    (the context when unset).
     """
-
-    def __init__(self, engine: V41ChatEngine, args, prefetcher: contextlib.ExitStack):
-        if not args.prefill_max_len and engine.max_seq > _MAX_PREFILL_LEN:
-            logger.info(
-                f"traced prefill sized for {_MAX_PREFILL_LEN} tokens beside decode's {engine.max_seq}-token caches; "
-                "decode replays the rest of a longer prompt"
-            )
-            args.prefill_max_len = _MAX_PREFILL_LEN
-        super().__init__(engine, args, prefetcher)
 
     def _build_model(self, engine: V41ChatEngine):
         return engine.model.build_prefill(

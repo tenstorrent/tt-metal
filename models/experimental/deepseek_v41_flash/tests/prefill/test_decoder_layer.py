@@ -50,8 +50,9 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
 PCC = 0.95
-# The carried pre is ~sigmoid(bias) plus a small input-dependent part; bf16 alone costs ~1e-3.
-PRE_MIX_ATOL = 0.01
+# The carried pre is ~sigmoid(bias) plus a small input-dependent part; bf16 alone costs ~1e-3. The fused indexer
+# select returns a query's entries unordered, so attention accumulates them in a different order than the reference.
+PRE_MIX_ATOL = 0.015
 
 
 def _snapshot():
@@ -143,8 +144,9 @@ def test_decoder_layer_prefill(device, layers, seq_len, chunk):
             )
             actual[i][0].append(ttnn.to_torch(out).reshape(chunk, hc, -1).float())
             actual[i][1].append(ttnn.to_torch(out_pre).reshape(chunk, hc).float())
-        if shared.entry_idx is not None:
-            ttnn.deallocate(shared.entry_idx)
+        for tensor in (shared.entry_idx, shared.candidates):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
 
     # Reference: every layer over the whole prompt.
     for j, i in enumerate(layers):
