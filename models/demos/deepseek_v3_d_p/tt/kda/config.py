@@ -152,6 +152,12 @@ def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
     return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
 
 
+# Worker L1 a KDA mesh opens with on Blackhole: 112 KiB of kernel-config ring above the firmware map (41088 B)
+# instead of the HAL's 69 KiB, so dispatch writes the next KDA program's binaries while the current one runs (chunk
+# preparation's alone are ~67 KiB): -11 us per Galaxy SP8xTP4 T=5120 layer, for 43 KiB less allocatable L1 per core.
+KDA_WORKER_L1_SIZE = 1417088
+
+
 # Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
 _TUNED_PROJECTION_ROWS = 640
 

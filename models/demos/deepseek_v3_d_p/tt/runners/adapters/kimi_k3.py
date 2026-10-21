@@ -35,6 +35,7 @@ from typing import Callable
 from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_WORKER_L1_SIZE
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -70,6 +71,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # exactly like a broken model.
     kv_pe_interleave = False
     l1_small_size = KimiK3Config.L1_SMALL_SIZE
+    worker_l1_size = KDA_WORKER_L1_SIZE
     # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
     # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
     # checkpoint so a different one cannot silently load another's tensors; `8x4` is a symlink onto
