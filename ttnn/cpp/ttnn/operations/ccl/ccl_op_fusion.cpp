@@ -26,9 +26,9 @@ void AllGatherFusedOpSignaler::init_fused_op(
 
 void AllGatherFusedOpSignaler::init_all_gather(
     Program& program,
-    IDevice const* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
 
-    CoreRangeSet const& all_gather_workers,
+    const CoreRangeSet& all_gather_workers,
     std::vector<CoreCoord>& all_gather_worker_cores) {
     // Create the sync semaphore for the all gather workers
     if (all_gather_worker_cores.size() > 1) {
@@ -89,7 +89,7 @@ void StridedAllGatherFusedOpSignaler::init_fused_op(
 
 void StridedAllGatherFusedOpSignaler::init_all_gather(
     Program& program,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
 
     const CoreRangeSet& all_gather_workers,
     std::vector<CoreCoord>& all_gather_worker_cores) {
@@ -139,7 +139,9 @@ void StridedAllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
 }
 
 void ReduceScatterFusedOpSignaler::init_reduce_scatter(
-    Program& program, const IDevice* device, const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    Program& program,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
     // Clear the existing receiver cores
     this->fused_op_receiver_cores_noc.clear();
 
@@ -181,7 +183,9 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
 }
 
 void ReduceScatterFusedOpSignaler::init_reduce_scatter(
-    ProgramDescriptor& desc, const IDevice* device, const CoreRangeSet& core_range_to_signal) {
+    ProgramDescriptor& desc,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    const CoreRangeSet& core_range_to_signal) {
     this->fused_op_receiver_cores_noc.clear();
     for (const auto& range : core_range_to_signal.ranges()) {
         for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
@@ -225,7 +229,9 @@ void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vec
 // Used to propagate semaphore information from strided reduce scatter to matmul
 // so the matmul master knows which cores and semaphore to signal.
 void StridedReduceScatterFusedOpSignaler::init_strided_reduce_scatter(
-    Program& program, const IDevice* device, const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
+    Program& program,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal) {
     this->fused_op_receiver_cores_noc.clear();
 
     std::visit(
@@ -314,7 +320,7 @@ void MatmulFusedOpSignaler::init_reduce_scatter(
 
 void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const CoreRange& matmul_workers,
     const std::vector<CoreCoord>& matmul_worker_cores) {
     // Create the sync semaphore for the matmul workers
@@ -334,7 +340,7 @@ void MatmulFusedOpSignaler::init_fused_op(
 
 void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;
@@ -382,7 +388,7 @@ void MatmulFusedOpSignaler::init_fused_op(
 
 void MatmulFusedOpSignaler::init_fused_op(
     ProgramDescriptor& desc,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const CoreRange& matmul_workers,
     const std::vector<CoreCoord>& matmul_worker_cores) {
     // Create the sync semaphore for the matmul workers
@@ -402,7 +408,7 @@ void MatmulFusedOpSignaler::init_fused_op(
 
 void MatmulFusedOpSignaler::init_fused_op(
     ProgramDescriptor& desc,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;
@@ -500,7 +506,7 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores,
 void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     const CoreRangeSet& matmul_cores,
     tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     int privilaged_index) {
     // pick the privileged core, record the number of matmul cores
     TT_FATAL(initialized_llama_reduce_scatter_part1, "reduce scatter half needs to be initialized first");
@@ -523,7 +529,7 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     std::vector<uint32_t>& out_rt_args,
     CoreCoord current_core,
     tt::tt_metal::NOC writer_noc,
-    const tt::tt_metal::IDevice* device) const {
+    const tt::tt_metal::distributed::MeshDevice* device) const {
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.x));
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.y));
     out_rt_args.push_back(static_cast<uint32_t>(this->matmul_privilaged_semaphore));
@@ -589,7 +595,7 @@ void MinimalMatmulFusedOpSignaler::init_all_gather(
 
 void MinimalMatmulFusedOpSignaler::init_fused_op(
     Program& program,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;

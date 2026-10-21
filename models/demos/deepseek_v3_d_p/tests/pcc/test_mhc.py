@@ -226,6 +226,66 @@ def test_hc_head(device, T, C):
     _check("head_y", r_y, ttnn.to_torch(d_y))
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("T", [32], ids=["T32"])
+@pytest.mark.parametrize("C", [4096, 7168], ids=["C4096", "C7168"])
+def test_hc_head_tp_sharded(mesh_device, device_params, T, C):
+    """The head with the hidden split across the TP axis: the mixes are all-reduced, the weighted
+    sum stays per chip, so each chip ends with its own hidden slice of the collapsed stream."""
+    torch.manual_seed(0)
+    cfg = MHCConfig(dim=C, n=4)
+    g = torch.Generator().manual_seed(5)
+    fn = torch.randn(cfg.n, cfg.n * C, generator=g) * 0.02
+    base = torch.randn(cfg.n, generator=g)
+    # A unit scale, so the projection is most of each sigmoid's argument and a wrong reduction shows.
+    scale = torch.full((1,), 1.0)
+    x = torch.randn(1, T, cfg.n, C)
+
+    head = MHCHead(cfg)
+    head.fn.data, head.base.data, head.scale.data = fn, base, scale
+    r_y = head(x)  # [1,T,C]
+
+    tp = mesh_device.shape[1]
+    ms = tuple(mesh_device.shape)
+    packed = x.reshape(1, T, cfg.n, tp, C // tp).permute(0, 1, 3, 2, 4).reshape(1, 1, T, cfg.n * C)
+    x_tt = ttnn.from_torch(
+        packed.contiguous(),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.float32,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(None, 3)),
+    )
+    tt_head = TtMHCHead(
+        mesh_device,
+        cfg,
+        fn,
+        base,
+        scale,
+        tp_axis=1,
+        topology=per_axis_topology(device_params["fabric_config"])[1],
+    )
+    # Replicated over the SP axis, sharded over TP: row 0 of the mesh holds the whole answer.
+    d_y = ttnn.to_torch(tt_head(x_tt), mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(0, 3)))
+    _check(f"head_y-tp C={C}", r_y, d_y[0:1].reshape(1, T, C))
+
+
 @pytest.mark.parametrize("T", [1, 32], ids=["T1", "T32"])
 @pytest.mark.parametrize("C, scale_val", _E2E, ids=_E2E_IDS)
 @pytest.mark.parametrize("f_kind", ["identity", "linear"])
