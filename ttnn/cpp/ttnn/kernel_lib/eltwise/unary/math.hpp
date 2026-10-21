@@ -12,13 +12,20 @@
  * Runtime-param ops (Power, Rpow) override `exec(uint32_t)` directly to capture instance state.
  */
 
+#include "api/compute/eltwise_unary/recip.h"  // ReciprocalApproxMode
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/op_params.hpp"  // Approx
 
 namespace compute_kernel_lib {
 
 // ---- Exp ----
-template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
+// `Iterations` and `Mode` restrict the SFPU walk (e.g. `VectorMode::R` with 2 iterations covers only the
+// face rows holding row 0); the defaults process the whole tile.
+template <
+    Approx approx = Approx::Exact,
+    Dst Slot = Dst::D0,
+    int Iterations = 8,
+    ckernel::VectorMode Mode = ckernel::VectorMode::RC>
 struct Exp;
 
 // ---- Log ----
@@ -30,7 +37,8 @@ template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
 struct Sqrt;
 
 // ---- Recip (1/x) ----
-template <Dst Slot = Dst::D0>
+// `Approximation` defaults to the kernel's APPROX setting; `Precise` / `Approximate` override it.
+template <Dst Slot = Dst::D0, ckernel::ReciprocalApproxMode Approximation = ckernel::ReciprocalApproxMode::Default>
 struct Recip;
 
 // ---- Rsqrt ----
