@@ -20,8 +20,11 @@ namespace tt::tt_metal::distributed::host_transport {
 
 namespace {
 
-constexpr uint32_t kSpinsBeforeSleep = 1000;
-constexpr uint32_t kSleepCapUs = 50;
+// Idle policy. A hop over RDMA is ~9 us, so a parked relay must not add tens of
+// microseconds to the first page after a pause: spin for a while (~1 ms of pauses)
+// before sleeping at all, and never sleep longer than a hop.
+constexpr uint32_t kSpinsBeforeSleep = 20000;
+constexpr uint32_t kSleepCapUs = 5;
 
 struct Backoff {
     uint32_t empty = 0;

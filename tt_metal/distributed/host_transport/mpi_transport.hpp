@@ -43,8 +43,13 @@ public:
     std::string describe() const override;
 
 private:
-    // Caps the request bookkeeping; the relay's credit gate is the real limit.
-    static constexpr size_t kMaxOutstanding = 512;
+    // Messages in flight before the relay is told to wait. This is what makes the
+    // batching adaptive: with the pipe this deep, pages that arrive while a message
+    // is out stay in the ring and leave together when a slot frees, so the message
+    // size settles wherever the link's bandwidth-delay product puts it. Hand every
+    // poll's pages straight to MPI instead and the backlog forms as a queue of
+    // one-page messages, each costing the receiver a rendezvous round trip.
+    static constexpr size_t kMaxInFlight = 2;
 
     // The contiguous ring bytes from page `first` for `pages` pages; never crosses the wrap.
     std::span<std::byte> run_span(uint64_t first, uint32_t pages) const;
