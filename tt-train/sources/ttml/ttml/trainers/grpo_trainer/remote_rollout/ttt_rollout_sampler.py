@@ -201,7 +201,6 @@ class TTTRolloutSampler(RolloutSampler):
         prompts: List[List[int]],
         *,
         max_new_tokens: int = 128,
-        enable_trace: bool = True,
         stop_at_eos: bool = True,
     ) -> List[List[int]]:
         """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
@@ -210,7 +209,7 @@ class TTTRolloutSampler(RolloutSampler):
         completions, _ = self._generate_impl(
             prompts,
             max_new_tokens=max_new_tokens,
-            enable_trace=enable_trace,
+            enable_trace=True,
             stop_at_eos=stop_at_eos,
             collect_logprobs=True,
         )
@@ -221,7 +220,6 @@ class TTTRolloutSampler(RolloutSampler):
         prompts: List[List[int]],
         *,
         max_new_tokens: int = 128,
-        enable_trace: bool = True,
         stop_at_eos: bool = True,
     ) -> Tuple[List[List[int]], List[List[float]]]:
         """Same as :meth:`generate_tokens`, but also returns per-token sampled log-probs
@@ -235,7 +233,7 @@ class TTTRolloutSampler(RolloutSampler):
         completions, logprobs = self._generate_impl(
             prompts,
             max_new_tokens=max_new_tokens,
-            enable_trace=enable_trace,
+            enable_trace=True,
             stop_at_eos=stop_at_eos,
             collect_logprobs=True,
         )
@@ -277,6 +275,9 @@ class TTTRolloutSampler(RolloutSampler):
             empty_completions: List[List[int]] = [[] for _ in prompts]
             empty_logprobs: Optional[List[List[float]]] = [[] for _ in prompts] if collect_logprobs else None
             return empty_completions, empty_logprobs
+        assert (
+            enable_trace or max_new_tokens <= 2
+        ), "untraced decode re-feeds the prefill token; use at most 1 decode step"
 
         if enable_trace and not self._sampling_warmed_up:
             self._warm_up_sampling(prompts, max_new_tokens=max_new_tokens, stop_at_eos=stop_at_eos)

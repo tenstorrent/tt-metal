@@ -5,7 +5,7 @@
 
 TTTRolloutSampler.generate_tokens() must set ``warmup_prefill=True`` when it
 calls ``Generator.prefill_forward_text``. If it does not, the first
-``generate_tokens(..., enable_trace=True)`` call might raise this TT_FATAL from
+``generate_tokens(...)`` call might raise this TT_FATAL from
 ``tt_metal/distributed/mesh_workload.cpp``:
 
     Cannot load new binaries during trace capture. This program is not
@@ -61,7 +61,6 @@ def test_traced_generate_does_not_fatal_on_first_call():
             completions = sampler.generate_tokens(
                 [prompt],
                 max_new_tokens=MAX_NEW_TOKENS,
-                enable_trace=True,
             )
         except RuntimeError as e:
             msg = str(e)
