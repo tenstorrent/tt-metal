@@ -67,9 +67,34 @@ selectors `64T` + `64T/rows` bytes, the end scalar), one `execute_trace`, one `[
 region holds one command stream per length (set `GLM53_MODEL_TRACE_MB` accordingly on the 8x4: the decode trace
 of 45 layers alone needs ~216 MB at 32 users/row).
 
-Validation: `tests/test_trace_prefill.py` on one chip (layers 0-5, lengths 128 / 256 / 512): traced vs eager
-first token, last-token logits, stream rows, slot state (KDA carries, latent pages, pools, ring rows),
-replay-twice, decode continuity, TTFT. Numbers: see STATUS.md / the test log (pending the chip grant).
+Validation (`tests/test_trace_prefill.py`, chip 2 of the Galaxy, (1,1) mesh, layers 0-5 (KDA+MLP 0-2, DSA+MoE 3,
+KDA+MoE 4-5), bfp4 experts, B=2, lengths 128 / 256 / 512; `_logs/agents/traceprefill/traced_vs_eager_2.log`,
+2026-10-21):
+
+| prompt (slot) | trace T | first token eager / traced | last-token logits pcc, max diff | stream rows [0,S) pcc, max diff | slot state after the prefill (KDA recurrent + conv per layer, latent rows, complete pools, ring rows) |
+|---|---|---|---|---|---|
+| S=100 (0) | 128 | 45523 / 45523 | 1.000000, 0 | 1.000000, 0 | every tensor bit-identical |
+| S=128 (1) | 128 | 1526 / 1526 | 1.000000, 0 | 1.000000, 0 | bit-identical |
+| S=103 (1) | 128 | 9276 / 9276 | 1.000000, 0 | 1.000000, 0 | bit-identical, incl. the 3 ring rows of the open pool |
+| S=200 (0) | 256 | 31259 / 31259 | 1.000000, 0 | 1.000000, 0 | bit-identical |
+| S=384 (1) | 512 | 58387 / 58387 | 0.999880, 0.125 | 0.999887, 0.036 | the eager pass pads to 384, the trace runs 512: the variation between two padded lengths of the eager path (ttKDA chunk scan, MoE block splits) |
+
+Replay-twice: prompt B (S=90, slot 1) replayed after prompt A (S=100, slot 0) through the same trace gives B's eager
+first token (74246) and logits (pcc 1.000000; 0.0989 against A's). Decode continuity: the first token + 2 eager
+decode steps after the traced prefill equal those after the eager prefill ([13861, 49701, 29452], S=102). The slot
+write primitives alone (`test_slot_write_ops`): all exact. TTFT on this one chip (6 layers, S=100): eager 162.9 ms,
+traced 145.1 ms: the 6-layer prefill is device-bound here (three MoE layers stream their experts), the saving is the
+host dispatch of ~660 ops. The same through `tests/test_mesh_model.py::_ttft` with `GLM53_TRACE_PREFILL=1`
+(`ttft_1.log`, the 128-token L45_S128 prompt): eager warm 175 ms (cold 894 ms), traced replays 163 ms, first token
+1526 = the host head on the HF rows in both, chain pcc vs HF 0.996515 in both; the three traces captured in 3 s
+after the eager prefill had compiled the programs. `demo/text_demo.py` (questions_8, 4 users of 20-27 tokens, the
+same chip and layers, `demo_1.log`): `warmup_decode` -> four prefill traces (128..1024) captured in 33 s -> the decode
+capture -> traced TTFT 105-109 ms per user -> 61 decode-trace replays at 34 ms/step, i.e. prefill replays before
+decode replays and a decode trace captured after the prefill traces corrupt neither. Not validated on a device:
+multi-row meshes (the row-sharded ids, the replicated tile bounds, the row CCLs inside the trace), the
+user-partitioned cache slot path. The 8x4 / 45-layer measurement (where the eager 128-token TTFT is 919 ms against
+~100-300 ms of device work) is the coordinator's run (`GLM53_TRACE_PREFILL=1`, `tests/test_mesh_model.py::_ttft`
+`PERF-TTFT-TRACED` line or `demo/text_demo.py`; `GLM53_MODEL_TRACE_MB=1024`).
 
 ## Phase B (design): traced chunks for long prompts (`start > 0`, sparse rows)
 
