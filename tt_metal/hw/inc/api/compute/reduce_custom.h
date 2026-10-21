@@ -289,9 +289,8 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
     (void)icb;
     MATH((llk_math_reduce_block_max_row_uninit<DST_ACCUM_MODE>()));
 #else
-    // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-    // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-    // See _llk_math_reduce_init_ for more details
+    // The block init leaves the Src zero-substitution flag at the operand-driven default, so the flag
+    // restore in _llk_math_reduce_uninit_ is a no-op here.
     MATH((llk_math_reduce_uninit(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
