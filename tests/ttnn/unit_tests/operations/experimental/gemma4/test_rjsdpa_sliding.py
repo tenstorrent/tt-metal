@@ -83,7 +83,7 @@ class SlidingCase(PackedCase):
         legacy=False,
         q_chunk=32,
         k_chunk=128,
-        max_k_splits=1,
+        k_splits=1,
         scale=None,
         fidelity=None,
         **overrides,
@@ -96,7 +96,7 @@ class SlidingCase(PackedCase):
                 compute_with_storage_grid_size=rt.sdpa_compute_grid,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
-                max_k_splits=max_k_splits,
+                k_splits=k_splits,
                 exp_approx_mode=False,
                 matmul_math_fidelity=fidelity,
             ),
@@ -258,7 +258,7 @@ def test_sliding_gemma_shape(runtime, communication, splits):
     case = SlidingCase(runtime, communication=communication, tokens=256, head_dim=256, kv_heads=4)
     try:
         case.stage(4096)
-        case.check(case.call(max_k_splits=splits, fidelity=ttnn.MathFidelity.LoFi, scale=1.0)[0], scale=1.0)
+        case.check(case.call(k_splits=splits, fidelity=ttnn.MathFidelity.LoFi, scale=1.0)[0], scale=1.0)
     finally:
         case.close()
 
@@ -272,9 +272,7 @@ def test_sliding_split_queries_across_stripes(runtime, communication, q_chunk):
     try:
         for prefix in (0, 32, 4096):
             case.stage(prefix)
-            output = case.call(q_chunk=q_chunk, k_chunk=32, max_k_splits=3, fidelity=ttnn.MathFidelity.LoFi, scale=1.0)[
-                0
-            ]
+            output = case.call(q_chunk=q_chunk, k_chunk=32, k_splits=3, fidelity=ttnn.MathFidelity.LoFi, scale=1.0)[0]
             case.check(output, scale=1.0)
     finally:
         case.close()
