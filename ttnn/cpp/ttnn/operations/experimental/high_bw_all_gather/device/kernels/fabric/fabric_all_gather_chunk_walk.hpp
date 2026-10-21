@@ -147,7 +147,7 @@ inline void for_each_fabric_chunk(
     uint32_t first_owned_chunk,
     uint32_t owned_chunk_stride,
     uint32_t chunk_half,
-    Visit&& visit) {
+    const Visit& visit) {
     const uint32_t chunks_per_slice = fabric_chunks_per_outer_slice(geometry, num_dram_banks, pages_per_fabric_chunk);
     const uint32_t num_chunks = chunks_per_slice * geometry.num_outer_slices;
     const OwnedChunks owned = owned_chunks_of_half(first_owned_chunk, owned_chunk_stride, chunk_half);
