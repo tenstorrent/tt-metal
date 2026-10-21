@@ -18,8 +18,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> routing_metadata(
     // an empty window, which validation reports.
     const uint32_t total_tokens = indices.logical_shape().rank() >= 2 ? indices.logical_shape()[-2] : 0;
     const uint32_t window = num_tokens.value_or(total_tokens > token_start ? total_tokens - token_start : 0);
-    // TODO(#60284): windows are capped at 4096 tokens, so the model splits larger batches into
-    // passes. Remove the cap, and the passes from the model.
     return ttnn::prim::routing_metadata(indices, values, num_experts, token_start, window);
 }
 

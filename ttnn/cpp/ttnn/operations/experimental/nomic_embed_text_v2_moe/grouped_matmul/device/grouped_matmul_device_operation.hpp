@@ -21,8 +21,9 @@ struct GroupedMatmulLayout {
     uint32_t rows = 0;
     uint32_t k_tiles = 0;
     uint32_t n_tiles = 0;
-    // Blocks are dealt round-robin to num_lanes core rows. The N tiles split over num_columns core
-    // columns, column_n_tiles each and last_column_n_tiles on the last.
+    // Blocks are dealt round-robin to num_lanes core rows, or with per_expert_lanes lane e takes
+    // expert e's blocks, num_lanes = num_experts. The N tiles split over num_columns core columns,
+    // column_n_tiles each and last_column_n_tiles on the last.
     uint32_t num_lanes = 0;
     uint32_t num_columns = 0;
     uint32_t column_n_tiles = 0;
@@ -39,6 +40,7 @@ struct GroupedMatmulDeviceOperation {
         tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
         tt::tt_metal::MemoryConfig memory_config;
         DeviceComputeKernelConfig compute_kernel_config;
+        bool per_expert_lanes = false;
     };
 
     struct tensor_args_t {
@@ -77,6 +79,7 @@ Tensor grouped_matmul(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     tt::tt_metal::Layout output_layout,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool per_expert_lanes);
 
 }  // namespace ttnn::prim

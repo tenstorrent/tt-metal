@@ -135,7 +135,14 @@ GroupedMatmulLayout GroupedMatmulDeviceOperation::compute_layout(
     }
 
     // Lanes are the core rows and columns split N, as ttnn.matmul's 2D layout without transpose_mcast.
+    // Per-expert lanes give each expert a row of its own.
     const auto grid = input.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        !attributes.per_expert_lanes || num_experts <= grid.y,
+        "grouped_matmul: per_expert_lanes gives each expert a core row, so num_experts must be at most the grid's {} "
+        "rows, got {}",
+        grid.y,
+        num_experts);
     const uint32_t n_tiles = n / kTileSize;
     const uint32_t column_n_tiles = tt::div_up(n_tiles, grid.x);
     const uint32_t num_columns = tt::div_up(n_tiles, column_n_tiles);
@@ -158,7 +165,7 @@ GroupedMatmulLayout GroupedMatmulDeviceOperation::compute_layout(
         .rows = input_shape[2],
         .k_tiles = k / kTileSize,
         .n_tiles = n_tiles,
-        .num_lanes = static_cast<uint32_t>(grid.y),
+        .num_lanes = attributes.per_expert_lanes ? num_experts : static_cast<uint32_t>(grid.y),
         .num_columns = num_columns,
         .column_n_tiles = column_n_tiles,
         .last_column_n_tiles = last_column_n_tiles,
@@ -200,7 +207,8 @@ Tensor grouped_matmul(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     tt::tt_metal::Layout output_layout,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool per_expert_lanes) {
     using Operation = ttnn::experimental::nomic_embed_text_v2_moe::GroupedMatmulDeviceOperation;
     return ttnn::device_operation::launch<Operation>(
         Operation::operation_attributes_t{
@@ -209,7 +217,8 @@ Tensor grouped_matmul(
             .activation = activation,
             .output_layout = output_layout,
             .memory_config = memory_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .per_expert_lanes = per_expert_lanes},
         Operation::tensor_args_t{.input = input, .weight = weight, .expert_counts = expert_counts});
 }
 

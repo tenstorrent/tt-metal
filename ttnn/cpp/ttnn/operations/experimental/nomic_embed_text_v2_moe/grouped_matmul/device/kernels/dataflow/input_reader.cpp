@@ -4,7 +4,7 @@
 
 // RISCV_1 of every core: the input rows of each of this lane's blocks. The lane's first core reads a
 // block's K tiles and multicasts them along the lane; the other cores take them into the same ring
-// slot. Blocks come in lane order, so the compute kernel walks the experts in order.
+// slot. Blocks come in expert order, the order the compute kernel walks them in.
 
 #include <cstdint>
 
@@ -20,6 +20,7 @@
 
 void kernel_main() {
     constexpr bool is_sender = get_named_compile_time_arg_val("is_sender") == 1;
+    constexpr bool per_expert_lanes = get_named_compile_time_arg_val("per_expert_lanes") == 1;
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
     constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
@@ -53,11 +54,15 @@ void kernel_main() {
     noc.async_read_barrier();
     uint32_t first_block[num_experts];
     uint32_t num_blocks[num_experts];
-    const uint32_t used_blocks = grouped_matmul::expert_regions<num_experts>(
+    grouped_matmul::expert_regions<num_experts>(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_cb.get_write_ptr()),
         input_blocks,
         first_block,
         num_blocks);
+    auto lane_blocks = [&](uint32_t expert) {
+        return grouped_matmul::lane_blocks<num_lanes, per_expert_lanes>(
+            expert, first_block[expert], num_blocks[expert], lane);
+    };
 
     if constexpr (is_sender) {
         const auto input_accessor = TensorAccessor(input_args, input_address);
@@ -66,45 +71,51 @@ void kernel_main() {
         constexpr uint32_t aligned_tile_bytes = (tile_bytes + DRAM_ALIGNMENT - 1) & ~(DRAM_ALIGNMENT - 1);
         constexpr uint32_t block_bytes = k_tiles * aligned_tile_bytes;
         receiver_semaphore.set(VALID);
-        for (uint32_t block = lane; block < used_blocks; block += num_lanes) {
-            input_cb.reserve_back(k_tiles);
-            const uint32_t block_address = input_cb.get_write_ptr();
-            uint32_t page = block * k_tiles;
-            for (uint32_t tile = 0; tile < k_tiles; ++tile, ++page) {
-                noc.async_read(
-                    input_accessor,
-                    input_cb,
-                    tile_bytes,
-                    {.page_id = page},
-                    {.offset_bytes = tile * aligned_tile_bytes});
-            }
-            noc.async_read_barrier();
-            if constexpr (num_receivers > 0) {
-                sender_semaphore.wait(num_receivers);
-                sender_semaphore.set(0);
-                noc.async_write_multicast(
-                    CoreLocalMem<uint32_t>(block_address),
-                    MulticastEndpoint{},
-                    block_bytes,
-                    num_receivers,
-                    {},
-                    {.noc_x_start = receivers_start_x,
-                     .noc_y_start = receivers_start_y,
-                     .noc_x_end = receivers_end_x,
-                     .noc_y_end = receivers_end_y,
-                     .addr = block_address},
-                    true);
+        for (uint32_t expert = 0; expert < num_experts; ++expert) {
+            const auto blocks = lane_blocks(expert);
+            for (uint32_t index = 0, block = blocks.first; index < blocks.count; ++index, block += blocks.stride) {
+                input_cb.reserve_back(k_tiles);
+                const uint32_t block_address = input_cb.get_write_ptr();
+                uint32_t page = block * k_tiles;
+                for (uint32_t tile = 0; tile < k_tiles; ++tile, ++page) {
+                    noc.async_read(
+                        input_accessor,
+                        input_cb,
+                        tile_bytes,
+                        {.page_id = page},
+                        {.offset_bytes = tile * aligned_tile_bytes});
+                }
+                noc.async_read_barrier();
+                if constexpr (num_receivers > 0) {
+                    sender_semaphore.wait(num_receivers);
+                    sender_semaphore.set(0);
+                    noc.async_write_multicast(
+                        CoreLocalMem<uint32_t>(block_address),
+                        MulticastEndpoint{},
+                        block_bytes,
+                        num_receivers,
+                        {},
+                        {.noc_x_start = receivers_start_x,
+                         .noc_y_start = receivers_start_y,
+                         .noc_x_end = receivers_end_x,
+                         .noc_y_end = receivers_end_y,
+                         .addr = block_address},
+                        true);
 #ifdef ARCH_BLACKHOLE
-                noc.async_writes_flushed();
+                    noc.async_writes_flushed();
 #endif
-                receiver_semaphore.set_multicast(
-                    noc, receivers_start_x, receivers_start_y, receivers_end_x, receivers_end_y, num_receivers);
+                    receiver_semaphore.set_multicast(
+                        noc, receivers_start_x, receivers_start_y, receivers_end_x, receivers_end_y, num_receivers);
+                }
+                input_cb.push_back(k_tiles);
             }
-            input_cb.push_back(k_tiles);
         }
     } else {
-        const uint32_t lane_blocks = grouped_matmul::lane_block_count<num_lanes>(0, used_blocks, lane);
-        for (uint32_t block = 0; block < lane_blocks; ++block) {
+        uint32_t lane_block_total = 0;
+        for (uint32_t expert = 0; expert < num_experts; ++expert) {
+            lane_block_total += lane_blocks(expert).count;
+        }
+        for (uint32_t block = 0; block < lane_block_total; ++block) {
             input_cb.reserve_back(k_tiles);
             receiver_semaphore.set(INVALID);
             sender_semaphore.up(noc, sender_x, sender_y, 1);

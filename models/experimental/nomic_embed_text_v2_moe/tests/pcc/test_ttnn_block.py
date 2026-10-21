@@ -74,8 +74,9 @@ def routing_agreement(config, reference, tt_block, x, x_tt, moe, rot_mats, attn_
 
     tt_attn = tt_block.attn(x_tt, rot_mats, attn_mask)
     tt_hidden = tt_block._norm(tt_attn, x_tt, tt_block.norm1)
-    _, _, indices = tt_block.mlp.router.select(flatten_tokens(tt_hidden))
-    selected = ttnn.to_torch(indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing = tt_block.mlp.router(flatten_tokens(tt_hidden))
+    selected = ttnn.to_torch(routing.indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing.deallocate()
 
     with torch.no_grad():
         ref_hidden = reference.norm1(reference.attn(x, attention_mask=ref_mask) + x)

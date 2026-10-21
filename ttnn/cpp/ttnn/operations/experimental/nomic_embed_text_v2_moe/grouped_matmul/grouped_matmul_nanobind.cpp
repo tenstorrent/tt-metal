@@ -27,9 +27,11 @@ void bind_grouped_matmul(nb::module_& mod) {
         output rows hold whatever the buffer held. Regions stop at the input's last row, so counts
         that do not match input_tensor never read or write past it or the output.
 
-        One program runs every expert: blocks are dealt round-robin to the core rows, each core
-        column multiplies by its share of the output columns, and each expert's weights are read
-        once and multicast down every column.
+        One program runs every expert. Each core column multiplies by its share of the output
+        columns. By default the blocks are dealt round-robin to the core rows and each expert's
+        weights are read once and multicast down every column. With per_expert_lanes, core row e
+        multiplies all of expert e's blocks and each core reads its own share of expert e's weights,
+        so the experts' weights load at once: faster when the experts have few blocks each.
 
         Args:
             input_tensor (ttnn.Tensor): (1, 1, rows, K) BFLOAT16 or BFLOAT8_B, TILE, interleaved,
@@ -52,6 +54,8 @@ void bind_grouped_matmul(nb::module_& mod) {
                 input's.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): defaults to HiFi4
                 with fp32 accumulation.
+            per_expert_lanes (bool): give each expert a core row of its own; num_experts must be
+                at most the grid's rows. The output is the same bit for bit. Defaults to False.
 
         Returns:
             ttnn.Tensor: (1, 1, rows, N).
@@ -66,7 +70,8 @@ void bind_grouped_matmul(nb::module_& mod) {
         nb::arg("activation") = nb::none(),
         nb::arg("output_layout") = nb::cast(tt::tt_metal::Layout::TILE),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("per_expert_lanes") = false);
 }
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

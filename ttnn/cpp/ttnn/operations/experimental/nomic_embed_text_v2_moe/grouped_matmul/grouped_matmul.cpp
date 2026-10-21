@@ -17,7 +17,8 @@ Tensor grouped_matmul(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     tt::tt_metal::Layout output_layout,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    bool per_expert_lanes) {
     // Without a config: HiFi4 and fp32 accumulation, the most precise setting.
     const auto kernel_config = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -34,7 +35,8 @@ Tensor grouped_matmul(
         activation,
         output_layout,
         memory_config.value_or(input_tensor.memory_config()),
-        kernel_config);
+        kernel_config,
+        per_expert_lanes);
 }
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

@@ -102,7 +102,9 @@ def activation_of(projection: dict):
     return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, projection["gelu"])
 
 
-def run(device, projection: dict, inputs, weight, counts, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def run(
+    device, projection: dict, inputs, weight, counts, memory_config=ttnn.DRAM_MEMORY_CONFIG, per_expert_lanes=False
+):
     fidelity = ttnn.MathFidelity.LoFi if projection["transposed"] else ttnn.MathFidelity.HiFi2
     return grouped_matmul(
         inputs,
@@ -114,6 +116,7 @@ def run(device, projection: dict, inputs, weight, counts, memory_config=ttnn.DRA
         output_layout=projection["layout"],
         memory_config=memory_config,
         compute_kernel_config=compute_config(device, fidelity),
+        per_expert_lanes=per_expert_lanes,
     )
 
 
@@ -209,6 +212,34 @@ def test_rows_match_a_stock_matmul_per_expert(device, projection_name, tokens, r
     assert_rows_match_stock(device, projection, output, inputs, weight, counts)
 
 
+# per_expert_lanes, each core row multiplying one expert's blocks: the model's w1 and w2. At 32 tokens
+# every lane has one block; at 352 the regions span several blocks and start past block 0, and
+# one_expert puts every block on one lane and gives the other lanes none.
+PER_EXPERT_CASES = [
+    (name, tokens, routing)
+    for name in ("w1_fast_gelu", "w2_row_major")
+    for tokens, routing in ((32, "uniform"), (352, "uniform"), (352, "one_expert"))
+]
+
+
+@pytest.mark.parametrize("projection_name, tokens, routing", PER_EXPERT_CASES)
+def test_per_expert_lanes_rows_match_a_stock_matmul_per_expert(device, projection_name, tokens, routing):
+    """With per_expert_lanes every row still equals ttnn.matmul of its expert's rows, bit for bit.
+
+    Seeded apart from test_rows_match_a_stock_matmul_per_expert, so an output placed on the freed
+    buffer of an identical earlier call cannot pass for rows this one left unwritten.
+    """
+    projection = PROJECTIONS[projection_name]
+    generator = torch.Generator().manual_seed(tokens + 1)
+    counts = expert_counts(routing, tokens, generator)
+    weight = make_weight(device, generator)
+    inputs = make_input(device, projection["transposed"], gathered_rows(tokens), generator)
+
+    output = run(device, projection, inputs, weight, device_counts(device, counts), per_expert_lanes=True)
+
+    assert_rows_match_stock(device, projection, output, inputs, weight, counts)
+
+
 def test_program_cache_reuse(device):
     """A second call with new routing at new addresses reuses the program and follows the new buffers."""
     projection = PROJECTIONS["w1_accurate_gelu"]
@@ -230,8 +261,15 @@ def test_program_cache_reuse(device):
     assert_rows_match_stock(device, projection, first_output, first_inputs, weight, first_counts)
     assert_rows_match_stock(device, projection, second_output, second_inputs, weight, second_counts)
 
+    # per_expert_lanes is part of the program: the output is the same bit for bit, so only the
+    # cache shows that the flag reaches the op.
+    for _ in range(2):
+        run(device, projection, second_inputs, weight, device_counts(device, second_counts), per_expert_lanes=True)
+        assert device.num_program_cache_entries() == entries + 1
 
-def test_every_used_row_is_written(device):
+
+@pytest.mark.parametrize("per_expert_lanes", [False, True])
+def test_every_used_row_is_written(device, per_expert_lanes):
     """Every row of every region comes from the call itself, not from what an earlier call left.
 
     Freed DRAM keeps its contents and the allocator hands the same addresses back first, so the
@@ -249,8 +287,8 @@ def test_every_used_row_is_written(device):
 
     # Builds the program first: a cold call also allocates its kernel binaries in DRAM, which would
     # move the output off the poison.
-    ttnn.deallocate(run(device, projection, inputs, weight, checked_counts))
-    ttnn.deallocate(run(device, projection, inputs, weight, stale_counts))
+    ttnn.deallocate(run(device, projection, inputs, weight, checked_counts, per_expert_lanes=per_expert_lanes))
+    ttnn.deallocate(run(device, projection, inputs, weight, stale_counts, per_expert_lanes=per_expert_lanes))
     poison = ttnn.from_torch(
         torch.full((1, 1, gathered_rows(tokens), HIDDEN), float("nan")),
         dtype=ttnn.bfloat16,
@@ -261,7 +299,7 @@ def test_every_used_row_is_written(device):
     ttnn.synchronize_device(device)
     ttnn.deallocate(poison)
 
-    output = run(device, projection, inputs, weight, checked_counts)
+    output = run(device, projection, inputs, weight, checked_counts, per_expert_lanes=per_expert_lanes)
 
     assert output.buffer_address() == poisoned_address
     assert_rows_match_stock(device, projection, output, inputs, weight, counts)
@@ -361,6 +399,11 @@ INVALID_CALLS = {
     "counts_dtype": (dict(expert_counts=_counts(dtype=ttnn.int32)), {}, "expert_counts must be UINT32"),
     "counts_shape": (dict(expert_counts=_counts(shape=(2, NUM_EXPERTS))), {}, "expert_counts must be 1 x num_experts"),
     "too_many_experts": (dict(expert_counts=_counts(shape=(1, 96))), {}, "num_experts must be 1 to 64"),
+    "per_expert_lanes_too_many_experts": (
+        dict(expert_counts=_counts(shape=(1, 16))),
+        dict(per_expert_lanes=True),
+        "per_expert_lanes gives each expert a core row",
+    ),
     "output_dtype": ({}, dict(dtype=ttnn.float32), "dtype must be BFLOAT16 or BFLOAT8_B"),
     "row_major_bfloat8_b": (
         {},

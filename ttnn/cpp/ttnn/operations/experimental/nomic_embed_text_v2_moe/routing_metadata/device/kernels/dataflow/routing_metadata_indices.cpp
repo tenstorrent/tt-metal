@@ -147,8 +147,8 @@ void kernel_main() {
 
     // The table: a row of counts per core, two to a word, gathered on core 0 and multicast back; then
     // the totals that core 0 writes out, one to a word, and a scratch word for draining stores.
-    // With two or more cores, a core holds at most 64 tile rows, 32768 slots, so its counts fit in
-    // 16 bits; a single core never reads the table.
+    // With two or more cores, a core holds at most half a window's tile rows, rounded up, so about
+    // half of its at most 65536 slots: its counts fit in 16 bits. A single core never reads the table.
     volatile tt_l1_ptr uint32_t* table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_scratch);
     volatile tt_l1_ptr uint32_t* own_row = table + core_index * table_row_words;
     volatile tt_l1_ptr uint32_t* totals_row = table + num_cores * table_row_words;

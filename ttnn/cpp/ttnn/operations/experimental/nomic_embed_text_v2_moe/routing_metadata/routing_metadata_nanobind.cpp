@@ -36,7 +36,8 @@ void bind_routing_metadata(nb::module_& mod) {
         Keyword Args:
             num_experts (int): number of experts, 1 to 64.
             token_start (int): first token of the window, a multiple of 32. Defaults to 0.
-            num_tokens (int, optional): tokens in the window, 1 to 4096. Defaults to the rest.
+            num_tokens (int, optional): tokens in the window, at most 65536 slots: 1 to
+                65536 / top_k, 32768 at top-2. Defaults to the rest.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], all in DRAM:

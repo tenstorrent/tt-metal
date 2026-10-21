@@ -8,7 +8,8 @@
 // so expert e + 1's slice loads while e computes. One core reading a slice alone was bound by issuing
 // one read per tile. This kernel also writes the outputs of expert e - 1's blocks after it hands
 // over expert e's slice: the output ring then never waits on a slice that cannot arrive, which would
-// hang the device.
+// hang the device. With per-expert lanes every core reads its whole share of its own expert's slice
+// instead, so the lanes' slices load at once, with no gather or multicast.
 
 #include <cstdint>
 
@@ -25,6 +26,7 @@
 
 void kernel_main() {
     constexpr bool is_sender = get_named_compile_time_arg_val("is_sender") == 1;
+    constexpr bool per_expert_lanes = get_named_compile_time_arg_val("per_expert_lanes") == 1;
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
     constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
@@ -82,15 +84,23 @@ void kernel_main() {
         first_block,
         num_blocks);
 
+    auto lane_blocks = [&](uint32_t expert) {
+        return grouped_matmul::lane_blocks<num_lanes, per_expert_lanes>(
+            expert, first_block[expert], num_blocks[expert], lane);
+    };
+    // Whether this core takes expert e's slice. In the shared schedule a lane takes every slice the
+    // column shares, also of an expert it has no block of; a per-expert lane takes its own expert's
+    // only, and none when that expert has no rows.
+    auto takes_slice = [&](uint32_t expert) {
+        return per_expert_lanes ? lane_blocks(expert).count > 0 : num_blocks[expert] > 0;
+    };
+
     // The compute kernel's schedule: this core's blocks of each expert, or kSkipExpert where no slice
-    // comes. A lane with no block of an expert still takes its slice, which the column shares.
+    // comes.
     schedule_cb.reserve_back(1);
     auto* schedule = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_cb.get_write_ptr());
     for (uint32_t expert = 0; expert < num_experts; ++expert) {
-        schedule[expert] = num_blocks[expert] == 0
-                               ? grouped_matmul::kSkipExpert
-                               : grouped_matmul::lane_block_count<num_lanes>(
-                                     first_block[expert], first_block[expert] + num_blocks[expert], lane);
+        schedule[expert] = takes_slice(expert) ? lane_blocks(expert).count : grouped_matmul::kSkipExpert;
     }
     // A store can retire before L1 has it; a blocking load of the last word returns once all have
     // landed, so the compute kernel never reads the schedule ahead of it.
@@ -111,9 +121,8 @@ void kernel_main() {
     // An output slot is free once its writes have left L1; their acknowledgements are awaited once,
     // at the end. Waiting for them per block cost w2 15 us at 4096 tokens.
     auto write_outputs = [&](uint32_t expert) {
-        const uint32_t end = first_block[expert] + num_blocks[expert];
-        for (uint32_t block = grouped_matmul::first_lane_block<num_lanes>(first_block[expert], lane); block < end;
-             block += num_lanes) {
+        const auto blocks = lane_blocks(expert);
+        for (uint32_t index = 0, block = blocks.first; index < blocks.count; ++index, block += blocks.stride) {
             if constexpr (row_major_output) {
                 output_cb.wait_front(n_tiles);
                 uint32_t row = block * grouped_matmul::kBlockRows;
@@ -164,6 +173,46 @@ void kernel_main() {
         noc.async_read_barrier();
     };
 
+    if constexpr (per_expert_lanes) {
+        // Pages go to the DRAM banks in turn. Where the strides are multiples of the bank count, as
+        // in both of the model's projections, every core walking its tiles from (0, 0) would read the
+        // same bank at the same time, so each core starts at another K row and N tile. A tile's place
+        // in the slot depends on (k, n) alone, so the walk's order changes nothing else.
+        const uint32_t column = first_n_tile / slot_n_tiles;
+        const uint32_t start_k = (lane + column) % k_tiles;
+        const uint32_t start_n = lane % n_tiles;
+        auto read_slice = [&](uint32_t expert) {
+            uint32_t k = start_k;
+            for (uint32_t k_step = 0; k_step < k_tiles; ++k_step) {
+                uint32_t n = start_n;
+                for (uint32_t n_step = 0; n_step < n_tiles; ++n_step) {
+                    const uint32_t page =
+                        k * weight_stride_k + (first_n_tile + n) * weight_stride_n + expert * weight_stride_expert;
+                    noc.async_read(
+                        weight_accessor,
+                        weight_cb,
+                        weight_tile_bytes,
+                        {.page_id = page},
+                        {.offset_bytes = (k * slot_n_tiles + n) * aligned_weight_tile_bytes});
+                    n = n + 1 == n_tiles ? 0 : n + 1;
+                }
+                k = k + 1 == k_tiles ? 0 : k + 1;
+            }
+            noc.async_read_barrier();
+        };
+        for (uint32_t expert = 0; expert < num_experts; ++expert) {
+            if (!takes_slice(expert)) {
+                continue;
+            }
+            weight_cb.reserve_back(slot_tiles);
+            read_slice(expert);
+            weight_cb.push_back(slot_tiles);
+            write_outputs(expert);
+        }
+        noc.async_write_barrier();
+        return;
+    }
+
     if constexpr (is_sender) {
         receiver_semaphore.set(VALID);
     }
@@ -171,7 +220,7 @@ void kernel_main() {
     // Slices sent so far, the same count on every core of the column.
     uint32_t slice = 0;
     for (uint32_t expert = 0; expert < num_experts; ++expert) {
-        if (num_blocks[expert] == 0) {
+        if (!takes_slice(expert)) {
             continue;
         }
         ++slice;

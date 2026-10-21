@@ -24,6 +24,7 @@ Tensor grouped_matmul(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation = std::nullopt,
     tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool per_expert_lanes = false);
 
 }  // namespace ttnn::experimental::nomic_embed_text_v2_moe

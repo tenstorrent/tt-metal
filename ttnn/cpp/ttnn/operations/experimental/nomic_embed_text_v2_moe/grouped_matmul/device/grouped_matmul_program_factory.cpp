@@ -83,7 +83,9 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulDeviceOperation::create_descriptor(
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
-    // Core (column, lane): the lane's input sender is column 0, the column's weight sender lane 0.
+    // Core (column, lane): the lane's input sender is column 0, the column's weight sender lane 0. With
+    // per-expert lanes every core reads its own weights, so there is no weight sender.
+    const bool per_expert_lanes = attributes.per_expert_lanes;
     const uint32_t num_lanes = layout.num_lanes;
     const uint32_t num_columns = layout.num_columns;
     const CoreCoord last_core(num_columns - 1, num_lanes - 1);
@@ -152,6 +154,7 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulDeviceOperation::create_descriptor(
                                        : CoreRangeSet{CoreRange(CoreCoord(1, 0), last_core)};
         kernel.named_compile_time_args = {
             {"is_sender", is_sender ? 1u : 0u},
+            {"per_expert_lanes", per_expert_lanes ? 1u : 0u},
             {"num_experts", layout.num_experts},
             {"num_lanes", num_lanes},
             {"k_tiles", layout.k_tiles},
@@ -171,14 +174,19 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulDeviceOperation::create_descriptor(
         KernelDescriptor kernel;
         kernel.kernel_source = kKernelDirectory + "dataflow/weight_reader_writer.cpp";
         kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        kernel.core_ranges = is_sender ? CoreRangeSet{CoreRange(CoreCoord(0, 0), CoreCoord(num_columns - 1, 0))}
-                                       : CoreRangeSet{CoreRange(CoreCoord(0, 1), last_core)};
+        if (per_expert_lanes) {
+            kernel.core_ranges = all_cores;
+        } else {
+            kernel.core_ranges = is_sender ? CoreRangeSet{CoreRange(CoreCoord(0, 0), CoreCoord(num_columns - 1, 0))}
+                                           : CoreRangeSet{CoreRange(CoreCoord(0, 1), last_core)};
+        }
         // Expert e's tile (k, n) in the weight's pages: (1, 1, K, E * N) holds it at row k, column
         // e * N + n; read transposed, (1, 1, N, E * K) at row n, column e * K + k.
         const uint32_t expert_tiles =
             layout.num_experts * (attributes.transpose_weight ? layout.k_tiles : layout.n_tiles);
         kernel.named_compile_time_args = {
             {"is_sender", is_sender ? 1u : 0u},
+            {"per_expert_lanes", per_expert_lanes ? 1u : 0u},
             {"num_experts", layout.num_experts},
             {"num_lanes", num_lanes},
             {"k_tiles", layout.k_tiles},
@@ -206,15 +214,19 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulDeviceOperation::create_descriptor(
         return kernel;
     };
 
-    // A grid one core wide or tall has no receivers on that side.
+    // A grid one core wide or tall has no receivers on that side. With per-expert lanes there is no
+    // weight sender: one weight kernel, the receivers', runs on every core and reads its own weights.
     KernelDescriptor input_sender = input_kernel(true);
     std::optional<KernelDescriptor> input_receiver;
     if (num_columns > 1) {
         input_receiver = input_kernel(false);
     }
-    KernelDescriptor weight_sender = weight_kernel(true);
+    std::optional<KernelDescriptor> weight_sender;
     std::optional<KernelDescriptor> weight_receiver;
-    if (num_lanes > 1) {
+    if (!per_expert_lanes) {
+        weight_sender = weight_kernel(true);
+    }
+    if (per_expert_lanes || num_lanes > 1) {
         weight_receiver = weight_kernel(false);
     }
 
@@ -276,7 +288,7 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulDeviceOperation::create_descriptor(
                      static_cast<uint32_t>(lane_last.y),
                      static_cast<uint32_t>(lane_first.x),
                      static_cast<uint32_t>(lane_first.y)});
-            (lane == 0 ? weight_sender : *weight_receiver)
+            (lane == 0 && weight_sender.has_value() ? *weight_sender : *weight_receiver)
                 .emplace_runtime_args(
                     core,
                     {weight.buffer(),
@@ -300,7 +312,9 @@ tt::tt_metal::ProgramDescriptor GroupedMatmulDeviceOperation::create_descriptor(
     if (input_receiver.has_value()) {
         descriptor.kernels.push_back(std::move(*input_receiver));
     }
-    descriptor.kernels.push_back(std::move(weight_sender));
+    if (weight_sender.has_value()) {
+        descriptor.kernels.push_back(std::move(*weight_sender));
+    }
     if (weight_receiver.has_value()) {
         descriptor.kernels.push_back(std::move(*weight_receiver));
     }

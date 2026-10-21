@@ -40,19 +40,27 @@ uint32_t expert_regions(
     return next_block;
 }
 
-// Blocks are dealt round-robin to the lanes: lane l takes blocks l, l + num_lanes, ... Every lane
-// then walks the experts in order, so one weight slice serves all lanes at once.
-template <uint32_t num_lanes>
-uint32_t first_lane_block(uint32_t begin, uint32_t lane) {
-    const uint32_t offset = begin % num_lanes;
-    return begin - offset + lane + (lane < offset ? num_lanes : 0);
-}
+// The blocks of one expert's region a lane multiplies: count of them, from first, stride apart.
+struct LaneBlocks {
+    uint32_t first;
+    uint32_t stride;
+    uint32_t count;
+};
 
-// How many of blocks [begin, end) lane `lane` takes.
-template <uint32_t num_lanes>
-uint32_t lane_block_count(uint32_t begin, uint32_t end, uint32_t lane) {
-    const uint32_t first = first_lane_block<num_lanes>(begin, lane);
-    return first < end ? (end - 1 - first) / num_lanes + 1 : 0;
+// The shared schedule deals the blocks round-robin to the lanes, lane l taking blocks l, l +
+// num_lanes, ..., so that one weight slice serves all lanes at once. With per-expert lanes, lane l
+// multiplies all of expert l's blocks and none of the others'. Every kernel walks the blocks
+// through this function, so the two schedules cannot disagree between kernels.
+template <uint32_t num_lanes, bool per_expert_lanes>
+LaneBlocks lane_blocks(uint32_t expert, uint32_t first_block, uint32_t num_blocks, uint32_t lane) {
+    if constexpr (per_expert_lanes) {
+        return {first_block, 1, expert == lane ? num_blocks : 0};
+    } else {
+        const uint32_t offset = first_block % num_lanes;
+        const uint32_t first = first_block - offset + lane + (lane < offset ? num_lanes : 0);
+        const uint32_t end = first_block + num_blocks;
+        return {first, num_lanes, first < end ? (end - 1 - first) / num_lanes + 1 : 0};
+    }
 }
 
 }  // namespace grouped_matmul

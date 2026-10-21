@@ -22,10 +22,13 @@ constexpr uint32_t kBlockRows = tt::constants::TILE_HEIGHT;
 // The kernels read a tile's columns 0-15 from its faces 0 and 2 only.
 constexpr uint32_t kMaxTopK = tt::constants::FACE_WIDTH;
 constexpr uint32_t kMaxExperts = 64;
-// The size of one routed expert pass; larger batches run as windows. It also bounds each core's L1
-// scratch, to about 420 KB at top_k 16 and 64 experts; a clash with tensors already in L1 raises
-// when the program is created.
-constexpr uint32_t kMaxTokens = 4096;
+// The slots, top_k x num_tokens, of one routed expert pass; larger batches run as windows. The cores
+// exchange their per-expert counts as 16-bit halves of a word, and a sum of the other cores' counts
+// stays below 65536 only if the window's slots do: ids clamped to num_experts - 1 can put several of
+// a token's slots on one expert, so bounding the tokens alone would not do. It also bounds each
+// core's L1 scratch, to about 420 KB at top_k 16 and 64 experts; a clash with tensors already in L1
+// raises when the program is created. That is 4096 tokens at top_k 16 and 32768 at top_k 2.
+constexpr uint32_t kMaxSlots = 65536;
 
 // The framework rejects host tensors before this runs.
 void check_input(const Tensor& tensor, std::string_view name, DataType dtype) {
@@ -86,9 +89,11 @@ RoutingMetadataLayout RoutingMetadataDeviceOperation::compute_layout(
         total_tokens,
         attributes.token_start);
     TT_FATAL(
-        attributes.num_tokens >= 1 && attributes.num_tokens <= kMaxTokens,
-        "routing_metadata: num_tokens must be 1 to {}, got {}",
-        kMaxTokens,
+        attributes.num_tokens >= 1 && attributes.num_tokens <= kMaxSlots / top_k,
+        "routing_metadata: num_tokens must be 1 to {} at top_k {}, {} slots a window, got {}",
+        kMaxSlots / top_k,
+        top_k,
+        kMaxSlots,
         attributes.num_tokens);
     TT_FATAL(
         attributes.num_tokens <= total_tokens - attributes.token_start,

@@ -17,10 +17,8 @@ text attend to another: PCC 0.71 against per-sequence attention, a wrong answer 
 less precise one. Pooling also reduces along S, and has to produce one mean per text rather
 than one per batch.
 
-The MoE matmuls force the opposite. A stacked pass takes the tokens as one (1, 1, T, H) operand
-against every expert's weights side by side, and a transposed pass multiplies the stacked weight
-by one (1, 1, H, T) x^T. There the spare dim at position 1 is what the expert axis expands into
-and what fast_reduce_nc collapses again.
+The MoE layer forces the opposite: the routed expert pass gathers its rows from one (1, 1, T, H)
+operand by token index.
 
 So tt/moe.py flattens on entry and unflattens on exit, which is where the reference does its own
 x.view(-1, H), and nothing else in the encoder reshapes: ttnn.linear, ttnn.layer_norm and
@@ -29,7 +27,7 @@ trip to the six MoE layers, 12 reshapes rather than the 24 a flat-everywhere con
 need around attention.
 
 Sub-blocks take other shapes internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and
-(1, 1, T, E*F) or (1, E, H, T) across the experts, each produced and consumed by the op that owns
+(1, 1, R, H) and (1, 1, R, F) across the experts, each produced and consumed by the op that owns
 it.
 
 The flat form keeps tokens batch-major, matching the reference's own x.view(-1, H), so the
@@ -70,9 +68,9 @@ def to_device(
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
-# Up to this many tile rows of M the residual stream (the block and embedding norms' outputs), the
-# stacked expert sum and the router's dense weights go to L1, where the next op reads them:
-# bit-identical, 20 to 36 us a forward from 1x32 to 1x320, the largest stacked pass.
+# Up to this many tile rows of M the residual stream (the block and embedding norms' outputs) and
+# the expert sum go to L1, where the next op reads them: bit-identical, 20 to 36 us a forward from
+# 1x32 to 1x320, measured with the dense experts the routed ones replaced.
 ACTIVATION_L1_MAX_TILES = 10
 
 
@@ -125,14 +123,6 @@ def pack_expert_weights(
         w1.view(*expert_shape).transpose(1, 2).unsqueeze(0).contiguous(),
         w2.view(*expert_shape).unsqueeze(0).contiguous(),
     )
-
-
-def block_spread(rows: int, width: int) -> torch.Tensor:
-    """(rows, rows * width) 0/1 matrix, row r one on columns r*width .. (r+1)*width.
-
-    A matmul by it repeats each of a row's values width times, one non-zero term a sum: exact.
-    """
-    return torch.eye(rows).repeat_interleave(width, dim=-1)
 
 
 def stack_expert_columns(per_expert: torch.Tensor) -> torch.Tensor:

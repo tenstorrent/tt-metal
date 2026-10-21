@@ -22,7 +22,11 @@ pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
 NUM_EXPERTS = 8
 TOP_K = 2
-MAX_TOKENS = 4096
+# A window holds at most MAX_SLOTS slots, top_k x num_tokens.
+MAX_SLOTS = 65536
+MAX_TOKENS = MAX_SLOTS // TOP_K
+# Up to this many tokens the model's router leaves its selection in L1, and in DRAM above.
+ROUTER_L1_MAX_TOKENS = 4096
 
 # Stand-ins for what topk leaves in the tile padding. If a kernel read a padding row, the id would
 # be clamped into the last expert and change its count; the weight would turn a combine weight
@@ -90,32 +94,39 @@ def device_selection(device, indices, values, memory_config=ttnn.L1_MEMORY_CONFI
 
 
 @pytest.mark.parametrize("pattern", ["uniform", "skewed", "same_pair", "first_and_last"])
-@pytest.mark.parametrize("num_tokens", [1, 37, 128, 330, 1024, 2048, 2240, 4095, 4096])
+@pytest.mark.parametrize(
+    "num_tokens", [1, 37, 128, 330, 1024, 2048, 2240, 4095, ROUTER_L1_MAX_TOKENS, ROUTER_L1_MAX_TOKENS + 1, MAX_TOKENS]
+)
 def test_matches_reference(device, num_tokens, pattern):
-    """L1 inputs, as the router leaves them up to 4096 tokens.
+    """Inputs where the router leaves them: L1 up to ROUTER_L1_MAX_TOKENS tokens, DRAM above.
 
     The window's tile rows are split over a rectangle of cores. On Blackhole these sizes take 1, 2,
     4, 6 (one with a row less than the others), 32 (one row each), 32 (two rows each), 70 (one row
-    each, the whole 7 x 10 block), 70 and 70 (58 with two rows, 12 with one) cores.
+    each, the whole 7 x 10 block), 70, 70 (58 with two rows, 12 with one), 70 and 70 cores; the last
+    is the longest window at top-2, MAX_SLOTS slots.
     """
     generator = torch.Generator().manual_seed(num_tokens)
     indices = selection(pattern, num_tokens, generator)
     values = torch.rand(num_tokens, TOP_K, generator=generator)
 
-    outputs = routing_metadata(*device_selection(device, indices, values), num_experts=NUM_EXPERTS)
+    memory_config = ttnn.L1_MEMORY_CONFIG if num_tokens <= ROUTER_L1_MAX_TOKENS else ttnn.DRAM_MEMORY_CONFIG
+
+    outputs = routing_metadata(*device_selection(device, indices, values, memory_config), num_experts=NUM_EXPERTS)
 
     assert_matches_reference(outputs, indices, values, NUM_EXPERTS)
 
 
-@pytest.mark.parametrize("num_tokens", [37, MAX_TOKENS])
+@pytest.mark.parametrize("window", ["short", "longest"])
 @pytest.mark.parametrize("num_experts, top_k", [(1, 1), (3, 1), (5, 3), (16, 4), (64, 16)])
-def test_other_expert_and_choice_counts(device, num_experts, top_k, num_tokens):
+def test_other_expert_and_choice_counts(device, num_experts, top_k, window):
     """The validated range beyond the model's 8 experts and top-2.
 
     top_k 1, 3, 4 and 16 group the slots differently while counting and assigning; odd counts of
-    experts leave the high half of the last packed count word empty; and 64 experts with top-16 at
-    4096 tokens is 65536 slots, the most the 16-bit packed count sums are bounded for.
+    experts leave the high half of the last packed count word empty; and the longest window of
+    each top_k is MAX_SLOTS slots, the most the 16-bit packed count sums are bounded for. One
+    expert at top-1 takes all 65536, the count that would carry into the next half.
     """
+    num_tokens = 37 if window == "short" else MAX_SLOTS // top_k
     generator = torch.Generator().manual_seed(num_experts * 100 + top_k)
     indices = torch.multinomial(torch.ones(num_tokens, num_experts), top_k, replacement=False, generator=generator)
     values = torch.rand(num_tokens, top_k, generator=generator)
@@ -183,7 +194,7 @@ def test_runs_shorter_than_a_block(device):
     partial write as an atomic read-modify-write; were one lost, a row of the region would be wrong.
     Repeated, since a lost write would depend on timing.
     """
-    tokens = MAX_TOKENS
+    tokens = 4096
     rare = torch.arange(tokens) % 21 == 0
     for seed in range(10):
         generator = torch.Generator().manual_seed(seed)
@@ -240,7 +251,7 @@ def test_program_cache_reuse(device):
     "tokens, checked, stale",
     [
         (100, dict(token_start=32, num_tokens=37), dict(token_start=0, num_tokens=48)),
-        (MAX_TOKENS, dict(token_start=0, num_tokens=3990), dict(token_start=96, num_tokens=4000)),
+        (4096, dict(token_start=0, num_tokens=3990), dict(token_start=96, num_tokens=4000)),
     ],
     ids=["2_cores", "63_cores"],
 )
@@ -330,7 +341,7 @@ INVALID_CALLS = {
             values=_tensor((1, 1, MAX_TOKENS + 32, TOP_K), ttnn.float32),
         ),
         dict(num_tokens=MAX_TOKENS + 1),
-        "num_tokens must be 1 to 4096",
+        "num_tokens must be 1 to 32768 at top_k 2, 65536 slots a window",
     ),
     "window_past_end": (
         {},
