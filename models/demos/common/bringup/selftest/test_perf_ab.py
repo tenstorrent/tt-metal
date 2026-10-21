@@ -48,6 +48,9 @@ def pick(**kw):
     return t
 
 
+QUICK_LIMITS = {}
+
+
 def fake_runner(calls):
     """Stands in for the device: the change (no TOY_FIDELITY) fails the component check and runs faster."""
 
@@ -63,6 +66,7 @@ def fake_runner(calls):
         elif "BRINGUP_QUICK=1" in cmd:  # F122: one process a side
             rec = {"pcc_layer_L00": 0.999, "pcc_layer_L01": 0.990 if on else 0.995, "pcc_chunk_out": 0.99}
             rec.update(chunk_wall_ms=250.0 if on else 840.0, chunk_wall_ms_spread=4.0, host_transfers_per_layer=0)
+            rec.update(QUICK_LIMITS)  # F131: the quick profile records the ladder's limits
         elif "test_profile.py" in cmd:
             rec = {"device_ms_total": 90.0 if on else 100.0, "device_ms_experts": 8.0 if on else 12.0}
             rec["pcc_chunk_out"] = 0.99
@@ -552,3 +556,22 @@ def test_a_quick_pick_is_accepted_now_and_its_full_gate_runs_once_before_the_fin
     assert not o.led.state()["P.1"].get("full_pending") and not o.led.state()["P.2"].get("full_pending")
     assert sum("full gate (quick-accepted pick)" in ln for ln in mk.lines) == 1  # P.2 shares P.1's run
     assert "the same gate as P.1" in Path(o.led.state()["P.2"]["log"]).read_text()
+
+
+@pytest.mark.parametrize("limits", [True, False])
+def test_a_quick_ab_judges_limit_gates_on_the_limits_it_recorded(mk, monkeypatch, limits):
+    """F131: a `>= limit` gate passes on a quick A/B that recorded its limits and fails without them; the table shows
+    value / limit / share of the margin used."""
+    lim = {"pcc_layer_L00_limit": 0.995, "pcc_layer_L01_limit": 0.985, "pcc_state_kv_L01": 0.999}
+    monkeypatch.setattr(sys.modules[__name__], "QUICK_LIMITS", dict(lim, pcc_state_kv_L01_limit=0.99) if limits else {})
+    gate = {"cmd": GATE, "metrics": {"pcc_layer_L*": ">= limit", "device_ms_experts": "< 10"}}
+    o = mk([pick(ab_mode="quick", gate=gate)], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    g = o.led.state()["P.1"]["ab"]["gate_on"]
+    assert g["ok"] is limits, g
+    table = (o.run_dir / "ab" / "P.1" / "table.md").read_text()
+    if limits:
+        assert "| pcc_layer_L01 | 0.99000 / 0.98500 (0.67) | 0.99500 / 0.98500 (0.33) |" in table, table
+        assert "pcc_state_kv_L01" in table
+    else:
+        assert "no pcc_layer_L00_limit recorded" in " ".join(g["failing"]) and "Accuracy vs" not in table

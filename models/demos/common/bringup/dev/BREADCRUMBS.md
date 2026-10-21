@@ -1442,3 +1442,18 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   check after it passed (F128 added drift_metrics to the G tasks); the check runs at the task's rerun. Before, the
   export's consistency check flagged it as an export bug and the watch woke at once on every arm.
   Selftest: test_dashboard_limits.py::test_a_fixed_check_added_after_a_pass_is_a_note_not_red.
+- F131 (overseer, 2026-10-21; audit V2-V4): F128's limits at run time.
+  - Contract (testing/contract.producer_limits): a producer read-back key maps to the golden state it reads (itself when
+    it is a state name, else KV_STATE_NAMES k -> key, v -> value, kvpe -> kv_latent, overridden by the adapter's
+    `kv_state_names()` or hooks.kv_state_names(spec)); a key with no state in the drift fails the contract with the
+    fix named. Was E.state_limit(drift, "k"): KeyError for Gemma-4 / MiMo (k / v vs key / value). e2e_limits.state_limit
+    matches the state name exactly (a prefix match took index_key's layers for "index").
+  - harness.threshold(s, "state" | "layer" | ...) raises a KeyError naming e2e_limits (was a bare KeyError 'state').
+    DeepSeek's and Xing's runner contract tests (server_rules.state_threshold) take per (state, layer) the stricter of
+    the server's prefill-golden PCC (the server's own rule) and calib x the drift on their golden rung.
+  - The quick A/B profile records each layer's and each state's limit (E.check, ladder.check_states on the last chunk):
+    a `>= limit` gate could never pass a quick pick ("no pcc_layer_L00_limit recorded"). The A/B report's quick and
+    ladder results carry {metric: [value, limit]} and the table lists value / limit / share of the margin used (worst
+    first).
+  - Selftests: test_e2e_runtime.py (key map, unmapped stop, removed thresholds, no threshold() in any model's contract
+    tests, quick profile limits), test_perf_ab.py::test_a_quick_ab_judges_limit_gates_on_the_limits_it_recorded.
