@@ -42,13 +42,14 @@ def complete(url, prompt):
     return message, body["usage"]
 
 
-def test_cached_prefix_matches_cold_generation_for_ten_users():
+@pytest.mark.parametrize("shared_repetitions", [128, 131])
+def test_cached_prefix_matches_cold_generation_for_ten_users(shared_repetitions):
     url = os.environ.get("GRANITE_SERVER_URL")
     if not url:
         pytest.skip("Set GRANITE_SERVER_URL for live prefix-cache checks")
     url = url.rstrip("/")
     # Several full KV pages are identical; each final instruction is distinct.
-    shared = "Reference notes: " + "The orchard has red apples and green pears. " * 128
+    shared = "Reference notes: " + "The orchard has red apples and green pears. " * shared_repetitions
     prompts = [shared + f"\nReply with only this label: item{i}." for i in range(10)]
     cold = []
     for prompt in prompts:
@@ -62,6 +63,8 @@ def test_cached_prefix_matches_cold_generation_for_ten_users():
     repeated, repeated_usage = complete(url, prompts[0])
     assert repeated == prime == cold[0]
     assert repeated_usage["prompt_tokens_details"]["cached_tokens"] > 0
+    if shared_repetitions == 131:
+        assert repeated_usage["prompt_tokens_details"]["cached_tokens"] % 128 != 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
         warm = list(pool.map(lambda prompt: complete(url, prompt), prompts))
@@ -73,6 +76,7 @@ def test_cached_prefix_matches_cold_generation_for_ten_users():
     # Retain accounting and output hashes, without publishing prompts or text.
     report = {
         "concurrency": 10,
+        "shared_repetitions": shared_repetitions,
         "hf_revision": "9e668ce1c538387ef24d3644e9b0606647762636",
         "prompt_mode": "chat",
         "temperature": 0,
@@ -92,6 +96,7 @@ def test_cached_prefix_matches_cold_generation_for_ten_users():
     destination = Path(
         os.environ.get("GRANITE_PREFIX_REPORT", "generated/test_reports/granite42_30b_qb2/prefix-cache.json")
     )
+    destination = destination.with_name(f"{destination.stem}-{shared_repetitions}{destination.suffix}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(report, indent=2) + "\n")
     reset_cache(url)
