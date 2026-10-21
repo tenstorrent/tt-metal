@@ -129,8 +129,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
     };
     const uint32_t batch = largest_divisor_up_to(Wt, 4);
     const uint32_t cb_length = 2 * batch;
-    // Pass-2 block: DST tiles per acquire (fp32 dest halves the register file), at most one credit batch.
-    const uint32_t block_size = std::min(batch, fp32_dest_acc_en ? 2u : 4u);
+    // Pass-2 block: DST tiles per acquire (fp32 dest halves the register file), a divisor of Wt (so also
+    // of the credit batch) so every block is full: a pack batch must never straddle the end of its ring
+    // (the packer writes a batch linearly).
+    const uint32_t block_size = largest_divisor_up_to(Wt, fp32_dest_acc_en ? 2u : 4u);
     TT_FATAL(cb_length % 2 == 0 && block_size <= cb_length / 2, "layer_norm: window / block geometry");
 
     // ---- Formats ----

@@ -38,6 +38,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     slice_write/slice_write.hpp
     op_slicing/op_slicing.hpp
     layernorm/layernorm.hpp
+    softmax/softmax.hpp
+    batch_norm/batch_norm.hpp
     # transformer
     transformer/sdpa_decode/sdpa_decode.hpp
     transformer/sdpa/sdpa.hpp
@@ -224,6 +226,14 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     layernorm/layernorm.cpp
     layernorm/device/layernorm_device_operation.cpp
     layernorm/device/layernorm_welford_program_factory.cpp
+    # softmax (Quasar-native, last dim, three-pass streamed)
+    softmax/softmax.cpp
+    softmax/device/softmax_device_operation.cpp
+    softmax/device/softmax_program_factory.cpp
+    # batch_norm (Quasar-native, inference, per-plane)
+    batch_norm/batch_norm.cpp
+    batch_norm/device/batch_norm_device_operation.cpp
+    batch_norm/device/batch_norm_program_factory.cpp
     # transformer (Metal 2.0 fork of operations/transformer/sdpa_decode; isolated in ttnn::prim::qsr)
     transformer/sdpa_decode/sdpa_decode.cpp
     transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp
@@ -268,6 +278,8 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
     layernorm/layernorm_nanobind.cpp
+    softmax/softmax_nanobind.cpp
+    batch_norm/batch_norm_nanobind.cpp
     # transformer (nested ttnn.experimental.quasar.transformer submodule)
     transformer/transformer_nanobind.cpp
     transformer/sdpa_decode/sdpa_decode_nanobind.cpp

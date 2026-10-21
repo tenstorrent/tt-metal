@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (1, 1, 96, 1024),  # 3 rows: uneven across 4 NEOs
         (2, 3, 64, 2048),  # many rows, Wt=64
         (1, 1, 32, 100),  # ragged W
+        (1, 1, 32, 96),  # Wt=3: window 6, block 1 (odd tile count)
     ],
 )
 @pytest.mark.parametrize("affine", ["none", "gamma", "gamma_beta"])

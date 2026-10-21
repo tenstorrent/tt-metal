@@ -31,6 +31,8 @@
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/layernorm/layernorm_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/softmax/softmax_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/batch_norm/batch_norm_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/transformer_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
@@ -97,8 +99,10 @@ void bind_quasar(nb::module_& mod) {
     detail::bind_sharded_to_interleaved(m_quasar);
     detail::bind_interleaved_to_sharded(m_quasar);
 
-    // layer_norm (standard Welford path only; program factory + kernels are stubs for now).
+    // normalization (Quasar-native: layer_norm Welford, softmax last-dim, batch_norm inference).
     detail::bind_layernorm(m_quasar);
+    detail::bind_softmax(m_quasar);
+    detail::bind_batch_norm(m_quasar);
 
     // transformer (nested ttnn.experimental.quasar.transformer submodule; sdpa_decode for now).
     transformer::bind_transformer(m_quasar);
