@@ -534,3 +534,24 @@ The MoE block's weight cache is keyed on what the device layout depends on, neve
   TP degree, not a Geometry or the chunk (the Galaxy MoE Block artifact's proposal).
 - **Follow-up for the implementation:** the flat plan takes experts_per_chip as an input; it should expose a per-expert
   layout signature (the fields compared above) as the cache key, and pack a chip's regions from per-expert blobs.
+
+## 15. North star: the fused MoE block (2026-10-21)
+
+Two programs per MoE layer for non-latent models (K2.7, GLM-5.3, M3), three for a latent MoE (K3); today main runs
+~18-22 per layer and the GLM-Flash bring-up block ~15.
+
+1. **Head**: ffn_norm (optional), router matmul (gate split along H), logits reduce-scatter to the token owners, top-k
+   on the owners, routing gather over the mesh, combine plan + dispatch tables; on other cores / links in the same
+   program the x all-gather over TP, the shared expert (gate_up, GLU, down) + its TP reduce-scatter, and for K3 the
+   latent down projection + all-to-all to the owners. Ends at a mesh-wide barrier (the dispatch needs every chip's
+   routing and plan); everything in it lives in L1.
+2. **Exchange**: arena setup + cross-chip barrier, 2D dispatch from the owners, flat experts streaming weights from the
+   dispatch start, 2D combine. Non-latent: the combine lands width slices on the home row's chips and adds the
+   shared-expert partial and the residual, so no tail. L1 changes role here (the arena takes ~all of it).
+3. **Latent tail** (K3): latent all-gather over TP, norm, up projection, residual add (needs every owner's sums).
+
+Not one program: the routing -> dispatch dependency is mesh-wide and the head / window use L1 differently; merging
+would only save launch gaps (a few us each traced). On the way: ~8 programs (router, routing + plan, x all-gather,
+shared expert, latent down, dispatch + experts + combine, tail, add). Order: fused shared-expert op (then merged into
+the head / dispatch), experts during the dispatch, router + routing gather + planner merged, combine landing width
+slices (non-latent tail gone). Artifact: Galaxy MoE Block, section "North star".
