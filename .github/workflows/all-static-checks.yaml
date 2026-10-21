@@ -64,8 +64,14 @@ jobs:
 
       - name: Fail if pre-commit hooks require changes
         if: steps.pre-commit.outcome == 'failure'
+        env:
+          SUGGESTIONS_POSTED: ${{ github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
         run: |
-          echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
+          if [[ "$SUGGESTIONS_POSTED" == "true" ]]; then
+            echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
+          else
+            echo "::error::Pre-commit hooks failed. See the output of the Run Pre-commit step above."
+          fi
           echo "To fix locally: pre-commit run --from-ref origin/main --to-ref HEAD"
           exit 1
   check-spdx-licenses:
