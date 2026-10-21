@@ -60,6 +60,9 @@ def test_export_rejects_bad_arguments(expect_error):
         ttnn.D2DStreamService.export_pipeline_descriptor(_service_id("empty_boundary"), [[]], root=0)
     with expect_error(RuntimeError, "outside world"):
         ttnn.D2DStreamService.export_pipeline_descriptor(_service_id("root"), [], root=1)
+    for bad_id in ["", "../escape", "a/b", "a..b"]:
+        with expect_error(RuntimeError, "must be letters, digits"):
+            ttnn.D2DStreamService.export_pipeline_descriptor(bad_id, [], root=0)
 
 
 def test_wait_and_read_times_out(expect_error):
