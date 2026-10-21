@@ -248,8 +248,8 @@ class TtRouter(LightweightModule):
         self.lin_gate_sig = DecodeLinear(device, self.w_gate, activation=ttnn.UnaryOpType.SIGMOID)
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
         # decode (T <= 32): ONE generic op after the gate matmul (custom_ops/router_topk) instead of the 16-op
-        # composite; same outputs. GLM53_ROUTER_FUSED=1 (default off); ``topk`` tie-break semantics (see README)
-        self.fused = os.environ.get("GLM53_ROUTER_FUSED", "0") == "1"
+        # composite; same outputs. GLM53_ROUTER_FUSED=1 is the default since 2026-10-21 (0 = the composite); ``topk`` tie-break semantics (see README)
+        self.fused = os.environ.get("GLM53_ROUTER_FUSED", "1") == "1"
         self.fused_op = RouterTopk(device, E=self.E, k=self.k, scale=cfg.routed_scaling_factor) if self.fused else None
         if self.fused:
             logger.info("TtRouter: fused decode router (custom_ops/router_topk, GLM53_ROUTER_FUSED=1)")
