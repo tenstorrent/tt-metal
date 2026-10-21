@@ -47,13 +47,21 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
     namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     const Tensor& input = tensor_args.input;
     require_device_input(input);
-    const char* violation = rcg::scope_violation(
-        input,
-        operation_attributes.logical_output_shape,
-        operation_attributes.output_mem_config,
-        operation_attributes.sub_core_grids);
-    TT_FATAL(violation == nullptr, "ReshapeCodegen: {}", violation);
     const auto& plan = operation_attributes.plan;
+    TT_FATAL(
+        rcg::supported_by_codegen(
+            input,
+            operation_attributes.logical_output_shape,
+            operation_attributes.output_mem_config,
+            operation_attributes.sub_core_grids,
+            plan),
+        "ReshapeCodegen: {}",
+        rcg::unsupported_reason(
+            input,
+            operation_attributes.logical_output_shape,
+            operation_attributes.output_mem_config,
+            operation_attributes.sub_core_grids,
+            &plan));
     if (plan.tile_route != rcg::TileRoute::TileRows) {
         return;
     }

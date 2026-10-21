@@ -43,9 +43,8 @@ bool standard_tile_with_tight_padding(const Tensor& input) {
            padded[-2] == tt::round_up(logical[-2], tile.get_height());
 }
 
-}  // namespace
-
-// Cheapest first.
+// Why the codegen program cannot run this call before any plan is built (placement, layout, dtype, shapes, grid), or
+// nullptr. Cheapest first.
 const char* scope_violation(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -86,8 +85,6 @@ const char* scope_violation(
     return nullptr;
 }
 
-namespace {
-
 // Native reads every source tile each output tile touches; tile rows reads each source once per batch. Thresholds
 // are judged on the full plan, fitted on Blackhole and checked on Wormhole.
 constexpr uint64_t kTileRowsMinReadCut = 8;
@@ -97,10 +94,7 @@ constexpr uint64_t kTileRowsMinReadsSavedPerTile = 16;
 // Two runs per output tile means every output tile is whole face halves of its sources.
 constexpr uint64_t kWholeHalfRunsPerTile = 2;
 
-bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t num_cores) {
-    if (input.dtype() == tt::tt_metal::DataType::UINT16) {
-        return false;
-    }
+bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
     // A width change copies one row per run and loses below the read cut unless the reads it saves outweigh the runs;
     // a refold of whole face halves wins once native needs more than one round.
     const uint64_t out_pages = choice.layout.num_output_pages;
@@ -112,51 +106,6 @@ bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t n
 
 constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
 constexpr const char* kTileStaticFitViolation = "no TILE program fits the static L1 budget even at its smallest plan";
-
-// Tries tile rows where it beats native, then tile rows and the segment map where they do not; the first whose
-// smallest plan fits the static window is taken. Tile rows falls back to the segment map under live L1 pressure, so it
-// beats native only while the segment map is within its size caps.
-RouteDecision choose_tile_route(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    uint32_t num_cores) {
-    const auto& in_shape = input.logical_shape();
-    const bool native_rejects = input.dtype() == tt::tt_metal::DataType::UINT16;
-    const bool row_permutation = is_tile_row_permutation(in_shape, logical_output_shape);
-    auto rows = plan_tile_rows(in_shape, logical_output_shape);
-    const bool rows_win = rows.has_value() && !native_faster(input, *rows, num_cores);
-
-    const uint64_t budget = static_l1_budget(input, output_spec(input, logical_output_shape, output_mem_config));
-    const uint32_t tile_bytes =
-        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    const auto rows_fit_budget = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
-    const bool rows_fit = rows.has_value() && (rows_fit_budget(*rows) ||
-                                               plan_tile_rows_fitting(in_shape, logical_output_shape, rows_fit_budget));
-    const auto mapped_within_caps = [&] {
-        return tile_mapped_within_caps(
-            in_shape, logical_output_shape, static_cast<uint32_t>(input.element_size()), tile_bytes, num_cores);
-    };
-
-    const auto take = [&](TileRoute tile_route, bool beats_native) {
-        RouteDecision route{.plan = LaunchPlan{.tile_route = tile_route}, .demoted = !beats_native};
-        if (tile_route == TileRoute::TileRows) {
-            route.plan->tile_rows = std::move(*rows);
-        }
-        return route;
-    };
-    if (rows_fit && rows_win) {
-        return take(TileRoute::TileRows, native_rejects || mapped_within_caps());
-    }
-    if (rows_fit) {
-        return take(TileRoute::TileRows, native_rejects);
-    }
-    if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
-        return take(TileRoute::TileMapped, native_rejects || !row_permutation);
-    }
-    const bool within_caps = rows.has_value() || mapped_within_caps();
-    return {.violation = within_caps ? kTileStaticFitViolation : kTileCapsViolation};
-}
 
 }  // namespace
 
@@ -183,16 +132,89 @@ bool supported_execution_controls(
            (sub_core_grids->num_cores() > 0 && reshape_core_grid(input).contains(*sub_core_grids));
 }
 
-RouteDecision plan_codegen(
+const char* unsupported_reason(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const LaunchPlan* plan) {
+    if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
+        return violation;
+    }
+    const auto& in_shape = input.logical_shape();
+    const uint32_t num_cores = reshape_core_grid(input, sub_core_grids).num_cores();
+    if (plan == nullptr) {
+        const bool within_caps = plan_tile_rows(in_shape, logical_output_shape).has_value() ||
+                                 segment_map_within_caps(input, logical_output_shape, num_cores);
+        return within_caps ? kTileStaticFitViolation : kTileCapsViolation;
+    }
+    const uint64_t budget = static_l1_budget(input, output_spec(input, logical_output_shape, output_mem_config));
+    if (plan->tile_route == TileRoute::TileRows) {
+        const uint32_t tile_bytes =
+            input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
+        const auto fits = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
+        if (fits(plan->tile_rows) || plan_tile_rows_fitting(in_shape, logical_output_shape, fits).has_value()) {
+            return nullptr;
+        }
+    } else if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
+        return nullptr;
+    }
+    return kTileStaticFitViolation;
+}
+
+bool supported_by_codegen(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const LaunchPlan& plan) {
+    return unsupported_reason(input, logical_output_shape, output_mem_config, sub_core_grids, &plan) == nullptr;
+}
+
+std::optional<LaunchPlan> plan_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
-        return {.violation = violation};
+    if (scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids) != nullptr) {
+        return std::nullopt;
     }
-    return choose_tile_route(
-        input, logical_output_shape, output_mem_config, reshape_core_grid(input, sub_core_grids).num_cores());
+    if (auto rows = plan_tile_rows(input.logical_shape(), logical_output_shape)) {
+        LaunchPlan plan{.tile_route = TileRoute::TileRows, .tile_rows = std::move(*rows)};
+        if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
+            return plan;
+        }
+    }
+    LaunchPlan mapped{.tile_route = TileRoute::TileMapped};
+    if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, mapped)) {
+        return mapped;
+    }
+    return std::nullopt;
+}
+
+bool segment_map_within_caps(const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t num_cores) {
+    return tile_mapped_within_caps(
+        input.logical_shape(),
+        logical_output_shape,
+        static_cast<uint32_t>(input.element_size()),
+        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype())),
+        num_cores);
+}
+
+bool is_demoted(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t num_cores, const LaunchPlan& plan) {
+    // Native rejects uint16, so demoting would fail the call.
+    if (input.dtype() == tt::tt_metal::DataType::UINT16) {
+        return false;
+    }
+    if (plan.tile_route == TileRoute::TileRows) {
+        // Tile rows falls back to the segment map under live L1 pressure, so it beats native only while the segment
+        // map is within its size caps.
+        return native_faster(plan.tile_rows, num_cores) ||
+               !segment_map_within_caps(input, logical_output_shape, num_cores);
+    }
+    // The segment map loses to native only on a tile-row permutation: both widths whole tiles.
+    return input.logical_shape()[-1] % kTileDim == 0 && logical_output_shape[-1] % kTileDim == 0;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
