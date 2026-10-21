@@ -90,25 +90,60 @@ def test_cache_hit_complex_fft_uses_fresh_args(device, dtype, tol):
     assert rel < tol, f"cache-hit output wrong: rel {rel:.2e} (tol {tol:.0e})"
 
 
-def test_non_pow2_batch_is_rejected(device, expect_error):
-    """A leading-dimension product that is not a power of two must fail before any twiddle table is built."""
-    tt_in = _from_torch(torch.randn(3, 4096), device, ttnn.float32)
-    with expect_error(RuntimeError, "power of two") as exc_info:
-        ttnn.experimental.fft(tt_in)
-    assert "route via" not in str(exc_info.value)
-
-
-def test_tile_layout_does_not_build_twiddles(device, expect_error):
-    """TILE layout used to miss the two-pass check and overflow the Stockham table."""
-    tt_in = ttnn.from_torch(
-        torch.randn(1, 4096), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+@pytest.mark.parametrize("B, N", [(3, 1024), (5, 256), (3, 4096), (6, 2048)])
+def test_non_pow2_batch_is_auto_padded(device, B, N):
+    """Leading-dim product is not a power of two: op must auto-pad to next pow-2,
+    run the transform, and slice the padding off so the caller sees shape (B, N)."""
+    torch_in = torch.randn(B, N, dtype=torch.float32)
+    tt_in = _from_torch(torch_in, device, ttnn.float32)
+    real, imag = ttnn.experimental.fft(tt_in)
+    assert real.shape == tt_in.shape, f"expected shape {tt_in.shape}, got {real.shape}"
+    got = torch.complex(
+        ttnn.to_torch(real).to(torch.float32),
+        ttnn.to_torch(imag).to(torch.float32),
     )
-    with expect_error(RuntimeError, "ROW_MAJOR"):
-        ttnn.experimental.fft(tt_in)
+    rel = _rel_err(got, torch.fft.fft(torch_in, dim=-1))
+    assert rel < 2e-3, f"non-pow2 batch B={B} N={N} rel err {rel:.2e}"
+
+
+def test_rank3_non_pow2_batch_is_auto_padded(device):
+    """A rank-3 input (5, 7, 64) has leading-dim product 35, not pow-2. Auto-pad path
+    must restore the original rank-3 shape on the way back."""
+    torch_in = torch.randn(5, 7, 64, dtype=torch.float32)
+    tt_in = _from_torch(torch_in, device, ttnn.float32)
+    real, imag = ttnn.experimental.fft(tt_in)
+    assert real.shape == tt_in.shape
+    got = torch.complex(
+        ttnn.to_torch(real).to(torch.float32),
+        ttnn.to_torch(imag).to(torch.float32),
+    )
+    rel = _rel_err(got, torch.fft.fft(torch_in, dim=-1))
+    assert rel < 2e-3, f"rank-3 non-pow2 batch rel err {rel:.2e}"
+
+
+@pytest.mark.parametrize("N", [256, 1024, 4096])
+def test_tile_layout_is_auto_converted(device, N):
+    """TILE input used to be rejected; now auto-converts to ROW_MAJOR for the FFT
+    and converts back on return so the caller gets a TILE output."""
+    torch_in = torch.randn(1, N, dtype=torch.float32)
+    tt_in = ttnn.from_torch(
+        torch_in, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    real, imag = ttnn.experimental.fft(tt_in)
+    assert real.layout == ttnn.TILE_LAYOUT, "output layout must match input layout"
+    assert imag.layout == ttnn.TILE_LAYOUT
+    got = torch.complex(
+        ttnn.to_torch(real).reshape(-1).to(torch.float32),
+        ttnn.to_torch(imag).reshape(-1).to(torch.float32),
+    )
+    ref = torch.fft.fft(torch_in.reshape(-1))
+    rel = _rel_err(got, ref)
+    assert rel < 2e-3, f"TILE auto-convert N={N} rel err {rel:.2e}"
 
 
 def test_large_unaligned_length_is_rejected(device, expect_error):
-    """N=44100 is a common audio length and is past the fp32 padded-row limit."""
+    """N=44100 is a common audio length. Still rejected on this tree (fix lands in
+    a follow-up PR); the error must say 'multiple of 1024'."""
     tt_in = _from_torch(torch.randn(1, 44100), device, ttnn.float32)
     with expect_error(RuntimeError, "multiple of 1024"):
         ttnn.experimental.fft(tt_in)

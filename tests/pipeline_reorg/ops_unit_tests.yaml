@@ -77,9 +77,9 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
-  # Ignore experimental/fft: WH-B0 only, needs a dedicated per-file job; registering that
-  # job requires a time_budget.yaml bump that fork PRs cannot land.
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
+  # Note: experimental/fft tests are collected here (previously --ignore'd); the op is
+  # WH-B0 only and the Blackhole suites below retain their --ignore on this folder.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 65

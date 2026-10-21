@@ -15,6 +15,9 @@
 #include "device/rebank_rm_device_operation.hpp"
 #include "device/rebank_rm_merge_device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/types.hpp"  // ttnn::Shape, ttnn::SmallVector
 
 // Bluestein: included after fft.hpp to avoid circular dependency
@@ -948,6 +951,126 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> fft_three_pass(
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Input normalization: auto-adapt rejected inputs instead of refusing.
+//
+// Two kinds of inputs the native routing cannot handle are handled by
+// transparent host-side adapters here:
+//
+//   (a) Non-ROW_MAJOR layout. The native readers assume row-major
+//       pages. We untile on entry, run the FFT in ROW_MAJOR, and
+//       restore the caller's layout on exit.
+//
+//   (b) Non-power-of-two leading dims. The core grid is sized to a
+//       power of two. We zero-pad along the batch dimension to the
+//       next power of two, run the FFT, and slice the padding off
+//       on exit. The transform is linear so the padded rows do not
+//       affect the kept rows.
+//
+// Both adapters are no-ops on the common path (ROW_MAJOR + pow-2 B).
+// ────────────────────────────────────────────────────────────────────
+
+static uint32_t next_pow2_u32(uint32_t v) {
+    if (v <= 1u) {
+        return 1u;
+    }
+    uint32_t p = 1u;
+    while (p < v) {
+        p <<= 1;
+    }
+    return p;
+}
+
+struct LayoutInfo {
+    tt::tt_metal::Layout orig;
+};
+
+static LayoutInfo normalize_layout_to_row_major(ttnn::Tensor& real, std::optional<ttnn::Tensor>& imag) {
+    LayoutInfo info{real.layout()};
+    if (real.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
+        real = ttnn::to_layout(real, tt::tt_metal::Layout::ROW_MAJOR);
+        if (imag.has_value()) {
+            imag = ttnn::to_layout(*imag, tt::tt_metal::Layout::ROW_MAJOR);
+        }
+    }
+    return info;
+}
+
+static std::tuple<ttnn::Tensor, ttnn::Tensor> restore_layout(
+    ttnn::Tensor out_r, ttnn::Tensor out_i, const LayoutInfo& info) {
+    if (info.orig != tt::tt_metal::Layout::ROW_MAJOR) {
+        out_r = ttnn::to_layout(out_r, info.orig);
+        out_i = ttnn::to_layout(out_i, info.orig);
+    }
+    return {std::move(out_r), std::move(out_i)};
+}
+
+struct BatchPadInfo {
+    ttnn::SmallVector<uint32_t> orig_leading;  // leading-dim shape of the caller's input
+    uint32_t orig_batch{1u};                    // product of orig_leading
+    uint32_t padded_batch{1u};                  // next_pow2(orig_batch)
+    uint32_t N{0u};                             // last-dim length
+    bool did_pad{false};
+};
+
+static BatchPadInfo normalize_batch_to_pow2(ttnn::Tensor& real, std::optional<ttnn::Tensor>& imag) {
+    const auto& shape = real.padded_shape();
+    BatchPadInfo info;
+    for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
+        info.orig_leading.push_back(static_cast<uint32_t>(shape[d]));
+    }
+    info.N = static_cast<uint32_t>(shape[-1]);
+    info.orig_batch = 1u;
+    for (auto v : info.orig_leading) {
+        info.orig_batch *= v;
+    }
+    info.padded_batch = info.orig_batch;
+    if (is_pow2(info.orig_batch)) {
+        return info;
+    }
+
+    // Flatten leading dims to a single batch axis, pad, store back.
+    info.padded_batch = next_pow2_u32(info.orig_batch);
+    info.did_pad = true;
+
+    const auto mc = real.memory_config();
+    real = ttnn::reshape(real, make_shape({info.orig_batch, info.N}));
+    if (imag.has_value()) {
+        imag = ttnn::reshape(*imag, make_shape({info.orig_batch, info.N}));
+    }
+
+    const uint32_t pad_rows = info.padded_batch - info.orig_batch;
+    const ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+        {{0u, pad_rows}},
+        {{0u, 0u}},
+    };
+    real = ttnn::pad(real, padding, /*value=*/0.0f, /*use_multicore=*/true, mc);
+    if (imag.has_value()) {
+        imag = ttnn::pad(*imag, padding, /*value=*/0.0f, /*use_multicore=*/true, mc);
+    }
+    return info;
+}
+
+static std::tuple<ttnn::Tensor, ttnn::Tensor> restore_batch(
+    ttnn::Tensor out_r, ttnn::Tensor out_i, const BatchPadInfo& info) {
+    if (!info.did_pad) {
+        return {std::move(out_r), std::move(out_i)};
+    }
+    // Slice the padded rows off the (padded_batch, N) outputs.
+    const auto mc = out_r.memory_config();
+    const ttnn::SmallVector<uint32_t> begins = {0u, 0u};
+    const ttnn::SmallVector<uint32_t> ends = {info.orig_batch, info.N};
+    const ttnn::SmallVector<uint32_t> step = {1u, 1u};
+    out_r = ttnn::slice(out_r, begins, ends, step, mc);
+    out_i = ttnn::slice(out_i, begins, ends, step, mc);
+    // Restore the caller's original leading-dim shape.
+    ttnn::SmallVector<uint32_t> out_dims(info.orig_leading);
+    out_dims.push_back(info.N);
+    out_r = ttnn::reshape(out_r, ttnn::Shape{out_dims});
+    out_i = ttnn::reshape(out_i, ttnn::Shape{out_dims});
+    return {std::move(out_r), std::move(out_i)};
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Preflight validation for the top-level fft/ifft entry points.  All
 // three overloads run this to reject inputs the router can't correctly
 // dispatch (invalid arch, degenerate N, mismatched complex halves)
@@ -968,27 +1091,17 @@ static void preflight_fft_input(
         op_name,
         N);
 
+    // NOTE: dtype is the only remaining hard reject. Non-pow-2 batch is
+    // handled by auto-padding (see normalize_batch_to_pow2), and non-
+    // ROW_MAJOR layout is handled by auto-conversion (see
+    // normalize_layout_to_row_major) before this preflight is invoked
+    // on the normalized tensor.
     const auto dt = real.dtype();
     TT_FATAL(
         dt == tt::tt_metal::DataType::FLOAT32 || dt == tt::tt_metal::DataType::BFLOAT16,
         "{}: only Float32 and BFloat16 are supported (got {}).",
         op_name,
         static_cast<int>(dt));
-    TT_FATAL(
-        real.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "{}: only ROW_MAJOR layout is supported.",
-        op_name);
-
-    uint32_t batch = 1u;
-    for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
-        batch *= static_cast<uint32_t>(shape[d]);
-    }
-    TT_FATAL(
-        is_pow2(batch),
-        "{}: the product of the leading dimensions must be a positive power of two (got {}). "
-        "Pad those dimensions up to the next power of two, run the transform, then slice the padding off.",
-        op_name,
-        batch);
 
     auto* dev = real.device();
     TT_FATAL(dev != nullptr, "{}: input tensor must reside on a device.", op_name);
@@ -1020,98 +1133,113 @@ static void preflight_fft_input(
     }
 }
 
+// Internal router that assumes the input is already normalized: ROW_MAJOR
+// layout, pow-2 batch, rank >= 2. The three public entries (fft real,
+// fft complex, ifft) normalize their inputs then call this.
+static std::tuple<ttnn::Tensor, ttnn::Tensor> fft_route(
+    const ttnn::Tensor& real_in,
+    std::optional<ttnn::Tensor> imag_in,
+    FFTPrecision precision,
+    bool inverse) {
+    const uint32_t N_last = static_cast<uint32_t>(real_in.padded_shape()[-1]);
+    if (two_pass_eligible(real_in)) {
+        return fft_two_pass(real_in, imag_in, precision, inverse);
+    }
+    if (three_pass_eligible(real_in)) {
+        return fft_three_pass_auto(real_in, imag_in, precision, inverse);
+    }
+    if (bluestein_eligible(real_in)) {
+        ensure_bluestein_row_fits(real_in, inverse ? "ttnn::experimental::ifft" : "ttnn::experimental::fft");
+        return bluestein_dispatch(real_in, imag_in, precision, inverse);
+    }
+    // Small pow-2 N <= 1024.
+    if (inverse) {
+        TT_FATAL(
+            imag_in.has_value(),
+            "ttnn::experimental::ifft: small-N inverse requires both real and imag spectra.");
+        TT_FATAL(
+            is_pow2(N_last) && N_last >= 2u && N_last <= 1024u,
+            "ttnn::experimental::ifft: unsupported spectrum length N={}.",
+            N_last);
+        return small_pow2_ifft(real_in, *imag_in, N_last, precision);
+    }
+    TT_FATAL(
+        is_pow2(N_last) && N_last <= 1024u,
+        "ttnn::experimental::fft: length N={} is not supported. "
+        "Power-of-two N above 1024 uses the multi-pass path; this call did not match it. "
+        "Non-power-of-two N is supported only while next_pow2(2N-1) <= 2^30 and, "
+        "when N is not a multiple of 1024, the padded row fits in {} bytes.",
+        N_last,
+        kRebankThresholdBytes);
+    return ttnn::prim::fft(real_in, /*inverse=*/false, imag_in, precision);
+}
+
+// Normalize → route → denormalize. Shared by all three public entries.
+static std::tuple<ttnn::Tensor, ttnn::Tensor> fft_dispatch(
+    const ttnn::Tensor& input_real,
+    std::optional<ttnn::Tensor> input_imag,
+    FFTPrecision precision,
+    bool inverse,
+    const char* op_name) {
+    preflight_fft_input(input_real, input_imag, op_name);
+
+    // (B2) Convert TILE → ROW_MAJOR for the duration of the FFT, remember
+    // the caller's layout so we can convert back on exit.
+    ttnn::Tensor real_rm = input_real;
+    std::optional<ttnn::Tensor> imag_rm = input_imag;
+    const LayoutInfo layout_info = normalize_layout_to_row_major(real_rm, imag_rm);
+
+    // Promote 1D (N,) to (1, N) so downstream ops see rank >= 2.
+    const bool was_1d = (real_rm.padded_shape().size() == 1u);
+    const uint32_t N_last = static_cast<uint32_t>(real_rm.padded_shape()[-1]);
+    if (was_1d) {
+        real_rm = ttnn::reshape(real_rm, make_shape({1u, N_last}));
+        if (imag_rm.has_value()) {
+            imag_rm = ttnn::reshape(*imag_rm, make_shape({1u, N_last}));
+        }
+    }
+
+    // (B1) Pad leading dims up to the next pow-2 when the user-supplied
+    // batch is not already a power of two.
+    const BatchPadInfo batch_info = normalize_batch_to_pow2(real_rm, imag_rm);
+
+    auto [out_r, out_i] = fft_route(real_rm, imag_rm, precision, inverse);
+
+    // Undo batch padding (slice + reshape back to original leading dims).
+    std::tie(out_r, out_i) = restore_batch(std::move(out_r), std::move(out_i), batch_info);
+
+    // Undo 1D promotion.
+    if (was_1d) {
+        out_r = ttnn::reshape(out_r, make_shape({N_last}));
+        out_i = ttnn::reshape(out_i, make_shape({N_last}));
+    }
+
+    // Undo layout conversion.
+    return restore_layout(std::move(out_r), std::move(out_i), layout_info);
+}
+
 std::tuple<ttnn::Tensor, ttnn::Tensor> fft(const ttnn::Tensor& input_real, FFTPrecision precision) {
-    preflight_fft_input(input_real, /*imag=*/std::nullopt, "ttnn::experimental::fft");
     // Unified cuFFT-style router — any N, any dtype, no env var needed.
     //
     //   N ≤ 1024,  pow-2           → prim::fft  → SingleTile/BatchedStockham
     //   1024 < N ≤ 2^20, pow-2     → fft_two_pass   (3 transposes + 2 passes)
     //   2^20 < N ≤ 2^30, pow-2     → fft_three_pass_auto (auto-reshape)
     //   non-pow-2, M ≤ 2^30        → bluestein_dispatch (7-op device chain)
-
-    // Accept 1D (N,) inputs by promoting to (1, N) so all downstream ops
-    // (rebank_rm, transpose_rm, …) see rank ≥ 2.  Squeeze back on return.
-    const bool was_1d = (input_real.padded_shape().size() == 1u);
-    const uint32_t N_last = static_cast<uint32_t>(input_real.padded_shape()[-1]);
-    std::optional<ttnn::Tensor> real_2d_buf;
-    if (was_1d) {
-        real_2d_buf = ttnn::reshape(input_real, make_shape({1u, N_last}));
-    }
-    const ttnn::Tensor& real_in = was_1d ? *real_2d_buf : input_real;
-
-    auto squeeze = [&](std::tuple<ttnn::Tensor, ttnn::Tensor> out) -> std::tuple<ttnn::Tensor, ttnn::Tensor> {
-        if (!was_1d) {
-            return out;
-        }
-        auto& [r, i] = out;
-        return {ttnn::reshape(r, make_shape({N_last})), ttnn::reshape(i, make_shape({N_last}))};
-    };
-    if (two_pass_eligible(real_in)) {
-        return squeeze(fft_two_pass(real_in, /*input_imag=*/std::nullopt, precision, false));
-    }
-    if (three_pass_eligible(real_in)) {
-        return squeeze(fft_three_pass_auto(real_in, /*input_imag=*/std::nullopt, precision, false));
-    }
-    if (bluestein_eligible(real_in)) {
-        ensure_bluestein_row_fits(real_in, "ttnn::experimental::fft");
-        return squeeze(bluestein_dispatch(real_in, /*input_imag=*/std::nullopt, precision, false));
-    }
-    TT_FATAL(
-        is_pow2(N_last) && N_last <= 1024u,
-        "ttnn::experimental::fft: length N={} is not supported. "
-        "Power-of-two N above 1024 uses the multi-pass path; this call did not match it. "
-        "Non-power-of-two N is supported only while next_pow2(2N-1) <= 2^30 and, "
-        "when N is not a multiple of 1024, the padded row fits in {} bytes.",
-        N_last,
-        kRebankThresholdBytes);
-    return squeeze(ttnn::prim::fft(real_in, /*inverse=*/false, /*input_imag=*/std::nullopt, precision));
+    //
+    // Non-pow-2 batch and TILE layout are handled by normalize_batch_to_pow2
+    // and normalize_layout_to_row_major inside fft_dispatch, so the user
+    // never has to pad or convert layout manually.
+    return fft_dispatch(input_real, /*imag=*/std::nullopt, precision, /*inverse=*/false, "ttnn::experimental::fft");
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> fft(
     const ttnn::Tensor& input_real, const ttnn::Tensor& input_imag, FFTPrecision precision) {
-    preflight_fft_input(input_real, input_imag, "ttnn::experimental::fft");
     // Complex-input variant — same routing table as the real-input overload.
-    const bool was_1d = (input_real.padded_shape().size() == 1u);
-    const uint32_t N_last = static_cast<uint32_t>(input_real.padded_shape()[-1]);
-    std::optional<ttnn::Tensor> real_2d_buf, imag_2d_buf;
-    if (was_1d) {
-        real_2d_buf = ttnn::reshape(input_real, make_shape({1u, N_last}));
-        imag_2d_buf = ttnn::reshape(input_imag, make_shape({1u, N_last}));
-    }
-    const ttnn::Tensor& real_in = was_1d ? *real_2d_buf : input_real;
-    const ttnn::Tensor& imag_in = was_1d ? *imag_2d_buf : input_imag;
-
-    auto squeeze = [&](std::tuple<ttnn::Tensor, ttnn::Tensor> out) -> std::tuple<ttnn::Tensor, ttnn::Tensor> {
-        if (!was_1d) {
-            return out;
-        }
-        auto& [r, i] = out;
-        return {ttnn::reshape(r, make_shape({N_last})), ttnn::reshape(i, make_shape({N_last}))};
-    };
-    if (two_pass_eligible(real_in)) {
-        return squeeze(fft_two_pass(real_in, imag_in, precision, false));
-    }
-    if (three_pass_eligible(real_in)) {
-        return squeeze(fft_three_pass_auto(real_in, imag_in, precision, false));
-    }
-    if (bluestein_eligible(real_in)) {
-        ensure_bluestein_row_fits(real_in, "ttnn::experimental::fft");
-        return squeeze(bluestein_dispatch(real_in, imag_in, precision, false));
-    }
-    TT_FATAL(
-        is_pow2(N_last) && N_last <= 1024u,
-        "ttnn::experimental::fft: length N={} is not supported. "
-        "Power-of-two N above 1024 uses the multi-pass path; this call did not match it. "
-        "Non-power-of-two N is supported only while next_pow2(2N-1) <= 2^30 and, "
-        "when N is not a multiple of 1024, the padded row fits in {} bytes.",
-        N_last,
-        kRebankThresholdBytes);
-    return squeeze(ttnn::prim::fft(real_in, /*inverse=*/false, imag_in, precision));
+    return fft_dispatch(input_real, input_imag, precision, /*inverse=*/false, "ttnn::experimental::fft");
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ifft(
     const ttnn::Tensor& spectrum_real, const ttnn::Tensor& spectrum_imag, FFTPrecision precision) {
-    preflight_fft_input(spectrum_real, spectrum_imag, "ttnn::experimental::ifft");
     // Inverse routing mirrors fft() with the inverse flag set.
     //
     // Two-pass / three-pass IFFT: swap-trick (see fft_two_pass comment)
@@ -1120,46 +1248,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ifft(
     //
     // Bluestein IFFT: sign-flipped chirps + 1/N folded into chirp_k;
     //   see bluestein_host.hpp get_or_create(inverse=true).
-
-    // Promote 1D (N,) inputs to (1, N) — same contract as fft().
-    const bool was_1d = (spectrum_real.padded_shape().size() == 1u);
-    const uint32_t N_last = static_cast<uint32_t>(spectrum_real.padded_shape()[-1]);
-    std::optional<ttnn::Tensor> real_2d_buf, imag_2d_buf;
-    if (was_1d) {
-        real_2d_buf = ttnn::reshape(spectrum_real, make_shape({1u, N_last}));
-        imag_2d_buf = ttnn::reshape(spectrum_imag, make_shape({1u, N_last}));
-    }
-    const ttnn::Tensor& real_in = was_1d ? *real_2d_buf : spectrum_real;
-    const ttnn::Tensor& imag_in = was_1d ? *imag_2d_buf : spectrum_imag;
-
-    auto squeeze = [&](std::tuple<ttnn::Tensor, ttnn::Tensor> out) -> std::tuple<ttnn::Tensor, ttnn::Tensor> {
-        if (!was_1d) {
-            return out;
-        }
-        auto& [r, i] = out;
-        return {ttnn::reshape(r, make_shape({N_last})), ttnn::reshape(i, make_shape({N_last}))};
-    };
-    if (two_pass_eligible(real_in)) {
-        return squeeze(fft_two_pass(real_in, imag_in, precision, true));
-    }
-    if (three_pass_eligible(real_in)) {
-        return squeeze(fft_three_pass_auto(real_in, imag_in, precision, true));
-    }
-    if (bluestein_eligible(real_in)) {
-        ensure_bluestein_row_fits(real_in, "ttnn::experimental::ifft");
-        return squeeze(bluestein_dispatch(real_in, imag_in, precision, true));
-    }
+    //
     // Small pow-2 N ≤ 1024: SingleTile/BatchedStockhamFactory only implement
-    // the forward DFT, so use the same swap trick as the two-pass IFFT but
-    // via fft_radix_pass (which has output_scale for 1/N).
-    const uint32_t N = static_cast<uint32_t>(real_in.padded_shape()[-1]);
-    TT_FATAL(
-        is_pow2(N) && N >= 2u && N <= 1024u,
-        "ttnn::experimental::ifft: unsupported spectrum length N={}.  "
-        "Expected pow-2 in [2, 1024], or the large-N / non-pow-2 branches "
-        "handled above.",
-        N);
-    return squeeze(small_pow2_ifft(real_in, imag_in, N, precision));
+    // the forward DFT, so use the same swap trick via fft_radix_pass with
+    // output_scale=1/N. Handled inside fft_route.
+    return fft_dispatch(spectrum_real, spectrum_imag, precision, /*inverse=*/true, "ttnn::experimental::ifft");
 }
 
 }  // namespace ttnn::operations::experimental

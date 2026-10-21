@@ -148,10 +148,14 @@ void bind_experimental_fft_operation(nb::module_& mod) {
                 real, imag = X.real, X.imag
 
             Args:
-                * :attr:`input_real`: Float32 or BFloat16 ROW_MAJOR tensor.
-                  The product of the leading dimensions must be a positive
-                  power of two. Pad those dimensions up to the next power of
-                  two and slice the padding off afterwards.
+                * :attr:`input_real`: Float32 or BFloat16 tensor. ROW_MAJOR is
+                  the native layout; TILE inputs are auto-converted to
+                  ROW_MAJOR for the duration of the transform and converted
+                  back on return. Leading dimensions may be any positive
+                  integers; non-power-of-two leading-dim products are
+                  auto-padded to the next power of two and sliced back
+                  on return (zero-pad is linear so padded rows do not
+                  affect the kept rows).
                 * :attr:`input_imag` (optional): same shape, dtype, layout, and
                   memory config as ``input_real``. When supplied, the input is
                   treated as the complex signal ``input_real + i * input_imag``;
@@ -159,6 +163,8 @@ void bind_experimental_fft_operation(nb::module_& mod) {
                 * Non-power-of-two ``N`` that is not a multiple of 1024 must
                   satisfy ``N <= 16384`` (Float32) or ``N <= 32768`` (BFloat16).
                   Larger lengths are supported when ``N`` is a multiple of 1024.
+                  (Support for larger non-aligned ``N`` and for ``N > 2^30``
+                  will land in follow-up PRs.)
                 * :attr:`precision` (str, default ``"precise"``):
                   ``"precise"`` → SFPU true-fp32 path (matches ``torch.fft``
                   precision; round-trip ~1e-7).
