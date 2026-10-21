@@ -246,6 +246,8 @@ def _ttt_side() -> None:
         )
     finally:
         server = None
+        if worker is not None:
+            worker.close()
         worker = None
         gc.collect()
         ttnn.close_mesh_device(parent_mesh)

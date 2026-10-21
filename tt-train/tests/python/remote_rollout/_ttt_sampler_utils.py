@@ -171,6 +171,8 @@ def open_sampler(
         )
         yield sampler
     finally:
+        if sampler is not None:
+            sampler.close()
         sampler = None
         gc.collect()
         ttnn.close_mesh_device(mesh_device)
