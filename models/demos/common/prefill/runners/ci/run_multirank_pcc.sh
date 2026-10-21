@@ -81,6 +81,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
+    # sc1 is sc4's stage 0, so it opens sc4's slots.
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     EAGER_IF_MULTI_SLOT=1
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # The sc4 93-layer leg's KV PCC
