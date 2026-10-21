@@ -16,6 +16,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_kwargs, agmm_pins
@@ -74,8 +75,8 @@ class MiniMaxH3TransformerBlock(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
     ) -> None:
-        """`dynamic_length` freezes the ff1 / ff2 blockings at construction and gathers the modulation rows
-        by index (`ttnn.embedding` on ROW_MAJOR tables) instead of one-hot matmuls, so no per-block program
+        """`dynamic_length` freezes the ff1 / ff2 blockings (ff1 per length class) at construction and runs the
+        one-hot modulation gathers through `minimal_matmul` with one frozen blocking, so no per-block program
         depends on the per-device length; `norm_row_capacity` (per-device rows) sizes the fused norms there."""
         super().__init__()
 
@@ -172,6 +173,18 @@ class MiniMaxH3TransformerBlock(Module):
                 self._ff1_pins = agmm_pins(*self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links)
             if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
                 self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
+        # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through
+        # minimal_matmul, whose program keeps only the M > N bit of the row count (fixed per selector kind).
+        self._gather_config = None
+        if dynamic_length:
+            self._gather_config = ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=1,
+                N_block_size=6,
+                subblock_h=2,
+                subblock_w=2,
+                compute_with_storage_grid_size=get_matmul_core_grid(mesh_device),
+            )
 
     # ------------------------------------------------------------------ weights
 
@@ -241,19 +254,23 @@ class MiniMaxH3TransformerBlock(Module):
                 if self._fold_norm_weight:
                     norm = self.norm1 if p == _SCALE_MSA else self.norm2
                     table = ttnn.multiply(table, norm.weight.data)
-            # The gathers take the table as a 2D [rows, hidden_local] matmul operand (TILE) or, on the
-            # dynamic-length path, as the ROW_MAJOR table `ttnn.embedding` reads without an untilize.
+            # The gathers take the table as a 2D [rows, hidden_local] matmul operand (TILE).
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
-            tables.append(table if self.dynamic_length else ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+            tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
         return tables
 
     def _gather_rows(self, table: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
-        """One table row per row of the selector: [1, 1, S_local, hidden_local] for the per-token gather,
-        [1, 1, expanded_rows, hidden_local] for the tile-row selector. The selector is the bf16 one-hot of
-        the rows (a matmul operand) or, on the dynamic-length path, the uint32 row indices (an exact copy)."""
+        """One table row per row of the bf16 one-hot selector (exact): [1, 1, S_local, hidden_local] for the
+        per-token gather, [1, 1, expanded_rows, hidden_local] for the tile-row selector. The dynamic-length
+        path runs it through minimal_matmul, whose program does not depend on the row count."""
         if self.dynamic_length:
-            return ttnn.unsqueeze(ttnn.embedding(selector, table, layout=ttnn.TILE_LAYOUT), 0)
+            return ttnn.experimental.minimal_matmul(
+                input_tensor=selector,
+                weight_tensor=table,
+                config=self._gather_config,
+                compute_kernel_config=self.mm_compute_kernel_config,
+            )
         return ttnn.matmul(selector, table, compute_kernel_config=self.mm_compute_kernel_config)
 
     def _onehot(self, adaln_indices: ttnn.Tensor, rows: int, eye: ttnn.Tensor | None = None) -> ttnn.Tensor:
@@ -278,12 +295,8 @@ class MiniMaxH3TransformerBlock(Module):
     def onehot_table(
         self, adaln_indices: ttnn.Tensor, num_timesteps: int, eye: ttnn.Tensor | None = None
     ) -> ttnn.Tensor:
-        """The per-token row selector shared by every block of a forward: the one-hot gather matrix, or on the
-        dynamic-length path the `[1, S_local]` index view itself (nothing to allocate or free)."""
-        indices = self._gather_indices(adaln_indices)
-        if self.dynamic_length:
-            return indices
-        return self._onehot(indices, num_timesteps * MODALITY_NUM, eye)
+        """The per-token one-hot gather matrix shared by every block of a forward."""
+        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM, eye)
 
     def tilerow_tables(
         self,
@@ -297,10 +310,7 @@ class MiniMaxH3TransformerBlock(Module):
         table whose tile row `tile_map[r]` is tile row `r` of the gather."""
         if tile_map is None or expanded_indices is None:
             return None
-        indices = self._gather_indices(expanded_indices)
-        if self.dynamic_length:
-            return tile_map, indices
-        return tile_map, self._onehot(indices, num_timesteps * MODALITY_NUM, eye)
+        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM, eye)
 
     # ------------------------------------------------------------------ forward
 

@@ -524,13 +524,10 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
-        # The dynamic-length path gathers by index and has no one-hot.
-        eye = None
-        if not self.dynamic_length:
-            rows = temb.shape[2] * MODALITY_NUM
-            eye_state = self._eye_states.setdefault(rows, StateTensor())
-            eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
-            eye = eye_state.value
+        rows = temb.shape[2] * MODALITY_NUM
+        eye_state = self._eye_states.setdefault(rows, StateTensor())
+        eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+        eye = eye_state.value
 
         hidden = self.run_blocks(
             hidden,
@@ -601,11 +598,9 @@ class MiniMaxH3Transformer3DModel(Module):
                     onehot=onehot,
                     tilerow=tilerow,
                 )
-        # The dynamic-length selectors are views of the caller's index tensors, not allocations.
-        if not self.dynamic_length:
-            ttnn.deallocate(onehot)
-            if tilerow is not None:
-                ttnn.deallocate(tilerow[1])
+        ttnn.deallocate(onehot)
+        if tilerow is not None:
+            ttnn.deallocate(tilerow[1])
         return hidden
 
     def release_traces(self) -> None:

@@ -383,9 +383,11 @@ Every program choice is frozen at construction into **length classes** keyed on 
 | short | <= 6144 | 4 s (2368), 5 s (4736) | (320, 384) | 6/3/16 | 4/6/16, 11x10 non-transposed | 6/8/6, 12x9 transposed |
 | long | > 6144 | 10 s (9184), 15 s (13664), capacity (15040) | (256, 512) | 4/3/16 | same | same |
 
-The fused ff2 MM+RS keeps one blocking (12x8, 6/4/8) for every length. A class value reaches the op as a
-config object, never as a shape, so a length inside a class never compiles anything; a new class costs
-one more program set. The warm-up runs one two-step generation at `max_sequence_length` (the capacity
+The fused ff2 MM+RS keeps one blocking (12x8, 6/4/8) for every length, and the blocks' adaLN gathers stay
+one-hot matmuls, run through the row-free `minimal_matmul` with one frozen blocking (gathering the
+`[rows, 1344]` modulations with `ttnn.embedding` instead measured 3-4 % per block slower). A class value
+reaches the op as a config object, never as a shape, so a length inside a class never compiles anything; a
+new class costs one more program set. The warm-up runs one two-step generation at `max_sequence_length` (the capacity
 point), one at the shortest served request (4 s at 1:1, padded 18944) and one inside every class neither
 of those falls in, then the usual VAE / audio / prompt-encoder warms. The measured gate is
 `test_pipeline_minimax_h3.py::test_t2va_dynamic_length_zero_misses` (`MINIMAX_H3_DYNAMIC_GATE=1`): warm
