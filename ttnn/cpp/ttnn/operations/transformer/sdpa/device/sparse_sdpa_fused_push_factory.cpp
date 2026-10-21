@@ -280,8 +280,8 @@ void SparseSDPAOperation::SparseSDPAPushFusedFactory::override_runtime_arguments
     auto& reader = tt::tt_metal::GetCommonRuntimeArgs(program, kPushReaderKernel);
     reader[0] = tensor_args.push_input->buffer()->address();
     reader[1] = tensor_args.push_table->buffer()->address();
-    reader[2] = tensor_args.push_batch_index_tensor.has_value() ? tensor_args.push_batch_index_tensor->buffer()->address()
-                                                                : 0u;
+    reader[2] =
+        tensor_args.push_batch_index_tensor.has_value() ? tensor_args.push_batch_index_tensor->buffer()->address() : 0u;
     reader[3] = push.batch_slot_num_layers;
     reader[4] = push.batch_slot_layer_idx;
     reader[5] = push.input_batch_index;

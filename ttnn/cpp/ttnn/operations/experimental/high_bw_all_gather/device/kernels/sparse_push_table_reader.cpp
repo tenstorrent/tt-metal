@@ -209,7 +209,8 @@ void kernel_main() {
             // split is chunk aligned only when the chunk start is (a padded/rotated chunk starts mid-slab), so it is
             // NOT a whole block row of every owner: owners below split % N have one more prefix block.
             const uint32_t split_block = header[4];
-            const uint32_t split_j = split_block > my_rank ? (split_block - my_rank + num_devices - 1) / num_devices : 0;
+            const uint32_t split_j =
+                split_block > my_rank ? (split_block - my_rank + num_devices - 1) / num_devices : 0;
             uint32_t jb_first = 0;
             if (part == 1) {
                 my_blocks = my_blocks < split_j ? my_blocks : split_j;

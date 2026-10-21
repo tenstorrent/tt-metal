@@ -1613,7 +1613,9 @@ def test_sparse_mla_kv_push_prefetch_chain_padded(
             equal = torch.equal(outs[False][i], outs[True][i])
             all_equal &= equal
             _, pcc_message = assert_with_pcc(outs[False][i], outs[True][i], 0.9999)
-            logger.info(f"[{variant.name}] padded chunk [{s}, {e}) layer {i} push+prefetch vs gather: bitwise={equal} {pcc_message}")
+            logger.info(
+                f"[{variant.name}] padded chunk [{s}, {e}) layer {i} push+prefetch vs gather: bitwise={equal} {pcc_message}"
+            )
     logger.info(f"[{variant.name}] padded push prefetch chain {starts}: all bitwise={all_equal}")
     assert all_equal, "push + prefetch chain differs from the dense-gather chain"
     ttnn.synchronize_device(mesh_device)
@@ -1689,7 +1691,9 @@ def test_sparse_mla_kv_push_traced_metadata_slots(
         return layers, kvpe, index
 
     gather, push = _chain(False), _chain(True)
-    assert push[0][0]._push_prefetch is not None, "the push chain must prefetch (overlap profile + TT_SPARSE_KV_PUSH_OVERLAP)"
+    assert (
+        push[0][0]._push_prefetch is not None
+    ), "the push chain must prefetch (overlap profile + TT_SPARSE_KV_PUSH_OVERLAP)"
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         total, chunk
     )
@@ -1720,7 +1724,9 @@ def test_sparse_mla_kv_push_traced_metadata_slots(
         out, idx = layers[0].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=0, return_indexer_indices=True, **args)
         outs = [_to_torch(out)]
         for i in (1, 2):
-            outs.append(_to_torch(layers[i].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=i, indexer_indices=idx, **args)))
+            outs.append(
+                _to_torch(layers[i].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=i, indexer_indices=idx, **args))
+            )
         ref.append(outs)
 
     # Push chain on the metadata path: warm on schedule[0], capture it, replay the rest.
