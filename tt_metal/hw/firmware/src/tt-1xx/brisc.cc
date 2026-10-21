@@ -280,6 +280,10 @@ void __attribute__((interrupt)) l1_ecc_halt_handler() {
         // Pulse the IRQ clear: 1 drops the IRQ, 0 re-arms it. Without the clear, mret re-enters this handler.
         *ecc_ctrl = ctrl_without_view | ecc_ctrl_host_view | ECC_CTRL_IRQ_CLR;
         *ecc_ctrl = ctrl_without_view | ecc_ctrl_host_view;
+        // A fence only sends the stores on their way. A load of the same register returns after they land, so the
+        // IRQ has dropped before mret. A still-pending IRQ at mret has been seen to resume at the code after mret.
+        uint32_t landed = *ecc_ctrl;
+        asm volatile("addi zero, %0, 0" ::"r"(landed));
         return;
     }
     halt_on_ecc_error(ctrl, last_l1_error, l1_and_local_mem_counts, icache_and_ncrisc_local_mem_counts, risc_mem_error);
