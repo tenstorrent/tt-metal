@@ -13,6 +13,7 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import (
     comp_pcc,
     is_blackhole,
+    is_wormhole_b0,
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
@@ -4117,21 +4118,24 @@ def test_matmul_default_sharded_non_origin_single_core(device, memory_layout, m_
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-def _default_dram_in0_block_w(k_tiles, grid_x):
+def _default_dram_in0_block_w(k_tiles, grid_x, per_core_m):
     """K block, in tiles, that the default config takes for all-DRAM-interleaved operands on a grid_x-wide grid."""
     if k_tiles % grid_x == 0:
         return k_tiles // grid_x
-    return next(w for w in range(min(8, k_tiles), 0, -1) if k_tiles % w == 0)
+    # Wormhole keeps a one- or two-tile block when each core holds 8 or more tile rows of M.
+    cap = 2 if is_wormhole_b0() and per_core_m >= 8 else 8
+    return next(w for w in range(min(cap, k_tiles), 0, -1) if k_tiles % w == 0)
 
 
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize("k_size", [896, 1056, 1120, 1792, 4096, 7168])
-def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype):
+@pytest.mark.parametrize("per_core_m", [1, 8])
+def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype, per_core_m):
     """All-DRAM-interleaved matmul with no program_config: Kt / grid_x is the K block when it divides Kt, else the
-    largest divisor of Kt up to 8 tiles.
+    largest divisor of Kt up to 8 tiles, or up to 2 tiles on Wormhole when each core holds 8 or more tile rows of M.
 
     The default used a single tile whenever the grid width did not divide Kt, which is most Kt on a 13-column
-    Blackhole grid. One output tile per core keeps L1 from shrinking the block. The explicit config below spells
+    Blackhole grid. One output tile column per core, and one or eight tile rows, keeps L1 from shrinking the block. The explicit config below spells
     out the expected default, together with the compute config the default picks (HiFi2 with packer L1
     accumulation; an explicit program config alone would run LoFi), so running it must reuse the default's
     program-cache entry, while a one-tile block must build a new program. A grid on which the default takes neither
@@ -4139,8 +4143,8 @@ def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype):
     """
     torch.manual_seed(0)
     grid = device.compute_with_storage_grid_size()
-    m_size, n_size = 32 * grid.y, 32 * grid.x
-    expected = _default_dram_in0_block_w(k_size // 32, grid.x)
+    m_size, n_size = 32 * grid.y * per_core_m, 32 * grid.x
+    expected = _default_dram_in0_block_w(k_size // 32, grid.x, per_core_m)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -4154,9 +4158,9 @@ def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype):
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid,
             in0_block_w=in0_block_w,
-            out_subblock_h=1,
+            out_subblock_h=per_core_m,
             out_subblock_w=1,
-            per_core_M=1,
+            per_core_M=per_core_m,
             per_core_N=1,
             transpose_mcast=False,
             fused_activation=None,
