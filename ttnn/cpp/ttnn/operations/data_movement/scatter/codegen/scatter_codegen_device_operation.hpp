@@ -75,7 +75,9 @@ struct ScatterCodegenDeviceOperation {
 };
 
 // `reduction_mode` is one of scatter_codegen_supported.hpp's kReduction* modes; the prim derives
-// every other attribute from the tensors itself.
+// every other attribute from the tensors itself. The operands arrive normalized: scatter axis last,
+// rank padded to 4, and src already sliced to index's shape (every reader addresses src pages with
+// index's geometry; validate rejects any other src).
 Tensor scatter_codegen(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
