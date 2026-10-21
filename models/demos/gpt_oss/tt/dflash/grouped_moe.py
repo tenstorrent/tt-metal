@@ -64,10 +64,12 @@ def _pc2d(gx, gy, bw, pm, pn, sw=1):
 
 
 class GroupedMoE:
-    def __init__(self, mesh, moe, hidden, rows=256):
+    def __init__(self, mesh, moe, hidden, rows=256, share=None):
         """moe: per layer dict(gate, up [hidden, E x 720] BFP4, down [E x 720, hidden] BFP4, gate_bias / up_bias
-        [1, E x 720], down_bias [E, hidden]) on DRAM (BatchedVerify.moe); gate / up / down are only read here."""
-        assert rows == 256
+        [1, E x 720], down_bias [E, hidden]) on DRAM (BatchedVerify.moe); gate / up / down are only read here.
+        rows: the routed pass's rows (32 .. 256, a multiple of 32). share: another GroupedMoE whose relaid weights and
+        rows-independent buffers (table, A_g, Y_g) this one uses (passes of different row counts, run one at a time)."""
+        assert rows % TILE == 0 and TILE <= rows <= 256
         self.mesh, self.hidden, self.rows = mesh, hidden, rows
         self.gu_split = GU_SPLIT
         grid = mesh.compute_with_storage_grid_size()
@@ -77,7 +79,7 @@ class GroupedMoE:
         )
         self.nc = grid.x * grid.y
         self.kt = hidden // TILE
-        self.nt = moe[0]["gate"].shape[-1] // TILE  # 720 column tiles
+        self.nt = share.nt if share is not None else moe[0]["gate"].shape[-1] // TILE  # 720 column tiles
         self.ku = 23  # local column tiles per expert
         self.nu_down = hidden // TILE
         rep = ttnn.ReplicateTensorToMesh(mesh)
@@ -91,6 +93,12 @@ class GroupedMoE:
         # gather 39 -> 36 us per layer
         self.p1t = zeros([1, 1, S, rows], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG)
         self.pw = zeros([1, 1, rows, S], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG)
+        self._pass_configs(rows)
+        if share is not None:
+            self.table, self.ag, self.yg, self.layers = share.table, share.ag, share.yg, share.layers
+            self.ck_hifi2, self.ck_combine = share.ck_hifi2, share.ck_combine
+            self.xg_mc, self.xg_noc = share.xg_mc, share.xg_noc
+            return
         # the plan table [tiles[E], base[E]] (written by the route op, read by the grouped matmuls' readers)
         self.table = ttnn.from_torch(torch.zeros(1, 1, 1, 2 * E, dtype=torch.int32), dtype=ttnn.uint32,
                                      layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -153,9 +161,6 @@ class GroupedMoE:
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )  # fmt: skip
-        # gather [72 x 32, 256] x [256, hidden]: 10 x 8 cores, 9 x 9 output tiles each; combine [256, 72 x 32] x
-        # [72 x 32, hidden]: 1 x 9 output tiles per core, 8-tile K blocks
-        self.gather_pc = _pc2d(10, 8, rows // TILE, MAX_SLOTS // 8, self.kt // 10, 3)
         # X_g block sharded as the gather's 10 x 8 output blocks: a slot's row is 10 contiguous 9-tile runs, the gate|up
         # reader loads it in 10 reads instead of 90 single-tile ones
         self.xg_mc = ttnn.MemoryConfig(
@@ -165,7 +170,13 @@ class GroupedMoE:
         )  # fmt: skip
         self.xg_noc = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(j, 0)).x for j in range(10)]
         self.xg_noc += [mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, i)).y for i in range(8)]
-        self.combine_pc = _pc2d(10, 8, 8, 1, self.kt // 10, 3)
+
+    def _pass_configs(self, rows):
+        """The row-count-dependent matmul configs: gather [72 x 32, rows] x [rows, hidden]: 10 x 8 cores, 9 x 9 output
+        tiles each; combine [rows, 72 x 32] x [72 x 32, hidden]: 10 x rows / 32 cores, 1 x 9 output tiles each, 8-tile
+        K blocks."""
+        self.gather_pc = _pc2d(10, 8, rows // TILE, MAX_SLOTS // 8, self.kt // 10, 3)
+        self.combine_pc = _pc2d(10, rows // TILE, 8, 1, self.kt // 10, 3)
 
     def _relayout(self, src0, src1, units, page, down, split=1):
         """Every unit's weight tiles into one contiguous page (fused_decode/kernels/gmoe_relayout.cpp): a [units, page]
@@ -227,7 +238,7 @@ class GroupedMoE:
             kernel_source=str(KERNEL_DIR / "gmoe_route.cpp"), core_ranges=cores, compile_time_args=ct,
             runtime_args=[], common_runtime_args=addr[:4] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y] + addr[4:],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-            defines=[("GMOE_KTH", str(self.kt))],
+            defines=[("GMOE_KTH", str(self.kt)), ("GMOE_ROWS", str(self.rows))],
         )  # fmt: skip
         scr = self.rows * 32 + 64 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]

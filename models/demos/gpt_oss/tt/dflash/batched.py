@@ -302,14 +302,14 @@ def _all_reduce(x):
     return _TPAllReduce.get(x)(x)
 
 
-def _mm_config_256(k, n):
+def _mm_config_256(k, n, rows=256):
     """Program config for the drafter's and the verify's [256, k] x [k, n] projections (None: the auto config).
     Measured on one device: the auto config spreads these narrow outputs over few cores with all 8 row tiles each;
     2D over 10 x 8 cores (one row tile, n / 10 columns each) is 1.4-2.5x faster (drafter QKV 74 -> 37 us, gate / up
     86 -> 49, down 73 -> 51, o_proj 45 -> 33; verify QKV BF8 68 -> 27); the drafter's fc (k = 14400) is fastest 1D
-    over 90 cores (487 -> 293 us)."""
-    kt, nt = k // TILE, n // TILE
-    if k == 14400 and nt == 90:
+    over 90 cores (487 -> 293 us). rows (32 .. 256): one row tile per core row (rows / 32 core rows)."""
+    kt, nt, gy = k // TILE, n // TILE, rows // TILE
+    if k == 14400 and nt == 90 and rows == 256:
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(11, 9), in0_block_w=10, out_subblock_h=1, out_subblock_w=1,
             out_block_h=8, out_block_w=1, per_core_M=8, per_core_N=1, fuse_batch=True, fused_activation=None,
@@ -323,7 +323,7 @@ def _mm_config_256(k, n):
     pn = nt // gx
     bw = {90: 10, 60: 12, 32: 8}.get(kt, max(d for d in range(1, 17) if kt % d == 0))
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(gx, 8), in0_block_w=bw, out_subblock_h=1,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), in0_block_w=bw, out_subblock_h=1,
         out_subblock_w=max(d for d in range(1, 5) if pn % d == 0), out_block_h=1, out_block_w=pn, per_core_M=1,
         per_core_N=pn, transpose_mcast=False, fused_activation=None,
     )  # fmt: skip
@@ -685,7 +685,12 @@ class BatchedDraft:
     """The z-lab drafter (8 layers, TP like a dense target layer) for `users` sequences, each with its own paged BF16
     K/V cache; draft and context passes over all users' rows at once."""
 
-    def __init__(self, mesh_device, target, max_positions, users, window=None, block_size=64):
+    def __init__(self, mesh_device, target, max_positions, users, window=None, block_size=64, cache_users=None,
+                 ring=None):  # fmt: skip
+        """users: the rows' users (a pass: users x block rows); cache_users: the users with a K/V cache (lanes of `users`
+        each: the page table rows of a lane's users are set before its passes, BatchedDFlashRunner); ring: each user's
+        cache a ring of `ring` blocks (logical block b at physical block b mod ring; with the window the drafter reads
+        only the last `window` positions, add_prompt_context fills only those)."""
         from safetensors.torch import load_file
 
         self.mesh_device = mesh_device
@@ -800,9 +805,20 @@ class BatchedDraft:
         self.knorm_joint = put(kn, dtype=ttnn.bfloat16)
         self.block_size = block_size
         self.num_blocks = -(-(-(-(max_positions + self.block) // block_size)) // 8) * 8  # (32-byte page-table rows)
-        user_tables = torch.arange(users * self.num_blocks, dtype=torch.int32).reshape(users, self.num_blocks)
+        cache_users = cache_users or users
+        self.ring = ring
+        if ring:
+            # the window's positions plus the block (and a block of alignment) never wrap onto each other
+            assert window and ring * block_size >= window + self.block + block_size
+            phys = ring
+            user_tables = (torch.arange(cache_users)[:, None] * ring + torch.arange(self.num_blocks)[None] % ring).int()
+        else:
+            phys = self.num_blocks
+            user_tables = torch.arange(cache_users * phys, dtype=torch.int32).reshape(cache_users, phys)
         self.user_tables = user_tables
-        self.page_table = _replicate(mesh, user_tables, ttnn.int32)  # row u: user u (each 32-row step)
+        self.page_table = _replicate(
+            mesh, user_tables[:users].contiguous(), ttnn.int32
+        )  # row u: user u (each 32-row step)
         from ..batched_decode import sharded_norm_program_config
         from ..fused_decode.config import width_sharded_memory_config
 
@@ -829,7 +845,7 @@ class BatchedDraft:
         heads_split = ttnn.ShardTensorToMesh(mesh, dim=1)
         self.caches = []
         for _ in range(self.layers):
-            z = torch.zeros(users * self.num_blocks, D * nkv, block_size, hd)
+            z = torch.zeros(cache_users * phys, D * nkv, block_size, hd)
             self.caches.append(
                 tuple(
                     ttnn.from_torch(
@@ -955,7 +971,14 @@ class BatchedDraft:
         pt_host = self.user_tables[user][None]
         qw, kvw = self.nq * self.hd, self.nkv * self.hd
         avail = features.shape[2]
-        for s0 in range(0, n, chunk):
+        first = 0
+        if self.ring:
+            # only the positions a round can read (the last `window` before the first block), block aligned, in one
+            # chunk (a chunk's blocks must not wrap onto each other)
+            first = max(0, (n - self.window) // self.block_size * self.block_size)
+            chunk = n - first + self.block_size
+            assert chunk <= self.ring * self.block_size
+        for s0 in range(first, n, chunk):
             rows = min(chunk, -(-(n - s0) // self.block_size) * self.block_size)
             tx = ttnn.slice(features, [0, 0, s0, 0], [1, 1, min(s0 + rows, avail), self.ctx_in])
             if s0 + rows > avail:
@@ -1344,27 +1367,44 @@ class BatchedVerify:
         return out, features
 
 
-class BatchedDFlashRunner:
-    """Greedy DFlash for `users` sequences (each prefilled into its own KV slot) on the batched decode model."""
+class _Lane:
+    """One lane's persistent per-round state (BatchedDFlashRunner: 32 users per lane)."""
 
-    def __init__(self, generator, model, page_table, kv_cache, users=32, window=1024, eos_ids=(200002, 200012)):
+
+class BatchedDFlashRunner:
+    """Greedy DFlash for `users` sequences (each prefilled into its own KV slot) on the batched decode model. More than
+    32 users run as lanes of 32: every lane's round (draft, verify, context, acceptance: the batch-32 passes on the
+    lane's users) in one trace, the weights and the passes' buffers shared."""
+
+    LANE = 32
+
+    def __init__(self, generator, model, page_table, kv_cache, users=32, window=1024, eos_ids=(200002, 200012),
+                 ring=None):  # fmt: skip
+        """ring: the drafter's per-user cache as a ring of `ring` blocks (BatchedDraft; with more than one lane, 24 by
+        default: the window's 1024 positions + a block)."""
         from .capture import TargetCapture
 
         self.generator, self.model, self.kv_cache = generator, model, kv_cache
         mesh = model.mesh_device
         self.mesh = mesh
+        self.total_users = users
+        lanes = max(1, users // self.LANE)
+        assert users == self.LANE * lanes or (lanes == 1 and users <= self.LANE)
+        users = min(users, self.LANE)  # (a lane's users)
         self.users = users
         self.page_table_host = page_table
-        self.page_table = _replicate(mesh, page_table, ttnn.int32)
         self.V = model.vocab_size
         self.eos_ids = set(eos_ids)
         max_pos = page_table.shape[-1] * 64
-        self.draft = BatchedDraft(mesh, model, max_pos, users, window=window)
+        if ring is None and lanes > 1:
+            ring = 24
+        self.draft = BatchedDraft(mesh, model, max_pos, users, window=window, cache_users=self.total_users, ring=ring)
         self.block = B = self.draft.block
         self.rows = users * B
         self.capture = TargetCapture(model, self.draft.target_layer_ids)
         self.capture.on_device = True  # (the prompt features stay on the device: no host round trip per user)
         kv = kv_cache[0] if isinstance(kv_cache[0][0], list) else kv_cache
+        self.page_table = _replicate(mesh, page_table[:users].contiguous(), ttnn.int32)
         self.verify = BatchedVerify(model, self.page_table, kv, users, B, self.draft.target_layer_ids)
         self.verify.trans_rows = self.draft.rope.get_both_trans_mats()["prefill"]  # (the target's RoPE)
         from .grouped_moe import GroupedMoE
@@ -1378,32 +1418,44 @@ class BatchedDFlashRunner:
         # _dense_gate_up_stream: gate, up and SwiGLU in one program)
         for li, layer in enumerate(model.layers):
             layer.mlp.experts.gu_relaid = (self.verify.grouped.layers[li]["gate_up"], self.verify.grouped.gu_split)
-        # persistent per-round inputs (the traces' inputs)
-        z = torch.zeros(users, dtype=torch.int32)
-        self.d_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
-        self.v_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
-        # per-step positions, then (entry B) every row's position user-major (8 u + i: start_u + i, block attention)
-        self.pos = [_replicate(mesh, z, ttnn.int32) for _ in range(B)] + [
-            _replicate(mesh, torch.zeros(self.rows, dtype=torch.int32), ttnn.int32)
-        ]
-        self.bound = _replicate(mesh, z, ttnn.int32)
-        self.pos_rows = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
-        # the per-round inputs travel as two packed host writes (int32: per-step positions, user-major positions, the
-        # draft bound; uint32: the draft tokens, per-row positions), unpacked on device into the tensors above at the
-        # start of a pass (one host-to-device copy each instead of 11)
         U = users
-        self.unpack_i = [(t, [U]) for t in self.pos[:B]] + [(self.pos[B], [self.rows]), (self.bound, [U])]
-        self.unpack_u = [(self.d_tokens, [1, self.rows]), (self.pos_rows, [1, self.rows])]
-        n_i = sum(math.prod(shape) for _, shape in self.unpack_i)
-        n_u = sum(math.prod(shape) for _, shape in self.unpack_u)
-        self.in_i = _replicate(mesh, torch.zeros(1, n_i, dtype=torch.int32), ttnn.int32)
-        self.in_u = _replicate(mesh, torch.zeros(1, n_u, dtype=torch.int32), ttnn.uint32)
+        put = lambda t: ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))  # fmt: skip
+        self.lanes = []
+        for l in range(lanes):
+            lane = _Lane()
+            u0 = l * U
+            lane.u0 = u0
+            lane.page_table = (
+                self.page_table if l == 0 else _replicate(mesh, page_table[u0 : u0 + U].contiguous(), ttnn.int32)
+            )
+            lane.draft_page_table = (self.draft.page_table if l == 0 else
+                                     _replicate(mesh, self.draft.user_tables[u0 : u0 + U].contiguous(), ttnn.int32))  # fmt: skip
+            # persistent per-round inputs (the traces' inputs)
+            z = torch.zeros(users, dtype=torch.int32)
+            lane.d_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
+            lane.v_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
+            # per-step positions, then (entry B) every row's position user-major (8 u + i: start_u + i, block attention)
+            lane.pos = [_replicate(mesh, z, ttnn.int32) for _ in range(B)] + [
+                _replicate(mesh, torch.zeros(self.rows, dtype=torch.int32), ttnn.int32)
+            ]
+            lane.bound = _replicate(mesh, z, ttnn.int32)
+            lane.pos_rows = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
+            # the per-round inputs travel as two packed host writes (int32: per-step positions, user-major positions,
+            # the draft bound; uint32: the draft tokens, per-row positions), unpacked on device into the tensors above
+            # at the start of a pass (one host-to-device copy each instead of 11)
+            lane.unpack_i = [(t, [U]) for t in lane.pos[:B]] + [(lane.pos[B], [self.rows]), (lane.bound, [U])]
+            lane.unpack_u = [(lane.d_tokens, [1, self.rows]), (lane.pos_rows, [1, self.rows])]
+            n_i = sum(math.prod(shape) for _, shape in lane.unpack_i)
+            n_u = sum(math.prod(shape) for _, shape in lane.unpack_u)
+            lane.in_i = _replicate(mesh, torch.zeros(1, n_i, dtype=torch.int32), ttnn.int32)
+            lane.in_u = _replicate(mesh, torch.zeros(1, n_u, dtype=torch.int32), ttnn.uint32)
+            lane.limit = put(torch.zeros(1, 1, 1, U))  # each user's last start position (its token budget)
+            lane.round_out = None
+            self.lanes.append(lane)
         # the next round's inputs are computed on device at the end of a round (acceptance on device): every traced
         # round is queued before the previous round's result is read
-        put = lambda t: ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))  # fmt: skip
         self.iota8 = put(torch.arange(B).float().reshape(1, 1, B, 1).expand(1, 1, B, U).contiguous())  # row i: i
         self.mask_rest = put(torch.full((1, 1, 1, self.rows - U), float(self.draft.mask_token_id)))
-        self.limit = put(torch.zeros(1, 1, 1, U))  # each user's last start position (its token budget)
         self.first_step = ttnn.from_torch(
             (torch.arange(self.rows) < users).float().reshape(1, 1, 1, self.rows),
             dtype=ttnn.float32,
@@ -1411,7 +1463,17 @@ class BatchedDFlashRunner:
             device=mesh,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+        self._use(self.lanes[0])
         self.traces = None
+
+    def _use(self, lane):
+        """The passes read lane's inputs and page tables (the attributes they use are set to lane's tensors)."""
+        for k in ("d_tokens", "v_tokens", "pos", "bound", "pos_rows", "unpack_i", "unpack_u", "in_i", "in_u", "limit"):
+            setattr(self, k, getattr(lane, k))
+        self.page_table = lane.page_table
+        self.verify.page_table = lane.page_table
+        self.draft.page_table = lane.draft_page_table
+        self.lane = lane
 
     def prefill(self, prompts):
         firsts = []
@@ -1423,7 +1485,7 @@ class BatchedDFlashRunner:
                 page_table=self.page_table_host[u : u + 1],
                 kv_cache=self.kv_cache,
                 prompt_lens=[len(p)],
-                empty_slots=[u],
+                empty_slots=[u % self.LANE],  # (the model's batch: 32 slots; the page table row picks the blocks)
                 enable_trace=False,
                 warmup_prefill=False,
             )
@@ -1524,14 +1586,20 @@ class BatchedDFlashRunner:
 
     def capture_traces(self):
         """One trace for the whole round (draft, verify, context and the acceptance: no host round trip between draft
-        and verify), replayed by generate."""
+        and verify; every lane's round, one after the other), replayed by generate."""
         mesh = self.mesh
         self.release_traces()
-        for t in self._round_pass():  # (compile)
-            t.deallocate(True)
+        for lane in self.lanes:  # (compile)
+            self._use(lane)
+            for t in self._round_pass():
+                t.deallocate(True)
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-        self.round_out = self._round_pass()
+        for lane in self.lanes:
+            self._use(lane)
+            lane.round_out = self._round_pass()
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        self._use(self.lanes[0])
+        self.round_out = self.lanes[0].round_out
         self.traces = (tid,)
 
     def release_traces(self):
@@ -1542,18 +1610,22 @@ class BatchedDFlashRunner:
         self.traces = None
 
     def _set_inputs(self, starts, lasts):
+        """starts / lasts: per user (all lanes' users, or one lane's)."""
         mesh, U, B = self.mesh, self.users, self.block
-        toks = torch.full((1, self.rows), self.draft.mask_token_id, dtype=torch.int32)
-        toks[0, :U] = torch.tensor(lasts, dtype=torch.int32)
-        st = torch.tensor(starts, dtype=torch.int32)
-        steps = st[None] + torch.arange(B)[:, None]  # [step i, user u]: start_u + i
-        vi = torch.cat([steps.reshape(-1), steps.T.reshape(-1), st + B - 1])
-        vu = torch.cat([toks.reshape(-1), steps.reshape(-1)])
-        _copy(mesh, self.in_i, vi.reshape(1, -1), ttnn.int32)
-        _copy(mesh, self.in_u, vu.reshape(1, -1), ttnn.uint32)
+        lanes = self.lanes if len(starts) == self.total_users else [self.lane]
+        for l, lane in enumerate(lanes):
+            toks = torch.full((1, self.rows), self.draft.mask_token_id, dtype=torch.int32)
+            toks[0, :U] = torch.tensor(lasts[l * U : (l + 1) * U], dtype=torch.int32)
+            st = torch.tensor(starts[l * U : (l + 1) * U], dtype=torch.int32)
+            steps = st[None] + torch.arange(B)[:, None]  # [step i, user u]: start_u + i
+            vi = torch.cat([steps.reshape(-1), steps.T.reshape(-1), st + B - 1])
+            vu = torch.cat([toks.reshape(-1), steps.reshape(-1)])
+            _copy(mesh, lane.in_i, vi.reshape(1, -1), ttnn.int32)
+            _copy(mesh, lane.in_u, vu.reshape(1, -1), ttnn.uint32)
 
-    def _accept(self, ids, accept, done, dr, post):
-        """Each user's drafts up to the first mismatch with the target's tokens, plus the target's next token."""
+    def _accept(self, ids, accept, done, dr, post, u0=0):
+        """Each user's drafts up to the first mismatch with the target's tokens, plus the target's next token (the
+        lane of users u0 .. u0 + 31)."""
         U, B = self.users, self.block
         for u in range(U):
             d = [dr[i * U + u] for i in range(1, B)]
@@ -1561,39 +1633,43 @@ class BatchedDFlashRunner:
             k = 0
             while k < B - 1 and d[k] == p[k]:
                 k += 1
-            if not done(u):
-                ids[u] += d[:k] + [p[k]]
-                accept[u].append(k + 1)
+            if not done(u0 + u):
+                ids[u0 + u] += d[:k] + [p[k]]
+                accept[u0 + u].append(k + 1)
 
     def _enqueue_round(self):
         """Queue one traced round and non-blocking reads of its token ids. Returns (host tensors, event)."""
         ttnn.execute_trace(self.mesh, self.traces[0], cq_id=0, blocking=False)
-        host = [t.cpu(blocking=False) for t in self.round_out]
+        host = [t.cpu(blocking=False) for lane in self.lanes for t in lane.round_out]
         return host, ttnn.record_event(self.mesh, 0)
 
     def _generate_queued(self, ids, lens, accept, done, times, max_new_tokens):
         """Traced rounds with the acceptance on device (b1's queued rounds): round r + 1 is queued before round r's
         result is read (the device writes its inputs), so the host's read and bookkeeping overlap the next round."""
-        U = self.users
-        limit = torch.tensor([lens[u] + max_new_tokens for u in range(U)], dtype=torch.float32).reshape(1, 1, 1, U)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(limit, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)),
-            self.limit,
-        )  # fmt: skip
+        U, N = self.users, self.total_users
+        for lane in self.lanes:
+            us = range(lane.u0, lane.u0 + U)
+            limit = torch.tensor([lens[u] + max_new_tokens for u in us], dtype=torch.float32).reshape(1, 1, 1, U)
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(limit, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)),
+                lane.limit,
+            )  # fmt: skip
         t = time.perf_counter()
         pending = [self._enqueue_round()]
         while pending:
             # a round adds at most B tokens: queue the next one unless every user may finish with this one
-            if len(pending) == 1 and any(len(ids[u]) - lens[u] + self.block < max_new_tokens for u in range(U)):
+            if len(pending) == 1 and any(len(ids[u]) - lens[u] + self.block < max_new_tokens for u in range(N)):
                 pending.append(self._enqueue_round())
             host, event = pending.pop(0)
             ttnn.event_synchronize(event)
-            dr, post = (ttnn.to_torch(ttnn.get_device_tensors(h)[0]).reshape(-1).long().tolist() for h in host)
-            self._accept(ids, accept, done, dr, post)
+            for l, lane in enumerate(self.lanes):
+                dr, post = (ttnn.to_torch(ttnn.get_device_tensors(h)[0]).reshape(-1).long().tolist()
+                            for h in host[2 * l : 2 * l + 2])  # fmt: skip
+                self._accept(ids, accept, done, dr, post, lane.u0)
             now = time.perf_counter()
             times.append((now - t, now - t, 0.0, 0.0))
             t = now
-            if all(done(u) for u in range(U)):
+            if all(done(u) for u in range(N)):
                 break
             if not pending:
                 pending.append(self._enqueue_round())
@@ -1603,7 +1679,7 @@ class BatchedDFlashRunner:
     def generate(self, prompts, max_new_tokens, firsts):
         """Returns (per-user new tokens, per-user accepted counts, per-round seconds)."""
         mesh = self.mesh
-        U = self.users
+        U = len(prompts)
         lens = [len(p) for p in prompts]
         ids = [list(p) + [f] for p, f in zip(prompts, firsts)]
         accept = [[] for _ in range(U)]
@@ -1621,6 +1697,7 @@ class BatchedDFlashRunner:
             if self.traces is not None:  # traced rounds, queued
                 self._generate_queued(ids, lens, accept, done, times, max_new_tokens)
                 break
+            assert len(self.lanes) == 1, "more than one lane: traced rounds only"
             # eager: the draft pass, the verify block from its drafts on the host, verify + context
             d_out = self._draft_pass()
             dr = self.draft.argmax.host(d_out)

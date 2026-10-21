@@ -18,7 +18,10 @@
 
 namespace gmoe {
 constexpr uint32_t E = 32;
-constexpr uint32_t ROWS = 256;
+#ifndef GMOE_ROWS
+#define GMOE_ROWS 256
+#endif
+constexpr uint32_t ROWS = GMOE_ROWS;  // rows of the routed pass (gmoe_route.cpp; 32 .. 256)
 constexpr uint32_t K_SEL = 4;
 constexpr uint32_t K_IDS = K_SEL + 1;  // the router's ids per row (top-k + 1: a BF16 tie routes k + 1 experts)
 
