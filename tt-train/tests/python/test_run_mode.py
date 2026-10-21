@@ -61,3 +61,13 @@ def test_run_mode_restores_previous_eval():
         assert _modes(parent) == (RunMode.EVAL, RunMode.EVAL)
 
     assert _modes(parent) == (RunMode.EVAL, RunMode.EVAL)
+
+
+def test_run_mode_restores_each_submodule():
+    parent = _Parent()
+    parent.child.eval()
+
+    with run_mode(parent, RunMode.EVAL):
+        assert _modes(parent) == (RunMode.EVAL, RunMode.EVAL)
+
+    assert _modes(parent) == (RunMode.TRAIN, RunMode.EVAL)
