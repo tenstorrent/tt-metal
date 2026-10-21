@@ -1684,7 +1684,7 @@ inline void calculate_bitonic_topk_rebuild(
         idir, m_iter, k, logk, skip_second);
 }
 
-// Fused-key stable topk sweeps (see _topk_fuse_tile_/_topk_defuse_tile_ in the LLK header).
+// Fused-key stable topk sweeps (see _topk_fuse_tile_/_topk_defuse_tile_).
 // largest is the op's GLOBAL sort order; fuse runs once per fresh 2-tile slab, defuse once on the
 // final output tiles.
 template <bool APPROXIMATION_MODE, bool largest>
@@ -1700,7 +1700,7 @@ inline void calculate_topk_defuse(std::uint32_t num_tiles) {
     _topk_defuse_tile_<largest, index_store_mode>(num_tiles);
 }
 
-// Rank-stamped stable topk stamp sweep (see _topk_stamp_local_positions_ in the LLK header).
+// Rank-stamped stable topk stamp sweep (see _topk_stamp_local_positions_).
 // The stamp runs once per freshly transposed 2-tile slab, before every local-sort call.
 // largest is the op's GLOBAL sort order; TAG_BITS the tag field width (16 for bf16 values).
 template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
@@ -1710,7 +1710,7 @@ inline void calculate_topk_stamp_local_positions() {
 
 // Single-tile stamp with a runtime rank base: the k>32 insertion cascade's chain-position stamp
 // (accumulator tile at level p gets [32p, 32p+32); the fresh chunk gets the top range once, at
-// level 0; loser-tile tags ride). See _topk_stamp_tile_rank_range_ in the LLK header.
+// level 0; loser-tile tags ride). See _topk_stamp_tile_rank_range_.
 template <bool APPROXIMATION_MODE, bool largest, std::uint32_t TAG_BITS = 16>
 inline void calculate_topk_stamp_tile_rank_range(std::uint32_t dst_tile_index, std::uint32_t rank_base) {
     _topk_stamp_tile_rank_range_<largest, TAG_BITS>(dst_tile_index, rank_base);
