@@ -809,3 +809,12 @@ flip per row. The 1 M user-3 difference needs a within-row asymmetry on top. Two
 next 1 M experiments: `GLM53_LONG_USER_ORDER=3,0,1,2` (is it column 3 or the last prefill / the memory state?) and
 `GLM53_LONG_REPEAT_USER0=1` (prefill user 0 again at the end: same first token and last-chunk logits = the 1 M prefill
 is deterministic in that memory state).
+
+**1 M x 4 users per row, needle depth 0.56, gen 160, regions path (20:20, `long_8x4_1M_4users_d56_g160.log`):**
+TTFT 489.1 / 460.7 / 460.4 / 456.4 s (2142-2296 tok/s), **needles 32/32, rows agree, users agree** (32 identical
+160-token chains), decode 152.1 ms = 6.6 tok/s per user (210 aggregate) at 1 047 612 — the README's 1 M x 32 row.
+The column-3 first-token difference of the depth-0.5 run did not reproduce on this prompt: it is prompt-specific
+(the degenerate depth-0.5 continuation), i.e. a near-tie flip from a small within-row asymmetry, not a broken slot.
+Next: the same depth-0.5 prompt with the users prefilled in the order 3,0,1,2 plus a repeat of user 0 at the end
+(`sched_1m_order_d50.sh`): same flip on user 3 = a column-3 property; flip on the user prefilled last = order / memory
+state; a repeat of user 0 with a different first token or logits = non-deterministic prefill at 1 M.
