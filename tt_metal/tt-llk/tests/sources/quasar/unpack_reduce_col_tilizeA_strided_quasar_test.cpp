@@ -151,6 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(i, tensor_shape);
@@ -161,6 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(i, tensor_shape);

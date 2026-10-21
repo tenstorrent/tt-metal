@@ -17,15 +17,15 @@ namespace dest_chain
 using dest_dvalid::NONE;
 using dest_dvalid::THIS_UNIT;
 
-constexpr std::uint32_t NUM_BANKS = 2;
-
 struct State
 {
-    dest_dvalid_client publisher[NUM_BANKS] = {NONE, NONE};
-    dest_dvalid_client holder               = NONE;
-    std::uint32_t section                   = 0;
-    std::uint8_t members                    = 0;
-    std::uint8_t bank                       = 0;
+    dest_dvalid_client holder     = NONE;
+    dest_dvalid_client head       = NONE;
+    dest_dvalid_client pending[2] = {NONE, NONE}; // per bank, the head whose token the last section posted
+    std::uint32_t section         = 0;
+    std::uint8_t members          = 0;
+    std::uint8_t bank             = 0;
+    bool holder_is_head           = false; // false once the head takes again later in the section
 };
 
 inline State state;
@@ -77,58 +77,6 @@ inline void after_pulse()
     }
 }
 
-/**
- * @brief Publish the actual next head after the previous section's completion, on its terminal unit's thread.
- */
-template <dest_dvalid_client FROM, dest_dvalid_client TO, bool HOLD_BANK>
-inline void publish()
-{
-    _llk_dest_dvalid_write_release_<FROM, dest_dvalid::bit_of(TO), HOLD_BANK>();
-    _llk_dest_dvalid_pulse_<FROM>();
-}
-
-template <dest_dvalid_client FROM, dest_dvalid_client TO>
-inline void publish_on_bank(const std::uint32_t bank)
-{
-    const std::uint32_t saved = state.bank;
-    select_bank<FROM>(bank);
-    if (saved == bank)
-    {
-        publish<FROM, TO, true /*HOLD_BANK*/>();
-    }
-    else
-    {
-        publish<FROM, TO, false /*HOLD_BANK*/>();
-    }
-    state.bank = saved;
-}
-
-/**
- * @brief Admit HEAD using the previous terminal client's stream, never a guessed head's bit.
- */
-template <dest_dvalid_client HEAD, DstSync DST>
-inline void collect()
-{
-    const std::uint32_t bank           = section_bank<DST>();
-    const dest_dvalid_client publisher = state.publisher[bank];
-    if (publisher == NONE)
-    {
-        if constexpr (mine<HEAD>())
-        {
-            select_bank<HEAD>(bank);
-            _llk_dest_dvalid_write_release_<HEAD, dest_dvalid::bit_of(HEAD), true /*HOLD_BANK*/>();
-            _llk_dest_dvalid_pulse_<HEAD>();
-        }
-    }
-    else if constexpr (THIS_UNIT != NONE)
-    {
-        if (publisher == THIS_UNIT)
-        {
-            publish_on_bank<THIS_UNIT, HEAD>(bank);
-        }
-    }
-}
-
 template <dest_dvalid_client UNIT, DstSync DST>
 inline void arrive()
 {
@@ -143,7 +91,14 @@ inline void signal()
 {
     if constexpr (FROM != TO && mine<FROM>())
     {
-        _llk_dest_dvalid_signal_<FROM, TO, DST>();
+        if (state.holder_is_head)
+        {
+            _llk_dest_dvalid_signal_<FROM, TO, DST, true /*HEAD*/>();
+        }
+        else
+        {
+            _llk_dest_dvalid_signal_<FROM, TO, DST, false /*HEAD*/>();
+        }
         after_pulse<DST>();
     }
 }
@@ -158,10 +113,76 @@ inline void pass_from_holder()
             signal<THIS_UNIT, TO, DST>();
         }
     }
-    arrive<TO, DST>();
+}
+
+template <dest_dvalid_client UNIT, DstSync DST>
+inline void admit(const bool head)
+{
+    if constexpr (mine<UNIT>())
+    {
+        if (head)
+        {
+            _llk_dest_dvalid_admit_<UNIT, true /*HEAD*/, DST>();
+        }
+        else
+        {
+            _llk_dest_dvalid_admit_<UNIT, false /*HEAD*/, DST>();
+        }
+    }
+}
+
+/**
+ * @brief PACK's turn ended the section: PACK clears its bit and posts the token of this section's head.
+ */
+template <DstSync DST>
+inline void close_section()
+{
+    const std::uint32_t bank = section_bank<DST>();
+    if constexpr (mine<dest_dvalid_client::PACK>())
+    {
+        _llk_dest_dvalid_finish_<dest_dvalid_client::PACK>(dest_dvalid::token_sem(state.head, bank));
+        after_pulse<DST>();
+    }
+    state.pending[bank] = state.head;
+    state.section++;
+    state.holder = NONE;
+}
+
+/**
+ * @brief Wait for the token of the previous section on this bank. A token posted to another unit is forwarded by it.
+ */
+template <dest_dvalid_client UNIT, DstSync DST>
+inline void claim()
+{
+    const std::uint32_t bank          = section_bank<DST>();
+    const dest_dvalid_client expected = state.pending[bank];
+    if (expected == NONE)
+    {
+        return;
+    }
+    const std::uint8_t sem = dest_dvalid::token_sem(UNIT, bank);
+    if constexpr (THIS_UNIT != NONE && !mine<UNIT>())
+    {
+        if (expected == THIS_UNIT)
+        {
+            _llk_dest_dvalid_token_forward_(dest_dvalid::token_sem(THIS_UNIT, bank), sem);
+        }
+    }
+    if constexpr (mine<UNIT>())
+    {
+        _llk_dest_dvalid_token_wait_(sem);
+    }
 }
 
 } // namespace dest_chain
+
+/**
+ * @brief Seed the token semaphores. Call once from one thread at firmware boot, before any section.
+ */
+inline void _llk_dest_chain_boot_init_()
+{
+    _llk_dest_dvalid_token_init_();
+}
 
 /**
  * @brief Add UNIT to the dest chain.
@@ -178,14 +199,13 @@ inline void _llk_dest_chain_join_()
     if constexpr (dest_chain::mine<UNIT>())
     {
         _llk_dest_dvalid_join_<UNIT>();
-        _llk_dest_dvalid_write_wait_<UNIT>();
         dest_chain::state.bank = 0;
     }
     dest_chain::state.members |= BIT;
 }
 
 /**
- * @brief Remove UNIT while preserving its role as publisher for the next head's take.
+ * @brief Remove UNIT from the dest chain.
  * @note Call on every thread outside a section, paired with @ref _llk_dest_chain_join_.
  */
 template <dest_dvalid_client UNIT>
@@ -204,15 +224,11 @@ inline void _llk_dest_chain_leave_()
 }
 
 /**
- * @brief Start runtime bookkeeping for a section.
- */
-inline void _llk_dest_chain_section_begin_()
-{
-    dest_chain::state.holder = dest_chain::NONE;
-}
-
-/**
- * @brief Take dest from the current holder or ask the previous terminal unit to publish it.
+ * @brief Take dest from the current holder.
+ *
+ * A take after PACK's turn starts a new section: PACK's bank is released and the taker waits as the head for the
+ * previous section on the bank it moves to.
+ *
  * @note Call on every thread before UNIT's dest accesses, after @ref _llk_dest_chain_join_.
  * @note Issue at least one gated dest access in each turn before handing off to another unit.
  */
@@ -225,44 +241,36 @@ inline void _llk_dest_chain_take_()
     {
         return;
     }
-    if (s.holder == dest_chain::NONE)
+    if (s.holder == dest_dvalid_client::PACK)
     {
-        if constexpr (dest_chain::can_start(UNIT))
-        {
-            dest_chain::collect<UNIT, DST>();
-            dest_chain::arrive<UNIT, DST>();
-        }
-        else
-        {
-            LLK_ASSERT(false, "PACK only reads dest, so it cannot start a section");
-        }
+        dest_chain::close_section<DST>();
+    }
+    const bool head = s.holder == dest_chain::NONE;
+    LLK_ASSERT(!head || dest_chain::can_start(UNIT), "PACK only reads dest, so it cannot start a section");
+    if (head)
+    {
+        s.head = UNIT;
     }
     else
     {
         dest_chain::pass_from_holder<UNIT, DST>();
     }
-    s.holder = UNIT;
+    dest_chain::arrive<UNIT, DST>();
+    dest_chain::admit<UNIT, DST>(head);
+    if (head)
+    {
+        dest_chain::claim<UNIT, DST>();
+    }
+    s.holder         = UNIT;
+    s.holder_is_head = head;
 }
 
 /**
- * @brief Complete the section and remember which unit will publish its bank's next head.
+ * @brief Bank this thread's unit is on. Pass it to @ref _llk_math_dest_clear_ after the FPU's take.
  */
-template <DstSync DST, bool EN_32BIT_DEST = false>
-inline void _llk_dest_chain_section_end_()
+inline std::uint32_t _llk_dest_chain_bank_()
 {
-    dest_chain::State& s = dest_chain::state;
-    LLK_ASSERT(s.holder != dest_chain::NONE, "a section must end with a holder");
-    if constexpr (dest_chain::THIS_UNIT != dest_chain::NONE)
-    {
-        if (s.holder == dest_chain::THIS_UNIT)
-        {
-            _llk_dest_dvalid_finish_<dest_chain::THIS_UNIT, DST, EN_32BIT_DEST>(s.bank);
-            dest_chain::after_pulse<DST>();
-        }
-    }
-    s.publisher[dest_chain::section_bank<DST>()] = s.holder;
-    s.section++;
-    s.holder = dest_chain::NONE;
+    return dest_chain::state.bank;
 }
 
 } // namespace ckernel

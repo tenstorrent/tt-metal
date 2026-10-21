@@ -127,6 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
                     _llk_math_matmul_block_(CT_DIM, RT_DIM);
@@ -137,6 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
                     _llk_math_matmul_block_(CT_DIM, RT_DIM);

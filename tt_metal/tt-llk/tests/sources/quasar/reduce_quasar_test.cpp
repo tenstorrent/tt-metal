@@ -145,6 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += tiles_per_section)
                 {
                     const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, tiles_per_section);
+                    _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         const std::uint32_t dst_tile_idx = IS_REDUCE_TO_ONE ? 0 : block_tile;

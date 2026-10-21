@@ -337,4 +337,18 @@ inline void eltwise_binary_reuse_dest_as_src()
     }
 }
 
+// Dest bank the next _llk_math_dest_clear_ zeroes (SyncHalf), toggles 0/1 per section.
+// thread_local so each math TRISC (one per Neo) has its own toggle: ENV_LLK_INFRA uses a plain static,
+// the metal build defines it in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
+#ifdef ENV_LLK_INFRA
+static std::uint32_t clear_dest_bank_id = 0;
+#else
+extern thread_local std::uint32_t clear_dest_bank_id;
+#endif
+
+inline void _update_clear_dest_bank_id_()
+{
+    clear_dest_bank_id = 1 - clear_dest_bank_id;
+}
+
 } // namespace ckernel::math

@@ -230,7 +230,11 @@ def golden(src_a, schedule):
         lo, hi = section * TILE_ELEMENTS, (section + 1) * TILE_ELEMENTS
         dest = None
         wrote = False
+        packed_last = False
         for unit in order:
+            if packed_last and unit != P:
+                dest = None  # a take after PACK starts a new section on an empty bank
+            packed_last = unit == P
             if unit in (U, F):
                 dest = src_a[lo:hi]
             elif unit == S:
