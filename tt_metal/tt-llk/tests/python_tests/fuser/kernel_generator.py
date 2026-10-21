@@ -13,9 +13,10 @@ from typing import Dict, List
 from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
+from . import dest_chain
 from .arch_common import sfpu_common
 from .base_sfpu import Sfpu
-from .fuser_config import FuserConfig
+from .fuser_config import FuserConfig, GlobalConfig
 from .pipeline_plan import PlannedBlock, plan_pipeline
 from .sfpu_node import SfpuNode
 
@@ -44,7 +45,7 @@ def format_cpp(source: str, source_dir: Path, cache_dir: Path) -> str:
         return cached.read_text()
 
 
-def render_kernel(thread: str, headers, body: str) -> str:
+def render_kernel(thread: str, headers, body: str, config: GlobalConfig) -> str:
     includes = "\n".join(f'#include "{header}"' for header in sorted(headers))
     return (
         f"\n"
@@ -54,6 +55,7 @@ def render_kernel(thread: str, headers, body: str) -> str:
         f"\n"
         f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
         f"{{\n"
+        f"{dest_chain.kernel_init(config)}"
         f"{body}"
         f"}}\n"
         f"\n"
@@ -80,7 +82,9 @@ class UnpackKernelGenerator:
             op.unpack(self.config.global_config, blocks)
             for op, blocks in zip(self.config.pipeline, plans)
         )
-        return render_kernel("UNPACK", all_headers, unpack_calls)
+        return render_kernel(
+            "UNPACK", all_headers, unpack_calls, self.config.global_config
+        )
 
 
 class MathKernelGenerator:
@@ -104,7 +108,7 @@ class MathKernelGenerator:
             op.do_math(self.config.global_config, blocks)
             for op, blocks in zip(self.config.pipeline, plans)
         )
-        return render_kernel("MATH", all_headers, math_calls)
+        return render_kernel("MATH", all_headers, math_calls, self.config.global_config)
 
 
 class SfpuKernelGenerator:
@@ -128,7 +132,7 @@ class SfpuKernelGenerator:
             op.do_sfpu(global_config, blocks)
             for op, blocks in zip(self.config.pipeline, plans)
         )
-        return render_kernel("ISOLATE_SFPU", all_headers, sfpu_calls)
+        return render_kernel("ISOLATE_SFPU", all_headers, sfpu_calls, global_config)
 
 
 class PackKernelGenerator:
@@ -149,7 +153,7 @@ class PackKernelGenerator:
             op.pack(self.config.global_config, blocks)
             for op, blocks in zip(self.config.pipeline, plans)
         )
-        return render_kernel("PACK", all_headers, pack_calls)
+        return render_kernel("PACK", all_headers, pack_calls, self.config.global_config)
 
 
 class FusedKernelGenerator:

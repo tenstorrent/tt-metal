@@ -49,16 +49,20 @@ def units(operation: "L1Operation") -> List[str]:
     return [unit for unit in CHAIN_ORDER if unit in used]
 
 
-def joins(config: "GlobalConfig", operation: "L1Operation") -> str:
+def kernel_init(config: "GlobalConfig") -> str:
     if not active(config):
         return ""
-    return "".join(f"_llk_dest_chain_join_<{unit}>();\n" for unit in units(operation))
+    return "".join(f"_llk_dest_chain_join_<{unit}>();\n" for unit in (FPU, PACK))
 
 
-def leaves(config: "GlobalConfig", operation: "L1Operation") -> str:
+def init(config: "GlobalConfig", operation: "L1Operation") -> str:
     if not active(config):
         return ""
-    return "".join(f"_llk_dest_chain_leave_<{unit}>();\n" for unit in units(operation))
+    members = units(operation)
+    return "".join(
+        f"_llk_dest_chain_{'join' if unit in members else 'leave'}_<{unit}>();\n"
+        for unit in (UNPACK, SFPU)
+    )
 
 
 class Section:

@@ -83,7 +83,6 @@ struct UnpackToDestOp
 
     static void init()
     {
-        ckernel::_llk_dest_chain_join_<UNIT>();
         UNPACK((_llk_unpack_unary_operand_to_dest_init_(bfd_a)));
     }
 
@@ -91,11 +90,6 @@ struct UnpackToDestOp
     {
         ckernel::_llk_dest_chain_take_<UNIT, dest_sync, is_fp32_dest_acc_en>();
         UNPACK((_llk_unpack_unary_operand_to_dest_tile_(i, 0 /*dest tile*/)));
-    }
-
-    static void uninit()
-    {
-        ckernel::_llk_dest_chain_leave_<UNIT>();
     }
 };
 
@@ -105,7 +99,6 @@ struct DatacopyOp
 
     static void init()
     {
-        ckernel::_llk_dest_chain_join_<UNIT>();
         UNPACK((
             _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(bfd_a, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/)));
         MATH((_llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(datacopy_rows, 1 /*num_matrices*/)));
@@ -117,11 +110,6 @@ struct DatacopyOp
         UNPACK((_llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, ckernel::DEFAULT_TENSOR_SHAPE)));
         MATH((_llk_math_eltwise_unary_datacopy_(0 /*dest tile*/)));
     }
-
-    static void uninit()
-    {
-        ckernel::_llk_dest_chain_leave_<UNIT>();
-    }
 };
 
 struct SquareOp
@@ -130,7 +118,6 @@ struct SquareOp
 
     static void init()
     {
-        ckernel::_llk_dest_chain_join_<UNIT>();
         SFPU((sfpu::init_square()));
     }
 
@@ -146,11 +133,6 @@ struct SquareOp
             SFPU((SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), 0 /*dest tile*/, VectorMode::RC, fill_value(i))));
         }
     }
-
-    static void uninit()
-    {
-        ckernel::_llk_dest_chain_leave_<UNIT>();
-    }
 };
 
 struct PackOp
@@ -159,7 +141,6 @@ struct PackOp
 
     static void init()
     {
-        ckernel::_llk_dest_chain_join_<UNIT>();
         PACK((_llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/)));
     }
 
@@ -167,11 +148,6 @@ struct PackOp
     {
         ckernel::_llk_dest_chain_take_<UNIT, dest_sync, is_fp32_dest_acc_en>();
         PACK((_llk_pack_(0 /*dest tile*/, i, ckernel::DEFAULT_TENSOR_SHAPE)));
-    }
-
-    static void uninit()
-    {
-        ckernel::_llk_dest_chain_leave_<UNIT>();
     }
 };
 
@@ -197,12 +173,16 @@ inline void run_op(const std::uint32_t step, const bool produced, const std::uin
 }
 
 template <typename Op>
-inline void uninit_op(const std::uint32_t members, std::uint32_t& inited)
+inline void init_op(const std::uint32_t members, std::uint32_t& inited)
 {
     const std::uint32_t bit = ckernel::dest_dvalid::bit_of(Op::UNIT);
-    if ((members & bit) == 0 && (inited & bit))
+    if (members & bit)
     {
-        Op::uninit();
+        ckernel::_llk_dest_chain_join_<Op::UNIT>();
+    }
+    else
+    {
+        ckernel::_llk_dest_chain_leave_<Op::UNIT>();
         inited &= ~bit;
     }
 }
@@ -227,6 +207,8 @@ inline void run_section(const std::uint32_t order_half, const std::uint32_t i, s
 
 inline void run_schedule(const std::uint32_t tile_cnt, const std::uint32_t* orders, const std::uint32_t members_word)
 {
+    ckernel::_llk_dest_chain_join_<dest_dvalid_client::FPU>();
+    ckernel::_llk_dest_chain_join_<dest_dvalid_client::PACK>();
     std::uint32_t inited = 0;
     // Both producer operations program the same unpack MOP bank.
     dest_dvalid_client configured_unpacker = ckernel::dest_dvalid::NONE;
@@ -234,18 +216,12 @@ inline void run_schedule(const std::uint32_t tile_cnt, const std::uint32_t* orde
     {
         const std::uint32_t members    = nibble(members_word, i);
         const std::uint32_t order_half = (orders[i / 2] >> (16 * (i % 2))) & 0xFFFF;
-        uninit_op<UnpackToDestOp>(members, inited);
-        uninit_op<DatacopyOp>(members, inited);
-        uninit_op<SquareOp>(members, inited);
-        uninit_op<PackOp>(members, inited);
+        init_op<UnpackToDestOp>(members, inited);
+        init_op<SquareOp>(members, inited);
         ckernel::_llk_dest_chain_section_begin_();
         run_section(order_half, i, inited, configured_unpacker);
         ckernel::_llk_dest_chain_section_end_<dest_sync, is_fp32_dest_acc_en>();
     }
-    UnpackToDestOp::uninit();
-    DatacopyOp::uninit();
-    SquareOp::uninit();
-    PackOp::uninit();
 }
 
 } // namespace

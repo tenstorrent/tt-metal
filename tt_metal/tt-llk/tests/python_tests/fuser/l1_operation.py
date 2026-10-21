@@ -147,7 +147,7 @@ class L1Operation:
         hoist = len(unpack_ops) == 1
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
-        init_code = dest_chain.joins(config, self)
+        init_code = dest_chain.init(config, self)
         init_code += unpack_common.dvalid_init(config=config, operation=self)
         init_code += config.sentinel.hw_configure_unpack(config, self)
         if unpack_ops and not config.skip_unpack_init:
@@ -206,7 +206,6 @@ class L1Operation:
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(self, config, None)
-        uninit_code += dest_chain.leaves(config, self)
         code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
@@ -219,7 +218,7 @@ class L1Operation:
         hoist_reconfig = hoist or self._all_same_operand_formats(fpu_ops)
 
         init_code = config.sentinel.hw_configure_math(config, self)
-        init_code += dest_chain.joins(config, self)
+        init_code += dest_chain.init(config, self)
         init_code += fpu_common.math_pack_sync_init(config, self)
         init_code += fpu_common.math_dest_remap_config(
             any(pn.packer.requires_dest_remap for pn in self._get_pack_nodes())
@@ -290,7 +289,6 @@ class L1Operation:
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(self, config, None)
-        uninit_code += dest_chain.leaves(config, self)
         code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
         return code
@@ -314,7 +312,7 @@ class L1Operation:
     def do_sfpu(self, config: "GlobalConfig", blocks: List[PlannedBlock]) -> str:
         config.sentinel.prepare_operation(config, self, blocks)
         code = f"// Operation {self.stage_id}: SFPU\n"
-        init_code = dest_chain.joins(config, self)
+        init_code = dest_chain.init(config, self)
         init_code += sfpu_common.sfpu_sync_init(config, self)
         code += self._zone(config, f"INIT{self.stage_id}", init_code)
 
@@ -347,9 +345,6 @@ class L1Operation:
         code += self._zone_loop(
             config, f"TILE_LOOP{self.stage_id}", self._batch_loop(blocks, batch_body)
         )
-        code += self._zone(
-            config, f"UNINIT{self.stage_id}", dest_chain.leaves(config, self)
-        )
         return code
 
     def _all_same_pack_formats(self, config) -> bool:
@@ -370,7 +365,7 @@ class L1Operation:
         if hoist_reconfig and pack_only:
             init_code += config.sentinel.configure_pack(config, self, pack_only[0])
         init_code += pack_common.pack_reduce_mask_config(self)
-        init_code += dest_chain.joins(config, self)
+        init_code += dest_chain.init(config, self)
         init_code += pack_common.pack_dest_init(config, self, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(self, config, None)
@@ -430,7 +425,6 @@ class L1Operation:
         uninit_code = pack_common.packer_sync_with_unpacker(config, self)
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(self, config)
-        uninit_code += dest_chain.leaves(config, self)
         uninit_code += pack_common.pack_reduce_mask_clear(self)
         code += self._zone(config, f"UNINIT{self.stage_id}", uninit_code)
 
