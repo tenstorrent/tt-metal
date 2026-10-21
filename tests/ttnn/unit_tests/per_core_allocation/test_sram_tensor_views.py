@@ -274,7 +274,12 @@ def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device
     owner = _owner(mesh, core)
     address = _address(owner, coord, core)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-    for invalid, message in ((0, "below allocatable SRAM"), (address + 1, "must be aligned"), (2**32, "overflows")):
+    for invalid, message in (
+        (0, "below allocatable SRAM"),
+        (address + 1, "must be aligned"),
+        (2**32, "exceeds device SRAM"),
+        (2**64 - ttnn.get_l1_alignment(), "overflows"),
+    ):
         with expect_error(RuntimeError, message):
             ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1, invalid)
     with expect_error(RuntimeError, "ordinary SRAM"):
