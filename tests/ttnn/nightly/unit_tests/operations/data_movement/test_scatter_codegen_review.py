@@ -215,6 +215,37 @@ def test_scatter_codegen_row_major_under_l1_pressure_stays_native(device):
     assert added == 0, "auto routed a ROW_MAJOR call whose sticks no longer fit live L1 to codegen; expected native"
 
 
+def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
+    # The interleaved TILE factory keeps a whole row of input and output tiles resident; a row the
+    # per-core L1 cannot hold twice has to stream one tile at a time instead. The width comes from the
+    # device so the row just overflows the budget on Wormhole and Blackhole alike, and 160 tile rows
+    # fill either grid, so the row split alone would not have chosen streaming.
+    torch.manual_seed(0)
+    budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    tile_bytes = 32 * 32 * 2
+    width = 32 * (budget // (2 * tile_bytes) + 1)
+    rows, index_w = 32 * 160, 32
+    # Unique positions per row without sorting a row this wide: stride the 32 columns across it and
+    # shift by the row, which cannot collide because 31 strides stay short of the width.
+    index = (torch.arange(index_w) * (width // index_w) + torch.arange(rows).unsqueeze(1)) % width
+    x = torch.rand([1, 1, rows, width], dtype=torch.bfloat16)
+    src = torch.rand([1, 1, rows, index_w], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    it = ttnn.from_torch(
+        index.reshape(1, 1, rows, index_w).to(torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    st = ttnn.from_torch(src, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert_equal(ttnn.to_torch(_force_native(xt, -1, it, st)), ttnn.to_torch(_force_codegen(xt, -1, it, st)))
+
+
+def test_scatter_codegen_streaming_with_more_columns_than_cores(device):
+    # Streaming splits work by output column; with more columns than cores the split is uneven and
+    # the ordinal-numbered kernels must stride by the core count without drifting. Width 6408: its
+    # 12816 B stick is not 32 B aligned, which keeps the single tile row off the row-major detour.
+    xt, it, st = _make_case([1, 1, 32, 6408], [1, 1, 32, 100], -1, ttnn.TILE_LAYOUT, device)
+    assert_equal(ttnn.to_torch(_force_native(xt, -1, it, st)), ttnn.to_torch(_force_codegen(xt, -1, it, st)))
+
+
 @pytest.mark.parametrize("reduce", ["add", "multiply"])
 def test_scatter_codegen_row_major_bf16_reduce_matches_native(device, reduce):
     # Positions drawn from the first 8 of 64 columns, so every hit column accumulates several
