@@ -16,9 +16,11 @@ class _ReusingCalculator:
 
     def __init__(self):
         self.output_tensor = torch.zeros(1, 1, 1, 32)
+        self.calls = 0
 
     def calculate_log_probs(self, logits, tokens):
-        self.output_tensor.fill_(float(logits))
+        self.calls += 1
+        self.output_tensor.fill_(-float(self.calls))
         return self.output_tensor
 
 
@@ -44,14 +46,14 @@ def _sampler(monkeypatch, calculator, deallocated):
     return sampler
 
 
-def _sample(sampler, logits):
-    return sampler._sample_topk(logits, object(), object(), object(), None, None)[1]
+def _sample(sampler):
+    return sampler._sample_topk(object(), object(), object(), object(), None, None)[1]
 
 
 def test_an_earlier_request_keeps_its_logprobs_after_a_later_request_runs(monkeypatch):
     sampler = _sampler(monkeypatch, _ReusingCalculator(), [])
-    first = _sample(sampler, -1.0)
-    second = _sample(sampler, -2.0)
+    first = _sample(sampler)
+    second = _sample(sampler)
     assert torch.all(first == -1.0), "request 1 read back request 2's logprobs"
     assert torch.all(second == -2.0)
 
@@ -63,7 +65,7 @@ def test_releasing_a_result_leaves_the_calculator_output_alive(monkeypatch):
         "models.common.llm_runtime.tensor_resources.ttnn",
         SimpleNamespace(Tensor=torch.Tensor, deallocate=deallocated.append),
     )
-    result = _sample(sampler, -1.0)
+    result = _sample(sampler)
     assert not best_effort_deallocate_owned_tensors((object(), result))
     assert any(value is result for value in deallocated)
     assert not any(value is calculator.output_tensor for value in deallocated)
