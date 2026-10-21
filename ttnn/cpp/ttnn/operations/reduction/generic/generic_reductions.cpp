@@ -561,19 +561,18 @@ Tensor reduce(
         const auto& lshape = input_tensor_arg.logical_shape();
         if (input_tensor_arg.layout() == TILE_LAYOUT && tt::tt_metal::is_block_float(input_tensor_arg.dtype()) &&
             lshape.rank() > 0 && lshape[-1] % tt::constants::FACE_WIDTH != 0) {
-            return ttnn::typecast(
-                reduce<reduce_type>(
-                    ttnn::typecast(input_tensor_arg, DataType::BFLOAT16),
-                    dim_arg,
-                    keepdim,
-                    memory_config_arg,
-                    compute_kernel_config,
-                    scalar,
-                    correction,
-                    sub_core_grids,
-                    fast_and_approximate_mode,
-                    output_layout),
-                input_tensor_arg.dtype());
+            auto widened = reduce<reduce_type>(
+                ttnn::typecast(input_tensor_arg, DataType::BFLOAT16),
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                correction,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            return ttnn::typecast(ttnn::fill_implicit_tile_padding(widened, ttnn::PadValue{0.0f}), input_tensor_arg.dtype());
         }
     }
     // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
