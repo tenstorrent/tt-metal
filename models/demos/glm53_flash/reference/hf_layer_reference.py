@@ -325,13 +325,16 @@ def generate_streaming(
     *,
     resume: bool = True,
     layers: list[int] | None = None,
+    x0: torch.Tensor | None = None,
 ) -> dict:
     """Greedy generation of ``n`` tokens with every layer streamed per token (prefill pass, then
     ``n - 1`` decode passes; a pass builds each of the 45 HF layers in turn, ~10 s per MoE layer on
     a warm page cache, and frees it). The head is the model's bf16 path: ``hc_head`` (stream mean)
     -> ``norm`` -> ``lm_head`` in bf16 -> argmax (first index on ties, as ``torch.argmax``).
     Writes ``generate.json`` (prompt ids, generated ids, per-step top-5 ids/logits, timings) and a
-    resumable ``generate_state.pt`` (the ``DynamicCache`` + tokens so far) after every token."""
+    resumable ``generate_state.pt`` (the ``DynamicCache`` + tokens so far) after every token.
+    ``x0`` ``[1, T, hc_mult, hidden]``: the prefill streams to use instead of ``embed[prompt_ids]`` (the
+    multimodal reference: image features scattered into the text embeddings, ``hf_multimodal_reference.py``)."""
     import gc
 
     from transformers import DynamicCache
@@ -396,7 +399,11 @@ def generate_streaming(
 
     if not generated:
         t0 = time.time()
-        x = embed[prompt_ids].unsqueeze(2).expand(-1, -1, hc, -1).contiguous()
+        if x0 is not None:
+            assert tuple(x0.shape) == (B, T, hc, text_config.hidden_size), (tuple(x0.shape), (B, T, hc))
+            x = x0.to(torch.bfloat16).contiguous()
+        else:
+            x = embed[prompt_ids].unsqueeze(2).expand(-1, -1, hc, -1).contiguous()
         x = run_pass(x, cache, torch.ones(B, T, dtype=torch.bool))
         logits = head(x[:, -1:])
         records.append(record(0, T - 1, logits, time.time() - t0))

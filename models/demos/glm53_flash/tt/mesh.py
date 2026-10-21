@@ -38,10 +38,17 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
 
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
-        # GLM53_FABRIC: torus (default on the 8x4) | 2d | 1d | 1d_ring. ``ttnn.all_to_all_dispatch`` /
-        # ``all_to_all_combine`` (the EP expert path) route with 1D hop counts along one axis and are only
-        # exercised under FABRIC_1D (blackhole CI, the DeepSeek-V3 Galaxy demo); under a 2D fabric they hang.
-        fabric = os.environ.get("GLM53_FABRIC", "torus" if (rows, cols) == (8, 4) else "2d")
+        # GLM53_FABRIC: torus (default on the 8x4) | 2d (default on a block) | 1d | 1d_ring. The EP expert layout
+        # (GLM53_MOE_LAYOUT=ep) defaults to 1d: ``ttnn.all_to_all_dispatch`` / ``all_to_all_combine`` send 1D hop
+        # packets under a Linear topology and are exercised under FABRIC_1D only (Blackhole CI, the DeepSeek-V3
+        # Galaxy model); the first block run under FABRIC_2D hung. Validated here under FABRIC_1D on a (2,4) block
+        # (tests/test_a2a_perf.py::test_dispatch_combine_golden, tests/test_mesh_moe.py with the ep layout).
+        default = (
+            "1d"
+            if os.environ.get("GLM53_MOE_LAYOUT", "hybrid") == "ep"
+            else ("torus" if (rows, cols) == (8, 4) else "2d")
+        )
+        fabric = os.environ.get("GLM53_FABRIC", default)
         params["fabric_config"] = {
             "torus": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "2d": ttnn.FabricConfig.FABRIC_2D,
@@ -129,6 +136,16 @@ class GLMMesh:
             mesh_mapper=self.shard_2d(rows, cols),
         )
 
+    def _shard_shape(self, shape, rows: int | None, cols: int | None) -> tuple[int, ...]:
+        """The per-device shard shape of a global ``shape`` sharded on dim ``rows`` over the mesh rows and on
+        dim ``cols`` over the columns (``None`` = replicated on that axis; negative dims allowed)."""
+        local = list(shape)
+        for dim, n in ((rows, self.rows), (cols, self.cols)):
+            if dim is not None and n > 1:
+                d = dim % len(local)
+                local[d] = -(-local[d] // n)
+        return tuple(local)
+
     def upload_cached(
         self,
         make: Callable[[], torch.Tensor],
@@ -154,11 +171,17 @@ class GLMMesh:
             cache_file = Path(cache_file)
             if cache_file.is_file():
                 t = ttnn.load_tensor(cache_file, device=self.device)
-                shape_ok = expect_shape is None or tuple(t.shape) == tuple(expect_shape)
+                # a loaded multi-device tensor reports its per-device shard shape, the uploaded one the global
+                # (mesh-wide) shape: both describe the same shards, so either matches ``expect_shape``
+                shape_ok = expect_shape is None or tuple(t.shape) in (
+                    tuple(expect_shape),
+                    self._shard_shape(expect_shape, rows, cols),
+                )
                 if t.dtype != dtype or t.layout != layout or not shape_ok:
                     raise RuntimeError(
                         f"weight cache {cache_file}: {t.dtype} {t.layout} {tuple(t.shape)} does not match the "
-                        f"expected {dtype} {layout} {expect_shape}; delete the stale file"
+                        f"expected {dtype} {layout} {expect_shape} (per-device "
+                        f"{self._shard_shape(expect_shape, rows, cols)}); delete the stale file"
                     )
                 return t
         t = self.upload(make(), dtype, cols=cols, rows=rows, layout=layout, memory_config=memory_config)
@@ -253,9 +276,19 @@ class GLMMesh:
 
     def partition_cols(self, x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
         """Each column chip keeps its own ``1/cols`` slice of ``dim`` of a column-replicated tensor (a per-device
-        slice, no fabric traffic): the user-partitioned DSA cache's "my users" of a row-wide activation."""
+        slice, no fabric traffic): the user-partitioned DSA cache's "my users" of a row-wide activation. A TILE
+        tensor whose per-column part is not tile-aligned on a tile dim (4 users split 4 ways on dim 2) goes
+        through ROW_MAJOR: ``mesh_partition`` refuses a tiled split that would create padding."""
         if self.cols == 1:
             return x
+        d = dim % len(x.shape)
+        if x.layout == ttnn.TILE_LAYOUT and d >= len(x.shape) - 2 and (x.shape[d] // self.cols) % ttnn.TILE_SIZE:
+            rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            part = ttnn.mesh_partition(rm, dim, cluster_axis=TP_AXIS)
+            ttnn.deallocate(rm)
+            out = ttnn.to_layout(part, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(part)
+            return out
         return ttnn.mesh_partition(x, dim, cluster_axis=TP_AXIS)
 
     def all_to_all_cols(self, x: ttnn.Tensor, in_dim: int, out_dim: int, *, memory_config=None) -> ttnn.Tensor:
@@ -264,10 +297,14 @@ class GLMMesh:
         user-partitioned attention, as DeepSeek-V3's decode does)."""
         if self.cols == 1:
             return x
+        # the op's convention is the reverse of this helper's: it SPLITS ``out_dim`` over the devices and GROWS
+        # ``in_dim`` (output[in_dim] *= cols, output[out_dim] /= cols), so the arguments are swapped here. The
+        # grown dim may sit on the tile-row dim only if its per-device size is a multiple of 16 (16 heads per
+        # column qualifies); the split dim must not be the tile-row dim unless its size is a multiple of 16.
         return ttnn.experimental.all_to_all_async_generic(
             x,
-            in_dim=in_dim,
-            out_dim=out_dim,
+            in_dim=out_dim,
+            out_dim=in_dim,
             num_links=self.ccl.get_num_links(TP_AXIS),
             memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=TP_AXIS,

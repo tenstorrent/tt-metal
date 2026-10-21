@@ -65,7 +65,7 @@ def test_partitioned_two_rows_four_users(mesh_device):
         layer_idx=LAYER,
         mesh_device=mesh_device,
         max_batch=B,
-        max_seq_len=max(S) + 64,
+        max_seq_len=-(-max(S) // (32 * ROWS)) * (32 * ROWS) + 64,  # prompts pad to 32 * rows on the mesh
         partition_users=True,
     )
     assert dec.cache.partition and dec.cache.users_per_chip == 1 and dec.cache.slots == 2

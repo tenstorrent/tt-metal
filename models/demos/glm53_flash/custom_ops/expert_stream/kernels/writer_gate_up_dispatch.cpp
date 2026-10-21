@@ -14,7 +14,9 @@
 // The compute learns each expert's pass count through the BRISC mailboxes (0 = done).
 //
 // runtime args: [x_addr, routing_addr (EP: weights), counts_addr (EP: idx), act_addr, table_addr, bank_id, group,
-//                (EP) base_addr]
+//                (EP) base_addr, (EP = 2) t_valid, idx_page, x_page]
+// EP = 2 (the mesh path): the ids are the all_to_all_dispatch metadata rows [t_valid, K] UINT16 and the weights the
+// K BF16 tail of every dispatched token row ([x | w], x_page bytes per row); both packed in L1 at K per token.
 
 #include <stdint.h>
 
@@ -60,9 +62,7 @@ void kernel_main() {
     constexpr uint32_t tile_page = 2048;
     static_assert(RT * 32 == T, "T must be a multiple of 32");
 
-    const auto s_x = TensorAccessor(x_args, x_addr, row_bytes);
-    const auto s_r = TensorAccessor(routing_args, routing_addr, tile_page);
-    const auto s_c = TensorAccessor(counts_args, counts_addr, tile_page);
+    const auto s_x = TensorAccessor(x_args, x_addr, EP == 2 ? get_arg_val<uint32_t>(10) : row_bytes);
     const auto s_act = TensorAccessor(act_args, act_addr, tile_page);
     const auto s_tab = TensorAccessor(table_args, table_addr, table_bytes);
 
@@ -70,13 +70,25 @@ void kernel_main() {
     constexpr uint32_t r_tiles = EP ? RT : RT * E_TILES;  // EP: the weight tiles
     cb_reserve_back(cb_c, c_tiles);
     const uint32_t c_l1 = get_write_ptr(cb_c);
-    for (uint32_t i = 0; i < c_tiles; ++i) {
-        noc_async_read(s_c.get_noc_addr(i), c_l1 + i * tile_page, tile_page);
-    }
     cb_reserve_back(cb_r, r_tiles);
     const uint32_t r_l1 = get_write_ptr(cb_r);
-    for (uint32_t i = 0; i < r_tiles; ++i) {
-        noc_async_read(s_r.get_noc_addr(i), r_l1 + i * tile_page, tile_page);
+    uint32_t t_valid = T;
+    if constexpr (EP == 2) {
+        t_valid = get_arg_val<uint32_t>(8);
+        const auto s_c = TensorAccessor(counts_args, counts_addr, get_arg_val<uint32_t>(9));
+        for (uint32_t t = 0; t < t_valid; ++t) {
+            noc_async_read(s_c.get_noc_addr(t), c_l1 + t * K * 2, K * 2);             // the token's ids
+            noc_async_read(s_x.get_noc_addr(t, row_bytes), r_l1 + t * K * 2, K * 2);  // its weights (row tail)
+        }
+    } else {
+        const auto s_r = TensorAccessor(routing_args, routing_addr, tile_page);
+        const auto s_c = TensorAccessor(counts_args, counts_addr, tile_page);
+        for (uint32_t i = 0; i < c_tiles; ++i) {
+            noc_async_read(s_c.get_noc_addr(i), c_l1 + i * tile_page, tile_page);
+        }
+        for (uint32_t i = 0; i < r_tiles; ++i) {
+            noc_async_read(s_r.get_noc_addr(i), r_l1 + i * tile_page, tile_page);
+        }
     }
     uint32_t expert_base = 0;
     uint16_t n_tok[E], passes[E], base[E], mine[E];
@@ -88,7 +100,11 @@ void kernel_main() {
         noc_async_read(s_b.get_noc_addr(0), b_l1, 32);
         noc_async_read_barrier();
         expert_base = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(b_l1);
-        count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+        if constexpr (EP == 2) {
+            count_from_rows<E, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), t_valid, expert_base, n_tok);
+        } else {
+            count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+        }
     } else {
         noc_async_read_barrier();
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
@@ -104,7 +120,10 @@ void kernel_main() {
         const uint32_t e = mine[i];
         // the tokens routed to e, ascending, and their routing weights
         uint32_t nr = 0;
-        if constexpr (EP) {
+        if constexpr (EP == 2) {
+            nr = rows_from_rows<K>(
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), routing, t_valid, expert_base + e, rows, wbits);
+        } else if constexpr (EP) {
             nr = rows_from_indices<T, K>(
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), routing, expert_base + e, rows, wbits);
         } else {

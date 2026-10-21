@@ -24,6 +24,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     down_stream_layout,
     ep_base_tensor,
     ep_index_tiles,
+    ep_rm_inputs,
     expert_dispatch_golden,
     expert_dispatch_golden_ep,
     gate_up_stream_layout,
@@ -318,4 +319,47 @@ def test_expert_dispatch_ep_trace(mesh_device, T, active, rows_per):
         f"(eager gate_up {split['gate_up']:.1f} us, down {split['down']:.1f} us), pcc {p:.6f}"
     )
     ttnn.release_trace(mesh_device, tid)
+    assert p > 0.9999, p
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, t_valid, E_local, base",
+    [(32, 20, 36, 252), (64, 64, 9, 9), (256, 256, 36, 72)],
+    ids=["32-20-36-252", "64-9", "256-36"],
+)
+def test_expert_dispatch_ep_rm(mesh_device, T, t_valid, E_local, base):
+    """EP row-major mode (the mesh path): the ids arrive as the all_to_all_dispatch metadata rows [t_valid, K] UINT16
+    (exact for ids 257..287, which BF16 tiles cannot hold: base 252 covers them) and the weights as the K-wide BF16
+    tail of every token row; t_valid < T = the tile-padded short batch (rows >= t_valid never scanned)."""
+    I, E_total, K = 2048, 288, 8
+    w13, w2, w13_q, w2_q = upload(mesh_device, E_local, I, seed=base)
+    op = ExpertDispatch(
+        mesh_device, E_local, 4096, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, ep=True, ep_rm=True
+    )
+    x = torch.randn(t_valid, 4096).bfloat16()
+    idx, wts = topk_lists(t_valid, E_total, K, seed=T + base + 1)
+    if base + E_local == E_total:  # make sure the ids beyond 256 are exercised (distinct ids, as topk makes them)
+        idx[0] = torch.tensor([257, 263, 271, 287, 3, 60, 130, 200])
+    act_ref, y_ref, passes = expert_dispatch_golden_ep(x, idx, wts, base, E_local, w13_q, w2_q)
+    local = int(((idx >= base) & (idx < base + E_local)).sum())
+    logger.info(
+        f"EP-RM T {T} (valid {t_valid}), experts [{base}, {base + E_local}): {local} routed rows, {len(passes)} passes"
+    )
+    xw, meta = ep_rm_inputs(x, idx, wts, mesh_device)
+    bt = ep_base_tensor(base, mesh_device)
+    act, table, out = op.alloc(mesh_device, t_valid=t_valid)
+    assert tuple(out.shape) == (1, 1, t_valid, H), out.shape
+    op.forward(xw, xw, meta, w13, w2, act, table, out, base=bt, t_valid=t_valid)
+    tab = ttnn.to_torch(table).reshape(op.P, -1).to(torch.int64)
+    for k, (e, rows) in enumerate(passes):
+        got = (int(tab[k, 0]), int(tab[k, 1]), tab[k, 2 : 2 + len(rows)].tolist())
+        assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
+    a = ttnn.to_torch(act).float().reshape(op.P, 32, I)[: len(passes)]
+    y = ttnn.to_torch(out).float().reshape(t_valid, H)
+    y_rm = ttnn.to_torch(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)).float()
+    assert tuple(y_rm.shape) == (1, 1, t_valid, H), y_rm.shape
+    p_act, p = pcc(act_ref, a), pcc(y_ref, y)
+    logger.info(f"EP-RM T {T} (valid {t_valid}), E_local {E_local}: table ok, act pcc {p_act:.6f}, out pcc {p:.6f}")
+    assert p_act > 0.9999, p_act
     assert p > 0.9999, p

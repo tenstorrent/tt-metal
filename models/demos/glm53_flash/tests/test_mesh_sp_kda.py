@@ -50,13 +50,14 @@ def test_sp_kda_prefill_vs_hf(mesh_device, weights):
     assert T % (rows * 32) == 0
     x_dev = mesh.upload(x, ttnn.bfloat16, rows=1)  # [1, T/rows, 4096] per row, replicated over the columns
     state = tt.allocate_state(1)
-    layer = tt.prefill_layer(T)  # global active_seq_len; ttKDA divides by the SP size
-    y, new_state = layer.forward(x_dev, state, tt.scalar(0), None)
+    # the model path: ttKDA for the global active_seq_len (SP over the rows, the grouped scan sized to the local
+    # chunk count and the worker grid), the conv-history layout conversions of the block decode path and the TP
+    # all-gather of the reduce-scattered output inside
+    y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(0), None)
     logger.info(
-        f"ttKDA SP output shape per chip {list(y.shape)}, state {list(new_state.recurrent.shape)} / {list(new_state.convolution.shape)}"
+        f"ttKDA SP output shape per chip {list(y.shape)}, state {list(new_state.recurrent.shape)} / {list(new_state.convolution.shape)}; "
+        f"summary group chunks {tt.summary_group_chunks(T // rows // 32)} for {T // rows // 32} local chunks"
     )
-    if tt.mesh.tp > 1:
-        y = mesh.all_gather_cols(y, dim=-1)
     out = mesh.to_host(y, rows=1).float()  # [1, T, 4096] in row (slab) order
     p = pcc(y_hf, out)
     per_row = [
@@ -69,6 +70,8 @@ def test_sp_kda_prefill_vs_hf(mesh_device, weights):
     # final carries: TP-sharded heads, replicated over the rows?
     rec_shards = [ttnn.to_torch(t) for t in mesh.device_tensors(new_state.recurrent)]
     conv_shards = [ttnn.to_torch(t) for t in mesh.device_tensors(new_state.convolution)]
+    if new_state.convolution.layout == ttnn.TILE_LAYOUT:  # block path: tap-major tiles [taps, B, W] -> [B, taps, W]
+        conv_shards = [c.permute(1, 0, 2).contiguous() for c in conv_shards]
     H_loc = cfg.kda_num_heads // mesh.cols
     rec = torch.cat([rec_shards[c] for c in range(mesh.cols)], dim=1)  # row 0's columns -> [1, 64, 128, 128]
     p_rec = pcc(hf_layer.recurrent_states[0], rec)

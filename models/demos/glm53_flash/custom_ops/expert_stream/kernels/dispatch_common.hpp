@@ -128,6 +128,47 @@ inline uint32_t rows_from_indices(
     return nr;
 }
 
+// EP mode with row-major routing (EP = 2, the mesh path): idx = the all_to_all_dispatch metadata [t_valid, K] UINT16
+// (global expert ids, exact: BF16 cannot hold 257..287) packed in L1 at K elements per token; w = the routing weights
+// [t_valid, K] BF16 packed at K elements per token (the tail of every dispatched token row). Rows >= t_valid (the
+// tile padding of a short batch) are never scanned.
+template <uint32_t E, uint32_t K>
+inline void count_from_rows(const volatile tt_l1_ptr uint16_t* idx, uint32_t t_valid, uint32_t base, uint16_t* n) {
+    for (uint32_t e = 0; e < E; ++e) {
+        n[e] = 0;
+    }
+    for (uint32_t t = 0; t < t_valid; ++t) {
+        for (uint32_t k = 0; k < K; ++k) {
+            const uint32_t e = idx[t * K + k];
+            if (e >= base && e < base + E) {
+                ++n[e - base];
+            }
+        }
+    }
+}
+
+template <uint32_t K>
+inline uint32_t rows_from_rows(
+    const volatile tt_l1_ptr uint16_t* idx,
+    const volatile tt_l1_ptr uint16_t* w,
+    uint32_t t_valid,
+    uint32_t global_e,
+    uint16_t* rows,
+    uint16_t* wbits) {
+    uint32_t nr = 0;
+    for (uint32_t t = 0; t < t_valid; ++t) {
+        for (uint32_t k = 0; k < K; ++k) {
+            if (idx[t * K + k] == global_e) {
+                rows[nr] = static_cast<uint16_t>(t);
+                wbits[nr] = w[t * K + k];
+                ++nr;
+                break;  // one slot per (token, expert)
+            }
+        }
+    }
+    return nr;
+}
+
 // Work units of the gate|up dispatch: (expert, column pair) for every active expert and each of the bank's PPB
 // pairs, LPT-assigned to the core groups by pass count (units ordered by passes descending, expert ascending, pair
 // ascending; each to the least loaded group, lowest id on ties: with PPB = 1 exactly assign_group). Calls

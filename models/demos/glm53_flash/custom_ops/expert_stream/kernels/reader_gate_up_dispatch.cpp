@@ -7,7 +7,7 @@
 // (dispatch_common.hpp). With one column pair per bank an expert's two columns are streamed once however many
 // 32-row passes it takes (the compute keeps them resident); with more pairs they are streamed once per pass.
 //
-// runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, group, (EP) base_addr]
+// runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, group, (EP) base_addr, (EP = 2) t_valid, idx_page]
 
 #include <stdint.h>
 
@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t ppb = get_compile_time_arg_val(8);  // column pairs per bank
-    constexpr uint32_t EP = get_compile_time_arg_val(9);   // 1: counts from the top-k index list + expert base
+    constexpr uint32_t EP = get_compile_time_arg_val(9);   // 1: counts from the top-k index list + expert base;
+                                                           // 2: from the packed UINT16 id rows (dispatch_common.hpp)
     constexpr uint32_t T = get_compile_time_arg_val(10);
     constexpr uint32_t K = get_compile_time_arg_val(11);
     constexpr auto counts_args = TensorAccessorArgs<12>();  // EP: the index tiles
@@ -44,9 +45,18 @@ void kernel_main() {
     constexpr uint32_t c_tiles = EP ? T / 32 : E_TILES;
     cb_reserve_back(cb_c, c_tiles);
     const uint32_t c_l1 = get_write_ptr(cb_c);
-    const auto s_c = TensorAccessor(counts_args, counts_addr, 2048);
-    for (uint32_t i = 0; i < c_tiles; ++i) {
-        noc_async_read(s_c.get_noc_addr(i), c_l1 + i * 2048, 2048);
+    uint32_t t_valid = T;
+    if constexpr (EP == 2) {  // the id rows [t_valid, K] UINT16 (one page per token) packed at K elements per token
+        t_valid = get_arg_val<uint32_t>(6);
+        const auto s_c = TensorAccessor(counts_args, counts_addr, get_arg_val<uint32_t>(7));
+        for (uint32_t t = 0; t < t_valid; ++t) {
+            noc_async_read(s_c.get_noc_addr(t), c_l1 + t * K * 2, K * 2);
+        }
+    } else {
+        const auto s_c = TensorAccessor(counts_args, counts_addr, 2048);
+        for (uint32_t i = 0; i < c_tiles; ++i) {
+            noc_async_read(s_c.get_noc_addr(i), c_l1 + i * 2048, 2048);
+        }
     }
     uint16_t n_tok[E], passes[E], base[E], mine[E];
     if constexpr (EP) {
@@ -57,7 +67,11 @@ void kernel_main() {
         noc_async_read(s_b.get_noc_addr(0), b_l1, 32);
         noc_async_read_barrier();
         const uint32_t expert_base = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(b_l1);
-        count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+        if constexpr (EP == 2) {
+            count_from_rows<E, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), t_valid, expert_base, n_tok);
+        } else {
+            count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+        }
     } else {
         noc_async_read_barrier();
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);

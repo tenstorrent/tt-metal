@@ -161,6 +161,17 @@ class DecodePositions:
     sparse: SparseDecodeMeta | None = None
 
 
+@dataclass
+class PrefillTraceCall:
+    """The device-side inputs of one traced prefill chunk (``tt/trace_prefill.py``): the user slot
+    (``PrefillSlot``), the valid end ``[1,1,1,1]`` uint32 (ttKDA ``actual_end`` = the prompt length) and
+    the ring-row selector ``[1,1,32,T]`` bf16 of the pooled-key index."""
+
+    slot: object
+    end: ttnn.Tensor
+    ring_sel: ttnn.Tensor
+
+
 class FunctionalDecoder(LightweightModule):
     def __init__(
         self,
@@ -290,6 +301,31 @@ class FunctionalDecoder(LightweightModule):
         conv = self._require_weights().attn.user_conv_state(src, user)  # ttKDA's [1, taps, W] row-major
         return LayerState(kda=KdaState(recurrent=rec, convolution=conv)), [rec, conv]
 
+    def _write_user_kda_state_slot(self, slot, new: KdaState):
+        """``_write_user_kda_state`` with the slot chosen on device (the traced prefill): the recurrent
+        state is a whole-tile copy through ``paged_fill_cache`` on the ``[B*H*K/32, 1, 32, V]`` view of
+        the batched state (``slot.rec_page_table`` = identity, ``slot.user_idx`` = the batch index), the
+        tap-major conv history is blended with the one-hot user masks (``dst * keep + new * mask``:
+        every product is x * 1.0 or x * 0.0, exact in bf16). B == 1 keeps the plain copies."""
+        dst = self.kda_batched
+        attn = self._require_weights().attn
+        if self.max_batch == 1:
+            ttnn.copy(new.recurrent, dst.recurrent)
+            ttnn.copy(new.convolution, dst.convolution)
+        else:
+            if not attn.conv_tiled:
+                raise NotImplementedError("the traced prefill needs the block KDA decode (tiled conv history)")
+            B, H, K, V = (int(v) for v in dst.recurrent.shape)
+            dst_view = ttnn.experimental.view(dst.recurrent, ttnn.Shape([B * H * K // TILE, 1, TILE, V]))
+            new_view = ttnn.experimental.view(new.recurrent, ttnn.Shape([1, 1, H * K, V]))
+            ttnn.experimental.paged_fill_cache(dst_view, new_view, slot.rec_page_table, batch_idx_tensor=slot.user_idx)
+            ttnn.multiply(dst.convolution, slot.conv_keep, output_tensor=dst.convolution)  # zero the slot's rows
+            new_rows = ttnn.multiply(new.convolution, slot.conv_mask)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
+            ttnn.add(dst.convolution, new_rows, output_tensor=dst.convolution)
+            ttnn.deallocate(new_rows)
+        ttnn.deallocate(new.recurrent)
+        ttnn.deallocate(new.convolution)
+
     def _write_user_kda_state(self, user: int, new: KdaState):
         """Copy a freshly prefilled single-user state into slot ``user`` of the persistent batched state."""
         dst = self.kda_batched
@@ -381,14 +417,29 @@ class FunctionalDecoder(LightweightModule):
 
     # ---------------------------------------------------------------- forwards
     def prefill_forward(
-        self, streams: ttnn.Tensor, *, user: int = 0, seq_len: int | None = None, start: int = 0
+        self,
+        streams: ttnn.Tensor,
+        *,
+        user: int = 0,
+        seq_len: int | None = None,
+        start: int = 0,
+        trace: PrefillTraceCall | None = None,
     ) -> ttnn.Tensor:
         """One chunk of one user's prompt: row i of ``streams`` is the token at absolute position
         ``start + i``. ``start == 0`` starts a new prompt; a later chunk must start where the previous
         one ended (``next_start[user]``), on a 32-row boundary, and end within ``max_seq_len`` (see
-        the module docstring for the full chunked-prefill contract)."""
+        the module docstring for the full chunked-prefill contract).
+        ``trace`` (``PrefillTraceCall``): the trace-replayable form of a new prompt (start == 0): the
+        user slot, the prompt length and the ring rows come from persistent device tensors, so the
+        graph is the same for every prompt of the padded length ``T`` (``seq_len`` is then ``T``)."""
         T = streams.shape[-2] * self.mesh.rows  # multi-row mesh: streams hold this row's slab of the chunk
         seq_len = T if seq_len is None else seq_len
+        if trace is not None:
+            if start or seq_len != T:
+                raise ValueError("a traced prefill chunk starts a new prompt (start == 0) at its padded length")
+            if user >= self.max_batch:
+                raise ValueError(f"user {user} >= max_batch {self.max_batch}")
+            return self._prefill_forward_traced(streams, trace, user, T)
         if T % TILE or seq_len > T or seq_len <= 0:
             raise ValueError(f"T_pad={T} must be a multiple of {TILE} and 0 < seq_len={seq_len} <= T_pad")
         if user >= self.max_batch:
@@ -414,6 +465,32 @@ class FunctionalDecoder(LightweightModule):
         if self.is_kda:
             self._write_user_kda_state(user, new_state.kda)
         self.next_start[user] = start + seq_len
+        return out
+
+    def _prefill_forward_traced(self, streams: ttnn.Tensor, trace: PrefillTraceCall, user: int, T: int) -> ttnn.Tensor:
+        """The device-slot form of a new-prompt chunk (no host value of the call enters the graph):
+        KDA starts from the slot's read-only zero state, runs to ``trace.end`` (ttKDA clips its
+        chronology there) and writes the carries into the slot chosen on device; DSA fills the latent
+        pages / index of that slot and selects the ring rows with ``trace.ring_sel``. ``user`` is the
+        host-side bookkeeping only (the slot the caller refreshed ``trace.slot`` for)."""
+        layer = self._require_weights()
+        slot = trace.slot
+        if self.is_kda:
+            out, new_state = layer.prefill_forward(
+                streams,
+                LayerState(kda=slot.kda_zero),
+                user=user,
+                seq_len=T,
+                start=0,
+                actual_start=layer.attn.scalar(0),
+                actual_end=trace.end,
+            )
+            self._write_user_kda_state_slot(slot, new_state.kda)
+        else:
+            out, _ = layer.prefill_forward(
+                streams, LayerState(cache=self.cache), user=user, seq_len=T, start=0, slot=slot, ring_sel=trace.ring_sel
+            )
+        self.next_start[user] = T  # the caller (GLM53MeshModel.prefill_traced) sets the prompt's real length
         return out
 
     def decode_forward(
