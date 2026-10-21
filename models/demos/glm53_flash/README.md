@@ -27,7 +27,8 @@ Measured 2026-10-21 on an 8x4 Blackhole Galaxy with the default configuration (h
 bfp8 experts, fast exact mHC kernels, fused router), `tests/test_mesh_model.py` (short prompts) and
 `tests/test_mesh_long_context.py` (long prompts, one prompt per slot). Decode is the traced steady-state step with every
 slot active at the stated decode ISL. ISL is per user: every decode slot attends over that many cached tokens, so the
-mesh holds users x ISL tokens of cache (32 x 1 M = 33.5 M tokens). TTFT is per prompt (one prompt in flight) with the whole mesh on that
+mesh holds users x ISL tokens of cache (32 x 1 M = 33.5 M tokens). TTFT and decode of a row come from one run.
+TTFT is per prompt (one prompt in flight) with the whole mesh on that
 prompt: for prompts up to 2 K tokens the per-length traced prefill (replay time); above that the chunked prefill
 (16 K chunks, sequence-parallel over the 8 rows and tensor-parallel over the 4 columns, compiled kernels, not
 traced). The sequence-parallel prefill writes a prompt into the same slot of every row, so one prefill fills 8 slots
@@ -37,11 +38,11 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 
 | Batch | Hardware | ISL (tokens) | TTFT | T/S/U | Target T/S/U | T/S | Notes |
 |---|---|---|---|---|---|---|---|
-| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 ms | 14.3 | 33 | 458 | decode step 69.8 ms |
-| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) | - | 8.7 | 19 | 2226 | dense expert pass; decode step 115.0 ms (traced, greedy id == host head for every user) |
+| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 ms | 14.3 | 33 | 458 | decode step 69.8 ms; TTFT and decode from separate runs of the same config (one-run re-measure queued) |
+| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | - | 8.7 | 19 | 2226 | dense expert pass; decode step 115.0 ms (traced, greedy id == host head for every user); one-run re-measure with TTFT queued |
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31.8 s | 9.8 | 60 | 79 | one prompt, replicated to the 8 rows; 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
-| 32  | Galaxy 8x4 (Blackhole) | 65 493 | 27.3 s | 11.1 | 33 | 356 | every slot populated (4 prompts per row prefilled one after another at 2400 tok/s on the MoE regions prefill path), needle retrieved by all 32 slots, chains bit-identical across users and rows; decode step 90.0 ms on the stacked block expert op (148 ms when the stacked copy is not kept beside the regions path) |
-| 8   | Galaxy 8x4 (Blackhole) | 1 047 526 | 458 s | 4.6 | 33 | 37 | one prompt, replicated to the 8 rows; 2288 tok/s prefill; decode step 219 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
+| 32  | Galaxy 8x4 (Blackhole) | 65 493 | 27.3 s | 6.7 | 33 | 216 | one run: every slot populated (4 prompts per row prefilled one after another at 2400 tok/s on the MoE regions prefill path), needle retrieved by all 32 slots, users of a row bit-identical; decode step 148.2 ms through the regions expert kernel (the stacked block op decodes at 90 ms when its copy fits: one-run re-measure queued) |
+| 8   | Galaxy 8x4 (Blackhole) | 1 047 612 | 460 s | 6.4 | 33 | 51 | one run (needle depth 0.56, retrieved by all 8 slots): one prompt, replicated to the 8 rows; 2276 tok/s prefill; decode step 156.0 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
 | 32  | Galaxy 8x4 (Blackhole) | 1 047 526 (user-partitioned cache) | 462-495 s | 6.2 | 33 | 199 | 4 prompts prefilled one after another (each replicated to the 8 rows, 31 min to fill the 32 slots) at 2118-2269 tok/s; decode step 160.8 ms; the column-3 users' output diverges from the other columns' (under investigation; needle at depth 0.5 not retrieved by any slot, as in the single-user run) |
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1.2 s | 12.5 | - | 25 | eager vision tower + traced prefill; decode step 80 ms; 45 layers bfp4 experts |
 
