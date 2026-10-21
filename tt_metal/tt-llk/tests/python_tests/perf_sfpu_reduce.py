@@ -25,31 +25,25 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @parametrize(
-    # Float32 and Int32 are the formats ttnn routes to the SFPU reduce (Int32 always, Float32 with
-    # accurate fp32 mode). Row: Float32 MAX runs the compare-and-swap horizontal_reduce_max (MIN differs
-    # only by the SFPCONFIG direction bit) and SUM/AVG the add-based horizontal_reduce, for both formats;
-    # Int32 MAX takes the separate signed compare-and-swap path (horizontal_reduce_max_int32). Column:
-    # MAX runs the LOADMACRO path (Float32) or the signed compare-and-swap path (Int32); SUM/AVG run the
-    # tree-add + transpose path, with AVG adding the divide-by-32 tail (float multiply / integer shift).
+    # Float32 and Int32 are the formats ttnn routes to the SFPU reduce.
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Int32],
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes],
-    mathop=[MathOperation.ReduceRow, MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
+    # Integer row AVG is not supported (integer AVG is column-only).
+    mathop=lambda formats, reduce_pool: (
+        [MathOperation.ReduceColumn]
+        if reduce_pool == ReducePool.Average
+        and formats.input_format == DataFormat.Int32
+        else [MathOperation.ReduceRow, MathOperation.ReduceColumn]
+    ),
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce(
     perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
 ):
-    if (
-        reduce_pool == ReducePool.Average
-        and mathop == MathOperation.ReduceRow
-        and formats.input_format == DataFormat.Int32
-    ):
-        pytest.skip("integer row AVG is not supported (integer AVG is column-only)")
-
     input_dimensions = [32, 32]
     tile_count = 1
 
