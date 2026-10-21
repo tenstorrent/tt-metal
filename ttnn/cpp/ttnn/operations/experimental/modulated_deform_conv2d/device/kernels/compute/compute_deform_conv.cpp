@@ -321,7 +321,8 @@ void kernel_main() {
     CircularBuffer acc_cb(acc_cb_index);
     // Written once by the reader and kept for every block.
     CircularBuffer(geom_kernel_cb_index).wait_front(2);
-    // Every block's output tiles stay reserved while the positions accumulate into them.
+    // Every block's output tiles stay reserved while the positions accumulate into them; the last
+    // pass hands each block's over as it finishes.
     acc_cb.reserve_back(num_blocks * OUT_TILES);
 
     auto geometry_of = [&](uint32_t block) {
@@ -334,8 +335,58 @@ void kernel_main() {
     for (uint32_t block = 0; block < num_blocks && block < 2; ++block) {
         geometry_of(block);
     }
+    if constexpr (HAS_BIAS) {
+        CircularBuffer(bias_cb_index).wait_front(OUT_TILES);
+    }
+
+    // Bias, ReLU, bfloat16: a block's output, at the front of acc_cb, to the reader that owns the
+    // block. It runs as each block finishes its last pass, so the readers write it out while the
+    // other blocks still compute.
+    auto finish_block = [&](uint32_t block) {
+        const uint32_t out_index = (block & 1) ? odd_output_cb_index : output_cb_index;
+        CircularBuffer output_cb(out_index);
+        acc_cb.wait_front(OUT_TILES);
+        if constexpr (HAS_BIAS) {
+            reconfig_data_format(acc_cb_index, bias_cb_index);
+        } else {
+            reconfig_data_format_srca(acc_cb_index);
+        }
+        output_cb.reserve_back(OUT_TILES);
+        pack_reconfig_data_format(out_index);
+        for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
+            const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
+            if constexpr (HAS_BIAS) {
+                add_bcast_rows_init(acc_cb_index, bias_cb_index);
+            } else {
+                copy_init(acc_cb_index);
+            }
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < chunk; ++i) {
+                if constexpr (HAS_BIAS) {
+                    add_tiles_bcast_rows(acc_cb_index, bias_cb_index, n0 + i, n0 + i, i);
+                } else {
+                    copy_tile(acc_cb_index, n0 + i, i);
+                }
+            }
+            if constexpr (RELU) {
+                relu_tile_init();
+                for (uint32_t i = 0; i < chunk; ++i) {
+                    relu_tile(i);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < chunk; ++i) {
+                pack_tile<true>(i, out_index, n0 + i);
+            }
+            tile_regs_release();
+        }
+        output_cb.push_back(OUT_TILES);
+        acc_cb.pop_front(OUT_TILES);
+    };
 
     for (uint32_t pass = 0; pass < kernel_positions * CHUNKS; ++pass) {
+        const bool last_pass = pass + 1 == kernel_positions * CHUNKS;
         conv_weight_cb.wait_front(WEIGHT_SLICE_TILES);
         for (uint32_t block = 0; block < num_blocks; ++block) {
             const bool odd = block & 1;
@@ -383,7 +434,8 @@ void kernel_main() {
             tiled_cb.pop_front(BLOCK_TILES);
 
             // The block's output += its columns times the pass's weight slice: fp32 in dest over the
-            // slice's rows, and in L1 across passes; the first pass overwrites.
+            // slice's rows, and in L1 across passes; the first pass overwrites. In the last pass
+            // the blocks before this one have left acc_cb, so this one's tiles are at its front.
             column_cb.wait_front(channel_tiles);
             reconfig_data_format(conv_weight_cb_index, column_cb_index);
             pack_reconfig_data_format(acc_cb_index);
@@ -399,62 +451,20 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_reconfig_l1_acc(pass == 0 ? 0 : 1);
                 for (uint32_t i = 0; i < chunk; ++i) {
-                    pack_tile<true>(i, acc_cb_index, block * OUT_TILES + n0 + i);
+                    pack_tile<true>(i, acc_cb_index, (last_pass ? 0 : block * OUT_TILES) + n0 + i);
                 }
                 tile_regs_release();
             }
             pack_reconfig_l1_acc(0);
             column_cb.pop_front(channel_tiles);
+            if (last_pass) {
+                acc_cb.push_back(OUT_TILES);
+                finish_block(block);
+            }
             if (pass == 0 && block + 2 < num_blocks) {
                 geometry_of(block + 2);
             }
         }
         conv_weight_cb.pop_front(WEIGHT_SLICE_TILES);
-    }
-    acc_cb.push_back(num_blocks * OUT_TILES);
-
-    // Bias, ReLU, bfloat16: each block's output to the reader that owns the block.
-    acc_cb.wait_front(num_blocks * OUT_TILES);
-    if constexpr (HAS_BIAS) {
-        CircularBuffer(bias_cb_index).wait_front(OUT_TILES);
-        reconfig_data_format(acc_cb_index, bias_cb_index);
-    } else {
-        reconfig_data_format_srca(acc_cb_index);
-    }
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        const uint32_t out_index = (block & 1) ? odd_output_cb_index : output_cb_index;
-        CircularBuffer output_cb(out_index);
-        output_cb.reserve_back(OUT_TILES);
-        pack_reconfig_data_format(out_index);
-        for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
-            const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
-            if constexpr (HAS_BIAS) {
-                add_bcast_rows_init(acc_cb_index, bias_cb_index);
-            } else {
-                copy_init(acc_cb_index);
-            }
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < chunk; ++i) {
-                const uint32_t tile = block * OUT_TILES + n0 + i;
-                if constexpr (HAS_BIAS) {
-                    add_tiles_bcast_rows(acc_cb_index, bias_cb_index, tile, n0 + i, i);
-                } else {
-                    copy_tile(acc_cb_index, tile, i);
-                }
-            }
-            if constexpr (RELU) {
-                relu_tile_init();
-                for (uint32_t i = 0; i < chunk; ++i) {
-                    relu_tile(i);
-                }
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < chunk; ++i) {
-                pack_tile<true>(i, out_index, n0 + i);
-            }
-            tile_regs_release();
-        }
-        output_cb.push_back(OUT_TILES);
     }
 }
