@@ -441,9 +441,7 @@ void kernel_main() {
 
     const uint32_t index_tile_nbytes = get_tile_size(geom_index_cb_index);
     const uint32_t corner_weight_slot_nbytes = CORNERS * get_tile_size(geom_weight_cb_index);
-    uint32_t image_page[TILE_ROWS];  // first page of each row's image
     uint32_t page[TILE_ROWS];
-    uint16_t corner_weight[CORNERS][TILE_ROWS];
 
     for (uint32_t pass = 0; pass < PASSES; ++pass) {
         const uint32_t kk = pass / CHUNKS;
@@ -462,15 +460,12 @@ void kernel_main() {
             const uint32_t index_l1 = index_cb.get_read_ptr() + slot * index_tile_nbytes;
             const uint32_t corner_weight_l1 = corner_weight_cb.get_read_ptr() + slot * corner_weight_slot_nbytes;
 
-            uint32_t b = block * TILE_ROWS / (OUT_H * OUT_W);
-            uint32_t rows_left_in_image = (b + 1) * OUT_H * OUT_W - block * TILE_ROWS;
-            for (uint32_t r = 0; r < valid_rows; ++r) {
-                image_page[r] = b * static_cast<uint32_t>(IN_H * IN_W);
-                if (--rows_left_in_image == 0) {
-                    ++b;
-                    rows_left_in_image = OUT_H * OUT_W;
-                }
-            }
+            // The first page of the row's image, stepped row by row.
+            uint32_t image_first_page = block * TILE_ROWS / (OUT_H * OUT_W) * static_cast<uint32_t>(IN_H * IN_W);
+            uint32_t rows_left_in_image = OUT_H * OUT_W - block * TILE_ROWS % (OUT_H * OUT_W);
+            // Bit r of present[c]: row r reads corner c, its weight being nonzero. Rows past the
+            // block's end weigh zero.
+            uint32_t present[CORNERS] = {0, 0, 0, 0};
 
             // Only column 0 of each row is read by the column broadcast.
             scalar_tile_cb.reserve_back(CORNERS);
@@ -480,13 +475,28 @@ void kernel_main() {
             const tt_l1_ptr uint16_t* w =
                 reinterpret_cast<const tt_l1_ptr uint16_t*>(corner_weight_l1) + tile_element(0, kk);
             tt_l1_ptr uint16_t* lane = reinterpret_cast<tt_l1_ptr uint16_t*>(scalar_l1);
+#pragma GCC unroll 4
             for (uint32_t r = 0; r < TILE_ROWS; ++r) {
                 const uint32_t row = tile_element(r, 0);
-                page[r] = r < valid_rows ? image_page[r] + index[row] : 0;
-                for (uint32_t c = 0; c < CORNERS; ++c) {
-                    const uint16_t value = r < valid_rows ? w[c * TILE_ELEMENTS + row] : 0;
-                    corner_weight[c][r] = value;
-                    lane[c * TILE_ELEMENTS + row] = value;
+                // A row's loads all go out before any of them is used, so their latencies overlap.
+                const uint32_t corner_page = index[row];
+                const uint32_t keep = r < valid_rows ? 0xFFFFu : 0u;
+                const uint32_t w0 = w[row] & keep;
+                const uint32_t w1 = w[TILE_ELEMENTS + row] & keep;
+                const uint32_t w2 = w[2 * TILE_ELEMENTS + row] & keep;
+                const uint32_t w3 = w[3 * TILE_ELEMENTS + row] & keep;
+                lane[row] = w0;
+                lane[TILE_ELEMENTS + row] = w1;
+                lane[2 * TILE_ELEMENTS + row] = w2;
+                lane[3 * TILE_ELEMENTS + row] = w3;
+                present[0] |= static_cast<uint32_t>(w0 != 0) << r;
+                present[1] |= static_cast<uint32_t>(w1 != 0) << r;
+                present[2] |= static_cast<uint32_t>(w2 != 0) << r;
+                present[3] |= static_cast<uint32_t>(w3 != 0) << r;
+                page[r] = image_first_page + corner_page;
+                if (--rows_left_in_image == 0) {
+                    image_first_page += IN_H * IN_W;
+                    rows_left_in_image = OUT_H * OUT_W;
                 }
             }
             scalar_tile_cb.push_back(CORNERS);
@@ -497,7 +507,7 @@ void kernel_main() {
             auto gather = [&](uint32_t c, uint32_t r, uint32_t nbytes) {
                 const uint32_t dst_l1 = block_l1 + r * BLOCK_ROW_NBYTES + c * STICK_NBYTES;
                 // A zero weight also marks a corner outside the input, whose page is not one.
-                if (corner_weight[c][r] == 0) {
+                if (((present[c] >> r) & 1) == 0) {
                     zero_stick(dst_l1);
                     return;
                 }
@@ -545,8 +555,7 @@ void kernel_main() {
                     for (uint32_t r = 0; r < TILE_ROWS; ++r) {
                         // Both read, and the right one is the next page of the same shard.
                         const uint32_t right_page = page[r] + (c >> 1) * IN_W + 1;
-                        if (corner_weight[c][r] != 0 && corner_weight[c + 1][r] != 0 &&
-                            right_page % INPUT_SHARD_PAGES != 0) {
+                        if ((present[c] >> r) & (present[c + 1] >> r) & 1 && right_page % INPUT_SHARD_PAGES != 0) {
                             gather(c, r, 2 * STICK_NBYTES);
                         } else {
                             gather(c, r, STICK_NBYTES);
