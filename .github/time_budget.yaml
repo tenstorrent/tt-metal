@@ -72,7 +72,7 @@ ttnn:
     wh_n150_civ2: 30
     github_hosted_cpu: 10
   merge_gate:
-    github_hosted_cpu: 60
+    github_hosted_cpu: 80
     wh_n150_civ2: 45
     wh_n300_civ2: 55
     wh_llmbox_civ2_viommu: 15

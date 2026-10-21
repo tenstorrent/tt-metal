@@ -20,8 +20,8 @@
   budget_type: merge_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
-# Kernel compile on mock devices, per arch: hand-picked cases + unary sweep, and the binary sweep.
-# An empty TT_METAL_CACHE makes every kernel compile.
+# Kernel compile on mock devices, per arch: hand-picked cases + unary sweep, the binary sweep, and the
+# ternary and data movement sweeps. An empty TT_METAL_CACHE makes every kernel compile.
 - name: ttnn kernel compile wormhole
   cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile/*wormhole_*:CPU_KernelCompileSweep/*wormhole_unary_*'
   skus:
@@ -40,6 +40,15 @@
   budget_type: merge_gate
   owner_id: U0BK8PFEXGU # Igor Jankowski
 
+- name: ttnn kernel compile wormhole ternary and data movement sweep
+  cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompileSweep/*wormhole_ternary_*:CPU_KernelCompileSweep/*wormhole_dm_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
+
 - name: ttnn kernel compile blackhole
   cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile/*blackhole_*:CPU_KernelCompileSweep/*blackhole_unary_*'
   skus:
@@ -54,6 +63,15 @@
   skus:
     github_hosted_cpu:
       timeout: 15
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
+
+- name: ttnn kernel compile blackhole ternary and data movement sweep
+  cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompileSweep/*blackhole_ternary_*:CPU_KernelCompileSweep/*blackhole_dm_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 10
   team: ttnn
   budget_type: merge_gate
   owner_id: U0BK8PFEXGU # Igor Jankowski
