@@ -56,11 +56,11 @@ void kernel_main() {
         cb_in0, cb_in1, 1 /*acc_to_dest*/)));
     reconfig_data_format(cb_in0, cb_in1);
 
+    constexpr uint32_t weights_per_set = sites_per_group * num_candidates;
     for (uint32_t group = 0; group < num_groups; ++group) {
         const uint32_t first_site = group * sites_per_group;
         const uint32_t sites_in_group =
             (first_site + sites_per_group <= num_sites) ? sites_per_group : num_sites - first_site;
-        const uint32_t weights_per_set = sites_in_group * num_candidates;
 
         // One weight set per token row, shared by the Wt positions in that row.
         // The reader turns the set over on the same test — `i % Wt == 0` over the
@@ -88,14 +88,14 @@ void kernel_main() {
             tile_regs_commit();
             cb_in0_obj.pop_front(num_candidates);
 
-            cb_out0_obj.reserve_back(sites_in_group);
+            cb_out0_obj.reserve_back(sites_per_group);
             pack_reconfig_data_format(cb_out0);
             tile_regs_wait();
             for (uint32_t s = 0; s < sites_in_group; ++s) {
                 pack_tile(s, cb_out0);
             }
             tile_regs_release();
-            cb_out0_obj.push_back(sites_in_group);
+            cb_out0_obj.push_back(sites_per_group);
 
             ++width_index;
             if (width_index == Wt) {

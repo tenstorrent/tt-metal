@@ -105,6 +105,24 @@ def test_attn_res_weighted_reduce_nc_weight_batch(num_sites, device):
         assert_with_pcc(want[site : site + 1], got[site : site + 1], PCC)
 
 
+@pytest.mark.parametrize("num_sites", (7, 11))
+@pytest.mark.parametrize("shape", ([1, 9, 2560, 1792], [1, 9, 8192, 32]), ids=["wide", "wt1"])
+def test_attn_res_weighted_reduce_nc_weight_batch_tail_group(shape, num_sites, device):
+    torch.manual_seed(2026)
+    _, candidates, height, width = shape
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn([num_sites, candidates, height, 1], dtype=torch.bfloat16)
+
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
+        _place(torch_input, device), _place(torch_weight, device), dim=1
+    )
+
+    got = ttnn.to_torch(output).float()
+    want = _reference(torch_input, torch_weight)
+    for site in range(num_sites):
+        assert_with_pcc(want[site : site + 1], got[site : site + 1], PCC)
+
+
 def test_attn_res_weighted_reduce_nc_weight_batch_matches_per_site(device):
     """A batch of R sets against R calls of one set each.
 

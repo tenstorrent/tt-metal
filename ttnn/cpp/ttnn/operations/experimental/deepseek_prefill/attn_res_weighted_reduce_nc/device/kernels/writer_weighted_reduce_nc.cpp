@@ -38,7 +38,7 @@ void kernel_main() {
             (first_site + sites_per_group <= num_sites) ? sites_per_group : num_sites - first_site;
 
         for (uint32_t i = start_id; i < start_id + num_positions; ++i) {
-            cb_out_obj.wait_front(sites_in_group);
+            cb_out_obj.wait_front(sites_per_group);
             uint32_t read_offset = 0;
             uint32_t page_id = first_site * inner_tile_size + i;
             for (uint32_t s = 0; s < sites_in_group; ++s) {
@@ -52,7 +52,7 @@ void kernel_main() {
                 page_id += inner_tile_size;
             }
             noc.async_write_barrier();
-            cb_out_obj.pop_front(sites_in_group);
+            cb_out_obj.pop_front(sites_per_group);
         }
     }
 }

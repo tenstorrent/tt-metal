@@ -60,7 +60,7 @@ void kernel_main() {
             if (i == start_id || i % Wt == 0) {
                 const uint32_t row = i / Wt;
 
-                cb_in1_obj.reserve_back(sites_in_group * num_candidates);
+                cb_in1_obj.reserve_back(sites_per_group * num_candidates);
                 uint32_t weight_write_offset = 0;
                 for (uint32_t s = 0; s < sites_in_group; ++s) {
                     uint32_t weight_tile_id = (first_site + s) * weight_reduce_tile_size + row;
@@ -76,7 +76,7 @@ void kernel_main() {
                     }
                 }
                 noc.async_read_barrier();
-                cb_in1_obj.push_back(sites_in_group * num_candidates);
+                cb_in1_obj.push_back(sites_per_group * num_candidates);
             }
 
             // A whole reduction as one CB unit, so a candidate's position in the
