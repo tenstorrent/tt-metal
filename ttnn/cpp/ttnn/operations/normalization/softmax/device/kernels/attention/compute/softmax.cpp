@@ -420,10 +420,12 @@ void kernel_main() {
     }
 #endif  // !CAUSAL_MASK
 #endif  // FUSED_SCALE_MASK
-#if defined(MASK_PADDED_DATA) && !defined(FUSED_SCALE_MASK)
-    // The padding mask is a single tile pushed once by the reader and re-waited on the last column
-    // tile of every row; pop it once here so the buffer is left balanced. Only the non-fused path
-    // applies this mask, so the pop carries the same pair of conditions as the wait.
+#ifdef MASK_PADDED_DATA
+    // The padding mask is a single tile pushed once by the writer and re-waited on the last column
+    // tile of every row (by both the fused and the non-fused path); pop it once here so the buffer is
+    // left balanced. Wait first: a zero-work core never waited for it.
+    dfb_mask_padded_obj.wait_front(1);
+    dummy_unpack(dfb_mask_padded);
     dfb_mask_padded_obj.pop_front(1);
 #endif
 }

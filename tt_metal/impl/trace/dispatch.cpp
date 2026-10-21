@@ -84,7 +84,7 @@ void issue_trace_commands(
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    CoreCoord dispatch_core) {
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -107,15 +107,12 @@ void issue_trace_commands(
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             metal_ctx.hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_REPLAY_TRACE,
-                dispatch_core.x,
-                dispatch_core.y,
-                metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index) +
-                    metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+                dev_msgs::RUN_MSG_REPLAY_TRACE, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+            worker_launch_message_buffer_state[index].get_mcast_wptr(),
             dispatcher_for_go_signal);
     }
 
@@ -135,15 +132,13 @@ void issue_trace_commands(
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
-                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            expected_num_workers,
-            cq_id);
+            expected_num_workers);
     }
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);
