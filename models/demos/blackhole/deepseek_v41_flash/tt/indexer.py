@@ -91,7 +91,7 @@ def pos_buckets(max_pos, factor=2):
     raw = os.environ.get("DSV41_POS_BUCKETS")
     if raw is None:
         vals, b = list(POS_BUCKETS_BASE), POS_BUCKETS_BASE[-1] * int(factor)
-        while b < int(max_pos):
+        while b + 64 < int(max_pos):  # (a bucket within 64 of the built context is the full slab)
             vals.append(b)
             b *= int(factor)
         return sorted(v for v in vals if 0 < v < int(max_pos))
