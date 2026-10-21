@@ -14,6 +14,9 @@ echo "== $(git log -1 --format='%h %s' | cut -c1-80) nodes $AB_NODES_FILE ($(wc 
 suffix() { echo "$1" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'; }
 declare -A PK
 while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); done < $S/files_dev.txt
+while read -r rel; do
+  [[ -z ${PK[$rel]} ]] && { sib=$(grep "^$(dirname $rel)/" $S/files_dev.txt | grep -v "^$rel\$" | head -1); for p in ${PK[$sib]}; do PK[$rel]+=" $(dirname $p)/$(basename $rel)"; done; echo "== new file $rel -> ${PK[$rel]}"; }
+done < $S/files_dev.txt
 echo "== package copies: $(for r in "${!PK[@]}"; do echo ${PK[$r]} | wc -w; done | awk '{s+=$1} END {print s}') for $(wc -l < $S/files_dev.txt) files"
 use() { local d=${1%2}
   while read -r rel; do
