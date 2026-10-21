@@ -227,7 +227,7 @@ class TtKimiK3Block(LightweightModule):
                 trace_controller=getattr(self, "_trace_controller", None),
                 tp_axis=self.attention.mla.tp_shard_kv_axis,
             )
-        elif self._kda_layer_ack:
+        elif self._kda_layer_ack and (d2h_service is not None or on_layer_complete is not None):
             send_layer_ack(
                 mesh_device=self.mesh_device,
                 global_layer_idx=self.layer_idx,

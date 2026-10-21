@@ -118,6 +118,7 @@ def zero_pad_and_ack(
             metadata_msg=metadata_msg,
             on_layer_complete=on_layer_complete,
             trace_controller=trace_controller,
+            alias_layer_ids=alias_layer_ids,
         )
         if _ACK_TIMING:
             _end = time.perf_counter()
@@ -135,6 +136,7 @@ def send_layer_ack(
     metadata_msg,
     on_layer_complete,
     trace_controller,
+    alias_layer_ids: tuple = (),
 ) -> None:
     """Tell migration this layer is done for the chunk, through whichever ack transport is wired.
 
