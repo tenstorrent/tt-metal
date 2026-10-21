@@ -21,7 +21,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -34,7 +33,6 @@ namespace ttnn::d2d_stream_service {
 
 namespace {
 
-using tt::tt_metal::distributed::PCIeCoreLocation;
 using tt::tt_metal::distributed::SocketMemoryConfig;
 using tt::tt_metal::distributed::multihost::Rank;
 using ttnn::D2DBoundaryDescriptor;
@@ -49,6 +47,7 @@ using ttnn::D2DStreamConfig;
 using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
 using ttnn::D2DStreamServiceSender;
+using ttnn::PCIeCoreLocation;
 using MeshDevicePtr = std::shared_ptr<tt::tt_metal::distributed::MeshDevice>;
 
 // Assemble a D2DStreamConfig from individual kwargs. Like the H2DStreamService ctor, the

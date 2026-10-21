@@ -26,7 +26,6 @@ namespace ttnn {
 
 namespace fb = d2d_flatbuffer;
 namespace dist_fb = tt::tt_metal::distributed::flatbuffer;
-using tt::tt_metal::distributed::PCIeCoreLocation;
 
 namespace {
 
