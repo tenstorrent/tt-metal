@@ -49,6 +49,11 @@ on:
         required: false
         default: false
         type: boolean
+      debug-symbols:
+        description: "Build the ELFs with -g"
+        required: false
+        default: true
+        type: boolean
       shadow-compile-runner:
         description: "Also build each shard on this CPU runner, measure it on the board and compare, report-only (blank = off)"
         required: false
@@ -179,6 +184,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: compile
@@ -195,6 +201,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
@@ -259,6 +266,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           PIPELINE: ${{ inputs.pipeline }}
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
@@ -311,10 +319,10 @@ jobs:
         env:
           TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
         run: |
-          # Must exceed the sum of the shadow step timeouts below (26 min).
+          # Must exceed the sum of the shadow step timeouts below (29 min).
           left=$(( TIMEOUT_MINUTES - ( $(date +%s) - JOB_START_EPOCH ) / 60 ))
           echo "minutes-left=$left" >> "$GITHUB_OUTPUT"
-          if (( left >= 30 )); then
+          if (( left >= 33 )); then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -331,7 +339,7 @@ jobs:
         id: shadow-download
         if: ${{ steps.shadow-zstd.outcome == 'success' }}
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 8
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: llk-elfs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst
@@ -356,6 +364,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
@@ -371,6 +380,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
           TT_LLK_DISABLE_ASSERTS: "1"
           PIPELINE: ${{ inputs.pipeline }}
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
