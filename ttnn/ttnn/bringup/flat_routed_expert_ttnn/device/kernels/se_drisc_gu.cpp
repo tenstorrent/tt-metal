@@ -94,10 +94,46 @@ inline void fast_inc_nopoll(uint8_t noc, uint32_t coord) {
     noc_nonposted_atomics_acked[noc] += 1;
 }
 
+// (perf probe SE_DRISC_XEMU: x's DRAM reads emulated inside the DRISC's queue - SE_DRISC_XEMU_B-byte reads from this
+// bank into a scratch slot, never forwarded. Reads are owed by SE_DRISC_XEMU_MODE: 0 one every SE_DRISC_XEMU weight
+// units (spread), 1 SE_DRISC_XEMU_K at each load's first unit, 2 the same one load ahead; issued with at most
+// SE_DRISC_XEMU_CAP in flight, before (SE_DRISC_XEMU_FIRST) or after the pass's weight DMAs, on the job's stream or
+// the other one (SE_DRISC_XEMU_OTHER))
+#ifdef SE_DRISC_XEMU
+#ifndef SE_DRISC_XEMU_B
+#define SE_DRISC_XEMU_B 12288
+#endif
+#ifndef SE_DRISC_XEMU_MODE
+#define SE_DRISC_XEMU_MODE 0
+#endif
+#ifndef SE_DRISC_XEMU_K
+#define SE_DRISC_XEMU_K 5
+#endif
+#ifndef SE_DRISC_XEMU_CAP
+#define SE_DRISC_XEMU_CAP 2
+#endif
+#ifndef SE_DRISC_XEMU_OTHER
+#define SE_DRISC_XEMU_OTHER 0
+#endif
+#ifndef SE_DRISC_XEMU_FIRST
+#define SE_DRISC_XEMU_FIRST 0
+#endif
+#ifndef SE_DRISC_XEMU_W  // 1: each completed x read also written out (stock NoC write, transaction id 15) to a receiver
+#define SE_DRISC_XEMU_W 0  // core's landing ring - the DRISC -> relay delivery of x, emulated (garbage there)
+#endif
+static_assert(SE_DRISC_XEMU_CAP >= 1 && SE_DRISC_XEMU_CAP <= 8, "x emulation: 1..8 reads in flight (ring of 8)");
+#define SE_XEMU_SAME (!SE_DRISC_XEMU_OTHER)
+#else
+#define SE_XEMU_SAME 0
+#endif
+
 struct Job {
     uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub, dmax;
     uint32_t rd, wr, fl, sn;  // units DMA'd, written, flushed (acked), sent (left this L1: SE_DRISC_FREE_SENT)
     uint32_t dn, dattr;       // (SE_DRISC_LEAN) units known DMA'd (in-order stream), the DMA's attribute word
+    // (SE_DRISC_XEMU) DMAs issued on the job's stream (weights + extra), the extra reads' stream indices (ring of 8,
+    // at most 2 in flight), extra reads completed, weight units since the last extra read, the scratch slot (0: off)
+    uint32_t tot, xq[8], xh, xt, xdone, since, xslot, xpend, xi;
     uint8_t noc;
     uint8_t loads[SD_MAX_LOADS], regions[SD_MAX_LOADS];
     uint32_t cr[SE_DRISC_MAX_R];
@@ -236,6 +272,17 @@ void kernel_main() {
             J.trid0 = ns_max > 7 ? 1 : 1 + 7 * k;
             J.units = n_load * J.per_e * (J.rg / J.ub);
             J.rd = J.wr = J.fl = J.sn = J.dn = 0;
+            J.tot = J.xh = J.xt = J.xdone = J.since = J.xpend = J.xi = 0;
+#ifdef SE_DRISC_XEMU
+#if defined(SE_DRISC_FREE_SENT) || defined(SE_DRISC_DRAIN)
+#error "SE_DRISC_XEMU: not with FREE_SENT / DRAIN"
+#endif
+            // (perf probe: an extra SE_DRISC_XEMU_B-byte read from this bank every SE_DRISC_XEMU weight units, into a
+            // scratch slot past the job's slots, never forwarded: x's DRAM reads moved into the DRISC's own queue)
+            J.xslot = J.ns * J.ub * J.blk + SE_DRISC_XEMU_B <= room ? J.slot0 + J.ns * J.ub * J.blk : 0;
+#else
+            J.xslot = 0;
+#endif
             left += J.units;
             volatile uint32_t* st = word(se_drisc_state(k));
             st[0] = seen;
@@ -271,6 +318,23 @@ void kernel_main() {
                 fast_inc_state(jobs[k].noc, jobs[k].dsem);
             }
         }
+#if SE_XEMU_SAME
+        // (x reads on the job's in-order stream: completed DMAs less the x reads among them = weight units done)
+        auto xrefresh = [&](Job& J, uint8_t s) {
+            const uint32_t d = J.tot - experimental::dma_get_reads_outstanding(s);
+            while (J.xh != J.xt && J.xq[J.xh & 7] < d) {
+                ++J.xh;
+                ++J.xdone;
+#if SE_DRISC_XEMU_W
+                // (on the read command buffer: the write one keeps the fast weight writes' constant registers; the
+                // grant refreshes' stock reads reprogram this one every time)
+                noc_async_write_one_packet_with_trid(
+                    J.xslot, J.rx[J.xdone % J.R] | J.land, SE_DRISC_XEMU_B, 15, read_cmd_buf, J.noc, fwd_vc);
+#endif
+            }
+            J.dn = d - J.xdone;
+        };
+#endif
         uint32_t it = 0;
 #ifdef SE_DRISC_PROF  // (debug: cycles per section over the call, refreshes; at 448.. of the working region)
         uint64_t pf[6] = {0, 0, 0, 0, 0, 0};
@@ -288,6 +352,33 @@ void kernel_main() {
 #define SE_DRISC_STREAM0 0
 #endif
                 const uint8_t stream = (SE_DRISC_STREAM0 + k) & 1, noc = J.noc;
+#if defined(SE_DRISC_XEMU) && SE_DRISC_XEMU_FIRST
+#ifdef SE_DRISC_XEMU
+                if (J.xslot && J.xpend) {
+#if SE_DRISC_XEMU_OTHER
+                    const uint8_t xs = stream ^ 1;
+                    while (J.xpend && experimental::dma_get_reads_outstanding(xs) < SE_DRISC_XEMU_CAP) {
+#else
+                    const uint8_t xs = stream;
+                    if (J.xt - J.xh >= SE_DRISC_XEMU_CAP) {
+                        xrefresh(J, stream);
+                    }
+                    while (J.xpend && J.xt - J.xh < SE_DRISC_XEMU_CAP) {
+#endif
+                        const uint32_t upc2 = J.rg / J.ub, u2 = (J.rd + J.units / 2 + J.xi) % J.units;
+                        const uint32_t c2 = u2 / upc2, b2 = (u2 % upc2) * J.ub;
+                        const uint32_t src2 =
+                            J.gddr + (J.loads[c2 / J.per_e] * J.per_e + c2 % J.per_e) * J.chunk + b2 * J.blk;
+                        experimental::dma_async_read<false>(xs, src2, J.xslot, SE_DRISC_XEMU_B);
+#if !SE_DRISC_XEMU_OTHER
+                        J.xq[J.xt++ & 7] = J.tot++;
+#endif
+                        --J.xpend;
+                        ++J.xi;
+                    }
+                }
+#endif
+#endif
                 // DMA ahead into free slots (unit rd: chunk rd / RG of load (rd / RG) / PER_E, block rd % RG)
                 {
                 PF_BEGIN
@@ -309,13 +400,58 @@ void kernel_main() {
                         stream, src, J.slot0 + (J.rd % J.ns) * J.ub * J.blk, J.ub * J.blk);
 #endif
                     ++dma_total[stream];
+                    ++J.tot;
 #else
                     (void)src;
+#endif
+#ifdef SE_DRISC_XEMU
+#if SE_DRISC_XEMU_MODE == 0
+                    if (++J.since >= SE_DRISC_XEMU) {
+                        J.since = 0;
+                        ++J.xpend;
+                    }
+#else
+                    if (J.rd % (J.per_e * upc) == 0) {  // (a load's first unit)
+                        const uint32_t ld = J.rd / (J.per_e * upc), nld = J.units / (J.per_e * upc);
+#if SE_DRISC_XEMU_MODE == 1
+                        J.xpend += SE_DRISC_XEMU_K;
+#else
+                        J.xpend += ld == 0 ? (nld > 1 ? 2 : 1) * SE_DRISC_XEMU_K : (ld + 1 < nld ? SE_DRISC_XEMU_K : 0);
+#endif
+                    }
+#endif
 #endif
                     ++J.rd;
                 }
                 PF_END(0)
                 }
+#if defined(SE_DRISC_XEMU) && !SE_DRISC_XEMU_FIRST
+#ifdef SE_DRISC_XEMU
+                if (J.xslot && J.xpend) {
+#if SE_DRISC_XEMU_OTHER
+                    const uint8_t xs = stream ^ 1;
+                    while (J.xpend && experimental::dma_get_reads_outstanding(xs) < SE_DRISC_XEMU_CAP) {
+#else
+                    const uint8_t xs = stream;
+                    if (J.xt - J.xh >= SE_DRISC_XEMU_CAP) {
+                        xrefresh(J, stream);
+                    }
+                    while (J.xpend && J.xt - J.xh < SE_DRISC_XEMU_CAP) {
+#endif
+                        const uint32_t upc2 = J.rg / J.ub, u2 = (J.rd + J.units / 2 + J.xi) % J.units;
+                        const uint32_t c2 = u2 / upc2, b2 = (u2 % upc2) * J.ub;
+                        const uint32_t src2 =
+                            J.gddr + (J.loads[c2 / J.per_e] * J.per_e + c2 % J.per_e) * J.chunk + b2 * J.blk;
+                        experimental::dma_async_read<false>(xs, src2, J.xslot, SE_DRISC_XEMU_B);
+#if !SE_DRISC_XEMU_OTHER
+                        J.xq[J.xt++ & 7] = J.tot++;
+#endif
+                        --J.xpend;
+                        ++J.xi;
+                    }
+                }
+#endif
+#endif
 #ifdef SE_DRISC_DRAIN  // (every unit ready this pass, not one: the loop's other work no longer delays them)
 #define SE_DRISC_STEP while
 #else
@@ -327,9 +463,16 @@ void kernel_main() {
 #else
 #if SE_DRISC_LEAN
                 if (J.wr >= J.dn && J.wr < J.rd) {  // (the stream completes in order: rd - outstanding are done)
+#if SE_XEMU_SAME
+                    xrefresh(J, stream);
+#else
                     J.dn = J.rd - experimental::dma_get_reads_outstanding(stream);
+#endif
                 }
                 SE_DRISC_STEP(J.wr < J.dn) {
+#elif SE_XEMU_SAME
+                xrefresh(J, stream);
+                SE_DRISC_STEP(J.wr < J.rd && J.wr < J.dn) {
 #else
                 SE_DRISC_STEP(J.wr < J.rd && J.wr < J.rd - experimental::dma_get_reads_outstanding(stream)) {
 #endif
@@ -442,6 +585,20 @@ void kernel_main() {
                 stop = *word(SE_DRISC_STOP) != 0;
             }
         }
+#ifdef SE_DRISC_XEMU
+        for (uint32_t k = 0; k < nj; ++k) {  // (the extra reads drained: the next call's in-order count starts clean)
+            if (jobs[k].xslot) {
+                for (uint8_t s = 0; s < 2; ++s) {
+                    while (experimental::dma_get_reads_outstanding(s)) {
+                    }
+                }
+#if SE_DRISC_XEMU_W
+                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(jobs[k].noc, 15)) {
+                }
+#endif
+            }
+        }
+#endif
         for (uint32_t k = 0; k < nj; ++k) {
             volatile uint32_t* st = word(se_drisc_state(k));
             st[2] = jobs[k].rd;

@@ -81,6 +81,8 @@ FlatProbes FlatProbes::from_env() {
     p.drisc_ub = read("MIMO_FL_DRISC_UB");
     p.drisc_ns_max = read("MIMO_FL_DRISC_NS_MAX");
     p.drisc_lean = read("MIMO_FL_DRISC_LEAN");
+    p.drisc_xemu = read("MIMO_FL_DRISC_XEMU");
+    p.drisc_xemu_opt = read("MIMO_FL_DRISC_XEMU_OPT");
     p.dump_rt = read("MIMO_FL_DUMP_RT");
     p.dw_rot = read("MIMO_FL_DW_ROT");
     p.dyn_pull = read("MIMO_FL_DYN_PULL");

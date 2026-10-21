@@ -1257,3 +1257,26 @@ the bytes) queue behind the bulk streams whatever the NoC, port weight or depth.
 (1450 / 1573 with x and y at 512 GB/s). What is left is structural: x not read from DRAM in the experts window (the
 dispatch lands rows in L1 in the experts' order), or x read as bulk (expert-contiguous, pre-tilized bfp8 from the
 dispatch; possibly by the DRISC in the same queue as the weights) instead of row gathers.
+
+### x through the DRISC's queue (option A), emulated: orderings, queues, the lean registers (2026-10-21, GLM-5.3)
+Probe MIMO_FL_DRISC_XEMU=N[:B] + MIMO_FL_DRISC_XEMU_OPT="mode,k,cap,other,first,w": each DRISC tile also DMAs x's
+share of reads from its own bank (12 KB, 2 M a tile per call = x's volume; re-reads of other weight blocks of the
+bank: same DRAM load) into a scratch slot; with w each completed read is also written out (stock NoC write on the read
+command buffer, transaction id 15) to a receiver's landing ring = the DRISC -> relay delivery. Relays' x reads off
+(XRD_SKIP) in every row; real path otherwise (y on); garbage x, so perf only. Accounting check (real x + the extra
+reads on the job's stream, UB 2, LEAN 1, M 128): y bit-exact vs the default.
+| us, M 80 / 160 | |
+| default (relays read x over NOC1) | 1667 / 1926 |
+| UB 2 + LEAN 1, no x reads at all | 1552 / 1750 |
+| ... x spread / at each load's start / one load ahead | 1552 / 1752, 1552 / 1750, 1552 / 1748 |
+| ... 4 in flight / x before the weights / on the other stream (triage off) | 1555 / 1750, 1553 / 1749, 1553 / 1748 |
+| ... + each x row written to a receiver: at the load / ahead / spread / cap 4 / without LEAN | 1553 / 1751, 1553 / 1750, 1555 / 1750, 1554 / -, 1553 / 1750 |
+| UB 1 + LEAN 1, x spread / at the load | 1649 / 1790, 1669 / 1790 |
+| UB 1 + LEAN 1 + writes, at the load | HANG at M 80 (triage off, host up; not narrowed - UB 1 is not the configuration) |
+- With UB 2 the whole of option A is free: reads and writes, every ordering, depth, stream, with or without LEAN, sit
+  on the no-x line. All of x's cost on the real path is the relays' NOC1 DRAM reads; read from the DRISC's own bank
+  queue it vanishes. Against the default: -6.8% at M 80, -9.1% at M 160. Left to the floor (1450 / 1573 with x and y
+  at 512 GB/s): 103 / 177 us.
+- With UB 1 the DRISC's per-unit work still binds, so the extra units cost (and the write variant hung).
+Build A as: UB 2, the DRISCs reading the x rows of their bank (bank = page index % banks; the relay chunks get a
+per-chunk arrival count from the 8 banks), any ordering (the simplest: each expert's rows when its load starts).

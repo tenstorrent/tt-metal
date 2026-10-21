@@ -91,6 +91,14 @@ struct FlatProbes {
     // re-read only when the known completions are used up. 2 (measure only, unsafe): also no ready poll before the
     // receivers' semaphore increment. Results: FLAT_EXPERT_WORKLOG.md (GLM-5.3, 2026-10-21)
     std::optional<std::string> drisc_lean;
+    // MIMO_FL_DRISC_XEMU=N[:B]: an extra B-byte (default 12288) DMA read from the DRISC's own bank every N weight
+    // units, on the job's stream into a scratch slot, never forwarded - x's DRAM reads emulated inside the DRISC's
+    // queue
+    std::optional<std::string> drisc_xemu;
+    // MIMO_FL_DRISC_XEMU_OPT="mode,k,cap,other,first,w" (any prefix): the emulated x reads' ordering (0 spread, 1 at
+    // each load's start, 2 one load ahead), reads owed a load (modes 1-2), in flight (1-8), on the other stream, before
+    // the pass's weight DMAs, each also written to a receiver (the DRISC -> relay delivery; same stream only)
+    std::optional<std::string> drisc_xemu_opt;
     std::optional<std::string> dump_rt;             // MIMO_FL_DUMP_RT (debug output)
     std::optional<std::string> dw_rot;              // MIMO_FL_DW_ROT
     std::optional<std::string> dyn_pull;            // MIMO_FL_DYN_PULL

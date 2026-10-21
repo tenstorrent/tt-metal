@@ -247,6 +247,34 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
     if (const char* u = cstr(pr.drisc_ub)) {  // (probe: blocks per DRISC unit)
         defs["SE_DRISC_UB"] = u;
     }
+    if (const char* x = cstr(pr.drisc_xemu)) {  // (probe: x's DRAM reads emulated in the DRISC's queue, "N[:B]")
+        const std::string v(x);
+        const auto c = v.find(':');
+        defs["SE_DRISC_XEMU"] = v.substr(0, c);
+        defs["SE_DRISC_XEMU_B"] = c == std::string::npos ? "12288" : v.substr(c + 1);
+        // MIMO_FL_DRISC_XEMU_OPT "mode,k,cap,other,first" (any prefix): ordering, reads a load, in flight, stream
+        if (const char* o = cstr(pr.drisc_xemu_opt)) {
+            const char* names[] = {
+                "SE_DRISC_XEMU_MODE",
+                "SE_DRISC_XEMU_K",
+                "SE_DRISC_XEMU_CAP",
+                "SE_DRISC_XEMU_OTHER",
+                "SE_DRISC_XEMU_FIRST",
+                "SE_DRISC_XEMU_W"};
+            std::string w(o);
+            for (size_t i = 0, p0 = 0; i < 6 && p0 <= w.size(); ++i) {
+                const size_t p1 = w.find(',', p0);
+                const std::string f = w.substr(p0, p1 == std::string::npos ? std::string::npos : p1 - p0);
+                if (!f.empty()) {
+                    defs[names[i]] = f;
+                }
+                if (p1 == std::string::npos) {
+                    break;
+                }
+                p0 = p1 + 1;
+            }
+        }
+    }
     if (const char* l = cstr(pr.drisc_lean)) {  // (probe: fewer register accesses a unit, 1 safe, 2 measure-only)
         defs["SE_DRISC_LEAN"] = l;
     }

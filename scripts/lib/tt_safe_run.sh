@@ -270,7 +270,11 @@ ttrun_setup_hang_hook() {
     [[ "$SIM_MODE" == false ]] || return 0
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
     mkdir -p "$TRIAGE_OUT_DIR"
-    if python3 -c "import ttexalens" 2>/dev/null; then
+    if [[ "${TT_SAFE_NO_TRIAGE:-0}" == 1 ]]; then
+        # Hang still detected (and the card reset) but nothing reads the wedged chip: host reads into a wedged chip
+        # have taken the whole host down (likely-hang probes on a shared box).
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG_NO_TRIAGE > ${TRIAGE_LOG}"
+    elif python3 -c "import ttexalens" 2>/dev/null; then
         export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check ${TRIAGE_EXTRA_ARGS} --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
     else
         # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt. The warning is
