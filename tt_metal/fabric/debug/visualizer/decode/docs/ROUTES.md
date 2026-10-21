@@ -1,6 +1,6 @@
 # Route rules
 
-[`routes.py`](routes.py) reads fabric routes from raw bytes: the route fields of a packet header, the routing tables in a router's L1, and the chunks of a scatter write. The manifest gives it every value routes are encoded with (`routing_encodings`, and the `compressed_routing_values` and `NocScatterWriteChunkEncoding` enums). How to read a route with those values isn't data the manifest can carry, so `routes.py` holds it as rules, each written to match the fabric's C++.
+[`routes.py`](../routes.py) reads fabric routes from raw bytes: the route fields of a packet header, the routing tables in a router's L1, and the chunks of a scatter write. The manifest gives it every value routes are encoded with (`routing_encodings`, and the `compressed_routing_values` and `NocScatterWriteChunkEncoding` enums). How to read a route with those values isn't data the manifest can carry, so `routes.py` holds it as rules, each written to match the fabric's C++.
 
 This page lists the rules, for fabric owners to check against the fabric, and names the code each one mirrors. A fabric
 change to that code should update the rule, its function and its tests in the same change: nothing else catches it
@@ -206,8 +206,8 @@ chunk_count 3, chunk_size [64, 192, 1], chunk_encoding 0b11_01_01, a 256-byte pa
 
 ## When the fabric changes
 
-The rows follow the three cases in [README.md](README.md#what-decode-reads-and-what-it-knows): a value whose meaning
-the manifest carries, a value whose meaning is in `routes.py`, and a change to the logic alone.
+The rows follow the three cases of "What decode reads, and what it knows" in [README.md](../README.md): a value whose
+meaning the manifest carries, a value whose meaning is in `routes.py`, and a change to the logic alone.
 
 | Change | What fails | What to edit |
 | --- | --- | --- |
