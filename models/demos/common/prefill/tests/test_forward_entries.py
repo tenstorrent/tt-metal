@@ -134,6 +134,12 @@ GOOD = {
         EMPTY,
     ],
     "empty_any_slot": [PrefillEntry(0, 0, C), PrefillEntry(9, 64, 64), EMPTY, EMPTY],
+    "clamped_to_cache_end": [
+        PrefillEntry(0, 6 * C + 96, 7 * C + 96),
+        PrefillEntry(0, 7 * C, 7 * C + 700),
+        EMPTY,
+        EMPTY,
+    ],
 }
 
 
@@ -151,6 +157,10 @@ BAD = {  # name -> (entries, expected message)
     ),
     "partial_not_last": ([PrefillEntry(0, 0, 500), PrefillEntry(0, C, 2 * C), EMPTY, EMPTY], "must end its slot"),
     "gap_in_run": ([PrefillEntry(0, 0, C), PrefillEntry(0, 2 * C, 3 * C), EMPTY, EMPTY], "does not continue"),
+    "overlap_not_at_cache_end": (
+        [PrefillEntry(0, C + 96, 2 * C + 96), PrefillEntry(0, 2 * C, 3 * C), EMPTY, EMPTY],
+        "does not continue",
+    ),
     "empty_not_tail": ([PrefillEntry(0, 0, C), EMPTY, PrefillEntry(1, 0, C), EMPTY], "after an empty one"),
     "all_empty": ([EMPTY] * 4, "at least one non-empty entry"),
     "negative_start": ([PrefillEntry(0, -32, 32), EMPTY, EMPTY, EMPTY], "negative start"),

@@ -64,7 +64,7 @@ def pack_forward_tokens(chunk_tokens: list, starts: list, sp: int) -> list:
     One entry reduces to rotate_chunk_tokens."""
     per_chip = [[] for _ in range(sp)]
     for tokens, start in zip(chunk_tokens, starts, strict=True):
-        rotated = rotate_chunk_tokens(list(tokens), start, sp)
+        rotated = rotate_chunk_tokens(tokens, start, sp)
         s = len(rotated) // sp
         for c in range(sp):
             per_chip[c] += rotated[c * s : (c + 1) * s]
