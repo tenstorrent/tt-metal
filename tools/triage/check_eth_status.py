@@ -12,7 +12,8 @@ Description:
     or, without Inspector, the channels connected to another chip on this host when triage starts (links to other
     hosts are not checked).
     Reads base-firmware state once and reports port and link state, retrain, CRC and FEC counts, the firmware
-    signature and, on Blackhole, ERR_STAT, the TX resend and RX drop totals and the raw eth firmware mailbox messages.
+    signature and, on Blackhole, ERR_STAT, the TX resend and RX drop totals, the raw eth firmware mailbox messages and
+    the eth firmware stage each erisc last recorded (base FW, metal FW or a kernel).
     The heartbeat is read on every core first and compared after a single 100 ms wait; one that has not moved is
     reported Down, as a warning. On Blackhole, a core base firmware released to metal reads Released instead unless a
     fabric router is running its main loop there, since nothing else writes the heartbeat on such a core.
@@ -56,6 +57,7 @@ class EthCoreCheckData:
     txq_resends: int | None = triage_field("TXQ Resends")
     rxq_drops: int | None = triage_field("RXQ Drops")
     eth_fw: str | None = triage_field("ETH FW")
+    fw_stage: str | None = triage_field("FW Stage")
     fw_signature: int | None = triage_field("FW Signature", hex_serializer, verbose=1)  # 0xABCD base FW, 0xDCBA router
     link_raw: int | None = triage_field("Link Raw", hex_serializer, verbose=1)
     mailbox_host: int | None = triage_field("Mailbox HOST", hex_serializer, verbose=1)
@@ -196,6 +198,7 @@ class BlackholeEthCore(EthCore):
     BOOT_RESULTS = 0x7CC00  # boot_results_t (1 KB), then the eth FW mailboxes (64 B)
     BOOT_RESULTS_WORDS = 272
     PORT_STATUS = 0x7CC04
+    FW_STAGE = 0x7CC10  # eth_status_t.eth_fw_stage: one word per erisc, zeroed by metal before its FW starts
     HEARTBEAT = 0x7CC70  # heartbeat[0]: base FW loop (0xABCD) and the fabric router's main loop (0xDCBA)
     METAL_HEARTBEAT = 0x7CC74  # heartbeat[1]: metal's context switch writes 0xDCBA0000 | (heartbeat[0] + 1)
     RETRAIN_COUNT = 0x7CE00
@@ -220,6 +223,17 @@ class BlackholeEthCore(EthCore):
     QUEUE_COUNTERS_MIN_ETH_FW_VERSION = (1, 5, 0)
 
     PORT_STATUS_NAMES = {0: "Unknown", 1: "Up", 2: "Down", 3: "Unused"}
+    # eth_fw_stage_e, ASCII-packed little-endian.
+    FW_STAGE_NAMES = {
+        0: "Unknown",  # never reached metal FW, so still in base FW
+        0x45534142: "Base FW",  # BASE: base FW main loop, or metal FW returned control
+        0x494E4946: "FW init",  # FINI
+        0x50554C46: "FW loop",  # FLUP: waiting for a go message
+        0x4C4E524B: "Kernel",  # KRNL
+        0x494E4942: "Base init",  # BINI: base FW link training
+        0x47534D42: "Base msg",  # BMSG: base FW servicing a mailbox message
+        0x49504142: "Base API",  # BAPI: metal FW called a base FW API
+    }
 
     def released(self, words: dict[int, int]) -> bool:
         # After RELEASE_CORE, metal's idle loop and waits mirror heartbeat[0] into heartbeat[1] and leave
@@ -232,6 +246,12 @@ class BlackholeEthCore(EthCore):
         row.mailbox_cmfw = words[self.MAILBOX + 2 * self.MAILBOX_SLOT_SIZE]
         row.mailbox_other = words[self.MAILBOX + 3 * self.MAILBOX_SLOT_SIZE]
         row.err_stat = words[self.ERR_STAT]
+        # Metal writes the stage words, so they don't depend on the base FW version. The second erisc's word is only
+        # written in 2-erisc mode; zero there means it is unused, not that it is in base FW.
+        stages = [words[self.FW_STAGE], words[self.FW_STAGE + 4]]
+        row.fw_stage = " / ".join(
+            self.FW_STAGE_NAMES.get(stage, f"0x{stage:08x}") for stage in (stages if stages[1] else stages[:1])
+        )
         # PCS_STATUS is a live register; port_status and rx_link_up are snapshots base FW may not have refreshed.
         row.link_raw = words[self.PCS_STATUS]
         row.link = "Up" if row.link_raw == 1 else "Down"
