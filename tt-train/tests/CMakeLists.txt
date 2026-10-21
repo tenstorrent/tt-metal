@@ -186,6 +186,15 @@ target_link_libraries(
 )
 tt_reuse_precompile_headers(moe_ffn_swiglu_benchmark ttml_pch)
 
+add_executable(sdpa_fw_chunk_sweep_benchmark benchmark/sdpa_fw_chunk_sweep_benchmark.cpp)
+target_link_libraries(
+    sdpa_fw_chunk_sweep_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+tt_reuse_precompile_headers(sdpa_fw_chunk_sweep_benchmark ttml_pch)
+
 add_executable(swiglu_packed_benchmark benchmark/swiglu_packed_benchmark.cpp)
 target_link_libraries(
     swiglu_packed_benchmark
