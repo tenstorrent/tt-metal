@@ -886,9 +886,6 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         }
 
         auto worker_kernel_defines = fabric_defines;  // carries AXIS define if set
-        if (local_only) {
-            worker_kernel_defines["LOCAL_ONLY"] = "1";
-        }
         auto worker_writer_defines = fabric_defines;
         if (has_padding_config) {
             worker_kernel_defines["HAS_PADDING_CONFIG"] = "1";

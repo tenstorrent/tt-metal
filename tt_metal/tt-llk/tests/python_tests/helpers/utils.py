@@ -156,6 +156,20 @@ def matmul_acc_atol(
     )
 
 
+def classify_special(value) -> str:
+    """One float result as a short label for special-value tests: "NaN", "+inf" / "-inf",
+    "+0.0" / "-0.0" (the sign of a zero kept), or the value to nine significant digits.
+    Turns a dict of per-probe results into something an expected-results dict can compare
+    with ==, and a failure message can print readably."""
+    if np.isnan(value):
+        return "NaN"
+    if np.isinf(value):
+        return "+inf" if value > 0 else "-inf"
+    if value == 0.0:
+        return "-0.0" if np.signbit(value) else "+0.0"
+    return "%.9g" % value
+
+
 def print_faces(operand1, tile_shape=None):
     if tile_shape is None:
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
@@ -534,10 +548,11 @@ _ULP_REPORT: bool = False
 
 #: Set by ``--ulp-measure=<path>``: append one JSON row per comparison that follows
 #: exactly one ``accuracy_contract`` lookup in the same test, on a variant that ran as
-#: asked (see :func:`_record_ulp_measurement`). The exhaustive sweep skips tolerance
-#: cells before comparing and, under ``--ulp-emit``, returns before comparing at all, so
-#: those write nothing. Like ``_ULP_REPORT`` it is written after the verdict and never
-#: read back into one, so it cannot change a result.
+#: asked (see :func:`_record_ulp_measurement`). The exhaustive sweep writes one for
+#: every cell it measures, gated or not -- it records a tolerance cell, and every cell
+#: under ``--ulp-emit``, itself rather than through ``passed_test`` -- and a non-finite
+#: lane count for a tolerance cell it cannot measure. Like ``_ULP_REPORT`` it is written
+#: after the verdict and never read back into one, so it cannot change a result.
 _ULP_MEASURE_PATH: Optional[str] = None
 
 #: Set once a recorder write has failed, so the warning is printed once per process.
@@ -599,7 +614,7 @@ def _consume_ulp_query() -> None:
         budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
 
 
-def _record_ulp_measurement(distance, *, mask) -> None:
+def _record_ulp_measurement(distance, *, mask, nonfinite: int = 0) -> None:
     """Append the worst measurable lane of one comparison, tagged with its variant.
 
     ``ulp_stats`` rather than a bare ``max()``, so the number is the one the log
@@ -609,6 +624,10 @@ def _record_ulp_measurement(distance, *, mask) -> None:
     is missing, ambiguous, from another test, or names a ``dest_acc`` TestConfig did not
     run (:func:`_promoted`): a lost datapoint is recoverable, a budget folded back under
     the wrong variant is not.
+
+    *nonfinite* is how many lanes the hardware and the golden disagree about being
+    finite (``ulp_sweep.nonfinite_failures``), written as the row's ``nonfinite``; the
+    headroom report fails a cell with more of them than its table row accounts for.
 
     A failed write warns once and is otherwise ignored: a full disk must not turn into a
     failing test, or hide a failing comparison's summary.
@@ -638,6 +657,11 @@ def _record_ulp_measurement(distance, *, mask) -> None:
         "arch": arch.name,
         # `lanes` and `unmeasurable` too: max 0 over 0 lanes is not a bit-exact cell.
         **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
+        # Lanes where the hardware and the golden disagree about being finite: inf/NaN
+        # against a finite golden, a finite answer to an infinite one, or opposite
+        # infinities. A step count cannot describe them, so they ride alongside it for
+        # the headroom report.
+        "nonfinite": int(nonfinite),
     }
     try:
         with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
@@ -1232,6 +1256,48 @@ def passed_test(
         target_pcc = custom_pcc_threshold
 
     return is_within_tolerance and (pcc > target_pcc)
+
+
+def bf16_from_bits(bits: int) -> float:
+    """One bfloat16 value, as a Python float, from its 16-bit pattern."""
+    return float(torch.tensor([bits], dtype=torch.int16).view(torch.bfloat16).item())
+
+
+def assert_bf16_separates_rne(wide: torch.Tensor) -> None:
+    """Fail when every lane rounds the same under truncation and round-to-nearest-even.
+
+    A bit-exact NearestEven check is vacuous on values that are already bf16.
+    """
+    rne = wide.to(torch.bfloat16)
+    trunc = (wide.view(torch.int32) & 0xFFFF0000).view(torch.float32).to(torch.bfloat16)
+    if torch.equal(rne.view(torch.int16), trunc.view(torch.int16)):
+        raise AssertionError("stimulus does not separate NearestEven from truncation")
+
+
+def assert_bit_exact(got: torch.Tensor, want: torch.Tensor, what: str) -> None:
+    """Fail unless two 16-bit tensors have the same dtype and the same bits."""
+    if got.dtype != want.dtype:
+        raise AssertionError(f"{what}: dtype {got.dtype} vs {want.dtype}")
+    if torch.equal(got, want):
+        return
+    differ = int((got.view(torch.int16) != want.view(torch.int16)).sum())
+    raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
+
+
+def fp32_bits_as_int32(tensor: torch.Tensor) -> torch.Tensor:
+    """Reinterpret a float32 tensor's bits as int32 (no numeric conversion)."""
+    return tensor.to(torch.float32).contiguous().view(torch.int32)
+
+
+def int32_to_smag32(tensor: torch.Tensor) -> torch.Tensor:
+    """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32).
+
+    Bit 31 is the sign and bits [30:0] are the magnitude. Used to stage operands
+    for and model the SIGN_MAGNITUDE_FORMAT kernel path, which skips the
+    2's-comp<->SM casts.
+    """
+    values = tensor.to(torch.int64)
+    return (values.abs() | ((values < 0).to(torch.int64) << 31)).to(torch.int32)
 
 
 def create_directories(dirs: list[Path]):

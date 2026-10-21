@@ -7,6 +7,7 @@
 // silicon's extraction 1:1 so the POD carries exactly what silicon feeds. Every consumer
 // (program_model / kernel_defines / metal2_emit / device_map / cb_dfb_setup) reads this POD.
 
+#include <filesystem>
 #include "emule_descriptor_builder.hpp"
 
 #include <optional>
@@ -33,7 +34,6 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
@@ -124,9 +124,9 @@ SocView build_soc_view(IDevice* device, Program& program) {
         v.l1_banks.push_back(bank);
     }
 
-    v.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    v.l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    v.arch_num_circular_buffers = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    v.dram_alignment = hw.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    v.l1_alignment = hw.get_alignment(tt::tt_metal::HalMemType::L1);
+    v.arch_num_circular_buffers = hw.get_num_dataflow_buffers();
     v.num_semaphores = tt::tt_metal::NUM_SEMAPHORES;
     v.has_tile_counter_registers = hw.has_tile_counter_registers();
 
@@ -269,9 +269,12 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     auto& metal_context = MetalContext::instance(impl.get_context_id());
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     std::string quasar_arch_include;
-    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_arch_variant().empty()) {
-        quasar_arch_include =
-            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_arch_variant();
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_variant().empty()) {
+        const std::string dir =
+            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_variant();
+        if (std::filesystem::is_directory(dir)) {
+            quasar_arch_include = dir;
+        }
     }
 
     EmuleProgramDescriptor pd;
@@ -342,13 +345,35 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             }
             {
-                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels).
+                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels). An ethernet
+                // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
                 auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr);
+                auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
                 uint32_t proc_type_idx = 0;
-                if (!kd.is_compute && dm_kernel != nullptr &&
+                if (dm_kernel != nullptr &&
                     std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
                     proc_type_idx = 1;
+                }
+                if (eth_kernel != nullptr) {
+                    const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
+                    kd.dm_processor = static_cast<uint32_t>(processor);
+                    proc_type_idx = static_cast<uint32_t>(processor);
+                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                    const auto& rtoptions = MetalContext::instance().rtoptions();
+                    for (const auto& define : hw.get_jit_build_query().defines(
+                             {false,
+                              k.get_kernel_programmable_core_type(),
+                              HalProcessorClassType::DM,
+                              proc_type_idx,
+                              rtoptions})) {
+                        const auto eq = define.find('=');
+                        const std::string name = define.substr(0, eq);
+                        if (name == "PROCESSOR_INDEX" || name == "PROGRAMMABLE_CORE_TYPE") {
+                            continue;  // collect_kernels sets these for every kernel
+                        }
+                        kd.defines[name] = eq == std::string::npos ? "1" : define.substr(eq + 1);
+                    }
                 }
                 kd.compile_processor_index = hw.get_processor_index(
                     k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
@@ -370,7 +395,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           uint16_t id,
                                                           bool is_relay,
                                                           uint8_t pipe,
-                                                          const std::optional<LLKMetadata>& llk) {
+                                                          const std::optional<LLKMetadata>& llk,
+                                                          uint8_t /*pap*/,
+                                                          uint8_t /*cap*/) {
                 kd.bindings.dfb.push_back(
                     DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
             });
@@ -387,6 +414,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                  const LLKMetadata& llk) {
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
                 kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
+            });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
             });
             k.process_scratchpad_binding_handles([&kd](
                                                      const std::string& name,
@@ -451,6 +481,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                             auto rta = kc.rta_offset()[processor_index];
                             ck.rta_offset = rta.rta_offset();
                             ck.crta_offset = rta.crta_offset();
+                            ck.remote_cb_offset = static_cast<uint16_t>(kc.remote_cb_offset());
+                            ck.min_remote_cb_start_index = static_cast<uint32_t>(kc.min_remote_cb_start_index());
                         }
                         const tt::tt_metal::CoreCoord lc(x, y);
                         if (k.cores_with_runtime_args().count(lc) != 0) {

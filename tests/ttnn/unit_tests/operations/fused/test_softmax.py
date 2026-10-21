@@ -8,8 +8,8 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
@@ -292,6 +292,99 @@ def test_softmax_sharded_stable_with_program_cache(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.cache_entries_counter.total == 1
+
+
+# The sharded compute kernel sizes its Dest blocks from subblock_w. It used to keep all subblock_w tiles
+# live in Dest at once, so a value above the capacity of the compute config (8 tiles by default, 4 with
+# fp32_dest_acc_en, 16 with dst_full_sync_en) ran to completion and returned wrong numbers, PCC 0.01 at 16
+# on the default config. The kernel now clamps the block to the capacity and handles a tail block, so every
+# value above capacity, and one that does not divide block_w, has to match torch. subblock_w = 0 is
+# rejected on the host, because the mask branch of validation takes block_w % subblock_w.
+@pytest.mark.parametrize(
+    "fp32_acc_en, dst_full_sync_en, subblock_w",
+    [
+        (False, False, 0),
+        (False, False, 8),
+        (False, False, 16),
+        (False, False, 6),
+        (True, False, 4),
+        (True, False, 8),
+        (False, True, 16),
+    ],
+)
+def test_softmax_sharded_subblock_w_dest_capacity(device, expect_error, fp32_acc_en, dst_full_sync_en, subblock_w):
+    torch.manual_seed(0)
+    grid_size = (8, 4)
+    batch_size, num_heads, h, w = 8, 4, 128, 512
+
+    torch_input_tensor = torch_random((batch_size, num_heads, h, w), -10, 10, dtype=torch.bfloat16)
+    memory_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=subblock_w,
+        block_h=batch_size * num_heads * h // 32 // (grid_size[0] * grid_size[1]),
+        block_w=w // 32,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=False,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    if subblock_w == 0:
+        with expect_error(RuntimeError, "subblock_w must be greater than 0"):
+            ttnn.softmax_in_place(
+                input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+            )
+        return
+
+    output_tensor = ttnn.softmax_in_place(
+        input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+    torch_output_tensor = F.softmax(torch_input_tensor.float(), dim=-1)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor).float(), 0.999)
+
+
+# subblock_w = 0 with a mask present used to reach `block_w % subblock_w` in the mask branch of
+# validate_on_program_cache_miss, which is a modulo by zero, before any check on subblock_w itself
+# ran. The zero check is hoisted ahead of both branches, so this path raises like the unmasked one.
+def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
+    torch.manual_seed(0)
+    grid_size = (8, 4)
+    batch_size, num_heads, h, w = 8, 4, 128, 512
+
+    torch_input_tensor = torch_random((batch_size, num_heads, h, w), -10, 10, dtype=torch.bfloat16)
+    attention_mask = torch.zeros(batch_size, 1, 1, w, dtype=torch.bfloat16)
+    attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    memory_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=0,
+        block_h=batch_size * num_heads * h // 32 // (grid_size[0] * grid_size[1]),
+        block_w=w // 32,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    with expect_error(RuntimeError, "subblock_w must be greater than 0"):
+        ttnn.scale_mask_softmax_in_place(input_tensor, 1.0, attention_mask_t, program_config=program_config)
 
 
 @pytest.mark.merge_gate
@@ -1035,3 +1128,89 @@ def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
     tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
         op(tt_input, dim=-7)
+
+
+def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
+    """An explicit fp32_dest_acc_en keeps the attention-optimized factory's bulk buffers in Float32,
+    so exp(x - max) is not rounded to bfloat16 before the sum and the final multiply. The defaulted
+    config (fp32 accumulation with 16-bit bulk buffers since #53643) is a different program and
+    must not share its cache entry with an explicit config, even one that matches the default."""
+    torch.manual_seed(0)
+    # Attention-score shape from Qwen3-TTS's talker (16 heads, T = 26), a short causal row.
+    torch_input = torch.randn((1, 16, 26, 26), dtype=torch.bfloat16) * 4
+    golden = F.softmax(torch_input.float(), dim=-1).to(torch.bfloat16)
+
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    explicit_out = ttnn.to_torch(ttnn.softmax(tt_input, dim=-1, compute_kernel_config=explicit_config))
+
+    # An explicit config with the same values as the softmax default still gets its own program.
+    is_wormhole = device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    default_equal_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    ttnn.softmax(tt_input, dim=-1, compute_kernel_config=default_equal_config)
+    entries_explicit = device.num_program_cache_entries()
+    ttnn.softmax(tt_input, dim=-1)
+    assert device.num_program_cache_entries() == entries_explicit + 1, "defaulted call reused the explicit program"
+
+    # Measured: 0.810 of outputs match the correctly rounded result with Float32 bulk buffers (WH N150 and
+    # BH P150), 0.728 when exp(x - max) is rounded to bfloat16 first (main after #53643, WH N150).
+    correctly_rounded = (explicit_out == golden).float().mean().item()
+    assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
+
+
+# The documented unsharded ROW_MAJOR mask form [B, 1, W/32, 32] must give the same result as the same mask as a
+# TILE [B, 1, 1, W] tensor. The in-place path used to hand it to the interleaved factory, which reads every mask
+# page as a tile (wrong result); for W < 1024 the mask height also made mask_Ht zero, a host divide-by-zero that
+# killed the process.
+@pytest.mark.parametrize("W", [384, 1024, 2048])
+@pytest.mark.parametrize("api", ["scale_mask_softmax_in_place", "attention_softmax_"])
+def test_scale_mask_softmax_in_place_row_major_mask(device, W, api):
+    torch.manual_seed(0)
+    B, C, H = 2, 4, 64
+    head_size = 64
+    scale = 1 / head_size**0.5
+    torch_input = torch.randn((B, C, H, W), dtype=torch.bfloat16)
+    mask = torch.where(torch.rand((B, 1, 1, W)) > 0.5, 0.0, -10000.0)
+    torch_output = F.softmax(torch_input.float() * scale + mask, dim=-1)
+
+    def run(ttnn_mask):
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        if api == "scale_mask_softmax_in_place":
+            ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask)
+        else:
+            ttnn_output = ttnn.transformer.attention_softmax_(ttnn_input, head_size=head_size, attention_mask=ttnn_mask)
+        return ttnn.to_torch(ttnn_output).float()
+
+    row_major_mask = ttnn.from_torch(
+        mask.reshape(B, 1, W // 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tile_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = run(row_major_mask)
+
+    assert torch.equal(output, run(tile_mask)), "ROW_MAJOR mask result differs from the same mask as TILE"
+    pcc = torch.corrcoef(torch.stack([output.flatten(), torch_output.flatten()]))[0, 1].item()
+    assert pcc > 0.998, f"pcc {pcc} against torch"
+
+
+# A ROW_MAJOR mask that is not in the documented [B, 1, W/32, 32] form must still be rejected.
+def test_scale_mask_softmax_in_place_row_major_mask_wrong_shape_rejected(device, expect_error):
+    B, C, H, W = 2, 4, 64, 2048
+    ttnn_input = ttnn.from_torch(torch.randn((B, C, H, W)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(
+        torch.zeros((B, 1, 32, W)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "Non-sharded mask shape must match expected shape"):
+        ttnn.scale_mask_softmax_in_place(ttnn_input, 0.125, ttnn_mask)

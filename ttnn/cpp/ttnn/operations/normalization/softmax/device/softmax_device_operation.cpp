@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
@@ -184,6 +185,18 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensors_args.input_tensor.dtype() == DataType::BFLOAT8_B,
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
         tensors_args.input_tensor.dtype());
+
+    // subblock_w == 0 reaches `block_w % subblock_w` in the mask branch below, a modulo by zero on
+    // the host that kills the process with SIGFPE, so the zero check runs here, ahead of both branches.
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                TT_FATAL(program_config.subblock_w > 0, "subblock_w must be greater than 0.");
+            }
+        },
+        attributes.program_config);
+
     if (tensors_args.mask.has_value()) {
         const auto& mask = tensors_args.mask.value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -470,7 +483,8 @@ Tensor softmax(
             /*is_causal_mask=*/false,
             /*compute_kernel_config=*/compute_kernel_config_val,
             /*is_scale_causal_mask_hw_dims_softmax=*/false,
-            /*numeric_stable=*/numeric_stable);
+            /*numeric_stable=*/numeric_stable,
+            /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
     }
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
@@ -501,7 +515,8 @@ Tensor softmax(
             /*is_causal_mask=*/false,
             /*compute_kernel_config=*/compute_kernel_config_val,
             /*is_scale_causal_mask_hw_dims_softmax=*/false,
-            /*numeric_stable=*/numeric_stable);
+            /*numeric_stable=*/numeric_stable,
+            /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
     }
     // General-purpose softmax
     return ttnn::prim::softmax(
@@ -516,7 +531,8 @@ Tensor softmax(
         /*is_causal_mask=*/false,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor scale_mask_softmax(
@@ -590,7 +606,8 @@ Tensor scale_mask_softmax(
             /*is_causal_mask=*/is_causal_mask,
             /*compute_kernel_config=*/compute_kernel_config_val,
             /*is_scale_causal_mask_hw_dims_softmax=*/false,
-            /*numeric_stable=*/numeric_stable);
+            /*numeric_stable=*/numeric_stable,
+            /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
     }
 
     // Operation
@@ -606,7 +623,8 @@ Tensor scale_mask_softmax(
         /*is_causal_mask=*/is_causal_mask,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor softmax_in_place(
@@ -644,7 +662,8 @@ Tensor softmax_in_place(
         /*is_causal_mask=*/false,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor scale_mask_softmax_in_place(
@@ -663,12 +682,41 @@ Tensor scale_mask_softmax_in_place(
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
+    // Only the sharded factory has a ROW_MAJOR-mask reader. The default (interleaved, attention-optimized)
+    // factory reads every mask page as a tile, so the documented unsharded ROW_MAJOR form [B, 1, W/32, 32]
+    // was misread (and for W < 1024 its height made mask_Ht zero, a host divide-by-zero). Tilize it here, as the
+    // non-in-place scale_mask_softmax tilizes ROW_MAJOR masks: row-major [B, 1, W/32, 32] has the element order of
+    // [B, 1, 1, W].
+    // Only the documented shape is converted; anything else keeps reaching the ROW_MAJOR shape check in validation.
+    const bool tilize_rm_mask = [&] {
+        if (!mask.has_value() || mask->layout() != Layout::ROW_MAJOR || mask->is_sharded() || is_causal_mask ||
+            !std::holds_alternative<SoftmaxDefaultProgramConfig>(program_config)) {
+            return false;
+        }
+        const auto& tile = input_tensor.tensor_spec().tile();
+        const ttnn::Shape documented_shape(
+            {mask->padded_shape()[0], 1, input_tensor.padded_shape()[-1] / tile.get_width(), tile.get_height()});
+        return mask->padded_shape() == documented_shape;
+    }();
+    const std::optional<const Tensor> formatted_mask = [&]() -> std::optional<const Tensor> {
+        if (!tilize_rm_mask) {
+            return mask;
+        }
+        const auto& mask_shape = mask->padded_shape();
+        const ttnn::Shape flat_shape({mask_shape[0], 1, 1, mask_shape[-2] * mask_shape[-1]});
+        return ttnn::tilize_with_val_padding(
+            ttnn::reshape(*mask, flat_shape),
+            ttnn::operations::data_movement::pad_to_tile_shape(flat_shape),
+            -std::numeric_limits<float>::infinity(),
+            mask->memory_config());
+    }();
+
     // Operation
     return ttnn::prim::softmax(
         SoftmaxOperationType::ScaleMaskSoftmaxInPlace,
         /*input_tensor=*/input_tensor,
         /*dim=*/dim,
-        /*mask=*/mask,
+        /*mask=*/formatted_mask,
         /*scale=*/scale,
         /*inplace=*/true,
         /*output_mem_config=*/input_tensor.memory_config(),
@@ -676,7 +724,8 @@ Tensor scale_mask_softmax_in_place(
         /*is_causal_mask=*/is_causal_mask,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/false,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor scale_causal_mask_hw_dims_softmax_in_place(
@@ -707,7 +756,8 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*is_causal_mask=*/true,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/true,
-        /*numeric_stable=*/numeric_stable);
+        /*numeric_stable=*/numeric_stable,
+        /*has_explicit_compute_kernel_config=*/compute_kernel_config.has_value());
 }
 
 Tensor softmax(
@@ -722,7 +772,8 @@ Tensor softmax(
     bool is_causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
     bool is_scale_causal_mask_hw_dims_softmax,
-    bool numeric_stable) {
+    bool numeric_stable,
+    bool has_explicit_compute_kernel_config) {
     return ttnn::device_operation::launch<SoftmaxDeviceOperation>(
         SoftmaxParams{
             softmax_type,
@@ -734,7 +785,8 @@ Tensor softmax(
             is_causal_mask,
             compute_kernel_config,
             is_scale_causal_mask_hw_dims_softmax,
-            numeric_stable},
+            numeric_stable,
+            has_explicit_compute_kernel_config},
         SoftmaxInputs{input_tensor, mask});
 }
 }  // namespace ttnn::prim

@@ -604,6 +604,8 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define RecordPerfCounters()
 
 #define SYNC_WAIT(name, key) (void(sizeof(key)))
+#define SYNC_WAIT_ZONE(name)
+#define SYNC_WAIT_KEY(name, key) (void(sizeof(key)))
 #define SYNC_SIGNAL(name, key) (void(sizeof(key)))
 #define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
 
