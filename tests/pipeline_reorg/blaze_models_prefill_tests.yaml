@@ -967,12 +967,13 @@
       python3 -m pytest \
         "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_kv_matches_unbatched[blackhole-B4-8x4]" \
         "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_lanes_sdpa_matches_per_request[blackhole-lane0_empty-8x4]" \
-        -vv --tb=short
+        models/demos/gemma4_d_p/tests/test_mid_chunk_resume.py \
+        -vv --tb=short --durations=0
       # Its own process: the serving test launches a runner that opens the mesh, which the cases above keep open
       # until their pytest exits.
       python3 -m pytest \
         "models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_batched_prefill_migration[mock]" \
-        -vv --tb=short
+        -vv --tb=short --durations=0
     '
   test_type: gemma4_d_p_batching
   test_tags: [gemma4_d_p, batching]
@@ -980,7 +981,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 25
+      timeout: 45
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
