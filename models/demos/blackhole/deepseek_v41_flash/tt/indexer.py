@@ -54,21 +54,44 @@ def rope_rows(freqs_cis: torch.Tensor, positions: torch.Tensor):
     return C, S
 
 
+BUCKETED_MATMUL_MAX_ENTRIES = (1 << 19) + 64  # a 1,048,576-token build (ratio 2) + its 64 spare positions
+
+
 def default_backend(n_entries: int) -> str:
     """Length-dependent backend: the batched matmul composite wins for short key caches (139 us at 2k, 205 us at 8k vs 466-509 us fused), the fused
     ``indexer_score_dsa`` above ~64k entries (measured: matmul 440-770 us vs fused 629-872 us per index layer at 2k-32k entries, equal at 64k; env DSV41_IDX_BACKEND forces one, DSV41_IDX_SWITCH sets the length).
+
+    The fused backend scores the WHOLE key slab at every step, so a step costs by the built context, not by the positions (a 1M build decoded a 64k prompt at 64.8 ms/token against 47.0 ms on a 65k
+    build: 524,288 entries scored per index layer instead of ~33k). The matmul backend follows the position buckets (``pos_buckets``, ``DSV41DecodeIndexer.set_pos_bucket``), so up to
+    ``BUCKETED_MATMUL_MAX_ENTRIES`` it is chosen whatever the switch says (DSV41_IDX_BUCKETED=0 restores the old switch-only rule).
     """
     import os
 
     forced = os.environ.get("DSV41_IDX_BACKEND")
     if forced:
         return forced
-    return "matmul" if n_entries <= int(os.environ.get("DSV41_IDX_SWITCH", "65536")) else "fused"
+    if n_entries <= int(os.environ.get("DSV41_IDX_SWITCH", "65536")):
+        return "matmul"
+    if os.environ.get("DSV41_IDX_BUCKETED", "1") == "1" and n_entries <= BUCKETED_MATMUL_MAX_ENTRIES:
+        return "matmul"
+    return "fused"
+
+
+POS_BUCKETS_BASE = (512, 2048, 8192, 32768)
 
 
 def pos_buckets(max_pos):
-    """Position buckets of the decode / verify traces (ascending, all below ``max_pos``; the full-slab traces are always captured too). DSV41_POS_BUCKETS='512,2048,8192,32768' (default; '0' = none; a bucket <= topk * ratio, e.g. 512, runs dense, without the indexer)."""
-    raw = os.environ.get("DSV41_POS_BUCKETS", "512,2048,8192,32768")
+    """Position buckets of the decode / verify traces (ascending, all below ``max_pos``; the full-slab traces are always captured too). DSV41_POS_BUCKETS='512,2048,8192,32768,65536,...' sets the list
+    (a bucket <= topk * ratio, e.g. 512, runs dense, without the indexer; '0' = none). Default: ``POS_BUCKETS_BASE`` and every power of two above it below ``max_pos``, so the scored key length of a step
+    stays within 2x of the positions up to the built context (the last bucket below ``max_pos`` is the largest power of two under it) and a long build costs like a short one.
+    """
+    raw = os.environ.get("DSV41_POS_BUCKETS")
+    if raw is None:
+        vals, b = list(POS_BUCKETS_BASE), POS_BUCKETS_BASE[-1] * 2
+        while b < int(max_pos):
+            vals.append(b)
+            b *= 2
+        return sorted(v for v in vals if 0 < v < int(max_pos))
     if raw.strip() in ("", "0"):
         return []
     return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})

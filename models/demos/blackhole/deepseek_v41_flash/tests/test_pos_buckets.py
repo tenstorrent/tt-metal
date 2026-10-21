@@ -12,6 +12,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt import spec_model as sm
 def test_pos_bucket_list(monkeypatch):
     monkeypatch.delenv("DSV41_POS_BUCKETS", raising=False)
     default = sm.pos_buckets(131200)
+    assert default == [512, 2048, 8192, 32768, 65536, 131072]  # the power-of-two ladder up to the built context
     monkeypatch.setenv("DSV41_POS_BUCKETS", "0")
     assert sm.pos_buckets(131200) == []
     monkeypatch.setenv("DSV41_POS_BUCKETS", "32768,2048,8192,2048,200000")
