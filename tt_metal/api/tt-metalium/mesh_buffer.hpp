@@ -82,7 +82,7 @@ struct MeshCoreCoord;
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
 using SRAMTensorViewAddress = std::pair<distributed::MeshCoreCoord, DeviceAddr>;
-std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
+distributed::MeshBuffer create_sram_buffer_view(
     distributed::MeshDevice&,
     const distributed::MeshBufferConfig&,
     const distributed::DeviceLocalBufferConfig&,
@@ -205,7 +205,7 @@ private:
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
-    friend std::shared_ptr<MeshBuffer> experimental::per_core_allocation::create_l1_buffer_view(
+    friend MeshBuffer experimental::per_core_allocation::create_sram_buffer_view(
         MeshDevice&,
         const MeshBufferConfig&,
         const DeviceLocalBufferConfig&,
