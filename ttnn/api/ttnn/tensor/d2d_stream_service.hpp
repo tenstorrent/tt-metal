@@ -79,7 +79,6 @@ struct D2DStreamConfig {
     // Logical shape & layout of the un-sharded global tensor. The mapper runs
     // once on a zero host tensor of this spec to derive the per-shard
     // tt::tt_metal::TensorSpec + tt::tt_metal::TensorTopology shared by both sides.
-    // Any dtype / layout whose DRAM-interleaved page size is L1-aligned.
     tt::tt_metal::TensorSpec global_spec;
 
     // Required. Same mapper describes both sides. Ownership is transferred into
@@ -192,7 +191,7 @@ public:
     // All segments: [primary, extra_tensors...].
     const std::vector<Tensor>& get_backing_tensors() const;
 
-    // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
+    // Segment 0's per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
     const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
 
     // Echo of Config::sender_worker_cores.
@@ -269,7 +268,7 @@ public:
     // All segments: [primary, extra_tensors...].
     const std::vector<Tensor>& get_backing_tensors() const;
 
-    // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
+    // Segment 0's per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
     const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
 
     // Echo of Config::receiver_worker_cores.

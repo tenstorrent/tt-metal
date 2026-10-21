@@ -132,7 +132,8 @@ inline void snapshot_metadata(const Noc& noc, uint32_t start_page) {
 
 void kernel_main() {
     // RT args (per coord, per worker). Buffer base addresses come first so the
-    // host can register them as BufferBindings at fixed positions 0/1 (and 7).
+    // host can register them as BufferBindings at fixed positions 0/1, 7 (overhang),
+    // 8 (metadata) and 9+4s / 10+4s (extra segment s).
     const uint32_t backing_tensor_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_tensor_addr = get_arg_val<uint32_t>(1);
     const uint32_t consumed_counter_addr = get_arg_val<uint32_t>(2);

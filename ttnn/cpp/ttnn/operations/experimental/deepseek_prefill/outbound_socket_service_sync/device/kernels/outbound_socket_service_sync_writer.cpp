@@ -171,7 +171,8 @@ inline void forward_metadata(
 
 void kernel_main() {
     // RT args (per coord, per worker). Base addresses come first so the host can
-    // register them as BufferBindings at fixed positions 0/1 (and 7).
+    // register them as BufferBindings at fixed positions 0/1, 7 (metadata) and
+    // 10+4s / 11+4s (extra segment s).
     const uint32_t input_tensor_addr = get_arg_val<uint32_t>(0);
     const uint32_t backing_tensor_addr = get_arg_val<uint32_t>(1);
     const uint32_t data_ready_counter_addr = get_arg_val<uint32_t>(2);

@@ -252,6 +252,9 @@ def test_d2d_socket_sync_multi_tensor(mesh_device, metadata_words):
     assert len(receiver.get_backing_tensors()) == 3
 
     cache_after_first = None
+    # Inputs stay alive until the end so iteration 2 allocates at new addresses and
+    # the program-cache hit has to patch every segment's input binding.
+    kept_inputs = []
     try:
         for it in range(2):
             torch.manual_seed(it)
@@ -289,9 +292,7 @@ def test_d2d_socket_sync_multi_tensor(mesh_device, metadata_words):
                     got_md = ttnn.to_torch(dev_md).flatten().to(torch.int64).tolist()
                     assert got_md == metadata_words, f"iter {it}: metadata mismatch {got_md} != {metadata_words}"
 
-            for t in (tt_act, tt_tile, tt_ids, md_tensor):
-                if t is not None:
-                    ttnn.deallocate(t)
+            kept_inputs += [t for t in (tt_act, tt_tile, tt_ids, md_tensor) if t is not None]
 
             n_cached = (sender_mesh.num_program_cache_entries(), receiver_mesh.num_program_cache_entries())
             if it == 0:
@@ -299,5 +300,7 @@ def test_d2d_socket_sync_multi_tensor(mesh_device, metadata_words):
             else:
                 assert n_cached == cache_after_first, f"program cache grew on iter 2: {cache_after_first} -> {n_cached}"
     finally:
+        for t in kept_inputs:
+            ttnn.deallocate(t)
         del receiver
         del sender
