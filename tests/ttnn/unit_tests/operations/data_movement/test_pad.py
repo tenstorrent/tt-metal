@@ -1770,3 +1770,183 @@ def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+# Shard orientation of height-sharded row-major pads in L1.
+#
+# Which core holds which shard follows from the shard grid AND the shard orientation. The width-only sharded pad copies
+# each core's local input shard into its local output shard, and the height-only sharded pad hands the runtime args of
+# output shard i to the i-th core of the output grid. The width-pad output config used to hard-code ROW_MAJOR and the
+# height-only factory walked the output grid in the INPUT's orientation, so a COL_MAJOR input on a grid with more than
+# one row and more than one column came back with whole shards permuted, and a caller-supplied output config of the
+# other orientation got its runtime args on the wrong cores. On a single row or a single column of cores both
+# orientations list the cores in the same order, which is why those grids are the controls below.
+ORIENTATIONS = [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR]
+INPUT_ORIENTATION_IDS = ["in_col_major", "in_row_major"]
+OUTPUT_ORIENTATION_IDS = ["out_col_major", "out_row_major"]
+
+
+def skip_if_compute_grid_too_small(device, grid):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < grid[0] or compute_grid.y < grid[1]:
+        pytest.skip(f"needs a {grid[0]}x{grid[1]} compute grid, device has {compute_grid.x}x{compute_grid.y}")
+
+
+def height_sharded_l1_config(grid, shard_shape, orientation):
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, shard_shape, orientation),
+    )
+
+
+def run_pad_on_sharded_input(device, shape, dtype, input_memory_config, padding, value, output_memory_config=None):
+    """Pads a row-major tensor placed with input_memory_config. Returns the torch reference, the result and the tensor."""
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    torch_padding = [amount for before_and_after in reversed(padding) for amount in before_and_after]
+    expected = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    kwargs = {} if output_memory_config is None else {"memory_config": output_memory_config}
+    tt_output = ttnn.pad(tt_input, padding=padding, value=float(value), **kwargs)
+    return expected, ttnn.to_torch(tt_output), tt_output
+
+
+def assert_no_wrong_rows(expected, actual):
+    assert actual.shape == expected.shape, f"shape mismatch: {tuple(actual.shape)} vs {tuple(expected.shape)}"
+    expected_rows = expected.reshape(-1, expected.shape[-1])
+    actual_rows = actual.to(expected.dtype).reshape(-1, expected.shape[-1])
+    wrong_rows = torch.nonzero(~torch.all(expected_rows == actual_rows, dim=-1)).flatten()
+    assert (
+        wrong_rows.numel() == 0
+    ), f"{wrong_rows.numel()}/{expected_rows.shape[0]} rows differ, first: {wrong_rows[:16].tolist()}"
+
+
+# (shape, shard grid (x, y), dtype, pad value). Every case puts 8 rows on each core, except the single row and single
+# column grids that serve as controls.
+WIDTH_PAD_ORIENTATION_CASES = [
+    pytest.param((1, 1, 128, 16), (4, 4), ttnn.bfloat16, 5.0, id="4x4_bf16_value5"),
+    pytest.param((1, 1, 128, 16), (4, 4), ttnn.bfloat16, 0.0, id="4x4_bf16_value0"),
+    pytest.param((2, 2, 32, 16), (4, 4), ttnn.bfloat16, 5.0, id="4x4_bf16_batch_and_channel_folded"),
+    pytest.param((1, 1, 64, 16), (4, 2), ttnn.bfloat16, 5.0, id="4x2_bf16"),
+    pytest.param((1, 1, 64, 16), (2, 4), ttnn.bfloat16, 5.0, id="2x4_bf16"),
+    pytest.param((1, 1, 448, 16), (8, 7), ttnn.bfloat16, 5.0, id="8x7_bf16"),
+    pytest.param((1, 1, 512, 16), (8, 8), ttnn.int32, 5, id="8x8_int32"),
+    pytest.param((1, 1, 128, 16), (8, 1), ttnn.bfloat16, 5.0, id="8x1_bf16_control"),
+    pytest.param((1, 1, 128, 16), (1, 8), ttnn.bfloat16, 5.0, id="1x8_bf16_control"),
+]
+
+
+@pytest.mark.parametrize("shape,grid,dtype,value", WIDTH_PAD_ORIENTATION_CASES)
+@pytest.mark.parametrize("orientation", ORIENTATIONS, ids=INPUT_ORIENTATION_IDS)
+def test_pad_rm_height_sharded_width_pad_shard_orientation(device, shape, grid, dtype, value, orientation):
+    """Width-only pad: every core copies its local input shard into its local output shard, so the output has to list
+    the cores in the input's order. A COL_MAJOR input used to come back with whole shards swapped (12 of 16 on 4x4)."""
+    skip_if_compute_grid_too_small(device, grid)
+    rows = shape[0] * shape[1] * shape[2]
+    input_memory_config = height_sharded_l1_config(grid, (rows // (grid[0] * grid[1]), shape[3]), orientation)
+    padding = ((0, 0), (0, 0), (0, 0), (0, 16))
+
+    expected, actual, _ = run_pad_on_sharded_input(device, shape, dtype, input_memory_config, padding, value)
+
+    assert_no_wrong_rows(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "shape,grid",
+    [((1, 1, 128, 16), (4, 4)), ((1, 1, 64, 16), (4, 2)), ((1, 1, 128, 16), (8, 1))],
+    ids=["4x4", "4x2", "8x1"],
+)
+@pytest.mark.parametrize("orientation", ORIENTATIONS, ids=INPUT_ORIENTATION_IDS)
+def test_pad_rm_height_sharded_width_pad_keeps_input_orientation(device, shape, grid, orientation):
+    skip_if_compute_grid_too_small(device, grid)
+    rows = shape[0] * shape[1] * shape[2]
+    input_memory_config = height_sharded_l1_config(grid, (rows // (grid[0] * grid[1]), shape[3]), orientation)
+    padding = ((0, 0), (0, 0), (0, 0), (0, 16))
+
+    _, _, tt_output = run_pad_on_sharded_input(device, shape, ttnn.bfloat16, input_memory_config, padding, 5.0)
+
+    output_memory_config = tt_output.memory_config()
+    assert output_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert output_memory_config.shard_spec.orientation == orientation
+
+
+@pytest.mark.parametrize("requested_orientation", ORIENTATIONS, ids=OUTPUT_ORIENTATION_IDS)
+@pytest.mark.parametrize("input_orientation", ORIENTATIONS, ids=INPUT_ORIENTATION_IDS)
+def test_pad_rm_height_sharded_width_pad_explicit_output_config(device, input_orientation, requested_orientation):
+    """A width pad recomputes its output config and ignores the caller's (it logs that). Whatever orientation the caller
+    asks for, the values have to be right, and a request that matches the input's orientation is what comes back."""
+    shape, grid = (1, 1, 128, 16), (4, 4)
+    input_memory_config = height_sharded_l1_config(grid, (8, 16), input_orientation)
+    output_memory_config = height_sharded_l1_config(grid, (8, 32), requested_orientation)
+    padding = ((0, 0), (0, 0), (0, 0), (0, 16))
+
+    expected, actual, tt_output = run_pad_on_sharded_input(
+        device, shape, ttnn.bfloat16, input_memory_config, padding, 5.0, output_memory_config
+    )
+
+    assert_no_wrong_rows(expected, actual)
+    if requested_orientation == input_orientation:
+        assert tt_output.memory_config().shard_spec.orientation == requested_orientation
+
+
+@pytest.mark.parametrize(
+    "final_orientation",
+    [None, ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
+    ids=["no_output_config", "out_col_major", "out_row_major"],
+)
+@pytest.mark.parametrize("input_orientation", ORIENTATIONS, ids=INPUT_ORIENTATION_IDS)
+def test_pad_rm_height_sharded_height_and_width_pad_shard_orientation(device, input_orientation, final_orientation):
+    """Height and width padding together run as a width-only pad followed by a height-only pad. The width step must
+    keep the input's orientation, and the height step must honour an output config of the other orientation."""
+    shape, grid = (1, 1, 128, 16), (4, 4)
+    input_memory_config = height_sharded_l1_config(grid, (8, 16), input_orientation)
+    output_memory_config = (
+        None if final_orientation is None else height_sharded_l1_config(grid, (10, 32), final_orientation)
+    )
+    padding = ((0, 0), (0, 0), (0, 32), (0, 16))
+
+    expected, actual, _ = run_pad_on_sharded_input(
+        device, shape, ttnn.bfloat16, input_memory_config, padding, 5.0, output_memory_config
+    )
+
+    assert_no_wrong_rows(expected, actual)
+
+
+# (shape, shard grid (x, y), dtype, pad value). The height grows by 50%, so a core holds 8 rows in and 12 rows out.
+HEIGHT_PAD_ORIENTATION_CASES = [
+    pytest.param((1, 4, 32, 16), (4, 4), ttnn.bfloat16, -1.0, id="4x4_bf16"),
+    pytest.param((1, 2, 32, 16), (4, 2), ttnn.bfloat16, -1.0, id="4x2_bf16"),
+    pytest.param((1, 2, 32, 16), (2, 4), ttnn.bfloat16, -1.0, id="2x4_bf16"),
+    pytest.param((1, 14, 32, 16), (8, 7), ttnn.bfloat16, -1.0, id="8x7_bf16"),
+    pytest.param((1, 8, 64, 16), (8, 8), ttnn.int32, 0, id="8x8_int32"),
+    pytest.param((1, 4, 32, 16), (8, 1), ttnn.bfloat16, -1.0, id="8x1_bf16_control"),
+]
+
+
+@pytest.mark.parametrize("shape,grid,dtype,value", HEIGHT_PAD_ORIENTATION_CASES)
+@pytest.mark.parametrize("output_orientation", ORIENTATIONS, ids=OUTPUT_ORIENTATION_IDS)
+@pytest.mark.parametrize("input_orientation", ORIENTATIONS, ids=INPUT_ORIENTATION_IDS)
+def test_pad_rm_height_sharded_height_pad_output_config_orientation(
+    device, shape, grid, dtype, value, input_orientation, output_orientation
+):
+    """Height-only pad with a caller-supplied output config: the runtime args of output shard i belong on the i-th
+    core of the OUTPUT grid in the OUTPUT orientation, not in the input's (12 of 16 shards were wrong on 4x4)."""
+    skip_if_compute_grid_too_small(device, grid)
+    num_cores = grid[0] * grid[1]
+    height_padding = shape[2] // 2
+    rows = shape[0] * shape[1] * shape[2]
+    padded_rows = shape[0] * shape[1] * (shape[2] + height_padding)
+    input_memory_config = height_sharded_l1_config(grid, (rows // num_cores, shape[3]), input_orientation)
+    output_memory_config = height_sharded_l1_config(grid, (padded_rows // num_cores, shape[3]), output_orientation)
+    padding = ((0, 0), (0, 0), (0, height_padding), (0, 0))
+
+    expected, actual, _ = run_pad_on_sharded_input(
+        device, shape, dtype, input_memory_config, padding, value, output_memory_config
+    )
+
+    assert_no_wrong_rows(expected, actual)
