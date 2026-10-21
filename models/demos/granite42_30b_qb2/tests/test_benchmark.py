@@ -177,14 +177,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
             "decode_tokens_per_s": 40,
         }
 
-    def apply_filter(instances):
-        for instance in instances:
-            instance.filtered_resps["flexible-extract"] = instance.resps[0]
-
-    task = SimpleNamespace(
-        process_results=score,
-        _filters=[SimpleNamespace(name="flexible-extract", apply=apply_filter)],
-    )
+    task = SimpleNamespace(process_results=score)
     monkeypatch.setattr(benchmark, "load_gpqa", lambda: (task, cases))
     monkeypatch.setattr(benchmark, "complete_nonstreaming", complete_nonstreaming)
     assert benchmark.run(gpqa_args(tmp_path, prepare_only=True)) == 0
@@ -200,6 +193,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
     assert len(rows) == 10 and all(row["correct"] == 1 for row in rows)
     assert all(row["usage"] == {"prompt_tokens": 20, "completion_tokens": 4} for row in rows)
     summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["task"] == "r1_gpqa_diamond"
     assert summary["gpqa_result"]["accuracy"] == 1
     assert summary["gpqa_result"]["concurrency"] == 5
     assert summary["gpqa_result"]["mean_decode_tokens_per_s"] == 40
@@ -282,17 +276,15 @@ def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
         assert record.config_params["server_capacity"] in (1, 16)
 
 
-def test_gpqa_scores_the_filtered_final_answer():
+def test_gpqa_delegates_final_answer_extraction_to_the_r1_task():
     doc = {"answer": "(B)"}
-
-    def extract(instances):
-        assert instances[0].resps == [r"The final answer is \boxed{B}."]
-        instances[0].filtered_resps["flexible-extract"] = "(B)"
+    final_answer = r"The final answer is \boxed{B}."
 
     def score(actual_doc, responses):
         assert actual_doc is doc
-        assert responses == ["(B)"]
+        assert responses == [final_answer]
         return {"exact_match": 1}
 
-    task = SimpleNamespace(_filters=[SimpleNamespace(name="flexible-extract", apply=extract)], process_results=score)
-    assert benchmark.score_answer(task, doc, r"The final answer is \boxed{B}.") == 1
+    # r1_gpqa_diamond owns extraction; it needs no separate named filter.
+    task = SimpleNamespace(process_results=score)
+    assert benchmark.score_answer(task, doc, final_answer) == 1
