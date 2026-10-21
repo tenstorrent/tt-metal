@@ -10,7 +10,6 @@ from quasar.test_matmul_quasar import (
     NON_MX_MATMUL_FORMATS,
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
-    matmul_implied_math_formats,
     matmul_tile_dimensions,
     matmul_transpose_modes,
 )
@@ -42,7 +41,6 @@ def matmul_direct_indexing_tile_dimensions(dest_acc, dest_sync_mode):
     dest_sync_mode=lambda: matmul_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(matmul_direct_indexing_tile_dimensions),
-    implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=[None],
     transpose=matmul_transpose_modes,
 )
@@ -53,7 +51,6 @@ def test_matmul_direct_indexing(
     dest_sync_mode,
     dest_acc,
     format,
-    implied_math_format,
     register_format_hint,
     transpose,
 ):
@@ -64,7 +61,6 @@ def test_matmul_direct_indexing(
         dest_sync_mode,
         dest_acc,
         format,
-        implied_math_format,
         register_format_hint,
         enable_direct_indexing=True,
         transpose=transpose,
