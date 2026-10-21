@@ -990,17 +990,20 @@ def _run_sequence(
 
 
 @GALAXY_RING
-@pytest.mark.parametrize("rows,logical_n", [(1024, 8192), (1184, 9472)], ids=["r1024", "r1184"])
+@pytest.mark.parametrize(
+    "rows,logical_n,k_chunk", [(1024, 8192, 256), (4736, 37888, 384)], ids=["r1024k256", "r4736k384"]
+)
 def test_resident_call_parity(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, reset_seeds, capfd
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, reset_seeds, capfd
 ):
     """Four resident calls in a row, fresh inputs each, each checked against chunk mode run the same way.
 
-    Resident at 5 s alternates 11.9 / 4.3 ms by call, and the profile shows the fast calls' compute finishing
-    before the all-gather has delivered every slab. Fresh inputs per call make a skipped wait visible as a wrong
-    answer (the previous call's K/V), and per-call timing ties the parity to it. 256-key pieces as in the bench.
+    Resident at 5 s (4736 rows per shard, 384-key pieces: the bench's geometry) alternates 11.9 / 4.3 ms by
+    call. Fresh inputs per call make a skipped wait visible as a wrong answer (the previous call's K/V), and
+    per-call timing ties the parity to it. Measured 2026-10-21 at 1024 and 1184 rows with 256-key pieces: every
+    call 2.4 ms and bit-exact against chunk mode, i.e. no alternation at the small shapes.
     """
-    kw = dict(tau=2.0, seeds=[11, 12, 13, 14], rows=rows, logical_n=logical_n, q_chunk=Q1_CHUNK, k_chunk=256)
+    kw = dict(tau=2.0, seeds=[11, 12, 13, 14], rows=rows, logical_n=logical_n, q_chunk=Q1_CHUNK, k_chunk=k_chunk)
     res = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", **kw)
     ref = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
     pccs = []
