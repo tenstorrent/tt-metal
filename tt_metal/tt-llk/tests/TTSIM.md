@@ -73,7 +73,7 @@ the most common format and no SFPU/tilize paths.
 |---|---|
 | Blackhole | Working |
 | Wormhole B0 | Working |
-| Quasar | Working (`libttsim_qsr.so`) |
+| Quasar | Working |
 
 ## Skip list
 
