@@ -526,6 +526,8 @@ class TTMLRolloutSampler(RolloutSampler):
                         pending_hosts, pending_event = async_read_to_host(chunk_columns, mesh_device)
                         chunk_columns = []
         finally:
+            if pending_event is not None:
+                ttnn.event_synchronize(mesh_event=pending_event)
             self._cache_release(kv)
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
