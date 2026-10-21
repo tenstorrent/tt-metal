@@ -5,6 +5,7 @@
 #pragma once
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/sdpa_fw/sdpa_fw_program_config.hpp"
 #include "metal/ttnn_all_includes.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -22,6 +23,8 @@ struct RingSDPAFwParams {
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
     RingDirection ring_direction =
         ttnn_fixed::distributed::RingShiftDirection::Backward;  // Direction K/V is shifting in the ring
+    // Forwarded to the SDPA forward kernels on every device (see SDPAForwardProgramConfig).
+    ttml::metal::SDPAForwardProgramConfig program_config{};
 };
 
 struct RingSDPAFwInputs {

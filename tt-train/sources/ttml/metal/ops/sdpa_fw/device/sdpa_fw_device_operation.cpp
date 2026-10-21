@@ -177,6 +177,25 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             value_shape);
     }
 
+    // Program config knobs. Both are sequence lengths in elements; 0 means auto. The kernels
+    // iterate whole tiles and the reader rounds causal K counts up to a chunk boundary, so
+    // each knob must be a tile multiple that divides the sequence length.
+    const auto check_chunk_knob = [qSt](uint32_t value, const char* name) {
+        if (value == 0U) {
+            return;
+        }
+        TT_FATAL(
+            value % tt::constants::TILE_HEIGHT == 0U,
+            "{} must be a multiple of {} (got {})",
+            name,
+            tt::constants::TILE_HEIGHT,
+            value);
+        TT_FATAL(
+            qSt % value == 0U, "{} ({}) must divide the sequence length ({})", name, value, qSt);
+    };
+    check_chunk_knob(args.q_chunk_size, "q_chunk_size");
+    check_chunk_knob(args.k_chunk_size, "k_chunk_size");
+
     // TODO(vmelnykov): #28205 - Implement dropout support in SDPA forward operation
     // Currently dropout is not implemented
     TT_FATAL(
@@ -279,14 +298,17 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output,
-    const std::optional<ttnn::Tensor>& gate) {
+    const std::optional<ttnn::Tensor>& gate,
+    const ttml::metal::SDPAForwardProgramConfig& program_config) {
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .return_intermediates = return_intermediates,
         .mask_type = mask_type,
         .dropout_probability = dropout_probability,
-        .has_gate = gate.has_value()};
+        .has_gate = gate.has_value(),
+        .q_chunk_size = program_config.q_chunk_size,
+        .k_chunk_size = program_config.k_chunk_size};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,
