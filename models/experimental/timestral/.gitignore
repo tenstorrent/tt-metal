@@ -1,0 +1,3 @@
+# Downloaded checkpoints (mistralai/Timestral-*)
+weights/
+*.safetensors
