@@ -564,8 +564,8 @@ def _cap_torch_threads_to_half_the_cpus(fn):
     threads as the process has CPUs and some of those CPUs are busy with another process, every region
     waits for the threads stuck behind it. On the BH galaxy hosts the Weka client pins two polling
     threads at 100% on CPUs 1 and 2, which made the Wan VAE readback take ~430 ms instead of ~20 ms
-    (#60670). Leaving half the CPUs free lets the scheduler avoid busy ones whether or not the process
-    is pinned (LTX pins itself to one CPU per core). Bulk host work keeps the full thread count.
+    (#60670). Leaving half the CPUs free lets the scheduler avoid busy ones, including when the process
+    is launched on a subset of CPUs (e.g. with ``taskset``). Bulk host work keeps the full thread count.
     """
 
     @functools.wraps(fn)
