@@ -589,10 +589,12 @@ TEST(McastReverseTreeTest, XAxisChordAtRootIsCopiedToTargetRows) {
     constexpr std::uint32_t landing_y = root_y + 1;
     constexpr std::uint32_t landing_x = 5;
     EXPECT_EQ(
-        (Routing2DCodec::decode_action<eth_chan_directions::Z, true>(actions.data(), landing_y, landing_x, y_size)),
+        (Routing2DCodec::decode_action<eth_chan_directions::Z, Fabric2DAxis::X>(
+            actions.data(), landing_y, landing_x, y_size)),
         Routing2DCodec::ACTION_LOCAL_DELIVER | Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_EAST);
     EXPECT_EQ(
-        (Routing2DCodec::decode_action<eth_chan_directions::Z, false>(actions.data(), landing_y, landing_x, y_size)),
+        (Routing2DCodec::decode_action<eth_chan_directions::Z, Fabric2DAxis::Y>(
+            actions.data(), landing_y, landing_x, y_size)),
         Routing2DCodec::ACTION_LOCAL_DELIVER | Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_EAST |
             Routing2DCodec::ACTION_Z);
 }

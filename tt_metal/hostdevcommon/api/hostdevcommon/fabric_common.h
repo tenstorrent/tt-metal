@@ -308,13 +308,15 @@ struct Routing2DCodec {
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]
     // route buffer. E/W-facing routers consume X only; N/S-facing routers consume Y whenever the
     // whole Y byte is nonzero, and X otherwise. A Z-facing router decodes like the cardinal routers
-    // on the express axis: X only when Z_DECODES_X_ONLY (chords along E/W), Y-first otherwise.
-    template <eth_chan_directions MY_DIR, bool Z_DECODES_X_ONLY>
+    // on the express axis (EXPRESS_AXIS, the axis the mesh's chords run along): X only when that
+    // axis is X (chords along E/W), Y-first otherwise. Device routers do not call this directly --
+    // Fabric2DRoutingConfig::decode_action supplies this build's axis.
+    template <eth_chan_directions MY_DIR, Fabric2DAxis EXPRESS_AXIS>
     static std::uint8_t decode_action(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         if constexpr (
             MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST ||
-            (MY_DIR == eth_chan_directions::Z && Z_DECODES_X_ONLY)) {
+            (MY_DIR == eth_chan_directions::Z && EXPRESS_AXIS == Fabric2DAxis::X)) {
             return route_buffer[y_size + local_x];
         } else {
             return decode_action_y_first(route_buffer, local_y, local_x, y_size);
@@ -417,9 +419,15 @@ struct Fabric2DRoutingConfig {
     // True when express chords run along `axis` in this build.
     static constexpr bool express_on(Fabric2DAxis axis) { return EXPRESS_ENABLED && axis == EXPRESS_AXIS; }
 
-    // A chord arrives moving along the express axis, so a Z-facing router decodes like the cardinal
-    // routers on that axis. Passed to Routing2DCodec::decode_action as its template argument.
-    static constexpr bool z_decodes_x_only() { return express_on(Fabric2DAxis::X); }
+    // Router-facing decode for this build. A chord arrives moving along the express axis, so a
+    // Z-facing router decodes like the cardinal routers on that axis; which axis that is stays
+    // internal to this struct, and callers name only their facing. (When express is disabled
+    // EXPRESS_AXIS reads Y above, which reproduces the plain-mesh decode.)
+    template <eth_chan_directions MY_DIR>
+    static std::uint8_t decode_action(
+        const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
+        return Routing2DCodec::decode_action<MY_DIR, EXPRESS_AXIS>(route_buffer, local_y, local_x, y_size);
+    }
 
     // The one-hot action bits that travel on the given axis; Z joins the express axis.
     static constexpr std::uint8_t axis_actions(Fabric2DAxis axis) {

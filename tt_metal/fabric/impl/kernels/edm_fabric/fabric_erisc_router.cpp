@@ -808,7 +808,7 @@ constexpr uint8_t live_eth_mask_2d() {
         live = static_cast<uint8_t>(live & ~0b0110);
     }
     constexpr bool trim_ns_for_intramesh_z_on_x_express =
-        my_dir == eth_chan_directions::Z && Fabric2DRoutingConfig::z_decodes_x_only() && !is_intermesh_router;
+        my_dir == eth_chan_directions::Z && Fabric2DRoutingConfig::express_on(Fabric2DAxis::X) && !is_intermesh_router;
     if constexpr (trim_ns_for_intramesh_z_on_x_express) {
         live = static_cast<uint8_t>(live & ~0b1100);
     }
@@ -1470,9 +1470,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 } else {
                     // A Z-facing router decodes the axis its chord runs along; see Fabric2DRoutingConfig.
-                    action = Routing2DCodec::decode_action<
-                        static_cast<eth_chan_directions>(my_direction),
-                        Fabric2DRoutingConfig::z_decodes_x_only()>(
+                    action = Fabric2DRoutingConfig::decode_action<static_cast<eth_chan_directions>(my_direction)>(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 }
                 // This chip is the exit when the maps say deliver here but the final mesh is
