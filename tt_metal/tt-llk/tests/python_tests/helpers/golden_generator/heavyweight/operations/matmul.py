@@ -4,7 +4,7 @@
 """Matmul — the MVMUL family."""
 
 from functools import partial
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import torch
 from helpers.format_config import DataFormat
@@ -85,11 +85,6 @@ class MatmulGolden(Golden):
 
     op_name = "matmul"
 
-    #: Explicit mantissa bits the multiplier takes from each operand per phase,
-    #: as (srcA, srcB). ``None`` means this architecture's split is not modelled
-    #: and the product is computed exactly, at Dest precision.
-    MANTISSA_SPLIT: Optional[Tuple[int, int]] = None
-
     #: Which src register each stimulus lands in, in argument order. Set so that
     #: ``run([arg0, arg1])`` mirrors ``_llk_unpack_matmul_init_(arg0, arg1)`` and
     #: produces ``arg0 @ arg1``, which holds on every architecture -- what the
@@ -105,15 +100,16 @@ class MatmulGolden(Golden):
     def __init__(
         self,
         math_fidelity: MathFidelity = MathFidelity.HiFi4,
+        arch=None,
         blocks=None,
     ):
-        super().__init__(blocks)
+        super().__init__(arch, blocks)
         self.math_fidelity = math_fidelity
 
     @property
     def models_fidelity(self) -> bool:
         """Whether this runs the product as accumulated partial products."""
-        return self.MANTISSA_SPLIT is not None
+        return self.mantissa_split is not None
 
     def build_chain(self, cfg: OpConfig) -> Chain:
         unpack = {"srcA": self.l1_to_srcA, "srcB": self.l1_to_srcB}
@@ -244,6 +240,6 @@ class MatmulGolden(Golden):
         Non-finite operands go through :func:`.fidelity.resolve_non_finite`,
         which carries them on the first phase and zeroes them on the rest.
         """
-        a, b = operand_halves(regs["srcA"], regs["srcB"], self.MANTISSA_SPLIT, phase)
+        a, b = operand_halves(regs["srcA"], regs["srcB"], self.mantissa_split, phase)
         a, b = resolve_non_finite(a, b, regs["srcA"], regs["srcB"], phase)
         return self._product(a, b, geometry, k_face)

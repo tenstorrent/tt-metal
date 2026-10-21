@@ -8,6 +8,22 @@ Use an architecture's golden — ``quasar_operations``, ``blackhole_operations``
 pipelines they share.
 """
 
+from .arch import (
+    BLACKHOLE,
+    QUASAR,
+    WORMHOLE,
+    ArchProfile,
+    BlackholeDataCopyGolden,
+    BlackholeEltwiseBinaryGolden,
+    BlackholeMatmulGolden,
+    QuasarDataCopyGolden,
+    QuasarEltwiseBinaryGolden,
+    QuasarEltwiseBinaryReuseDestGolden,
+    QuasarMatmulGolden,
+    WormholeDataCopyGolden,
+    WormholeEltwiseBinaryGolden,
+    WormholeMatmulGolden,
+)
 from .chain import Chain, Registers, StageRecord, Step
 from .datacopy import DataCopyGolden
 from .eltwise import EltwiseBinaryGolden
@@ -16,6 +32,20 @@ from .matmul import MatmulGolden
 from .reuse_dest import EltwiseBinaryReuseDestGolden
 
 __all__ = [
+    "BLACKHOLE",
+    "QUASAR",
+    "WORMHOLE",
+    "ArchProfile",
+    "BlackholeDataCopyGolden",
+    "BlackholeEltwiseBinaryGolden",
+    "BlackholeMatmulGolden",
+    "QuasarDataCopyGolden",
+    "QuasarEltwiseBinaryGolden",
+    "QuasarEltwiseBinaryReuseDestGolden",
+    "QuasarMatmulGolden",
+    "WormholeDataCopyGolden",
+    "WormholeEltwiseBinaryGolden",
+    "WormholeMatmulGolden",
     "Chain",
     "DataCopyGolden",
     "EltwiseBinaryGolden",
