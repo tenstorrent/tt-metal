@@ -138,7 +138,12 @@ def test_mesh_model_chain_and_perf(mesh_device):
                 f"first {row_p[0]:.4f} last {row_p[-1]:.4f}; out std {chain_i.std():.4f} ref std {refs_l[i].std():.4f}"
             )
         model.reset_kda_states()
-    # traced e2e decode perf: steady-state replays at a fixed position
+    # traced e2e decode perf: steady-state replays at a fixed position. GLM53_MODEL_PERF_IDS=distinct (default): every
+    # user slot gets its own random token so the routed experts are as diverse as real traffic (the same token for
+    # every user sends all of them to one top-8: a hot-spot for the EP32 combine, a best case for the hybrid stream
+    # op; _agents/ep32_combine/ANALYSIS.md); "same" keeps the prompt token on every slot.
+    if os.environ.get("GLM53_MODEL_PERF_IDS", "distinct") == "distinct":
+        model.load_ids(torch.randint(0, cfg.vocab_size, (U,), generator=torch.Generator().manual_seed(0)))
     model.set_positions([S] * U)
     for _ in range(3):
         model.replay(trace_id)
@@ -149,7 +154,7 @@ def test_mesh_model_chain_and_perf(mesh_device):
     ttnn.synchronize_device(mesh_device)
     ms = (time.perf_counter() - t0) / N_PERF * 1e3
     logger.info(
-        f"PERF mesh {MESH} layers {len(layers)} users/row {B} (total {U}): traced decode step {ms:.2f} ms "
+        f"PERF mesh {MESH} layers {len(layers)} users/row {B} (total {U}, {os.environ.get('GLM53_MODEL_PERF_IDS', 'distinct')} ids): traced decode step {ms:.2f} ms "
         f"-> {1e3 / ms:.1f} tok/s per user, {U * 1e3 / ms:.0f} tok/s aggregate "
         f"(per layer {ms / len(layers):.2f} ms; the prompt loop above averaged {sum(step_times) / len(step_times) * 1e3:.2f} ms/step blocking)"
     )
