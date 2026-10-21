@@ -12,6 +12,7 @@
 #include <tt_stl/small_vector.hpp>
 
 #include "scatter_codegen_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -234,6 +235,22 @@ constexpr uint32_t kRowMajorRerouteMaxHt = 32;
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 constexpr uint32_t kRowMajorRerouteNocAlign = 32;
 
+// L1 bytes on the fullest bank that a ROW_MAJOR tensor of `shape` and `dtype` placed per
+// `mem_config` takes once allocated; 0 unless it lands in L1. `device_tensor` only names the device.
+uint64_t pending_l1_bytes(
+    const Tensor& device_tensor, const ttnn::Shape& shape, DataType dtype, const MemoryConfig& mem_config) {
+    return get_pending_l1_output_reservation(
+        device_tensor, shape, mem_config, dtype, Layout::ROW_MAJOR, /*require_constructible=*/true);
+}
+
+// The L1 a ROW_MAJOR factory will find: what is free now, less the buffers this call still
+// allocates before the factory runs. Routing and the dispatch both run ahead of
+// create_output_tensors(), which is what moves the frontier the factory and the program hash read.
+uint64_t rm_live_l1_budget(const Tensor& input_tensor, uint64_t pending_bytes) {
+    const uint64_t usable = ttnn::prim::scatter_usable_l1(input_tensor);
+    return usable > pending_bytes ? usable - pending_bytes : 0;
+}
+
 }  // namespace
 
 bool prefers_row_major_strategy(
@@ -277,16 +294,58 @@ bool prefers_row_major_strategy(
     if (raw_input_page_bytes % kRowMajorRerouteNocAlign != 0 || raw_index_page_bytes % kRowMajorRerouteNocAlign != 0) {
         return false;
     }
-    // Only take the detour when the destination RM plan can actually fit L1 once untilized -- the
-    // TILE dispatch's own footprint is a small, fixed number of tile pages regardless of row width,
-    // so it remains the safe fallback whenever the untilized sticks would not fit.
+    // Only take the detour when the untilized RM plan fits the L1 the factory will find: what is
+    // free now, less the three untilized operands and the output this call still allocates ahead
+    // of it (each counted only if placed in L1). The TILE dispatch's own footprint is a small,
+    // fixed number of tile pages regardless of row width, so it remains the safe fallback whenever
+    // the sticks would not fit. From is_demoted() this runs on the untransposed operands, so the
+    // transposed copy of an operand living in L1 is not counted there; the dispatch asks again on
+    // the transposed tensors themselves.
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
+    const uint64_t pending_bytes =
+        pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), input_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), index_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), src_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), output_mem_config);
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
-        ttnn::prim::scatter_static_l1(input_tensor),
+        rm_live_l1_budget(input_tensor, pending_bytes),
         input_page_bytes,
         index_tensor.element_size(),
         src_tensor.element_size(),
         /*bf16_reduce=*/false);
+}
+
+bool codegen_plan_fits_live_l1(
+    const Tensor& input_tensor,
+    int32_t dim,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    uint32_t reduction_mode,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (input_tensor.layout() != Layout::ROW_MAJOR) {
+        return true;
+    }
+    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    const int32_t axis = dim < 0 ? dim + rank : dim;
+    const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
+    const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, working_input[-1]);
+    const bool bf16_reduce = reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply;
+    // Still to be allocated before the factory runs: the output, and when the scatter axis is not
+    // already last, the transposed copy of each operand (in that operand's own placement).
+    uint64_t pending_bytes = pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), output_mem_config);
+    if (axis != rank - 1) {
+        pending_bytes +=
+            pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), input_tensor.memory_config()) +
+            pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), index_tensor.memory_config()) +
+            pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), src_tensor.memory_config());
+    }
+    return ttnn::prim::scatter_rm_min_plan_fits_l1(
+        rm_live_l1_budget(input_tensor, pending_bytes),
+        input_page_bytes,
+        index_tensor.element_size(),
+        src_tensor.element_size(),
+        bf16_reduce);
 }
 
 bool is_demoted(

@@ -58,7 +58,8 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 // the TILE factory. The TILE factories split per-core work by tile row, so a low tile-row count
 // leaves most of the grid idle whatever the row width; at or below kRowMajorRerouteMaxHt the RM factory's
 // per-stick split reaches far more cores, provided the untilized stick is bounded, NOC-aligned and
-// fits L1. `working_input`/`working_index` are the operands' codegen_working_shape()s; the tensors
+// fits the L1 left once this call's own allocations land. `working_input`/`working_index` are the
+// operands' codegen_working_shape()s; the tensors
 // supply dtype, element size, device and placement, none of which the transpose changes.
 // `output_mem_config` is the placement the call will write to: the detour lands on the ROW_MAJOR
 // factories, which supported_execution_controls() only admits when the output shares the input's
@@ -84,6 +85,22 @@ bool is_demoted(
     int32_t dim,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Live-L1 gate consulted only by ttnn::scatter()'s routing, after the gates above: whether the plan
+// the codegen factory will build fits the L1 that is free right now, with the buffers this call
+// still allocates before the factory runs already deducted. The ROW_MAJOR factories keep the full
+// input and output sticks resident, so unlike the chunked native kernels they cannot shrink to
+// whatever is left; a ROW_MAJOR call they cannot fit takes native as a whole. TILE calls always
+// pass: the TILE factories' footprint is a fixed handful of tile pages, and the row-major detour
+// runs this same budget inside prefers_row_major_strategy(). Same `dim` and reduction_mode
+// conventions as supported_by_codegen(), which must already have accepted the call.
+bool codegen_plan_fits_live_l1(
+    const Tensor& input_tensor,
+    int32_t dim,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    uint32_t reduction_mode,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::data_movement::scatter
