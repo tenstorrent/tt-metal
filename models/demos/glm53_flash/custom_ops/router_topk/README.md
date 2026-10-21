@@ -67,6 +67,17 @@ idx_mode (0 none / 1 uint32 / 2 fp32), dense_mode (0 / 1)] + TensorAccessorArgs(
 `fp32_dest_acc_en`, `UnpackToDestFp32` for S and B. Runtime args: writer per core `[row]`, common
 `[scores, bias, dense, w, idx addresses, T]`; compute none.
 
+## Measured (chip 0, layer 4 KDA+MoE, B = 32 users, one traced replay under Tracy, `tests/test_perf_layer.py`)
+
+| router after the gate matmul (`32 x 4096 x 288`, 17.8 us, both paths) | ops | device us | op-to-op gaps us |
+|---|---|---|---|
+| composite (`GLM53_ROUTER_FUSED=0`): add, topk, FillPad, gather, FillPad, sum, rdiv, mul, typecast, untilize x3, scatter, tilize | 14 | 142.1 | 14.0 |
+| fused (`GLM53_ROUTER_FUSED=1`): `router_topk` on 32 cores | 1 | 13.2 | 0.25 |
+
+Layer step: 72 -> 59 ops, 10318 -> 10180 us device time, 10.49 -> 10.35 ms/step wall (`_logs/agents/routerop/report_{base,fused}/`).
+The step is dominated by the expert path (`SparseMatmul` 4.2 + 2.2 ms at B = 32 on one chip); the router's remaining cost is the
+gate matmul plus this op (31 us).
+
 Test: `tests/custom_ops/test_router_topk.py` (real layer-4 scores through the real gate weights from the T256
 dump, T = 32 / 4, all three output modes vs the composite and the torch golden; a tie case; trace replay;
 op timing). Wiring: `TtRouter._forward_fused` (`GLM53_ROUTER_FUSED=1`, default off).
