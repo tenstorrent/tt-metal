@@ -69,6 +69,7 @@ constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
  * | rank_stamped    | Sort [bf16 value | rank tag] keys with the unstable network (u32 indices)  | bool         | true, false                                           | False    |
  * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
  * | tile0_sorted    | First data tile is sorted in idir; Blackhole skips it in phases 0 to 4     | bool         | true, false                                           | False    |
+ * | ct_steps        | Blackhole: constant counter steps in the step passes of a full 64 datum sort | bool         | true, false                                           | False    |
  */
 // clang-format on
 template <
@@ -76,7 +77,8 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
     bool rank_stamped = false,
-    TopkTieOrder tie_order = TopkTieOrder::Unset>
+    TopkTieOrder tie_order = TopkTieOrder::Unset,
+    bool ct_steps = false>
 ALWI void topk_local_sort(
     uint32_t idst,
     int idir,
@@ -93,7 +95,7 @@ ALWI void topk_local_sort(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_bitonic_topk_local_sort,
-        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order), ct_steps),
         idst,
         VectorMode::RC_custom,
         idir,
