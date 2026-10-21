@@ -70,10 +70,14 @@ def train(
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
-    causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )  # [1,1,T,T], bfloat16
+    # Without a mask the fused SDPA applies the causal mask itself and skips the fully masked key blocks.
+    # The tensor-parallel models go through the generic module call, which still takes an explicit mask.
+    tt_mask = None
+    if use_tp:
+        causal_mask = build_causal_mask(cfg.seq_len)
+        tt_mask = ttml.autograd.Tensor.from_numpy(
+            causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+        )  # [1,1,T,T], bfloat16
 
     # Create composer for distributed tensors if using DDP
     composer = None

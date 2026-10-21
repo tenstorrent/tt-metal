@@ -234,16 +234,15 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         // Explicit __call__ binding: GPT-2 overrides operator()(TensorPtr, optional<TensorPtr>)
         // which does not match the two-arg (TensorPtr, TensorPtr) binding on ModuleBase.
+        // Without a mask the attention applies the causal mask itself.
         py_gpt2.def(
             "__call__",
             [](models::gpt2::Transformer& self,
                const ttml::autograd::TensorPtr& tensor,
-               const ttml::autograd::TensorPtr& mask) {
-                return self(tensor, std::optional<ttml::autograd::TensorPtr>(mask));
-            },
+               const std::optional<ttml::autograd::TensorPtr>& mask) { return self(tensor, mask); },
             nb::arg("tensor"),
-            nb::arg("mask"),
-            "Model forward pass with causal mask.");
+            nb::arg("mask").none() = nb::none(),
+            "Model forward pass; without a mask the attention is causal.");
     }
 
     {
@@ -326,15 +325,15 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("CppLlama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
 
-        // Overload 1: Without KV cache
+        // Overload 1: Without KV cache. Without a mask the attention applies the causal mask itself.
         py_llama.def(
             "__call__",
             [](models::llama::Llama& self,
                const ttml::autograd::TensorPtr& tensor,
-               const ttml::autograd::TensorPtr& mask) { return self(tensor, mask); },
+               const std::optional<ttml::autograd::TensorPtr>& mask) { return self(tensor, mask); },
             nb::arg("tensor"),
-            nb::arg("mask"),
-            "Model forward pass without KV cache.");
+            nb::arg("mask").none() = nb::none(),
+            "Model forward pass without KV cache; without a mask the attention is causal.");
 
         // Overload 2: With KV cache and new_tokens
         py_llama.def(
