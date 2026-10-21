@@ -582,6 +582,45 @@ def test_decode_padded_size_full(mesh_device, sp_axis, tp_axis, h_axis, topology
         ttnn.synchronize_device(mesh.device)
 
 
+@vae_rows
+@pytest.mark.parametrize(
+    "height, width", [(1024, 1024), (768, 1344), (2048, 2048)], ids=["1024x1024", "1344x768", "2048x2048"]
+)
+def test_decode_local_query_attention_bit_identical(
+    mesh_device, sp_axis, tp_axis, h_axis, topology, num_links, snapshot, height: int, width: int
+) -> None:
+    """M10: ``VaeAttention.local_queries`` (each chip attends for its own query rows: spatial shard, then its TP slice,
+    with the TP group's rows all-gathered before ``to_out``) must be bit-identical to the replicated full-spatial
+    SDPA it replaces (same K/V, same k chunking, per-row math), on the shipped TP4 x H8 decoder and on one chip
+    (where it is a no-op). Logs the decode wall of both paths; the 2048 case is the one with the measurable gain."""
+    from models.tt_dit.models.vae.vae import VaeAttention
+
+    h, w = packing.latent_shape(height, width)
+    mesh = open_vae(mesh_device, sp_axis, tp_axis, h_axis, topology, num_links, snapshot)
+    torch.manual_seed(3)
+    tokens = torch.randn(h * w, packing.FLUX3_KLEIN_LATENT_CHANNELS).to(torch.bfloat16).float()
+    name = f"decode_local_query_attention[{width}x{height}] {mesh.tag}"
+    saved = VaeAttention.local_queries
+    try:
+        VaeAttention.local_queries = False
+        replicated, _ = device_decode(mesh, tokens, height, width, traced=False)
+        replicated, wall_rep = device_decode(mesh, tokens, height, width, traced=False)
+        VaeAttention.local_queries = True
+        local, _ = device_decode(mesh, tokens, height, width, traced=False)
+        local, wall_loc = device_decode(mesh, tokens, height, width, traced=False)
+        same = torch.equal(replicated, local)
+        logger.info(
+            f"RESULT {name}: replicated SDPA warm decode {wall_rep:.3f}s, local-query {wall_loc:.3f}s; bit-identical "
+            f"{same}; max|d| {(replicated - local).abs().max().item():.4g}; {memory_line(mesh.device)}"
+        )
+        assert local.shape == (3, height, width) and torch.isfinite(local).all()
+        assert same, "local-query attention differs from the replicated full-spatial SDPA"
+    finally:
+        VaeAttention.local_queries = saved
+        mesh.helper.release_trace()
+        ttnn.synchronize_device(mesh.device)
+
+
 # --- M8: V5 host grid rule, V6 downsample, E1-E4 encoder, D1 896x1120 ---------------------------------------------------------
 
 
@@ -624,7 +663,7 @@ def test_plain_grid_rule(expect_error) -> None:
     logger.info(f"RESULT plain_grid_rule: {len(rows)} Klein VAE levels agree with ttnn's _find_expected_dram_grid")
 
 
-def test_klein_conv_slice_table() -> None:
+def test_klein_conv_slice_table(monkeypatch) -> None:
     """V5b: every registered Klein conv slice count and every downsample count sits inside ttnn's bound (docstring)."""
     from ....layers.conv2d import Conv2d
     from ....pipelines.flux3_klein.vae_flux3_klein import (
@@ -1010,6 +1049,9 @@ def test_klein_partitioned_decoder_slices() -> None:
     assert set(auto.values()) == {0} and (130, 1024, 256, 256) in auto and (18, 128, 32, 512) in auto
     assert set(klein_partitioned_decoder_slices(1536, 1536, h_factor=8, tp_factor=4).values()) == {0}
     assert 1536 * 1536 == AUTO_SLICE_MAX_AREA
+    # default mode (auto, 2026-10-21): every size gets ttnn's auto slicer; the aligned counts below need the env
+    assert set(klein_partitioned_decoder_slices(4096, 4096, h_factor=8, tp_factor=4).values()) == {0}
+    monkeypatch.setenv("FLUX3_KLEIN_VAE_SLICE_MODE", "aligned")
     explicit_sizes = {
         "2048x2048": (2048, 2048),
         "4096x2304": (2304, 4096),
