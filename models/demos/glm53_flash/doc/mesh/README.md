@@ -538,3 +538,26 @@ Decode in these runs goes through the regions path (its per-expert lists replace
 built): 4.2-4.6 tok/s per user at ISL 64 K-1 M, below the stream path (6.7 tok/s at 16 K on a block). Keeping both
 forms costs 9.5 GB per chip (does not fit beside the 1 M caches); the fix is to point the decode stream op at the
 per-expert buffers (a base-address table), queued after the retrieval work.
+
+### Secondary stages on the 8x4 (v17, 2026-10-21 07:25-08:30; 45 layers, bfp8 experts, 4 users per row = 32 users)
+
+Traced prefill (all-wrap mHC, fresh model): a 128-token prompt replays in **353 ms** (eager warm 1486 ms, cold 16.9 s;
+x4.2), bit-identical across replays, first token == HF, chain PCC vs the HF rows 0.944.
+
+mHC / expert-path bisection (`test_mesh_model.py -k chain`: 16-step decode chain vs HF prefill rows, then a 128-token
+TTFT; every variant matches the greedy ids):
+
+| variant | chain PCC min / median / max | traced decode step | tok/s per user (aggregate) | TTFT 128 tokens warm | TTFT PCC |
+|---|---|---|---|---|---|
+| fast mHC, exact pre/post (POST_KERNEL=2), prefill wrap | 0.751 / 0.812 / 0.827 | 75.5 ms | 13.2 (424) | 869 ms | 0.861 |
+| + KDA fused kernel off | 0.798 / 0.831 / 0.866 | 94.5 ms | 10.6 (339) | 807 ms | 0.861 |
+| fast mHC + dense expert layout | 0.745 / 0.789 / 0.805 | 95.2 ms | 10.5 (336) | 794 ms | 0.896 |
+| all wrap (composite mHC everywhere) | 0.763 / 0.820 / 0.868 | 144.1 ms | 6.9 (222) | 1325 ms | 0.885 |
+
+Reading: the mHC implementation does not set the 45-layer chain PCC (0.75-0.80 min in every variant); the fast
+kernels halve the decode step (75.5 vs 144.1 ms) at equal accuracy, the fused KDA decode kernel is worth 19 ms per
+step, the dense expert layout costs 20 ms at 4 users per row. The TTFT PCCs measured after the decode chain
+(0.861-0.896) sit below the fresh-model 0.944 of the traced stage: a test-ordering effect to check (slot / KDA state
+between the chain and the TTFT prompt), not a model property. Decision: fast mHC with the exact pre/post kernels
+for decode, the composite wrap for the prefill rows; the needle runs re-graded vs HF with that config (v18) before
+it becomes the code default (today's defaults: GLM53_MHC_IMPL=wrap, POST_KERNEL=0).
