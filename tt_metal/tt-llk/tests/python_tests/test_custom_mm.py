@@ -137,10 +137,12 @@ def _run_custom_mm(
     calls=CUSTOM_MM_CALLS(),
     preserve_zero_flag=False,
     operands=None,
+    atol_start_row=0,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    ``atol_start_row`` excludes rows checked separately from the tolerance scale.
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
@@ -259,7 +261,7 @@ def _run_custom_mm(
     if out_format == DataFormat.Float16_b:
         FLOAT16B_DEFAULT_ATOL = 0.05
         ACC_ATOL_PER_KT = 0.005
-        active_golden = golden.abs()
+        active_golden = golden[atol_start_row:].abs()
         active_golden = active_golden[active_golden > 0]
         mean_active = active_golden.mean().item() if active_golden.numel() else 0.0
         custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
@@ -414,6 +416,10 @@ def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
         DestAccumulation.No,
         preserve_zero_flag=True,
         operands=(torch_a, torch_b),
+        # CPU bf16 matmul may keep denormals depending on the host ISA. Those
+        # tiny nonzero golden rows must not lower the normal rows' tolerance;
+        # the exact-zero assertion below checks the device's flush behavior.
+        atol_start_row=denormal_rows,
     )
     kept = res[:denormal_rows].float()
     assert (
