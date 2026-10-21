@@ -561,16 +561,24 @@ class TT_CCL:
         if key not in self.mla_chunked_kv_buffers:
             shard_dims = [None, None]
             shard_dims[tp_axis] = 1
-            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
-                torch.zeros(1, num_heads, seq_len, v_head_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
-                ),
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
             )
+            # Zero-filled: the SDPA reads whole K chunks, so a chunk straddling the end of the gathered rows reads
+            # (masked) rows the gather did not write, and those must be finite. Allocated at the per-device shape
+            # and filled on device; the topology does not depend on the size, so it is taken from a
+            # one-tile-per-shard host tensor through the same mapper.
+            buffer = ttnn.empty(
+                [1, num_heads // tp, seq_len, v_head_dim],
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.zeros_like(buffer, optional_tensor=buffer)
+            topology = ttnn.from_torch(torch.zeros(1, tp, 32, 32), mesh_mapper=mesh_mapper).tensor_topology()
+            buffer.update_tensor_topology(topology)
+            self.mla_chunked_kv_buffers[key] = buffer
         return self.mla_chunked_kv_buffers[key]
 
     def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
