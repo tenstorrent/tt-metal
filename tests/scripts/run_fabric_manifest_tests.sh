@@ -3,6 +3,7 @@
 #   - the device-free unit tests
 #   - the manifest fixtures on mock clusters
 #   - the schema check on every manifest the above runs write
+#   - the unit tests of the visualizer's shared code
 #   - the route decoder's unit tests
 #   - the route decoder's check on the same manifests, and that it finds Z peers on the express mesh's
 #   - capture's unit tests
@@ -26,6 +27,7 @@ SPLIT_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x2_multiprocess_rank_
 BH_32X4_ON_FOUR_RANKS=$CLUSTER_DESCS/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml
 EXPRESS_32X4_RANK_BINDINGS=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/express_links_32x4_rank_bindings.yaml
 CHECK_SCHEMA=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py
+COMMON_TESTS=tt_metal/fabric/debug/visualizer/common/tests
 DECODE_TESTS=tt_metal/fabric/debug/visualizer/decode/tests
 # A module, run with python3 -m: it imports the route decoder by its package path.
 CHECK_ROUTES=tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes
@@ -83,6 +85,13 @@ run_mock_ranks express_32x4 "$BH_32X4_ON_FOUR_RANKS" "$EXPRESS_32X4_RANK_BINDING
 
 echo "== Schema check"
 python3 "$CHECK_SCHEMA" "$OUT_DIR"
+
+echo "== Shared code unit tests"
+python3 -m unittest discover -s "$COMMON_TESTS" -t . 2>&1 | tee "$OUT_DIR/common_unit_tests.log"
+if ! grep -q '^Ran [1-9]' "$OUT_DIR/common_unit_tests.log"; then
+    echo "Fabric manifest: found no shared code unit tests under $COMMON_TESTS"
+    exit 1
+fi
 
 echo "== Route decoder unit tests"
 python3 -m unittest discover -s "$DECODE_TESTS" -t . 2>&1 | tee "$OUT_DIR/route_decoder_unit_tests.log"
