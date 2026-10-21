@@ -10,12 +10,45 @@ the reference:
 
 ## Contents
 
+- [Where things live](#where-things-live)
 - [What this is, and why](#what-this-is-and-why)
 - [Using it: write a test](#using-it-write-a-test)
 - [How the layers connect](#how-the-layers-connect)
 - [Adding things](#adding-things)
 - [When a comparison fails](#when-a-comparison-fails)
 - [What is not modelled](#what-is-not-modelled)
+
+---
+
+## Where things live
+
+```
+heavyweight/
+├── operations/                 the pipelines, and the engine that runs them
+│   ├── chain.py                Chain · Step · Registers — no hardware at all
+│   ├── golden.py               Golden · OpConfig — blocks into chainable steps
+│   ├── fidelity.py             phase tables, mantissa split, pre-carry flush
+│   ├── arch.py                 ArchProfile + the per-architecture factories
+│   └── pipelines/              one module per operation
+│       ├── datacopy.py · eltwise.py · matmul.py · reuse_dest.py
+│
+├── data_transfer_blocks/       what the hardware does to a buffer
+│   ├── data_transfer_blocks.py the façade — one delegation per boundary
+│   ├── arch.py                 ArchGolden + the three architectures
+│   ├── l1_support.py           L1Support — format set, checks, L1 read/write
+│   ├── storage.py              the precision rules, as pure functions
+│   ├── l1_codec.py             bytes ↔ values
+│   ├── pack_effects.py         ReLU, edge masking, stochastic rounding
+│   └── units/                  one module per hardware stage
+│       └── unpack.py · fpu.py · pack.py
+│
+└── mismatch.py                 failure reporting (lands with the test wiring)
+```
+
+**Two files named `arch.py`, on purpose.** They answer different questions:
+`operations/arch.py` says which blocks and mantissa split an *operation* runs
+with; `data_transfer_blocks/arch.py` says which units and format tables a
+*device* has. The operations one is what a test touches.
 
 ---
 
