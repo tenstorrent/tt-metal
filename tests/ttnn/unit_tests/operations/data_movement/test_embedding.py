@@ -921,13 +921,18 @@ def _run_fused_gather(
     input_tensor = ttnn.from_torch(indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=weights_layout, device=device)
     output = ttnn.embedding(
-        input_tensor, weights, padding_idx=pad_token, embeddings_type=embeddings_type, layout=ttnn.TILE_LAYOUT
+        input_tensor,
+        weights,
+        padding_idx=pad_token,
+        embeddings_type=embeddings_type,
+        layout=ttnn.TILE_LAYOUT,
+        native_untilize=weights_layout == ttnn.TILE_LAYOUT,  # the H3 call form: a TILE table untilized row-free
     )
     expected = torch.nn.functional.embedding(indices, torch_weights)
     assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
 
 
-@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("batch_size", [1, 2, 12])
 @pytest.mark.parametrize("embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED])
 def test_embedding_fused_dynamic_index_length_flat_cache(device, batch_size, embeddings_type):
     """Fused tilized gather: the index length is a runtime word, so every served length hits one program."""

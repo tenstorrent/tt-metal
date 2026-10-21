@@ -839,6 +839,7 @@ def _block_setup(
     num_text: int,
     num_audio: int,
     num_video: int,
+    torch_model: TorchMiniMaxH3Block | None = None,
 ) -> SimpleNamespace:
     """Shared block fixture: packed metadata, torch reference + output, uploaded TT inputs, `block_kwargs`, and a `run` closure."""
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -849,9 +850,10 @@ def _block_setup(
     num_timesteps = int(timestep_indices.max().item()) + 1
     adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags.clamp(min=0)
 
-    torch_model = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
-    randomize_norm_weights(torch_model)
-    torch_model.eval()
+    if torch_model is None:
+        torch_model = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+        randomize_norm_weights(torch_model)
+        torch_model.eval()
 
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     rope_cos, rope_sin = rope(position_ids)
@@ -895,10 +897,10 @@ def _block_setup(
         device=mesh_device,
         dtype=ttnn.float32,  # fp32: the reference runs the SiLU at temb precision
     )
-    tt_adaln_indices = from_torch(
+    tt_adaln_indices = from_torch(  # uint32 as the pipeline uploads them: no per-length typecast on device
         adaln_indices.to(torch.int32).reshape(1, 1, 1, seq_len),
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint32,
         layout=ttnn.Layout.ROW_MAJOR,
         mesh_axes=[..., None, sp_axis],
     )
@@ -988,37 +990,39 @@ def test_minimax_h3_transformer_block(
 
 
 @GALAXY_RING
-@pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video"),
-    [
-        pytest.param(512, 256, 1280, id="dyn_s2048"),
-        pytest.param(512, 512, 3072, id="dyn_s4096"),
-    ],
-)
 def test_minimax_h3_transformer_block_dynamic_length(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    num_text: int,
-    num_audio: int,
-    num_video: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
-    """The dynamic-length block (frozen AGMM/MMRS/SDPA configs, index gathers) matches the reference at two lengths."""
+    """One dynamic-length block serves two lengths from one program set: warm at the capacity length, then
+    the shorter one must add no program; PCC against the reference at both."""
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
     MIN_PCC = 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, num_text, num_audio, num_video)
-    tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, dynamic_length=True)
-    tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+    big = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 512, 3072)
+    small = _block_setup(
+        mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280, torch_model=big.torch_model
+    )
+    capacity = padded_sequence_length(big.seq_len, big.sp_factor)
+    tt_model = MiniMaxH3TransformerBlock(
+        **big.block_kwargs,
+        dynamic_length=True,
+        kv_gather_capacity=capacity,
+        norm_row_capacity=capacity // big.sp_factor,
+    )
+    tt_model.load_torch_state_dict(big.torch_model.state_dict())
 
-    before = mesh_device.num_program_cache_entries()
-    tt_out = fixture.run(tt_model)
-    logger.info(f"seq_len={fixture.seq_len}: +{mesh_device.num_program_cache_entries() - before} programs")
-    assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
+    def run(fixture: SimpleNamespace) -> None:
+        assert_quality(fixture.torch_out, fixture.run(tt_model), pcc=MIN_PCC)
+
+    assert_program_cache_flat(mesh_device, run, [big, small])
 
 
 # ---- production-geometry block device-perf (Tracy signposts) ----

@@ -9056,16 +9056,12 @@ def test_ring_joint_attention_gemma4_global_segmented_accuracy():
     )
 
 
-# ============================================================================
-# DYNAMIC PER-CHIP LENGTH (MiniMax-H3 DiT on the 4x8 Galaxy)
-# ============================================================================
-# The H3 DiT serves per-chip lengths of 74..470 tile rows from ONE cached program: dynamic_local_n=True makes
-# the per-chip padded length a runtime word the program hash ignores. The geometry here is the production one
-# (14 heads per chip, head dim 128, q/k chunks (256, 512)); the persistent gather buffers are sized to the
-# 15 s capacity, as the pipeline does with kv_gather_capacity.
+# Dynamic per-chip length (MiniMax-H3 DiT on the 4x8 Galaxy): dynamic_local_n=True makes the padded length a
+# runtime word the hash ignores, so one program per length class serves 74..470 tile rows per chip.
 H3_DYNAMIC_HEADS_PER_CHIP = 14
 H3_DYNAMIC_HEAD_DIM = 128
-H3_DYNAMIC_QK_CHUNKS = (256, 512)
+# The model's chunk pair per length class (DYNAMIC_RING_SDPA_CHUNKS).
+H3_DYNAMIC_QK_CHUNKS = {"short": (320, 384), "long": (256, 512)}
 H3_DYNAMIC_CAPACITY_TILES = 470  # 120320 rows / SP 8 / 32
 H3_DYNAMIC_PCC_THRESHOLD = 0.99
 
@@ -9137,7 +9133,7 @@ def _h3_dynamic_device_inputs(runtime, q, k, v, logical_n):
 
 
 def _h3_dynamic_op(
-    runtime, tt_q, tt_k, tt_v, logical_n_tensor, gather_k, gather_v, semaphores, *, qk_chunks, dynamic
+    runtime, tt_q, tt_k, tt_v, logical_n_tensor, gather_k, gather_v, semaphores, *, qk_chunks, **overrides
 ):
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=runtime.sdpa_compute_grid,
@@ -9145,8 +9141,6 @@ def _h3_dynamic_op(
         k_chunk_size=qk_chunks[1],
         exp_approx_mode=False,
     )
-    # The static form runs on a tree without the dynamic_local_n keyword (the main-branch timing baseline).
-    extra = {"dynamic_local_n": True} if dynamic else {}
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -9169,7 +9163,8 @@ def _h3_dynamic_op(
         subdevice_id=runtime.worker_sub_device_id,
         ccl_core_grid_offset=(runtime.ccl_column, 0),
         use_column_major_ccl=True,
-        **extra,
+        dynamic_local_n=True,
+        **overrides,
     )
     return out
 
@@ -9191,11 +9186,19 @@ def _h3_dynamic_check(q, k, v, out, logical_n, heads, label):
         assert pcc >= H3_DYNAMIC_PCC_THRESHOLD, f"{label} head {h}: PCC {pcc} below {H3_DYNAMIC_PCC_THRESHOLD}"
 
 
+# (per-chip tile rows, pad rows below the padded total, semaphore set) per length class; every pad stays
+# inside the last shard, and the first variant of each class is the warm point.
+H3_DYNAMIC_VARIANTS = {
+    "short": [(148, 0, 0), (74, 1000, 1), (148, 2368, 0)],
+    "long": [(287, 33, 0), (427, 5000, 1), (470, 777, 0), (287, 0, 1)],
+}
+
+
 @pytest.mark.timeout(3600)
-def test_ring_joint_attention_dynamic_local_n_flat_cache():
-    """One cached program serves every H3 per-chip length. Warm at 5 s (148 tile rows), then 74 / 287 / 427 /
-    470 (the gather capacity) with logical_n at and below the padded total (tile-aligned and mid-tile), NaN in
-    every fully padded row of Q/K/V, and the two all-gather semaphore sets alternating between calls."""
+@pytest.mark.parametrize("length_class", list(H3_DYNAMIC_VARIANTS))
+def test_ring_joint_attention_dynamic_local_n_flat_cache(length_class):
+    """One cached program per length class serves every H3 per-chip length of the class: logical_n at and below
+    the padded total, NaN in every fully padded row of Q/K/V, the two semaphore sets alternating."""
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     mesh_config = _h3_dynamic_mesh_config()
@@ -9232,14 +9235,11 @@ def test_ring_joint_attention_dynamic_local_n_flat_cache():
                 gather_k,
                 gather_v,
                 semaphore_sets[semaphore_set],
-                qk_chunks=H3_DYNAMIC_QK_CHUNKS,
-                dynamic=True,
+                qk_chunks=H3_DYNAMIC_QK_CHUNKS[length_class],
             )
             _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), logical_n, checked_heads, f"{variant}")
 
-        # (per-chip tile rows, pad rows below the padded total, semaphore set); every pad stays inside the last shard.
-        variants = [(148, 0, 0), (74, 1000, 1), (287, 33, 0), (427, 5000, 1), (470, 777, 0), (148, 2368, 1)]
-        assert_program_cache_flat(mesh, run, variants)
+        assert_program_cache_flat(mesh, run, H3_DYNAMIC_VARIANTS[length_class])
         assert mesh.num_program_cache_entries() == 1
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
@@ -9278,12 +9278,61 @@ def test_ring_joint_attention_dynamic_local_n_rehashes_on_width_change():
                 gather_k,
                 gather_v,
                 runtime.ccl_semaphore_handles,
-                qk_chunks=H3_DYNAMIC_QK_CHUNKS,
-                dynamic=True,
+                qk_chunks=H3_DYNAMIC_QK_CHUNKS["long"],
             )
             _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), logical_n, checked_heads, f"{variant}")
 
         assert_program_cache_flat(mesh, run, [(74, 128), (148, 128), (74, 64)], miss_indices=(2,))
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+@pytest.mark.timeout(1800)
+def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features():
+    """With the dynamic program cached, a call adding a feature the path does not serve (causal attention, an
+    attention sink) must raise from validation, never dispatch the cached program or add one."""
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh = runtime.mesh_device
+        sp, tp = mesh_config.sp_size, mesh_config.tp_size
+        heads = H3_DYNAMIC_HEADS_PER_CHIP * tp
+        gather_k, gather_v = _h3_dynamic_gather_buffers(runtime, mesh_config, H3_DYNAMIC_HEAD_DIM)
+        sq = 148 * 32 * sp
+        torch.manual_seed(7)
+        q, k, v = (torch.randn(1, heads, sq, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(3))
+        tt_q, tt_k, tt_v, logical_n_tensor = _h3_dynamic_device_inputs(runtime, q, k, v, sq - 100)
+        sink = ttnn.from_torch(
+            torch.zeros(1, H3_DYNAMIC_HEADS_PER_CHIP, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        mesh.disable_and_clear_program_cache()
+        mesh.enable_program_cache()
+
+        def call(**overrides):
+            return _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n_tensor,
+                gather_k,
+                gather_v,
+                runtime.ccl_semaphore_handles,
+                qk_chunks=H3_DYNAMIC_QK_CHUNKS["long"],
+                **overrides,
+            )
+
+        out = call()
+        _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), sq - 100, [0, heads - 1], "warm")
+        entries = mesh.num_program_cache_entries()
+        for overrides in ({"is_causal": True}, {"attention_sink": sink}):
+            with pytest.raises(RuntimeError, match="dynamic_local_n"):
+                call(**overrides)
+        assert mesh.num_program_cache_entries() == entries
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
