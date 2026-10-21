@@ -10,42 +10,20 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
 // Reservation alignment for tensor geometry; HYBRID banks use DRAM alignment for SRAM too.
 uint32_t l1_tensor_allocation_alignment(const IDevice& device);
 
-// Half-open physical storage owned (or logically exposed by a view) on one core.
-struct L1TensorExtent {
-    distributed::MeshCoordinate device_coord;
-    CoreCoord core_coord;
-    DeviceAddr address;
-    DeviceAddr size;
-};
-
-// Absolute address on one selected device/core; the caller owns and validates the backing storage.
-struct L1TensorViewPlacement {
-    distributed::MeshCoordinate device_coord;
-    CoreCoord core_coord;
-    DeviceAddr address;
-
-    L1TensorViewPlacement(distributed::MeshCoordinate device, CoreCoord core, DeviceAddr address) :
-        device_coord(std::move(device)), core_coord(core), address(address) {}
-};
-
-// Ordinary lockstep owners cover every worker core, range-lockstep/per-core owners
-// cover their allocation grids, and non-owning views expose only their logical shards.
-std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
-    const distributed::MeshBuffer& buffer, const std::vector<distributed::MeshCoordinate>& coords);
-
 // Creates a non-owning view. The caller must retain backing storage until all uses finish.
-// Placements cover every shard of each selected device; this API cannot validate backing bounds.
+// Address pairs cover every tensor core of each selected device; the caller validates backing bounds.
 std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
-    const std::vector<L1TensorViewPlacement>& placements);
+    const std::vector<SRAMTensorViewAddress>& placements);
 
 // Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
 // each device independently, so the address is only defined once a device is named: there is
