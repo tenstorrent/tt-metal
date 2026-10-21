@@ -6,6 +6,9 @@
 
 #include <memory>
 
+#include <tt-metalium/experimental/allocation/raw_allocation_properties.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
 namespace tt::tt_metal::experimental {
 
 struct RawAllocationImpl;
@@ -43,5 +46,31 @@ struct RawAllocation {
 private:
     std::unique_ptr<RawAllocationImpl> pimpl_;
 };
+
+/**
+ * Reserve L1 memory at a common address across the participating banks on each device in the mesh.
+ *
+ * Precondition:
+ * - properties satisfies its documented invariants.
+ *
+ * Postconditions:
+ * - Returns a valid RawAllocation that owns the memory reservation described by properties.
+ * - No other allocation can occupy the reserved memory region until the returned allocation is destroyed.
+ */
+RawAllocation allocate_l1(distributed::MeshDevice& device, LockstepAllocationProperties properties);
+
+/**
+ * Reserve L1 memory at a common address across the banks specified by properties.banks_to_be_allocated_on
+ * on each device in the mesh.
+ *
+ * Precondition:
+ * - properties satisfies its documented invariants.
+ *
+ * Postconditions:
+ * - Returns a valid RawAllocation that owns the memory reservation described by properties.
+ * - No other allocation can occupy the reserved memory region on the specified banks until the returned
+ *   allocation is destroyed.
+ */
+RawAllocation allocate_l1(distributed::MeshDevice& device, RangeLockstepAllocationProperties properties);
 
 }  // namespace tt::tt_metal::experimental
