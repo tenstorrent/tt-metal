@@ -8,6 +8,9 @@
                   settings; an environment knob is allowed only for diagnostics, marked `diagnostic` on its line.
                   F106: only the lines a change adds count (vs ``base``, default HEAD): an imported fork's own knobs
                   (e.g. 170 MIMO_FL_* reads in flat_routed_expert) are not the editing agent's to convert
+  emulation       F137 (owner): no setting's default is an emulation (a choice that rounds to a format the device
+                  neither computes nor stores in, agents' rule 17: Setting(emulation=...)); a choice whose name looks
+                  like one (EMULATION_HINT) must be declared, so the check cannot be dodged by leaving it out
 The orchestrator runs it on every agent's changed files; `python -m models.demos.common.bringup.testing.settings_lint`
 checks the whole model (the settings audit's gate, metric settings_violations)."""
 
@@ -19,6 +22,7 @@ import sys
 from pathlib import Path
 
 ENV_READ = re.compile(r"os\.environ\b|os\.getenv\(|\bgetenv\s*\(|std::getenv")
+EMULATION_HINT = re.compile(r"qdq|tf32|emul|parity", re.I)  # names of choices that only mimic a reference format
 FORKS = "ttnn/ttnn/bringup/"
 
 
@@ -57,6 +61,25 @@ def violations(repo: Path, model_dir: str, files: list[str], base: str | None = 
     return out
 
 
+def emulation_violations(sets) -> list[str]:
+    """F137: every Settings table's defaults and undeclared emulation-looking choices."""
+    out = []
+    for st in sets:
+        for name, s in st.table.items():
+            emu = {str(x) for x in s.emulation}
+            if str(s.default) in emu:
+                out.append(
+                    f"{st.env_name(name)}: the default {s.default!r} is an emulation (rule 17); ship a device format"
+                )
+            for c in [s.default, *(s.choices or ())]:
+                if isinstance(c, str) and EMULATION_HINT.search(c) and c not in emu:
+                    out.append(
+                        f"{st.env_name(name)}: choice {c!r} looks like an emulation; declare it in "
+                        "Setting(emulation=...) (never a default) or name it after the device format it is"
+                    )
+    return sorted(set(out))
+
+
 def model_files(repo: Path, model_dir: str) -> list[str]:
     base = repo / model_dir
     files = [str(p.relative_to(repo)) for p in (base / "tt").rglob("*.py")] if (base / "tt").is_dir() else []
@@ -73,7 +96,9 @@ def main(argv=None) -> int:
     repo = Path(spec.repo)
     md = str(Path(spec.model_dir).resolve().relative_to(repo.resolve()))
     files = model_files(repo, md)
-    bad = violations(repo, md, files)
+    from models.demos.common.bringup.testing.model_precision import model_settings
+
+    bad = violations(repo, md, files) + emulation_violations(model_settings(spec))
     for v in bad:
         print(f"FAIL {v}")
     has_settings = (repo / md / "tt" / "settings.py").exists()

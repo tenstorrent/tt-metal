@@ -1535,3 +1535,23 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
     dtype round every step's output to it (a margin exists in every golden selftest).
   - Selftests: test_drift_matched.py (an ignoring hook stops G; hf_official), test_noise_floor.py
     (test_r5_checks_the_references_official_numerics_against_the_taps).
+- F137 (owner, 2026-10-21; audit V1, V23): the device always runs the shipped realistic settings, in every gated test,
+  per step included; no device run at max precision, ever, not even as a diagnostic.
+  - Gone: tests.component_max_precision, model_precision.apply / overrides (component and swap tests set no
+    overrides), Settings(max_precision=...) and max_precision_env (a TypeError now), F120 / F121's split (the A/B runs
+    every frozen test on both sides with each side's switch; the accept reuses only the 'on' side's runs).
+    DeepSeek's and Xing's tt/settings.py in this tree lose MAX_PRECISION.
+  - The "logic bug or precision?" diagnosis is CPU-only (testing/devfmt.py): a failing component test runs the step's
+    CPU reference at the device's real formats on the same inputs (hooks.devfmt_component(spec, layer, step): weights
+    through their stored block formats, bf16 activations, the fidelity as far as the CPU models it; without the hook,
+    bf16 activations only, said so) and records `<err metric>_devfmt_cpu`, `_devfmt_dev` and `_devfmt_precision`,
+    never gated (the device within half its distance to full precision of the device-format step: precision).
+  - Setting(emulation=...) declares the choices that only emulate a reference format (rule 17); settings_lint refuses
+    one as a default and an undeclared choice named like one (qdq, tf32, emul, parity); the orchestrator runs it when
+    an agent changes tt/settings.py, and in Z.1. This tree's DeepSeek snapshot flags COMPRESSOR_X round_tf32 and
+    ENGRAM_KV_QDQ qdq (defaults).
+  - Text: agents' rules 7 / 10 / 14, the settings audit, README, the skill (owner rules 1 and 2 in the accuracy
+    section).
+  - Not done: the diagnosis for a failing swap-test step (component tests only).
+  - Selftests: test_model_settings.py (no max-precision setting or machinery, the emulation lint, the CPU diagnosis),
+    test_perf_ab.py::test_every_frozen_test_runs_on_both_sides_at_the_shipped_settings.
