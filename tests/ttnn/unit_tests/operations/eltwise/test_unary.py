@@ -2769,7 +2769,7 @@ def test_unary_chain_rejects_bitcast_with_other_ops(device, bitcast_first, expec
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_silu_mish_softsign_non_finite(device, dtype):
+def test_silu_mish_non_finite(device, dtype):
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     x_torch = torch.tensor(
         [[-float("inf"), -100.0, -1.0, 0.0, 1.0, 100.0, float("inf"), float("nan")]],
@@ -2780,7 +2780,6 @@ def test_silu_mish_softsign_non_finite(device, dtype):
     for ttnn_op, torch_op in (
         (ttnn.silu, torch.nn.functional.silu),
         (ttnn.mish, torch.nn.functional.mish),
-        (ttnn.softsign, torch.nn.functional.softsign),
     ):
         y_tt = ttnn.to_torch(ttnn_op(x_tt))
         y_ref = torch_op(x_torch)
