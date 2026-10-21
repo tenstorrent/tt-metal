@@ -888,8 +888,8 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
         4);
 #endif
 #endif  // NOC_ATT_ENABLED
-#define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                     \
-    debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
+#define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                      \
+    debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE, check_linked); \
     LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l) DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, true)
 #define DEBUG_SANITIZE_NOC_MULTI_ADDR_(noc_id, a, l, check_linked)                                                  \
