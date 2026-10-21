@@ -1505,3 +1505,16 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
     own, not the contract rung's tail).
   - Selftests: test_drift_matched.py (prefix seeding and region, gap feed, a forward that ignores the feed stops,
     contract entries, per-reader files and the pin), test_e2e_limits.py (entries()).
+- F135 (overseer, 2026-10-21; audit V9): end to end, the per-step convention. The ladder and the quick profile gate
+  every float tensor by its rel L2 error vs the full-precision golden: `err_layer_L<i>`, `err_state_<name>_L<i>`,
+  `err_final_hidden` `<= limit`, limit = e2e.calib x max(the drift's rel, one rounding's rel); index states and top-5
+  keep their overlap, 1 - calib x max(miss, one miss). PCC (pcc_layer_*, pcc_state_*, pcc_final_hidden, pcc_state_min)
+  is recorded as a diagnostic, without a limit. The contract keeps PCC (the producer's read-back and the
+  contract_state_pcc hook report nothing else) at 1 - calib^2 x its miss (1 - pcc ~ rel^2 / 2; F128 used calib, ~1.41x
+  the per-step margin). Drift entries are per tensor (`layer_L<i>`, `state_<name>_L<i>`, `final_hidden`, `top5`,
+  `contract_state_*`) with rel / rel_res / pcc / pcc_res (or overlap / overlap_res). ledger_gen gates the err_*.
+  - Ledgers written before F135 gate `pcc_layer_L* >= limit` etc.: those limits are no longer recorded (MISSING);
+    rename to err_layer_L* / err_state_*_L* / err_final_hidden `<= limit` (overlap_state_*, top5_overlap and
+    pcc_producer_kv_* stay).
+  - Selftests: test_e2e_limits.py (the convention; a 2 % scale fails with PCC 1), test_device_side.py,
+    test_e2e_runtime.py, test_drift_matched.py.

@@ -60,10 +60,10 @@ def test_a_prefix_rung_replays_the_last_chunk_from_the_golden_prefix(gspec, offi
     _Official.loads = []
     d = D.compute(s, "last")
     assert sorted(_Official.loads) == [(i, 384) for i in range(3)]  # seeded with the native prefix at the last chunk
-    assert d["pcc_state_key_L00"]["region"] == [0, 384, 512]  # compared over the positions the device computed
-    assert d["pcc_layer_L00"]["drift"] < 1.0
+    assert d["state_key_L00"]["region"] == [0, 384, 512]  # compared over the positions the device computed
+    assert d["layer_L00"]["rel"] > 0
     full = D.compute(s, "s512")
-    assert full["pcc_state_key_L00"]["region"] is None
+    assert full["state_key_L00"]["region"] is None
 
 
 def test_a_gapped_subset_starts_each_run_from_the_golden_input(gspec, official):  # noqa: F811
@@ -82,7 +82,7 @@ def test_a_gapped_subset_starts_each_run_from_the_golden_input(gspec, official):
             g.tokens()[c * g.chunk : (c + 1) * g.chunk], c * g.chunk, state, lambda n, x: outs.update({n: x})
         )
     unmatched = pcc(outs["L2.out"], g.layer(g.n_chunks - 1, 2)["out"])
-    assert 1 - gapped["pcc_layer_L02"]["drift"] < 1 - unmatched
+    assert 1 - gapped["layer_L02"]["pcc"] < 1 - unmatched
 
 
 def test_a_forward_that_ignores_the_fed_input_stops(gspec, official):  # noqa: F811
@@ -107,9 +107,9 @@ def test_the_g_task_writes_each_readers_drift_and_a_changed_drift_fails_the_pinn
     s = gspec()  # generate_golden --set: drift for s512 and for "last", which reads s512's golden
     d = Golden.for_rung(s, "s512").dir
     assert D.drift_path(d, "s512").exists() and D.drift_path(d, "last").exists()
-    assert json.loads(D.drift_path(d, "last").read_text())["pcc_state_key_L00"]["region"] == [0, 384, 512]
+    assert json.loads(D.drift_path(d, "last").read_text())["state_key_L00"]["region"] == [0, 384, 512]
     led = Ledger(s.bringup_dir)
-    e2e = {"pcc_layer_L*": ">= limit"}
+    e2e = {"err_layer_L*": "<= limit"}
     led.write_tasks(
         {
             "tasks": [

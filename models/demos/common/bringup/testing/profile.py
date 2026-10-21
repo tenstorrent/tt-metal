@@ -31,7 +31,7 @@ from models.demos.common.bringup.testing import e2e_limits as E
 from models.demos.common.bringup.testing import profiler
 from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
-from models.demos.common.bringup.testing.ladder import check_states
+from models.demos.common.bringup.testing.ladder import check_states, rel
 
 WALL_RUNS = 20  # F114: timed runs of the clean wall measurement
 WALL_WARM = 10  # F114b: warm-up runs not counted (new buffer-address combinations miss the program cache; ~10 here)
@@ -270,7 +270,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             else:
                 h2 = model.layer(i, h, start, state)
             if per_layer:  # F122: this layer's output vs the golden's, outside the host-transfer count
-                pccs[i] = metrics.pcc(model.to_host(h2).float(), g.layer(g.n_chunks - 1, i)["out"].float())
+                o, w = model.to_host(h2).float(), g.layer(g.n_chunks - 1, i)["out"].float()
+                pccs[i] = (metrics.pcc(o, w), rel(o, w))
             model.free(h)
             h = h2
         model.sync()
@@ -313,12 +314,14 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
                 E.load(g.dir, rung_name),
                 [],
             )  # F131: the ladder's limits, so a `>= limit` gate can judge the quick run
-            for i, v in pcc.items():
+            for i, (v, e) in pcc.items():
                 metrics.record(f"pcc_layer_L{i:02d}", v)
-                E.check(drift, f"pcc_layer_L{i:02d}", v, failed)
+                metrics.record(f"err_layer_L{i:02d}", e)  # F135: the rel error gates, as in the ladder
+                E.check(drift, f"layer_L{i:02d}", f"err_layer_L{i:02d}", e, failed)
             check_states(state, g, layers, rung["seq"], drift, failed)
             metrics.record("host_transfers_per_layer", max(host) if host else 0)
-            print(f"PROFILE quick: worst layer PCC {min(pcc.values()):.5f} (L{min(pcc, key=pcc.get):02d})")
+            worst = max(pcc, key=lambda i: pcc[i][1])
+            print(f"PROFILE quick: worst layer rel {pcc[worst][1]:.5f} (L{worst:02d}, PCC {pcc[worst][0]:.5f})")
             print("".join(f"FAIL {f}\n" for f in failed) or "PROFILE quick: every layer and state within its limit")
         return {"wall_ms": med, "wall_runs_ms": walls}
     reload()
