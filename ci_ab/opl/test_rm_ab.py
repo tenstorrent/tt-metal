@@ -12,7 +12,6 @@ SHAPES = {
 }
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("neg", [0, 1])
 @pytest.mark.parametrize("shape", list(SHAPES))
 def test_softmax(device, shape, neg):

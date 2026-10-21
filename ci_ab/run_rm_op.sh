@@ -32,7 +32,7 @@ elfsum() {
 # The header the JIT build really read (its dependency list) tells where the compile root is; every arm copy goes there too.
 LH=tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_reduce.h
 jitpath() { grep -ah -o "\"[^\"]*llk_math_reduce.h\"" $1/*/kernels/softmax*/*/trisc1/trisck.o.dephash 2>/dev/null | head -1 | tr -d '"'; }
-echo "ci_ab/opl/test_rm_ab.py::test_softmax[1x1x64x8192-0-device_params0]" > $OUT/probe_nodes.txt
+echo "ci_ab/opl/test_rm_ab.py::test_softmax[1x1x64x8192-0]" > $OUT/probe_nodes.txt
 use S S; export TT_METAL_CACHE=$OUT/cache_probe; mkdir -p $TT_METAL_CACHE
 AB_NODES_FILE=$OUT/probe_nodes.txt R3_REPS=1 timeout -s INT -k 60 1200 python3 $S/opl/run_nodes.py > $OUT/probe.log 2>&1; prc=$?
 jp=$(jitpath $TT_METAL_CACHE); echo "== probe rc=$prc jit header: $jp"
