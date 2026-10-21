@@ -988,9 +988,8 @@ class TtMiMoModel:
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
         warm = self._decode_inputs(inputs, greedy_only=greedy_only)
         self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
-        for name, t in warm.items():
-            if not (written and name == "next_tokens"):  # GreedyHead's buffer is persistent
-                t.deallocate(True)
+        # Keeps the persistent buffers: GreedyHead's tokens and the final norm's "hidden" (the MTP drafter's input).
+        self._release(warm)
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
