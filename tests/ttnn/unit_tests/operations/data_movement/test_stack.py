@@ -26,6 +26,13 @@ from tests.ttnn.utils_for_testing import assert_equal
         ([(8732, 2), (8732, 2)], 2, ttnn.ROW_MAJOR_LAYOUT),
         ([(1, 23, 40, 64), (1, 23, 40, 64)], 4, ttnn.ROW_MAJOR_LAYOUT),
         ([(5, 7)], -1, ttnn.ROW_MAJOR_LAYOUT),
+        # Tile-layout stacks on a new trailing axis take the same route for rank >= 2.
+        ([(8732, 1), (8732, 1), (8732, 1), (8732, 1)], 2, ttnn.TILE_LAYOUT),
+        ([(8732, 2), (8732, 2)], 2, ttnn.TILE_LAYOUT),
+        ([(1, 23, 40, 64), (1, 23, 40, 64)], 4, ttnn.TILE_LAYOUT),
+        ([(1, 5, 16, 16), (1, 5, 16, 16)], -1, ttnn.TILE_LAYOUT),
+        # Rank-1 tile inputs keep the unsqueeze-then-concat path.
+        ([(1444,)] * 8, -1, ttnn.TILE_LAYOUT),
     ],
 )
 def test_stack(device, input_shapes, dim, layout):
