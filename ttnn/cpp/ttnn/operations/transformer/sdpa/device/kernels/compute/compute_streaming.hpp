@@ -3069,73 +3069,73 @@ void sdpa_ring_v2(
                 }
                 {
                     MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
-                sdpa_inner_loop_step<
-                    kRingStepProfilingPhases,  // profiling_enabled: phase zones (level 2), fine zones (level 3)
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    Skt,
-                    DHt,
-                    vDHt,
-                    scale_fp32,
-                    qkt_subblock_h,
-                    qkt_subblock_w,
-                    qktv_subblock_h,
-                    qktv_subblock_w,
-                    false,  // use_padded_mask
-                    true,   // ring_mode
-                    false,  // causal
-                    cb_q_in,
-                    cb_kt_in,
-                    cb_v_in,
-                    cb_qkt_im,
-                    cb_identity_scale_in,
-                    cb_exp_max_diff,
-                    cb_col_identity,
-                    cb_recip_scratch,
-                    cb_normalized_out,
-                    cb_mask_in,
-                    Sk_chunk_t,
-                    false,  // kv_pad_rotation
-                    kv_region_Nt,
-                    chunk_size_t,
-                    local_padded_Nt,
-                    v_cb_physical_width_t,
-                    kt_inplace_v,
-                    0,  // sliding window
-                    use_attention_sink,
-                    cb_attention_sink,
-                    false,  // use_provided_mask
-                    use_l1_state_fifo,
-                    false,  // circular_kv_cache
-                    false,  // packed_kv_enabled
-                    true,   // use_col_bias
-                    cb_sol_bias>(
-                    q_prev,
-                    q_cur,
-                    is_last_k_of_last_ring_iter,
-                    is_first,
-                    /*apply_mask=*/false,
-                    /*lw_partial_tile_idx=*/0,
-                    active_Sk_param,
-                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !is_pooled,
-                    chunk_sbw,
-                    step_save_out_cb,
-                    step_save_max_cb,
-                    /*apply_causal=*/false,
-                    0,
-                    0,
-                    lw_mask.neginf_tile_idx,
-                    0,
-                    0,
-                    0,
-                    0,
-                    false,
-                    0,
-                    0,
-                    chunked.kv_pad_rotation,
-                    q_base_tiles,
-                    {},
-                    /*apply_col_bias=*/is_pooled);
+                    sdpa_inner_loop_step<
+                        kRingStepProfilingPhases,  // profiling_enabled: phase zones (level 2), fine zones (level 3)
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        Skt,
+                        DHt,
+                        vDHt,
+                        scale_fp32,
+                        qkt_subblock_h,
+                        qkt_subblock_w,
+                        qktv_subblock_h,
+                        qktv_subblock_w,
+                        false,  // use_padded_mask
+                        true,   // ring_mode
+                        false,  // causal
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_v_in,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_exp_max_diff,
+                        cb_col_identity,
+                        cb_recip_scratch,
+                        cb_normalized_out,
+                        cb_mask_in,
+                        Sk_chunk_t,
+                        false,  // kv_pad_rotation
+                        kv_region_Nt,
+                        chunk_size_t,
+                        local_padded_Nt,
+                        v_cb_physical_width_t,
+                        kt_inplace_v,
+                        0,  // sliding window
+                        use_attention_sink,
+                        cb_attention_sink,
+                        false,  // use_provided_mask
+                        use_l1_state_fifo,
+                        false,  // circular_kv_cache
+                        false,  // packed_kv_enabled
+                        true,   // use_col_bias
+                        cb_sol_bias>(
+                        q_prev,
+                        q_cur,
+                        is_last_k_of_last_ring_iter,
+                        is_first,
+                        /*apply_mask=*/false,
+                        /*lw_partial_tile_idx=*/0,
+                        active_Sk_param,
+                        can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !is_pooled,
+                        chunk_sbw,
+                        step_save_out_cb,
+                        step_save_max_cb,
+                        /*apply_causal=*/false,
+                        0,
+                        0,
+                        lw_mask.neginf_tile_idx,
+                        0,
+                        0,
+                        0,
+                        0,
+                        false,
+                        0,
+                        0,
+                        chunked.kv_pad_rotation,
+                        q_base_tiles,
+                        {},
+                        /*apply_col_bias=*/is_pooled);
                 }
                 if (!is_first) {
                     sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
@@ -3464,73 +3464,73 @@ void sdpa_ring_v2(
 
                 {
                     MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
-                sdpa_inner_loop_step<
-                    kRingStepProfilingPhases,  // profiling_enabled: phase zones (level 2), fine zones (level 3)
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    Skt,
-                    DHt,
-                    vDHt,
-                    scale_fp32,
-                    qkt_subblock_h,
-                    qkt_subblock_w,
-                    qktv_subblock_h,
-                    qktv_subblock_w,
-                    false,                              // use_padded_mask — ring uses ring mask instead
-                    true,                               // ring_mode
-                    is_causal_sdpa || chunked_enabled,  // chunked re-enables causal masking with absolute coords
-                    cb_q_in,
-                    cb_kt_in,
-                    cb_v_in,
-                    cb_qkt_im,
-                    cb_identity_scale_in,
-                    cb_exp_max_diff,
-                    cb_col_identity,
-                    cb_recip_scratch,
-                    cb_normalized_out,
-                    cb_mask_in,
-                    Sk_chunk_t,
-                    kv_pad_rotation_enabled,
-                    kv_region_Nt,
-                    chunk_size_t,
-                    local_padded_Nt,
-                    v_cb_physical_width_t,
-                    kt_inplace_v,
-                    sliding_window_size,
-                    use_attention_sink,
-                    cb_attention_sink,
-                    false,              // use_provided_mask
-                    use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
-                    circular_kv_cache,
-                    packed_kv_enabled,
-                    sol_chunk_mode,  // use_col_bias (pooled chunks only, runtime-gated)
-                    cb_sol_bias>(
-                    q_prev,
-                    q_cur,
-                    is_last_k_of_last_ring_iter,
-                    is_first,
-                    apply_mask,
-                    lw_partial_tile_idx,
-                    active_Sk_param,
-                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !sol_is_pooled,
-                    chunk_sbw,
-                    step_save_out_cb,
-                    step_save_max_cb,
-                    step_apply_causal,
-                    kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
-                    step_k_start_tile,
-                    lw_mask.neginf_tile_idx,
-                    has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,
-                    has_sliding_window ? 2 : 0,
-                    has_sliding_window ? 3 : 0,
-                    has_sliding_window ? 4 : 0,
-                    has_sliding_window,
-                    step_straddle_col,
-                    step_straddle_jump,
-                    step_kv_pad_rotation,
-                    q_base_tiles,
-                    packed_mask,
-                    /*apply_col_bias=*/sol_is_pooled);
+                    sdpa_inner_loop_step<
+                        kRingStepProfilingPhases,  // profiling_enabled: phase zones (level 2), fine zones (level 3)
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        Skt,
+                        DHt,
+                        vDHt,
+                        scale_fp32,
+                        qkt_subblock_h,
+                        qkt_subblock_w,
+                        qktv_subblock_h,
+                        qktv_subblock_w,
+                        false,                              // use_padded_mask — ring uses ring mask instead
+                        true,                               // ring_mode
+                        is_causal_sdpa || chunked_enabled,  // chunked re-enables causal masking with absolute coords
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_v_in,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_exp_max_diff,
+                        cb_col_identity,
+                        cb_recip_scratch,
+                        cb_normalized_out,
+                        cb_mask_in,
+                        Sk_chunk_t,
+                        kv_pad_rotation_enabled,
+                        kv_region_Nt,
+                        chunk_size_t,
+                        local_padded_Nt,
+                        v_cb_physical_width_t,
+                        kt_inplace_v,
+                        sliding_window_size,
+                        use_attention_sink,
+                        cb_attention_sink,
+                        false,              // use_provided_mask
+                        use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
+                        circular_kv_cache,
+                        packed_kv_enabled,
+                        sol_chunk_mode,  // use_col_bias (pooled chunks only, runtime-gated)
+                        cb_sol_bias>(
+                        q_prev,
+                        q_cur,
+                        is_last_k_of_last_ring_iter,
+                        is_first,
+                        apply_mask,
+                        lw_partial_tile_idx,
+                        active_Sk_param,
+                        can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !sol_is_pooled,
+                        chunk_sbw,
+                        step_save_out_cb,
+                        step_save_max_cb,
+                        step_apply_causal,
+                        kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
+                        step_k_start_tile,
+                        lw_mask.neginf_tile_idx,
+                        has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,
+                        has_sliding_window ? 2 : 0,
+                        has_sliding_window ? 3 : 0,
+                        has_sliding_window ? 4 : 0,
+                        has_sliding_window,
+                        step_straddle_col,
+                        step_straddle_jump,
+                        step_kv_pad_rotation,
+                        q_base_tiles,
+                        packed_mask,
+                        /*apply_col_bias=*/sol_is_pooled);
                 }
 
                 // Post-iteration cleanup: pop previous values and swap aliases
