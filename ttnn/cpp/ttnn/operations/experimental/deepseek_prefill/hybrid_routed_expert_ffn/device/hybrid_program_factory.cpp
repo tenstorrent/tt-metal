@@ -1177,7 +1177,10 @@ constexpr uint32_t CB_IN1_GATE = CB_BASE + 16;
 constexpr uint32_t CB_IN1_UP = CB_BASE + 2;
 constexpr uint32_t CB_IN1_DOWN = CB_BASE + 3;
 constexpr uint32_t CB_GATE_INT = CB_BASE + 4;
-constexpr uint32_t CB_UP_INT = CB_BASE + 5;
+// URE_X_TILIZE_ONCE prototype: cb_up_intermed is never allocated, so its index moves to +20 and the
+// tiled-x staging CB takes +5 (the tilize helper needs its output CB below index 32).
+constexpr uint32_t CB_UP_INT = CB_BASE + 20;
+constexpr uint32_t CB_X_TILED = CB_BASE + 5;
 constexpr uint32_t CB_ACTIVATED = CB_BASE + 6;
 constexpr uint32_t CB_PARTIALS_GU = CB_BASE + 7;
 constexpr uint32_t CB_PARTIALS_D = CB_BASE + 8;
@@ -1456,6 +1459,9 @@ void append_to_descriptor(
     // else it matches x's dtype (bf8_b on the TILE path).
     const tt::DataFormat in0_x_df = op.x_is_row_major ? tt::DataFormat::Bfp8_b : x_df;
     const uint32_t in0_x_tile_size = tt::tile_size(in0_x_df);
+    // URE_X_TILIZE_ONCE prototype switch (row-major x only).
+    const char* ure_xo_env = std::getenv("URE_X_TILIZE_ONCE");
+    const bool x_tilize_once = op.x_is_row_major && ure_xo_env != nullptr && std::string(ure_xo_env) == "1";
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
     const uint32_t up_tile_size = tt::tile_size(up_df);
     const uint32_t down_tile_size = tt::tile_size(down_df);
@@ -1480,10 +1486,13 @@ void append_to_descriptor(
     // section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
+        total += static_cast<uint64_t>(M * w_gu * ((op.x_is_row_major && !x_tilize_once) ? 1 : 2)) *
                  in0_x_tile_size;  // cb_in0_x (RM: single-buf)
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu * (x_tilize_once ? 1 : 2)) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+            if (x_tilize_once) {
+                total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;  // cb_x_tiled
+            }
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
@@ -1578,6 +1587,11 @@ void append_to_descriptor(
 
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;
+    if (ure_xo_env != nullptr) {
+        fprintf(stderr, "URE_X_TILIZE_ONCE=%d fit per_core_M=%u in0_block_w_gu=%u cb_bytes=%llu budget=%llu\n",
+            (int)x_tilize_once, per_core_M, in0_block_w_gu,
+            (unsigned long long)cb_footprint_bytes(per_core_M, in0_block_w_gu), (unsigned long long)l1_budget);
+    }
     chunk_M_tiles = per_core_M * GRID_Y;
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
@@ -1777,7 +1791,7 @@ void append_to_descriptor(
     // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
     // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
     // overlap).
-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * ((op.x_is_row_major && !x_tilize_once) ? 1u : 2u), in0_x_tile_size);
     // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
     // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
     // while N's posted mcast still drains — single-buffering reuses the slot
@@ -1787,8 +1801,11 @@ void append_to_descriptor(
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles * 2,
+            /*tiles=*/gu_in0_block_num_tiles * (x_tilize_once ? 1u : 2u),
             tt::tile_size(tt::DataFormat::Float16_b));
+    }
+    if (x_tilize_once) {
+        make_cb(CB_X_TILED, tt::DataFormat::Bfp8_b, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
@@ -1860,9 +1877,9 @@ void append_to_descriptor(
     };
     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * ((op.x_is_row_major && !x_tilize_once) ? 1u : 2u), in0_block_w_gu);
     if (op.x_is_row_major) {
-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+        check_ring("cb_x_rm", gu_in0_block_num_tiles * (x_tilize_once ? 1u : 2u), in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -2063,6 +2080,9 @@ void append_to_descriptor(
     std::map<std::string, std::string> reader_defines{};
     // adaptive_chunk divides the host-sized max_chunk by this; see kGridY.
     reader_defines["UNIFIED_RE_GRID_Y"] = std::to_string(GRID_Y);
+    if (x_tilize_once) {
+        reader_defines["URE_X_TILIZE_ONCE"] = std::to_string(CB_X_TILED);
+    }
     if (op.far_chunk_table) {
         reader_defines["URE_FAR_EXT_OFF"] = std::to_string(far_ext_off);
     }
@@ -2252,6 +2272,9 @@ void append_to_descriptor(
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["UNIFIED_RE_GRID_Y"] = std::to_string(GRID_Y);
+    if (x_tilize_once) {
+        compute_defines["URE_X_TILIZE_ONCE"] = std::to_string(CB_X_TILED);
+    }
     if (op.far_chunk_table) {
         compute_defines["URE_FAR_EXT_OFF"] = std::to_string(far_ext_off);
     }
@@ -2548,7 +2571,9 @@ void append_to_descriptor(
         compute_descriptor.emplace_runtime_args(
             core,
             {(valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
-             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w});   // 1 down valid N subblocks
+             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+             (gx + GRID_X - (gy + 1) % GRID_X) % GRID_X,                 // 2 x tilize rank (URE_X_TILIZE_ONCE)
+             static_cast<uint32_t>(GRID_X)});                            // 3 grid width
     }
 
     descriptor.kernels.push_back(std::move(reader_descriptor));

@@ -443,7 +443,9 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t gate_intermed_cb_id,
     uint32_t up_intermed_cb_id,
     uint32_t m_subblocks,
-    uint32_t n_subblocks) {
+    uint32_t n_subblocks,
+    uint32_t xo_rank = 0,
+    uint32_t xo_grid = 1) {
     // No real_k_tiles bound here, unlike the down phase: the host asserts
     // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
     // dim exactly and there is no padded K position to skip. This phase's padding
@@ -489,6 +491,48 @@ FORCE_INLINE void matmul_phase_fused_gu(
     partials_up_cb.reserve_back(EFF_OUT_MAX);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
+#ifdef URE_X_TILIZE_ONCE
+        // Prototype: tilize only the K-blocks this core owns, one block ahead of the matmul, into
+        // cb_x_tiled; the reader multicasts them to the row's cb_in0_x. Same tilize call as below,
+        // only the output CB differs (same Bfp8_b format), so the tiles are bit-identical.
+        for (uint32_t xo_pass = 0; xo_pass < 2; ++xo_pass) {
+            const uint32_t xo_blk = (xo_pass == 0) ? 0 : block + 1;
+            const bool xo_do = (xo_pass == 0) ? (block == 0 && xo_rank == 0)
+                                              : (block + 1 < num_blocks && ((block + 1) % xo_grid) == xo_rank);
+            (void)xo_blk;
+            if (!xo_do) {
+                continue;
+            }
+#ifdef PACKER_L1_ACC
+            PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+            const uint32_t xo_strips = x_block_tiles / in0_block_w;
+            compute_kernel_lib::tilize<
+                in0_block_w,
+                x_rm_cb_id,
+                URE_X_TILIZE_ONCE,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(xo_strips);
+            {
+                const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+                if (x_pad > 0) {
+                    CircularBuffer x_rm_cb(x_rm_cb_id);
+                    CircularBuffer xo_cb(URE_X_TILIZE_ONCE);
+                    x_rm_cb.wait_front(x_pad);
+                    x_rm_cb.pop_front(x_pad);
+                    xo_cb.reserve_back(x_pad);
+                    xo_cb.push_back(x_pad);
+                }
+            }
+            reconfig_data_format_srca(gate_cb_id);
+            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            pack_reconfig_data_format(URE_X_TILIZE_ONCE, partials_gu_cb_id);
+#ifdef PACKER_L1_ACC
+            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+#endif
+        }
+#endif
         if constexpr (tilize_x) {
             //  Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
             //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
@@ -917,6 +961,15 @@ void kernel_main() {
     // compile-time) because they vary per core and one kernel serves the whole grid.
     const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+#ifdef URE_X_TILIZE_ONCE
+    const uint32_t xo_rank = get_arg_val<uint32_t>(2);
+    const uint32_t xo_grid = get_arg_val<uint32_t>(3);
+    constexpr bool xo_old_tilize = false;
+#else
+    const uint32_t xo_rank = 0;
+    const uint32_t xo_grid = 1;
+    constexpr bool xo_old_tilize = true;
+#endif
 
     // Phase 1 (gate)
     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
@@ -1145,7 +1198,7 @@ void kernel_main() {
                 gu_out_block_num_tiles,
                 /*x_cb_id=*/cb_in0_x,
                 /*x_rm_cb_id=*/cb_x_rm,
-                /*tilize_x=*/(x_is_row_major != 0)>(
+                /*tilize_x=*/(x_is_row_major != 0) && xo_old_tilize>(
                 cb_in1_gate,
                 cb_in1_up,
                 cb_partials_gu,
@@ -1153,7 +1206,9 @@ void kernel_main() {
                 cb_gate_intermed,
                 cb_up_intermed,
                 /*m_subblocks=*/re_m_valid,
-                /*n_subblocks=*/gu_valid_n_subblocks);
+                /*n_subblocks=*/gu_valid_n_subblocks,
+                xo_rank,
+                xo_grid);
 
 #ifdef FUSED_BINARY_ACT
             // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.

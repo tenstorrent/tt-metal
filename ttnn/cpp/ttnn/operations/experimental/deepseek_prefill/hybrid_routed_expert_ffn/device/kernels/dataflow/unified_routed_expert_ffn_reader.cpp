@@ -291,7 +291,17 @@ void kernel_main() {
     // push all operate on x_stage_obj; only the DRAM read loop differs
     // (partial-stick vs tile-page). In row-major mode the reader never touches
     // cb_in0_x — compute produces it.
+#ifdef URE_X_TILIZE_ONCE
+    // Prototype: cb_in0_x receives TILE x, multicast by the row core that tilized that K-block.
+    constexpr uint32_t x_stage_cb = cb_in0_x;
+    CircularBuffer cb_x_tiled_obj(URE_X_TILIZE_ONCE);
+    constexpr bool xo_old_sender = false;
+    (void)in0_sender_nx;
+    (void)in0_sender_ny;
+#else
     constexpr uint32_t x_stage_cb = (x_is_row_major != 0) ? cb_x_rm : cb_in0_x;
+    constexpr bool xo_old_sender = true;
+#endif
     CircularBuffer x_stage_obj(x_stage_cb);
     const uint32_t x_stage_tile_bytes = x_stage_obj.get_tile_size();
 
@@ -590,6 +600,50 @@ void kernel_main() {
             //   Receivers wait for BOTH valid semaphores at the end. Halves the
             //   per-K-block elapsed time at small per_core_M where mcast/handshake
             //   overhead dominates compute.
+#ifdef URE_X_TILIZE_ONCE
+            // K-block kb of this row is owned (read, tilized, multicast) by gx == (kb + gy + 1) % GRID_X.
+            const uint32_t xo_rank = (my_nt_d + GRID_X_NOC - ((my_mt + 1) % GRID_X_NOC)) % GRID_X_NOC;
+            const uint32_t xo_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
+            const uint32_t xo_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
+            const uint32_t xo_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
+            const uint32_t xo_last_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 1);
+            const uint32_t xo_valid_tile_rows =
+                (this_core_first_row < count_tiles)
+                    ? ((count_tiles - this_core_first_row < per_core_M) ? (count_tiles - this_core_first_row) : per_core_M)
+                    : 0;
+            // Same stick reads as the old x sender, into this core's own cb_x_rm (tilize input).
+            auto xo_read_rm = [&](uint32_t xkb) {
+                cb_x_rm_obj.reserve_back(g_in0_block_tiles_max);
+                uint32_t l1_x = cb_x_rm_obj.get_write_ptr();
+                constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                const uint32_t col_off_bytes = xkb * rm_kblock_bytes;
+                for (uint32_t m = 0; m < per_core_M; ++m) {
+                    const uint32_t tile_row = this_core_first_row + m;
+                    if (tile_row < count_tiles) {
+                        const uint32_t row_base = tile_row * TILE_HEIGHT;
+                        const uint32_t real_r =
+                            (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
+                        for (uint32_t r = 0; r < real_r; ++r) {
+                            noc_read.async_read(
+                                x_acc_rm,
+                                CoreLocalMem<uint32_t>(l1_x),
+                                rm_kblock_bytes,
+                                {.page_id = x_start_stick + row_base + r, .offset_bytes = col_off_bytes},
+                                {});
+                            l1_x += rm_kblock_bytes;
+                        }
+                        l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
+                    } else {
+                        l1_x += TILE_HEIGHT * rm_kblock_bytes;
+                    }
+                }
+                noc_read.async_read_barrier();
+                cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+            };
+            if (xo_rank == 0) {
+                xo_read_rm(0);
+            }
+#endif
             for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                 x_stage_obj.reserve_back(g_in0_block_tiles_max);
                 cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
@@ -610,21 +664,70 @@ void kernel_main() {
                 // proceed in parallel. The senders are usually disjoint sets of
                 // cores; the only core that's both senders is (0,0) which doesn't
                 // self-inc (it's its own sender for both).
+#ifdef URE_X_TILIZE_ONCE
+                const bool xo_owner = (kb % GRID_X_NOC) == xo_rank;
+                if (!xo_owner) {
+                    const uint32_t og = (kb + my_mt + 1) % GRID_X_NOC;
+                    in0_valid_sem.set(0);
+                    in0_ready_sem.up(
+                        noc,
+                        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * og + 0),
+                        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * og + 1),
+                        1);
+                }
+#else
                 if (!is_in0_sender) {
                     in0_valid_sem.set(0);
                     in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
                 }
+#endif
                 if (!is_in1_sender) {
                     in1_valid_sem.set(0);
                     in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
                 }
 
+#ifdef URE_X_TILIZE_ONCE
+                // Feed the compute the row-major sticks of the next block this core owns; it tilizes
+                // them one K-block ahead of its matmul.
+                if (kb + 1 < num_blocks_gu && ((kb + 1) % GRID_X_NOC) == xo_rank) {
+                    xo_read_rm(kb + 1);
+                }
+                if (xo_owner) {
+                    // Tiles ready in cb_x_tiled and every row core has a free cb_in0_x slot: multicast
+                    // the real tile-rows to the whole row, this core included (as phase 4 does).
+                    cb_x_tiled_obj.wait_front(g_in0_block_tiles_max);
+                    in0_ready_sem.wait(GRID_X_NOC - 1);
+                    in0_ready_sem.set(0);
+                    const uint32_t xo_src = cb_x_tiled_obj.get_read_ptr();
+                    const uint32_t xo_dst = x_stage_obj.get_write_ptr();
+                    const uint32_t xo_bytes = xo_valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+                    if (xo_bytes > 0) {
+                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                            CoreLocalMem<uint32_t>(xo_src),
+                            MulticastEndpoint{},
+                            xo_bytes,
+                            GRID_X_NOC,
+                            {.offset_bytes = 0},
+                            {.noc_x_start = xo_first_nx,
+                             .noc_y_start = xo_first_ny,
+                             .noc_x_end = xo_last_nx,
+                             .noc_y_end = xo_last_ny,
+                             .addr = xo_dst},
+                            /*linked=*/true);
+                    }
+                    noc.async_writes_flushed();
+                    in0_valid_sem.set(IN0_VALID);
+                    in0_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                        noc, xo_first_nx, xo_first_ny, xo_last_nx, xo_last_ny, GRID_X_NOC);
+                    cb_x_tiled_obj.pop_front(g_in0_block_tiles_max);
+                }
+#endif
                 // Step 2: senders run their work. in0 sender path and in1 sender
                 // path can each start as soon as their ready sem is satisfied —
                 // for the common case where a core is one type of sender, the
                 // work begins immediately. For core (0,0) (both senders), in0
                 // runs first then in1, ~60µs sequentially — same as before.
-                if (is_in0_sender) {
+                if (xo_old_sender && is_in0_sender) {
                     in0_ready_sem.wait(in0_num_receivers);
                     in0_ready_sem.set(0);
 
@@ -906,10 +1009,20 @@ void kernel_main() {
                 }
 
                 // Step 3: receivers wait for both valid semaphores and push.
+#ifdef URE_X_TILIZE_ONCE
+                if (!xo_owner) {
+                    in0_valid_sem.wait(IN0_VALID);
+                } else {
+                    // Own loopback copy: only the write ack proves it landed (see phase 4, step 5).
+                    noc.async_write_barrier();
+                }
+                x_stage_obj.push_back(g_in0_block_tiles_max);
+#else
                 if (!is_in0_sender) {
                     in0_valid_sem.wait(IN0_VALID);
                     x_stage_obj.push_back(g_in0_block_tiles_max);
                 }
+#endif
                 if (!is_in1_sender) {
                     in1_valid_sem.wait(IN1_VALID);
                     cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
