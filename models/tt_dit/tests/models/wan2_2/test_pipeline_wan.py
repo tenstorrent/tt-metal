@@ -195,7 +195,8 @@ def test_pipeline_inference(
     # (garbage, static or blurry output)
     #
     # This test runs a single prompt at a single seed, and is therefore too sensitive
-    # to numeric fluctuation to support strict thresholds; those should be in perf tests.
+    # to numeric fluctuation to support strict thresholds; the multi-prompt, multi-seed gate
+    # is in test_performance_wan.py. RUN_VBENCH=0 skips this one where that gate runs instead.
     vbench_thresholds_by_height = {
         720: {
             "subject_consistency": 0.8,
@@ -214,6 +215,9 @@ def test_pipeline_inference(
     }
 
     def check_output_with_vbench(prompt, number):
+        if os.environ.get("RUN_VBENCH", "1") == "0":
+            logger.info("RUN_VBENCH=0, skipping VBench quality gate")
+            return
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
             thresholds = vbench_thresholds_by_height[height]

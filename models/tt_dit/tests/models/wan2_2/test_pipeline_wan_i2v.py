@@ -189,6 +189,10 @@ def test_pipeline_inference(
     }
 
     def check_output_with_vbench(prompt, number):
+        # RUN_VBENCH=0 skips this single-clip gate where test_performance_wan.py runs the multi-seed one.
+        if os.environ.get("RUN_VBENCH", "1") == "0":
+            logger.info("RUN_VBENCH=0, skipping VBench quality gate")
+            return
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
             thresholds = vbench_thresholds_by_height[height]

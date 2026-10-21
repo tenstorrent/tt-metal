@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import numpy as np
@@ -18,6 +19,7 @@ from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
+from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
@@ -31,6 +33,30 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
+
+
+# VBench quality gate (RUN_VBENCH=1): every (prompt, seed) clip is rendered after the timed runs, and
+# each prompt's mean over the seeds must clear that prompt's floors (models/tt_dit/utils/vbench_bundle.py).
+# Indices into the test's prompt list: the boxing cats and the cyberpunk alley, both strongly dynamic.
+VBENCH_PROMPTS = [0, 2]
+VBENCH_SEEDS = [42, 43, 44, 45]
+
+
+def vbench_thresholds(model_type: str, height: int) -> dict:
+    # Loose "broken pipeline" floors carried over from the single-clip gate (#60488) until the
+    # per-prompt spread over these seeds is measured on both bh_sc4 quads (#60481). dynamic_degree is
+    # binary per clip, so 0.75 requires three of the four seeds to move.
+    if model_type == "i2v":
+        # The I2V conditioning image is a fractal: dynamic_degree and imaging_quality are meaningless
+        # on it, so only intra-video consistency is gated (see test_pipeline_wan_i2v.py).
+        return {"subject_consistency": 0.70, "background_consistency": 0.80 if height == 720 else 0.82}
+    return {
+        "subject_consistency": 0.8,
+        "background_consistency": 0.8,
+        "motion_smoothness": 0.9,
+        "dynamic_degree": 0.75,
+        "imaging_quality": 0.5 if height == 720 else 0.45,
+    }
 
 
 def _scale_expected_metrics(expected_metrics: dict, factor: float) -> dict:
@@ -219,11 +245,17 @@ def test_pipeline_performance(
     galaxy_type: str,
     is_fsdp: bool,
     quant_config_name: str | None,
+    tmp_path,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
     traced = mesh_shape == (4, 32)  # trace only for quadx32
+    # VBENCH_EXPORT_DIR leaves the bundle for a CI step that scores it after pytest has closed the
+    # devices; without it rank 0 scores the bundle at the end of the test.
+    run_vbench = os.environ.get("RUN_VBENCH", "0") == "1"
+    vbench_export_dir = os.environ.get("VBENCH_EXPORT_DIR")
+    vbench_dir = vbench_export_dir or tmp_path / "vbench"
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -340,6 +372,29 @@ def test_pipeline_performance(
                 ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
+
+    if run_vbench:
+        gate_prompts = [
+            {"text": prompts[i], "thresholds": vbench_thresholds(model_type, height)} for i in VBENCH_PROMPTS
+        ]
+        if is_global_rank_zero():
+            vbench_bundle.create_bundle(vbench_dir)
+        for index, gate_prompt in enumerate(gate_prompts):
+            for seed in VBENCH_SEEDS:
+                logger.info(f"VBench clip: prompt {index}, seed {seed}")
+                with torch.no_grad():
+                    clip = pipeline(
+                        prompts=[gate_prompt["text"]],
+                        image_prompt=image_prompt,
+                        num_inference_steps=num_inference_steps,
+                        seed=seed,
+                        traced=traced,
+                        output_type="uint8",
+                    )
+                if is_global_rank_zero():
+                    export_to_video(clip[0], str(vbench_bundle.clip_path(vbench_dir, index, seed)), fps=16)
+        if is_global_rank_zero():
+            vbench_bundle.write_manifest(vbench_dir, prompts=gate_prompts, seeds=VBENCH_SEEDS)
 
     pipeline.release_traces()
 
@@ -473,5 +528,8 @@ def test_pipeline_performance(
             pass_perf_check = False
 
     assert pass_perf_check, "\n".join(assert_msgs)
+
+    if run_vbench and not vbench_export_dir and is_global_rank_zero():
+        vbench_bundle.evaluate(vbench_dir)
 
     logger.info("Performance test completed successfully!")
