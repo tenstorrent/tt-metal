@@ -63,6 +63,30 @@ private:
     binding_details::LLKMetadata llk_metadata_;
 };
 
+// PerNodeTensorBindingToken: the binding token for a per-node tensor.
+//
+// A per-node allocated tensor has an independent base address on every node, so the address
+// cannot ride the kernel's common runtime args the way TensorBindingToken's does. Instead, each node
+// receives its own address in its per-node runtime args, at byte offset ADDR_RTA_OFFSET.
+//
+// Only this node's address is known to the kernel, so a per-node token builds only a LocalTensorAccessor:
+//  auto a = LocalTensorAccessor<T>(tensor::my_host_declared_accessor_name); // OK
+//  auto b = TensorAccessor(tensor::my_host_declared_accessor_name);         // compile error
+template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+struct PerNodeTensorBindingToken {
+    using args_t = TensorAccessorArgs<CTA_OFFSET>;
+    static constexpr args_t args{};
+    static constexpr uint32_t addr_rta_offset = ADDR_RTA_OFFSET;  // in bytes
+
+    explicit constexpr PerNodeTensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
+
+private:
+    template <const auto& Token>
+    friend struct binding_details::LLKOperandExtractor;
+
+    binding_details::LLKMetadata llk_metadata_;
+};
+
 // NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
 //
 // tensor::get_token_if_present<"name">() returns a pointer to the named TensorBindingToken when

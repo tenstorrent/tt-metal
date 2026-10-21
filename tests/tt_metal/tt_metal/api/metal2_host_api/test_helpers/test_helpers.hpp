@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -239,6 +240,23 @@ inline TensorParameter MakeShardedTensorParameter(
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
         .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),
+    };
+}
+
+// Per-node allocated counterpart of MakeShardedTensorParameter: one 32x32 tile per node on `num_cores` nodes
+// in a row. per_node=false gives the otherwise identical lockstep layout.
+inline TensorParameter MakePerNodeTensorParameter(std::string name, uint32_t num_cores, bool per_node = true) {
+    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
+    tt::tt_metal::MemoryConfig memory_config{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec{shard_grid, {32, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR}};
+    tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, per_node);
+    auto tensor_layout = tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory_config);
+    return TensorParameter{
+        .unique_id = TensorParamName{std::move(name)},
+        .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{32 * num_cores, 32}, std::move(tensor_layout)),
     };
 }
 
