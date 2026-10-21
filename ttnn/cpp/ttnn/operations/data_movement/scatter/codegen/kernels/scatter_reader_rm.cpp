@@ -17,10 +17,9 @@
 //   chunk is a *sub-range of the single per-stick DRAM page*, read via a
 //   page-relative Noc::async_read ({.page_id, .offset_bytes}) — never spanning
 //   the page boundary, so the interleaved bank mapping is never crossed. chunk_elems is
-//   chosen (by the builder) so chunk_elems*elem_size is a multiple of the 32B
-//   NOC alignment for every dtype, keeping every chunk source/dest 32B aligned.
-//   When the whole stick fits one chunk this collapses to the original 1-read
-//   path (byte-identical behavior).
+//   either the whole index stick (one chunk at offset 0) or a multiple of 32 elements, so
+//   with the 2- and 4-byte dtypes in scope every chunk's byte offset is a multiple of 64 B:
+//   NOC-aligned on Wormhole (32 B) and Blackhole (64 B) alike.
 
 #include "scatter_common.hpp"
 #include "api/dataflow/dataflow_api.h"
@@ -46,18 +45,18 @@ void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(3);
     constexpr uint32_t input_stick_elems = get_compile_time_arg_val(4);
     constexpr uint32_t index_stick_elems = get_compile_time_arg_val(5);
-    // Element sizes in bytes — passed explicitly because get_tile_size()
-    // returns L1 words (not bytes), causing division to zero.
+    // Element sizes in bytes — passed explicitly: get_tile_size() reports a
+    // 32x32 tile's bytes, which says nothing about an RM stick's element.
     constexpr uint32_t output_df_size = get_compile_time_arg_val(6);
     constexpr uint32_t index_df_size = get_compile_time_arg_val(7);
     constexpr uint32_t src_df_size = get_compile_time_arg_val(8);
-    // Actual page sizes in bytes — passed explicitly because get_tile_size()
-    // returns L1 words (not bytes) for RM CBs.
+    // Actual page sizes in bytes — passed explicitly: get_tile_size() reports a
+    // 32x32 tile's bytes, not the RM stick page these CBs hold.
     constexpr uint32_t index_page_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t src_page_bytes = get_compile_time_arg_val(10);
-    // Chunk size (elements) for streaming index/src. chunk_elems*elem_size is a
-    // multiple of the 32B NOC alignment for every supported dtype (builder
-    // enforces chunk_elems % 32 == 0), so every chunk read is 32B aligned.
+    // Chunk size (elements) for streaming index/src: the whole stick (one chunk
+    // at offset 0) or a multiple of 32 elements, so every chunk offset is
+    // NOC-aligned for the 2- and 4-byte dtypes in scope.
     constexpr uint32_t chunk_elems = get_compile_time_arg_val(11);
     constexpr auto index_ta_args = TensorAccessorArgs<12>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
@@ -116,10 +115,10 @@ void kernel_main() {
             if (base + this_chunk > index_stick_elems) {
                 this_chunk = index_stick_elems - base;
             }
-            // 32B-aligned byte offsets (chunk_elems*elem_size % 32 == 0); the
-            // final partial chunk reads exactly this_chunk*elem_size bytes
-            // (unaligned size is fine — only addresses require 32B alignment)
-            // and never crosses the page boundary.
+            // base is 0 or a multiple of 32 elements, so these offsets are
+            // NOC-aligned; the final partial chunk reads exactly
+            // this_chunk*elem_size bytes (only addresses need alignment, not
+            // sizes) and never crosses the page boundary.
             const uint32_t idx_off = base * index_df_size;
             const uint32_t src_off = base * src_df_size;
             noc.async_read(

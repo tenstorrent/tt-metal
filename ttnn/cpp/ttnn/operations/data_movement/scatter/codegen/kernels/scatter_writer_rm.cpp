@@ -25,8 +25,8 @@ void kernel_main() {
     // Compile-time args
     constexpr uint32_t cb_input = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    // Actual page sizes in bytes — passed explicitly because get_tile_size()
-    // returns L1 words (not bytes) for RM CBs.
+    // Actual page sizes in bytes — passed explicitly: get_tile_size() reports a
+    // 32x32 tile's bytes, not the RM stick page these CBs hold.
     constexpr uint32_t input_page_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t output_page_bytes = get_compile_time_arg_val(3);
     constexpr auto input_ta_args = TensorAccessorArgs<4>();

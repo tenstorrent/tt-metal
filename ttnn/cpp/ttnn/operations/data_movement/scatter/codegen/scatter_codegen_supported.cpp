@@ -136,9 +136,9 @@ bool supported_by_codegen(
     // before routing reaches this gate, so reduction_mode is one of the three named modes here.
     // BFLOAT16 reduction is only correct through the dedicated ROW_MAJOR accumulator (add/multiply,
     // full-stick FP32 accumulation): the generic value_kind switch scatter_common.hpp's
-    // scatter_reduce_value implements has no bfloat16 case, so a TILE reduce -- or any reduce on the
-    // plain (non-bf16-reduce) ROW_MAJOR reader -- would silently drop every duplicate update instead
-    // of accumulating it.
+    // scatter_reduce_value implements has no bfloat16 case, and the generic readers static_assert
+    // that combination away, so a TILE reduce -- or any reduce on the plain (non-bf16-reduce)
+    // ROW_MAJOR reader -- past this gate would fail at JIT compile rather than run.
     if (reduction_mode != kReductionNone &&
         (layout != Layout::ROW_MAJOR || (reduction_mode != kReductionAdd && reduction_mode != kReductionMultiply))) {
         return false;
