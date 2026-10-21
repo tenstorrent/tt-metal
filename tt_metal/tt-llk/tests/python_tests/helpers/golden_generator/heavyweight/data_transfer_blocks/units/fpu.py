@@ -43,13 +43,44 @@ class Fpu:
         """
         self.l1.check_dest_format(dest_format)
         if current is not None:
-            # An integer Dest accumulates exactly on the device. float32 holds
-            # integers only to 2^24, so a Dest value past that loses its low
-            # bits here, before the narrow -- 16777217 + 1 would come back as
-            # 16777216. float64 covers Int32's whole range exactly.
-            wide = torch.float64 if dest_format.is_integer() else torch.float32
-            values = current.to(wide) + values.to(wide)
+            values = self._accumulate(values, current, dest_format)
         return to_dest_storage(values, dest_format)
+
+    @staticmethod
+    def _accumulate(
+        values: torch.Tensor, current: torch.Tensor, dest_format: DataFormat
+    ) -> torch.Tensor:
+        """Add a new result to what Dest holds, in a type exact for both.
+
+        Three cases, because the operands are not always the same kind:
+
+        * **Both integer** -- an integer op, whose operands the unpacker landed
+          as integers and whose result stayed integer. Add as integers, which
+          is what the device does. ``int64`` because the narrow types *wrap*:
+          ``int8`` 100 + 100 is -56, and the saturation below would then clamp
+          the wrong number.
+        * **A float result into an integer Dest** -- reachable from a matmul on
+          integer inputs, and from a caller naming an integer ``dest_format``
+          explicitly. ``float64``, because float32 holds integers exactly only
+          to 2**24 and an Int32 Dest reaches 2**31; a value past that would
+          lose its low bits here, before the narrow, so ``16777217 + 1`` would
+          come back 16777216.
+        * **A float Dest** -- ``float32``, the width the rest of the float path
+          uses.
+
+        The narrowing and the saturation happen once, afterwards, in
+        :func:`..storage.to_dest_storage`.
+        """
+        both_integer = (
+            not values.dtype.is_floating_point and not current.dtype.is_floating_point
+        )
+        if both_integer:
+            wide = torch.int64
+        elif dest_format.is_integer():
+            wide = torch.float64
+        else:
+            wide = torch.float32
+        return current.to(wide) + values.to(wide)
 
     def dest_to_src(
         self,
