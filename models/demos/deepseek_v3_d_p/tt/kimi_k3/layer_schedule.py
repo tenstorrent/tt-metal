@@ -20,7 +20,14 @@ plausible, wrong, out-of-range slot. `KimiK3Adapter.allocate_kv_cache` states th
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+
+def kda_layer_ack_enabled() -> bool:
+    """Whether KDA layers send their own layer ack (PREFILL_KDA_LAYER_ACK, default on). Off, only the
+    KV-writing MLA layers ack."""
+    return os.environ.get("PREFILL_KDA_LAYER_ACK", "1") == "1"
 
 
 @dataclass(frozen=True)
@@ -34,8 +41,8 @@ class KimiK3LayerSchedule:
         kv_slot_of_local: one entry per local layer — its rank-local KV slot, or `None` on a KDA
             layer, which writes no KV slab at all.
         num_mla_layers: how many of this rank's layers are MLA. This is what `ttMLA` must be given
-            as `layer_num`, and what the layer-ack channel must be configured with — not the model's
-            93, and not the rank's layer count.
+            as `layer_num`, and, with KDA layer acks off, what the layer-ack channel must be configured
+            with — not the model's 93, and not the rank's layer count.
     """
 
     first_layer_idx: int

@@ -20,7 +20,7 @@ def layer_completion_layout(
     layer_split: list, rank: int, *, kv_slot_layer_ids=None, extra_layers: int = 0
 ) -> LayerCompletionLayout:
     """`layer_split` is compute_layer_split's [(first_layer, count)] per rank; `kv_slot_layer_ids`
-    the global layers that write KV (None: every layer); `extra_layers` the rows the last rank
+    the global layers that ack, i.e. a hybrid stack's KV-writing layers (None: every layer); `extra_layers` the rows the last rank
     reports past the trunk (MTP levels plus drafter layers)."""
     first_layer_idx, num_my_layers = layer_split[rank]
     trunk_layers = sum(count for _, count in layer_split)

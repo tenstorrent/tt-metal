@@ -233,6 +233,12 @@ class KimiK3Adapter(MLAPrefillAdapter):
             schedule.global_index(local) for local, slot in enumerate(schedule.kv_slot_of_local) if slot is not None
         ]
 
+    def ack_layer_ids(self, num_layers: int):
+        """Every layer when KDA layers ack (PREFILL_KDA_LAYER_ACK), otherwise only the MLA layers."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import kda_layer_ack_enabled
+
+        return None if kda_layer_ack_enabled() else self.kv_slot_layer_ids(num_layers)
+
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """The live stream, plus one plane per AttnRes snapshot sealed before this boundary.
 

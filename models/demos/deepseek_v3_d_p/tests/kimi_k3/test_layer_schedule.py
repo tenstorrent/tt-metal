@@ -99,3 +99,19 @@ def test_slice_bounds_are_checked(expect_error):
         KimiK3LayerSchedule.build(KimiK3Config, first_layer_idx=90, num_layers=10)
     with expect_error(ValueError, "invalid slice"):
         KimiK3LayerSchedule.build(KimiK3Config, first_layer_idx=0, num_layers=0)
+
+
+@pytest.mark.parametrize("kda_ack, expected", [("1", (93, [24, 24, 24, 21])), ("0", (24, [6, 6, 6, 6]))])
+def test_layer_ack_layout_follows_the_kda_ack_flag(monkeypatch, kda_ack, expected):
+    """With KDA acks on, every layer acks and records label densely; off, only the MLA layers do."""
+    from models.demos.common.prefill.adapter import get_adapter
+    from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
+
+    monkeypatch.setenv("PREFILL_KDA_LAYER_ACK", kda_ack)
+    ack_ids = get_adapter("kimi_k3").ack_layer_ids(93)
+    assert (ack_ids is None) == (kda_ack == "1")
+
+    split = [(0, 24), (24, 24), (48, 24), (72, 21)]
+    layouts = [layer_completion_layout(split, rank, kv_slot_layer_ids=ack_ids) for rank in range(len(split))]
+    assert layouts[0].completions_per_chunk == expected[0]
+    assert [layout.rank_record_count for layout in layouts] == expected[1]

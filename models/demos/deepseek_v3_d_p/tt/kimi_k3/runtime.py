@@ -260,7 +260,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         )
 
     def warmup_ack_count(self) -> int:
-        """One record per KV-WRITING layer, not per layer.
+        """One record per layer when KDA layers ack (PREFILL_KDA_LAYER_ACK); otherwise one per KV-WRITING
+        layer, not per layer.
 
         `capture_trace()`'s warm pass fires the ack from `zero_pad_and_ack`, which a block only calls
         when its attention wrote a KV slab. Kimi-K3 is hybrid: a 24-layer rank owns 6 MLA layers and
@@ -269,6 +270,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         blocked on the seventh -- every traced 4-rank run hung after capture, before the request loop,
         spinning at ~76% CPU with no log line after "layer-completion routing up".
         """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import kda_layer_ack_enabled
+
+        if kda_layer_ack_enabled():
+            return super().warmup_ack_count()
         if not self.config.use_trace or self._trace_d2h_service is None:
             return 0
         return len(self._my_mla_layer_ids())
