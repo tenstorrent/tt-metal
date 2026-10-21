@@ -1067,7 +1067,7 @@ class TtRoutedExperts(LightweightModule):
         block = self._block_stream if self.stream else self._block
         if self.dense:
             y = self._block_dense(x, dense_w)
-        elif self._dispatch is not None and T > TILE:
+        elif self._dispatch is not None:  # the per-expert lists replaced the stacked tensors: every call, any T
             assert (
                 idx is not None and w is not None
             ), "the dispatch / regions prefill paths need the router's top-k lists"
@@ -1432,7 +1432,7 @@ class TtMoE(LightweightModule):
             routed = self.experts(x, w, idx)
             for t in (w, idx, dense):
                 ttnn.deallocate(t)
-        elif getattr(self.experts, "_dispatch", None) is not None and x.shape[-2] > TILE:
+        elif getattr(self.experts, "_dispatch", None) is not None:
             w, idx, dense = self.router(x)
             routed = self.experts(x, dense, idx=idx, w=w)
             for t in (w, idx, dense):

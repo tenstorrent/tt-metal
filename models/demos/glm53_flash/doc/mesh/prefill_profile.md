@@ -1,4 +1,4 @@
-# Long-context prefill chunk: per-op profile and reference swaps on a (2,4) block (2026-10-21, in progress)
+# Long-context prefill chunk: per-op profile and reference swaps on a (2,4) block (2026-10-21)
 
 The 1 M-token run on the 8x4 (`_logs/mesh/long_8x4_N1048576.log`, 45 layers bfp8, 16 K chunks, composite hybrid
 experts, composite mHC, one cache slot) spends 58-72 s per 16 K chunk (229-286 tok/s on 32 chips, ~0.3 % of the compute
@@ -123,7 +123,18 @@ Tracy per-op tables (J5) are queued behind the reset. Expected from the kernel's
 weight read once, only routed rows computed): the routed-expert share of a MoE layer should fall from ~470-510 ms to
 tens of ms per 8 K chunk on this block (useful work 413 GFLOP + 0.96 GB of weights per chip per layer).
 
-## Not done (2026-10-21 03:05)
+## Before / after (what is measured, what is projected)
+
+| | routed experts per MoE layer (8 K chunk, per chip) | 8 K chunk, 22 layers | 1 M tokens, 128 chunks (22 layers / 45 layers) |
+|---|---|---|---|
+| before (`blocks`, measured J4) | 473 ms (KDA+MoE) / 509 ms (DSA+MoE): 256 x 32-token sparse_matmul pairs | **12.50 s** (656 tok/s) | ~2900 s / ~5900 s |
+| after (`regions`, projected from the kernel's work: 0.96 GB of weights read once + 413 GFLOP of routed rows per chip per layer, plus ~1 GB of row gathers) | ~15-40 ms | ~3.5-4 s (the MoE 9.2 s -> ~0.5 s; the DSA scorer 1.2 s, mHC 0.9 s, the rest unchanged) | ~800-1000 s / ~1600-2000 s |
+
+The "after" column is a projection until the block is back (the tests to run are listed in `_agents/prefillprof/STATUS.md`):
+the regions path is written, its routing math host-validated, its kernels are the d_p production kernels, but it has
+not executed on a device (the block's Ethernet cores are stuck since the hung fabric op).
+
+## Not done (2026-10-21 03:10)
 
 - Tracy per-op device tables of the chunk (deliverable 1's per-op part): the capture needs the block; the per-module
   attribution above is from the host-synchronized pass. `tests/test_mesh_prefill_profile.py` (`GLM53_PROF_TRACY=1`) and
