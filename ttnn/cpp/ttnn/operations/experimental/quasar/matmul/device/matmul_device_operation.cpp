@@ -2251,7 +2251,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                 {.orientation_hint = plan.orientation, .caller_tag = "QuasarMatmulUnified"});
                         }
                         mem_config = tt::tt_metal::MemoryConfig(
-                            mem_config.memory_layout(), mem_config.buffer_type(), *shard_spec);
+                            mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
                     }
                     return {tt::tt_metal::TensorSpec(
                         output_shape,
