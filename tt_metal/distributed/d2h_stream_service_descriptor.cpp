@@ -7,7 +7,7 @@
 #include "d2h_stream_service_descriptor_generated.h"
 #include "hd_socket_descriptor_serialization.hpp"
 
-#include <internal/descriptor_file.hpp>
+#include "common/filesystem_utils.hpp"
 
 #include <tt_stl/assert.hpp>
 
@@ -101,11 +101,12 @@ void D2HStreamServiceDescriptor::write_to_file(const std::string& path) const {
         fb_composer_shape_override,
         fb_entries);
     builder.Finish(fb_desc);
-    internal::write_file_atomically(path, ttsl::Span<const uint8_t>(builder.GetBufferPointer(), builder.GetSize()));
+    tt::filesystem::write_file_atomically(
+        path, ttsl::Span<const uint8_t>(builder.GetBufferPointer(), builder.GetSize()));
 }
 
 D2HStreamServiceDescriptor D2HStreamServiceDescriptor::wait_and_read(const std::string& path, uint32_t timeout_ms) {
-    const auto buf = internal::wait_and_read_file(path, timeout_ms);
+    const auto buf = tt::filesystem::wait_and_read_file(path, timeout_ms);
     const auto* fb = flatbuffer::GetD2HStreamServiceDescriptor(buf.data());
     TT_FATAL(fb, "Failed to parse flatbuffer D2H service descriptor from: {}", path);
     TT_FATAL(
