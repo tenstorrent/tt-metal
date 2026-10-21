@@ -11,6 +11,7 @@ C++17 compiler. A tiny real nanobind extension replaces the device runtime.
 from __future__ import annotations
 
 import importlib
+import io
 import pathlib
 import shutil
 import subprocess
@@ -131,12 +132,24 @@ def test_sphinx_emits_complete_signatures_for_all_documenter_kinds(bindings_dir,
         ".. autooperationdata:: ttnn.transpose\n"
     )
     output = tmp_path / "html"
-    result = subprocess.run(
-        [sys.executable, "-m", "sphinx", "-q", "-W", "-E", "-b", "html", str(source), str(output)],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
+    from sphinx.application import Sphinx
+
+    status, warnings = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sys, "path", sys.path.copy())
+        app = Sphinx(
+            str(source),
+            str(source),
+            str(output),
+            str(tmp_path / "doctrees"),
+            "html",
+            status=status,
+            warning=warnings,
+            freshenv=True,
+            warningiserror=True,
+        )
+        app.build(force_all=True)
+    assert app.statuscode == 0, warnings.getvalue() or status.getvalue()
 
     from lxml import html
 
