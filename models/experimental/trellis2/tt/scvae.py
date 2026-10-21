@@ -149,6 +149,18 @@ class TtSCVAEDecoder:
             g = ttnn.slice(g, (0, 0, 0, 0), (1, 1, m_pad, width))
         return ttnn.to_layout(g, ttnn.TILE_LAYOUT)
 
+    def _expand(self, x: ttnn.Tensor, width: int) -> ttnn.Tensor:
+        """repeat_interleave on the channel dim (x [.., c] -> [.., width], channel j = x[.., j // (width // c)]) as a
+        matmul with a 0/1 matrix: ttnn.repeat_interleave lowers to a concat whose rows overflow L1 at 2.7M voxels.
+        Exact: x holds bf16 values and each output sums one of them times 1.0 in fp32."""
+        c = x.shape[-1]
+        key = ("expand", c, width)
+        if key not in self._w:
+            e = torch.zeros(c, width)
+            e[torch.arange(width) // (width // c), torch.arange(width)] = 1.0
+            self._w[key] = self._tile(e.reshape(1, 1, c, width))
+        return ttnn.matmul(x, self._w[key], compute_kernel_config=self.norm_config, dtype=ttnn.float32)
+
     def _c2s(self, h: ttnn.Tensor, level: Level, keep: torch.Tensor, res: int, p: str) -> tuple[ttnn.Tensor, Level]:
         c = h.shape[-1]
         c_next = self.s[p + "conv2.weight"].shape[0]
@@ -157,7 +169,7 @@ class TtSCVAEDecoder:
         a = self._conv(ttnn.silu(self._ln(h, p + "norm1")), level, p + "conv1")
         a = self._rows_gather(a, c_next, kids.rows, fine.n_pad)
         skip = self._rows_gather(h, c // 8, kids.rows, fine.n_pad)
-        skip = ttnn.repeat_interleave(ttnn.typecast(skip, ttnn.float32), c_next // (c // 8), dim=3)
+        skip = self._expand(skip, c_next)
         a = self._conv(ttnn.silu(self._ln(a, None)), fine, p + "conv2")
         return ttnn.add(a, skip), fine
 
