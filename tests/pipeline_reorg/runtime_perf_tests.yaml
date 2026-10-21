@@ -72,7 +72,7 @@
   skus:
     wh_n300_civ2:
       timeout: 10
-    bh_p150_perf_gh04:
+    bh_p150_perf_high_core_count:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
