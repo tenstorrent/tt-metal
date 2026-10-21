@@ -20,14 +20,11 @@ namespace ttnn::experimental::prim {
 //
 struct MinimalMatmulProgramFactory {
     struct shared_variables_t {
-        uint32_t num_cores{};
-        std::vector<CoreCoord> cores;
         tt::tt_metal::KernelHandle in0_sender_kernels_id{};
         tt::tt_metal::KernelHandle in0_receiver_kernels_id{};
         tt::tt_metal::KernelHandle in1_sender_kernels_id{};
         tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
         tt::tt_metal::KernelHandle compute_kernels_id{};
-        bool transpose_core_grid{};
         bool read_local_slice_from_input{};
         // Fused concatenation: in0's K is sourced from input_tensor + optional_input_tensor (no
         // materialized concat). When set, optional_input_tensor feeds the in3 address on re-runs.
