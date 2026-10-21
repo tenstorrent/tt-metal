@@ -89,18 +89,14 @@ ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
         std::holds_alternative<ScatterCodegenProgramFactoryBf16ReduceRowMajor>(factory);
     if (is_row_major || is_bf16_reduce_row_major) {
         const auto& in_t = tensor_args.input_tensor;
-        // Mirrors ScatterCodegenProgramFactoryRowMajor/Bf16ReduceRowMajor's own fixed_bytes exactly, so
-        // this cache key never diverges from the chunk depth the matching create_descriptor() call
-        // would bake into the program.
+        // The same page sizes and fixed bytes the matching create_descriptor() computes, so this key
+        // never diverges from the chunk depth it bakes into the program.
         const uint64_t input_page_bytes = scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems);
         const uint64_t output_page_bytes =
             scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor);
-        const uint64_t fixed_bytes = is_bf16_reduce_row_major
-                                         ? input_page_bytes + output_page_bytes + 2 * input_page_bytes
-                                         : input_page_bytes + output_page_bytes;
         chunk_elems = scatter_rm_chunk_elems(
             scatter_usable_l1(in_t),
-            fixed_bytes,
+            scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, is_bf16_reduce_row_major),
             attributes.index_stick_elems,
             tensor_args.index_tensor.element_size(),
             tensor_args.src_tensor.element_size());
