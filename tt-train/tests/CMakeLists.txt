@@ -42,6 +42,7 @@ set(SOURCES
     ops/frobenius_normalize_test.cpp
     ops/k_split_gram_matmul_op_test.cpp
     ops/matmul_op_test.cpp
+    ops/grad_skipping_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
