@@ -329,7 +329,7 @@ def test_topk_large_indices_production_perf_check(
     upper = expected_duration_ns * (1 + TOPK_LARGE_INDICES_PERF_MARGIN)
 
     logger.info(
-        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e6:.3f} ms "
+        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e6:.3f} ms ns={duration_ns} "
         f"(expected {expected_duration_ns / 1e6:.3f} ms, band [{lower / 1e6:.3f}, {upper / 1e6:.3f}]), "
         f"shape=({num_rows}, {n}), valid_length={valid_length}, k={k}, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
