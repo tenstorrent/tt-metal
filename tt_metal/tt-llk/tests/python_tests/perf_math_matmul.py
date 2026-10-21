@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
+    MATMUL_IN1_ALT,
     MATMUL_STREAM_NARROW,
     NUM_BLOCKS,
     NUM_FACES,
@@ -259,6 +260,15 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.rt_dim,
             ),
             *MATMUL_FORM_KEYS.for_block(formats, matmul_config.tile_dimensions.kt_dim),
+            *MATMUL_IN1_ALT.for_tiles(
+                formats,
+                matmul_config.dest_acc,
+                math_fidelity,
+                matmul_config.tile_dimensions.in0_tile_r_dim,
+                matmul_config.tile_dimensions.in0_tile_c_dim,
+                matmul_config.tile_dimensions.in1_tile_r_dim,
+                matmul_config.tile_dimensions.in1_tile_c_dim,
+            ),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),

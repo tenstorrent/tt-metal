@@ -38,7 +38,7 @@ inline bool math_matmul_init_reuse_a = true;
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, bool row_form = false, int in1_order = 0>
 inline void matmul_configure_addrmod(
     const bool transpose,
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -56,6 +56,7 @@ inline void matmul_configure_addrmod(
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
+    const bool in1_alt      = in1_order == 1; // alternate the four DEST row groups of the in1 32x16 body
 
     // MVMUL does D = B*A
 
@@ -129,7 +130,17 @@ inline void matmul_configure_addrmod(
     }
     else
     {
-        if (is_in1_32x16)
+        if (in1_alt)
+        {
+            // second face of in1 next, srcb back to face 1 of in0, dest back to the tile base
+            addr_mod_t {
+                .srca = {.incr = 16, .clr = 0, .cr = 0},
+                .srcb = {.incr = 40, .clr = 0, .cr = 0},
+                .dest = {.incr = 0, .clr = 0, .cr = 1},
+            }
+                .set(ADDR_MOD_1);
+        }
+        else if (is_in1_32x16)
         {
             addr_mod_t {
                 .srca = {.incr = 16, .clr = 0, .cr = 0},
@@ -162,7 +173,17 @@ inline void matmul_configure_addrmod(
         }
     }
 
-    if (is_in1_32x16)
+    if (in1_alt)
+    {
+        // jump from in0 face 0 (or 1) to face 2 (or 3) with the same in1 face
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 24, .clr = 0, .cr = 0},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_2);
+    }
+    else if (is_in1_32x16)
     {
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16
@@ -326,7 +347,7 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, int in1_order = 0>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -353,6 +374,8 @@ inline void matmul_configure_mop(
     const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
     const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
 
+    const bool in1_alt = in1_order == 1;
+
     const std::uint32_t replay_buf_len =
         (is_in0_16x32 && is_in1_32x16) ? 4 : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
 
@@ -360,7 +383,7 @@ inline void matmul_configure_mop(
         ckernel::math::replay_buf_offset,
         replay_buf_len,
         // Lambda function to load reply buffer
-        [high_fidelity, reuse_a, partial_face, is_in1_32x16, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim]
+        [high_fidelity, reuse_a, partial_face, is_in1_32x16, in1_alt, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim]
         {
             if (is_in1_32x16)
             {
@@ -369,6 +392,18 @@ inline void matmul_configure_mop(
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8, bias=1
+                }
+                else if (in1_alt)
+                {
+                    // the four DEST row groups in turn, so a group is rewritten 4 MVMULs later instead of 2
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // dest 0
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // dest 8, srcb to B2
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // dest 16
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // dest 24, srca A1, srcb to B1, dest to base
+
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // dest 0
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A1 // dest 8, srcb to B3
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A1 // dest 16
                 }
                 else
                 {
@@ -525,7 +560,7 @@ inline void matmul_load_row_replay()
 }
 
 // Build the matmul MOP for a whole reuse row of full 32x32 tiles, the opt-in form of @ref matmul_configure_mop.
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, int in1_order = 0>
 inline void matmul_configure_row_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -539,7 +574,7 @@ inline void matmul_configure_row_mop(
     if (!full_tiles)
     {
         matmul_row_mop_dims = 0;
-        matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         return;
     }
 
@@ -948,13 +983,15 @@ inline void matmul_configure_mop_throttled(
  * @tparam row_mop: One MOP per reuse row with THROTTLE_LEVEL 0 and full 32x32 tiles; _llk_math_matmul_ must pass the same value.
  * @tparam tile_mop: One MOP and one DEST offset write per output tile instead of the default one MOP per reuse row for
  *         full 32x32 tiles at THROTTLE_LEVEL 0; _llk_math_matmul_ must pass the same value.
+ * @tparam in1_order: For in1 32x16 tiles, 1 alternates the DEST row groups and 0 keeps the pair order; 1 needs in1 32x16 and
+ *         in0 other than 16x32.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
  * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -967,10 +1004,15 @@ inline void _llk_math_matmul_init_(
 {
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
+    LLK_ASSERT(
+        in1_order != 1 ||
+            ((in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM) && !((in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM))),
+        "in1_order 1 needs in1 32x16 tiles and in0 other than 16x32");
 
     if constexpr (THROTTLE_LEVEL > 0)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+            transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         // On a geometry the throttled MOP does not support, fall back to the unthrottled one:
         // throttling is only a throughput cap, and the throttled sequence wedges there.
         //
@@ -985,7 +1027,7 @@ inline void _llk_math_matmul_init_(
 
         if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
@@ -995,13 +1037,15 @@ inline void _llk_math_matmul_init_(
     }
     else if constexpr (row_mop)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_row_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+            transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_row_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else if constexpr (tile_mop || !matmul_row_mop_supported)
     {
-        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+            transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
@@ -1012,9 +1056,10 @@ inline void _llk_math_matmul_init_(
         }
         else
         {
-            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
+                transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
     LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = (ct_dim >= rt_dim));
