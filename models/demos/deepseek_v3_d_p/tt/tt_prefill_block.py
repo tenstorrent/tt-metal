@@ -317,6 +317,14 @@ class TtPrefillBlock(LightweightModule):
             use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
 
         # --- Attention norm ---
+        # Mistral-Small-4 at 640 rows/device: the 2D post-all-gather split (one tile row per core) runs
+        # the normalize on 80 cores instead of 20, 17.9 us vs 33.9 per norm. Bit-identical to the 1D path.
+        use_mistral4_2d_post_norm = (
+            is_blackhole()
+            and seq_len // mesh_device.shape[sp_axis] == 640
+            and config.num_attention_heads == 32
+            and config.q_lora_rank == 1024
+        )
         use_glm53_l1_attn_norm = (
             is_blackhole()
             and is_chunked
@@ -337,6 +345,7 @@ class TtPrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
             use_fused=use_fused_rmsnorm,
             output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
+            post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
         # --- MLA ---
@@ -382,6 +391,7 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
             use_fused=use_fused_rmsnorm,
+            post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
         # --- FFN (MoE or dense) ---
