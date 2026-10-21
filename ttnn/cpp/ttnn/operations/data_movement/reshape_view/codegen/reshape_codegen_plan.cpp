@@ -249,7 +249,7 @@ std::optional<TileChoice> live_tile_choice(
         }
     } else if (planned.tile_route == TileRoute::Lcm && planned.lcm.has_value()) {
         if (auto lcm = fit_tile(*planned.lcm, free_l1)) {
-            return TileChoice{std::move(*lcm)};
+            return TileChoice{*lcm};
         }
     }
     if (auto mapped = fit_tile_mapped(input, logical_output_shape, grid_cores, free_l1)) {
