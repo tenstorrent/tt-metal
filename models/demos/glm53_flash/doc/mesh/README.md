@@ -561,3 +561,25 @@ step, the dense expert layout costs 20 ms at 4 users per row. The TTFT PCCs meas
 between the chain and the TTFT prompt), not a model property. Decision: fast mHC with the exact pre/post kernels
 for decode, the composite wrap for the prefill rows; the needle runs re-graded vs HF with that config (v18) before
 it becomes the code default (today's defaults: GLM53_MHC_IMPL=wrap, POST_KERNEL=0).
+
+### mHC defaults flipped (2026-10-21 09:30, a641b9041e8) and the EP32 8x4 verdict
+
+v18 re-ran the needle runs on the 8x4 with the fast configuration (`GLM53_MHC_IMPL=fast`, `POST_KERNEL=2`, exact
+pre/post, `PREFILL_IMPL=wrap`; regions prefill in 2048 sub-chunks, QBLOCK 512):
+
+| ISL | TTFT | prefill tok/s | greedy vs HF | decode (through the regions path) |
+|---|---|---|---|---|
+| 16359 | 11.8 s (one chunk, kernels cached) | 1381 | 8/8 identical | 164.5 ms = 6.1 tok/s per user |
+| 65493 | 31.8 s (37.3 s with wrap) | 2060 | 8/8 identical | 148.3 ms = 6.7 tok/s per user |
+
+So the fast kernels are the code default now (decode step 75.5 vs 144.1 ms at 32 users at the same chain PCC;
+`GLM53_MHC_IMPL=wrap` keeps the composite everywhere for A/Bs). `GLM53_REGIONS_KEEP_STACKED=1` (5adf2791f3b) keeps the
+stacked expert tensors next to the regions lists so decode stays on the stream op (second copy of the expert weights:
+fits on the 8x4 up to ~512 K of context; validation in v20).
+
+EP32 on the full 8x4 (`GLM53_MOE_LAYOUT=ep`, FABRIC_1D sanity passed): both e2e runs failed in the decode warm-up with an
+L1 clash, "statically allocated circular buffers in program N clash with L1 buffers on core range [0-0 - 11-1 / 7-0]"
+(256 users: top op `paged_update_cache` through the mHC forward; 4 users per row: `custom_ops/expert_stream/op.py`
+`__call__` from `TtEPExperts.run_experts`). EP=8 on a (2,4) block passed earlier; the 32-way exchange's larger per-chip
+token buffers overflow the L1 plan of the EP decode graph. Open item for the EP32 track; the hybrid layout is unaffected.
+The EP weight conversion is cold on the first run (43 s per layer, 33 min), cached afterwards.
