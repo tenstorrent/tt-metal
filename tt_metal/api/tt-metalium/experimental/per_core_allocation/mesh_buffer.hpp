@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -17,11 +18,6 @@ namespace tt::tt_metal::experimental::per_core_allocation {
 // Placements must cover exactly the configured data cores on each selected local device.
 distributed::MeshBuffer create_sram_buffer_view(
     distributed::MeshDevice& mesh, const TensorSpec& spec, const std::vector<SRAMTensorViewAddress>& placements);
-
-namespace detail {
-// Check the complete padded write range before constructing a view or initializing a semaphore.
-void validate_sram_address(IDevice& device, uint64_t address, uint64_t bytes);
-}  // namespace detail
 
 // Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
 // each device independently, so the address is only defined once a device is named: there is
