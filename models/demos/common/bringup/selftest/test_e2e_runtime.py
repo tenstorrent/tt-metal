@@ -16,7 +16,7 @@ from models.demos.common.bringup.testing import contract, harness
 ROOT = Path(contract.__file__).resolve().parents[1]
 MODELS = ROOT.parents[1]
 DRIFT = {
-    f"contract_state_{n}_L{i:02d}": {"drift": d, "res": 0.99999}
+    f"contract_state_{n}_L{i:02d}": {"pcc": d, "pcc_res": 0.99999}
     for n, d in (("key", 0.999), ("value", 0.998), ("index_key", 0.99))
     for i in (0, 1)
 }
@@ -34,10 +34,10 @@ def test_producer_keys_map_to_golden_state_names(fx):
     """Gemma / MiMo producers return k / v, their goldens hold key / value: the limit comes from the mapped state."""
     fx()
     failed = []
-    contract.producer_limits(_Spec(), object(), {"k": 0.9985, "v": 0.99}, DRIFT, failed)
+    contract.producer_limits(_Spec(), object(), {"k": 0.997, "v": 0.99}, DRIFT, failed)
     m = got()
-    assert m["pcc_producer_kv_k_limit"] == pytest.approx(1 - 2 * 0.001)
-    assert m["pcc_producer_kv_v_limit"] == pytest.approx(1 - 2 * 0.002)
+    assert m["pcc_producer_kv_k_limit"] == pytest.approx(1 - 4 * 0.001)  # F135: calib^2 on a PCC's miss
+    assert m["pcc_producer_kv_v_limit"] == pytest.approx(1 - 4 * 0.002)
     assert len(failed) == 1 and "PCC v (value)" in failed[0]
 
 
@@ -92,5 +92,5 @@ def test_the_quick_profile_records_layer_and_state_limits(gspec, noise, monkeypa
     profile.run_profile(s, None)
     m = got()
     for i in range(3):
-        assert m[f"pcc_layer_L{i:02d}"] >= m[f"pcc_layer_L{i:02d}_limit"]
-        assert f"pcc_state_key_L{i:02d}_limit" in m and f"pcc_state_value_L{i:02d}" in m
+        assert m[f"err_layer_L{i:02d}"] <= m[f"err_layer_L{i:02d}_limit"] and f"pcc_layer_L{i:02d}" in m
+        assert f"err_state_key_L{i:02d}_limit" in m and f"err_state_value_L{i:02d}" in m
