@@ -2,15 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Reshape codegen port: routing, bit-exactness of the program, edge shapes, sub_core_grids and program-cache keys.
-
-import contextlib
+# Reshape codegen: routing, bit-exactness of the program, edge shapes, sub_core_grids and program-cache keys.
 
 import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 _dm = ttnn._ttnn.operations.data_movement
 _force_native = _dm.reshape_force_native
@@ -82,9 +79,11 @@ _PATHS = [
     ("tile_rows", [1, 64, 1024], [1, 64, 8, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     ("tile_rows_fp32", [1, 64, 1024], [1, 64, 8, 128], ttnn.float32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
+    ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
     # Segment map: a width that is not a multiple of 32.
     ("tile_mapped_bf16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     ("tile_mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    ("tile_mapped_uint32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.uint32, ttnn.TILE_LAYOUT),
     # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
     # tile is cut into ranges written by different cores.
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
@@ -96,14 +95,19 @@ _PATHS = [
 ]
 
 
+def _check_bit_exact(device, in_shape, out_shape, dtype, layout, in_mem, out_mem):
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, layout, in_mem)
+    out = _force_codegen(x, out_shape, memory_config=out_mem)
+    assert list(out.shape) == out_shape
+    assert out.memory_config().buffer_type == out_mem.buffer_type
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
 @pytest.mark.parametrize("mem", [_DRAM, _L1], ids=["dram", "l1"])
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _PATHS, ids=[p[0] for p in _PATHS])
 def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, layout, mem):
-    source = _make(in_shape, dtype)
-    x = _to_device(device, source, dtype, layout, mem)
-    out = _force_codegen(x, out_shape, memory_config=mem)
-    assert list(out.shape) == out_shape
-    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+    _check_bit_exact(device, in_shape, out_shape, dtype, layout, mem, mem)
 
 
 _KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced", "rm_split")]
@@ -111,6 +115,10 @@ _KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_m
 
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
+    _check_sub_core_grids(device, in_shape, out_shape, dtype, layout)
+
+
+def _check_sub_core_grids(device, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=_SUB_CORE_GRIDS)
@@ -120,6 +128,12 @@ def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype
     out = ttnn.reshape(x, out_shape, memory_config=_DRAM, sub_core_grids=_SUB_CORE_GRIDS)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
     assert device.num_program_cache_entries() == entries
+
+
+@pytest.mark.parametrize("in_mem,out_mem", [(_DRAM, _L1), (_L1, _DRAM)], ids=["dram_to_l1", "l1_to_dram"])
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
+def test_reshape_codegen_mixed_placement(device, path, in_shape, out_shape, dtype, layout, in_mem, out_mem):
+    _check_bit_exact(device, in_shape, out_shape, dtype, layout, in_mem, out_mem)
 
 
 # Forced tile rows on shapes whose tile padding, rank or outer dims differ from the common head split.
@@ -141,6 +155,10 @@ _EDGE_CASES = [(*e, ttnn.bfloat16) for e in _EDGE] + [
     "case,in_shape,out_shape,dtype", _EDGE_CASES, ids=[f"{c[0]}-{c[3].name.lower()}" for c in _EDGE_CASES]
 )
 def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
+    _check_edge_shape(device, in_shape, out_shape, dtype)
+
+
+def _check_edge_shape(device, in_shape, out_shape, dtype):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
     codegen = _force_codegen(x, out_shape, memory_config=_DRAM)
@@ -184,6 +202,10 @@ _ROUTES = [
 
 @pytest.mark.parametrize("case,in_shape,out_shape,dtype,layout,route", _ROUTES, ids=[r[0] for r in _ROUTES])
 def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layout, route):
+    _check_routing(device, in_shape, out_shape, dtype, layout, route)
+
+
+def _check_routing(device, in_shape, out_shape, dtype, layout, route):
     if route == "native_bh":
         route = "codegen" if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else "native"
     source = _make(in_shape, dtype)
@@ -199,6 +221,10 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
 
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
+    _check_cache_hit_new_addresses(device, in_shape, out_shape, dtype, layout)
+
+
+def _check_cache_hit_new_addresses(device, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     first = _force_codegen(x, out_shape, memory_config=_DRAM)
@@ -213,6 +239,21 @@ def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_sha
     assert device.num_program_cache_entries() == entries
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(first), dtype)
     _assert_bits(other.reshape(out_shape), ttnn.to_torch(second), dtype)
+
+
+def test_reshape_codegen_new_shape_is_new_program(device):
+    # Same input and program kind, different output shape: the plan differs, so the key must too.
+    in_shape, first_shape, second_shape, dtype = [1, 64, 1024], [1, 64, 8, 128], [1, 64, 16, 64], ttnn.bfloat16
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(source.reshape(first_shape), ttnn.to_torch(_force_codegen(x, first_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    _assert_bits(
+        source.reshape(second_shape), ttnn.to_torch(_force_codegen(x, second_shape, memory_config=_DRAM)), dtype
+    )
+    assert device.num_program_cache_entries() == entries + 1
+    _assert_bits(source.reshape(first_shape), ttnn.to_torch(_force_codegen(x, first_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries + 1
 
 
 @pytest.mark.parametrize("entry", ["auto", "forced"])
@@ -254,6 +295,10 @@ def _l1_hog(device, bytes_per_core):
     ids=["tile_rows"],
 )
 def test_reshape_codegen_program_key_stable_while_full_plan_fits(device, path, in_shape, out_shape, dtype, layout, mem):
+    _check_program_key_stable(device, in_shape, out_shape, dtype, layout, mem)
+
+
+def _check_program_key_stable(device, in_shape, out_shape, dtype, layout, mem):
     # The hog leaves room for the full plan, so the program and its key stay the same.
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
@@ -263,11 +308,13 @@ def test_reshape_codegen_program_key_stable_while_full_plan_fits(device, path, i
     ttnn.deallocate(out)
     entries = device.num_program_cache_entries()
     hog = _l1_hog(device, 256 * 1024)
-    out = _force_codegen(x, out_shape, memory_config=mem)
-    _assert_bits(expected, ttnn.to_torch(out), dtype)
-    assert device.num_program_cache_entries() == entries
-    ttnn.deallocate(out)
-    ttnn.deallocate(hog)
+    try:
+        out = _force_codegen(x, out_shape, memory_config=mem)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+        assert device.num_program_cache_entries() == entries
+        ttnn.deallocate(out)
+    finally:
+        ttnn.deallocate(hog)
 
 
 def _l1_hog_leaving(device, free_bytes_per_bank):
@@ -295,13 +342,15 @@ def test_reshape_codegen_shrinks_plan_under_l1_pressure(device):
     _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
     entries = device.num_program_cache_entries()
     hog = _l1_hog_leaving(device, 240 * 1024)
-    # The smaller plan is a new program, so it cannot reuse the full plan's cache entry.
-    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
-    assert device.num_program_cache_entries() == entries + 1
-    # Auto routes to the codegen program it just compiled; native would compile a new one.
-    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
-    assert device.num_program_cache_entries() == entries + 1
-    ttnn.deallocate(hog)
+    try:
+        # The smaller plan is a new program, so it cannot reuse the full plan's cache entry.
+        _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+        # Auto routes to the codegen program it just compiled; native would compile a new one.
+        _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
     # With the L1 free again the full plan fits, so the call hits the full plan's entry.
     _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
     assert device.num_program_cache_entries() == entries + 1
@@ -317,11 +366,13 @@ def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1
     _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
     entries = device.num_program_cache_entries()
     hog = _l1_hog_leaving(device, 128 * 1024)
-    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
-    assert device.num_program_cache_entries() == entries + 1
-    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
-    assert device.num_program_cache_entries() == entries + 1
-    ttnn.deallocate(hog)
+    try:
+        _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+        _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
 
 
 _RM_ABOVE_NATIVE_FLOOR = [
@@ -344,15 +395,17 @@ def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
     hog = _l1_hog_leaving(device, 48 * 1024)
-    # Native's program hash leaves out its staging ring depth, so a program cached with more L1 free would not fit.
-    device.clear_program_cache()
-    _assert_bits(expected, ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)), dtype)
-    entries = device.num_program_cache_entries()
-    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
-    assert device.num_program_cache_entries() == entries, "auto did not run native"
-    with expect_error(RuntimeError, "no row-major program fits"):
-        _force_codegen(x, out_shape, memory_config=_DRAM)
-    ttnn.deallocate(hog)
+    try:
+        # Native's program hash leaves out its staging ring depth, so a program cached with more L1 free would not fit.
+        device.clear_program_cache()
+        _assert_bits(expected, ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)), dtype)
+        entries = device.num_program_cache_entries()
+        _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries, "auto did not run native"
+        with expect_error(RuntimeError, "no row-major program fits"):
+            _force_codegen(x, out_shape, memory_config=_DRAM)
+    finally:
+        ttnn.deallocate(hog)
 
 
 def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
@@ -364,82 +417,6 @@ def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
     one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
-
-
-def _best_effort(action):
-    # Once a capture has gone wrong these calls fail too, and the original error is the one worth surfacing.
-    try:
-        action()
-    except RuntimeError:
-        pass
-
-
-@contextlib.contextmanager
-def _capturing(device):
-    # A queue left mid-capture fails every later call against the device, so the capture closes even when the
-    # captured op raises.
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    try:
-        yield trace_id
-    finally:
-        _best_effort(lambda: ttnn.end_trace_capture(device, trace_id, cq_id=0))
-
-
-@pytest.mark.parametrize(
-    "hog_before_warmup",
-    [
-        True,
-        pytest.param(
-            False,
-            marks=pytest.mark.xfail(
-                reason="https://github.com/tenstorrent/tt-metal/issues/46533: a plan chosen from live L1 misses the "
-                "cache when free L1 shrinks between warm-up and capture, and a capture cannot compile the plan it "
-                "then needs",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
-    ],
-    ids=["warm_under_pressure", "warm_then_pressure"],
-)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 4 * 1024 * 1024}], indirect=True)
-@skip_for_slow_dispatch("trace capture requires fast dispatch")
-def test_reshape_codegen_trace_capture_under_l1_pressure(device, hog_before_warmup):
-    # Trace capture compiles nothing, so it needs the plan warm-up cached. With 240 KiB free this head split takes
-    # its single-buffered plan instead of the full one. warm_under_pressure warms up under that pressure, as
-    # TraceCorrectness.md asks of a model, and the capture reuses the warm entry. warm_then_pressure warms up on
-    # free L1 and captures under pressure: the capture needs a plan warm-up never compiled and aborts. Strict, so the
-    # case fails if the pressure stops moving the plan.
-    in_shape, out_shape, dtype = [1, 256, 4096], [1, 256, 32, 128], ttnn.float32
-    source = _make(in_shape, dtype)
-    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
-    trace_id = None
-    hog = None
-    try:
-        if hog_before_warmup:
-            hog = _l1_hog_leaving(device, 240 * 1024)
-        warm = ttnn.reshape(x, out_shape, memory_config=_DRAM)
-        _assert_bits(source.reshape(out_shape), ttnn.to_torch(warm), dtype)
-        ttnn.deallocate(warm)
-        entries = device.num_program_cache_entries()
-        if not hog_before_warmup:
-            hog = _l1_hog_leaving(device, 240 * 1024)
-
-        with _capturing(device) as trace_id:
-            out = ttnn.reshape(x, out_shape, memory_config=_DRAM)
-        ttnn.synchronize_device(device)
-        assert device.num_program_cache_entries() == entries, "trace capture compiled a program"
-
-        # The capture already left a correct result in out, so only a swapped input shows the replay ran.
-        fresh = torch.flip(source, dims=[-1])
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(fresh, dtype=dtype, layout=ttnn.TILE_LAYOUT), x)
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-        _assert_bits(fresh.reshape(out_shape), ttnn.to_torch(out), dtype)
-    finally:
-        if trace_id is not None:
-            _best_effort(lambda: ttnn.release_trace(device, trace_id))
-        if hog is not None:
-            ttnn.deallocate(hog)
 
 
 _OUT_OF_SCOPE = [

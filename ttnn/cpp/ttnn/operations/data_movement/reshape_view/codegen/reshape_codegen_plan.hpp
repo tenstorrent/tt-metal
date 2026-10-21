@@ -4,11 +4,16 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <list>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <variant>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -18,7 +23,51 @@
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
-inline constexpr uint64_t kTileDim = 32;
+// The gate admits only square 32x32 tiles of 16x16 faces. 64-bit so plan arithmetic on large shapes does not wrap.
+inline constexpr uint64_t kTileDim = tt::constants::TILE_WIDTH;
+inline constexpr uint64_t kFaceDim = tt::constants::FACE_WIDTH;
+static_assert(tt::constants::TILE_HEIGHT == kTileDim && tt::constants::FACE_HEIGHT == kFaceDim);
+
+// Planning walks every output tile row on the host; above this many tiles it costs seconds and hundreds of MB.
+inline constexpr uint64_t kMaxPlannedOutTiles = 128 * 1024;
+
+// Process-wide memo of planner results, which depend only on shapes and device constants. Evicts the least recently
+// used entry beyond `capacity`.
+template <typename Key, typename Value>
+class PlanMemo {
+public:
+    explicit PlanMemo(size_t capacity) : capacity_(capacity) {}
+
+    std::optional<Value> find(const Key& key) {
+        std::lock_guard lock(mutex_);
+        const auto it = index_.find(key);
+        if (it == index_.end()) {
+            return std::nullopt;
+        }
+        recency_.splice(recency_.begin(), recency_, it->second);
+        return it->second->second;
+    }
+
+    void insert(const Key& key, Value value) {
+        std::lock_guard lock(mutex_);
+        if (index_.contains(key)) {
+            return;
+        }
+        recency_.emplace_front(key, std::move(value));
+        index_.emplace(key, recency_.begin());
+        if (recency_.size() > capacity_) {
+            index_.erase(recency_.back().first);
+            recency_.pop_back();
+        }
+    }
+
+private:
+    using Entry = std::pair<Key, Value>;
+    std::mutex mutex_;
+    size_t capacity_;
+    std::list<Entry> recency_;
+    std::map<Key, typename std::list<Entry>::iterator> index_;
+};
 
 // Physical (C, H, W) model of a TILE shape: leading dims fold into C.
 struct Shape3 {
@@ -145,9 +194,8 @@ tt::tt_metal::TensorSpec output_spec(
 uint32_t output_aligned_page(const Tensor& input, const tt::tt_metal::TensorSpec& spec);
 
 // L1 window independent of live occupancy: the L1 bank (allocator range less L1_SMALL) minus the per-bank footprint
-// of the input and output when they live in L1. Routing and validation gate on the smallest plan fitting it, so the
-// route never moves with live occupancy; which plan the program is built with is live_tile_choice's or
-// live_rm_choice's decision.
+// of the input and output when they live in L1. Routing gates on the smallest plan fitting it, so the route never
+// moves with live occupancy; which plan the program is built with is live_tile_choice's or live_rm_choice's decision.
 uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
 // The plan the program is built with: `planned` when its buffers fit the L1 free below the lowest live allocation,

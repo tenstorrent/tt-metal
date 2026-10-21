@@ -7,9 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#if !defined(ARCH_QUASAR)
 #include "ckernel.h"
-#endif
 
 // Not copy_via_memmove: that invalidates and drains on every copy, while these readers invalidate once per NOC wait
 // and drain once after a batch of copies.
@@ -40,11 +38,7 @@ FORCE_INLINE uint32_t riscv_copy_elements(uint32_t dst, uint32_t src, uint32_t b
 // every earlier RISC store land in L1 before a NOC read or a CB push must hit the last store exactly.
 FORCE_INLINE void drain_stores(uint32_t last_store) {
     volatile tt_l1_ptr uint16_t* last = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(last_store);
-#if defined(ARCH_QUASAR)
-    (void)*last;
-#else
     (void)ckernel::load_blocking(last);
-#endif
 }
 
 }  // namespace codegen_kernels

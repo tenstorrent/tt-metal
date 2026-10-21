@@ -6,11 +6,10 @@
 
 #include <algorithm>
 #include <array>
-#include <list>
-#include <map>
-#include <mutex>
+#include <cstdint>
 #include <utility>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
@@ -21,12 +20,8 @@ namespace ttnn::operations::data_movement::reshape_codegen {
 
 namespace {
 
-constexpr uint64_t kFaceDim = 16;
-constexpr uint32_t kTileElems = kTileDim * kTileDim;
 constexpr uint64_t kEntryBytes = kMappedEntryWords * sizeof(uint32_t);
 constexpr uint64_t kMaxMapBytes = 16 * 1024 * 1024;
-// Planning walks every output tile row on the host; above this many tiles it costs seconds.
-constexpr uint64_t kMaxOutTiles = 128 * 1024;
 // Slice ranges start on 16-byte boundaries so each core's partial page write keeps L1 and DRAM offsets congruent.
 constexpr uint32_t kSliceGranuleBytes = 16;
 // First-order device-time model (ns) deciding whether to slice: launch floor, per-row overhead, per source-tile read,
@@ -37,7 +32,7 @@ constexpr uint64_t kReadNs = 155;
 constexpr uint64_t kRowLaunchNs = 34;
 constexpr uint64_t kMinGainNs = 1500;
 constexpr std::array<uint32_t, 2> kPipelinedDepths = {8, 4};
-// Distinct reshapes memoized; a miss re-walks up to kMaxOutTiles output tiles.
+// Distinct reshapes memoized; a miss re-walks up to kMaxPlannedOutTiles output tiles.
 constexpr size_t kLayoutCacheEntries = 1024;
 
 uint32_t faced_offset(uint64_t row, uint64_t col) {
@@ -45,21 +40,17 @@ uint32_t faced_offset(uint64_t row, uint64_t col) {
     return static_cast<uint32_t>(face * kFaceDim * kFaceDim + (row % kFaceDim) * kFaceDim + col % kFaceDim);
 }
 
-struct Segment {
-    uint32_t in_page = 0;
-    uint32_t in_offset = 0;
-    uint32_t out_offset = 0;
-    uint32_t num = 0;
-};
+using ttnn::prim::detail::SegmentMapData;
 
-bool extends(const Segment& head, const Segment& next) {
-    return head.in_page == next.in_page && head.in_offset + head.num == next.in_offset &&
-           head.out_offset + head.num == next.out_offset;
+bool extends(const SegmentMapData& head, const SegmentMapData& next) {
+    return head.input_page_index == next.input_page_index &&
+           head.input_page_offset + head.num_elements == next.input_page_offset &&
+           head.output_page_offset + head.num_elements == next.output_page_offset;
 }
 
 // Segments of one output tile, grouped by input tile in ascending order. A segment stays inside one face row on
 // both sides, so it is contiguous in both faced tiles.
-void map_output_page(const Shape3& in, const Shape3& out, uint64_t page, std::vector<Segment>& segments) {
+void map_output_page(const Shape3& in, const Shape3& out, uint64_t page, std::vector<SegmentMapData>& segments) {
     const uint64_t ht_i = tt::div_up(in.h, kTileDim);
     const uint64_t wt_i = tt::div_up(in.w, kTileDim);
     const uint64_t ht_o = tt::div_up(out.h, kTileDim);
@@ -82,13 +73,14 @@ void map_output_page(const Shape3& in, const Shape3& out, uint64_t page, std::ve
         while (col < valid_w) {
             const uint64_t len =
                 std::min({valid_w - col, kFaceDim - col % kFaceDim, in.w - w_in, kFaceDim - w_in % kFaceDim});
-            const Segment segment{
-                .in_page = static_cast<uint32_t>(c_in * ht_i * wt_i + (h_in / kTileDim) * wt_i + w_in / kTileDim),
-                .in_offset = faced_offset(h_in % kTileDim, w_in % kTileDim),
-                .out_offset = faced_offset(r, col),
-                .num = static_cast<uint32_t>(len)};
+            const SegmentMapData segment{
+                .input_page_index =
+                    static_cast<uint32_t>(c_in * ht_i * wt_i + (h_in / kTileDim) * wt_i + w_in / kTileDim),
+                .input_page_offset = faced_offset(h_in % kTileDim, w_in % kTileDim),
+                .output_page_offset = faced_offset(r, col),
+                .num_elements = static_cast<uint32_t>(len)};
             if (!segments.empty() && extends(segments.back(), segment)) {
-                segments.back().num += segment.num;
+                segments.back().num_elements += segment.num_elements;
             } else {
                 segments.push_back(segment);
             }
@@ -104,12 +96,13 @@ void map_output_page(const Shape3& in, const Shape3& out, uint64_t page, std::ve
         }
     }
 
-    std::stable_sort(
-        segments.begin(), segments.end(), [](const Segment& a, const Segment& b) { return a.in_page < b.in_page; });
+    std::stable_sort(segments.begin(), segments.end(), [](const SegmentMapData& a, const SegmentMapData& b) {
+        return a.input_page_index < b.input_page_index;
+    });
     size_t kept = 0;
     for (size_t i = 0; i < segments.size(); ++i) {
         if (kept > 0 && extends(segments[kept - 1], segments[i])) {
-            segments[kept - 1].num += segments[i].num;
+            segments[kept - 1].num_elements += segments[i].num_elements;
         } else {
             segments[kept++] = segments[i];
         }
@@ -118,10 +111,10 @@ void map_output_page(const Shape3& in, const Shape3& out, uint64_t page, std::ve
 }
 
 // Source-tile reads of one map row: the reader loads one tile per change of input page.
-uint32_t row_reads(const std::vector<Segment>& segments) {
+uint32_t row_reads(const std::vector<SegmentMapData>& segments) {
     uint32_t reads = 0;
     for (size_t i = 0; i < segments.size(); ++i) {
-        if (i == 0 || segments[i].in_page != segments[i - 1].in_page) {
+        if (i == 0 || segments[i].input_page_index != segments[i - 1].input_page_index) {
             ++reads;
         }
     }
@@ -161,23 +154,24 @@ uint32_t choose_slices(uint64_t pages, uint32_t max_reads, uint32_t num_cores, u
 
 // Ascending in-tile datum cuts balancing segment counts across `slices` ranges. Each cut rounds up to the granule so
 // the segment that crosses a balance point stays in the finished range; duplicate or out-of-tile cuts are dropped.
-std::vector<uint32_t> range_cuts(const std::vector<Segment>& segments, uint32_t slices, uint32_t granule_elems) {
+std::vector<uint32_t> range_cuts(const std::vector<SegmentMapData>& segments, uint32_t slices, uint32_t granule_elems) {
     std::vector<uint32_t> cuts;
     if (segments.empty() || slices < 2) {
         return cuts;
     }
-    std::vector<Segment> ordered = segments;
-    std::stable_sort(
-        ordered.begin(), ordered.end(), [](const Segment& a, const Segment& b) { return a.out_offset < b.out_offset; });
+    std::vector<SegmentMapData> ordered = segments;
+    std::stable_sort(ordered.begin(), ordered.end(), [](const SegmentMapData& a, const SegmentMapData& b) {
+        return a.output_page_offset < b.output_page_offset;
+    });
     const uint64_t total = ordered.size();
     uint32_t previous = 0;
     uint64_t boundary = 1;
     uint64_t cumulative = 0;
-    for (const Segment& segment : ordered) {
+    for (const SegmentMapData& segment : ordered) {
         ++cumulative;
         while (boundary < slices && cumulative * slices >= total * boundary) {
-            const uint32_t cut = tt::round_up(segment.out_offset + segment.num, granule_elems);
-            if (previous < cut && cut < kTileElems) {
+            const uint32_t cut = tt::round_up(segment.output_page_offset + segment.num_elements, granule_elems);
+            if (previous < cut && cut < tt::constants::TILE_HW) {
                 cuts.push_back(cut);
                 previous = cut;
             }
@@ -188,32 +182,38 @@ std::vector<uint32_t> range_cuts(const std::vector<Segment>& segments, uint32_t 
 }
 
 // Segments of one output tile split at `cuts` and bucketed by range; bucket i covers [bounds[i], bounds[i + 1]).
-std::vector<std::vector<Segment>> slice_page(
-    const std::vector<Segment>& segments, const std::vector<uint32_t>& bounds) {
-    std::vector<std::vector<Segment>> buckets(bounds.size() - 1);
-    for (const Segment& segment : segments) {
-        Segment rest = segment;
+std::vector<std::vector<SegmentMapData>> slice_page(
+    const std::vector<SegmentMapData>& segments, const std::vector<uint32_t>& bounds) {
+    std::vector<std::vector<SegmentMapData>> buckets(bounds.size() - 1);
+    for (const SegmentMapData& segment : segments) {
+        SegmentMapData rest = segment;
         while (true) {
-            const auto upper = std::upper_bound(bounds.begin(), bounds.end(), rest.out_offset);
+            const auto upper = std::upper_bound(bounds.begin(), bounds.end(), rest.output_page_offset);
             const size_t index = static_cast<size_t>(upper - bounds.begin()) - 1;
             const uint32_t end = bounds[index + 1];
-            if (rest.out_offset + rest.num <= end) {
+            if (rest.output_page_offset + rest.num_elements <= end) {
                 buckets[index].push_back(rest);
                 break;
             }
-            const uint32_t head = end - rest.out_offset;
-            buckets[index].push_back(Segment{rest.in_page, rest.in_offset, rest.out_offset, head});
-            rest = Segment{rest.in_page, rest.in_offset + head, rest.out_offset + head, rest.num - head};
+            const uint32_t head = end - rest.output_page_offset;
+            buckets[index].push_back(
+                SegmentMapData{rest.input_page_index, rest.input_page_offset, rest.output_page_offset, head});
+            rest = SegmentMapData{
+                rest.input_page_index,
+                rest.input_page_offset + head,
+                rest.output_page_offset + head,
+                rest.num_elements - head};
         }
     }
     return buckets;
 }
 
-std::vector<uint32_t> slice_bounds(const std::vector<Segment>& segments, uint32_t slices, uint32_t element_bytes) {
+std::vector<uint32_t> slice_bounds(
+    const std::vector<SegmentMapData>& segments, uint32_t slices, uint32_t element_bytes) {
     std::vector<uint32_t> bounds{0};
     const auto cuts = range_cuts(segments, slices, kSliceGranuleBytes / element_bytes);
     bounds.insert(bounds.end(), cuts.begin(), cuts.end());
-    bounds.push_back(kTileElems);
+    bounds.push_back(tt::constants::TILE_HW);
     return bounds;
 }
 
@@ -229,11 +229,11 @@ Candidates plan_candidates(
     const Shape3& in, const Shape3& out, uint32_t element_bytes, uint32_t tile_bytes, uint32_t num_cores) {
     Candidates candidates;
     const uint64_t pages = tile_pages(out);
-    if (pages == 0 || pages > kMaxOutTiles) {
+    if (pages == 0 || pages > kMaxPlannedOutTiles) {
         return candidates;
     }
     const uint32_t alignment = entries_alignment();
-    std::vector<Segment> segments;
+    std::vector<SegmentMapData> segments;
     uint32_t max_entries = 1;
     uint32_t max_reads = 0;
     for (uint64_t page = 0; page < pages; ++page) {
@@ -280,43 +280,28 @@ Candidates plan_candidates(
 Candidates cached_candidates(
     const Shape3& in, const Shape3& out, uint32_t element_bytes, uint32_t tile_bytes, uint32_t num_cores) {
     using Key = std::array<uint64_t, 10>;
-    using Entry = std::pair<Key, Candidates>;
-    static std::mutex mutex;
-    static std::list<Entry> recency;
-    static std::map<Key, std::list<Entry>::iterator> cache;
+    static PlanMemo<Key, Candidates> memo(kLayoutCacheEntries);
 
     const Key key{in.c, in.h, in.w, out.c, out.h, out.w, element_bytes, tile_bytes, num_cores, entries_alignment()};
-    {
-        std::lock_guard lock(mutex);
-        if (auto it = cache.find(key); it != cache.end()) {
-            recency.splice(recency.begin(), recency, it->second);
-            return it->second->second;
-        }
+    if (auto hit = memo.find(key)) {
+        return *hit;
     }
     auto candidates = plan_candidates(in, out, element_bytes, tile_bytes, num_cores);
-    std::lock_guard lock(mutex);
-    if (!cache.contains(key)) {
-        recency.emplace_front(key, candidates);
-        cache.emplace(key, recency.begin());
-        if (recency.size() > kLayoutCacheEntries) {
-            cache.erase(recency.back().first);
-            recency.pop_back();
-        }
-    }
+    memo.insert(key, candidates);
     return candidates;
 }
 
 // Upper bound on the segments of one output tile. When both widths are multiples of 16, each output face row is one
 // run inside one input face row, so a tile has at most two segments per row; otherwise at most one per datum.
 uint64_t max_segments_per_page(const Shape3& in, const Shape3& out) {
-    return in.w % kFaceDim == 0 && out.w % kFaceDim == 0 ? 2 * kTileDim : kTileElems;
+    return in.w % kFaceDim == 0 && out.w % kFaceDim == 0 ? 2 * kTileDim : tt::constants::TILE_HW;
 }
 
-void write_entry(uint32_t* entry, const Segment& segment) {
-    entry[0] = segment.in_page;
-    entry[1] = segment.in_offset;
-    entry[2] = segment.out_offset;
-    entry[3] = segment.num;
+void write_entry(uint32_t* entry, const SegmentMapData& segment) {
+    entry[0] = segment.input_page_index;
+    entry[1] = segment.input_page_offset;
+    entry[2] = segment.output_page_offset;
+    entry[3] = segment.num_elements;
 }
 
 }  // namespace
@@ -355,7 +340,7 @@ bool tile_mapped_within_caps(
     }
     const auto& [in, out] = *shapes;
     const uint64_t pages = tile_pages(out);
-    if (pages == 0 || pages > kMaxOutTiles) {
+    if (pages == 0 || pages > kMaxPlannedOutTiles) {
         return false;
     }
     if (pages * tt::round_up(max_segments_per_page(in, out), entries_alignment()) * kEntryBytes <= kMaxMapBytes) {
@@ -380,13 +365,13 @@ TileMappedPlan build_tile_mapped_plan(
 
     TileMappedPlan plan{.layout = *layout};
     plan.table.assign(static_cast<size_t>(layout->num_rows) * layout->page_words(), 0);
-    std::vector<Segment> segments;
+    std::vector<SegmentMapData> segments;
     size_t row = 0;
     for (uint64_t page = 0; page < layout->num_output_pages; ++page) {
         map_output_page(in, out, page, segments);
         if (!sliced) {
             uint32_t* entry = plan.table.data() + row++ * layout->page_words();
-            for (const Segment& segment : segments) {
+            for (const SegmentMapData& segment : segments) {
                 write_entry(entry, segment);
                 entry += kMappedEntryWords;
             }
@@ -398,12 +383,12 @@ TileMappedPlan build_tile_mapped_plan(
             uint32_t* entry = plan.table.data() + row++ * layout->page_words();
             write_entry(
                 entry,
-                Segment{
+                SegmentMapData{
                     static_cast<uint32_t>(page),
                     bounds[i] * element_bytes,
                     (bounds[i + 1] - bounds[i]) * element_bytes,
                     0});
-            for (const Segment& segment : buckets[i]) {
+            for (const SegmentMapData& segment : buckets[i]) {
                 entry += kMappedEntryWords;
                 write_entry(entry, segment);
             }

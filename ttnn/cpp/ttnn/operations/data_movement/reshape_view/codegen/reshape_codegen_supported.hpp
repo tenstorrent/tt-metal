@@ -22,41 +22,33 @@ const char* call_contract_violation(
     const ttnn::Shape& padded_shape,
     const std::optional<ttnn::PadValue>& pad_value);
 
-// Why the codegen program cannot run this call, or nullptr. Budgets the smallest plan against static_l1_budget only,
-// never live free L1: the op allocates its output between routing and validation, so a live read could disagree with
-// itself. Live L1 picks the plan at program creation (live_tile_choice, live_rm_choice).
-const char* unsupported_reason(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
-
-// unsupported_reason(...) == nullptr.
-bool supported_by_codegen(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
-
-// Perf routing only, for a call supported_by_codegen: native measures faster than the program the gate admits.
-// TILE: native's tiled reshape measures faster than the program taken against the static window.
-// ROW_MAJOR: the smallest stick or slab plan needs more L1 than native's smallest footprint, or rm_native_faster's
-// stick-size rule, taken only while the stick program and native's scratch both fit the static L1 window. Depends on
-// shapes and static device geometry only, never live L1. Never true for uint16: native rejects it, so demoting would
-// fail the call.
-bool is_demoted(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
-
-// The static plan for a supported call; the program factory shrinks it to live L1. Raises with unsupported_reason's
-// text otherwise. Built by prim::reshape_codegen.
-LaunchPlan launch_plan(
+// Why the codegen program cannot run this call before any plan is built (placement, layout, dtype, shapes, grid),
+// or nullptr. The program cache revalidates with it on a miss.
+const char* scope_violation(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
+// The program one call takes, planned against static_l1_budget only, never live free L1: the op allocates its output
+// between routing and program creation, so a live read could disagree with itself. Live L1 sizes the plan at program
+// creation (live_tile_choice, live_rm_choice).
+struct RouteDecision {
+    // Set when the call is in scope and the smallest plan of some program fits the static budget.
+    std::optional<LaunchPlan> plan;
+    // Why `plan` is unset.
+    const char* violation = nullptr;
+    // Perf routing only: native measures faster than the planned program. ROW_MAJOR also demotes when some L1 window
+    // native runs in holds no row-major plan. Never true for uint16, which native rejects.
+    bool demoted = false;
+};
+
+// Plans the call once for both routing and the forced entry.
+RouteDecision plan_codegen(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
 // `sub_core_grids`, when given, must be a non-empty subset of the device's compute grid.
 bool supported_execution_controls(const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);

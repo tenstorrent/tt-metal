@@ -50,12 +50,12 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
     namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     const Tensor& input = tensor_args.input;
     require_device_input(input);
-    const char* reason = rcg::unsupported_reason(
+    const char* violation = rcg::scope_violation(
         input,
         operation_attributes.logical_output_shape,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grids);
-    TT_FATAL(reason == nullptr, "ReshapeCodegen: {}", reason);
+    TT_FATAL(violation == nullptr, "ReshapeCodegen: {}", violation);
     const auto& plan = operation_attributes.plan;
     if (input.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
@@ -149,11 +149,10 @@ Tensor reshape_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    ttnn::operations::data_movement::reshape_codegen::LaunchPlan plan) {
     using OperationType = ReshapeCodegenDeviceOperation;
     require_device_input(input);
-    auto plan = ttnn::operations::data_movement::reshape_codegen::launch_plan(
-        input, logical_output_shape, output_mem_config, sub_core_grids);
     return ttnn::device_operation::launch<OperationType>(
         ReshapeCodegenParams{
             .logical_output_shape = logical_output_shape,
