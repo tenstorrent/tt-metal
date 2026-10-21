@@ -504,14 +504,21 @@ kernel compiles (15-31 s). The 03:00 run with the blocks path took 57-94 s per c
 | 525170 | 32 | 319.7 s | 1643 | 785 'The' | MISSING | - |
 | 1047526 | 64 | 497.2 s | 2107 | 785 'The' | MISSING | - |
 
-The 512 K text is an analysis monologue that quotes the question verbatim from the end of the 525 K-token prompt
-("The user has provided a very long log of survey team activities and asks: 'What is the secret passphrase for the
-vault? Answer with the passphrase only.' Looking"); the 1 M text continues the filler ("The survey team measured the
-salt flats and logged 421 entries before noon. On day 24178 ..."). Both are coherent: the prompt tail is attended
-correctly, the retrieval of a needle 262 K+ tokens back is what fails. Between the 256 K and 512 K rungs the needle
-position crosses 2^18, the question position 2^19 and the scorer / top-k rows 65536 pools (both ops have golden tests
-at ~262 K: `tests/custom_ops/test_topk_rows.py`, `test_index_score_decode.py`). Probes in flight at 512 K: depth 0.5
-with 128 generated tokens, depth 0.98, depth 0.02 (`_logs/mesh/sched_probes.sh`).
+The 512 K text at 32 tokens is an analysis monologue that quotes the question verbatim from the end of the 525 K-token
+prompt; with `GLM53_LONG_GEN=128` the same run (depth 0.5, probe 06:15) retrieves the key AND its position:
+
+> I need to find the secret passphrase embedded in the text. Let me search for it. Looking through the text, I see:
+> "The secret passphrase for the vault is 'amber-falcon-7391'." This appears after day 12275 in the log. [...] So the
+> answer is: amber-falcon-7391</think>amber-falcon-7391
+
+(the first filler half has 12275 sentences, the needle follows it). So the stack retrieves across 262 K tokens; from
+512 K on the model re-opens a reasoning block before answering although the prompt closes `<think></think>` (the chat
+template's "Reasoning Effort: Max" system line), while up to 256 K it answers directly. Needle runs at >= 512 K need
+`GLM53_LONG_GEN >= 128`. The 1 M text at 32 tokens continues the filler instead ("The survey team measured the salt
+flats and logged 421 entries before noon. On day 24178 ..."), a different symptom: 1 M probes with a 160-token budget at
+depth 0.5 and 0.98 (`_logs/mesh/sched_probes2.sh`) and a planted-key selection test at 131072 / 262144 pools
+(`tests/custom_ops/test_wide_pool_selection.py`: scorer -> bounded top-k, pools on both sides of 65536) follow.
+Per-chunk prefill at 512 K: 227.1 s for 525170 tokens (2313 tok/s) on the warm second run.
 
 Decode in these runs goes through the regions path (its per-expert lists replace the stacked expert tensors once
 built): 4.2-4.6 tok/s per user at ISL 64 K-1 M, below the stream path (6.7 tok/s at 16 K on a block). Keeping both
