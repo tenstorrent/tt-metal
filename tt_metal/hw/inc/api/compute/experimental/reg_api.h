@@ -45,7 +45,10 @@ ALWI void tile_regs_release_math_clear() {
  * pack-bound loop. Release with tile_regs_release_math_only(); call tile_regs_math_only_end() after the last such
  * section if the kernel then acquires DST the default way (the next kernel starts with DST clear).
  */
-ALWI void tile_regs_acquire_math_only() { MATH((llk_math_wait_for_dest_available<true>())); }
+template <bool math_clears_dest = true>
+ALWI void tile_regs_acquire_math_only() {
+    MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+}
 
 /**
  * Release a section acquired with tile_regs_acquire_math_only() without clearing it.
