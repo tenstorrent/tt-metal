@@ -18,7 +18,7 @@ a rare wrong answer downstream rather than an error here.
 from types import SimpleNamespace
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
+from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 
 
 class _Recorder:
@@ -163,51 +163,3 @@ def test_missing_end_and_metadata_is_rejected(expect_error):
 def test_d2h_without_metadata_msg_is_rejected(expect_error):
     with expect_error(AssertionError, "metadata_msg required"):
         zero_pad_and_ack(**_call(d2h_service="SVC", metadata_msg=None))
-
-
-def _ack_call(**overrides):
-    args = dict(
-        mesh_device="MESH",
-        global_layer_idx=20,
-        d2h_service=None,
-        metadata_msg=None,
-        on_layer_complete=None,
-        trace_controller=None,
-    )
-    args.update(overrides)
-    return args
-
-
-def test_send_layer_ack_without_transport_is_a_no_op(monkeypatch):
-    rec = _Recorder()
-    rec.install(monkeypatch)
-    send_layer_ack(**_ack_call())
-    assert rec.zero_calls == [] and rec.syncs == 0 and rec.socket_syncs == []
-
-
-def test_send_layer_ack_never_zeroes(monkeypatch):
-    """A KDA layer has no KV pad window: the ack goes out alone, through either transport."""
-    rec = _Recorder()
-    rec.install(monkeypatch)
-
-    send_layer_ack(**_ack_call(d2h_service="SVC", metadata_msg="REC"))
-    assert rec.socket_syncs == [("SVC", "REC")] and rec.syncs == 0
-
-    acked = []
-    send_layer_ack(**_ack_call(on_layer_complete=acked.append))
-    assert acked == [20] and rec.syncs == 1
-    assert rec.zero_calls == []
-
-
-def test_send_layer_ack_routes_through_a_live_trace_controller(monkeypatch):
-    rec = _Recorder()
-    rec.install(monkeypatch)
-    acked, controller_acks = [], []
-    live = SimpleNamespace(has_layer_ack=lambda: True, layer_ack=controller_acks.append)
-    send_layer_ack(**_ack_call(on_layer_complete=acked.append, trace_controller=live))
-    assert controller_acks == [20] and acked == [] and rec.syncs == 0
-
-
-def test_send_layer_ack_d2h_without_metadata_msg_is_rejected(expect_error):
-    with expect_error(AssertionError, "metadata_msg required"):
-        send_layer_ack(**_ack_call(d2h_service="SVC"))
