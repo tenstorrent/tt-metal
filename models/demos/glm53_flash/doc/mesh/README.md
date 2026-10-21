@@ -784,3 +784,10 @@ untilize / tilize; expected 338-892 -> ~100-130 us per layer (T % 16 == 0 only, 
 (2) the e2e perf loop feeds one random token per user (`GLM53_MODEL_PERF_IDS=distinct`, default). Validation and
 the distinct-id re-measures of both layouts at 32 and 256 users are the chain's last stage (`sched_ep_combine.sh`);
 the README decode rows get refreshed from them.
+
+**64 K x 4 users per row, 45 layers, blocks prefill path (19:13, `long_8x4_N65536_4users_partitioned.log`):** needles
+32/32, rows agree, users agree (all 32 chains identical: 'amber-falcon-7391'); per-user TTFT 155 s (420 tok/s: the
+default `GLM53_PREFILL_EXPERTS=blocks` path, 5x slower than the regions path the 1 M run used at 2.2 K tok/s), decode
+90.0 ms = 11.1 tok/s per user (356 aggregate) on the stream expert op. So the column-3 divergence is absent at 64 K
+with the full model; the bisect continues on the regions path (`sched_bisect_v2.sh`: 64 K, 256 K), which the first
+bisect scripts had omitted.
