@@ -7,6 +7,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 namespace ttnn::operations::experimental::kda::select_final_carry::detail {
 
@@ -37,6 +38,14 @@ void bind_select_final_carry(nb::module_& mod) {
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence.
             num_links (int, optional): Fabric links used by the owner's multicast. Defaults to the
                 links available on the sequence-parallel axis.
+            cores (list[ttnn.CoreCoord], optional): The worker cores: the first ``num_links`` send over
+                the fabric and all of them copy. Defaults to enough cores from the grid's start.
+            prefix_on_last_rank (bool, optional): ``prefix_final`` is valid only on the last
+                chronological rank (as the SP relay leaves it): without a split tail that rank
+                multicasts it instead of every rank copying its own.
+            semaphores (list[ttnn.GlobalSemaphore], optional): The zeroed barrier and arrival global
+                semaphores, kept alive across calls. Without them each cached program allocates its
+                own when it is built.
 
         Returns:
             ttnn.Tensor: FLOAT32 TILE-layout ``[B*H, K, V]`` final state, replicated along the line.
@@ -50,7 +59,10 @@ void bind_select_final_carry(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("num_links") = nb::none());
+        nb::arg("num_links") = nb::none(),
+        nb::arg("cores") = nb::none(),
+        nb::arg("prefix_on_last_rank") = false,
+        nb::arg("semaphores") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::select_final_carry::detail
