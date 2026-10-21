@@ -133,6 +133,22 @@ def test_quad_preset_bucket_ladder_is_aligned(task):
     validate_bucket_ladder(_PRESETS_BH[(4, 32)]["bucket_ladder"][task], 32 * ttnn.TILE_SIZE)
 
 
+# Pure (no-device) coverage of the dynamic-length padding and admission rule.
+def test_dynamic_padded_length_admission(expect_error):
+    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
+    pipeline.sp_factor, pipeline.dynamic_length, pipeline.max_sequence_length = 8, True, 120320
+    pipeline._force_pad_to = None
+    assert pipeline._padded_length(37749) == 37888  # 256-aligned, not a ladder rung
+    assert pipeline._padded_length(120320) == 120320
+    with expect_error(ValueError, "beyond the longest served packed length"):
+        pipeline._padded_length(120321)
+    pipeline._force_pad_to = 120320  # the warm-up's capacity point
+    assert pipeline._padded_length(37749) == 120320
+    pipeline._force_pad_to = 18944
+    with expect_error(ValueError, "smaller than the packed length"):
+        pipeline._padded_length(37749)
+
+
 # The dynamic-length integration gate: one program set must serve every length. It passes only once every
 # length-dependent op of the step hashes without its row count, so CI runs it on request only.
 DYNAMIC_GATE_ENV = "MINIMAX_H3_DYNAMIC_GATE"
