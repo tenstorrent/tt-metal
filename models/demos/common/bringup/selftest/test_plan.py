@@ -735,3 +735,11 @@ def test_scale_never_rewrites_the_real_config_through_a_hard_link(fx, tmp_path, 
     assert scale.scale(s)["errors"] == []
     assert _json.loads((hf / "inference" / "config.json").read_text())["n_heads"] == 8  # the real one untouched
     assert _json.loads((s.scaled_hf_dir / "inference" / "config.json").read_text())["n_heads"] == 4
+
+
+def test_x3_asks_for_the_full_prefill_only_from_a_stack_without_gaps(fx, monkeypatch):
+    s = Spec.load(fx())
+    x3 = lambda: next(t for t in generate(s, Reference())["tasks"] if t["id"] == "X.3")["gate"]["metrics"]
+    assert x3()["prefill_ms_full"] == "> 0"
+    monkeypatch.setattr(Spec, "layers", lambda self: [0, 2])  # F125: DeepSeek-V4.1's 0-3,14,20,21,24 never times it
+    assert "prefill_ms_full" not in x3() and x3()["timeline_ok"] == "== 1"
