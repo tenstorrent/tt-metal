@@ -366,9 +366,32 @@ positions that is 2 x 11 layers x 1.07 GB of latent (+ 1.5 GB of pooled keys) = 
 12.4 GB of weights does not fit the 32 GB chip. The 1 M single-user run therefore runs without partition (one
 slot per chip, replicated over the row's columns; each column attends its own 16 heads).
 
-Fix for multi-user 1 M (not implemented): do the prefill like the decode, with the heads -> users exchange
-(`GLMMesh.all_to_all_cols`) before the attention of a chunk: column c receives all 64 heads of its own users'
-rows and attends over its own cache only; the inverse exchange returns the attention output head-split for
-`o_proj`. The scratch slot disappears (one slot per user per chip, 11.4 GB at 1 M), and the per-chunk
-whole-prefix copy and the scorer run once per owner instead of on every column. For one user the attention
-of a chunk runs on one column; the MLP / KDA / mHC parts stay sequence-parallel over the rows as today.
+Fix for multi-user 1 M (`GLM53_PREFILL_PARTITION=heads2users`, `arg/glm53_mu1m`; default `scratch` = the layout
+above): do the prefill like the decode, attending where the cache is. The users of a row are prefilled one after
+the other (each chunk belongs to one user, the KDA / mHC / MoE parts stay sequence-parallel over the rows), so the
+"heads -> users" exchange of a chunk degenerates into a gather to the owner column, expressed with the existing
+collectives and no per-device program:
+
+| step of a DSA chunk (per sparse sub-block of n rows) | scratch layout | heads2users |
+|---|---|---|
+| latent fill, pool / ring writes | the user's slot on the owner column, the scratch slot elsewhere | the user's slot on the owner column, DUMMY blocks elsewhere (per-column page-table views, one upload per user) |
+| whole-prefix latent copy, scorer, bounded top-k | every column over the scratch slot | every column over its OWN slot `u % users_per_chip` (the owner's = the real selection; the others score their own user's data: same shapes, discarded) |
+| sparse attention | heads -> sequence a2a: 64 heads on n/4 rows per column, inverse a2a | `all_gather_cols(q_lat, dim=1)` -> `[1,64,n,512]` on every column, `sparse_sdpa` (64 heads, no padding) over the column's own kv copy / index rows, `all_to_all_cols(o, in_dim=1, out_dim=0)` (heads split by column, sources stacked on dim 0: `[4,16,n,512]`), slice entry `owner` = the owner's output for this column's head shard (`TtDSA._sparse_attention(owner=...)`) |
+| dense rows (position < 2048) | head-local K/V SDPA; prefix from the scratch slot | the same; a prefix (0 < start < 2048) is all-gathered on dim 0 from the owner's slot and sliced (`_prefix_rows`, < 2 MB) |
+
+Dummies (`TtLatentCache(prefill_partition="heads2users")`): `DUMMY_BLOCKS = 64` spare latent blocks at the end
+of the paged cache (1 MB per layer) that page-table row `users_per_chip` maps every block onto (j % 64; the row a
+non-owner column's traced prefill names through `PrefillSlot.cache_idx`); the pooled-key index rounds
+`pools + 32` (instead of + 8) up to 256, so the LAST 32-pool block of every slot's region never holds a valid pool
+and is the pool dummy (masked -inf by the shared scorer's causal bound, below every top-k bound; the pool page
+table gets one extra row pointing at it); one extra ring block. Non-owner columns write every block of a chunk
+onto those few dummies (racing DRAM writes of garbage that nothing reads). Memory per chip at 1 M: one slot
+(11 layers x (1.07 GB + 67 MB)) next to the weights instead of two. Cost: the owner's `sparse_sdpa` covers all
+n rows of a sub-block with 64 heads (4x the sequence-split kernel's rows; the other three columns run the same
+kernel on their own data: nothing else to do in SPMD); the scorer / top-k / prefix copy cost what they cost with
+the scratch slot (they were replicated over the columns already); the exchanges move 48 x n x 1 KB per chip each
+way per sub-block (24 MB at n = 512). A lockstep multi-user chunk loop (one chunk of each of the row's 4 users
+per pass) would turn the gather into the true heads -> users all-to-all with no discarded work: not done.
+Tests: `tests/test_mesh_heads2users_prefill.py` (block: exchange primitives, layer-3 R4097 and 16 K-at-64 K vs
+the non-partitioned slab path, per-user state integrity after the other users' prefills),
+`tests/test_mesh_long_context.py` with `GLM53_LONG_USERS=all` (every slot prefilled, per-user chains).
