@@ -136,9 +136,10 @@ def _run(
     scale = D**-0.5
     sink_tokens = 300 if rows < 4096 else 849
     if mode == "resident" and q_chunk == Q_CHUNK:
-        # Resident mode's compute unit is the 64-row query block, and its L1 FIFO of per-chunk accumulators does not
-        # fit next to a 256-row chunk's CBs (static CB region clashes with the L1 buffers at 1,504,000 B).
-        q_chunk = Q1_CHUNK
+        # Resident mode's compute unit is the 64-row query block (SOL_RESIDENT_Q_CHUNK overrides, e.g. 128 while the
+        # base kernel's 64-row path is under investigation), and its L1 FIFO of per-chunk accumulators does not fit
+        # next to a 256-row chunk's CBs (static CB region clashes with the L1 buffers at 1,504,000 B).
+        q_chunk = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", str(Q1_CHUNK)))
     geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
 
     ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -474,7 +475,13 @@ def test_resident_matches_chunk(
     garbage on 2026-10-21); k_chunk 256 halves the piece (Sk_chunk_t 8). At rows=1024 a core holds about two
     resident chunks and some cores straddle two heads, which exercises the interleaved per-head streaming.
     """
-    kw = dict(tau=tau, q_chunk=Q1_CHUNK, rows=rows, logical_n=logical_n, k_chunk=k_chunk)
+    kw = dict(
+        tau=tau,
+        q_chunk=int(os.environ.get("SOL_RESIDENT_Q_CHUNK", str(Q1_CHUNK))),
+        rows=rows,
+        logical_n=logical_n,
+        k_chunk=k_chunk,
+    )
     base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
     res = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", want_dense=False, **kw)
     p_chunk = _pcc(base.sol, res.sol, logical_n)
@@ -498,7 +505,10 @@ def test_resident_matches_chunk(
         logger.info(f"[resident] {name}: per-shard nonfinite count / std: {' '.join(per_shard)}")
     # The factory's flat split: chunk-heads [h * nqc + qc] over 120 cores, the first (total % 120) cores one extra.
     # A head's cores form its chain in core order; position = index among them, slot = index within the core.
-    num_cores = 120
+    # The op's worker grid is the chip's compute grid minus the CCL column (as _run's program_config sets it); on a
+    # harvested 11x10 part that is 110 cores, not 120, which moves every chunk-to-core boundary.
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = (grid.x - 1) * grid.y
     total = H * nqc
     base_per_core, n_extra = divmod(total, num_cores)
     core_start = [c * base_per_core + min(c, n_extra) for c in range(num_cores + 1)]
@@ -558,20 +568,28 @@ def test_resident_matches_chunk(
 
 
 @GALAXY_RING
-def test_q64_base_determinism(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
-    """Is the 64-row-chunk path deterministic WITHOUT resident mode? Dense ring op and chunk mode, each run twice at
-    q_chunk=64 with identical inputs. If either differs between runs, the run-to-run variation seen in resident
-    mode on 2026-10-21 is inherited from the shared q_chunk=64 path, not introduced by the resident loop."""
-    kw = dict(mode="chunk", tau=-1e4, q_chunk=Q1_CHUNK)
+@pytest.mark.parametrize("rows,logical_n", [(1024, 8192), (1184, 9472)], ids=["r1024", "r1184"])
+@pytest.mark.parametrize("q_chunk", [64, 128, 256], ids=["q64", "q128", "q256"])
+def test_base_determinism(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, q_chunk, rows, logical_n, reset_seeds, capfd
+):
+    """Is the base kernel deterministic and sane at this query chunk, WITHOUT resident mode? The dense ring op and
+    chunk mode, each run twice with identical inputs. Measured 2026-10-21 at q_chunk=64: the dense op differs between
+    runs by up to 0.36 (outputs of std ~0.1) at rows 1024, and at rows 1184 every mode returns values of order 1e33.
+    Every 64-row-chunk measurement (pack mode, resident mode) sits on that, so this finds the smallest clean chunk."""
+    kw = dict(mode="chunk", tau=-1e4, q_chunk=q_chunk, rows=rows, logical_n=logical_n)
     a = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
     b = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
     d_dense = (a.dense - b.dense).abs().max().item()
     d_chunk = (a.sol - b.sol).abs().max().item()
+    sane = float(a.dense[:, :logical_n].abs().max()) < 1e3 and torch.isfinite(a.dense[:, :logical_n]).all()
     logger.info(
-        f"[q64] run-to-run max |diff|: dense {d_dense:.3e}, chunk {d_chunk:.3e}; pcc(chunk, dense) {_pcc(a.sol, a.dense, LOGICAL_N):.6f}"
+        f"[base] q_chunk={q_chunk} rows={rows}: run-to-run max |diff| dense {d_dense:.3e}, chunk {d_chunk:.3e}; "
+        f"dense max |value| {float(a.dense[:, :logical_n].abs().max()):.3g}; pcc(chunk, dense) {_pcc(a.sol, a.dense, logical_n):.6f}"
     )
-    assert d_dense == 0.0, f"dense ring op at q_chunk=64 is not deterministic: {d_dense:.3e}"
-    assert d_chunk == 0.0, f"chunk mode at q_chunk=64 is not deterministic: {d_chunk:.3e}"
+    assert sane, "dense ring op output is not finite / sane at this geometry"
+    assert d_dense == 0.0, f"dense ring op at q_chunk={q_chunk} is not deterministic: {d_dense:.3e}"
+    assert d_chunk == 0.0, f"chunk mode at q_chunk={q_chunk} is not deterministic: {d_chunk:.3e}"
 
 
 @GALAXY_RING

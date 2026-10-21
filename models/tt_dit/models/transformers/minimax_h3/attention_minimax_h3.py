@@ -742,7 +742,8 @@ class MiniMaxH3Attention(Module):
     # Resident mode (sol_attn_status_2026-10-21.md 4a, M1): the op streams each K/V piece once per core and applies
     # it to every resident 64-row query chunk, so the query chunk is the 64-token block (no union over blocks) and
     # the mask is the chunk-form one the "chunk" pre-pass produces.
-    _SOL_RESIDENT_Q_CHUNK = 64
+    # SOL_RESIDENT_Q_CHUNK overrides it (128 while the base kernel's 64-row path is under investigation, 2026-10-21).
+    _SOL_RESIDENT_Q_CHUNK = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", "64"))
 
     @property
     def _sol_prepass_mode(self) -> str:
