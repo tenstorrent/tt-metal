@@ -145,18 +145,25 @@ void MpiTransport::poll() {
             arm_credit_recv();
         }
     } else {
-        if (payload_recv_) {
-            if (const auto status = payload_recv_->test(); status.has_value()) {
-                const uint64_t bytes = static_cast<uint64_t>(status->count);
-                TT_FATAL(
-                    bytes != 0 && bytes % geom_.page_size == 0,
-                    "mpi receiver got a {} B message on a {} B page ring",
-                    bytes,
-                    geom_.page_size);
-                delivered_ += bytes / geom_.page_size;
-                payload_recv_.reset();
-                post_receive();
+        // Drain every message that has landed, not just one: a message that arrived
+        // before its receive was posted sits in MPI's unexpected queue and matches
+        // the moment the next receive goes up, so one poll can retire a whole run
+        // of them. Stopping at one would put a relay poll (and its back-off sleep)
+        // between every two messages.
+        while (payload_recv_) {
+            const auto status = payload_recv_->test();
+            if (!status.has_value()) {
+                break;
             }
+            const uint64_t bytes = static_cast<uint64_t>(status->count);
+            TT_FATAL(
+                bytes != 0 && bytes % geom_.page_size == 0,
+                "mpi receiver got a {} B message on a {} B page ring",
+                bytes,
+                geom_.page_size);
+            delivered_ += bytes / geom_.page_size;
+            payload_recv_.reset();
+            post_receive();
         }
         retire_credit_send();
     }
