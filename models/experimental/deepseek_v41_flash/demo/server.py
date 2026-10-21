@@ -16,6 +16,11 @@ docstring), on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instea
 
 ``GET /models`` and ``GET /v1/models`` return DeepSeek's list-models record (:func:`model_record`).
 
+A turn stops, mid-prefill or mid-decode, when its client disconnects or on
+``POST /v1/chat/completions/<id>/cancel`` (the ``id`` of the first streamed chunk, also the ``X-Request-Id`` header)
+or ``POST /v1/sessions/<user>/cancel``, and every running turn stops on the live console's ``k`` key; see
+"Stopping" in the V4 server's docstring.
+
 What V4.1 imposes on the serving side:
 
 * Users. ``--num-users`` sessions stay open at once, each with its own ring and window slot and its own rows of the
@@ -25,10 +30,10 @@ What V4.1 imposes on the serving side:
   decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   Speculative decode is single-user.
-* Context. ``--max-context`` is 524288 tokens by default (prompt + reply). Past
+* Context. ``--max-context`` is 1048576 tokens by default (prompt + reply). Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
-  most 262144 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
+  most 131072 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
 * Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free.
 
 Run it (ttnn venv, from the repo root; 32-chip Galaxy for the prefill model)::
@@ -83,10 +88,10 @@ from models.experimental.deepseek_v4_flash.tt.system_config import load_system_c
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-_MAX_CONTEXT = 524288  # default --max-context (prompt + reply)
-# Default --prefill-max-len when a larger context is asked for: the longest traced prefill whose last position tier
-# compiled on every stage (a 524288-token tier ran out of DRAM).
-_MAX_PREFILL_LEN = 262144
+_MAX_CONTEXT = 1048576  # default --max-context (prompt + reply)
+# Default --prefill-max-len when a larger context is asked for. Prefill's DRAM shares the chips with decode's caches,
+# which grow with the context: a 262144-token tier fit beside a 524288-token decode but not beside a 1M one.
+_MAX_PREFILL_LEN = 131072
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -278,17 +283,17 @@ class _V41Prefiller(_Prefiller):
     """:class:`_Prefiller` with V4.1's prefill model, which has no CSA position bias for the commit.
 
     The prefill selects two-level past ``candidate_topk_blocks * candidate_block_size`` compressed entries, as
-    decode does. Its attention stays dense, so every per-layer mask and score tensor of the last position tier
-    spans the whole ``--prefill-max-len``; with decode's caches resident, a 512K-token tier runs out of DRAM.
-    Unset, ``--prefill-max-len`` is therefore the context capped at ``_MAX_PREFILL_LEN``, and decode replays the rest
-    of a longer prompt; an explicit value is used as given.
+    decode does. Attention reads only the selected entries, but the indexer scores every one, so the score tensors of
+    the last position tier span the whole ``--prefill-max-len``. Unset, ``--prefill-max-len`` is therefore the
+    context capped at ``_MAX_PREFILL_LEN``, and decode replays the rest of a longer prompt; an explicit value is used
+    as given.
     """
 
     def __init__(self, engine: V41ChatEngine, args, prefetcher: contextlib.ExitStack):
         if not args.prefill_max_len and engine.max_seq > _MAX_PREFILL_LEN:
             logger.info(
-                f"traced prefill sized for {_MAX_PREFILL_LEN} tokens (dense attention past that does not fit beside "
-                f"decode's {engine.max_seq}-token caches); decode replays the rest of a longer prompt"
+                f"traced prefill sized for {_MAX_PREFILL_LEN} tokens beside decode's {engine.max_seq}-token caches; "
+                "decode replays the rest of a longer prompt"
             )
             args.prefill_max_len = _MAX_PREFILL_LEN
         super().__init__(engine, args, prefetcher)
@@ -299,9 +304,6 @@ class _V41Prefiller(_Prefiller):
             lm_head=engine.lm_head,
             cache=engine.weight_cache,
             weight_dtype=_ATTENTION_WEIGHT_DTYPE,
-            # Sliding layers attend without an additive mask (the compressed ones stay masked): the masked SDPA's
-            # mask buffers do not fit beside the L1 decode keeps resident.
-            maskless=True,
             # Fresh-window traces, so a conversation edited past an earlier turn resumes from its cached
             # compressed KV (SWA bounded replay) instead of re-prefilling from 0.
             bounded_replay=True,

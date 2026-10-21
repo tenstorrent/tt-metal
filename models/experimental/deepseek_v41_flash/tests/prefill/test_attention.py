@@ -107,8 +107,8 @@ def test_attention_prefill(device, layers, seq_len, chunk):
             actual[i].append(out)
             _, pcc = comp_pcc(expected[i][start : start + chunk], out, PCC)
             logger.info(f"layer {i} (ratio {config.compress_ratios[i]}) chunk at {start}: PCC {pcc}")
-        if shared.entry_sel is not None:
-            ttnn.deallocate(shared.entry_sel)
+        if shared.entry_idx is not None:
+            ttnn.deallocate(shared.entry_idx)
 
     for i in layers:
         passing, pcc = comp_pcc(expected[i], torch.cat(actual[i]), PCC)
