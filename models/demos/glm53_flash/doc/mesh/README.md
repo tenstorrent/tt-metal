@@ -729,3 +729,58 @@ of the 2026-10-20 21:41 incident). The op's kernels (`custom_ops/mhc_pre_block`)
 NOC on a mesh; the knob stays off and the op must not run on a mesh before a kernel audit. Recovery per the device
 rules: zero holders confirmed, one `tt-smi -r`; the EP32 8x4 e2e and the 1 M x 32-user rerun follow in
 `_logs/mesh/sched_post_reset.sh` once the heartbeats advance again.
+
+## 2026-10-21 evening: the 1 M x 32-user run, the column-3 divergence, the EP32 combine
+
+The post-reset chain (`_logs/mesh/sched_post_reset.sh`) completed the 1 M x 4-users-per-row partitioned run
+(`long_8x4_1M_4users_partitioned.log`, JSON `generated/glm53_flash_long_context/mesh8x4_N1047526.json`):
+
+| item | result |
+|---|---|
+| per-user TTFT (one prompt in flight, 8 rows SP) | 494.7 / 466.6 / 465.9 / 461.7 s (2118-2269 tok/s) |
+| DRAM after each prefill | 2.08 / 2.07 / 2.05 / 2.04 GiB free of 31.33 (per-user release holds) |
+| traced decode step, 32 slots at 1 047 526 | 160.8 ms = 6.2 tok/s per user, 199 aggregate |
+| needle (depth 0.5, gen 128) | 0/32 (the known depth-0.5 miss: the single-user d50 probe misses, d56 finds) |
+| users agree | **False**: users 0-2 first token 785 'The', user 3 (column 3 of every row) token 6 "'" |
+| rows agree | **False**: user 3's text differs per row (834 / 856 / 896); users 0-2 diverge across rows after ~100 chars |
+
+Every chain is a degenerate filler continuation with a repeated number (878 for users 0-2, 896 for user 3), i.e. a
+near-tie regime where any numerical difference flips tokens; but identical inputs must give bit-identical outputs, so
+the user-3 / row differences are real. Exonerated since (all exact):
+
+| check | where | result |
+|---|---|---|
+| DSA heads2users prefill, users 0..3, 64 K, sub-block 256, chunkings [16384] and [8192, 8192] | rows 4-5 block, `test_mesh_heads2users_prefill.py -k heads2users_long` (`GLM53_H2U_USERS=all`) | latent / pools / rings equal to the reference on every column, rows PCC >= 0.999998 |
+| decode batch independence, layers 3 (DSA) and 4 (KDA + MoE), B = 4, positions 0..15, eager and traced | rows 4-5 block, `test_mesh_batch_independence.py` (new) | rows agree; changing the last or the first slot's prompt leaves the other slots bit-identical |
+| full model (layers 0-3), 16 K x 4 users per row, chunked heads2users prefill, 8 decode steps | rows 4-5 block, `probe16k_2x4_4users_L0-3.log` | users 0..3 and both rows bit-identical (same 8 ids) |
+| full model 45 layers, 64 K x 4 users on a block | rows 6-7 block | OOM after the build (the block holds the model at 4.1 of 4.2 GB per bank): moved to the 8x4 |
+
+Still open: the length bisect on the 8x4 (`sched_64k_8x4.sh`: 64 K then 256 K x 4 users, 45 layers, `users agree`),
+then the 1 M x 4 users rerun at needle depth 0.56 / gen 160 (`sched_1m32_d56.sh`). Candidates left: a 1 M-only
+effect (memory at 29.3 of 31.3 GiB, 262144 pools per user, the decode trace captured before the prefills: "Allocating
+device buffers is potentially unsafe due to the existence of an active trace") or a 45-layer-only path.
+
+Scheduling lesson: the hand-launched 16 K probe raced the chain's zero-holder gate (a 20 s poll) and overlapped the
+256-user re-measure's mesh open on rows 4-5 for its first seconds (no kernels overlapped: the probe spent 8 min on
+host work; a clean rerun is queued). One scheduler owns every chip gate; new jobs are appended as gated stages.
+
+### 256-user re-measure and the EP32 combine analysis
+
+Hybrid dense pass, 45 layers, fast mHC + fused router (today's defaults): traced decode step **115.0 ms** at 256
+users (8.7 tok/s per user, 2226 aggregate; 121.6 ms on 2026-10-20), greedy id == host head for every user.
+
+Agent analysis of the layer-4 tracy profiles (`_agents/ep32_combine/ANALYSIS.md`, `per_chip_a2a.csv`): the EP32
+`all_to_all_combine` runs on 2 cores (= the 2 routing planes of axis 0) scanning every gathered token with one NOC
+read + barrier per row and one fabric packet per 8 KB row: 338-892 us per chip at 32 users/row for ~0.47 MB moved,
+2-5 % of the 2 x 24.2 GB/s link rate; its spread is the column's expert-stage skew (it ends when all 8 senders have
+delivered). The e2e EP32 figure (135.8 ms) was a hot-spot artefact: `test_mesh_model.py` gave every user the same
+token, so all 256 users shared one top-8 and 1-2 chips per column returned 256 rows each (~1.0-1.3 ms/layer vs
+0.34-0.42 with diverse routing, +25-38 ms over 42 MoE layers); the hybrid dense pass is routing-independent. In-trace
+op gaps are 64 us/layer for both layouts (nothing host-side).
+
+Taken: (1) `GLM53_EP_COMBINE=a2a` (default `op`): the zero-padded expert output [1, 1, rows*T, H] exchanged densely
+along the rows with `all_to_all_async_generic` + `fast_reduce_nc` over the senders, dropping the slot clone /
+untilize / tilize; expected 338-892 -> ~100-130 us per layer (T % 16 == 0 only, so 4 users/row stays on the op);
+(2) the e2e perf loop feeds one random token per user (`GLM53_MODEL_PERF_IDS=distinct`, default). Validation and
+the distinct-id re-measures of both layouts at 32 and 256 users are the chain's last stage (`sched_ep_combine.sh`);
+the README decode rows get refreshed from them.
