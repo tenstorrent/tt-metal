@@ -870,19 +870,27 @@ void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_i
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
 
-bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const {
-    if (this->rtoptions_.get_disable_dma_ops()) {
-        return false;
-    }
+namespace {
 
-    // Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
-    // TODO: Remove this once we have a proper fix for small DMA sizes.
-    constexpr uint32_t min_dma_size_bytes = 32;
+// Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
+// TODO: Remove this once we have a proper fix for small DMA sizes.
+constexpr uint32_t min_dma_size_bytes = 32;
 
-    // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
-    // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
-    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->get_cluster_desc()->is_chip_mmio_capable(chip_id) &&
-           sz_in_bytes >= min_dma_size_bytes;
+}  // namespace
+
+bool Cluster::dma_available(ChipId chip_id) const {
+    return this->hal_ != nullptr && !this->rtoptions_.get_disable_dma_ops() &&
+           this->get_cluster_desc()->is_chip_mmio_capable(chip_id);
+}
+
+bool Cluster::use_dma_read(ChipId chip_id, uint32_t sz_in_bytes) const {
+    return this->dma_available(chip_id) && this->hal_->supports_dma_reads() && sz_in_bytes >= min_dma_size_bytes;
+}
+
+bool Cluster::use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const {
+    // UMD rejects a DMA write whose address or size is not a multiple of 4.
+    return this->dma_available(chip_id) && addr % 4 == 0 && sz_in_bytes % 4 == 0 && sz_in_bytes >= min_dma_size_bytes &&
+           sz_in_bytes >= this->hal_->get_dma_write_min_bytes(ordering);
 }
 
 void Cluster::write_core(
@@ -912,12 +920,12 @@ void Cluster::write_core(
             sz_in_bytes);
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
+        core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
 
-    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    if (this->use_dma_write(chip_id, sz_in_bytes, addr, resolved_ordering)) {
+        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     } else {
-        const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
-            core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }
 
@@ -947,7 +955,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    if (this->use_dma_read(chip_id, size_in_bytes)) {
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
@@ -1644,7 +1652,7 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, tt::tt_metal::CoreCoord
 }
 
 uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    if (this->dma_available(chip_id) && size_in_bytes >= min_dma_size_bytes) {
         return this->hal_->get_dma_alignment();
     }
     return 1;
