@@ -789,8 +789,9 @@ def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
     return src_format == DataFormat.UInt16 and dst_format == DataFormat.Float32
 
 
-# Values the random [0, 1000] band never reaches. 32768 and 65535 are the ones that
-# separate a zero-extending uint16 load from a sign-extending int16 load.
+# The uint16 endpoints and the bit-15 boundary. 32768 and 65535 are the ones that separate
+# an unsigned load from a signed one: Quasar's signed 16-bit format is sign-magnitude, so a
+# signed read gives -0.0 for 32768 and -32767 for 65535.
 _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
 
 
@@ -841,7 +842,6 @@ def _prepare_typecast_input(
                     flat[i] = seed
             result = flat.reshape(result.shape)
 
-        # UInt16 → Float32 only. The reverse pair uses a different kernel.
         if _is_uint16_to_fp32(src_format, dst_format):
             flat = result.flatten()
             for i, seed in enumerate(_UINT16_TO_FP32_SEEDS):
@@ -1579,8 +1579,8 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
 def _uint16_to_fp32_tile() -> tuple:
     """Repeat the uint16 boundary seeds across one tile, with the fp32 oracle.
 
-    32768 and 65535 stay positive only if the load zero-extends. A sign-extending
-    int16 read turns 32768 into -32768.
+    32768 and 65535 stay positive only if the load is unsigned. Quasar's signed 16-bit
+    format is sign-magnitude, so a signed read gives -0.0 for 32768 and -32767 for 65535.
     """
     element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
     repeats = math.ceil(element_count / len(_UINT16_TO_FP32_SEEDS))
@@ -1595,9 +1595,7 @@ def _uint16_to_fp32_tile() -> tuple:
 @pytest.mark.quasar
 @parametrize(dest_sync=[DestSync.Half, DestSync.Full])
 def test_typecast_uint16_to_fp32_quasar(dest_sync):
-    """
-    UInt16 -> Float32 only. The reverse pair is a different kernel.
-    """
+    """UInt16 -> Float32 over a full tile of the boundary seeds."""
     dest_sync = dest_sync[0]
 
     formats = InputOutputFormat(DataFormat.UInt16, DataFormat.Float32)
