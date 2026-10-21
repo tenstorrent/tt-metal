@@ -99,6 +99,10 @@ struct FlatProbes {
     // each load's start, 2 one load ahead), reads owed a load (modes 1-2), in flight (1-8), on the other stream, before
     // the pass's weight DMAs, each also written to a receiver (the DRISC -> relay delivery; same stream only)
     std::optional<std::string> drisc_xemu_opt;
+    // MIMO_FL_DRISC_X=1: x from the DRISCs - each reads the x row segments in its own bank and writes them into the
+    // relays' row-major chunks (credits / arrival counts, se_drisc.hpp), the relays read no DRAM. Pure DRISC, indexed
+    // x, one row per x page. (Probe while it is new: read at plan / program build, not in the program hash)
+    std::optional<std::string> drisc_x;
     std::optional<std::string> dump_rt;             // MIMO_FL_DUMP_RT (debug output)
     std::optional<std::string> dw_rot;              // MIMO_FL_DW_ROT
     std::optional<std::string> dyn_pull;            // MIMO_FL_DYN_PULL

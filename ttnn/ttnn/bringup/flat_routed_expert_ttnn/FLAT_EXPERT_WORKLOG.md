@@ -1296,3 +1296,25 @@ volume; spread rounds the interval: 1870 / 4224).
   UB 2 + 4 slots).
 - The writes are not measured: the write emulation hangs (garbage into the receivers' landing rings - not the real
   target; not narrowed). So A's projected gain is ~90 us (M 80) / ~136 us (M 160) less the DRISC -> relay writes.
+
+### Option A for real: x from the DRISCs (MIMO_FL_DRISC_X, 2026-10-21, GLM-5.3, one chip, M 128)
+Implemented end to end (probe, off by default): the launcher writes each slot's x info (the call's schedule entries,
+the relays, the addresses) into its DRISC's L1 next to the job descriptor; each DRISC walks the relays' chunk stream
+(entries, sub-blocks, super-blocks, row tiles) and for the rows of its bank (bank = token % 8, half = token / 8 % 2)
+DMAs the 2 KB segment on its job's stream (the emulation's in-order accounting), writes it into the relay's row-major
+chunk once the relay's credit covers it, then (one flush check over every x write, transaction id 15, after the
+command buffer drained) bumps the relay's arrival count for that chunk slot. The relays read no DRAM: they publish a
+credit per reserved batch and wait for each slot's rows. Credits and arrivals are program semaphores on the relays
+(ids 0 / 1, 2, 6, 11, 12: zero at each launch, so nothing carries across calls - the op's arena is per launch and
+garbage, which hung the first, arena-word version).
+- **Correct:** y bit-exact vs the default path at M 128, also with x read once (X1). Default path unchanged and
+  bit-exact after the change (1667 / 1824 / 1928 us at M 80 / 128 / 160).
+- **Slow:** M 128 default 1821 us; DRISC x 4249 (credit re-read every 8th pass), 3348 (every pass), 3883 (XRD_BATCH 1),
+  X1 3074 (vs X1 default 1801: half the writes and increments save only 274 us).
+- **Why (DRISC counters, per call per tile):** ~1500 x tasks, ~1600 loop passes, ~2900 credit stalls, ~1500 credit
+  re-reads (each a blocking NoC round trip). Every 32-row chunk needs rows from all 16 DRISCs while a relay holds 4
+  chunks: DRISCs and relays move in lockstep, one round trip per chunk, and the stalls hold the weight stream.
+- What it would take: far deeper relay rings (L1, more than 5 semaphores), non-blocking credit reads, out-of-order
+  writes across relays - and even then each 2 KB segment costs the DRISC ~25-40 register accesses (DMA, write,
+  increment), against a read-side gain of ~90 / 136 us (M 80 / 160) in the emulation. Not pursued further: the DRISC is
+  the wrong engine for x's scatter-gather; kept as a probe.

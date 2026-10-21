@@ -725,6 +725,19 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const auto v = device->virtual_core_from_logical_core(flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
         return static_cast<uint32_t>((v.x << 16) | v.y);
     };
+    // (probe MIMO_FL_DRISC_X: x from the DRISCs, se_drisc.hpp)
+    const bool x_drisc = on(pr.drisc_x) && p.drisc;
+    if (x_drisc) {
+        TT_FATAL(!p.dual, "MIMO_FL_DRISC_X: pure DRISC only (the launcher posts every call)");
+        TT_FATAL(t.token_index.has_value(), "MIMO_FL_DRISC_X: indexed x only");
+        TT_FATAL(t.x.logical_shape()[-1] == p.H, "MIMO_FL_DRISC_X: one x row per page");
+        TT_FATAL(MT * 32 * 4 <= 512, "MIMO_FL_DRISC_X: MT x 32 token ids must fit the DRISC's 512 B");
+        TT_FATAL(NR * p.vstride <= 8, "MIMO_FL_DRISC_X: at most 8 relays");
+        TT_FATAL(p.drisc_n % banks == 0, "MIMO_FL_DRISC_X: whole banks of slots");
+        TT_FATAL(
+            !x_two && !p.xfwd && !xsolo && !cstr(pr.xhelp_all) && !xprim_only && !cstr(pr.xhelp_noc0),
+            "MIMO_FL_DRISC_X: not with X2 / XFWD / XSOLO / XHELP_ALL / XPRIM_ONLY / XHELP_NOC0");
+    }
     Args drisc_post;
     if (p.drisc) {
         TT_FATAL(
@@ -772,9 +785,39 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             "flat DRISC dual: the launcher must be a plain reader");
         if (!p.dual) {
             const auto k =
-                dm("se_drisc_go.cpp", {p.launcher}, DataMovementProcessor::RISCV_0, NOC::NOC_0, {E}, drisc_dual_def);
+                dm("se_drisc_go.cpp",
+                   {p.launcher},
+                   DataMovementProcessor::RISCV_0,
+                   NOC::NOC_0,
+                   {E},
+                   x_drisc ? with(drisc_dual_def, {{"SE_DRISC_X", "1"}}) : drisc_dual_def);
             Args a;
             a.cat(drisc_post).cat(dyn);
+            if (x_drisc) {  // (se_drisc_post.hpp se_drisc_x_stage: after the post and the dyn args)
+                TT_FATAL(dyn.v.size() == 7, "flat DRISC x: the launcher expects SE_DYN_NARGS dyn args");
+                uint32_t xrb = XRD_BATCH;
+                if (const char* b = cstr(pr.xrd_batch)) {
+                    xrb = static_cast<uint32_t>(std::stoul(b));
+                }
+                // (x once: only rectangle 0's relays take x - its primary multicasts into both rectangles)
+                const uint32_t nrect_x = x_once ? 1 : NR;
+                std::vector<uint32_t> rxy(nrect_x * p.vstride, 0);
+                for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
+                    const uint32_t off = idx < NR ? 0 : (idx - NR) / NR + 1;  // (rl_off)
+                    if (idx % NR < nrect_x) {
+                        rxy.at((idx % NR) * p.vstride + off) = pk(p.relays[idx]);
+                    }
+                }
+                a.a(AddrSrc::Arena, p.ti_off)
+                    .a(AddrSrc::X)
+                    .lit(static_cast<uint32_t>(t.x.buffer()->aligned_page_size()))
+                    .a(AddrSrc::TokenIndex)
+                    .lits({MT, p.nsb, p.vstride, nrect_x, p.rm_chunks, xrb, p.seg})
+                    .a(AddrSrc::Arena, 0)
+                    .lit(0)
+                    .lits({banks, p.drisc_n / banks, flat_drisc_size()})
+                    .lits(rxy);
+            }
             add_rt(k, p.launcher, a);
         }
     }
@@ -898,6 +941,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}});
         if (indexed) {
             xrd_def["XRD_INDEXED"] = "1";
+        }
+        if (x_drisc) {  // (x from the DRISCs: the relays' credit / arrival semaphores, se_drisc.hpp SE_XSEM_*)
+            TT_FATAL(p.rm_chunks <= 5, "MIMO_FL_DRISC_X: at most 5 row-major chunks (semaphores)");
+            xrd_def["XRD_DRISC"] = "1";
+            xrd_def["XRD_RMC"] = std::to_string(p.rm_chunks);
         }
         // perf probes (read at program build; not in the program hash, so a process uses one setting):
         // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read

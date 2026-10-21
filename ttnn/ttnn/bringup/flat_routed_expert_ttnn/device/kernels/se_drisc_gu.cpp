@@ -123,8 +123,36 @@ inline void fast_inc_nopoll(uint8_t noc, uint32_t coord) {
 #endif
 static_assert(SE_DRISC_XEMU_CAP >= 1 && SE_DRISC_XEMU_CAP <= 8, "x emulation: 1..8 reads in flight (ring of 8)");
 #define SE_XEMU_SAME (!SE_DRISC_XEMU_OTHER)
+#ifdef SE_DRISC_X
+#error "SE_DRISC_X and SE_DRISC_XEMU together"
+#endif
+#elif defined(SE_DRISC_X)
+#define SE_XEMU_SAME 1  // (the x segment reads share the job's in-order stream: the same accounting)
 #else
 #define SE_XEMU_SAME 0
+#endif
+
+#ifdef SE_DRISC_X
+// one x segment write from DRISC L1 into a relay's row-major chunk, transaction id 15 (every x write: one flush check
+// covers them), on the register command buffer - the write buffer keeps the fast weight writes' constant registers
+inline void x_write(uint8_t noc, uint32_t src, uint32_t coord, uint32_t dst, uint32_t bytes) {
+    while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(
+        noc,
+        write_reg_cmd_buf,
+        NOC_CTRL,
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_RESP_MARKED);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_AT_LEN_BE, bytes);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_TARG_ADDR_MID, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_MID, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(15));
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_TARG_ADDR_LO, src);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_LO, dst);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
+    NOC_CMD_BUF_WRITE_REG(noc, write_reg_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    noc_nonposted_writes_num_issued[noc] += 1;
+    noc_nonposted_writes_acked[noc] += 1;
+}
 #endif
 
 struct Job {
@@ -140,6 +168,19 @@ struct Job {
     uint64_t rx[SE_DRISC_MAX_R], rdata[SE_DRISC_MAX_R], rgrant[SE_DRISC_MAX_R];
     uint32_t coord[SE_DRISC_MAX_R];  // (NOC_*_ADDR_COORDINATE of receiver j)
     uint32_t dsem;
+#ifdef SE_DRISC_X
+    // x from this DRISC (se_drisc.hpp XI_*): the call's info, the cursor over the relays' chunk stream (entry,
+    // sub-block, super-block, row tile, row; the global super-block, its relay offset, the chunk's number for that
+    // offset and its rows), the x tasks (in DMA order = the xq ring: chunk, row, relay offset), written / flushed +
+    // counted, the relays' credit words as last read
+    uint32_t xon, xia, xs0, x_seg, x_mt, x_nsb, x_vs, x_nrect, x_rmc, x_batch, x_page, x_xaddr, x_ring, x_rsva;
+    uint32_t x_slot, x_banks, x_spb, x_nact, x_arra[XI_MAX_RMC];
+    uint64_t x_tidx, x_rbase[XI_MAX_RL];
+    uint32_t x_rcoord[XI_MAX_RL], x_rsv[XI_MAX_RL];
+    uint32_t ca, cs, cj, cm, crow, cg, co, cqc, crows, coff, ccnt, cq[XI_MAX_RL];
+    bool cin, cch, cdone;
+    uint32_t tq[8], tr[8], to_[8], xw, xf;
+#endif
 };
 
 void kernel_main() {
@@ -214,7 +255,13 @@ void kernel_main() {
                 ++seen_skip[k];
             }
         }
-        const uint32_t room = n_real ? (region - SE_DRISC_SLOTS) / n_real : 0;  // (L1 slots split over the real jobs)
+#ifdef SE_DRISC_X
+        constexpr uint32_t x_res = 2 * SE_DRISC_XA;  // (the jobs' x areas, se_drisc.hpp)
+#else
+        constexpr uint32_t x_res = 0;
+#endif
+        const uint32_t room =
+            n_real ? (region - SE_DRISC_SLOTS - x_res) / n_real : 0;  // (L1 slots split over the real jobs)
         uint32_t left = 0, ri = 0;
         for (uint32_t k = 0; k < nj; ++k) {
             Job& J = jobs[k];
@@ -295,6 +342,51 @@ void kernel_main() {
 #else
             J.xslot = 0;
 #endif
+#ifdef SE_DRISC_X
+            J.xon = d[SD_XON];
+            J.xw = J.xf = 0;
+            if (J.xon) {
+                J.xia = base + region - (k + 1) * SE_DRISC_XA;
+                volatile uint32_t* xi = reinterpret_cast<volatile uint32_t*>(J.xia);
+                J.x_xaddr = xi[XI_XADDR];
+                J.x_page = xi[XI_PAGE];
+                J.x_mt = xi[XI_MT];
+                J.x_nsb = xi[XI_NSB];
+                J.x_vs = xi[XI_VSTRIDE];
+                J.x_nrect = xi[XI_NRECT];
+                J.x_rmc = xi[XI_RMC];
+                J.x_batch = xi[XI_BATCH];
+                J.x_seg = xi[XI_SEG];
+                J.x_ring = xi[XI_RING];
+                J.x_rsva = xi[XI_RSV];
+                for (uint32_t p = 0; p < XI_MAX_RMC; ++p) {
+                    J.x_arra[p] = xi[XI_ARR + p];
+                }
+                J.x_slot = xi[XI_SLOT];
+                J.x_banks = xi[XI_BANKS];
+                J.x_spb = xi[XI_SPB];
+                J.x_nact = xi[XI_NACT];
+                const uint32_t tw = J.noc ? XI_TIDX1 : XI_TIDX0;
+                J.x_tidx = uint64_t(xi[tw]) | (uint64_t(xi[tw + 1]) << 32);
+                for (uint32_t i = 0; i < J.x_vs * J.x_nrect; ++i) {
+                    const uint32_t xy = xi[XI_RXY + i];
+                    J.x_rbase[i] = get_noc_addr(xy >> 16, xy & 0xFFFF, 0, J.noc);
+                    J.x_rcoord[i] = (uint32_t)(J.x_rbase[i] >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+                    J.x_rsv[i] = 0;
+                }
+                for (uint32_t o = 0; o < XI_MAX_RL; ++o) {
+                    J.cq[o] = 0;
+                }
+                J.ca = J.cs = J.cj = J.cm = J.crow = J.cg = 0;
+                J.cin = J.cch = J.cdone = false;
+                // the x segment slots out of the job's room (the weight slots shrink to fit)
+                const uint32_t xs_bytes = SE_DRISC_XS * J.x_seg;
+                if (J.ns * J.ub * J.blk + xs_bytes > room) {
+                    J.ns = (room - xs_bytes) / (J.ub * J.blk);
+                }
+                J.xs0 = J.slot0 + J.ns * J.ub * J.blk;
+            }
+#endif
             left += J.units;
             volatile uint32_t* st = word(se_drisc_state(k));
             st[0] = seen;
@@ -347,6 +439,75 @@ void kernel_main() {
             J.dn = d - J.xdone;
         };
 #endif
+#ifdef SE_DRISC_X
+        // The relays' chunk stream, as se11_xrd.cpp walks it: entries a (off, cnt), their sub-blocks of MT x 32 rows,
+        // super-blocks j (the global count g picks the relay offset g % VSTRIDE; every rectangle's relay at that
+        // offset takes the chunk), row tiles m; chunk q counts per offset. The next row segment this DRISC owns (its
+        // bank's rows, its share of them): token t, super-block j, offset o, chunk q, row r. A sub-block's token ids
+        // are read once (NoC, from the token index row).
+        auto x_next = [&](Job& J, uint32_t& t, uint32_t& j, uint32_t& o, uint32_t& q, uint32_t& r) {
+            volatile uint32_t* xi = reinterpret_cast<volatile uint32_t*>(J.xia);
+            volatile uint32_t* idx = reinterpret_cast<volatile uint32_t*>(J.xia + XI_IDX_OFF);
+            const uint32_t rps = J.x_mt * 32;
+            while (true) {
+                if (J.ca >= J.x_nact) {
+                    return false;
+                }
+                if (!J.cin) {
+                    J.coff = xi[XI_ENT + 2 * J.ca];
+                    J.ccnt = xi[XI_ENT + 2 * J.ca + 1];
+                    if (J.cs * rps >= J.ccnt) {
+                        ++J.ca;
+                        J.cs = 0;
+                        continue;
+                    }
+                    const uint32_t rows = J.ccnt - J.cs * rps < rps ? J.ccnt - J.cs * rps : rps;
+                    noc_async_read(
+                        J.x_tidx + (J.coff + J.cs * rps) * 4, J.xia + XI_IDX_OFF, (rows + 31) / 32 * 128, J.noc);
+                    noc_async_read_barrier(J.noc);
+                    invalidate_l1_cache();
+                    J.cin = true;
+                    J.cch = false;
+                    J.cj = J.cm = 0;
+                }
+                if (J.cj >= J.x_nsb) {
+                    J.cin = false;
+                    ++J.cs;
+                    continue;
+                }
+                if (!J.cch) {
+                    J.co = J.cg % J.x_vs;
+                    J.cqc = J.cq[J.co]++;
+                    const uint32_t r0 = J.cs * rps + J.cm * 32;
+                    J.crows = r0 < J.ccnt ? (J.ccnt - r0 < 32 ? J.ccnt - r0 : 32) : 0;
+                    J.crow = 0;
+                    J.cch = true;
+                }
+                while (J.crow < J.crows) {
+                    const uint32_t rr = J.crow++, tok = idx[J.cm * 32 + rr];
+                    if (tok % J.x_banks == J.x_slot % J.x_banks &&
+                        (tok / J.x_banks) % J.x_spb == J.x_slot / J.x_banks) {
+                        t = tok;
+                        j = J.cj;
+                        o = J.co;
+                        q = J.cqc;
+                        r = rr;
+                        return true;
+                    }
+                }
+                J.cch = false;
+                if (++J.cm >= J.x_mt) {
+                    J.cm = 0;
+                    ++J.cj;
+                    ++J.cg;
+                }
+            }
+        };
+        bool xbusy = false;
+        for (uint32_t k = 0; k < nj; ++k) {
+            xbusy = xbusy || (jobs[k].units && jobs[k].xon);
+        }
+#endif
         uint32_t it = 0;
 #ifdef SE_DRISC_PROF  // (debug: cycles per section over the call, refreshes; at 448.. of the working region)
         uint64_t pf[6] = {0, 0, 0, 0, 0, 0};
@@ -357,7 +518,13 @@ void kernel_main() {
 #define PF_BEGIN
 #define PF_END(i)
 #endif
+#ifdef SE_DRISC_X
+        while ((left || xbusy) && !stop) {
+            xbusy = false;
+            *word(496) += 1;  // (debug: passes)
+#else
         while (left && !stop) {
+#endif
             for (uint32_t k = 0; k < nj; ++k) {
                 Job& J = jobs[k];
 #ifndef SE_DRISC_STREAM0
@@ -585,6 +752,87 @@ void kernel_main() {
 #endif
                 }
                 PF_END(3)
+#ifdef SE_DRISC_X
+                if (J.units && J.xon) {
+                    // x: read the owned segments ahead (at most SE_DRISC_XS unwritten-or-uncounted), write the landed
+                    // ones once their relays hold the chunk (credit: the relay's batches reserved), then - one
+                    // flush check over every x write - count them into the relays' arrival words. Never blocks.
+                    while (!J.cdone && J.xt - J.xf < SE_DRISC_XS) {
+                        uint32_t t, j, o, q, r;
+                        if (!x_next(J, t, j, o, q, r)) {
+                            J.cdone = true;
+                            break;
+                        }
+                        const uint32_t i = J.xt;
+                        experimental::dma_async_read<false>(
+                            stream,
+                            J.x_xaddr + (t / J.x_banks) * J.x_page + j * J.x_seg,
+                            J.xs0 + (i % SE_DRISC_XS) * J.x_seg,
+                            J.x_seg);
+                        J.xq[J.xt++ & 7] = J.tot++;
+                        J.tq[i & 7] = q;
+                        J.tr[i & 7] = r;
+                        J.to_[i & 7] = o;
+                        *word(508) += 1;  // (debug: x tasks)
+                    }
+                    if (J.xw < J.xt && J.xw >= J.xdone) {
+                        xrefresh(J, stream);
+                    }
+                    bool refreshed = false;
+                    while (J.xw < J.xdone) {
+                        const uint32_t i = J.xw, o = J.to_[i & 7], q = J.tq[i & 7], r = J.tr[i & 7];
+                        const uint32_t need = q / J.x_batch + 1;
+                        bool ok = true;
+                        for (uint32_t kk = 0; kk < J.x_nrect; ++kk) {
+                            ok = ok && J.x_rsv[kk * J.x_vs + o] >= need;
+                        }
+                        if (!ok) {
+                            *word(500) += 1;  // (debug: credit stalls)
+                            if (refreshed || it % SE_DRISC_X_RPER != 0) {
+                                break;  // (one credit read a pass, every RPER-th pass: the weights keep moving)
+                            }
+                            refreshed = true;
+                            *word(504) += 1;  // (debug: credit reads)
+                            for (uint32_t kk = 0; kk < J.x_nrect; ++kk) {
+                                const uint32_t rl = kk * J.x_vs + o;
+                                noc_async_read(J.x_rbase[rl] | J.x_rsva, J.xia + XI_RSV_OFF + 16 * rl, 4, J.noc);
+                            }
+                            noc_async_read_barrier(J.noc);
+                            invalidate_l1_cache();
+                            for (uint32_t kk = 0; kk < J.x_nrect; ++kk) {
+                                const uint32_t rl = kk * J.x_vs + o;
+                                J.x_rsv[rl] = *reinterpret_cast<volatile uint32_t*>(J.xia + XI_RSV_OFF + 16 * rl);
+                            }
+                            continue;
+                        }
+                        const uint32_t dst = J.x_ring + (q % J.x_rmc) * 32 * J.x_seg + r * J.x_seg;
+                        for (uint32_t kk = 0; kk < J.x_nrect; ++kk) {
+                            x_write(
+                                noc, J.xs0 + (i % SE_DRISC_XS) * J.x_seg, J.x_rcoord[kk * J.x_vs + o], dst, J.x_seg);
+                        }
+                        if constexpr (write_reg_cmd_buf == write_cmd_buf) {  // (shared: the weights' registers back)
+                            fast_write_state(noc, J.blk);
+                        }
+                        ++J.xw;
+                    }
+                    // (the command buffer drained first: an id reads done while its last write still sits in the
+                    // buffer - TS_HANG_WORKLOG wave 14)
+                    if (J.xf < J.xw && noc_cmd_buf_ready(noc, write_reg_cmd_buf) &&
+                        ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, 15)) {
+                        const uint32_t upto = J.xw;
+                        for (uint32_t i = J.xf; i < upto; ++i) {
+                            const uint32_t o = J.to_[i & 7], q = J.tq[i & 7];
+                            for (uint32_t kk = 0; kk < J.x_nrect; ++kk) {
+                                fast_inc_state(noc, J.x_arra[q % J.x_rmc]);
+                                fast_inc(noc, J.x_rcoord[kk * J.x_vs + o]);
+                            }
+                        }
+                        fast_inc_state(noc, J.dsem);  // (the weights' data semaphore increments' registers back)
+                        J.xf = upto;
+                    }
+                    xbusy = xbusy || !J.cdone || J.xf < J.xt;
+                }
+#endif
             }
             if ((++it & 0xFFF) == 0) {
                 for (uint32_t k = 0; k < nj; ++k) {

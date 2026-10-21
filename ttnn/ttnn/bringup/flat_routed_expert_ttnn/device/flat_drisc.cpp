@@ -275,6 +275,10 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
             }
         }
     }
+    if (on(pr.drisc_x)) {  // (x from the DRISCs: the jobs' x areas, the x path; the value: credit re-read period)
+        defs["SE_DRISC_X"] = "1";
+        defs["SE_DRISC_X_RPER"] = std::to_string(u32(pr.drisc_x, 8));
+    }
     if (const char* l = cstr(pr.drisc_lean)) {  // (probe: fewer register accesses a unit, 1 safe, 2 measure-only)
         defs["SE_DRISC_LEAN"] = l;
     }
@@ -416,7 +420,9 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
                 tt::LogOp,
                 "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {} mpfe P1-P3 {} {} {} prof dma {} refresh "
                 "{} "
-                "write {} flush {} total {} refreshes {} units {} xemu ns {} slot {:#x} room {} issued {}{}",
+                "write {} flush {} total {} refreshes {} units {} xemu ns {} slot {:#x} room {} issued {} (x: passes "
+                "{} stalls {} "
+                "credit reads {} tasks {}){}",
                 dev->id(),
                 c.str(),
                 v.str(),
@@ -437,6 +443,10 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
                 w[125],
                 w[127],
                 w[126],
+                w[124],
+                w[125],
+                w[126],
+                w[127],
                 jobs);
         }
     }

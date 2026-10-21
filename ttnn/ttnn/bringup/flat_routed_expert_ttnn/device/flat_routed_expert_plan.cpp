@@ -1153,7 +1153,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.ti_off = p.fw_off + (p.xfwd ? al(p.fw_slots * p.mt * p.sbt * p.x_tile) : 0);
     const uint32_t relay_bytes = p.ti_off;
     TT_FATAL(relay_bytes <= L1_BANK, "flat_routed_expert: relay arena does not fit");
-    p.arena_tiles = std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off}) / 2048;
+    // (MIMO_FL_DRISC_X: the relays' x words and the launcher's x info staging, 16 slots x 1 KB, from ti_off)
+    const uint32_t x_words_bytes = on(pr.drisc_x) ? p.ti_off + 256 + 16 * 1024 : 0;
+    p.arena_tiles = (std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off, x_words_bytes}) + 2047) / 2048;
     p.vstride = 1 + p.nh;
     p.region_bytes = p.E * p.nk_gu * p.rg * p.slot * p.w_tile;
     p.wd_region = p.E * p.It * pcd * p.w_tile;

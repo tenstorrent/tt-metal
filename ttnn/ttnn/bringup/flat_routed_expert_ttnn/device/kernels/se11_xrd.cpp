@@ -71,10 +71,34 @@ void kernel_main() {
     const uint32_t idx_l1 = get_write_ptr(tt::CBIndex::c_7);  // MT x 32 words (<= 512 B <= 2 SE_DYN_HALF)
 #endif
     uint32_t in_batch = 0, l1 = 0;
+#ifdef XRD_DRISC
+    // x from the DRISCs (se_drisc.hpp SE_XSEM_*): no DRAM reads here. Program semaphores, zero at the launch: the
+    // credit (batches reserved), published as they are reserved; per chunk slot the rows landed, a slot ready once its
+    // count reaches the rows staged into it this call. (The ids as se_drisc.hpp: that header's DRISC-L1 helpers are
+    // NOC0-only, this RISC reads on NOC1.)
+    constexpr uint32_t rmc = XRD_RMC, arr_ids[5] = {1, 2, 6, 11, 12};
+    static_assert(rmc <= 5, "DRISC x: at most 5 row-major chunks (semaphores)");
+    volatile tt_l1_ptr uint32_t* rsv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+    volatile tt_l1_ptr uint32_t* arr[rmc];
+    uint32_t arr_need[rmc];
+    for (uint32_t p = 0; p < rmc; ++p) {
+        arr[p] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arr_ids[p]));
+        arr_need[p] = 0;
+    }
+    uint32_t n_rsv = 0, xq = 0;  // (batches reserved, chunks staged this call)
+#endif
     auto flush = [&]() {
         {
             ZW("XRD_DRAM");
+#ifdef XRD_DRISC
+            for (uint32_t p = 0; p < rmc; ++p) {
+                while (*arr[p] < arr_need[p]) {
+                    invalidate_l1_cache();
+                }
+            }
+#else
             noc_async_read_barrier();
+#endif
         }
 #ifndef XRD_SOLO
         cb_push_back(rm_cb, 32 * in_batch);
@@ -138,7 +162,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < nsb && !mine; ++j) {
                     mine = (g + j) % stride == soff;
                 }
-#ifdef XRD_SOLO_NOIDX  // (probe MIMO_FL_XSOLO_NOIDX: no token-index read / barrier per sub-block)
+#if defined(XRD_SOLO_NOIDX) || defined(XRD_DRISC)  // (probe MIMO_FL_XSOLO_NOIDX; DRISC x: the DRISCs read them)
                 mine = false;
 #endif
                 if (mine) {
@@ -161,9 +185,20 @@ void kernel_main() {
                         cb_reserve_back(rm_cb, 32 * batch);
 #endif
                         l1 = get_write_ptr(rm_cb);
+#ifdef XRD_DRISC
+                        *rsv = ++n_rsv;  // (the DRISCs may write this batch's chunks now)
+#endif
                     }
                     const uint32_t dst = l1 + in_batch * 32 * seg;
                     const uint32_t r0 = s * mt * 32 + m * 32;
+#ifdef XRD_DRISC
+                    (void)dst;
+                    arr_need[xq++ % rmc] += r0 < count ? (count - r0 < 32 ? count - r0 : 32) : 0;
+                    if (++in_batch == batch) {
+                        flush();
+                    }
+                    continue;
+#endif
 #ifdef XRD_SKIP_READS
                     // perf experiment only: no DRAM traffic (the tiles are garbage)
                     for (uint32_t r = 0; r < XRD_SKIP_READS && r0 + r < count; ++r) {
