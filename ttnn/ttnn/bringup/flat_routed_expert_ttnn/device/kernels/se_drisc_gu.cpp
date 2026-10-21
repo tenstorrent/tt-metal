@@ -207,8 +207,15 @@ void kernel_main() {
             J.ub = n_real > 1 && J.rg % 2 == 0 ? 2 : 1;
 #endif
             J.ns = room / (J.ub * J.blk);
-            J.ns = J.ns > 7 ? 7 : J.ns;  // (transaction ids 1-7 / 8-14 per job)
-            J.trid0 = 1 + 7 * k;
+#ifndef SE_DRISC_NS_MAX
+#define SE_DRISC_NS_MAX 7
+#endif
+            // (transaction ids 1-7 / 8-14 per job; probe SE_DRISC_NS_MAX up to 14: one real job takes ids 1-14, so
+            // more units in flight when its L1 room holds more than 7)
+            const uint32_t ns_max =
+                SE_DRISC_NS_MAX > 7 && n_real == 1 ? (SE_DRISC_NS_MAX > 14 ? 14 : SE_DRISC_NS_MAX) : 7;
+            J.ns = J.ns > ns_max ? ns_max : J.ns;
+            J.trid0 = ns_max > 7 ? 1 : 1 + 7 * k;
             J.units = n_load * J.per_e * (J.rg / J.ub);
             J.rd = J.wr = J.fl = J.sn = 0;
             left += J.units;

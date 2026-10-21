@@ -1208,3 +1208,27 @@ x 61 / 123 us, y 61 / 123 us (M 80 / 160) -> 1450 / 1573 us (1389 / 1450 without
 Options: fewer RISC cycles a block on the DRISC (no ack wait per unit, batched flushes, a multicast write where a block
 goes to G > 1 receivers, fewer grant refreshes on tile 1); UB from the call's rows (2 at small M, 1 above); the tail at
 large M.
+
+### What limits the DRISC tile (GLM-5.3, same recipe; x off = XRD_SKIP + XMC_NODATA, no y = YRM_NOWRITE)
+Corrections to the entry above: GLM-5.3's DRISC blocks are 9216 B (R 4 receivers, G 1), and the DRISC tiles carry
+only gate/up (453 MB a call; the down cores read their own 226 MB): 3072 units of one block per tile per call, 28.3 MB
+a tile -> 17.6 GB/s a tile in the real path (16 tiles), 20.2 when it only forwards.
+| variant (us, M 80 / 160) | x on, no y | x off, no y |
+| UB 1 (default) | 1617 / 1785 | 1608 / 1737 |
+| DRISC loop only (W_NOREAD + W_NOFWD: no DMA, no writes, the grant / flush / semaphore protocol) | - | 840 / 1419 |
+| units in flight 7 -> 9 (new probe MIMO_FL_DRISC_NS_MAX=14: one job a tile takes transaction ids 1-14; the L1 room, 91 KB, holds 9) | - | 1608 / 1737 |
+| UB 2 (4 units of 18 KB in flight) | 1561 / 1868 | 1412 / 1747 |
+| read only (no forwarding) | - | 1385 / 1420 |
+- Not bandwidth (each half alone at the floor), not units in flight (7 -> 9 changes nothing), not the slow write path
+  (BH NOC_MAX_BURST_SIZE 16 KB: a 9 KB block is one fast_write), not the loop's bookkeeping alone (840 us).
+- Per unit: UB 2 halves the DMAs, the flush checks and the passes (the writes and semaphore increments stay one per
+  receiver) and takes M 80 x off from 1608 to 1412, the read-only time. So the tile's limit is its RISC's per-unit
+  work: the DRISC profile's ~1000 cycles a unit are mostly register (MMIO) accesses to its DMA engine and NIU - issuing
+  the DMA and polling its outstanding count (DMA section ~230), the write command (~200), polling the transaction id's
+  ack counter + the semaphore increment (~175).
+- With x on, UB 2 gains only 1617 -> 1561: the next limit is x (the relays' NOC1 DRAM reads against the bank's
+  NOC1-endpoint DRISC tile, drisc-endpoint-tile memory), which UB 1 hid. M 160 is bound elsewhere: no weights moved at
+  all (loop only) is already 1419.
+Next: UB 2 where the rows are few (per call, like the ALT_MAXCNT switch); fewer MMIO accesses a unit (outstanding-count
+polls only when the slots are full, one flush poll for several units, one semaphore increment of n); then the x / NOC1
+conflict, which caps what UB 2 can show with x on.
