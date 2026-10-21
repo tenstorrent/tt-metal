@@ -53,7 +53,7 @@ from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
+from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
@@ -474,7 +474,7 @@ class TtDSA(LightweightModule):
         self.w_absorb_o = up(wkb2.transpose(1, 2).reshape(1, H, L, Dv), weight_dtype, cols=1)
         self.w_o = up(sd["o_proj.weight"].t(), weight_dtype, cols=-2)  # [H*256, 4096] row-parallel
         self.indexer = TtDSAIndexer(
-            device, cfg, {k[len("indexer.") :]: v for k, v in sd.items() if k.startswith("indexer.")}
+            device, cfg, {k[len("indexer.") :]: v for k, v in sd.items() if k.startswith("indexer.")}, mesh=self.mesh
         )
         # Decode stem: the five narrow projections of x (q_a 1536 | kv_a 512 | indexer k 128 | pool gate 128 |
         # indexer head weights Hi) as ONE [4096 x 2336] matmul (74 column blocks on 74 cores; the separate
@@ -524,6 +524,7 @@ class TtDSA(LightweightModule):
         self._decode_cfgs: dict[int, ttnn.SDPAProgramConfig] = {}
         self._pad_cache: dict[tuple, ttnn.Tensor] = {}
         self._cu_windows: dict[int, ttnn.Tensor] = {}  # chunked-prefill SDPA window bounds per key length
+        self._slab_consts: dict[tuple, ttnn.Tensor] = {}  # slab-local prefill: per-row Q offsets / select masks
         self.sdpa_compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -675,18 +676,28 @@ class TtDSA(LightweightModule):
         return self._cu_windows[n_keys]
 
     def _dense_attention(
-        self, q: ttnn.Tensor, c: ttnn.Tensor, prefix: ttnn.Tensor | None = None, start: int = 0
+        self,
+        q: ttnn.Tensor,
+        c: ttnn.Tensor,
+        prefix: ttnn.Tensor | None = None,
+        start: int = 0,
+        *,
+        q_offset: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Causal attention of q [1,1,T,H*Dq] (rows at absolute positions ``start + i``) over the latent
         of the full prefix: ``prefix`` [1,1,start,L] (the user's cached rows before this chunk, None
-        when start == 0) followed by this chunk's c [1,1,T,L]; K/V are materialized from the latent.
-        With a prefix the SDPA runs in windowed mode (one window over all keys, Q offset ``start``),
-        which builds the causal mask on device at the global positions and is bit-identical to the
-        plain causal kernel's rows [start, start + T). Returns concat-heads v-space [1,1,T,H*Dv]."""
+        when start == 0) followed by this chunk's c [1,1,T_c,L] (T_c >= T: the chunk's latent rows up to
+        the last key the queries need); K/V are materialized from the latent. With a prefix the SDPA
+        runs in windowed mode (one window over all keys, Q offset ``start``), which builds the causal
+        mask on device at the global positions and is bit-identical to the plain causal kernel's rows
+        [start, start + T). ``q_offset``: the per-device form of the Q offset (a 1-element int32
+        ROW_MAJOR device tensor, row-sharded over a sequence-parallel mesh: the slab-local prefill), which
+        overrides ``start`` for the mask and forces the windowed mode. Returns concat-heads v-space
+        [1,1,T,H*Dv]."""
         T = q.shape[-2]
         H, Dq, Dv = self.H, self.Dq, self.Dv
         if prefix is not None:
-            c = ttnn.concat([prefix, c], dim=-2)  # [1,1,start+T,L]
+            c = ttnn.concat([prefix, c], dim=-2)  # [1,1,start+T_c,L]
         S = c.shape[-2]
         k = ttnn.linear(c, self.w_k_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,S,H*Dq]
         v = ttnn.linear(c, self.w_v_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,S,H*Dv]
@@ -697,7 +708,11 @@ class TtDSA(LightweightModule):
         vh = ttnn.transpose(ttnn.reshape(v, [1, S, H, Dv]), 1, 2)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        windowed = {} if start == 0 else {"cu_window_seqlens": self._cu_window(S), "windowed_q_token_offset": start}
+        windowed = {}
+        if start or q_offset is not None:
+            windowed = {"cu_window_seqlens": self._cu_window(S), "windowed_q_token_offset": start}
+            if q_offset is not None:
+                windowed["windowed_q_token_offset_tensor"] = q_offset
         o = ttnn.transformer.scaled_dot_product_attention(
             qh,
             kh,
@@ -728,7 +743,7 @@ class TtDSA(LightweightModule):
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
 
     def prefill_forward(
-        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0
+        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0, *, slab: bool = False
     ) -> ttnn.Tensor:
         """One user, one chunk: x row i is the token at absolute position ``start + i``
         (``start % block_size == 0``; ``start == 0`` = a new prompt). x [1,1,T_pad,4096] with
@@ -737,7 +752,12 @@ class TtDSA(LightweightModule):
         the pooled-key index for positions [start, start + seq_len) (the ring must hold the previous
         chunk's tail rows, i.e. chunks of a prompt are prefilled in order). Rows at absolute positions
         < 2048 run the dense causal attention over the full prefix (K/V from the cached latent rows +
-        this chunk's); rows from 2048 on use the indexer + sparse_sdpa, exactly as the single-shot path."""
+        this chunk's); rows from 2048 on use the indexer + sparse_sdpa, exactly as the single-shot path.
+        ``slab`` (multi-row mesh): ``x`` is THIS mesh row's slab [1,1,T_pad/rows,4096] of the chunk (row r
+        holds chunk rows [r*T_pad/rows, (r+1)*T_pad/rows)) and the result is the slab's output only
+        (``_prefill_slab``: the sequence-parallel form, no gathered hidden, no reduce-scatter)."""
+        if slab and self.mesh.rows > 1:
+            return self._prefill_slab(x, cache, user, seq_len, start)
         T = x.shape[-2]
         if start % cache.block_size:
             raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
@@ -812,23 +832,8 @@ class TtDSA(LightweightModule):
             if self.on_indices is not None:
                 self.on_indices(start + q0, indices)
             q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
-            q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(q_lat)
             self._mark("absorb_q")
-            o_rm = ttnn.transformer.sparse_sdpa(
-                self._pad_heads_rm(q_rm),
-                kv_rm,
-                indices,
-                v_dim=self.L,
-                kv_format=ttnn.transformer.SparseKVFormat.BF16,
-                scale=self.scale,
-                k_chunk_size=128,
-            )  # [1,H,q1-q0,L] row-major
-            self._mark("sparse_sdpa")
-            ttnn.deallocate(q_rm)
-            ttnn.deallocate(indices)
-            o_lat = self._unpad_heads(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
-            ttnn.deallocate(o_rm)
+            o_lat = self._sparse_attention(q_lat, kv_rm, indices)  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
             o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
             ttnn.deallocate(o_lat)
             self._mark("sparse_out")
@@ -851,6 +856,223 @@ class TtDSA(LightweightModule):
         y = self._o_proj(o)
         self._mark("out_proj")
         return y
+
+    # ------------------------------------------------------- slab-local sequence-parallel prefill
+    def _prefill_slab(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int) -> ttnn.Tensor:
+        """Sequence-parallel prefill of one chunk over the mesh rows, attention computed per slab: the chunk's
+        T rows are ``rows`` consecutive slabs, mesh row r holds slab r as ``x`` [1,1,T_loc,4096] (T_loc = T/rows)
+        and returns the attention output of ITS slab rows only [1,1,T_loc,4096] -- the rows ``prefill_forward``
+        would return for them from the gathered chunk, with no reduce-scatter and no 1/rows scaling. Every
+        row still receives the whole chunk's latent and index stems (all-gathered over the rows: [1,1,T,512]
+        + 2 x [1,1,T,128] bf16 instead of the hidden [1,1,T,4096]), so the replicated latent cache and
+        pooled-key index are filled exactly as in the single-row path. SPMD: every row runs the same ops
+        with the same shapes; what differs per row (the dense SDPA's Q offset, the scorer's causal bounds,
+        the tail ids, the dense/sparse row select) lives in row-sharded constant tensors built from the
+        chunk geometry (host ints, cached).
+
+        Row classes are by absolute position (dense below ``sparse_row_start``). A chunk entirely on one side
+        runs only that path per slab (exact, 1/rows of the v1 attention work). A mixed chunk (start < 2048 <
+        start + T) runs a uniform superset on every row: the dense SDPA over the first n_d = min(T_loc, split)
+        slab rows (an all-sparse row gets the last dense block's offset, so its throw-away rows cost one dense
+        block, never the whole prefix) and the sparse path over all T_loc slab rows (dense-position rows are
+        clamped to 2048 so they select a valid full pool prefix); a per-row 0/1 mask then keeps the dense
+        result for the rows below 2048. ``on_indices(row_starts, indices)`` receives the tuple of the rows'
+        query starts (true positions) instead of one start."""
+        mesh, rows = self.mesh, self.mesh.rows
+        T_loc = x.shape[-2]
+        T = T_loc * rows
+        if start % cache.block_size:
+            raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
+        end = start + seq_len
+        split = min(T, max(0, self.sparse_row_start - start))  # chunk rows [0, split) are dense
+        dense = [min(T_loc, max(0, split - r * T_loc)) for r in range(rows)]  # dense rows of slab r
+        n_d = max(dense)  # dense SDPA rows per slab (uniform over the rows) = min(T_loc, split)
+        if self.stage_timer is not None:
+            self.stage_timer.start()
+        q_resid = self._q_resid(x)
+        q = self._q(q_resid)  # [1,1,T_loc,H*Dq]
+        c_loc = self._latent(x)  # [1,1,T_loc,L]
+        k_loc, g_loc = self.indexer.keys_and_gates(x)  # [1,1,T_loc,D]
+        self._mark("prefill_stems")
+        c = mesh.all_gather_rows(c_loc, dim=2)  # [1,1,T,L]: the chunk's latent on every row (slabs in row order)
+        k_idx = mesh.all_gather_rows(k_loc, dim=2)
+        g_idx = mesh.all_gather_rows(g_loc, dim=2)
+        for t in (c_loc, k_loc, g_loc):
+            ttnn.deallocate(t)
+        self._mark("slab_gather")
+        cache.fill(c, user, start=start)
+        self._mark("cache_fill")
+        self.indexer.maintain_prefill(None, cache.index, user, seq_len, start=start, kg=(k_idx, g_idx))
+        self._mark("index_maintain")
+        o_dense = None
+        if n_d:
+            # keys: the cached prefix [0, start) ++ the chunk's latent up to the last key any slab's dense (or
+            # superset) rows need; the per-row Q offset tensor locates the slab's rows among them. An all-sparse
+            # row of a mixed chunk is pointed at the last dense block (its rows are discarded by the select).
+            S_c = min(T, split + n_d)
+            prefix = cache.user_rows(user, start) if start else None
+            offsets = tuple(start + (r * T_loc if dense[r] else split - n_d) for r in range(rows))
+            q_d = q if n_d == T_loc else ttnn.slice(q, [0, 0, 0, 0], [1, 1, n_d, self.H * self.Dq])
+            c_k = c if S_c == T else ttnn.slice(c, [0, 0, 0, 0], [1, 1, S_c, self.L])
+            o_dense = self._dense_attention(q_d, c_k, prefix, start, q_offset=self._row_offsets(offsets))
+            for t in (prefix, None if q_d is q else q_d, None if c_k is c else c_k):
+                if t is not None:
+                    ttnn.deallocate(t)
+            self._mark("dense_attention")
+        if split >= T:  # every slab row is dense
+            for t in (q_resid, q, c):
+                ttnn.deallocate(t)
+            y = self._o_proj(o_dense)
+            self._mark("out_proj")
+            return y
+        ttnn.deallocate(c)
+        # sparse rows: all T_loc slab rows in query sub-blocks (see prefill_forward); on a mixed chunk the rows
+        # below 2048 are scored at the clamped position 2048 (a valid full prefix) and dropped by the select
+        idx = self.indexer
+        if not idx.prefill_scorer_custom:
+            raise NotImplementedError("the slab-local prefill needs the custom scorer (GLM53_PREFILL_SCORER=custom)")
+        kv_rm = cache.user_rows_rm(user, start + T)
+        self._mark("kv_copy")
+        qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
+        o_parts = []
+        for q0 in range(0, T_loc, qb):
+            q1 = min(T_loc, q0 + qb)
+            whole = (q0, q1) == (0, T_loc)
+            x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
+            qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
+            q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=True)
+            if not whole:
+                ttnn.deallocate(x_s)
+                ttnn.deallocate(qr_s)
+            self._mark("index_queries")
+            row_starts = tuple(start + r * T_loc + q0 for r in range(rows))
+            indices = idx.select(
+                q_i,
+                w_i,
+                cache.index,
+                cache.index.prefill_slot(user),
+                query_start=start + q0,
+                num_pools_valid=end // idx.P,
+                q_rows_form=True,
+                row_starts=row_starts,
+                pos_floor=self.sparse_row_start,
+            )
+            ttnn.deallocate(q_i)
+            ttnn.deallocate(w_i)
+            if self.on_indices is not None:
+                self.on_indices(row_starts, indices)
+            q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
+            self._mark("absorb_q")
+            o_lat = self._sparse_attention(q_lat, kv_rm, indices)  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
+            o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
+            ttnn.deallocate(o_lat)
+            self._mark("sparse_out")
+        ttnn.deallocate(q_resid)
+        ttnn.deallocate(q)
+        ttnn.deallocate(kv_rm)
+        if len(o_parts) == 1:
+            o_sparse = o_parts[0]
+        else:
+            o_sparse = ttnn.concat(o_parts, dim=-2)  # [1,1,T_loc,H*Dv]
+            for part in o_parts:
+                ttnn.deallocate(part)
+        if o_dense is None:  # the whole chunk lies in the sparse region
+            y = self._o_proj(o_sparse)
+            self._mark("out_proj")
+            return y
+        o = self._select_rows(o_dense, o_sparse, dense)
+        ttnn.deallocate(o_dense)
+        ttnn.deallocate(o_sparse)
+        y = self._o_proj(o)
+        ttnn.deallocate(o)
+        self._mark("out_proj")
+        return y
+
+    def _sparse_attention(self, q_lat: ttnn.Tensor, kv_rm: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+        """``sparse_sdpa`` of the absorbed queries ``q_lat`` [1,H,n,L] TILE (H = this chip's heads) over the
+        ROW_MAJOR prefix copy ``kv_rm`` with the index rows ``indices`` [1,1,n,W] (replicated over the columns):
+        returns o_lat [1,H,n,L] TILE; ``q_lat`` and ``indices`` are consumed. The op wants H % 32 == 0; a
+        multi-column mesh whose head shard is thinner (16 heads at TP4) used to pad the heads to 32 (2x the
+        attention work). As ``models/demos/deepseek_v3_d_p`` ``_sparse_mla`` does, one all-to-all over the
+        columns instead hands column c EVERY head of sequence quarter c ([1,H_total,n/cols,L]), the index rows
+        are partitioned alike (a per-device slice, no traffic), the attention runs on full heads over a quarter
+        of the rows, and the inverse exchange restores the head shard for the per-head output projection.
+        Needs n % (32 * cols) == 0 (tile-aligned quarters); other sub-blocks, single columns and tile-aligned
+        head shards keep the direct form. ``GLM53_SPARSE_A2A=0`` keeps the padded form everywhere (A/B)."""
+        H, n = q_lat.shape[1], q_lat.shape[2]
+        cols = self.mesh.cols
+        a2a = cols > 1 and H % TILE != 0 and n % (TILE * cols) == 0 and os.environ.get("GLM53_SPARSE_A2A", "1") == "1"
+        if a2a:
+            q_x = self.mesh.all_to_all_cols(q_lat, in_dim=2, out_dim=1)  # [1,H*cols,n/cols,L]
+            ttnn.deallocate(q_lat)
+            q_rm = ttnn.to_layout(q_x, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(q_x)
+            idx = ttnn.mesh_partition(indices, 2, cluster_axis=TP_AXIS)  # [1,1,n/cols,W]: this column's quarter
+            ttnn.deallocate(indices)
+            self._mark("a2a_heads_to_seq")
+        else:
+            q_rm0 = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(q_lat)
+            q_rm = self._pad_heads_rm(q_rm0)
+            if q_rm is not q_rm0:
+                ttnn.deallocate(q_rm0)
+            idx = indices
+        o_rm = ttnn.transformer.sparse_sdpa(
+            q_rm,
+            kv_rm,
+            idx,
+            v_dim=self.L,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=self.scale,
+            k_chunk_size=128,
+        )  # [1,H',n',L] row-major
+        self._mark("sparse_sdpa")
+        ttnn.deallocate(q_rm)
+        ttnn.deallocate(idx)
+        o = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(o_rm)
+        if a2a:
+            o_lat = self.mesh.all_to_all_cols(o, in_dim=1, out_dim=2)  # [1,H,n,L]: the head shard back
+            ttnn.deallocate(o)
+            self._mark("a2a_seq_to_heads")
+            return o_lat
+        o_lat = self._unpad_heads(o)
+        if o_lat is not o:
+            ttnn.deallocate(o)
+        return o_lat
+
+    def _row_offsets(self, offsets: tuple[int, ...]) -> ttnn.Tensor:
+        """The windowed SDPA's per-device Q offset: mesh row r reads ``offsets[r]`` (a [1,1] int32 ROW_MAJOR
+        tensor per chip, row-sharded, replicated over the columns; cached per geometry)."""
+        key = ("qoff", offsets)
+        if key not in self._slab_consts:
+            t = torch.tensor(offsets, dtype=torch.int32).reshape(len(offsets), 1)
+            self._slab_consts[key] = self.mesh.upload(t, ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return self._slab_consts[key]
+
+    def _select_rows(self, o_dense: ttnn.Tensor, o_sparse: ttnn.Tensor, dense: list[int]) -> ttnn.Tensor:
+        """Mixed chunk: slab rows [0, dense[r]) of mesh row r come from ``o_dense`` [1,1,n_d,N], the rest from
+        ``o_sparse`` [1,1,T_loc,N] (n_d <= T_loc). The per-row 0/1 column mask [1,1,n_d,1] is a row-sharded
+        constant (cached per geometry); rows at and beyond n_d are sparse on every row."""
+        n_d, N = o_dense.shape[-2], o_dense.shape[-1]
+        T_loc = o_sparse.shape[-2]
+        key = ("select", n_d, tuple(dense))
+        if key not in self._slab_consts:
+            m = torch.zeros(len(dense), 1, n_d, 1)
+            for r, d in enumerate(dense):
+                m[r, 0, :d] = 1.0
+            self._slab_consts[key] = self.mesh.upload(m, ttnn.bfloat16, rows=0)
+        mask = self._slab_consts[key]
+        head_sparse = o_sparse if n_d == T_loc else ttnn.slice(o_sparse, [0, 0, 0, 0], [1, 1, n_d, N])
+        head = ttnn.where(mask, o_dense, head_sparse)
+        if n_d == T_loc:
+            return head
+        ttnn.deallocate(head_sparse)
+        tail = ttnn.slice(o_sparse, [0, 0, n_d, 0], [1, 1, T_loc, N])
+        out = ttnn.concat([head, tail], dim=-2)
+        ttnn.deallocate(head)
+        ttnn.deallocate(tail)
+        return out
 
     # ---------------------------------------------------------------------- decode
     def decode_forward(
