@@ -7,7 +7,7 @@ One run covers steps 3, 4 and 5 of #61416, with 4 users per row (the Phase 0 siz
 
 * **Step 3: same answer for two cuts, and passkey retrieval.** No fp32 golden exists at this length (the
   host would need hours for 48 layers). Each row prefills its own prompt twice: slot 0 in the baseline cut
-  (one shot at 32K; 16K-token chunks at 128K, where one shot does not fit), slot 1 in that row's chunk size
+  (one shot at 32K, 16K-token chunks at 128K), slot 1 in that row's chunk size
   (``CHUNKS``). Both must predict the same next token with near-equal logits and agree for the first
   ``AGREE_TOKENS`` greedy tokens. The prompt is filler text with a 5-digit pass key hidden at a different
   depth on each row (``DEPTHS``); greedy decode from both slots must say the key, which only works if
