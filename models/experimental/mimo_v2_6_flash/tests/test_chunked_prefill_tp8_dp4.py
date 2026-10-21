@@ -43,6 +43,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     cache_dir,
     dp_submeshes,
     load_config_and_ckpt,
+    model_path,
     pcc,
 )
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
@@ -86,23 +87,28 @@ CASES = {
 
 
 def reference_prefill(ref_layer, layer_idx, x):
-    """fp32 reference output and K/V history for one whole prompt, from ``MIMO_REF_CACHE`` when it is there."""
+    """fp32 reference output and K/V history for one whole prompt, from ``MIMO_REF_CACHE`` when it is there. Entries
+    are kept per checkpoint, as the TTNN weight cache is (the inputs are seeded the same for every checkpoint), and
+    one that records a different checkpoint, or none, is recomputed."""
     root = os.environ.get("MIMO_REF_CACHE")
     path = None
+    checkpoint = os.path.realpath(model_path())
     if root:
         digest = hashlib.sha1(x.numpy().tobytes()).hexdigest()[:16]
-        path = os.path.join(root, f"layer{layer_idx}_len{x.shape[0]}_{digest}.pt")
+        path = os.path.join(root, os.path.basename(checkpoint), f"layer{layer_idx}_len{x.shape[0]}_{digest}.pt")
         if os.path.exists(path):
             saved = torch.load(path)
-            hist = ref.KVHistory()
-            hist.k, hist.v, hist.pos = saved["k"], saved["v"], saved["pos"]
-            return saved["y"], hist
+            if saved.get("checkpoint") == checkpoint:
+                hist = ref.KVHistory()
+                hist.k, hist.v, hist.pos = saved["k"], saved["v"], saved["pos"]
+                return saved["y"], hist
+            logger.warning(f"{path} was made from {saved.get('checkpoint')}, not {checkpoint}; recomputing")
     hist = ref.KVHistory()
     with torch.no_grad():
         y = ref_layer(x, torch.arange(x.shape[0]), hist)
     if path:
-        os.makedirs(root, exist_ok=True)
-        torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos), path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos, checkpoint=checkpoint), path)
     return y, hist
 
 

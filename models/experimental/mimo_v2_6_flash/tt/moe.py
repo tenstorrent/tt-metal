@@ -458,8 +458,14 @@ class TtMiMoMoE:
     def forward(self, x, token_mask=None, decode=False):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
         assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
-        if not decode and x.shape[-2] > PREFILL_MAX_TOKENS:
-            return self._forward_slices(x, token_mask)
+        if decode or x.shape[-2] <= PREFILL_MAX_TOKENS:
+            out = self._partial(x, token_mask, decode)
+        else:
+            out = self._partial_slices(x, token_mask)
+        return self.plan.all_reduce(out)
+
+    def _partial(self, x, token_mask, decode=False):
+        """This chip's share of the routed-expert output [1, 1, T, hidden], before the row all-reduce."""
         logits = self._router_logits(x, prefill=not decode)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
@@ -470,11 +476,13 @@ class TtMiMoMoE:
         out = self.prefill_experts(x, indices, weights)
         indices.deallocate(True)
         weights.deallocate(True)
-        return self.plan.all_reduce(out)
+        return out
 
-    def _forward_slices(self, x, token_mask):
-        """A prefill chunk longer than PREFILL_MAX_TOKENS, in slices of at most that many tokens. Each token's output
-        is the same as in one call: the router's K blocking does not change with T, and the experts work per token."""
+    def _partial_slices(self, x, token_mask):
+        """_partial of a prefill chunk longer than PREFILL_MAX_TOKENS, in slices of at most that many tokens. Each
+        token's partial is the same as in one call: the router's K blocking does not change with T, and the experts
+        work per token. The caller all-reduces the whole chunk once, so the reduce sees the same rows as without
+        slicing (MeshPlan.prefill_reduce)."""
         T, H = x.shape[-2], x.shape[-1]
         outs = []
         for s in range(0, T, PREFILL_MAX_TOKENS):
@@ -485,7 +493,7 @@ class TtMiMoMoE:
                 ms = ttnn.slice(
                     token_mask, [0, 0, s, 0], [1, 1, e, token_mask.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
-            outs.append(self.forward(xs, ms))
+            outs.append(self._partial(xs, ms))
             xs.deallocate(True)
             if ms is not None:
                 ms.deallocate(True)

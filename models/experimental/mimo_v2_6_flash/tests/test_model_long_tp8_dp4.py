@@ -15,9 +15,10 @@ One run covers steps 3, 4 and 5 of #61416, with 4 users per row (the Phase 0 siz
 * **Step 5: DP=4.** Slot 2 holds the same prompt on every row, cut the same way. All four rows must give
   the same logits and the same greedy text.
 * **Step 4: memory.** DRAM per chip is logged after the weights, after the KV caches for 4 users, and after
-  prefill. Then row 0 runs one prefill chunk of each larger size in slot 3, until one does not fit. The SWA
-  pool no longer depends on the chunk size (``kv.swa_blocks_per_user``), so only prefill activations grow.
-  The largest that ran is logged.
+  prefill. Then, after decode, row 0 runs one prefill chunk of each size in slot 3, from vLLM's 4096 up, until
+  one does not fit (decode keeps L1 buffers that a prefill program's circular buffers must not reach). The
+  largest that ran is logged, and 4096 must run. The SWA pool does not depend on the chunk size
+  (``kv.swa_blocks_per_user``), so only prefill activations grow.
 
 Each case builds its own generator, because ``max_seq_len`` sizes the KV caches. Prefill wall time is
 logged; tuning it is #61418.
@@ -43,6 +44,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
 )
 from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 from models.experimental.mimo_v2_6_flash.tt.model import TtMiMoModel
+from models.experimental.mimo_v2_6_flash.tt.moe import PREFILL_MAX_TOKENS
 
 USERS = 4  # decode slots per row: 0 baseline cut, 1 the row's chunk size, 2 the shared prompt, 3 the chunk probe
 BASE, CHUNKED, SHARED, PROBE = range(USERS)
@@ -53,6 +55,7 @@ SHARED_DEPTH = 0.50
 GREEDY_TOKENS = 12
 AGREE_TOKENS = 4
 DECODE_ROOM = 512  # positions after the prompt, for decode
+SERVING_CHUNK = 4096  # the largest prefill chunk vLLM sends (generator_vllm)
 
 
 @dataclass(frozen=True)
@@ -66,8 +69,9 @@ class Case:
 
     @property
     def probe_chunks(self):
-        """Chunk sizes above the baseline, up to the whole prompt, for the step-4 probe."""
-        sizes, c = [], self.base_chunk * 2
+        """Chunk sizes for the step-4 probe, smallest first: vLLM's chunk, one MoE slice, the baseline, then doubling
+        up to the whole prompt."""
+        sizes, c = sorted({SERVING_CHUNK, PREFILL_MAX_TOKENS, self.base_chunk}), self.base_chunk * 2
         while c <= self.prompt_len:
             sizes.append(c)
             c *= 2
@@ -215,9 +219,10 @@ def test_model_long_tp8_dp4(mesh_device, case_name, monkeypatch):
             f"({m['total'] - m['with_kv']:.2f} GB free for prefill scratch)"
         )
 
-    # ---- step 4: the largest prefill chunk that fits (row 0; every row has the same layout)
+    # ---- step 4: the largest prefill chunk that runs after decode (row 0; every row has the same layout). Decode keeps
+    # L1 buffers allocated that a prefill program's static circular buffers must not reach into.
     model = gen.models[0]
-    largest = case.base_chunk
+    largest = None
     for chunk in case.probe_chunks:
         try:
             t0 = time.time()
@@ -230,8 +235,9 @@ def test_model_long_tp8_dp4(mesh_device, case_name, monkeypatch):
                 raise
             logger.info(f"{case_name} probe: a {chunk}-token chunk does not fit: {str(err).splitlines()[0][:200]}")
             break
-    logger.info(f"{case_name}: largest prefill chunk that fits with KV for {USERS} users: {largest}")
+    logger.info(f"{case_name}: largest prefill chunk that runs after decode, with KV for {USERS} users: {largest}")
 
+    assert largest is not None and largest >= SERVING_CHUNK, f"a {SERVING_CHUNK}-token chunk must run after decode"
     assert same_top1, "the two cuts predicted different next tokens"
     assert worst_pcc > 0.99, worst_pcc
     assert agree, f"greedy decode of the two cuts diverged within {AGREE_TOKENS} tokens"

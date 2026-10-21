@@ -48,6 +48,7 @@ import ttnn
 
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
+from .attention import page_table_width
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
@@ -236,7 +237,8 @@ class MiMoV2ForCausalLM:
         for i, (_, _, t) in enumerate(per_layer_specs):
             assert (groups[i], t) not in seen, f"layer {i}: two layers of group {groups[i]} share buffer {t}"
             seen.add((groups[i], t))
-        table_width = min(math.ceil(self.max_seq_len / block_size), num_blocks)
+        # vLLM trims its tables to the pool; the padding entries stay 0 (its null block, set_vllm_page_tables).
+        table_width = page_table_width(min(math.ceil(self.max_seq_len / block_size), num_blocks))
         self.layer_groups = groups
         self.kv_caches = []
         for model in self.models:

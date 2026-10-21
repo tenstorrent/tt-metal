@@ -28,7 +28,7 @@ import ttnn
 
 from ..reference.model import load_layer_weights
 from . import kv as kv_lib
-from .attention import TtMiMoAttention
+from .attention import TtMiMoAttention, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
@@ -254,9 +254,7 @@ class TtMiMoModel:
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
         self.kv_caches, tables = [], {}
-        # SwaDecodeQkv reads a page table row in 64 B pieces, so the width is padded to 16 blocks; the entries past
-        # max_seq_len are never read.
-        max_blocks = pad_to(self.max_seq_len // self.block_size, 16)
+        max_blocks = page_table_width(self.max_seq_len // self.block_size)
         swa_layers = [layer for layer in self.layers if layer.is_swa]
         self.swa_table = None
         if swa_layers:
