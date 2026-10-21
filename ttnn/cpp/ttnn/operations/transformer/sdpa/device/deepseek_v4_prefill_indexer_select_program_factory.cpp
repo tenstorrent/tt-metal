@@ -170,9 +170,9 @@ tt::tt_metal::ProgramDescriptor DeepseekV4PrefillIndexerSelectOperation::Program
     tt::tt_metal::TensorAccessorArgs(cand_scratch_buf).append_to(writer_ct, writer_crt);
 
     const std::vector<uint32_t> compute_ct = {
-        H,          Dt,        splits,       cb_q,      cb_w,        cb_k_rm,      cb_k,       cb_qk,
-        cb_scores,  cb_neginf, cb_surv_v,    cb_surv_i, cb_peer,     cb_out,       cb_meta,    cb_done,
-        candidates, cb_group,  cb_group_ack, cb_stage,  cb_csurv_in, cb_csurv_out, cb_cand_out};
+        H,          Dt,        splits,       cb_q,      cb_w,        cb_k_rm,      cb_k,        cb_qk,
+        cb_scores,  cb_neginf, cb_surv_v,    cb_surv_i, cb_peer,     cb_out,       cb_meta,     cb_done,
+        candidates, cb_group,  cb_group_ack, cb_stage,  cb_csurv_in, cb_csurv_out, cb_cand_out, 0 /*pool*/};
     TT_FATAL(
         compute_ct.size() == dis::compute_ct_arg::END,
         "deepseek_v4_prefill_indexer_select compute compile-time argument layout is out of sync");
