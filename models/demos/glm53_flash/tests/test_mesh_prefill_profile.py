@@ -399,6 +399,7 @@ def test_mesh_prefill_chunk_profile(mesh_device):
     timer = _ModuleTimer(mesh_device, sync=True, signposts=TRACY)
     out_streams = {}
     for variant in PASSES:
+        model.reset_kda_states()  # every pass continues the same (zero) KDA carries: identical outputs across passes
         if variant == "attributed":
             _install_labels(model, timer)
         if TRACY:

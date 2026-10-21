@@ -59,6 +59,21 @@ from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 
 TILE = 32
+# prefill (T > 32 gathered tokens) routed-expert path of the hybrid layout: "blocks" = one sparse_matmul pair per 32-token
+# block (the stage-1 path); "batched" = the same kernels over GLM53_PREFILL_BLOCK_GROUP blocks per call (the
+# deepseek_v3 Galaxy prefill form of sparse_matmul: [1, G, 32, K] x [1, E, K, N] with a [1, G, 1, E] mask, then
+# [G, E, 32, K] x [1, E, K, N] with a [1, 1, G, E] mask); "dispatch" = the deepseek_v3_d_p Blackhole prefill expert
+# kernels on a one-chip dispatch group per column (masked_bincount -> region offsets -> dispatch -> ONE
+# unified_routed_expert_moe program over the chip's experts (every weight read once, ClampedSiluGlu) -> combine ->
+# post_combine_reduce, every chip dispatching its gathered tokens to itself along the row axis); the routed partial
+# then takes the hybrid layout's reduce-scatter / all-reduce as before
+# "regions" = the same d_p expert kernel (unified_routed_expert_moe + post_combine_reduce) on a region buffer built
+# WITHOUT the fabric dispatch/combine (every chip of the hybrid layout already holds the gathered tokens): the router's
+# dense matrix -> per-expert ranks (cumsum over the tokens) and tile-aligned region offsets (cumsum over the experts) ->
+# the position of every (token, pick) -> ttnn.embedding gathers the token rows into the regions, the kernel runs, a
+# second ttnn.embedding gathers every pick's output row back, post_combine_reduce applies the routing weights
+PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+PREFILL_BLOCK_GROUP = int(os.environ.get("GLM53_PREFILL_BLOCK_GROUP", "32"))
 
 
 def _compute(device, fidelity=ttnn.MathFidelity.HiFi2, packer_l1_acc=True):
@@ -252,7 +267,9 @@ class TtRouter(LightweightModule):
             ttnn.deallocate(w)
             ttnn.deallocate(idx)
             return None, None, dense
-        return w, ttnn.typecast(idx, ttnn.float32), dense
+        idx32 = ttnn.typecast(idx, ttnn.float32)
+        ttnn.deallocate(idx)
+        return w, idx32, dense
 
     def _dense_zeros(self, T: int) -> ttnn.Tensor:
         key = ("zeros", T)
@@ -531,6 +548,10 @@ class TtRoutedExperts(LightweightModule):
             self.w2 = self.mesh.upload_cached(
                 make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
             )
+        self.prefill_experts = PREFILL_EXPERTS if not (dense or stream) else "blocks"
+        self._dispatch = None
+        if self.prefill_experts in ("dispatch", "regions"):
+            self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
         self.select = (
             None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
@@ -542,6 +563,7 @@ class TtRoutedExperts(LightweightModule):
         self.grid = (grid.x, grid.y)
         self.compute = _compute(device)
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
+        self._const_cache: dict = {}
 
     def _block(self, xb: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
         """One token block (<= 32 rows). xb [1,1,M,H] bf16, dense_w [1,1,M,E] bf16 (fp32 costs two
@@ -697,19 +719,362 @@ class TtRoutedExperts(LightweightModule):
             ttnn.deallocate(t)
         return out
 
-    def forward(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
+    # ------------------------------------------------------------- prefill: batched sparse blocks
+    def _forward_batched(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
+        """All T gathered tokens (T % 32 == 0) through the block-sparse kernels in groups of
+        ``PREFILL_BLOCK_GROUP`` 32-token blocks per call (the deepseek_v3 Galaxy prefill form): gate|up
+        ``[1, G, 32, H] x [1, E, H, 2I]`` under the ``[1, G, 1, E]`` activity mask, the activation and routing
+        weights on ``[G, E, 32, I]``, down ``[G, E, 32, I] x [1, E, I, H]`` under the ``[1, 1, G, E]`` mask, the
+        expert sum. Same kernels and program configs as ``_block`` (the active experts' weights are still
+        streamed once per 32-token block); G x fewer op launches and the per-block glue batched."""
+        E, H, I = self.E_local, self.H, self.I_local
+        T = x.shape[-2]
+        if self.select is not None:
+            sel = self.select if dense_w.dtype == ttnn.float32 else self.select_bf16
+            dense_w = ttnn.matmul(dense_w, sel, dtype=dense_w.dtype, compute_kernel_config=self.fp32)
+        if dense_w.dtype != self.activation_dtype:
+            dense_w = ttnn.typecast(dense_w, self.activation_dtype)
+        nb = T // TILE
+        xb = ttnn.reshape(x, [1, nb, TILE, H])
+        wb = ttnn.reshape(dense_w, [1, nb, TILE, E])
+        cfg_gu = sparse_matmul_config(self.grid, TILE, 2 * I, H)
+        cfg_down = sparse_matmul_config(self.grid, TILE, H, I)
+        outs = []
+        for g0 in range(0, nb, PREFILL_BLOCK_GROUP):
+            g1 = min(nb, g0 + PREFILL_BLOCK_GROUP)
+            G = g1 - g0
+            whole = (g0, g1) == (0, nb)
+            xg = xb if whole else ttnn.slice(xb, [0, g0, 0, 0], [1, g1, TILE, H])
+            wg = wb if whole else ttnn.slice(wb, [0, g0, 0, 0], [1, g1, TILE, E])
+            active = ttnn.sum(wg, dim=-2, keepdim=True)  # [1, G, 1, E] bf16: nonzero = active in that block
+            sparsity = ttnn.to_layout(active, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(active)
+            gu = ttnn.sparse_matmul(
+                xg,
+                self.w13,
+                sparsity=sparsity,
+                nnz=None,
+                is_input_a_sparse=False,
+                is_input_b_sparse=True,
+                program_config=cfg_gu,
+                dtype=self.activation_dtype,
+                compute_kernel_config=self.compute,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [1, G, 1, E, 32, 2I]
+            gu = ttnn.reshape(gu, [G, E, TILE, 2 * I])
+            gate = ttnn.slice(gu, [0, 0, 0, 0], [G, E, TILE, I])
+            up = ttnn.slice(gu, [0, 0, 0, I], [G, E, TILE, 2 * I])
+            ttnn.deallocate(gu)
+            h = ttnn.clamped_silu_glu(gate, up, self.limit)  # [G, E, 32, I]
+            ttnn.deallocate(gate)
+            ttnn.deallocate(up)
+            w_cols = ttnn.permute(wg, (1, 3, 2, 0))  # [G, E, 32, 1]
+            h = ttnn.multiply(h, w_cols, output_tensor=h)
+            ttnn.deallocate(w_cols)
+            sparsity_a = ttnn.reshape(sparsity, [1, 1, G, E])  # the same mask in the [A, E] form
+            down = ttnn.sparse_matmul(
+                h,
+                self.w2,
+                sparsity=sparsity_a,
+                nnz=None,
+                is_input_a_sparse=True,
+                is_input_b_sparse=False,
+                program_config=cfg_down,
+                dtype=self.activation_dtype,
+                compute_kernel_config=self.compute,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [G, E, 32, H]
+            ttnn.deallocate(h)
+            ttnn.deallocate(sparsity)
+            y = ttnn.sum(down, dim=1, keepdim=True)  # [G, 1, 32, H]
+            ttnn.deallocate(down)
+            outs.append(ttnn.reshape(y, [1, 1, G * TILE, H]))
+            if not whole:
+                ttnn.deallocate(xg)
+                ttnn.deallocate(wg)
+        if len(outs) == 1:
+            return outs[0]
+        y = ttnn.concat(outs, dim=-2)
+        for o in outs:
+            ttnn.deallocate(o)
+        return y
+
+    # ------------------------------------------------------- prefill: one-chip dispatch + unified expert kernel
+    def _build_dispatch_path(self, fabric: bool = True):
+        """Per-expert weight tensors (the ``unified_routed_expert_moe`` contract: one ``[H, I_local]`` gate, one
+        up and one ``[I_local, H]`` down per local expert, DRAM interleaved) sliced out of the stacked hybrid
+        tensors, which are then released (this path serves prefill; the stacked form is the decode block path's,
+        so a model that needs both keeps two copies: a follow-up). Plus the routing constants: the chip's dispatch
+        table (``0`` on its experts, ``-1`` elsewhere: a one-chip dispatch group), the local -> global expert ids."""
+        E, E_loc, H, I = self.E, self.E_local, self.H, self.I_local
+        cols = self.mesh.cols
+        gate, up, down = [], [], []
+        for e in range(E_loc):
+            g = ttnn.slice(self.w13, [0, e, 0, 0], [1, e + 1, H, I])
+            u = ttnn.slice(self.w13, [0, e, 0, I], [1, e + 1, H, 2 * I])
+            d = ttnn.slice(self.w2, [0, e, 0, 0], [1, e + 1, I, H])
+            gate.append(ttnn.reshape(g, [H, I]))
+            up.append(ttnn.reshape(u, [H, I]))
+            down.append(ttnn.reshape(d, [I, H]))
+        ttnn.deallocate(self.w13)
+        ttnn.deallocate(self.w2)
+        self.w13 = self.w2 = None
+        # The dispatch / combine ops are fabric ops along one mesh axis: a device is "chip i" of its dispatch group
+        # by its index along that axis, and they refuse a device without neighbours (a 1x1 mesh). The hybrid layout
+        # needs every chip to keep ITS gathered tokens for ITS expert slices, so the group is the row axis (the
+        # mesh rows, every chip the only source of its own tokens) and chip (r, c)'s table sends its experts
+        # [c*E_loc, (c+1)*E_loc) to chip r = itself (every write a local NOC write, the fabric links idle); the
+        # other columns' experts are absent (-1) and never counted / dispatched. Single-row meshes are refused.
+        rows = self.mesh.rows
+        if fabric and rows < 2:
+            raise ValueError(
+                "GLM53_PREFILL_EXPERTS=dispatch needs a multi-row mesh (the dispatch op wants fabric neighbours)"
+            )
+        table = torch.full((rows, cols, 1, E), -1, dtype=torch.int32)
+        gidx = torch.zeros(rows, cols, 1, E_loc, dtype=torch.int32)
+        for r in range(rows):
+            for c in range(cols):
+                table[r, c, 0, c * E_loc : (c + 1) * E_loc] = r
+                gidx[r, c, 0] = torch.arange(c * E_loc, (c + 1) * E_loc)
+        self._dispatch = {
+            "gate": gate,
+            "up": up,
+            "down": down,
+            "table": self.mesh.upload(
+                table, ttnn.int32, rows=0, cols=1, layout=ttnn.ROW_MAJOR_LAYOUT
+            ),  # [1,1,1,E] per chip
+            "gidx": self.mesh.upload(gidx, ttnn.uint32, rows=0, cols=1, layout=ttnn.ROW_MAJOR_LAYOUT),  # [1,1,1,E_loc]
+            "table_1d": None,
+            "group": rows,
+            "axis": 0,
+            "fabric": fabric,
+        }
+        # the region path's routing constant: the chip's expert mask as an fp32 row (1 on its experts)
+        self._dispatch["mask"] = self.mesh.upload((table >= 0).float(), ttnn.float32, rows=0, cols=1)  # [1,1,1,E]
+        self._dispatch["table_rm"] = ttnn.reshape(self._dispatch["table"], [1, E])
+        self._dispatch["table_1d"] = ttnn.reshape(self._dispatch["table"], [E])
+        self._dispatch["gidx_rm"] = ttnn.reshape(self._dispatch["gidx"], [1, E_loc])
+        self.dispatch_max_tokens = int(os.environ.get("GLM53_DISPATCH_MAX_TOKENS", "0"))  # 0 = T * k
+
+    def _forward_dispatch(self, x: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
+        """x [1,1,T,H] bf16 TILE (all gathered tokens, T % 64 == 0), idx / w [1,1,T,k] fp32 TILE (the router's
+        global expert ids as exact integers and their normalized weights) -> [1,1,T,H] bf16 TILE: the chip's
+        expert partial. The deepseek_v3_d_p Blackhole prefill expert pipeline on a one-chip dispatch group:
+        masked_bincount (counts of the chip's experts) -> tile-aligned exclusive prefix sum (fp32 cumsum, exact
+        integers) = the expert region offsets -> dispatch (NOC gather of every token's rows into its experts'
+        regions, metadata for the combine) -> unified_routed_expert_moe (every local expert's gate / up /
+        ClampedSiluGlu / down on its region, weights read once) -> combine (back to token order, one slot per
+        top-k pick) -> post_combine_reduce (the routing weights, the sum over the picks)."""
+        d = self._dispatch
+        E, E_loc, H, k = self.E, self.E_local, self.H, idx.shape[-1]
+        T = x.shape[-2]
+        # routing tensors in the kernels' formats
+        idx_u32 = ttnn.typecast(idx, ttnn.uint32)
+        idx_u16 = ttnn.typecast(idx_u32, ttnn.uint16)  # [1,1,T,k] TILE
+        ttnn.deallocate(idx_u32)
+        counts = ttnn.experimental.deepseek_prefill.masked_bincount(
+            ttnn.reshape(idx_u16, [T, k]), d["table_rm"], E, k
+        )  # [E] uint32: the chip's experts' token counts, 0 elsewhere
+        counts_rm = ttnn.reshape(counts, [1, E])
+        # tile-aligned exclusive prefix sum over the experts (fp32 TILE: integer sums < 2^24 are exact)
+        cf = ttnn.to_layout(ttnn.typecast(ttnn.reshape(counts, [1, 1, 1, E]), ttnn.float32), ttnn.TILE_LAYOUT)
+        aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(cf, TILE - 1), 1.0 / TILE)), float(TILE))
+        incl = ttnn.cumsum(aligned, dim=-1)
+        excl = ttnn.subtract(incl, aligned)
+        excl_u32 = ttnn.typecast(excl, ttnn.uint32)
+        offsets = ttnn.reshape(ttnn.to_layout(excl_u32, ttnn.ROW_MAJOR_LAYOUT), [1, E])
+        for t in (cf, aligned, incl, excl, excl_u32):
+            ttnn.deallocate(t)
+        max_buf = self.dispatch_max_tokens or (T * k + E_loc * TILE)
+        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, T, H])
+        idx_rm = ttnn.reshape(ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT), [1, T, k])  # dispatch + reduce ids
+        ttnn.deallocate(idx_u16)
+        buf, meta = ttnn.experimental.deepseek_prefill.dispatch(
+            x_rm,
+            idx_rm,
+            offsets,
+            d["table_rm"],
+            dispatch_group_size=d["group"],
+            experts_per_chip=E_loc,
+            num_routed_experts=E,
+            num_experts_per_tok=k,
+            metadata_len=3,
+            max_dispatch_buffer_token_size=max_buf,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=d["axis"],
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        ttnn.deallocate(x_rm)
+        out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            ttnn.reshape(buf, [max_buf, H]),
+            offsets,
+            counts_rm,
+            d["gidx_rm"],
+            d["gate"],
+            d["up"],
+            d["down"],
+            self.dispatch_max_tokens or T,
+            compute_kernel_config=self.compute,
+            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+        )  # [max_buf, H] bf8 TILE
+        ttnn.deallocate(buf)
+        comb = ttnn.experimental.deepseek_prefill.combine(
+            ttnn.reshape(out, [1, 1, max_buf, H]),
+            meta,
+            counts_rm,
+            offsets,
+            dispatch_group_size=d["group"],
+            experts_per_chip=E_loc,
+            num_experts_per_tok=k,
+            seq_len_per_chip=T,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=d["axis"],
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            init_zeros=True,
+        )  # [1, 1, T, k, H] bf16 ROW_MAJOR, zeros at the other columns' experts
+        ttnn.deallocate(out)
+        ttnn.deallocate(meta)
+        # the reduce's conventions (deepseek_v3_d_p tt_reduce.py): weights [1, 1, T, k, 1] bf16 ROW_MAJOR, the
+        # uint16 ids of the dispatch, the dispatch table as the 1-D [E] int32 row
+        w16 = ttnn.typecast(w, ttnn.bfloat16)
+        w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1, 1, T, k, 1]
+        ttnn.deallocate(w16)
+        y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            comb, w_rm, idx_rm, d["table_1d"], expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1, 1, T, H] TILE
+        for t in (comb, w_rm, idx_rm, counts, offsets):
+            ttnn.deallocate(t)
+        if y.dtype != self.activation_dtype:
+            y = ttnn.typecast(y, self.activation_dtype)
+        return y
+
+    def _forward_regions(self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
+        """x [1,1,T,H] bf16 TILE (all gathered tokens), dense_w [1,1,T,E] (the router's dense routing matrix, nonzero
+        at the picks), idx / w [1,1,T,k] fp32 TILE -> [1,1,T,H] bf16: the chip's expert partial through the d_p
+        ``unified_routed_expert_moe`` kernel on a region buffer built with plain ttnn ops (no fabric):
+        onehot[t, e] = (dense_w != 0) x the chip's expert mask; counts[e] = sum_t; rank[t, e] = cumsum over t;
+        offsets[e] = tile-aligned exclusive cumsum over e; pos[t, e] = offsets[e] + rank[t, e] - 1 at the local picks;
+        the picks' positions / local flags gathered at idx; the slot -> token map by one scatter, ``ttnn.embedding``
+        gathers the token rows into the regions; the kernel; ``ttnn.embedding(pos, y_rows)`` = every pick's output
+        row; ``post_combine_reduce`` with the routing weights zeroed at the non-local picks (its zero-weight skip)."""
+        d = self._dispatch
+        E, E_loc, H, k = self.E, self.E_local, self.H, idx.shape[-1]
+        T = x.shape[-2]
+        onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dense_w, 0.0), ttnn.float32), d["mask"])  # [1,1,T,E] fp32 0/1
+        counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)  # [1,1,1,E]
+        rank = ttnn.cumsum(onehot, dim=-2)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
+        aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(counts_f, TILE - 1), 1.0 / TILE)), float(TILE))
+        incl = ttnn.cumsum(aligned, dim=-1)
+        offsets_f = ttnn.subtract(incl, aligned)  # [1,1,1,E] exclusive, tile-aligned
+        max_buf = self.dispatch_max_tokens or (T * k + E_loc * TILE)
+        # pos[t, e] = offsets[e] + rank[t, e] - 1 at the local picks; the non-local picks go to the dummy slot
+        # max_buf - 1, which no region reaches (the tile-aligned regions total at most T*k + E_loc*31 rows), so
+        # they never overwrite a region row (slot 0 is the first row of the first local expert's region)
+        pos_te = ttnn.add(
+            ttnn.multiply(ttnn.add(ttnn.subtract(rank, 1.0), offsets_f), onehot),
+            ttnn.multiply(ttnn.rsub(onehot, 1.0), float(max_buf - 1)),
+        )  # [1,1,T,E]
+        for t in (rank, aligned, incl):
+            ttnn.deallocate(t)
+        idx_u32 = ttnn.typecast(idx, ttnn.uint32)
+        pos_tk = ttnn.gather(pos_te, -1, idx_u32)  # [1,1,T,k] fp32: the region slot of every pick (dummy if not local)
+        loc_tk = ttnn.gather(onehot, -1, idx_u32)  # [1,1,T,k]: 1 at the local picks
+        ttnn.deallocate(pos_te)
+        ttnn.deallocate(onehot)
+        ttnn.deallocate(idx_u32)
+        pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
+        ttnn.deallocate(pos_tk)
+        # slot -> token (the picks' slots are distinct; the non-local picks all land on the dummy slot)
+        slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
+        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
+        buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, max_buf, H] bf16: the regions
+        ttnn.deallocate(slot_src)
+        ttnn.deallocate(x_rm)
+        counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
+        offsets = ttnn.reshape(ttnn.to_layout(ttnn.typecast(offsets_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
+        ttnn.deallocate(counts_f)
+        ttnn.deallocate(offsets_f)
+        out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            ttnn.reshape(buf, [max_buf, H]),
+            offsets,
+            counts,
+            d["gidx_rm"],
+            d["gate"],
+            d["up"],
+            d["down"],
+            self.dispatch_max_tokens or T,
+            compute_kernel_config=self.compute,
+            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+        )  # [max_buf, H] bf8 TILE
+        ttnn.deallocate(buf)
+        y_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)  # the gather table [max_buf, H]
+        ttnn.deallocate(out)
+        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, T*k, H]: every pick's output row
+        ttnn.deallocate(y_rm)
+        ttnn.deallocate(pos_rm)
+        comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
+        w_loc = ttnn.multiply(w, loc_tk)  # the routing weights, 0 at the non-local picks (their rows are garbage)
+        ttnn.deallocate(loc_tk)
+        w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
+        w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1,1,T,k,1]
+        ttnn.deallocate(w_loc)
+        ttnn.deallocate(w16)
+        y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
+        for t in (comb, w_rm, counts, offsets):
+            ttnn.deallocate(t)
+        if y.dtype != self.activation_dtype:
+            y = ttnn.typecast(y, self.activation_dtype)
+        return y
+
+    def _iota_rows(self, T: int, k: int) -> ttnn.Tensor:
+        """uint32 ROW_MAJOR [1, T*k] with value t at (t, j) (cached per geometry)."""
+        key = ("iota_rows", T, k)
+        if key not in self._const_cache:
+            t = torch.arange(T, dtype=torch.int32).reshape(T, 1).expand(T, k).reshape(1, T * k).contiguous()
+            self._const_cache[key] = self.mesh.upload(t, ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return self._const_cache[key]
+
+    def _zero_u32_row(self, n: int) -> ttnn.Tensor:
+        key = ("zero_u32", n)
+        if key not in self._const_cache:
+            self._const_cache[key] = self.mesh.upload(
+                torch.zeros(1, n, dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+        return self._const_cache[key]
+
+    def forward(
+        self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor | None = None, w: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """x [1,1,T,H] bf16, dense_w [1,1,T,E] fp32 (this row's tokens) -> [1,1,T,H] TP partial over
-        the columns. Sparse layout: processed in 32-token blocks; a short last block (or T < 32, e.g.
+        the columns. ``idx`` / ``w`` [1,1,T,k] fp32 (the router's top-k ids and weights): the dispatch prefill
+        path's routing (``PREFILL_EXPERTS == "dispatch"``, T > 32). Sparse layout: processed in 32-token blocks; a short last block (or T < 32, e.g.
         decode with few users) runs on its padded tile rows. Dense layout: all tokens in one pass. On a
         multi-row mesh the rows' tokens are gathered first and the expert-slice partials
         reduce-scattered back to each token's row."""
         if self.mesh.rows > 1:
             x = self.mesh.all_gather_rows(x, dim=2)
             dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
+            if idx is not None:
+                idx = self.mesh.all_gather_rows(idx, dim=2)
+                w = self.mesh.all_gather_rows(w, dim=2)
         T = x.shape[-2]
         block = self._block_stream if self.stream else self._block
         if self.dense:
             y = self._block_dense(x, dense_w)
+        elif self._dispatch is not None and T > TILE:
+            assert (
+                idx is not None and w is not None
+            ), "the dispatch / regions prefill paths need the router's top-k lists"
+            if self._dispatch["fabric"]:
+                y = self._forward_dispatch(x, idx, w)
+            else:
+                y = self._forward_regions(x, dense_w, idx, w)
+        elif self.prefill_experts == "batched" and T > TILE and not self.stream:
+            y = self._forward_batched(x, dense_w)
         elif self.stream and self.stream_dispatch and TILE < T <= 256 and T % TILE == 0:
             y = self._block_dispatch(x, dense_w)
         elif T <= TILE:
@@ -729,6 +1094,9 @@ class TtRoutedExperts(LightweightModule):
         if self.mesh.rows > 1:
             ttnn.deallocate(x)
             ttnn.deallocate(dense_w)
+            if idx is not None:
+                ttnn.deallocate(idx)
+                ttnn.deallocate(w)
             y = self.mesh.reduce_scatter_rows(y, dim=2)
         return y
 
@@ -1062,6 +1430,12 @@ class TtMoE(LightweightModule):
             routed = self.experts(x, w, idx)
             for t in (w, idx, dense):
                 ttnn.deallocate(t)
+        elif getattr(self.experts, "_dispatch", None) is not None and x.shape[-2] > TILE:
+            w, idx, dense = self.router(x)
+            routed = self.experts(x, dense, idx=idx, w=w)
+            for t in (w, idx, dense):
+                if t.is_allocated():
+                    ttnn.deallocate(t)
         else:
             _, _, dense = self.router(x, dense_only=True)
             routed = self.experts(x, dense)
