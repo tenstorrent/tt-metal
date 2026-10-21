@@ -88,26 +88,44 @@ def _print_summary(reports):
     print("Speedup = legacy / packed (>1 favors packed). KV history is synthetic.\n", flush=True)
 
 
-def _device_samples(mesh, trace_id, *, repeats, num_slots=1, stage=None, profile=False):
-    records, dropped, sources = {}, [0], {}
+def _device_samples(mesh, trace_id=None, *, repeats, num_slots=1, stage=None, profile=False, run=None):
+    for attempt in range(2):
+        records, host_us, sources = _collect_device_samples(
+            mesh, trace_id, repeats=repeats, num_slots=num_slots, stage=stage, profile=profile, run=run
+        )
+        try:
+            captures = _replay_spans(
+                records, host_us, repeats, num_slots, mesh.get_num_devices(), sources, validate_sources=run is not None
+            )
+        except AssertionError:
+            replays = num_slots * (repeats + 1)
+            counts = {len(rows) for rows in records.values()}
+            wrapped = (
+                run is not None
+                and len(records) == mesh.get_num_devices()
+                and len(counts) == 1
+                and next(iter(counts)) % replays == replays - 1
+                and all({65535, 1} <= {row[0] for row in rows} for rows in records.values())
+            )
+            if attempt or not wrapped:
+                raise
+            logger.warning("Profiler runtime IDs wrapped through filtered ID zero; retrying the incomplete collection")
+            continue
+        for capture in captures:
+            capture["collection_attempts"] = attempt + 1
+        return captures
+
+
+def _collect_device_samples(mesh, trace_id, *, repeats, num_slots, stage, profile, run):
+    assert (trace_id is None) != (run is None), "Provide either a trace ID or an eager replay callable"
+    eager = run is not None
+    if run is None:
+        run = lambda: ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+    batches = []
     last_record = [time.monotonic()]
 
     def collect(batch):
-        dropped[0] += int(batch.dropped)
-        for record in batch.records:
-            source_id = None
-            if profile:
-                signature = tuple(str(source) for source in record.kernel_sources)
-                source_id = sources.setdefault(signature, len(sources))
-            records.setdefault(int(record.chip_id), []).append(
-                (
-                    int(record.runtime_id),
-                    int(record.start_timestamp),
-                    int(record.end_timestamp),
-                    float(record.frequency),
-                    source_id,
-                )
-            )
+        batches.append(batch)
         last_record[0] = time.monotonic()
 
     ttnn.synchronize_device(mesh)
@@ -120,21 +138,39 @@ def _device_samples(mesh, trace_id, *, repeats, num_slots=1, stage=None, profile
                 stage(slot)
             for _ in range(repeats + 1):
                 begin = time.perf_counter()
-                ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+                run()
                 ttnn.synchronize_device(mesh)
                 host_us.append((time.perf_counter() - begin) * 1e6)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if len(records) == mesh.get_num_devices() and time.monotonic() - last_record[0] >= 0.1:
+            if batches and time.monotonic() - last_record[0] >= 0.1:
                 break
             time.sleep(0.01)
     finally:
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
-    assert not dropped[0], f"Incomplete profiler stream: dropped={dropped[0]}"
-    return _replay_spans(records, host_us, repeats, num_slots, mesh.get_num_devices(), sources if profile else None)
+    dropped = sum(int(batch.dropped) for batch in batches)
+    assert not dropped, f"Incomplete profiler stream: dropped={dropped}"
+    records, sources = {}, {}
+    for batch in batches:
+        for record in batch.records:
+            source_id = None
+            if profile or eager:
+                signature = tuple(str(source) for source in record.kernel_sources)
+                assert signature, "Missing kernel sources for profiler sequence validation"
+                source_id = sources.setdefault(signature, len(sources))
+            records.setdefault(int(record.chip_id), []).append(
+                (
+                    int(record.runtime_id),
+                    int(record.start_timestamp),
+                    int(record.end_timestamp),
+                    float(record.frequency),
+                    source_id,
+                )
+            )
+    return records, host_us, sources if profile else None
 
 
-def _replay_spans(records, host_us, repeats, num_slots, num_devices, sources=None):
+def _replay_spans(records, host_us, repeats, num_slots, num_devices, sources=None, *, validate_sources=False):
     assert len(records) == num_devices, f"Profiler returned {len(records)}/{num_devices} chips"
     num_replays = num_slots * (repeats + 1)
     counts = {len(rows) for rows in records.values()}
@@ -145,23 +181,35 @@ def _replay_spans(records, host_us, repeats, num_slots, num_devices, sources=Non
     captures = [dict(chips={}) for _ in range(num_replays)]
     for chip, rows in records.items():
         rows.sort(key=lambda row: row[1])
-        signature = [row[0] for row in rows[:programs_per_replay]]
+        # Trace IDs stay fixed; eager IDs change. Wrapped eager IDs can overwrite trace kernel-source metadata.
+        signature_indices = [
+            4 if validate_sources and len({row[0] for row in rows[i::programs_per_replay]}) > 1 else 0
+            for i in range(programs_per_replay)
+        ]
+        signature = [row[index] for row, index in zip(rows[:programs_per_replay], signature_indices)]
+        assert None not in signature, "Missing program sequence signature"
         for replay, capture in enumerate(captures):
             programs = rows[replay * programs_per_replay : (replay + 1) * programs_per_replay]
             assert [
-                row[0] for row in programs
+                row[index] for row, index in zip(programs, signature_indices)
             ] == signature, f"Incomplete program sequence on chip {chip}, replay {replay}"
             assert all(end > start and frequency > 0 for _, start, end, frequency, _ in programs)
             frequencies = {row[3] for row in programs}
             assert len(frequencies) == 1, f"Inconsistent timestamp frequency on chip {chip}"
             frequency = frequencies.pop()
             start, end = min(row[1] for row in programs), max(row[2] for row in programs)
+            cursor, active_ticks = start, 0
+            for _, program_start, program_end, _, _ in programs:
+                active_ticks += max(0, program_end - max(cursor, program_start))
+                cursor = max(cursor, program_end)
             capture["chips"][chip] = dict(
                 start=start,
                 end=end,
                 frequency_ghz=frequency,
                 programs=programs_per_replay,
                 span_us=(end - start) / frequency / 1000,
+                program_us=active_ticks / frequency / 1000,
+                gap_us=(end - start - active_ticks) / frequency / 1000,
             )
     result = []
     for replay, capture in enumerate(captures):

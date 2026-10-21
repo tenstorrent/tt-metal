@@ -102,6 +102,16 @@ The default total chunk is 8192; set `GEMMA4_HYBRID_CHUNK_SIZE=4096` for 4k. The
 pytest 'models/demos/gemma4_d_p/tests/test_hybrid_prefill.py::test_hybrid_prefill_layout_changes[blackhole-8x4]' -sv
 ```
 
+Compare warmed legacy, fully traced packed, and hybrid prefill with the same full model and cache allocation:
+
+```bash
+pytest 'models/demos/gemma4_d_p/demo/hybrid_prefill_perf.py::test_prefill_hybrid_comparison[blackhole-8x4]' -sv
+```
+
+This measures 1×8192, 1×1600, 4×1600, and six mixed requests at prefixes 0 and 253952. Legacy pads each request to 8192 and runs them sequentially; both packed paths share one 8192-token projection/MLP batch. Five measured replays follow warmup, with loading, compilation, capture, and metadata staging excluded. Device span includes gaps between programs; a separate host measurement runs without Python profiler callbacks. Results and both comparison tables are saved under `investigations/gemma4_hybrid_prefill`. Configure `GEMMA4_PERF_OUTPUT`, `GEMMA4_PERF_DEVICE_REPEATS`, `GEMMA4_PERF_PREFIXES`, or `GEMMA4_PERF_CHUNK_SIZE` as needed; workloads that do not fit the configured chunk are omitted. KV history is synthetic; this test does not check PCC.
+
+The [recorded comparison](../../../investigations/gemma4_hybrid_prefill/summary.md) and [overhead breakdown](../../../investigations/gemma4_hybrid_prefill/findings.md) include device and host timings.
+
 The full-model packed sanity test uses five requests totaling 4096 tokens with fixed, nonzero rotated prefixes:
 
 ```bash
