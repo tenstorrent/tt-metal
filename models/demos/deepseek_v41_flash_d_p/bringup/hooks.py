@@ -65,12 +65,14 @@ def _config(spec):
     return Config.from_dir(hf_path(spec))
 
 
-def reference(spec, layers=None, dtype=None):
-    """The standalone CPU reference (reference/ds41_ref.py), the requested layers resident (fp32)."""
+def reference(spec, layers=None, dtype=None, numerics="official"):
+    """The standalone CPU reference (reference/ds41_ref.py), the requested layers resident (fp32). numerics (F112,
+    F128): "official" = the released code's arithmetic, bit for bit (goldens, R.2 / R.3); "native" = full precision,
+    every activation fp8 / fp4 quant-dequant the identity (ds41_ref.py "Numerics")."""
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import DS41Reference
 
-    ref = DS41Reference(hf_path(spec), layers=layers, dtype=dtype or torch.float32)
+    ref = DS41Reference(hf_path(spec), layers=layers, dtype=dtype or torch.float32, numerics=numerics)
     for i in ref.layer_ids:  # the state each layer returns is what the spec's block type declares
         assert ref.cfg.state_names(i) == spec.state_names(i), (i, ref.cfg.state_names(i), spec.state_names(i))
     return ref
