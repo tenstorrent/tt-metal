@@ -62,6 +62,53 @@ def test_slot_offsets_and_partial_final_chunk(expect_error):
             runtime.validate_chunk(*chunk)
 
 
+@pytest.mark.parametrize("chunk_size, step", [(2048, 256), (4096, 512), (8192, 32)])
+def test_mid_chunk_starts(chunk_size, step, expect_error):
+    """A chunk may start at any multiple of the resume granularity, and its padded chunk must fit the slot."""
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = replace(service_params(), chunk_size=chunk_size)
+    start, late = 3 * chunk_size + step, runtime.config.max_seq_len - chunk_size + step
+    runtime.slot_ends = [start, late, 0, 0, 0, 0]
+    runtime.validate_chunk(0, start, start + chunk_size)
+    runtime.validate_chunk(0, start - step, start)  # rewinds into the cached prefix
+    with expect_error(ValueError, "multiple of"):
+        runtime.validate_chunk(0, start + step // 2, start + chunk_size)
+    with expect_error(ValueError, "runs past"):
+        runtime.validate_chunk(1, late, late + 1)
+    with expect_error(ValueError, "holds"):
+        runtime.validate_chunk(0, start + step, start + chunk_size)
+
+
+@pytest.mark.parametrize("chunk_size, slots, step", [(2048, 1, 256), (4096, 1, 512), (8192, 2, 32)])
+def test_resume_granularity_follows_the_halo_slots(chunk_size, slots, step):
+    """Two halo slots only where the 1024-token halo fits one slab; the AgentX simulator models the same rule."""
+    from models.demos.gemma4_d_p.agentx_sim.agentx_sim import resume_step
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+        resume_granularity,
+        sliding_halo_slots,
+        sliding_halo_tokens,
+    )
+
+    assert sliding_halo_slots(chunk_size // 8, sliding_halo_tokens(1024)) == slots
+    assert resume_granularity(chunk_size, 8, 1024) == step == resume_step(chunk_size, "resume")
+
+
+@pytest.mark.parametrize("start", [16384, 16384 + 3 * 1024, 21536])
+def test_chunk_positions_follow_the_rotated_tokens(start):
+    """A chunk's staged positions are its tokens' positions after the producer's rotation: natural order at an
+    aligned start, rotated at a mid-chunk one."""
+    from types import SimpleNamespace
+
+    from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = service_params()
+    runtime.mesh_config = SimpleNamespace(cp_degree=8)
+    natural = list(range(start, start + 8192))
+    assert runtime._chunk_positions(start) == rotate_chunk_tokens(natural, start, 8)
+    assert (runtime._chunk_positions(start) == natural) == (start % 8192 == 0)
+
+
 def test_prepared_prompts_use_shared_producer_format(tmp_path):
     from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids
 
