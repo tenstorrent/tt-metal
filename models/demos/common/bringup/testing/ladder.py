@@ -11,6 +11,8 @@ layer (the gaps never run on the device). A rung may set ``layers`` to stack few
 Metrics (last chunk unless noted):
     pcc_layer_L{i}       per-layer output trail
     pcc_state_min        worst state tensor over every layer and the whole sequence (and pcc_state_<name>_L{i})
+    each gated metric also records <metric>_limit: calib x the reference's own drift from full precision (F128,
+    testing/e2e_limits.py); the golden is the full-precision reference
     state_bits_<name>    bits per element of each state tensor the ladder ran on (state.formats(), optional hook)
     pcc_final_hidden, top1_match, top5_overlap, pcc_logits_tail     only when the stack ends at the model's last layer
     chunk_seconds_c{c}, prefill_seconds, model_load_s, covered_layers, subset,
@@ -30,7 +32,8 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import cpu_bridge
-from models.demos.common.bringup.testing.harness import begin_chunk, threshold
+from models.demos.common.bringup.testing import e2e_limits as E
+from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
@@ -120,12 +123,12 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         )
 
     out = {"trail": {}, "failed": []}
+    drift = E.load(g.dir)  # F128: every limit below is calib x the reference's own drift from full precision
     for i in layers:
         p = metrics.pcc(trail[i], g.layer(last, i)["out"].float())
         metrics.record(f"pcc_layer_L{i:02d}", p)
         out["trail"][i] = p
-        if p < threshold(s, "layer"):
-            out["failed"].append(f"layer {i} pcc {p:.5f}")
+        E.check(drift, f"pcc_layer_L{i:02d}", p, out["failed"])
     worst_layer = min(out["trail"].values())
     print(f"worst layer pcc {worst_layer:.6f}")
 
@@ -134,6 +137,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         final = model.to_host(hidden).float()
         p = metrics.pcc(final, gm["final_norm"].float())
         metrics.record("pcc_final_hidden", p)
+        E.check(drift, "pcc_final_hidden", p, out["failed"])
         rows = sampled_rows(chunk)
         lg = model.logits(hidden, rows).float()
         tt5 = lg.topk(5, dim=-1).indices
@@ -144,10 +148,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         metrics.record("top5_overlap", top5)
         metrics.record("pcc_logits_tail", metrics.pcc(lg[-32:], gm["logits_tail"].float()))
         print(f"final hidden pcc {p:.6f} top1 {top1:.4f} top5 {top5:.4f}")
-        if p < threshold(s, "final_hidden"):
-            out["failed"].append(f"final hidden {p:.5f}")
-        if top5 < threshold(s, "top5"):
-            out["failed"].append(f"top5 {top5:.4f}")
+        E.check(drift, "top5_overlap", top5, out["failed"])
 
     # F99: float states by PCC; integer states (top-k index lists) by the selection overlap, not the PCC of the ids
     worst, worst_ov = 1.0, 1.0
@@ -158,32 +159,16 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
                 p = metrics.pcc(got[name].float(), want.float())
                 metrics.record(f"pcc_state_{name}_L{i:02d}", p)
                 worst = min(worst, p)
+                E.check(drift, f"pcc_state_{name}_L{i:02d}", p, out["failed"])
             else:
                 ov = index_overlap(got[name], want)
                 metrics.record(f"overlap_state_{name}_L{i:02d}", ov)
                 worst_ov = min(worst_ov, ov)
+                E.check(drift, f"overlap_state_{name}_L{i:02d}", ov, out["failed"])
     metrics.record("pcc_state_min", worst)
     metrics.record("overlap_state_min", worst_ov)
     print(f"worst state pcc {worst:.6f}, worst index-state overlap {worst_ov:.6f}")
-    if worst < threshold(s, "state"):
-        out["failed"].append(f"state {worst:.5f}")
-    bad = overlap_failure(s, worst_ov)
-    if bad:
-        out["failed"].append(bad)
     return out
-
-
-def overlap_failure(s, worst_ov: float) -> str | None:
-    """The index-state overlap verdict. F124: an owner waiver (tests.waivers ``ladder.state_overlap``: reason) lowers the
-    limit to the structural floor ``state_overlap_waived``, reported WAIVED; a wrong selector still fails."""
-    if worst_ov >= threshold(s, "state_overlap"):
-        return None
-    why = str((s.get("tests.waivers") or {}).get("ladder.state_overlap") or "").strip()
-    if why and worst_ov >= threshold(s, "state_overlap_waived"):
-        print(f"WAIVED index-state overlap {worst_ov:.5f} (limit {threshold(s, 'state_overlap')}): owner waiver: {why}")
-        metrics.record("overlap_state_min_waived", 1)
-        return None
-    return f"index-state overlap {worst_ov:.5f}"
 
 
 def index_overlap(got: torch.Tensor, want: torch.Tensor) -> float:

@@ -39,10 +39,7 @@ from models.demos.common.bringup.core.runs import IMPL_ENV
 from models.demos.common.bringup.reference.golden import Golden, load_spec
 from models.demos.common.bringup.reference.interface import Ctx
 
-DEFAULT_THRESHOLDS = {
-    k: defaults.get(f"thresholds.{k}")
-    for k in ("component", "block", "layer", "state", "state_overlap", "state_overlap_waived", "final_hidden", "top5")
-}
+DEFAULT_THRESHOLDS = {k: defaults.get(f"thresholds.{k}") for k in ("component", "block")}
 
 
 def impl_mode() -> str:

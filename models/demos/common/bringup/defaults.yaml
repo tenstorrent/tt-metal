@@ -22,17 +22,17 @@ agents:
     scale: {attempts: 3, escalate: stop}
     overseer: {attempts: 3, escalate: debugger, debugger_attempts: 3}  # F77: a fix the overseer queued
 
-thresholds:                # accuracy gates (PCC lower limits unless named otherwise)
+e2e:                       # F128 (owner): end-to-end limits = calib x the reference's own drift from full precision
+  calib: 2.0               # (reference/drift.py, testing/e2e_limits.py); no fixed end-to-end bar exists
+  overlap_res: 0.01        # an index overlap's resolution floor (one miss per hundred)
+golden:
+  numerics: native         # F128 (owner): goldens are the full-precision reference (fp32, no rounding); the official one
+                           # (the shipped code's roundings) is generated only for its drift, the margin
+reference:
+  shipped_dtype: bfloat16  # F128: the dtype the shipped code computes in (the official golden, the margin's source)
+thresholds:                # per-step fallbacks only (component / swap when no noise floor); end-to-end: e2e above
   component: 0.99
   block: 0.98
-  layer: 0.97
-  state: 0.97
-  state_overlap: 0.75      # F99: integer states (top-k index lists): mean per-row set overlap with the golden (lower limit). Structural:
-                           # a wrong selector gives ~k/n (<= 0.5 once the pool is 2k); near-tie flips grow with the sequence (DeepSeek-V4.1: 0.97 at 4k, 0.897 at 55k with every layer at PCC 0.9966)
-  state_overlap_waived: 0.5  # F124: the floor under an owner waiver of state_overlap (tests.waivers ladder.state_overlap),
-                           # e.g. native numerics vs goldens with the reference's fp4 index rounding; a wrong selector stays below it
-  final_hidden: 0.97
-  top5: 0.9
   swap_step_rel: 0.02      # swapped step vs the CPU step on the same inputs: rel L2 (upper limit)
   swap_step_row: 0.05      # worst row rel L2
   swap_step_ratio: 0.02    # every row's norm ratio within 1 +- this
@@ -56,8 +56,8 @@ tests:
                               # (a gap the device cannot close at its normal settings, fixed later); reported, recorded
   component_max_precision: true  # component and swap tests run at the model's max precision (tt/settings.py
                                  # max_precision); shipped precision is judged by the ladder and contract tests
-  step_numerics: native       # F112 (owner rule): per-step checks vs the reference with its parity-only roundings off,
-                              # when the model's hooks.reference takes `numerics`; the goldens stay official
+  step_numerics: native       # F112 / F128 (owner rule): per-step checks vs the full-precision reference (no rounding);
+                              # a hook without the switch stops (reference.no_rounding: true when it rounds nothing)
   low_precision_kinds: [moe]  # step kinds with a looser precision factor (bfp8 expert weights, F56)
   contract_tail_pad: 32       # the contract test's last chunk ends this many tokens early
   determinism_repeats: 5      # component and fork tests: A runs, A,B,A then A again, bit-identical to the first A

@@ -95,4 +95,4 @@ def test_a_reused_golden_must_match_the_rung(fx, tmp_path):
         json.dumps({"seq": 999, "chunk": 64, "layers": s.layers(), "model": "none/fixture"})
     )
     with pytest.raises(SystemExit, match="does not match this rung"):
-        G.reuse(s, s.rung("s256"), out)
+        G.reuse(s, s.rung("s256"), out, "native")

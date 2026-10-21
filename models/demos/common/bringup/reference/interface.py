@@ -121,12 +121,9 @@ def boundary_names(steps: list[Step]) -> list[str]:
 
 
 def step_reference(spec, layers, dtype):
-    """The CPU reference per-step checks compare against: ``tests.step_numerics`` (defaults.yaml) when the model's
-    ``hooks.reference`` takes ``numerics``, else its only (official) arithmetic (F112)."""
-    import inspect
+    """The CPU reference per-step checks compare against: ``tests.step_numerics`` (defaults.yaml, native = full
+    precision; F112, F128)."""
+    from models.demos.common.bringup.reference.golden import reference_at
 
-    fn = spec.hooks().reference
-    params = inspect.signature(fn).parameters
-    if "numerics" in params or any(p.kind is p.VAR_KEYWORD for p in params.values()):
-        return fn(spec, layers=layers, dtype=dtype, numerics=spec.get("tests.step_numerics") or "official")
-    return fn(spec, layers=layers, dtype=dtype)
+    # F128: no silent fallback to the rounded arithmetic (reference_at refuses a hook without the switch)
+    return reference_at(spec, spec.get("tests.step_numerics") or "native", layers=layers, dtype=dtype)

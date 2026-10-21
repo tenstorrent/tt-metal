@@ -26,8 +26,8 @@ def gspec(fx, monkeypatch):
         p = fx(**over)
         monkeypatch.setenv("BRINGUP_SPEC", p)
         prompt.build(Spec.load(p))
-        generate_golden.main(["--spec", p, "--rung", "s256"])
-        generate_golden.main(["--spec", p, "--rung", "s512"])
+        generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
+        generate_golden.main(["--spec", p, "--rung", "s512", "--set"])
         return Spec.load(p)
 
     return make
@@ -74,7 +74,12 @@ def test_ladder_all_chunks(gspec, noise):
     out = run_ladder(s, "s256", None)
     m = got()
     assert not out["failed"], out
-    assert sorted(k for k in m if k.startswith("pcc_layer_")) == ["pcc_layer_L00", "pcc_layer_L01", "pcc_layer_L02"]
+    assert sorted(k for k in m if k.startswith("pcc_layer_") and not k.endswith("_limit")) == [
+        "pcc_layer_L00",
+        "pcc_layer_L01",
+        "pcc_layer_L02",
+    ]
+    assert all(m[f"{k}_limit"] < 1 for k in ("pcc_layer_L00", "pcc_layer_L01", "pcc_layer_L02"))  # F128
     assert m["pcc_final_hidden"] > 0.99 and m["top5_overlap"] >= 0.9 and m["pcc_state_min"] > 0.99
     assert m["subset"] == 0 and "chunk_seconds_c03" in m
 
