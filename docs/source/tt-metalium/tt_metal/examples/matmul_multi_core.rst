@@ -77,7 +77,7 @@ Device initialization and parameter setup are similar to the single core example
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
 
     // Create DRAM buffers for input and output matrices (replicated per device across the mesh)
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
