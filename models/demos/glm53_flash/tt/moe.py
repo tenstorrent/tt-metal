@@ -76,6 +76,11 @@ PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
 # regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
 # chunk, which does not fit next to the 1 M caches; the expert weights are re-read once per sub-chunk)
 REGIONS_T = int(os.environ.get("GLM53_REGIONS_T", "4096"))
+# GLM53_REGIONS_KEEP_STACKED=1: keep the stacked (block / stream / dense) expert tensors next to the regions path's
+# per-expert lists, so decode (T <= 32) keeps the stream custom op (75 ms vs 219 ms per step on the 8x4 through the
+# regions kernel at 1 user/row) at the cost of a second copy of the expert weights (9.5 GB per chip in bfp8 on the
+# 8x4: fits up to ~512 K of context, not next to the 1 M caches; 45 layers in bfp4 on a (2,4) block do not fit twice)
+REGIONS_KEEP_STACKED = os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
 PREFILL_BLOCK_GROUP = int(os.environ.get("GLM53_PREFILL_BLOCK_GROUP", "32"))
 
 
@@ -827,9 +832,10 @@ class TtRoutedExperts(LightweightModule):
             gate.append(ttnn.reshape(g, [H, I]))
             up.append(ttnn.reshape(u, [H, I]))
             down.append(ttnn.reshape(d, [I, H]))
-        ttnn.deallocate(self.w13)
-        ttnn.deallocate(self.w2)
-        self.w13 = self.w2 = None
+        if not REGIONS_KEEP_STACKED:
+            ttnn.deallocate(self.w13)
+            ttnn.deallocate(self.w2)
+            self.w13 = self.w2 = None
         # The dispatch / combine ops are fabric ops along one mesh axis: a device is "chip i" of its dispatch group
         # by its index along that axis, and they refuse a device without neighbours (a 1x1 mesh). The hybrid layout
         # needs every chip to keep ITS gathered tokens for ITS expert slices, so the group is the row axis (the
@@ -1141,7 +1147,8 @@ class TtRoutedExperts(LightweightModule):
         block = self._block_stream if self.stream else self._block
         if self.dense:
             y = self._block_dense(x, dense_w)
-        elif self._dispatch is not None:  # the per-expert lists replaced the stacked tensors: every call, any T
+        elif self._dispatch is not None and (T > TILE or self.w13 is None):
+            # the per-expert lists serve prefill (and decode too when they replaced the stacked tensors)
             assert (
                 idx is not None and w is not None
             ), "the dispatch / regions prefill paths need the router's top-k lists"
