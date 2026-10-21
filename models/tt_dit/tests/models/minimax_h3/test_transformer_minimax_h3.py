@@ -1079,6 +1079,13 @@ def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
         pytest.param(4, id="sp_sim4"),
     ],
 )
+@pytest.mark.parametrize(
+    "dynamic_length",
+    [
+        pytest.param(False, id="legacy"),
+        pytest.param(True, id="dynamic"),
+    ],
+)
 def test_minimax_h3_transformer_block_perf(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1087,10 +1094,13 @@ def test_minimax_h3_transformer_block_perf(
     duration_s: float,
     num_text_tokens: int,
     sp_simulate: int,
+    dynamic_length: bool,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
+    """One block at the production geometry, legacy or dynamic-length configs. H3_BLOCK_PERF_ITERS=N adds N
+    timed warm iterations (host wall with a sync, min / median logged) after the profiled one."""
     skip_if_unsupported_num_links(mesh_device, num_links)
     # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
     # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
@@ -1146,6 +1156,7 @@ def test_minimax_h3_transformer_block_perf(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        dynamic_length=dynamic_length,
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
@@ -1184,6 +1195,19 @@ def test_minimax_h3_transformer_block_perf(
     signpost("start")
     tt_out = run_block()
     signpost("stop")
+
+    iters = int(os.environ.get("H3_BLOCK_PERF_ITERS", "0"))
+    if iters:
+        times_ms = []
+        for _ in range(iters):
+            t0 = time.perf_counter()
+            run_block()
+            times_ms.append(1000 * (time.perf_counter() - t0))
+        times_ms.sort()
+        logger.info(
+            f"BLOCK_PERF dynamic_length={dynamic_length} duration={duration_s:g}s rows/device={padded_len // sp_factor} "
+            f"iters={iters} min={times_ms[0]:.2f} ms median={times_ms[len(times_ms) // 2]:.2f} ms"
+        )
 
     assert tuple(tt_out.shape) == (
         1,
