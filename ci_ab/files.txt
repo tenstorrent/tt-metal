@@ -1,0 +1,2 @@
+tt_metal/tt-llk/tests/python_tests/perf_eltwise_binary_allcfg.py
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB.h
