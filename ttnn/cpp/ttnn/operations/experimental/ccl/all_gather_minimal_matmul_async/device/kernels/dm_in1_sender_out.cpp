@@ -58,8 +58,10 @@ void kernel_main() {
 
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(28);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(29);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
+    // The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map
+    // address it publishes in semaphore fabric_mux_l1_base_semaphore_id.
+    constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(30);
+    constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(31);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(32);
 
     constexpr uint32_t fsdp_mux_arg_count = 33;
@@ -243,12 +245,12 @@ void kernel_main() {
         fsdp_mux_backward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in1_core_order_index, fsdp_backward_in1_core_order_index);
-        fsdp_mux_handle_backward = fsdp_mux_backward.build_and_connect(fabric_mux_status_address);
+        fsdp_mux_handle_backward = fsdp_mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
     } else if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
         fsdp_mux_forward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in1_core_order_index, fsdp_forward_in1_core_order_index);
-        fsdp_mux_handle_forward = fsdp_mux_forward.build_and_connect(fabric_mux_status_address);
+        fsdp_mux_handle_forward = fsdp_mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
     }
 
     // FSDP semaphores (forward + backward counters incremented by remote fabric sends).
@@ -718,7 +720,7 @@ void kernel_main() {
             fsdp_mux_backward.num_mux_clients,
             fsdp_mux_backward.fabric_mux_x,
             fsdp_mux_backward.fabric_mux_y,
-            fabric_mux_termination_signal_address,
+            fsdp_mux_backward.fabric_mux_l1_base + fabric_mux_termination_signal_offset,
             fsdp_mux_backward.termination_master_noc_x,
             fsdp_mux_backward.termination_master_noc_y);
     }
@@ -731,7 +733,7 @@ void kernel_main() {
             fsdp_mux_forward.num_mux_clients,
             fsdp_mux_forward.fabric_mux_x,
             fsdp_mux_forward.fabric_mux_y,
-            fabric_mux_termination_signal_address,
+            fsdp_mux_forward.fabric_mux_l1_base + fabric_mux_termination_signal_offset,
             fsdp_mux_forward.termination_master_noc_x,
             fsdp_mux_forward.termination_master_noc_y);
     }

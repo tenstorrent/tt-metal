@@ -377,7 +377,7 @@
     pytest \
       tests/ttnn/unit_tests/operations/ccl/test_ccl_l1_small_semaphores.py \
       tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300 \
-      tests/ttnn/unit_tests/operations/ccl/test_all_gather_async_mux_l1.py \
+      tests/ttnn/unit_tests/operations/ccl/test_ccl_mux_l1.py \
       -xv -m "not disable_fast_runtime_mode" --timeout=300
   skus:
     wh_n300_civ2:

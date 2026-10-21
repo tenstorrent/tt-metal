@@ -51,21 +51,35 @@ struct ForwarderContext {
     std::array<ForwarderChannel, kMaxRuntimeChannels> channels{};
 };
 
-constexpr ForwarderContext make_forwarder_context() {
+// Base of the mux's L1 map, set by kernel_main before either RISC runs: the program-local circular buffer's address
+// in program-local L1, 0 otherwise.
+inline uint32_t l1_base_address = 0;
+
+// L1 address of a map location whose compile-time address is map_offset.
+FORCE_INLINE uint32_t map_address(uint32_t map_offset) {
+    if constexpr (ct_args::in_program_local_l1) {
+        return l1_base_address + map_offset;
+    } else {
+        return map_offset;
+    }
+}
+
+inline ForwarderContext make_forwarder_context() {
     ForwarderContext context{};
     const uint32_t channel_stride_bytes = ct_args::num_buffers_per_channel * ct_args::channel_buffer_size_bytes;
 
     for (uint32_t channel_idx = 0; channel_idx < ct_args::num_channels; ++channel_idx) {
         auto& channel = context.channels[channel_idx];
         channel.pending_packets_stream_id = channel_idx;
-        channel.channel_base_address = ct_args::channel_region_base_address + (channel_idx * channel_stride_bytes);
+        channel.channel_base_address =
+            map_address(ct_args::channel_region_base_address) + (channel_idx * channel_stride_bytes);
     }
 
     return context;
 }
 
 inline volatile tt_l1_ptr uint32_t* get_status_ptr() {
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct_args::mux_status_address);
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(map_address(ct_args::mux_status_address));
 }
 
 inline volatile tt_l1_ptr uint32_t* get_forwarder_ready_sem_ptr() {
@@ -80,7 +94,7 @@ inline volatile tt_l1_ptr uint32_t* get_manager_init_done_sem_ptr() {
 
 inline volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedControlBlock* get_shared_control_ptr() {
     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedControlBlock*>(
-        ct_args::shared_control_region_base_address);
+        map_address(ct_args::shared_control_region_base_address));
 }
 
 constexpr uint32_t get_per_channel_scalar_address(uint32_t base_address, uint32_t logical_channel_id) {
@@ -88,28 +102,29 @@ constexpr uint32_t get_per_channel_scalar_address(uint32_t base_address, uint32_
 }
 
 inline volatile tt_l1_ptr uint32_t* get_connection_handshake_ptr(uint32_t logical_channel_id) {
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        get_per_channel_scalar_address(ct_args::connection_handshake_region_base_address, logical_channel_id));
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_per_channel_scalar_address(
+        map_address(ct_args::connection_handshake_region_base_address), logical_channel_id));
 }
 
 inline uint32_t get_credit_notify_scratch_address(uint32_t logical_channel_id) {
-    return get_per_channel_scalar_address(ct_args::credit_notify_scratch_region_base_address, logical_channel_id);
+    return get_per_channel_scalar_address(
+        map_address(ct_args::credit_notify_scratch_region_base_address), logical_channel_id);
 }
 
 inline volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader* get_shared_ring_header_ptr() {
     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader*>(
-        ct_args::shared_ring_region_base_address);
+        map_address(ct_args::shared_ring_region_base_address));
 }
 
 inline volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingEntry* get_shared_ring_entries_ptr() {
     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingEntry*>(
-        ct_args::shared_ring_region_base_address + sizeof(tt::tt_fabric::FabricMuxV2SharedTridRingHeader));
+        map_address(ct_args::shared_ring_region_base_address) + sizeof(tt::tt_fabric::FabricMuxV2SharedTridRingHeader));
 }
 
 inline volatile tt_l1_ptr tt::tt_fabric::EDMChannelWorkerLocationInfo* get_connection_info_ptr(
     uint32_t logical_channel_id) {
     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-        ct_args::connection_info_region_base_address +
+        map_address(ct_args::connection_info_region_base_address) +
         (logical_channel_id * sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo)));
 }
 

@@ -53,6 +53,7 @@ set(FABRIC_SOURCES
     fabric_context.cpp
     fabric_builder_context.cpp
     fabric_mux_config.cpp
+    fabric_mux_program_local_l1.cpp
     fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp
