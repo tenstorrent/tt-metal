@@ -64,7 +64,7 @@ DIT_VARIANTS = ("base", "distilled")  # the pipeline's checkpoints; "pup" (the p
 # L1_SMALL for the VAE conv2d, the trace region for the DiT + VAE traces).
 MESH_SHAPE = (4, 8)
 L1_SMALL_SIZE = 65536
-TRACE_REGION_SIZE = 64_000_000
+TRACE_REGION_SIZE = 256_000_000  # 2026-10-21: base 4096x4096 DiT trace 64.27 MB + the VAE trace exceeded 64 MB
 FABRIC_PACKET_BYTES = 8192
 
 
