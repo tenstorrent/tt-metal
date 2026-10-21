@@ -18,9 +18,9 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_block_size
-from .attention_minimax_h3 import MiniMaxH3Attention
-from .mmrs_config import has_mmrs_config, register_mmrs_config
+from .agmm_config import agmm_block_size, agmm_pin
+from .attention_minimax_h3 import MiniMaxH3Attention, norm_pin_kwargs
+from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -71,10 +71,17 @@ class MiniMaxH3TransformerBlock(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        dynamic_length: bool = False,
+        norm_worker_cap: int | None = None,
     ) -> None:
+        """`dynamic_length` freezes the ff1 / ff2 blockings at construction and gathers the modulation rows
+        by index (`ttnn.embedding` on ROW_MAJOR tables) instead of one-hot matmuls, so no per-block program
+        depends on the per-device length; `norm_worker_cap` pins the fused norms' worker count there."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
+        self.dynamic_length = dynamic_length
+        self._norm_kwargs = norm_pin_kwargs(norm_worker_cap) if dynamic_length else {}
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
@@ -110,6 +117,8 @@ class MiniMaxH3TransformerBlock(Module):
             is_fsdp=is_fsdp,
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            dynamic_length=dynamic_length,
+            norm_worker_cap=norm_worker_cap,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -153,6 +162,14 @@ class MiniMaxH3TransformerBlock(Module):
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        # Dynamic-length pins, resolved once per layer: no table scan per call.
+        self._ff1_pin = self._mmrs_pin = None
+        if dynamic_length:
+            grid = mesh_device.compute_with_storage_grid_size()
+            if self.use_fused_agmm:
+                self._ff1_pin = agmm_pin(*self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links)
+            if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
+                self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
 
     # ------------------------------------------------------------------ weights
 
@@ -222,16 +239,20 @@ class MiniMaxH3TransformerBlock(Module):
                 if self._fold_norm_weight:
                     norm = self.norm1 if p == _SCALE_MSA else self.norm2
                     table = ttnn.multiply(table, norm.weight.data)
-            # The gathers take the table as a 2D [rows, hidden_local] matmul operand.
+            # The gathers take the table as a 2D [rows, hidden_local] matmul operand (TILE) or, on the
+            # dynamic-length path, as the ROW_MAJOR table `ttnn.embedding` reads without an untilize.
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
-            tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+            tables.append(table if self.dynamic_length else ttnn.to_layout(table, ttnn.TILE_LAYOUT))
         return tables
 
-    def _gather_rows(self, table: ttnn.Tensor, onehot: ttnn.Tensor) -> ttnn.Tensor:
-        """One table row per row of the one-hot selector: [1, 1, S_local, hidden_local] for the per-token
-        gather, [1, 1, expanded_rows, hidden_local] for the tile-row selector."""
-        return ttnn.matmul(onehot, table, compute_kernel_config=self.mm_compute_kernel_config)
+    def _gather_rows(self, table: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
+        """One table row per row of the selector: [1, 1, S_local, hidden_local] for the per-token gather,
+        [1, 1, expanded_rows, hidden_local] for the tile-row selector. The selector is the bf16 one-hot of
+        the rows (a matmul operand) or, on the dynamic-length path, the uint32 row indices (an exact copy)."""
+        if self.dynamic_length:
+            return ttnn.unsqueeze(ttnn.embedding(selector, table, layout=ttnn.TILE_LAYOUT), 0)
+        return ttnn.matmul(selector, table, compute_kernel_config=self.mm_compute_kernel_config)
 
     def _onehot(self, adaln_indices: ttnn.Tensor, rows: int, eye: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """[1, 1, S_local, rows] bf16 one-hot of the table row per token; exact when multiplied into a bf16 table.
@@ -255,8 +276,12 @@ class MiniMaxH3TransformerBlock(Module):
     def onehot_table(
         self, adaln_indices: ttnn.Tensor, num_timesteps: int, eye: ttnn.Tensor | None = None
     ) -> ttnn.Tensor:
-        """The one-hot gather matrix shared by every block of a forward."""
-        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM, eye)
+        """The per-token row selector shared by every block of a forward: the one-hot gather matrix, or on the
+        dynamic-length path the `[1, S_local]` index view itself (nothing to allocate or free)."""
+        indices = self._gather_indices(adaln_indices)
+        if self.dynamic_length:
+            return indices
+        return self._onehot(indices, num_timesteps * MODALITY_NUM, eye)
 
     def tilerow_tables(
         self,
@@ -266,11 +291,14 @@ class MiniMaxH3TransformerBlock(Module):
         eye: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
         """`(tile_map, selector)` shared by every block of a forward when the caller built a tile-row map, else None
-        (the norms then take the per-token gather); `selector @ table` is the expanded table whose tile row
-        `tile_map[r]` is tile row `r` of the gather."""
+        (the norms then take the per-token gather); gathering the table through `selector` gives the expanded
+        table whose tile row `tile_map[r]` is tile row `r` of the gather."""
         if tile_map is None or expanded_indices is None:
             return None
-        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM, eye)
+        indices = self._gather_indices(expanded_indices)
+        if self.dynamic_length:
+            return tile_map, indices
+        return tile_map, self._onehot(indices, num_timesteps * MODALITY_NUM, eye)
 
     # ------------------------------------------------------------------ forward
 
@@ -300,7 +328,7 @@ class MiniMaxH3TransformerBlock(Module):
         tables = self._modulation_tables(temb)
 
         if onehot is None:
-            onehot = self._onehot(self._gather_indices(adaln_indices), tables[0].shape[0])
+            onehot = self.onehot_table(adaln_indices, temb.shape[2])
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], onehot)
@@ -321,6 +349,7 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_bias=norm_modulation(_SHIFT_MSA),
             dynamic_weight_includes_static=self._fold_norm_weight,
             dynamic_tile_row_map=tile_map,
+            **self._norm_kwargs,
         )
         # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
         # `residual + attn_out * gate` directly rather than the block adding it afterwards.
@@ -341,6 +370,7 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_bias=norm_modulation(_SHIFT_MLP),
             dynamic_weight_includes_static=self._fold_norm_weight,
             dynamic_tile_row_map=tile_map,
+            **self._norm_kwargs,
         )
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
@@ -358,36 +388,48 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
-        ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
-        # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
-        # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
-        # took the fused path 50x per denoise step straight onto the warned fallback config.
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
-        if (
-            self.tp_factor > 1
-            and self.ccl_manager.topology == ttnn.Topology.Ring
-            and has_mmrs_config(*ff2_shape, core_grid)
-        ):
-            # M is only known here (it tracks the packed sequence length), so the blocking is
-            # registered at the point of use rather than at construction. Idempotent and cheap.
-            register_mmrs_config(*ff2_shape, core_grid)
+        #
+        # The dynamic-length path resolved its one blocking at construction and skips the M-keyed gate.
+        fused = self._mmrs_pin is not None
+        if not fused and self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring:
+            ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
+            # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
+            # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
+            # took the fused path 50x per denoise step straight onto the warned fallback config.
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            fused = has_mmrs_config(*ff2_shape, core_grid)
+            if fused:
+                # M is only known here (it tracks the packed sequence length), so the blocking is
+                # registered at the point of use rather than at construction. Idempotent and cheap.
+                register_mmrs_config(*ff2_shape, core_grid)
+        if fused:
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,
                 modulation(_GATE_MLP),
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
-                default_block_size=ff1_block_size,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
+                mmrs_config=self._mmrs_pin,
+                **self._ff1_kwargs(normed),
             )
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
-            default_block_size=ff1_block_size,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            **self._ff1_kwargs(normed),
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
+
+    def _ff1_kwargs(self, normed: ttnn.Tensor) -> dict:
+        """ff1's blocking kwargs: the frozen pin, else the length-keyed swept table."""
+        if self._ff1_pin is None:
+            return {"default_block_size": agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])}
+        return {
+            "matmul_config": self._ff1_pin.config,
+            "num_workers_per_link": self._ff1_pin.num_workers_per_link,
+            "transpose_core_grid": self._ff1_pin.transpose_core_grid,
+        }

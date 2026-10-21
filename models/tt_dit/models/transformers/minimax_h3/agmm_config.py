@@ -21,6 +21,13 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import math
+from typing import NamedTuple
+
+import ttnn
+
+from ....utils.matmul import agmm_worker_grid
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -77,6 +84,37 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
 }
+
+
+# Blocking of the dynamic-length path: one program per (K, N) for every M, the swept per_core_M=12 entry,
+# which is what the 10 s and 15 s points resolve to on the transposed 12x9 grid.
+AGMM_PINNED_PER_CORE_M = 12
+
+
+class AgmmPin(NamedTuple):
+    """Frozen all-gather-matmul program of one layer: grid, blocking and orientation fixed for every M."""
+
+    config: ttnn.MinimalMatmulConfig
+    num_workers_per_link: int
+    transpose_core_grid: bool
+
+
+def agmm_pin(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> AgmmPin:
+    """The M-independent AGMM program of a `(K, N)` layer: transposed worker grid at every length (the
+    op's own `M > N` orientation would flip to_qkv at M > 5376 and ff1 at M > 7168 rows, inside the served
+    envelope) and the `AGMM_PINNED_PER_CORE_M` blocking."""
+    m_block, k_block, n_block = AGMM_BLOCK_SIZES[(k, n, AGMM_PINNED_PER_CORE_M)]
+    grid = agmm_worker_grid(full_grid, True, num_links)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=m_block,
+        K_block_size=k_block,
+        N_block_size=n_block,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=grid,
+    )
+    # in0 senders group along the M-parallel axis (grid.x when transposed) into `num_links` groups.
+    return AgmmPin(config, math.ceil(grid.x / num_links), True)
 
 
 def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:

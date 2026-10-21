@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 
 import torch
@@ -19,7 +20,18 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_block_size
+from .agmm_config import agmm_block_size, agmm_pin
+
+# Ring SDPA chunk pair of the dynamic-length path: one program for every per-device length.
+DYNAMIC_RING_SDPA_CHUNKS = (256, 512)
+
+
+def norm_pin_kwargs(worker_cap: int | None) -> dict:
+    """`DistributedRMSNorm.forward` kwargs that pin the fused norm's worker count, or `{}` when the layer
+    has no such parameter yet (then the op picks workers from the row count)."""
+    if worker_cap is None or "num_workers" not in inspect.signature(DistributedRMSNorm.forward).parameters:
+        return {}
+    return {"num_workers": worker_cap}
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -105,11 +117,18 @@ class MiniMaxH3Attention(Module):
         is_sequence_parallel: bool = True,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        dynamic_length: bool = False,
+        norm_worker_cap: int | None = None,
     ) -> None:
+        """`dynamic_length` freezes every length-keyed choice (AGMM grid/blocking/orientation, ring SDPA
+        chunks) at construction so one program per op serves every per-device length; `norm_worker_cap` is
+        the fused norm's pinned worker count on that path."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
+        self.dynamic_length = dynamic_length
+        self._norm_kwargs = norm_pin_kwargs(norm_worker_cap) if dynamic_length else {}
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -188,6 +207,20 @@ class MiniMaxH3Attention(Module):
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
+
+        # Dynamic-length pins, resolved once: no table scan and no orientation flip per call.
+        self._qkv_pin = self._out_pin = self._ring_sdpa_config = None
+        if dynamic_length and self.use_fused_agmm:
+            pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links)
+            self._qkv_pin = agmm_pin(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
+            self._out_pin = agmm_pin(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
+        if dynamic_length and self.use_ring:
+            self._ring_sdpa_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+                q_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[0],
+                k_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[1],
+                exp_approx_mode=False,
+            )
 
         # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
         # serial passes, ceil(n_local_heads * segs / rows) passes per row. Segmentation is what
@@ -510,11 +543,9 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(
-                self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
-            ),
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            **self._agmm_kwargs(self._qkv_pin, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -534,6 +565,7 @@ class MiniMaxH3Attention(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             trans_mat=self.rope_trans_mat if rope_cos is not None else None,
+            **self._norm_kwargs,
         )
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
@@ -586,7 +618,7 @@ class MiniMaxH3Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
-                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
+                program_config=self._ring_sdpa_config or self._sdpa_program_config(q_BHNE.shape[2], ring=True),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
@@ -628,14 +660,23 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(
-                self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
-            ),
             force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            **self._agmm_kwargs(self._out_pin, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND),
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
+
+    @staticmethod
+    def _agmm_kwargs(pin, k: int, n: int, x: ttnn.Tensor) -> dict:
+        """The linear's blocking kwargs: the frozen pin, else the length-keyed swept table."""
+        if pin is None:
+            return {"default_block_size": agmm_block_size(k, n, x.padded_shape[-2])}
+        return {
+            "matmul_config": pin.config,
+            "num_workers_per_link": pin.num_workers_per_link,
+            "transpose_core_grid": pin.transpose_core_grid,
+        }
