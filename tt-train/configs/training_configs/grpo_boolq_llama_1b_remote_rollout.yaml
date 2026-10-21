@@ -7,6 +7,8 @@ training_config:
 
   # HuggingFace Hub id; both ranks load their weights from it.
   model_source: "meta-llama/Llama-3.2-1B-Instruct"
+  # Seeds the training rank only: tt-transformers seeds rollout sampling randomly, so remote runs are not reproducible.
+  seed: 42
 
   optimizer:
     type: MorehAdamW

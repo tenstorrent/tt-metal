@@ -160,7 +160,6 @@ def build_rollout_sampler(
             temperature=temperature,
             top_k=remote_rollout.top_k,
             top_p=remote_rollout.top_p,
-            seed=remote_rollout.seed,
             dummy_weights=True,
         )
     raise ValueError(f"unknown rollout sampler {source!r}")
@@ -173,7 +172,6 @@ class RemoteRolloutConfig:
     mesh_shape: List[int]
     max_batch_size: int
     max_seq_len: int
-    seed: Optional[int] = None
     top_k: int = 32
     top_p: float = 1.0
 
