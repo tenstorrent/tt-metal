@@ -1032,12 +1032,15 @@ def test_klein_partitioned_decoder_slices() -> None:
                 per_slice,
             )
             assert count == decoder_slice_count(rows, w, cin, cout, tensor_parallel, 4)
+            assert (w // 32) % count == 0, (label, (rows, w, cin, cout), count)  # TILE-aligned slices
     t2048 = klein_partitioned_decoder_slices(2048, 2048, h_factor=8, tp_factor=4)
-    assert t2048[(258, 2048, 256, 256)] == 17 and t2048[(258, 2048, 128, 128)] == 9 and t2048[(258, 2048, 128, 3)] == 33
-    assert t2048[(130, 1024, 512, 512)] == 9 and t2048[(34, 256, 32, 512)] == 1
+    assert (
+        t2048[(258, 2048, 256, 256)] == 32 and t2048[(258, 2048, 128, 128)] == 16 and t2048[(258, 2048, 128, 3)] == 64
+    )
+    assert t2048[(130, 1024, 512, 512)] == 16 and t2048[(34, 256, 32, 512)] == 1
     t4096 = klein_partitioned_decoder_slices(4096, 4096, h_factor=8, tp_factor=4)
     assert t4096[(514, 4096, 128, 3)] == conv_slice_cap(4096) == 128  # the only budget-capped entry
-    assert t4096[(514, 4096, 256, 256)] == 66 and t4096[(258, 2048, 512, 512)] == 33
+    assert t4096[(514, 4096, 256, 256)] == 128 and t4096[(258, 2048, 512, 512)] == 64
     # registration: full-image + per-device keys side by side, shipped entries untouched, idempotent
     mesh = (97, 97)  # a shape no other test registers
     Conv2d.slice_params.pop(mesh, None)
@@ -1096,4 +1099,4 @@ def test_set_conv_config_overrides() -> None:
     ):
         assert "set_conv_config_overrides(" in inspect.getsource(
             builder
-        ) and "config_tensors_in_dram=True" in inspect.getsource(builder)
+        ) and "config_tensors_in_dram=_config_tensors_in_dram()" in inspect.getsource(builder)
