@@ -1,0 +1,26 @@
+{
+ "expected": {
+  "chat": 56,
+  "code": null,
+  "fact": 15,
+  "json": null,
+  "list": 56,
+  "math": 56,
+  "multilingual": 9,
+  "prose": 13,
+  "refactor": 24,
+  "sky": 19,
+  "story": 6,
+  "summary": 75
+ },
+ "pin": "A3/chunked-32k/divergence_index",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-27",
+  "evidence": "chat server startup replay, chunked prefill, one 1x4 p150 line, 2026-09-27: gr_recip_last (the gated-residual read's front with the rsqrt applied after the down projection, COMPONENT class) by default beside the MoE rows form on two rings; against the 2026-09-25 table chat 2 -> 56 and code 32 -> none (later), math 61 -> 56 (the near-tie NUMERICS records at 0.36 logits), the other nine indices unchanged; eight streams differ past their divergence",
+  "head": "1aae82bbe33f7dcb7b61be56623972edbe51a921",
+  "run": "acceptance-default.json",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

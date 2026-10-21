@@ -1,0 +1,25 @@
+{
+ "expected": {
+  "chat": "ecf6849800f3e22d26a510b5f62f27635b111e47e43f916b93aba2334d18add1",
+  "code": "159de7287947ac44a7f8fe4d4405341775aaf5b0c73b974dce3e826dbc2d42ff",
+  "fact": "d165f2fd536c951e30a81542d4da983cb6d9034183d4d497e4dd9a07c924c53e",
+  "json": "a5b4defa72fae270391869377862fe60b95d893a6c2cfd24ea265bb59de6d16f",
+  "list": "ea554701b6f569357a19e22b0e743c4eb643d895a8448c68dc96ecc7e0616c2e",
+  "math": "19f55ccb4bb2174423d32141df95c365aa6306b246a65f26b4e5b255b64a7ea2",
+  "multilingual": "2992a198ce3299dea55a9a0dc1a8cb1e36880e4ae3063322eb1b7b8df377a814",
+  "prose": "966b4e1e0a3aa6b87fd792dfb45711043b14b7314d0eee01823540da3e9ec26a",
+  "refactor": "8a812a8ea01b3d7da9da5788d0d03034082562b5c5e7208ab7efc74ac301ee3d",
+  "sky": "de86bbc09c482272bf2da4c31c3f13cc593e5590ed85a8dacbd72d6cc80205fc",
+  "story": "1d6124d2611dfce1326d28408c69fc3291225ba8858b74712b092eb18bd30038",
+  "summary": "d9d024681580637c7df49daeb494605434d11459d87314dae53566a7527cbba6"
+ },
+ "pin": "A3/forced-32k/device_token_ids_sha256",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-06",
+  "evidence": "chat server startup replay, teacher-forced prefill (--prefill-mode teacher_forced), one lane of a 4x p150 host, 2026-09-06 (the GDN softplus gate and the fused weighted reduce fixed); json, math, prose, refactor, sky and summary are bitwise the chunked-prefill streams of the same day",
+  "head": "b98fc47541d192c16d32912111901fc188195e8a",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}
