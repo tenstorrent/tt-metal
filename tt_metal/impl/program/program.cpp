@@ -3271,6 +3271,31 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
+bool detail::ProgramImpl::runs_on_service_cores(const IDevice* device) const {
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    if (!svc.has_any_claims()) {
+        return false;
+    }
+    std::vector<const IDevice*> devices;
+    if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+        for (IDevice* dev : mesh->get_devices()) {
+            devices.push_back(dev);
+        }
+    } else {
+        devices.push_back(device);
+    }
+    for (const auto& per_type : this->logical_cores()) {
+        for (const auto& core : per_type) {
+            for (const IDevice* dev : devices) {
+                if (svc.is_service_core(dev->id(), core)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
     // The compile and allocation steps below are individually guarded and would early-return:
     // nothing has changed since this program was compiled and laid out for this device. Skip them
@@ -3278,8 +3303,9 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // program. Validation still reads live device state. In the lockstep case,
     // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
-        const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-        if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
+        // Service claims only matter to programs placed on service cores (no-mixing contract), so a
+        // worker-grid program keeps the cached check while e.g. an H2D service holds claimed cores.
+        if (this->simple_l1_validation_cached_ &&
             device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
             device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP) {
             if (this->simple_l1_validation_region_end_ == 0) {
@@ -3295,8 +3321,9 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
-        this->simple_l1_validation_cached_ =
-            !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+        this->simple_l1_validation_cached_ = !this->runs_on_service_cores(device) &&
+                                             device->allocator_impl()->get_config().allocator_mode ==
+                                                 AllocatorMode::LOCKSTEP;
         this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
         return;
     }
@@ -3315,9 +3342,9 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
 
-    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-    this->simple_l1_validation_cached_ =
-        !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+    this->simple_l1_validation_cached_ = !this->runs_on_service_cores(device) &&
+                                         device->allocator_impl()->get_config().allocator_mode ==
+                                             AllocatorMode::LOCKSTEP;
     this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
     this->simple_l1_validation_region_end_ = 0;
     for (const auto& cb_allocator : this->cb_allocators_) {

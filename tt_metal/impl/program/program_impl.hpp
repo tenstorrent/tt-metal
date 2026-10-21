@@ -539,6 +539,8 @@ public:
     void validate_dataflow_buffer_region(const IDevice* device);
     // Ensures that circular buffer core ranges are within the device compute grid
     void validate_circular_buffer_core_ranges(const IDevice* device);
+    // True if any of this program's cores is a claimed service core on `device` (or any of its mesh devices)
+    bool runs_on_service_cores(const IDevice* device) const;
 
     // Deallocate circular buffers and unregister from devices
     void deallocate_circular_buffers();
