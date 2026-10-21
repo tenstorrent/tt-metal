@@ -226,8 +226,7 @@ add_executable(unit_tests_ttnn_mock_allocator)
 target_sources(unit_tests_ttnn_mock_allocator PRIVATE ${UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES})
 setup_ttnn_test_target(unit_tests_ttnn_mock_allocator)
 
-# unit_tests_ttnn_kernel_compile: linked into tt-nn-validation-kernel-compile (ttnn/test), which runs
-# on CPU-only runners with mock devices.
+# unit_tests_ttnn_kernel_compile: CPU_ kernel compile tests on mock devices, linked into tt-nn-validation-smoke.
 
 add_library(unit_tests_ttnn_kernel_compile OBJECT)
 add_library(TTNN::Test::KernelCompile ALIAS unit_tests_ttnn_kernel_compile)
