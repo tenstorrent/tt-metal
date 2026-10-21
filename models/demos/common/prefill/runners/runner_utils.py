@@ -144,14 +144,17 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
     )
 
 
-# Rows per chip of the MTP id block below the hidden on the D2D activation (see mtp_prefill/id_transport.py).
-MTP_ID_ROWS = TILE_HEIGHT
-
-
-def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
+def mtp_id_segment_specs(mesh_shape: tuple, chunk_size: int, mtp_levels: int) -> list:
+    """Global specs of the D2D segments that carry a chunk's MTP ids next to the activation: the chunk ids,
+    then the lookahead ids. The same per-chip split the first rank cuts its H2D row into, so the first
+    rank forwards those two tensors as-is and the last rank gathers the union from them. Empty when MTP is
+    off."""
     if not mtp_levels:
-        return chunk_size
-    return chunk_size + sp_factor * MTP_ID_ROWS
+        return []
+    return [
+        make_token_spec(mesh_shape, h2d_row_len(chunk_size, mesh_shape[0])),
+        make_token_spec(mesh_shape, num_mtp_tokens(mtp_levels)),
+    ]
 
 
 def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
