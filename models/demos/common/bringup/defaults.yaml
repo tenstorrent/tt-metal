@@ -29,6 +29,8 @@ thresholds:                # accuracy gates (PCC lower limits unless named other
   state: 0.97
   state_overlap: 0.75      # F99: integer states (top-k index lists): mean per-row set overlap with the golden (lower limit). Structural:
                            # a wrong selector gives ~k/n (<= 0.5 once the pool is 2k); near-tie flips grow with the sequence (DeepSeek-V4.1: 0.97 at 4k, 0.897 at 55k with every layer at PCC 0.9966)
+  state_overlap_waived: 0.5  # F124: the floor under an owner waiver of state_overlap (tests.waivers ladder.state_overlap),
+                           # e.g. native numerics vs goldens with the reference's fp4 index rounding; a wrong selector stays below it
   final_hidden: 0.97
   top5: 0.9
   swap_step_rel: 0.02      # swapped step vs the CPU step on the same inputs: rel L2 (upper limit)

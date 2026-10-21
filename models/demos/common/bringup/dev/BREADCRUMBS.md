@@ -1403,3 +1403,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   per-step tests' bug-check setting only (rule 14). The bringup skill's intake asks for the reference point.
   DeepSeek-V4.1: built at max precision, then P.4 / P.6 / P.7 / P.10 / P.13 to get down to realistic; the
   sparse_sdpa high-precision options existed only to beat the parity fp8 quantizers (removed in P.8).
+- F124 (owner, 2026-10-21): an owner waiver of the ladder's index-state overlap. `tests.waivers` key `ladder.state_overlap`
+  (reason) lowers the limit from `state_overlap` to the structural floor `state_overlap_waived` (0.5), reported WAIVED with
+  `overlap_state_min_waived`; a wrong selector still fails. Origin: DeepSeek-V4.1 X.3, native numerics (F112) at 55k gave
+  L24 overlap 0.695 vs goldens whose selection used the reference's fp4 index q-dq (NUMERICS=official: 0.875, PASS); every
+  layer PCC >= 0.9944. Proper fix: F118 (goldens follow NUMERICS). Selftest: test_ladder_states.py.
