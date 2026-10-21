@@ -15,7 +15,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -34,7 +33,6 @@ from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
@@ -237,7 +235,6 @@ def test_unpack_tilize_quasar(
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(
                 DataCopyType.B2D
@@ -272,7 +269,6 @@ def test_unpack_tilize_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

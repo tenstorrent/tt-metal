@@ -31,6 +31,15 @@ inline std::vector<uint8_t> read_receiver_ring_bytes(
     return bytes;
 }
 
+// Nothing zeroes a ring, and an earlier run can have left the same bytes at the same address. Clear every
+// receiver's ring before a check that new bytes arrived.
+inline void zero_receiver_rings(distributed::MeshDevice& device, const experimental::PrefetcherPipe& pipe) {
+    std::vector<uint32_t> zeros(pipe.ring_size() / sizeof(uint32_t), 0);
+    for (const CoreCoord& receiver_core : corerange_to_cores(pipe.receiver_cores())) {
+        slow_dispatch::WriteToL1(device, receiver_core, pipe.buffer_address(), zeros, CoreType::WORKER);
+    }
+}
+
 inline bool verify_receiver_ring(
     distributed::MeshDevice& device,
     const experimental::PrefetcherPipe& pipe,

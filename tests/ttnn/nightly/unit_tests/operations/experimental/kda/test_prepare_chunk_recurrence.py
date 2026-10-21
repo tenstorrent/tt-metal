@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -302,7 +302,7 @@ def _assert_output_accurate(
     t_inv_max_abs_threshold: float = _T_INV_MAX_ABS,
 ) -> None:
     assert torch.isfinite(actual).all(), f"{context} {name} contains nonfinite values"
-    assert_accurate(expected, actual, name=f"{context} {name}", pcc_threshold=0.999)
+    assert_accurate(expected, actual, name=f"{context} {name}", pcc_threshold=0.999, nrmse_threshold=0.007)
     if name == "t_inv":
         _assert_t_inv_strict_lower_accurate(
             expected,
@@ -345,6 +345,7 @@ def _assert_t_inv_strict_lower_accurate(
         actual_strict_lower,
         name=f"{context} t_inv strictly-lower",
         pcc_threshold=0.999,
+        nrmse_threshold=0.01,
     )
     max_abs = float((expected_strict_lower - actual_strict_lower).abs().max())
     assert (

@@ -73,6 +73,7 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
+        uint32_t go_ring_slot,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();

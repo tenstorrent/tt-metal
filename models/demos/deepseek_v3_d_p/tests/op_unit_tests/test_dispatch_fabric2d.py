@@ -14,8 +14,9 @@ control tensors and the routing agree by construction. The bucket-fill ASSERT in
 (watcher builds only) relies on that.
 
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
-seq_len_per_chip is 640. Two tests vary it on purpose:
-`test_dispatch_fabric2d_partial_last_tile` and `test_dispatch_fabric2d_padding_config`.
+seq_len_per_chip is 640. `test_dispatch_fabric2d_partial_last_tile` varies it on purpose,
+`test_dispatch_fabric2d_padding_config` marks part of it as padding, and
+`test_dispatch_fabric2d_topk_above_bound` shrinks it because the op is refused before it runs.
 
 The mesh axis comes from the shared table in `tests/pcc/mesh_configs.py`, so CI's hardware-class
 selection through `requires_mesh_topology` matches the model's other prefill tests.
@@ -50,6 +51,9 @@ assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch_fabric2d mesh configs mis
 
 # The production 8x4 mesh on its own, for the tests about how the op is called, not the ring geometry.
 _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
+
+# The largest top-k the op is validated at, MAX_EXPERTS_PER_TOK in dispatch_fabric2d_device_operation.cpp.
+MAX_TOPK = 16
 
 
 def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb):
@@ -307,6 +311,9 @@ class _Fixture:
     Shared by the tests below that are about how the op is called, not about the routing.
     Routing coverage (in-group vs production draws, roomy vs tight capacity) lives in
     test_dispatch_fabric2d's parametrization.
+
+    `capacity_div` divides the buffer down from room for every pick the group makes,
+    H * seq_len_per_chip * topk pages. None sizes it to the draw, the smallest buffer that drops nothing.
     """
 
     # emb_dim 512 is 16 tiles wide, so the untilizer packs two column blocks per tile row. At 256 there
@@ -327,7 +334,7 @@ class _Fixture:
         self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
         self.num_routed_experts, self.topk = num_routed_experts, topk
         self.experts_per_chip = num_routed_experts // G // H
-        self.capacity = max(1, H * seq_len_per_chip * topk // capacity_div)
+        self.capacity_div = capacity_div
         torch.manual_seed(seed)
         self.table = _expert_dispatch_table(num_routed_experts, H, G)
         experts_per_group = num_routed_experts // G
@@ -359,7 +366,7 @@ class _Fixture:
         """Bring every routing input back in line with `indices`. Call it after editing `indices`.
 
         Recomputes the expert offsets, counts and region tables from `indices`, uploads them together
-        with `indices` itself, and clears the cached `reference()`.
+        with `indices` itself, resizes a buffer sized to the draw, and clears the cached `reference()`.
 
         The op trusts the offsets table to match the indices: it is how every chip on the axis, forwarding
         chips included, sizes the chunks it waits for and forwards. A table from a stale draw has the right
@@ -381,6 +388,12 @@ class _Fixture:
             )
             offs[g], counts[g], region[g] = o[0].to(torch.int32), c[0].to(torch.int32), r[0].to(torch.int32)
         self.offs = offs
+        if self.capacity_div is None:
+            # Expert e's pages on its chip run from region[e] to region[e] + counts[e], so the largest end is
+            # the most pages any chip is sent.
+            self.capacity = int((region + counts).max())
+        else:
+            self.capacity = max(1, H * self.seq_len_per_chip * self.topk // self.capacity_div)
         self.tt_idx = self._shard(self.indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
         self.tt_offs = self._shard(offs, (None, 0), ttnn.int32)
         self.tt_counts = self._shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
@@ -430,8 +443,8 @@ class _Fixture:
         multi-launch tests compare several launches against the same draw.
 
         The cache is cleared only by `rebuild()`, so after editing `indices` a test must call it or it
-        is checked against the old draw. Nothing else needs clearing: `x`, `capacity` and `emb_dim`
-        never change after `__init__`.
+        is checked against the old draw. Nothing else needs clearing: `x` and `emb_dim` never change
+        after `__init__`, and `capacity` changes only in `rebuild()`.
         """
         if self._reference is None:
             self._reference = _reference_dispatch(
@@ -612,8 +625,7 @@ def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_d
             capacity_div=8,
         )
         payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
-        # Reading the outputs back is what synchronises the launches: this op deadlocks if a chip
-        # starts sending into a downstream chip that is still retiring the previous one.
+        # Reading the outputs back keeps the launches apart; the back-to-back and overlapped-skew tests overlap them.
         fx.check(payload, metadata, f"{label}, emb {emb_dim}")
         if entries_after_first is None:
             entries_after_first = mesh_device.num_program_cache_entries()
@@ -648,6 +660,55 @@ def test_dispatch_fabric2d_partial_last_tile(mesh_device, device_params, num_lin
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_topk16(mesh_device, device_params, num_links):
+    """Kimi K3's routing shape dispatches byte-exact in both layouts: top-16 over 896 experts at emb 3584.
+
+    The routing index unrolls a token's picks by eight, so top-16 is the case that loops over them. On
+    8x1 all 896 experts sit in one group, 112 per chip, so the stream core's scratch is larger than on
+    the 8x4 production mesh.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(
+        mesh_device,
+        cfg.dispatch_group_size,
+        cfg.num_dispatch_groups,
+        emb_dim=3584,
+        num_routed_experts=896,
+        topk=MAX_TOPK,
+        capacity_div=None,
+    )
+    # A buffer one page short drops the same pick in the op and the reference, so the byte-exact check
+    # alone would pass. The draw must fit exactly: every routed pick placed, and the last page used.
+    _, _, src_of = fx.reference()
+    routed = int(sum((fx.table[g, fx.indices[g]] != -1).sum() for g in range(fx.G)))
+    placed = int((src_of >= 0).sum())
+    assert placed == routed, f"{routed - placed} of {routed} picks dropped at a capacity sized to the draw"
+    assert bool((src_of[..., fx.capacity - 1] >= 0).any()), f"no chip uses page {fx.capacity - 1}; the buffer is roomy"
+    for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
+        fx.check(payload, metadata, f"{label}, top-16 over 896 experts, emb 3584")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_topk_above_bound(mesh_device, device_params, num_links, expect_error):
+    """A top-k above the supported bound is refused when the op is validated, before any kernel is built."""
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=32, topk=MAX_TOPK + 1)
+    with expect_error(RuntimeError, f"num_experts_per_tok {MAX_TOPK + 1} is above {MAX_TOPK}"):
+        fx.run(cfg.sp_axis, num_links)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
     _PRODUCTION_MESH,
     indirect=["mesh_device", "device_params"],
 )
@@ -671,15 +732,11 @@ def test_dispatch_fabric2d_unaligned_emb_dim(mesh_device, device_params, num_lin
 )
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
-    """Four launches queued with no host sync between them, as in a traced replay.
+    """Four launches queued with no host sync between them, as in a traced replay, over two alternating draws.
 
-    Every other test reads outputs between launches, so launches never overlap. Here a chip that
-    finishes early can start sending into a downstream chip still finishing the previous launch, racing the
-    reset of the arrival counter:
-
-    - An increment lost to the reset hangs the forward waiting for it.
-    - A counter left too high lets the forward read pages before they arrive. Alternating two draws
-      makes those stale pages differ from the expected ones.
+    A chip that finishes early is held by its sender's launch credit until the downstream chip has started the
+    same launch, so the arrival counter and the forwarding region stay right without a host sync. A stale count
+    or page would hand back the other draw's pages, which alternating the draws makes visible.
     """
     cfg = extract_mesh_config(mesh_device)
     a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=31, capacity_div=8)
@@ -691,6 +748,63 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
     for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
         fx.check(payload, metadata, f"launch {i} of four with no host sync between them")
     logger.info("back-to-back: 4 unsynchronised launches byte-exact")
+
+
+def _starve_a_relay(fx):
+    """Rewrite a fixture's draw so chip 0 floods chip 1's forwarding region while chip 1 is busy.
+
+    Chip 0 sends every pick two hops, to chip 2, so all of it lands in chip 1's forwarding region. Chip 1 sends
+    every pick of its own one hop, to chip 2, and reads its forwarding region only after its own sends. Every
+    other chip keeps its picks local. Chip 0 then finishes a launch long before chip 1 has read what it sent,
+    and is free to start the next launch's forwards into pages chip 1 has not read yet.
+    """
+    G, H = fx.G, fx.H
+    for g in range(G):
+        experts_on = {pos: [e for e in range(fx.num_routed_experts) if int(fx.table[g, e]) == pos] for pos in range(H)}
+        for origin in range(H):
+            target = 2 if origin < 2 else origin
+            picks = experts_on[target][: fx.topk]
+            assert len(picks) == fx.topk, f"chip {target} hosts {len(picks)} experts, need {fx.topk}"
+            fx.indices[g, origin, :, :] = torch.tensor(picks, dtype=torch.int64)
+    fx.rebuild()
+    return fx
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+# Short of the CI job's budget, so a launch credit that never arrives fails this test rather than the job.
+@pytest.mark.timeout(180)
+def test_dispatch_fabric2d_overlapped_skew(mesh_device, device_params, num_links):
+    """Overlapped launches stay byte-exact when one chip runs a launch ahead of its relay.
+
+    The forwarding region is reused at the same offsets every launch. With `_starve_a_relay`'s draw chip 0
+    finishes early and, left to itself, starts the next launch's forwards into chip 1's region while chip 1 is
+    still reading the previous launch's pages. The launch credit holds chip 0's sender until chip 1 has
+    started the new launch. Without it the overwrite shows within the first few launches.
+
+    Four payloads in rotation over one routing. A stale page then carries the right next hop and fails as
+    wrong bytes, rather than as a misrouted token that could hang the ring.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    launches = 8
+    # Half of roomy: chip 2 takes three origins' picks, 15360 pages, and nothing is dropped.
+    payloads = [
+        _starve_a_relay(
+            _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=40 + i, capacity_div=2)
+        )
+        for i in range(4)
+    ]
+    assert all(torch.equal(fx.indices, payloads[0].indices) for fx in payloads), "the routing must not vary"
+    order = [payloads[i % len(payloads)] for i in range(launches)]
+
+    # Queued together, read afterwards. Nothing here waits on the device.
+    results = [fx.run(cfg.sp_axis, num_links) for fx in order]
+    for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
+        fx.check(payload, metadata, f"launch {i} of {launches}, chip 1 starved")
+    logger.info(f"overlapped skew: {launches} launches byte-exact")
 
 
 @pytest.mark.parametrize(
