@@ -177,9 +177,9 @@ private:
     bool prior_clean_shutdown_ = true;
     // Non-zero when the recv_core is a DRAM programmable core: every NOC write
     // from host to its L1 must add this offset on top of the local L1 address.
-    // Zero for worker recv cores (worker L1 has local==NOC space). Captured
-    // into the pcie_writer lambda in init_receiver_tlb so write() can keep
-    // passing local addresses.
+    // Zero for worker recv cores (worker L1 has local==NOC space). init_receiver_tlb
+    // anchors the receiver's window here, or adds it to each write when there is no
+    // window, so write() can keep passing local addresses.
     uint64_t dram_l1_noc_offset_ = 0;
     // Receiver core type, set at construction. The authoritative signal for
     // CoreType resolution and the DRAM-recv write path in init_receiver_tlb.

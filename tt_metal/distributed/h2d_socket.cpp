@@ -319,9 +319,9 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // runtime (only socket construction / JIT), so the installed writer is harmless there.
 
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
-    // ctor sets Dram, every other path is Tensix). Used only to resolve the
-    // virtual coordinate — logical coords overlap across core types, so this
-    // can't be inferred from coordinates here.
+    // ctor sets Dram, every other path is Tensix). Used to resolve the virtual
+    // coordinate — logical coords overlap across core types, so this can't be
+    // inferred from coordinates here — and to pick the window's ordering below.
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     uint32_t recv_device_id;
@@ -390,26 +390,22 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
             dram_receiver ? tt::umd::IoOrdering::Posted : tt::umd::IoOrdering::Strict,
             /*core_end=*/std::nullopt,
             dram_receiver ? tt::umd::WindowFlags::UnicastWrite : tt::umd::WindowFlags::None);
-        if (window != nullptr) {
-            const uint64_t window_base = window->get_target_config().addr;
-            const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset + fifo_size_;
-            const uint64_t config_end =
-                static_cast<uint64_t>(config_buffer_address_) + l1_offset + sizeof(receiver_socket_md);
-            if (window_base <= l1_offset && std::max(fifo_end, config_end) - window_base <= window->get_size()) {
-                receiver_core_window_ = std::move(window);
-            }
+        // The window is addressed from its anchor, so a local L1 address is its offset into the window.
+        const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + fifo_size_;
+        const uint64_t config_end = static_cast<uint64_t>(config_buffer_address_) + sizeof(receiver_socket_md);
+        if (window != nullptr && std::max(fifo_end, config_end) <= window->get_size()) {
+            receiver_core_window_ = std::move(window);
         }
     }
 
     if (receiver_core_window_ != nullptr) {
-        const uint64_t window_base = receiver_core_window_->get_target_config().addr;
-        pcie_writer = [this, l1_offset, window_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_window_->write_block(device_addr + l1_offset - window_base, data, num_bytes);
+        pcie_writer = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_window_->write_block(device_addr, data, num_bytes);
         };
     } else {
         // Non-Blackhole, or no window reaches the target: write through UMD instead
-        // (the driver may reconfigure a window per write). Covers Wormhole B0 and the
-        // DRAM-recv L1 path described above.
+        // (the driver may reconfigure a window per write). Covers Wormhole B0, mock and
+        // emulated devices.
         pcie_writer = [&cluster, recv_device_id, recv_virtual_core, l1_offset](
                           void* data, uint32_t num_bytes, uint64_t device_addr) {
             cluster.write_core(
@@ -936,18 +932,15 @@ uint32_t H2DSocketImpl::try_stage(const void* data, uint32_t max_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     const auto* pages = static_cast<const uint8_t*>(data);
+    if ((fifo_size_ - (bytes_sent_ - bytes_acked_)) / page_size_ < max_pages) {
+        tt_driver_atomics::mfence();
+        volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+        bytes_acked_ = bytes_acked_value;
+    }
     uint32_t staged = 0;
-    bool acked_refreshed = false;
     while (staged < max_pages) {
-        uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
-        if (bytes_free < page_size_ && !acked_refreshed) {
-            tt_driver_atomics::mfence();
-            volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
-            bytes_acked_ = bytes_acked_value;
-            bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
-            acked_refreshed = true;
-        }
         // One write per run of pages that fits in the FIFO before it wraps.
+        const uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
         const uint32_t pages_before_wrap = (fifo_curr_size_ - write_ptr_) / page_size_;
         const uint32_t run = std::min({max_pages - staged, bytes_free / page_size_, pages_before_wrap});
         if (run == 0) {

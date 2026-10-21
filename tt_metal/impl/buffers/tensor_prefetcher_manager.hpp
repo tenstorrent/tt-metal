@@ -59,9 +59,9 @@ class MeshDevice;
 //     fixed-size socket pages (splitting when the tensor list overflows a page)
 //     and pushes them onto the internal queue in order. The host worker thread
 //     fans each page out to every socket whose mesh coord is in `subset` via
-//     non-blocking try_write so one slow socket can't starve the others. The
-//     caller is responsible for keeping tensors and the GCB alive until stop()
-//     (see the public tensor_prefetcher.hpp note).
+//     non-blocking try_stage / publish_staged so one slow socket can't starve
+//     the others. The caller is responsible for keeping tensors and the GCB
+//     alive until stop() (see the public tensor_prefetcher.hpp note).
 //   * stop() pushes DRAIN requests naming every target still in memory, then an
 //     all-zero STOP page to the full mesh, joins the worker thread, WaitProgramDone
 //     on each device, and releases per-cycle resources.

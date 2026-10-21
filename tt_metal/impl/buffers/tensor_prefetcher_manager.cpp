@@ -1631,8 +1631,8 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     //   3. the WAIT_CQ enqueue into pending_.
     // If the lock were dropped between them, two concurrent callers could interleave their
     // dispatcher writes out of counter order, and stop() could slip its STOP sentinel into
-    // pending_ ahead of this WAIT_CQ request — worker_loop would then try_write() the
-    // WAIT_CQ to a kernel that has already exited and spin forever (try_write has no
+    // pending_ ahead of this WAIT_CQ request — worker_loop would then send the
+    // WAIT_CQ to a kernel that has already exited and spin forever (its sends have no
     // stop_requested_ check). queue() and stop() take the lock the same way, so all three
     // serialize. enqueue_write_dram_core_counter is documented to run under the caller's
     // api lock and does NOT re-lock, so holding it here does not self-deadlock.
@@ -1744,11 +1744,9 @@ void TensorPrefetcherManager::worker_loop() {
     // independently, as nothing on the device orders one sender's requests against another's.
     std::vector<std::deque<const uint8_t*>> unsent(sockets_.size());
     std::deque<Request> taken;
-    size_t num_unsent = 0;
-    uint32_t page_bytes = 0;
 
     const auto take_request = [&](Request&& request) {
-        Request& req = taken.emplace_back(std::move(request));
+        const Request& req = taken.emplace_back(std::move(request));
         // PREFETCH targets only the sender cores mapped by its GCB. STOP / WAIT_CQ leave
         // target_sender_indices empty and broadcast to every provisioned sender.
         const bool fanout_all_senders = req.target_sender_indices.empty();
@@ -1759,15 +1757,13 @@ void TensorPrefetcherManager::worker_loop() {
             "Tensor prefetcher request has {} sender pages for {} target senders",
             req.sender_pages.size(),
             req.target_sender_indices.size());
-        page_bytes = static_cast<uint32_t>(req.sender_pages.front().size());
         const auto send_page = [&](uint32_t socket_index, const std::vector<uint8_t>& page) {
             TT_FATAL(
-                page.size() == page_bytes,
-                "Tensor prefetcher request page is {} B, but its other pages are {} B",
+                page.size() == sockets_[socket_index]->get_page_size(),
+                "Tensor prefetcher request page is {} B, but its socket's pages are {} B",
                 page.size(),
-                page_bytes);
+                sockets_[socket_index]->get_page_size());
             unsent[socket_index].push_back(page.data());
-            ++num_unsent;
         };
         for (const auto& dev_coord : req.target_devices) {
             auto it = device_index_by_coord_.find(dev_coord);
@@ -1798,61 +1794,62 @@ void TensorPrefetcherManager::worker_loop() {
         }
     };
 
+    std::deque<Request> incoming;
     std::vector<uint8_t> run;
     std::vector<distributed::H2DSocket*> staged;
     staged.reserve(sockets_.size());
     while (true) {
         // A pass that starts with nothing unsent writes one page per socket, so that a request on its own,
         // or the first of a burst, is published without waiting for the pages behind it.
-        bool starting_idle = false;
+        const bool starting_idle = std::ranges::all_of(unsent, [](const auto& pages) { return pages.empty(); });
+        if (starting_idle) {
+            taken.clear();
+        }
         {
             std::unique_lock<std::mutex> lk(queue_mu_);
-            if (num_unsent == 0) {
-                taken.clear();
+            if (starting_idle) {
                 queue_cv_.wait(lk, [&] { return !pending_.empty() || stop_requested_.load(); });
                 if (pending_.empty()) {
                     // Stop with empty queue → break out, the main thread handles
                     // sentinel broadcast outside the lock.
                     return;
                 }
-                starting_idle = true;
             }
-            while (!pending_.empty()) {
-                take_request(std::move(pending_.front()));
-                pending_.pop_front();
-            }
+            incoming.swap(pending_);
         }
+        for (Request& req : incoming) {
+            take_request(std::move(req));
+        }
+        incoming.clear();
 
         // Stage each socket's next pages in one write, then publish them all with one pair of fences.
         const uint32_t max_pages = starting_idle ? 1u : kMaxPagesPerSocketWrite;
-        size_t num_sent = 0;
         for (size_t socket_index = 0; socket_index < unsent.size(); ++socket_index) {
             auto& pages = unsent[socket_index];
             if (pages.empty()) {
                 continue;
             }
+            distributed::H2DSocket& socket = *sockets_[socket_index];
+            const uint32_t page_bytes = socket.get_page_size();
             const auto num_pages = static_cast<uint32_t>(std::min<size_t>(max_pages, pages.size()));
             run.resize(static_cast<size_t>(num_pages) * page_bytes);
             for (uint32_t i = 0; i < num_pages; ++i) {
                 std::memcpy(run.data() + static_cast<size_t>(i) * page_bytes, pages[i], page_bytes);
             }
-            const uint32_t num_staged = experimental::detail::try_stage(*sockets_[socket_index], run.data(), num_pages);
+            const uint32_t num_staged = experimental::detail::try_stage(socket, run.data(), num_pages);
             if (num_staged > 0) {
                 pages.erase(pages.begin(), pages.begin() + num_staged);
-                staged.push_back(sockets_[socket_index].get());
-                num_sent += num_staged;
+                staged.push_back(&socket);
             }
         }
-        if (!staged.empty()) {
-            experimental::detail::publish_staged(staged);
-            staged.clear();
-        }
-        num_unsent -= num_sent;
-        // If no socket had room this pass, every socket with pages left is back-pressured;
-        // yield rather than busy-spinning at 100% CPU until a receiver frees a page.
-        if (num_sent == 0) {
+        if (staged.empty()) {
+            // No socket had room this pass, so every socket with pages left is back-pressured;
+            // yield rather than busy-spinning at 100% CPU until a receiver frees a page.
             std::this_thread::yield();
+            continue;
         }
+        experimental::detail::publish_staged(staged);
+        staged.clear();
     }
 }
 
