@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """TP4 Kolibri autoregressive model. Runtime methods operate only on TT tensors."""
 

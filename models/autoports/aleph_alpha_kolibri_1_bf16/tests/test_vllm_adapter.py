@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """vLLM adapter on QB2 (1x4 Blackhole): with an externally allocated KV cache, a resident-input
 decode (inputs poisoned, reload_inputs=False) must reproduce the full-reload greedy sequence and
