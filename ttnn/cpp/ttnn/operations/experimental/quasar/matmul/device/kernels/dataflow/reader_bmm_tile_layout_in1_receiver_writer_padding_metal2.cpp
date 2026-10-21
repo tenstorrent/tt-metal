@@ -252,8 +252,13 @@ void kernel_main() {
 #if OUT_SHARDED
     // The sharded output stays in place, so this kernel only waits for compute to finish it. Pop what it
     // waited for so the buffer is left balanced.
+    // The subblock counts describe one output block, and each core computes num_blocks_h_dim *
+    // num_blocks_w_dim blocks per batch. All output blocks are of the same size because
+    // matmul validation requires per_core_M and per_core_N to be multiples of out_block_h and out_block_w,
+    // so there is no smaller last block to handle.
     const uint32_t out_sharded_num_tiles =
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h;
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h *
+        num_blocks_h_dim * num_blocks_w_dim;
     cb_out.wait_front(out_sharded_num_tiles);
     cb_out.pop_front(out_sharded_num_tiles);
 #endif
