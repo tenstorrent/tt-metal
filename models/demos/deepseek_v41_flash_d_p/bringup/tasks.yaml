@@ -415,6 +415,13 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-21T22:12:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py: 0afb0c9c05bc01ce8654717b6be53f4ab8820622f715bb278acff2680fb52900
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.swa.05
   title: 'swa block with steps 1-5 on device (last: kv)'
   step: implement
