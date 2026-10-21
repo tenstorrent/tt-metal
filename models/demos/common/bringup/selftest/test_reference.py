@@ -199,3 +199,35 @@ def test_prompt_file_is_built_once_and_pinned(fx):
     p.write_text(json.dumps(d))
     with pytest.raises(ValueError, match="recorded hash"):
         prompt.load(s)
+
+
+def test_rehash_goldens_updates_only_verified_golden_files(fx, tmp_path):
+    """F144: a regenerated golden is re-hashed in every frozen block; the test files keep their hashes."""
+    import json
+
+    import yaml
+
+    from models.demos.common.bringup.core.freeze import sha256_file
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.runs import FreezeError, rehash_goldens
+    from models.demos.common.bringup.reference.golden import Golden
+
+    spec_path = fx()
+    s = Spec.load(spec_path)
+    prompt.build(s)
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])
+    g = Golden.for_rung(s, "s256")
+    man = g.dir / "manifest.json"
+    test = s.repo / "t.py"
+    test.write_text("x = 1\n")
+    led = Ledger(s.bringup_dir)
+    led.tasks_path.parent.mkdir(parents=True, exist_ok=True)
+    led.tasks_path.write_text(yaml.safe_dump({"tasks": [{"id": "C.1", "frozen": {"t.py": "old", str(man): "old"}}]}))
+    done = rehash_goldens(s, led)
+    frozen = yaml.safe_load(led.tasks_path.read_text())["tasks"][0]["frozen"]
+    assert done == {"C.1": [str(man)]} and frozen[str(man)] == sha256_file(man) and frozen["t.py"] == "old"
+    m = json.loads(man.read_text())
+    m["content_hash"] = "tampered"
+    man.write_text(json.dumps(m))
+    with pytest.raises(FreezeError, match="does not verify"):
+        rehash_goldens(s, led)

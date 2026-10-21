@@ -210,3 +210,35 @@ def compare(led_a: Ledger, led_b: Ledger) -> list[dict]:
             }
         )
     return rows
+
+
+def rehash_goldens(spec: Spec, ledger: Ledger) -> dict[str, list[str]]:
+    """F144: after a G task regenerated a golden (e.g. F128's full-precision target), re-hash only the golden files in
+    every task's frozen block, and only when the golden verifies against its own content_hash. Test files keep their
+    hashes, so an edited test still fails its gate. Returns {task: [re-hashed paths]}."""
+    import yaml
+
+    from models.demos.common.bringup.core.freeze import sha256_file
+    from models.demos.common.bringup.reference.golden import Golden
+
+    root = Path(spec.golden_root).resolve()
+    data = yaml.safe_load(ledger.tasks_path.read_text())
+    done, checked = {}, {}
+    for t in data["tasks"]:
+        frozen = t.get("frozen") or {}
+        for rel in list(frozen):
+            f = Path(rel) if Path(rel).is_absolute() else spec.repo / rel
+            try:
+                gdir = next(p for p in [f.parent, *f.parents] if (p / "manifest.json").exists() and root in p.parents)
+            except StopIteration:
+                continue
+            if gdir not in checked:
+                checked[gdir] = Golden(gdir).verify()
+            if not checked[gdir]:
+                raise FreezeError(f"{gdir}: the golden does not verify against its content_hash; not re-hashed")
+            if f.exists() and frozen[rel] != sha256_file(f):
+                frozen[rel] = sha256_file(f)
+                done.setdefault(t["id"], []).append(rel)
+    if done:
+        ledger.write_tasks(data)
+    return done
