@@ -866,7 +866,7 @@ def main() -> None:
         f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
         f"requests={stats.completed}"
     )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+    producer._drain_layer_acks(ack_channel, producer._ack_layers_per_chunk(kv_table) * stats.total_pushes)
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)
