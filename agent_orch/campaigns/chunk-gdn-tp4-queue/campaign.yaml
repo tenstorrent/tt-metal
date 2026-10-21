@@ -1,0 +1,47 @@
+# Dream-RSI campaign (queue mode: continuous worker slots, nodebandit over every node of the tree): prefill latency of chunk_gated_delta_rule (GDN) at the Qwen TP-4 shapes on one Blackhole chip.
+name: chunk-gdn-tp4-queue
+description: chunk_gated_delta_rule prefill device time (all ops of a call) for one 2048-token chunk at TP-4 (BH=12 Qwen3.6-27B, BH=16 Qwen3.5-397B), as the 27B decoder calls it, one Blackhole chip
+machine: local          # 4x BH p300c visible; the test uses 1 chip
+profile: ttmetal
+
+editable:
+  - ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/*
+  - tt_metal/hw/ckernels/blackhole/*
+  - tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/*
+  - tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_fused_geometry.py   # the cost model's mirror
+brief: brief.md
+rules:
+  - "The objective is the device time of one whole chunk_gated_delta_rule call (the sum over every device op it launches) at T=2048 for BH=12 and BH=16, as test_chunk_gdn_tp4_perf.py calls it."
+  - "The inputs and outputs are fixed: flat token-major q/k [1,T,H*128] and v [1,T,HV*128] bf16 (q/k un-normalized), g [1,T,HV] fp32, beta [1,T,HV] bf16, initial_state [1,HV,128,128] fp32, all TILE and interleaved in DRAM; o head-major [BH,T,V] and the final state [B,HV,K,V] keep their dtype, layout and memory config. Do not change the public op's signature or what its arguments mean, and keep every other input form working (4-D head-split q/k/v, token-major output, chunk_size 64, other BH and T)."
+  - "Everything inside the op is in scope: the fused / phased / mono dispatch, the geometry (receivers, producers, the producer pool and its share, hand-off depth, placement), the cost model and its constants, the program factories, the dataflow and compute kernels, and the Blackhole SFPU / LLK code they call."
+  - "The cost model must stay general: a geometry choice comes from a model or rule that holds for every grid, BH and NC, never from a lookup keyed on the test's shapes. When you change the model or its constants, update its mirror in test_chunk_gdn_fused_geometry.py (oracle constants, measurement anchors, operating points) to values you measured (the scripts in calibration/); do not delete or loosen those tests beyond re-measured values."
+  - "Do not lower precision anywhere: MathFidelity::HiFi4, fp32_dest_acc_en=true and math_approx_mode=false stay; the recurrent state, the WY inverse and the seven prep -> scan intermediates stay fp32; no approximate SFPU modes, no bf16/bfp8 intermediates."
+  - "The fused and phased paths must stay bit-identical for the same WY-inverse method, and the op deterministic across calls (test_chunk_gdn_fused.py and repeat_exact check it)."
+  - "The Blackhole LLK and SFPU sources are shared with other ops (exp, the binary SFPU ops, unpack/pack); prefer a new function or file that only this op calls. An in-place change must keep the interface and must not reduce accuracy. The triangle solve (ckernel_sfpu_triangle_solve.h) is used only by this op."
+  - "Do not special-case the test's data or seeds; the improvement must hold for any input."
+forbidden_patterns:
+  - 'math_approx_mode\s*=\s*true'
+  - '\.math_fidelity\s*=\s*MathFidelity::(HiFi3|HiFi2|LoFi)'
+
+eval:
+  # Writes per case: value = mean device time of a call (us, every op of the call, 3 warmup + 10 measured),
+  # pcc_o / pcc_fs vs a float64 golden, repeat_exact; then runs the GDN correctness suites.
+  command: python agent_orch/campaigns/chunk-gdn-tp4-queue/eval.py
+  direction: minimize
+  unit: us
+  gates: ["pcc_o >= 0.99999", "pcc_fs >= 0.99999", "repeat_exact >= 1"]   # baseline 0.9999977 / 0.999999
+  timeout_s: 3600
+
+build:
+  command: ./build_metal.sh --release --enable-ccache
+  # device code is JIT-compiled from the source tree: kernel, LLK and SFPU header edits need no host rebuild
+  skip_if_only: ["*/kernels/*", "tt_metal/hw/ckernels/*", "tt_metal/tt-llk/*", "tests/*"]
+  check_file: ttnn/ttnn/_ttnn.so
+
+budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
+search:
+  policy: nodebandit    # Thompson sampling over every node of the tree, neighborhood priors, detected code reuse
+  mode: queue           # W slots run continuously; a free slot asks the policy where the next attempt starts
+  W: 4
+queue: {reuse_threshold: 0.5, reuse_min_lines: 3, checkpoint: 8}   # dreaming every 8 completions
+dreaming: {revisions: 5, cost_per_attempt: 0.005, replay_seeds: 4}
