@@ -10,7 +10,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathFidelity,
-    PerfRunType,
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
@@ -23,7 +22,7 @@ from helpers.matmul_sweep import (
     sweep_tiny_tiles_matmul,
 )
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -227,13 +226,6 @@ def test_perf_math_matmul(
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-    ]
-
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
         * matmul_config.tile_dimensions.ct_dim
@@ -243,7 +235,7 @@ def test_perf_math_matmul(
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),

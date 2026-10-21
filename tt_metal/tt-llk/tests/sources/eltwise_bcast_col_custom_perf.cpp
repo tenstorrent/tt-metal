@@ -170,7 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // No wait_for_math_done (math returns/mocks immediately in these modes)
+            // No wait_for_math_done: math returns immediately in PACK_ISOLATE
             for (std::uint32_t loop = 0; loop < static_cast<std::uint32_t>(LOOP_FACTOR); loop++)
             {
                 for (std::uint32_t i = 0; i < CT_DIM; i++)

@@ -78,7 +78,7 @@ def _in_tmp(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
-def test_six_metric_rows_collapse_into_one_csv_row():
+def test_metric_rows_collapse_into_one_csv_row():
     records, columns, _ = bw.pivot(_rows())
     assert len(records) == 1
     for m in METRICS:

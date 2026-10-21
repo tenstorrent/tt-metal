@@ -75,7 +75,7 @@ Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`): `L
 - The perf counters are **global hardware** driven by shared debug registers (`PERF_CNT_ALL` and the per-bank `*2` command registers), so any RISC can arm/freeze them. The identity of the issuing thread does not change what is counted.
 - The entry rendezvous waits for every thread before arming, so the window opens after all of them have finished the previous zone.
 
-Pack is chosen because a sweep found arming there halves the total counter error against arming on TRISC0. Fixing it also matters for its own sake: letting the arming thread vary is how the two builds ended up releasing from different threads.
+Pack is chosen because a sweep found arming there halves the total counter error against arming on TRISC0. The sweep ran on the since-removed `L1_CONGESTION` run type only. Fixing it also matters for its own sake: letting the arming thread vary is how the two builds ended up releasing from different threads.
 
 **Freezing is per run type**, decided by `exit_barrier_for()` in `counters.h`, which defaults to `wants_exit_barrier()` unless `LLK_PERF_EXIT_BARRIER` overrides it:
 
@@ -228,12 +228,11 @@ A metric whose counters this architecture does not expose, or whose counter grou
 
 ## Notes and Caveats
 
-- **Four tests sit on a bistable L1 operating point.** `matmul`, `math_matmul`, `pack_dest_bank` and
-  `pack_untilize` each land on one of two discrete levels, chosen deterministically per binary and re-rolled
-  by any change to code layout. Worst observed spread is about 31 percent on `pack_dest_bank`. This is build
+- **Two tests sit on a bistable L1 operating point.** `pack_dest_bank` and `pack_untilize` each land on
+  one of two discrete levels, chosen deterministically per binary and re-rolled by any change to code layout. Worst observed spread is about 31 percent on `pack_dest_bank`. This is build
   sensitivity, not counter cost: the same two levels appear when one no-counter build is compared against
-  another that differs only in layout. If you see a large outlier on those four, check which level both
-  sides landed on before treating it as a regression. Tracked in #51901, #51902 and #51904.
+  another that differs only in layout. If you see a large outlier on those two, check which level both
+  sides landed on before treating it as a regression. Tracked in #51901.
 
 - **Never guard `PERF_RUN_TYPE` with `#ifndef`.** It arrives as a `constexpr` in the generated `build.h`, so a preprocessor guard cannot see it, always fires, and silently compiles every run type as the fallback. Identical values and identical `TEXT_SIZE` across run types is the symptom (PR #51918).
 - **`PACK_DONE` is reserved by the barrier.** It is safe only because the count returns to zero each time, so a measured kernel must not use `semaphore::PACK_DONE` for its own handshake.

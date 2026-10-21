@@ -6,7 +6,6 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
-    PerfRunType,
     ReduceDimension,
     ReducePool,
 )
@@ -14,7 +13,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -56,12 +55,7 @@ def test_perf_reduce(
     configuration = PerfConfig(
         "sources/reduce_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),

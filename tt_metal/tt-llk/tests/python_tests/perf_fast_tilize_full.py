@@ -11,9 +11,8 @@ fast-tilize numbers are directly comparable in the nightly perf dashboard.
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -73,12 +72,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
     configuration = PerfConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[],
         runtimes=[
             generate_input_dim(dimensions, dimensions),

@@ -27,7 +27,7 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig, PerfRunType
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -81,12 +81,7 @@ def test_perf_sfpu_ema(
     configuration = PerfConfig(
         "sources/sfpu_ema_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         # Everything compile-time so the measured kernel does no runtime-parameter
         # reads; all sweep values are single-valued so this does not expand the matrix.
         templates=[
