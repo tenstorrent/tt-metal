@@ -1,0 +1,4 @@
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_bfloat16.py
+tests/ttnn/unit_tests/operations/eltwise/test_unary_category2_float32.py
+-k
+hardswish
