@@ -4,6 +4,8 @@
 
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 
+#include <sys/stat.h>
+
 #include <cerrno>
 #include <cstdio>
 
@@ -177,12 +179,32 @@ std::string d2d_pipeline_descriptor_path(const std::string& service_id) {
     return fmt::format("/dev/shm/tt_d2d_pipeline_{}.bin", service_id);
 }
 
-D2DPipelineDescriptorFile::D2DPipelineDescriptorFile(std::string path) : path_(std::move(path)) {
-    // Removed at process exit too, in case this object never gets destroyed.
-    tt::tt_metal::distributed::ShmResourceTracker::instance().track_file(path_);
+D2DPipelineDescriptorFile::D2DPipelineDescriptorFile(std::string path, const D2DPipelineDescriptor& pipeline) :
+    path_(std::move(path)) {
+    // Track before writing. The tracker's first use removes files left by dead processes, and
+    // one of those could be this path.
+    auto& tracker = tt::tt_metal::distributed::ShmResourceTracker::instance();
+    tracker.track_file(path_);  // removed at process exit too, in case this object never gets destroyed
+    try {
+        pipeline.write_to_file(path_);
+        struct stat st{};
+        TT_FATAL(::stat(path_.c_str(), &st) == 0, "D2DPipelineDescriptorFile: can't stat {}", path_);
+        device_ = st.st_dev;
+        inode_ = st.st_ino;
+    } catch (...) {
+        std::remove(path_.c_str());
+        tracker.untrack_file(path_);
+        throw;
+    }
 }
 
 D2DPipelineDescriptorFile::~D2DPipelineDescriptorFile() {
+    // Each write makes a new file (tmp + rename), so a different inode means a newer export owns
+    // the path now. Leave its file and its tracking alone.
+    struct stat st{};
+    if (::stat(path_.c_str(), &st) == 0 && (st.st_dev != device_ || st.st_ino != inode_)) {
+        return;
+    }
     if (std::remove(path_.c_str()) == 0 || errno == ENOENT) {
         tt::tt_metal::distributed::ShmResourceTracker::instance().untrack_file(path_);
     }

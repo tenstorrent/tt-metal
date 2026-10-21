@@ -1879,6 +1879,7 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
     // would leave the others blocked forever waiting for it.
     D2DRankDescriptor local;
     std::vector<uint8_t> payload;
+    std::string path;
     std::exception_ptr error;
     try {
         std::array<char, 256> host{};
@@ -1897,6 +1898,10 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
         }
         if (rank != *root) {
             payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
+        } else {
+            // Drop a file left by an earlier run so a reader can't pick it up while the gather runs.
+            path = d2d_pipeline_descriptor_path(service_id);
+            std::filesystem::remove(path);
         }
     } catch (...) {
         error = std::current_exception();
@@ -1940,9 +1945,6 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
         return nullptr;
     }
 
-    // Drop a file left by an earlier run so a reader can't pick it up while the gather runs.
-    const auto path = d2d_pipeline_descriptor_path(service_id);
-    std::filesystem::remove(path);
     D2DPipelineDescriptor pipeline;
     for (int r = 0; r < world_size; ++r) {
         if (r == rank) {
@@ -1953,8 +1955,7 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
         ctx->recv(as_bytes(bytes), Rank{r}, tag);
         pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(bytes).ranks.at(0));
     }
-    pipeline.write_to_file(path);
-    return std::make_unique<D2DPipelineDescriptorFile>(path);
+    return std::make_unique<D2DPipelineDescriptorFile>(path, pipeline);
 }
 
 }  // namespace ttnn

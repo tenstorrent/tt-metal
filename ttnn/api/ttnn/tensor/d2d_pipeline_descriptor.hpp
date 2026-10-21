@@ -83,10 +83,11 @@ struct D2DPipelineDescriptor {
 // /dev/shm/tt_d2d_pipeline_<service_id>.bin
 std::string d2d_pipeline_descriptor_path(const std::string& service_id);
 
-// An exported descriptor file. Removes the file when destroyed.
+// An exported descriptor file. Writes the file, and removes it when destroyed unless a newer
+// export has replaced it since.
 class D2DPipelineDescriptorFile {
 public:
-    explicit D2DPipelineDescriptorFile(std::string path);
+    D2DPipelineDescriptorFile(std::string path, const D2DPipelineDescriptor& pipeline);
     ~D2DPipelineDescriptorFile();
     D2DPipelineDescriptorFile(const D2DPipelineDescriptorFile&) = delete;
     D2DPipelineDescriptorFile& operator=(const D2DPipelineDescriptorFile&) = delete;
@@ -95,6 +96,8 @@ public:
 
 private:
     std::string path_;
+    uint64_t device_ = 0;
+    uint64_t inode_ = 0;
 };
 
 }  // namespace ttnn
