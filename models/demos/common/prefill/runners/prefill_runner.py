@@ -189,13 +189,17 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of
     return on_layer_complete
 
 
-def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
+def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
+    # One D2H read; the 4th word is MTP provided_levels.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
+    meta = {
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
+    if with_provided_levels:
+        meta["provided_levels"] = max(0, int(m[3]))
+    return meta
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -300,10 +304,7 @@ def _d2d_recv(inbound) -> tuple:
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
-    meta = _decode_metadata(metadata_msg)
-    if MTP_LEVELS:
-        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-        meta["provided_levels"] = max(0, int(words[3]))
+    meta = _decode_metadata(metadata_msg, with_provided_levels=bool(MTP_LEVELS))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta, metadata_msg
@@ -638,7 +639,10 @@ def main() -> None:
     )
 
     mesh_device = open_mesh_device(
-        GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE, trace_region_size=_TRACE_REGION_SIZE
+        GLOBAL_MESH_SHAPE,
+        ADAPTER.fabric_payload_size(),
+        l1_small_size=_L1_SMALL_SIZE,
+        trace_region_size=_TRACE_REGION_SIZE,
     )
 
     hf_config = ADAPTER.load_hf_config()

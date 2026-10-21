@@ -161,7 +161,7 @@ int main(int argc, char* argv[]) {
             test_api = std::atoi(argv[1]);
         }
 
-        // Test configs: (producer_api, consumer_api, remote, name, producer_risc, consumer_risc, requires_quasar)
+        // Test configs: (producer_api, consumer_api, remote, name, producer_risc, consumer_risc)
         struct TestConfig {
             int producer_api;
             int consumer_api;
@@ -169,64 +169,44 @@ int main(int argc, char* argv[]) {
             const char* name;
             Risc producer_risc;
             Risc consumer_risc;
-            bool requires_quasar;
         };
-
-        // Check if running on Quasar (ckernel::Semaphore is Quasar-only)
-        bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
 
         TestConfig tests[] = {
             // Raw CB APIs
-            {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC, false},
-            {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC, false},
+            {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC},
+            {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC},
 
             // Raw Semaphore APIs. The noc 1 cases are produced from NCRISC; every other case is noc 0.
-            {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC, false},
-            {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC, false},
-            {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC, false},
-            {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC, false},
-            {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC, false},
-            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC, false},
-            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC, false},
-            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC, false},
-            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
-            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC},
+            {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC},
+            {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC},
+            {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC},
+            {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC},
+            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC},
+            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC},
+            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC},
+            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC},
+            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC},
 
             // Semaphore class APIs (dataflow)
-            {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC, false},
-            {22, 23, false, "Class: up() + wait_min()", Risc::BRISC, Risc::NCRISC, false},
-            {24, 25, true, "Class: up() remote", Risc::BRISC, Risc::NCRISC, false},
-            {20, 26, false, "Class: set() + down()", Risc::BRISC, Risc::NCRISC, false},
-            {27, 28, true, "Class: set_multicast()", Risc::BRISC, Risc::NCRISC, false},
-            {29, 30, true, "Class: inc_multicast()", Risc::BRISC, Risc::NCRISC, false},
+            {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC},
+            {22, 23, false, "Class: up() + wait_min()", Risc::BRISC, Risc::NCRISC},
+            {24, 25, true, "Class: up() remote", Risc::BRISC, Risc::NCRISC},
+            {20, 26, false, "Class: set() + down()", Risc::BRISC, Risc::NCRISC},
+            {27, 28, true, "Class: set_multicast()", Risc::BRISC, Risc::NCRISC},
+            {29, 30, true, "Class: inc_multicast()", Risc::BRISC, Risc::NCRISC},
 
             // Compute RISC (TRISC) CB APIs - all architectures
-            {0, 102, false, "Compute CB: BRISC push + TRISC wait+pop", Risc::BRISC, Risc::TRISC0, false},
-            {100, 1, false, "Compute CB: TRISC push + NCRISC wait", Risc::TRISC0, Risc::NCRISC, false},
-
-            // Compute RISC (TRISC) semaphore APIs - Quasar only (ckernel::Semaphore)
-            {2, 15, false, "Compute Sem: BRISC set + TRISC wait()", Risc::BRISC, Risc::TRISC0, true},
-            {2, 16, false, "Compute Sem: BRISC set + TRISC wait_min()", Risc::BRISC, Risc::TRISC0, true},
-            {2, 14, false, "Compute Sem: BRISC set + TRISC down()", Risc::BRISC, Risc::TRISC0, true},
-            {17, 3, false, "Compute Sem: TRISC set() + NCRISC wait", Risc::TRISC0, Risc::NCRISC, true},
-            {13, 3, false, "Compute Sem: TRISC up() + NCRISC wait", Risc::TRISC0, Risc::NCRISC, true},
+            {0, 102, false, "Compute CB: BRISC push + TRISC wait+pop", Risc::BRISC, Risc::TRISC0},
+            {100, 1, false, "Compute CB: TRISC push + NCRISC wait", Risc::TRISC0, Risc::NCRISC},
         };
 
         constexpr int num_tests = sizeof(tests) / sizeof(tests[0]);
         if (test_api >= 0 && test_api < num_tests) {
             auto& t = tests[test_api];
-            if (t.requires_quasar && !is_quasar) {
-                fmt::print("Skipping {} (requires Quasar)\n", t.name);
-            } else {
-                RunApiTest(
-                    mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
-            }
+            RunApiTest(mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
         } else {
             for (auto& t : tests) {
-                if (t.requires_quasar && !is_quasar) {
-                    fmt::print("Skipping {} (requires Quasar)\n", t.name);
-                    continue;
-                }
                 RunApiTest(
                     mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
             }
