@@ -91,7 +91,13 @@ def fixes(bringup_dir: Path) -> list[dict]:
 
 
 def queue_fix(
-    bringup_dir: Path, text: str, gate_tasks: list[str], title: str = "", tasks: dict | None = None, hold: str = ""
+    bringup_dir: Path,
+    text: str,
+    gate_tasks: list[str],
+    title: str = "",
+    tasks: dict | None = None,
+    hold: str = "",
+    paths: list[str] | None = None,
 ) -> dict:
     """Queue a fix; ``tasks`` (the ledger's tasks by id), when given, validates the gate tasks."""
     if not gate_tasks:
@@ -110,6 +116,7 @@ def queue_fix(
         "t": now(),
         "text": text.strip(),
         **({"hold": hold} if hold else {}),
+        **({"paths": list(paths)} if paths else {}),  # F127: where the fix may write, beyond its gate tasks' paths
     }
     data["fixes"] = list(data.get("fixes") or []) + [job]
     _write(bringup_dir, data)
@@ -135,6 +142,7 @@ def fix_task(job: dict, tasks: dict) -> dict:
     for g in gates:
         metrics.update(g["gate"].get("metrics") or {})
         paths += [p for p in g.get("paths") or [] if p not in paths]
+    paths += [p for p in job.get("paths") or [] if p not in paths]
     return {
         "id": job["id"],
         "title": job["title"],
@@ -322,6 +330,9 @@ def main(argv=None) -> int:
             p.add_argument("--gate", action="append", required=True, help="a passed task whose gate must still pass")
             p.add_argument("--title", default="")
             p.add_argument("--hold", default="", help="queue it now, place it only after `release` (what it waits for)")
+            p.add_argument(
+                "--paths", action="append", default=None, help="where the fix may write (default: the model's tt/ dir)"
+            )
             p.add_argument("text")
         if name == "release":
             p.add_argument("id")
@@ -342,7 +353,9 @@ def main(argv=None) -> int:
             print(f"{x['id']} {x.get('status'):6} gate {x.get('gate')}{held} {x['text'][:100]}")
     elif a.cmd == "fix":
         led_tasks = {t["id"]: t for t in (yaml.safe_load((bdir / "tasks.yaml").read_text()) or {}).get("tasks", [])}
-        x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold)
+        # F127: a fix changes the model's code even when its gate tasks own no paths (a scripted gate such as X.3)
+        paths = a.paths or [str((bdir.parent / "tt").resolve().relative_to(Path.cwd().resolve()))]
+        x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold, paths)
         when = f"held until `release` ({a.hold})" if a.hold else "the orchestrator starts it at its next task boundary"
         print(f"queued {x['id']} (gate {x['gate']}): {when}")
     elif a.cmd == "status":
