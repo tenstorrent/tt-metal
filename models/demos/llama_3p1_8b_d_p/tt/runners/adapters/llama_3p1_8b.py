@@ -127,6 +127,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
             cache_dtype=ttnn.bfloat8_b,
+            bank_aligned=True,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
