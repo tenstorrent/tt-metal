@@ -254,9 +254,9 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
     .C_slice_cycles = 0.0,
     .A_pad_tile_cycles = 1000.0,
     .overlap_exponent = 6.9,
-    // Fitted on the cycle simulator, which has no DRAM model. QSR1.A1 (1.0 TB/s GDDR7 at 75%, 1.4 GHz) would be ~3.8
-    // cycles per 2 KB tile; with it the picks avoid layouts that re-read A and B, which the simulator cannot show.
-    .dram_tile_cycles = 0.0,
+    // Not on the simulator (no DRAM model): QSR1.A1's 1.0 TB/s at 1.4 GHz is 2.9 cycles per 2 KB tile at peak; 75%
+    // of it, as p100a streams at 71-76% of its peak.
+    .dram_tile_cycles = 3.8,
 };
 
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
