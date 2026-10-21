@@ -116,13 +116,17 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         return "#define MATMUL_STREAM_NARROW"
 
     @staticmethod
-    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int) -> list:
-        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST), else []."""
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32, math_fidelity=None) -> list:
+        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST, not an 8-row in0 tile, nor a 4-row or shorter one with ct_dim below 8, nor a 1x1 block at HiFi4), else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
         if dest_sync != DestSync.Full:
             return []
         if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
+            return []
+        if in0_r_dim == 8 or (in0_r_dim <= 4 and ct_dim < 8):
+            return []
+        if math_fidelity == MathFidelity.HiFi4 and ct_dim == 1 and rt_dim == 1:
             return []
         streamed = formats.input_format if ct_dim >= rt_dim else formats.input_format_B
         return (
@@ -167,27 +171,37 @@ class MATMUL_FORM_KEYS(TemplateParameter):
     The report already carries both (k_dimm, formats.output), so they are kept out of the dataclass fields; the repr
     still holds them, as the variant hash reads it."""
 
-    def __init__(self, kt_per_section: int, output_format: DataFormat):
+    def __init__(
+        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False
+    ):
         self.kt_per_section = kt_per_section
         self.output_format = output_format
+        self.row_le_8 = row_le_8
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8})"
 
     def convert_to_cpp(self) -> str:
         return (
             "#define MATMUL_FORM_KEYS\n"
             f"constexpr std::uint32_t MATMUL_KT_PER_SECTION = {self.kt_per_section};\n"
             f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
+            + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int) -> list:
-        """[MATMUL_FORM_KEYS(...)] on Blackhole, else []."""
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0) -> list:
+        """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
-        return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5), formats.output_format)]
+        return [
+            MATMUL_FORM_KEYS(
+                1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
+                formats.output_format,
+                0 < max(ct_dim, rt_dim) <= 8,
+            )
+        ]
 
 
 @dataclass
