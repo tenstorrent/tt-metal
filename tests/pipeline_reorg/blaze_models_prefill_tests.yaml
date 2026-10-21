@@ -276,6 +276,7 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_runner_kv_cache_table -k "torus-xy and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
@@ -1187,6 +1188,38 @@
   team: models
   sp_config: sc1
 
+# Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
+# checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy 256k@8k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_d_p_prefill_accuracy
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    # The Weka copy of the traces reads much faster than /mnt/models.
+    export GEMMA4_GPU_TRACE_ROOT=/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p
+    export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
+    mpirun --bind-to none --pernode --tag-output \
+      python3 -m pytest \
+        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' \
+        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
+  test_type: gemma4_d_p_prefill_accuracy
+  test_tags: [gemma4_d_p, kv_cache, accuracy]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 1
+      release_ready: false
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  team: models
+  sp_config: sc1
+
 # Gemma4 prefill perf gate: traced 256k prefill at chunks 2k/4k/8k, each failing if the wall or device
 # time to reach 1k/10k/100k/256k context is above its baseline range in test_model_perf_glx.py.
 - name: "(Gemma4-31B-it) D_P prefill perf gate 256k@2k/4k/8k"
@@ -1409,7 +1442,7 @@
 
       timeout -k 2m 44m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4 and sp_only" -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"
@@ -2037,7 +2070,7 @@
 
 
 # Single-galaxy (SC1) GLM-5.3 MTP1 prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-embedding transport, so a failure here is MTP1 itself.
+# control for it: one rank skips the D2D union-id transport, so a failure here is MTP1 itself.
 - name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail

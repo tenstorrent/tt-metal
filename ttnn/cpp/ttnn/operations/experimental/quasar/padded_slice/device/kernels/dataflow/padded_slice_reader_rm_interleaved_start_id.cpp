@@ -72,7 +72,6 @@ void kernel_main() {
         Scratchpad<uint32_t> scratch_buf(
             scratch::pad);  // NB: local must not be named `scratch` (shadows the scratch:: ns)
         const uint32_t scratch_page_size = scratch_buf.size_in_bytes() / num_trids;
-        const uint32_t scratch_l1_base = scratch_buf.get_base_address();
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
         UnicastEndpoint self_ep;
@@ -96,13 +95,12 @@ void kernel_main() {
 
                     if (slot_states[slot] == SlotState::IDLE && sticks_issued < num_read_per_barrier &&
                         sticks_read < num_sticks_per_core) {
-                        CoreLocalMem<uint32_t> scratch_dst(scratch_l1_base + scratch_off);
                         noc.async_read<NocOptions::TXN_ID>(
                             s0,
-                            scratch_dst,
+                            scratch_buf,
                             padded_stick_size + misalignment,
                             {.page_id = src_stick_id, .offset_bytes = src_off_aligned},
-                            {.offset_bytes = 0},
+                            {.offset_bytes = scratch_off},
                             NocOptVals{.trid = active_trid});
                         dest_offsets[slot] = dest_off;
                         slot_states[slot] = SlotState::SRC_PENDING;
@@ -126,12 +124,10 @@ void kernel_main() {
                     } else if (slot_states[slot] == SlotState::SCRATCH_READY) {
                         // local L1 loopback: scratch(+misalignment) -> output DFB
                         noc.async_read<NocOptions::TXN_ID>(
-                            self_ep,
+                            scratch_buf,
                             cb_in0,
                             unpadded_stick_size,
-                            {.noc_x = my_noc_x,
-                             .noc_y = my_noc_y,
-                             .addr = scratch_l1_base + scratch_off + misalignment},
+                            {.offset_bytes = scratch_off + misalignment},
                             {.offset_bytes = dest_offsets[slot]},
                             NocOptVals{.trid = active_trid});
                         slot_states[slot] = SlotState::SCRATCH_PENDING;
