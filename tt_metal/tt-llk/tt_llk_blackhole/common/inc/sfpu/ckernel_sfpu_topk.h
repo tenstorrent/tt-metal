@@ -1981,7 +1981,13 @@ inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 
     if constexpr (PER_GROUP)
     {
-        if constexpr (KT == 4 || KT == 8 || (KT == 16 && FUSED))
+        if constexpr (KT >= 32)
+        {
+            // k_max is 32 whatever k and m_iter: one block of 8 groups a quadrant at distance 32
+            topk_merge_replay_quadrants<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, 0>();
+            return;
+        }
+        else if constexpr (KT == 4 || KT == 8 || KT == 16)
         {
             // m_iter past the last distinct case (dist stays 32, the datums stop shrinking) reads like it
             constexpr std::uint32_t last_m = KT == 4 ? 3 : (KT == 8 ? 2 : 1);
@@ -2229,13 +2235,13 @@ template <
 inline void _bitonic_topk_merge(const int m_iter)
 {
     static_assert(K > 0, "K is the merge's run length");
-    constexpr bool per_group = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
     if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED && (FUSED))
     {
         _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
         return;
     }
-    constexpr bool per_group_k = K < 32 && per_group;
+    constexpr bool per_group = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
+    constexpr bool per_group_k = (K < 32 && (per_group || K == 16)) || (K >= 32 && (STABLE_SORT || RANK_STAMPED));
     _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, per_group_k, K>(
         m_iter, static_cast<int>(K));
 }
