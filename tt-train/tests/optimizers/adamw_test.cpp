@@ -543,9 +543,8 @@ TEST_F(AdamWParamGroupsTest, StateDictRejectsMismatchedGroups) {
     optimizers::AdamW one_group(params, optimizers::AdamWConfig{});
     EXPECT_THROW(one_group.set_state_dict(state), std::runtime_error);
 
-    // Two groups, but with different sizes: {2, 0} params vs the checkpoint's {1, 1}.
-    optimizers::AdamW other_sizes(
-        params, optimizers::AdamWConfig{}, {{.params = {"w", "gamma"}, .options = {}}, {.params = {}, .options = {}}});
+    // Two groups, but with different sizes: {0, 2} params vs the checkpoint's {1, 1}.
+    optimizers::AdamW other_sizes(params, optimizers::AdamWConfig{}, {{.params = {"w", "gamma"}, .options = {}}});
     EXPECT_THROW(other_sizes.set_state_dict(state), std::runtime_error);
 
     // Same sizes {1, 1}, but the members swapped ({gamma}, {w} instead of {w}, {gamma}): the saved options would

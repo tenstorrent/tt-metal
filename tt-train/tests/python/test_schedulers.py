@@ -1679,3 +1679,14 @@ def test_set_lr_before_attaching_does_not_fix_the_scheduler_base():
     opt.set_lr(3e-4)
     LambdaScheduler(opt, lambda step: 1.0)
     assert opt.get_group_lrs() == pytest.approx([3e-4])
+
+
+def test_set_lr_scales_every_group_keeping_their_ratios():
+    """The deprecated single-LR API: get_lr is group 0's LR, and set_lr sets group 0 to lr with the other groups keeping
+    their ratio to it."""
+    opt = _make_opt(1e-3, 2e-3)
+    assert opt.get_lr() == pytest.approx(1e-3)
+    opt.set_lr(5e-4)
+    assert opt.get_group_lrs() == pytest.approx([5e-4, 1e-3])
+    assert opt.get_lr() == pytest.approx(5e-4)
+    assert opt.get_initial_lr() == pytest.approx(5e-4)  # nothing recorded before, so the current LR is the base
