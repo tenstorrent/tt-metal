@@ -1988,9 +1988,7 @@ inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint
     bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
 }
 
-// K 4, 8 and 16 merges and the stable and rank-stamped K >= 32 merges record one group in the replay buffer and replay it with a
-// counter step per group, as K and m_iter fix every group position. It overwrites the sort's and rebuild's windows, so
-// topk_replay_init is cleared after.
+// K and m_iter fix every group position, so one recorded group replays with a counter step per group.
 template <std::uint32_t K, std::uint32_t M>
 struct TopkMergeGeometry
 {
@@ -2421,9 +2419,7 @@ inline void _topk_merge_macros_replay_()
     topk_replay_init = 0;
 }
 
-// Groups are addressed one by one for K 16, for the stable and rank-stamped K >= 32, and for a k below 32 whose later m_iter
-// cannot walk the dest counter (dist not a multiple of 8, or at most 16 group words a quadrant); other k from 32 up are the
-// run-time-k merge unchanged.
+// Unstable K 16 and fused unstable K >= 32 use macros; other K 4, 8, 16 and stable or rank-stamped K >= 32 replay one group; the rest walk the counter.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
