@@ -184,11 +184,11 @@ Tensor pre_scatter_transform_tensor(
         const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
         processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
     }
-    // if layout is tile, convert to row-major first - this allows for minimized memory usage by transpose (no padding)
+    // The native leg transposes in ROW_MAJOR so the transpose moves no tile padding; the codegen leg
+    // keeps the caller's layout, which its factories address directly.
     if (force_row_major && processed_tensor.layout() != Layout::ROW_MAJOR) {
         processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
-    // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
     processed_tensor = pad_rank_up_to_4d(processed_tensor);
 
@@ -211,7 +211,6 @@ Tensor post_scatter_transform_tensor(
         output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
     }
 
-    // transposing a row-major tensor here
     if (!is_dim_last_idx) {
         output_tensor = ttnn::transpose(output_tensor, dim, -1, output_tensor.memory_config());
     }
@@ -374,7 +373,8 @@ Tensor scatter_native(
     const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
 
     // tensors sent to the native device operation must be row-major, transposed to have the last
-    // dimension as last axis, and unsqueezed to 4D if of a lower rank.
+    // dimension as last axis, and unsqueezed to 4D if of a lower rank (a higher rank passes through
+    // as is).
     Tensor transformed_input_tensor = pre_scatter_transform_tensor(
         input_tensor, normalized_dim, input_tensor_is_dim_last_idx, /*force_row_major=*/true);
     Tensor transformed_index_tensor = pre_scatter_transform_tensor(
@@ -552,8 +552,18 @@ Tensor scatter(
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
-    // Four gates, in order: architecture (the codegen kernels are built for Wormhole and Blackhole
-    // only), static scope and output placement, perf demotion, and the L1 that is free right now.
+    // Where a call lands, first match wins:
+    //   - not Wormhole/Blackhole, outside the codegen scope (dtype, layout, tile, padding, sharding,
+    //     reduce, page rank, host operand), or an output placement its factories cannot write
+    //                                                                      -> native
+    //   - TILE with a unit pre-last working dim that the row-major detour declines
+    //                                                                      -> native (demoted)
+    //   - ROW_MAJOR whose resident input/output sticks do not fit the L1 free right now
+    //                                                                      -> native
+    //   - TILE with at most 32 post-transpose tile rows, NOC-aligned sticks that fit L1 and an output
+    //     in the input's placement        -> untilize, ROW_MAJOR factory, tilize (the detour)
+    //   - otherwise -> codegen: the TILE interleaved/streaming factory, or the ROW_MAJOR plain or
+    //     bf16-reduce factory, chosen by the prim's select_program_factory()
     const bool use_codegen =
         ttnn::operations::data_movement::codegen_supported_on_arch(input_tensor) &&
         detail::codegen_can_serve(
