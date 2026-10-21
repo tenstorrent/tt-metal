@@ -17,6 +17,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_worker_split.hpp"
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -41,23 +42,21 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7))
 constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
 constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
-constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
-constexpr bool fuse_op = get_compile_time_arg_val(16);
-constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
-constexpr uint32_t barrier_target_count = get_compile_time_arg_val(18);
+constexpr uint32_t input_tensor_C = get_compile_time_arg_val(11);
+constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(12);
+constexpr uint32_t output_tensor_C = get_compile_time_arg_val(13);
+constexpr bool fuse_op = get_compile_time_arg_val(14);
+constexpr uint32_t reverse = get_compile_time_arg_val(15) == 1;
+constexpr uint32_t barrier_target_count = get_compile_time_arg_val(16);
 #ifdef USE_WORKER_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(22);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(23);
-constexpr uint32_t rt_arg_count = 24;
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(20);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(21);
+constexpr uint32_t rt_arg_count = 22;
 #else
-constexpr uint32_t rt_arg_count = 19;
+constexpr uint32_t rt_arg_count = 17;
 #endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
@@ -109,6 +108,9 @@ void kernel_main() {
 
     uint32_t arg_idx = 0;
     address_t output_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::output);
+    // Input rows in tiles is the one runtime length word; the output row count follows from the gather dim.
+    const uint32_t input_tensor_Ht = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::input_Ht);
+    const uint32_t output_tensor_Ht = gather_dim == 2 ? input_tensor_Ht * ring_size : input_tensor_Ht;
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
@@ -119,11 +121,22 @@ void kernel_main() {
 
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
     size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::semaphore_0 + direction);
-    const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
-    const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
-    const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    const auto global_worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const auto global_worker_count = get_arg_val<uint32_t>(arg_idx++);
+    const auto chunks_per_sync_or_zero = get_arg_val<uint32_t>(arg_idx++);
+    const AllGatherWorkerSplit split = all_gather_worker_split(
+        global_worker_id,
+        global_worker_count,
+        input_tensor_Ht,
+        input_tensor_Wt,
+        output_tensor_Wt,
+        num_tiles_to_write_per_packet,
+        chunks_per_sync_or_zero);
+    const uint32_t input_tile_id_start = split.input_tile_id_start;
+    const uint32_t input_tile_id_end = split.input_tile_id_end;
+    const uint32_t start_pages_read_in_row = split.start_pages_read_in_row;
+    const uint32_t start_row_offset = split.start_row_offset;
+    const uint32_t chunks_per_sync = split.chunks_per_sync;
 #ifdef USE_WORKER_MUX
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
