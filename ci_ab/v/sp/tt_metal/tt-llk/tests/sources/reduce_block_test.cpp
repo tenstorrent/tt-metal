@@ -97,7 +97,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (std::uint32_t start = 0; start < tile_cnt; start += block)
         {
-            _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(0, std::min(block, tile_cnt - start), 0, tensor_shape, SCALAR_PAIR);
+            _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                0, std::min(block, tile_cnt - start), 0, tensor_shape, SCALAR_PAIR);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

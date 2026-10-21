@@ -352,14 +352,13 @@ inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool l
     reduce_scalar_pool_faces<type, math_fidelity, row>(2, num_faces, last);
 }
 
-// REDUCE_SCALAR SUM/AVG block in tile pairs. The unpacker puts the same face of the two tiles (a, b) in one SrcA bank (rows 0-15
-// and 16-31), so the two face chains (DEST rows ra, rb) issue alternately, and the previous pair's transposed partials sit in
-// rows 32-47 of the bank of face 1 (a) and face 2 (b), where their final pools join the chains. Per DEST row the order of
-// additions is the tile path's: the final pools stay in tile order on row 0.
+// REDUCE_SCALAR SUM/AVG block in tile pairs. The unpacker puts the same face of two tiles (a, b) in one SrcA bank (rows 0-15 and
+// 16-31), so their face chains (DEST rows ra, rb) issue alternately. The previous pair's transposed partials sit in rows 32-47 of
+// the banks of face 1 (a) and face 2 (b), where their final pools join the chains; the final pools stay in tile order on row 0.
 template <MathFidelity math_fidelity>
 constexpr std::uint32_t reduce_pair_phases = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
 
-// One bank of a pair (both tiles); `final_pool` also pools the previous tile's transposed partials (SrcA row 32) into row 0.
+// One bank of a pair; final_pool also pools the previous tile's transposed partials (SrcA row 32) into row 0.
 template <MathFidelity math_fidelity, std::uint32_t ra, std::uint32_t rb, bool final_pool>
 inline void reduce_pair_bank(const bool release)
 {
@@ -382,18 +381,18 @@ inline void reduce_pair_bank(const bool release)
     {
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, rb);
     }
-    const std::uint32_t last_dst = final_pool ? 0 : rb;
+    constexpr std::uint32_t last_dst = final_pool ? 0 : rb;
     if (release)
     {
-        TT_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, last_dst);
+        TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, last_dst);
     }
     else
     {
-        TT_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, last_dst);
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, last_dst);
     }
 }
 
-// The same for an odd last tile: only chain a.
+// The same for an odd last tile: chain a only.
 template <MathFidelity math_fidelity, std::uint32_t ra, bool final_pool>
 inline void reduce_pair_bank_a(const bool release)
 {
@@ -414,18 +413,32 @@ inline void reduce_pair_bank_a(const bool release)
     {
         TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_5, p_gpool::INDEX_DIS, ra);
     }
-    const std::uint32_t last_dst = final_pool ? 0 : ra;
+    constexpr std::uint32_t last_dst = final_pool ? 0 : ra;
+    constexpr std::uint32_t last_mod = final_pool ? ADDR_MOD_4 : ADDR_MOD_0;
     if (release)
     {
-        TT_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, final_pool ? ADDR_MOD_4 : ADDR_MOD_0, p_gpool::INDEX_DIS, last_dst);
+        TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, last_mod, p_gpool::INDEX_DIS, last_dst);
     }
     else
     {
-        TT_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, final_pool ? ADDR_MOD_4 : ADDR_MOD_0, p_gpool::INDEX_DIS, last_dst);
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, last_mod, p_gpool::INDEX_DIS, last_dst);
     }
 }
 
-// Final pools of the last pair, its partials transposed over the data in the kept bank (a in rows 0-15, b in rows 16-31).
+template <MathFidelity math_fidelity, std::uint32_t ra, std::uint32_t rb, bool final_pool>
+inline void reduce_pair_bank_of(const bool has_b, const bool release)
+{
+    if (has_b)
+    {
+        reduce_pair_bank<math_fidelity, ra, rb, final_pool>(release);
+    }
+    else
+    {
+        reduce_pair_bank_a<math_fidelity, ra, final_pool>(release);
+    }
+}
+
+// The last pair's final pools, its partials transposed over the data of the kept bank (a in rows 0-15, b in rows 16-31).
 template <MathFidelity math_fidelity, bool clear_32b, std::uint32_t ra, std::uint32_t rb>
 inline void reduce_pair_tail(const bool has_b)
 {
@@ -450,66 +463,24 @@ inline void reduce_pair_tail(const bool has_b)
     TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
 }
 
-// One pair: rows (ra, rb) for its chains, (pa, pb) the previous pair's.
+// One pair on DEST rows (ra, rb); (pa, pb) are the previous pair's.
 template <MathFidelity math_fidelity, bool clear_32b, std::uint32_t ra, std::uint32_t rb, std::uint32_t pa, std::uint32_t pb>
 inline void reduce_pair(const bool first, const bool has_b, const bool last)
 {
-    if (has_b)
+    reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, true);
+    if (first)
     {
-        reduce_pair_bank<math_fidelity, ra, rb, false>(true);
+        reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, true);
+        reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, true);
     }
     else
-    {
-        reduce_pair_bank_a<math_fidelity, ra, false>(true);
-    }
-    if (!first)
     {
         reduce_scalar_transpose_upper<pa, clear_32b, 32>();
-    }
-    if (first && has_b)
-    {
-        reduce_pair_bank<math_fidelity, ra, rb, false>(true);
-    }
-    else if (first)
-    {
-        reduce_pair_bank_a<math_fidelity, ra, false>(true);
-    }
-    else if (has_b)
-    {
-        reduce_pair_bank<math_fidelity, ra, rb, true>(true);
-    }
-    else
-    {
-        reduce_pair_bank_a<math_fidelity, ra, true>(true);
-    }
-    if (!first)
-    {
+        reduce_pair_bank_of<math_fidelity, ra, rb, true>(has_b, true);
         reduce_scalar_transpose_upper<pb, clear_32b, 32>();
+        reduce_pair_bank_of<math_fidelity, ra, rb, true>(has_b, true);
     }
-    if (first && has_b)
-    {
-        reduce_pair_bank<math_fidelity, ra, rb, false>(true);
-    }
-    else if (first)
-    {
-        reduce_pair_bank_a<math_fidelity, ra, false>(true);
-    }
-    else if (has_b)
-    {
-        reduce_pair_bank<math_fidelity, ra, rb, true>(true);
-    }
-    else
-    {
-        reduce_pair_bank_a<math_fidelity, ra, true>(true);
-    }
-    if (has_b)
-    {
-        reduce_pair_bank<math_fidelity, ra, rb, false>(!last);
-    }
-    else
-    {
-        reduce_pair_bank_a<math_fidelity, ra, false>(!last);
-    }
+    reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, !last);
 }
 
 template <PoolType type, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
@@ -517,8 +488,8 @@ inline void reduce_scalar_pair_block(const std::uint32_t dst_index, const std::u
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    // SrcA to the next row group (16), back to row 0 with the next phase, and with phase 0; to row 32 (a single tile
-    // before its previous pair's final pool); the last final pool of a with b's rows next, phase 0.
+    // SrcA +16 (next tile of the bank), then back to row 0 with the next phase, back to row 0 with phase 0, +32 (a single tile
+    // reaches the transposed partials), +16 with phase 0 (the last final pools: a, then b's rows)
     addr_mod_t {
         .srca = {.incr = 16},
     }
@@ -543,13 +514,13 @@ inline void reduce_scalar_pair_block(const std::uint32_t dst_index, const std::u
     }
         .set(ADDR_MOD_6);
 
+    // Pairs alternate their DEST rows, so a pair's chains start while the previous pair's partials are being transposed
     const std::uint32_t pairs = (num_tiles + 1) / 2;
     for (std::uint32_t pair = 0; pair < pairs; pair++)
     {
         const bool first = pair == 0;
         const bool last  = pair == pairs - 1;
         const bool has_b = !(last && (num_tiles & 1));
-        // Alternating DEST rows, so a pair's chains start while the previous pair's partials are still being transposed
         if (pair & 1)
         {
             reduce_pair<math_fidelity, is_fp32_dest_acc_en, 24, 32, 8, 16>(first, has_b, last);
@@ -559,14 +530,13 @@ inline void reduce_scalar_pair_block(const std::uint32_t dst_index, const std::u
             reduce_pair<math_fidelity, is_fp32_dest_acc_en, 8, 16, 24, 32>(first, has_b, last);
         }
     }
-    const bool last_has_b = !(num_tiles & 1);
     if ((pairs - 1) & 1)
     {
-        reduce_pair_tail<math_fidelity, is_fp32_dest_acc_en, 24, 32>(last_has_b);
+        reduce_pair_tail<math_fidelity, is_fp32_dest_acc_en, 24, 32>(!(num_tiles & 1));
     }
     else
     {
-        reduce_pair_tail<math_fidelity, is_fp32_dest_acc_en, 8, 16>(last_has_b);
+        reduce_pair_tail<math_fidelity, is_fp32_dest_acc_en, 8, 16>(!(num_tiles & 1));
     }
 }
 

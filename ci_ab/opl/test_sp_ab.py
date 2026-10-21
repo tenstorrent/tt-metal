@@ -52,3 +52,14 @@ def test_hw_big(device, case, shape):
     t = torch.randn(SHAPES[shape], dtype=torch.float32)
     x = ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.to_torch(op(x, dim=[2, 3], keepdim=True))
+
+
+@pytest.mark.parametrize("case", ["sum_bf16", "mean_f32"])
+def test_row_big(device, case):
+    # ROW and COL reductions through the same helper (compile coverage of the block call's other dimensions)
+    op, dtype = HW[case]
+    torch.manual_seed(61433)
+    t = torch.randn((1, 1, 256, 512), dtype=torch.float32)
+    x = ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.to_torch(op(x, dim=[3], keepdim=True))
+    ttnn.to_torch(op(x, dim=[2], keepdim=True))

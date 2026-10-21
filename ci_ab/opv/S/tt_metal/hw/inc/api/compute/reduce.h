@@ -301,7 +301,8 @@ ALWI void reduce_block(
 #ifdef ARCH_BLACKHOLE
     if (!reduce_block_tile_by_tile<reduce_type, reduce_dim, pow2_scaler>(icb)) {
         // A SCALAR SUM/AVG block that accumulates is unpacked and pooled in tile pairs
-        const bool scalar_pair = reduce_dim == ReduceDim::REDUCE_SCALAR && reduce_type != PoolType::MAX && idst_stride == 0;
+        const bool scalar_pair =
+            reduce_dim == ReduceDim::REDUCE_SCALAR && reduce_type != PoolType::MAX && idst_stride == 0;
         MATH((llk_math_reduce_block<
               reduce_type,
               reduce_dim,
