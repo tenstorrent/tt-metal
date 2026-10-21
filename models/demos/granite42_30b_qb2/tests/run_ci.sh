@@ -98,14 +98,14 @@ mark_phase prepare_dataset
 evaluate --prepare-only --server-capacity 16 --output-dir "$results/gpqa"
 
 mark_phase server_start
-setsid python -u -m vllm.entrypoints.openai.api_server \
+setsid env VLLM_SERVER_DEV_MODE=1 python -u -m vllm.entrypoints.openai.api_server \
     --model "$HF_MODEL" --served-model-name ibm-granite/granite-4.2-30b \
     --revision 9e668ce1c538387ef24d3644e9b0606647762636 \
     --tokenizer-revision 9e668ce1c538387ef24d3644e9b0606647762636 \
     --hf-overrides '{"architectures":["TTGraniteForCausalLM"]}' \
     --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs 16 \
     --max-model-len 131072 --max-num-batched-tokens 1024 \
-    --enable-chunked-prefill --no-enable-prefix-caching --async-scheduling \
+    --enable-chunked-prefill --enable-prefix-caching --enable-prompt-tokens-details --async-scheduling \
     --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
     --default-chat-template-kwargs '{"enable_thinking":true,"low_effort":false}' \
     --no-enable-log-requests --no-enable-log-outputs \
@@ -122,7 +122,7 @@ while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
     sleep 4
 done
 mark_phase server_ready
-GRANITE_SERVER_URL=http://127.0.0.1:8000 python -m pytest "$model_dir/tests/test_api.py" \
+GRANITE_SERVER_URL=http://127.0.0.1:8000 python -m pytest "$model_dir/tests/test_api.py" "$model_dir/tests/test_prefix_cache.py" \
     --timeout 900 --junitxml "$results/api.xml"
 mark_phase api_complete
 for concurrency in 1 8 16; do

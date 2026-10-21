@@ -39,6 +39,9 @@ class TestServingContract(unittest.TestCase):
         self.adapter.generator.pages_per_row = 8
         self.adapter.generator._bucket.side_effect = lambda n: next(b for b in (1, 8, 16) if n <= b)
 
+    def test_adapter_declares_prefix_cache_support(self):
+        self.assertTrue(self.adapter.model_capabilities["supports_prefix_caching"])
+
     def test_real_vllm_generation_protocol_selects_tt_bridge(self):
         from vllm.model_executor.models.interfaces_base import is_text_generation_model
 

@@ -17,7 +17,7 @@ class GraniteForCausalLM:
     decode_input_update_contract = 1
     model_capabilities = {
         "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
