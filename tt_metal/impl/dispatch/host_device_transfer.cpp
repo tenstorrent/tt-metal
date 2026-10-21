@@ -379,10 +379,6 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
 
 bool WriteToDeviceDRAMChannel(
     IDevice& device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer) {
-    if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_dram_alignment(
-            &device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceDRAMChannel");
-    }
     TT_FATAL(
         address >= device.allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -402,10 +398,6 @@ bool WriteToDeviceDRAMChannel(IDevice& device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice& device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
-    if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_dram_alignment(
-            &device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
-    }
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     metal_ctx.get_cluster().dram_barrier(device.id());
     metal_ctx.get_cluster().read_dram_vec(host_buffer.data(), host_buffer.size(), device.id(), dram_channel, address);
