@@ -40,15 +40,19 @@ with it. A fabric change falls into one of three cases:
 3. **The fabric's logic changes, and no value does.** For example, a router starts reading a different byte of the
    route map, or a new header field starts changing where a packet goes. The manifest doesn't change, so nothing
    fails, and only review catches it. Decode holds this logic as rules, written in Python to match the fabric's C++.
-   [ROUTES.md](ROUTES.md) lists each rule with the code it mirrors, so a fabric change to that code can update the
+   [ROUTES.md](docs/ROUTES.md) lists each rule with the code it mirrors, so a fabric change to that code can update the
    rule with it.
 
 ## Components
 
 | File | What it does |
 | --- | --- |
-| [`routes.py`](routes.py) | The route rules. Reads 1D route words, 2D route maps, the routing tables, multicast trees and scatter writes from raw bytes, the way the fabric's routers and route setters do. In depth: [ROUTES.md](ROUTES.md) |
+| [`routes.py`](routes.py) | The route rules. Reads 1D route words, 2D route maps, the routing tables, multicast trees and scatter writes from raw bytes, the way the fabric's routers and route setters do. In depth: [ROUTES.md](docs/ROUTES.md) |
+| [`type_parser.py`](type_parser.py) | Reads the struct, union and enum layouts the manifest describes, checks them, and decodes bytes into values with them. It holds no fabric names. In depth: [TYPE_PARSER.md](docs/TYPE_PARSER.md) |
+| [`inputs.py`](inputs.py) | Loads a snapshot, its `.bin` and the manifest it was taken with, refuses them when they don't belong together, and warns when the run's build and decode's checkout may differ. In depth: [INPUTS.md](docs/INPUTS.md) |
 | [`tests/test_routes.py`](tests/test_routes.py) | Hand-written cases for each rule |
+| [`tests/test_type_parser.py`](tests/test_type_parser.py) | Hand-written cases for every schema form, and for each check of the layouts |
+| [`tests/test_inputs.py`](tests/test_inputs.py) | Cases for loading, pairing and refusing snapshots, and for the build identity warnings |
 | [`tests/check_manifest_routes.py`](tests/check_manifest_routes.py) | Checks that `routes.py` can read the manifests CI writes |
 | [`tests/test_check_manifest_routes.py`](tests/test_check_manifest_routes.py) | Cases for the check's `--expect-z-peers` |
 | [`../common/manifest_lookup.py`](../common/manifest_lookup.py) | `lookup`, which reads a manifest value and checks its JSON type, and `ManifestError`. Shared with the visualizer's other Python packages |

@@ -24,7 +24,7 @@ import sys
 
 from tt_metal.fabric.debug.visualizer.decode.routes import ManifestError, get_encodings_from_manifest, get_mesh_view
 
-ROUTES_DOC = "tt_metal/fabric/debug/visualizer/decode/ROUTES.md"
+ROUTES_DOC = "tt_metal/fabric/debug/visualizer/decode/docs/ROUTES.md"
 
 
 def find_manifests(args):
