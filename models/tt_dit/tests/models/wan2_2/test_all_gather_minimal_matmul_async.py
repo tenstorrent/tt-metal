@@ -646,6 +646,9 @@ def run_test_linear(
     "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
         (32768, 4096, 4096, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        # MiniMax-H3 ff1 shape with K_block 3: one half of every K block is a single tile per row, so the
+        # fabric sender reuses its unicast header on every row (regression for the missing flush).
+        (38912, 5376, 7168, True, False, None, 1, False, 8, 3, 8, 2, 2),
         (75776, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
         (75776, 5120, 1280, True, True, None, 1, True, 10, 8, 8, 2, 1),
         (75776, 5120, 1280, True, True, None, 1, False, 10, 8, 8, 2, 1),
@@ -672,6 +675,7 @@ def run_test_linear(
     ],
     ids=[
         "4k4k4k",
+        "h3ff1_kblock3",
         "1xqkv",
         "1xdenseattn1",
         "1xdenseattn2",

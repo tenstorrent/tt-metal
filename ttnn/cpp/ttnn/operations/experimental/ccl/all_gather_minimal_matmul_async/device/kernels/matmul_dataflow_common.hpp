@@ -230,9 +230,11 @@ struct PacketHeaders {
 // then raises the neighbour's out-ready semaphore.
 //
 // Two changes against the original single-header loop:
-//  * kNumScatterHdrs scatter headers rotate, so the NoC flush that protects a header from being
-//    rewritten while its previous packet is still leaving the NIU runs once per kNumScatterHdrs
-//    packets instead of once per packet.
+//  * kNumScatterHdrs scatter headers rotate. A header may only be rewritten once the packet it
+//    carried has left the NIU, so the kernel tracks which headers were written since the last NoC
+//    flush (hdrs_in_flight) and flushes only when one of them is about to be reused: once per
+//    kNumScatterHdrs scatter packets, and before every reuse of the single unicast header that
+//    carries an odd row's lead tile (a half block of 1 tile per row reuses it every row).
 //  * The semaphore increment rides in the last data packet (fused scatter-write + atomic-inc,
 //    which carries exactly 2 write chunks), so the standalone header-only packet, its mux/router
 //    slot and its extra flush disappear. Each M row is packetised so its last packet has 2 tiles
@@ -266,6 +268,9 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
     uint32_t row_tile_id = m_tile_start * output_tensor_Wt + k_tile_start;
     uint32_t scatter_idx = 0;
     bool sem_sent = false;
+    // Bit i: scatter header i written since the last flush; kUnicastBit: the unicast header.
+    constexpr uint32_t kUnicastBit = 1u << kNumScatterHdrs;
+    uint32_t hdrs_in_flight = 0;
 
     for (uint32_t row = 0; row < num_rows; row++) {
         const bool last_row = (row + 1 == num_rows);
@@ -277,11 +282,15 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
         // holds an even number of tiles.
         if (tiles_left & 1) {
             if (do_write) {
+                if (hdrs_in_flight & kUnicastBit) {
+                    // The previous odd row's packet may still be reading this header: wait for it.
+                    noc.async_writes_flushed();
+                    hdrs_in_flight = 0;
+                }
                 const uint64_t dst = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
                 fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                     mux_connection_handle, pkt_hdrs.unicast_hdr, l1_read_addr, NocUnicastCommandHeader{dst});
-                // The unicast header is reused by the next odd row; it departs long before then,
-                // but keep the ordering explicit: flush before any further reuse of this header.
+                hdrs_in_flight |= kUnicastBit;
             }
             l1_read_addr += page_size;
             tile_id += 1;
@@ -312,10 +321,11 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
                             {noc_addrs[0], noc_addrs[1]}, out_ready_sem_noc_addr_in_pkt, {page_size}, 1, true));
                     sem_sent = true;
                 } else {
-                    if (scatter_idx == 0) {
-                        // About to rewrite the first header of the ring: everything issued through
-                        // the previous rotation must have left the NIU.
+                    if (hdrs_in_flight & (1u << scatter_idx)) {
+                        // About to rewrite a header whose previous packet may still be leaving the
+                        // NIU: everything issued since the last flush must have left it.
                         noc.async_writes_flushed();
+                        hdrs_in_flight = 0;
                     }
                     fabric_unicast_noc_scatter_write_with_state<
                         UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
@@ -325,6 +335,7 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
                         l1_read_addr,
                         NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, take),
                         page_size * take);
+                    hdrs_in_flight |= 1u << scatter_idx;
                     scatter_idx = (scatter_idx + 1 == kNumScatterHdrs) ? 0 : scatter_idx + 1;
                 }
             }
