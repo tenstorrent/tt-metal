@@ -392,7 +392,8 @@ std::pair<double, double> estimate_plan_cycles(
         (double)plan.C_slice_M_tiles * plan.K_chunk_tiles * plan.A_entry_bytes / TILE_BYTES;
     const double first_K_chunk_B_tiles =
         (double)plan.K_chunk_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes / TILE_BYTES;
-    const double fill_cycles = (first_K_chunk_A_tiles + first_K_chunk_B_tiles) * model.tile_read_cycles +
+    const double fill_cycles = (first_K_chunk_A_tiles + first_K_chunk_B_tiles) *
+                                   std::max(model.tile_read_cycles, model.core_tile_read_cycles) +
                                ((plan.A_mcast_num_dests > 0 ? first_K_chunk_A_tiles : 0.0) +
                                 (plan.B_mcast_num_dests > 0 ? first_K_chunk_B_tiles : 0.0)) *
                                    model.tile_mcast_cycles +
@@ -806,9 +807,11 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         const uint32_t C_width_tiles = C_slices_are_columns ? N_tiles : M_tiles;
         const uint32_t columns = std::min(grid_columns, C_width_tiles);
         const uint32_t all_rows = std::clamp(C_width_tiles / grid_columns, 1u, grid_rows);
+        uint32_t filled_rows = 0;
         for (uint32_t rows = all_rows; rows >= 1; --rows) {
             const uint32_t C_slice_width_tiles = tt::div_up(C_width_tiles, columns * rows);
             const bool C_slices_fill_the_cores = tt::div_up(C_width_tiles, C_slice_width_tiles) == columns * rows;
+            filled_rows = C_slices_fill_the_cores ? rows : 0;
             if (rows == all_rows || C_slices_fill_the_cores) {
                 for (const uint32_t length : C_slice_lengths(C_slices_are_columns ? M_tiles : N_tiles)) {
                     add_candidate(
@@ -821,6 +824,27 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             }
             if (C_slices_fill_the_cores) {
                 break;
+            }
+        }
+        // When the C slices fill at most one whole grid row, also narrower rectangles (down to half the grid's
+        // columns) whose cores they fill, so the multicast to all of them reaches more cores (N = 120 tiles on 11
+        // columns: 10x6 cores instead of 11x1). Measured on Blackhole, they lose to two or more whole rows.
+        for (uint32_t narrower_columns = filled_rows <= 1 ? columns - 1 : 0;
+             narrower_columns >= tt::div_up(grid_columns, 2u) && narrower_columns > 0;
+             --narrower_columns) {
+            for (uint32_t rows = std::min(grid_rows, tt::div_up(C_width_tiles, narrower_columns)); rows >= 1; --rows) {
+                const uint32_t C_slice_width_tiles = tt::div_up(C_width_tiles, narrower_columns * rows);
+                if (tt::div_up(C_width_tiles, C_slice_width_tiles) == narrower_columns * rows) {
+                    for (const uint32_t length : C_slice_lengths(C_slices_are_columns ? M_tiles : N_tiles)) {
+                        add_candidate(
+                            CoreRangeSet(CoreRange({0, 0}, {narrower_columns - 1, rows - 1})),
+                            ROW_MAJOR,
+                            C_slices_are_columns ? length : C_slice_width_tiles,
+                            C_slices_are_columns ? C_slice_width_tiles : length,
+                            ONE_BATCH_GROUP);
+                    }
+                    break;
+                }
             }
         }
     }
