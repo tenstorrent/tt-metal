@@ -9,7 +9,8 @@
 
 // Tile is assumed to have 16-bit elements
 // Scaler is assumed to be a 16-bit value double packed into a u32
-FORCE_INLINE void generate_mm_scaler(DataflowBuffer cb, const uint32_t scaler) {
+template <typename DFB>
+FORCE_INLINE void generate_mm_scaler(DFB cb, const uint32_t scaler) {
     cb.reserve_back(1);
 
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());

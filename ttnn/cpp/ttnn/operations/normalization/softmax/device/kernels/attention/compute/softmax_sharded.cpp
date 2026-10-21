@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
+#include "api/compute/pack.h"  // dummy_pack
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -25,12 +26,12 @@ template <
     std::uint32_t dfb_in_id,
     std::uint32_t dfb_max_scaler_id,
     std::uint32_t dfb_max_id,
-    std::uint32_t dfb_out_id>
-ALWI void calc_numeric_stable(
-    DataflowBuffer& dfb_in_obj,
-    DataflowBuffer& dfb_max_scaler_obj,
-    DataflowBuffer& dfb_max_obj,
-    DataflowBuffer& dfb_out_obj) {
+    std::uint32_t dfb_out_id,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3>
+ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
     compute_kernel_lib::reduce<
@@ -81,6 +82,9 @@ void kernel_main() {
     DataflowBuffer dfb_x_obj(dfb_x_id);
     DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
+    // in0 and out0 are the borrowed input / output shards and this kernel is the only producer and consumer of
+    // each (self-loop). The rows below pop in0 (which also advances to the next row) and push out0, so push
+    // each in0 row before it is read and pop each out0 row after it is written to leave both balanced.
     DataflowBuffer dfb_in0_obj(dfb::in0);
     DataflowBuffer dfb_recip_sum_exps_obj(dfb::recip_sum_exps);
     DataflowBuffer dfb_out0_obj(dfb::out0);
@@ -98,6 +102,11 @@ void kernel_main() {
 #endif
 
     for (std::uint32_t i = 0; i < block_h; i++) {
+        // The in0 row is already resident in L1; advance the DFB to make it available. On Quasar a push with
+        // no intervening pack trips the TEN-4746 guard, so emit a no-write PACR first (a no-op on WH/BH).
+        dfb_in0_obj.reserve_back(block_w);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_w);
 #ifdef FUSED_SCALE_MASK
         ckl::mul<
             ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
@@ -181,6 +190,11 @@ void kernel_main() {
             dfb_exps_obj,
             dfb_recip_sum_exps_obj,
             dfb_out0_obj);
+        // The out0 row stays in place in the output shard; release it. dummy_unpack orders the pop after the
+        // wait on Quasar (nothing unpacks out0).
+        dfb_out0_obj.wait_front(block_w);
+        dummy_unpack(dfb::out0);
+        dfb_out0_obj.pop_front(block_w);
     }
 #ifdef FUSED_SCALE_MASK
     // The fused-scale scalar is a single tile pushed once by the reader and re-waited on every row

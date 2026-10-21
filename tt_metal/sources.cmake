@@ -1,9 +1,9 @@
 set(TT_METAL_PUBLIC_API
     api/internal/service/inter_process_counter_channel.hpp
     api/internal/service/service_core_manager.hpp
+    api/internal/disaggregation/layer_ack_decoder.hpp
     api/internal/disaggregation/layer_completion_message.hpp
     api/internal/disaggregation/layer_completion_queue.hpp
-    api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
     api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
@@ -95,6 +95,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/noc_estimator/types.hpp
     api/tt-metalium/experimental/offline_kernel_compile.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
+    api/tt-metalium/experimental/per_core_allocation/allocator_state.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
     api/tt-metalium/experimental/per_core_allocation/memory_config.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp

@@ -380,16 +380,11 @@ void kernel_main() {
                     // shared header -- so the read is inlined against the page_table TensorBinding. The
                     // redundant page-size 3rd accessor arg is dropped (the binding supplies the aligned
                     // page size); page_table_stick_size remains the read size.
-                    const uint32_t page_table_addr = page_table_scratch.get_base_address();
                     const auto page_table_reader = TensorAccessor(tensor::page_table);
                     noc.async_read(
-                        page_table_reader,
-                        CoreLocalMem<uint32_t>(page_table_addr),
-                        page_table_stick_size,
-                        {.page_id = decoded.nb},
-                        {});
+                        page_table_reader, page_table_scratch, page_table_stick_size, {.page_id = decoded.nb}, {});
                     noc.async_read_barrier();
-                    page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_addr);
+                    page_table_ptr = &page_table_scratch[0];
                 }
 #endif
             }
@@ -433,14 +428,14 @@ void kernel_main() {
 #ifdef USE_WINDOWED_NARROWING
             {
                 // NoC-written, CPU-read: the lock drops stale cached lines on acquire (no-op off Quasar DM).
-                // The shared helper takes a raw pointer, read under this lock.
+                // The shared helper takes a raw element pointer, read under this lock.
                 auto cu_lock = cu_reader.scoped_lock(0, cu_window_seqlens_eles);
                 const auto range = windowed_k_chunk_range<WindowedMode::Bidirectional>(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,
                     windowed_q_tok_offset,
-                    cu_reader.local_mem().get_unsafe_ptr(),
+                    &cu_reader[0],
                     cu_window_seqlens_eles,
                     Sk_chunk_t,
                     k_num_chunks,
