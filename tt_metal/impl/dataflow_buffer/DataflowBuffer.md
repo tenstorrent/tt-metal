@@ -305,7 +305,7 @@ Same dealing as STRIDED with a block of `block_size` entries as the unit: block 
 | BLOCKED → BLOCKED | same `block_size` on both sides; `P/C` or `C/P` integer; `num_entries % (block_size × lcm(P, C)) == 0` | a block on both sides                                              | `num_entries / lcm(P, C)` | `lcm(P, C)`         |
 | BLOCKED → STRIDED | `C` divides `block_size`; `num_entries % (block_size × P) == 0`                             | producer: a block; each consumer: `block_size / C` entries, `C` apart | `num_entries / (P × C)`  | `C`                 |
 | STRIDED → BLOCKED | `P` divides `block_size`; `num_entries % (block_size × C) == 0`                             | each producer: `block_size / P` entries, `P` apart; consumer: a block | `num_entries / (P × C)`  | `P`                 |
-| BLOCKED → ALL     | `num_entries % (block_size × P) == 0` | a block on both sides (every consumer sees every block)            | `num_entries / P`        | `1`                 |
+| BLOCKED → ALL     | `num_entries % (block_size × P) == 0`; DM → DM: producer must use explicit sync | a block on both sides (every consumer sees every block)            | `num_entries / P`        | `1`                 |
 
 
 ALL → BLOCKED is not allowed. Limits: `block_size ≤ 65535` or `≤ 1023` with a Tensix endpoint; with implicit sync a block must also fit one NOC packet.
@@ -420,11 +420,13 @@ That requires the batch to divide evenly across txn ids, participating DMs, and 
 
 **Normal (non–ALL-consumer) side:**
 
-- `threshold = num_entries / num_txn_ids`
-- Must have `threshold % num_prods_or_cons == 0` → `per_txn = threshold / num_prods_or_cons`
+- `entry_threshold = num_entries / num_txn_ids`
+- Must have `entry_threshold % num_prods_or_cons == 0` → `per_txn = entry_threshold / num_prods_or_cons`
 - Must have `per_txn % num_tcs_per_risc == 0` → `per_txn_per_tc = per_txn / num_tcs_per_risc`
+- `entries_per_noc_txn = block_size` on a BLOCKED side, otherwise `1`
+- `threshold = entry_threshold / entries_per_noc_txn` (the cmdbuf count is in transactions); each DM issues `per_txn / entries_per_noc_txn` NOC ops per txn id
 
-So one ISR fire means: all participating DMs have each completed `per_txn` NOC ops on that trid, which RR’d evenly so each TC is owed exactly `per_txn_per_tc` credits — matching the uniform increment.
+So one ISR fire means: all participating DMs have each completed their NOC ops on that trid (`per_txn` entries each), which RR’d evenly so each TC is owed exactly `per_txn_per_tc` credits — matching the uniform increment.
 
 **BLOCKED side:** every transaction completes a whole block, so `per_txn` must also be a whole number of blocks: `per_txn % block_size == 0`, and `per_txn % (block_size × num_tcs_per_risc) == 0` unless the block is split over the TCs, then `block_size % num_tcs_per_risc == 0`. A STRIDED or ALL side facing a BLOCKED one moves one entry per transaction but stays on one TC for its whole share, so there `per_txn % (share × num_tcs_per_risc) == 0`. The host picks `num_txn_ids` to satisfy this and rejects the DFB only when no count works; then change `num_entries`, `block_size` or the thread counts, or use explicit sync on that side.
 
