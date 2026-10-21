@@ -363,9 +363,6 @@ def _run(
             lm_head=lm_head,
             cache=WeightCache(CACHE_DIR) if CACHE_DIR else None,
             weight_dtype=_ATTENTION_WEIGHT_DTYPE,
-            # Sliding layers attend without an additive mask (CSA / HCA stay masked): the masked SDPA's mask
-            # buffers do not fit beside the L1 decode keeps resident.
-            maskless=True,
             progress=progress,
         )
         prefill.synchronize("uploads")

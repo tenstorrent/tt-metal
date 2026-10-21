@@ -74,7 +74,6 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         moe_weight_dtype: ttnn.DataType = ttnn.bfloat16,
         tp_size: int = 1,
-        maskless: bool = False,
     ):
         cache = _as_cache(cache)
         self.config = config
@@ -104,7 +103,6 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
             cache=cache.sub("attn"),
             weight_dtype=weight_dtype,
             tp_size=tp_size,
-            maskless=maskless,
         )
         self.mlp = DeepSeekV41PrefillMoE(
             config,
