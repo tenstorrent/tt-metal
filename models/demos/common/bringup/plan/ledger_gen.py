@@ -479,8 +479,8 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "optests",
         ["X.3"],
         f"BRINGUP_CAPTURE_FORKS={calls} BRINGUP_RUNG={cap['name']} {SAFE} --no-precompile{capture}"
-        f" && {PY}.testing.fork_cases --capture {calls} --run-tests",
-        {"forks_used": ">= 0", "fork_calls_uncovered": "== 0", "fork_tests_failed": "== 0"},
+        f" && {PY}.testing.fork_cases --capture {calls} --run-tests --lint",
+        {"forks_used": ">= 0", "fork_calls_uncovered": "== 0", "fork_tests_failed": "== 0", "fork_cases_lint": "== 0"},
         role="optests",
         paths=["ttnn/ttnn/bringup"],
         device=True,

@@ -234,3 +234,47 @@ def test_gate_outputs_are_allowed_for_the_agent(fx):
     b = str(Ledger(s.bringup_dir).results_dir.relative_to(s.repo))
     assert allowed(f"{b}/fork_calls.json", pats) and allowed(f"{b}/O.1.json", pats)
     assert [p.name for p in gate_outputs(Ledger(s.bringup_dir), task)][-1] == "fork_calls.json"
+
+
+def test_a_math_case_is_limited_by_the_ops_noise_floor_not_its_own_error():
+    """F139: the limit is calib x the torch reference at the op's real formats vs fp64; a correct device-like result
+    (bf16 inputs, fp32 sums, bf16 output) passes, a 1 % scale does not."""
+    import torch
+
+    from models.demos.common.bringup.testing import fork_cases as FC
+
+    g = torch.Generator().manual_seed(0)
+    x, w = torch.randn(256, 512, generator=g), torch.randn(512, 128, generator=g) / 20
+    lim = FC.noise_limit(lambda a, b: a @ b, [x, w], ["bf16", "bf16"])
+    want = (x.double() @ w.double()).float()
+    dev = FC.round_to(FC.round_to(x, "bf16") @ FC.round_to(w, "bf16"), "bf16")
+    rel = lambda a: float((a.double() - want.double()).norm() / want.double().norm())  # noqa: E731
+    assert rel(dev) <= lim["rel"] < 0.01 and rel(dev * 1.01) > lim["rel"]
+    assert FC.noise_limit(lambda a, b: a @ b, [x, w], ["bf16", "bfp8"])["rel"] > lim["rel"]  # bfp8 weights: wider
+    e = [rel(FC.round_to(want, d)) for d in ("bf16", "bfp8", "bfp4")]
+    assert e[0] <= e[1] < e[2], e
+
+
+def test_the_case_lint_refuses_a_numeric_tolerance_without_a_noise_floor():
+    from models.demos.common.bringup.testing.fork_cases import case_lint
+
+    assert case_lint({"id": "a", "pcc": 0.9999, "rtol": 0.02})
+    assert case_lint({"id": "b", "max_rel": {"y": 0.01}})
+    assert not case_lint({"id": "c", "exact": True})
+    assert not case_lint({"id": "d", "noise": {"inputs": ["bf16", "bfp8"], "out": "bf16"}})
+
+
+@pytest.mark.xfail(strict=True, reason="F140: the forks' existing cases still carry tolerances read off the device")
+def test_no_fork_case_carries_a_tolerance_of_its_own():
+    import glob
+    import runpy
+
+    from models.demos.common.bringup.testing.fork_cases import REPO, case_lint
+
+    bad = [
+        e
+        for f in sorted(glob.glob(str(REPO / "ttnn/ttnn/bringup/*/tests/cases.py")))
+        for c in runpy.run_path(f).get("CASES", [])
+        for e in case_lint(c)
+    ]
+    assert not bad, f"{len(bad)} cases, e.g. {bad[:3]}"
