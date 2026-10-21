@@ -113,10 +113,9 @@ def _placement_key(p) -> tuple:
 
 
 def _layout(tensor: ttml.autograd.Tensor) -> tuple:
-    """(placements, dist_shape) of a tensor's live topology, in a form that compares with ``==``."""
-    sharding = ttml.Sharding.from_tensor(tensor)
-    assert sharding.placements is not None, "a tensor on a [1, 2] mesh must report a topology"
-    return tuple(_placement_key(p) for p in sharding.placements), tuple(sharding.dist_shape)
+    """(placements, dist_shape) of a tensor's live topology label as spelled, in a form that compares with ``==``."""
+    topology = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).tensor_topology()
+    return tuple(_placement_key(p) for p in topology.placements()), tuple(topology.distribution_shape())
 
 
 def _expected_full_shape(name: str) -> tuple:

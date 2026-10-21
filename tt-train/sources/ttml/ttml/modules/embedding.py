@@ -145,14 +145,11 @@ class VocabParallelEmbedding(AbstractModuleBase):
         The per-rank offset masking is only correct when every TP device sees the
         full ids, so a shard on the TP axis silently produces wrong embeddings.
         """
-        placements = ttml.Sharding.from_tensor(x).placements
-        if self.cluster_axis >= len(placements):
-            return
-        p = placements[self.cluster_axis]
-        if isinstance(p, ttnn.PlacementShard):
+        dim = ttml.Sharding.from_tensor(x).shard_dim(self.cluster_axis)
+        if dim is not None:
             raise ValueError(
                 f"VocabParallelEmbedding expects ids replicated across TP axis '{self.axis_name}', "
-                f"got PlacementShard(dim={p.dim}). Each TP device must see the full ids for the "
+                f"got PlacementShard(dim={dim}). Each TP device must see the full ids for the "
                 f"offset masking to be correct."
             )
 
@@ -274,14 +271,11 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         Every device holds a different embedding-dim slice of the *full* vocab,
         so each needs the complete ids; a TP shard would silently drop tokens.
         """
-        placements = ttml.Sharding.from_tensor(x).placements
-        if self.cluster_axis >= len(placements):
-            return
-        p = placements[self.cluster_axis]
-        if isinstance(p, ttnn.PlacementShard):
+        dim = ttml.Sharding.from_tensor(x).shard_dim(self.cluster_axis)
+        if dim is not None:
             raise ValueError(
                 f"FeatureParallelEmbedding expects ids replicated across TP axis "
-                f"'{self.axis_name}', got PlacementShard(dim={p.dim}). Each TP device must see "
+                f"'{self.axis_name}', got PlacementShard(dim={dim}). Each TP device must see "
                 f"the full ids to look up its embedding-dim slice for every token."
             )
 

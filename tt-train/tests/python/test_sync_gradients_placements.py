@@ -345,7 +345,7 @@ class TestTP:
         forged = _input((1, 1, DIM, DIM)).get_value(NATIVE)
         coords = list(forged.tensor_topology().mesh_coords())
         forged.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementShard(0)], coords[:1]))
-        with expect_error(RuntimeError, "cannot tell whether the tensor is sharded"):
+        with expect_error(RuntimeError, "cannot read the tensor's placement per mesh axis"):
             is_sharded_on_axis(forged, tp)
 
 
@@ -392,27 +392,16 @@ class TestFSDP:
 
     def test_fully_shard_refuses_a_collapsed_shard_label(self, fsdp_mesh, expect_error):
         """A parameter carrying the collapsed ``{2}, [Shard(2)]`` label of the whole-mesh 1-D mapper is sharded over
-        every mesh axis at once, so ``fully_shard`` refuses it with the collapsed-label error, whatever index the
-        FSDP axis has: the placement count is checked before any index is read."""
-        from ttml import fsdp as fsdp_module
-
+        every mesh axis of size > 1, the fsdp axis included, so ``fully_shard`` refuses to shard it again there instead
+        of taking one device's piece for the whole parameter."""
         linear = LinearLayer(DIM, DIM, has_bias=False)
         weight = linear.weight.tensor.get_value(NATIVE)
         coords = list(weight.tensor_topology().mesh_coords())
         weight.update_tensor_topology(
             ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(2)], coords)
         )
-        with expect_error(RuntimeError, "collapsed 1-D topology label"):
-            ttml.fsdp.fully_shard(linear)
-
-        n_axes = len(fsdp_mesh.shape)
-        with expect_error(RuntimeError, "collapsed 1-D topology label"):  # FSDP axis at index 0
-            fsdp_module._already_fsdp_sharded([ttnn.PlacementShard(2)], 0, n_axes)
-        assert fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate()], 0, n_axes) is False
-        assert fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], 1, n_axes) is True
-        assert (
-            fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], 0, n_axes) is False
-        )
+        with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
+            ttml.fsdp.fully_shard(linear, shard_dim=3)
 
 
 # --- DDP on [1, 2] ("tp", "dp") ---------------------------------------------------------------------------------

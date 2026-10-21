@@ -17,24 +17,26 @@
 
 namespace ttml::core::distributed {
 
-bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
+ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
+    const ttnn::Tensor& value) {
     // The tensor's own mesh when it is on a device; the context's device otherwise (a host tensor).
     const auto* device = value.device();
     const auto mesh_shape = device != nullptr ? device->shape() : autograd::ctx().get_device().shape();
-    TT_FATAL(
-        axis < mesh_shape.dims(),
-        "is_sharded_on_axis: mesh axis {} is out of range for the {} device mesh",
-        axis,
-        mesh_shape);
     std::string reason;
-    const auto placements =
+    auto placements =
         ttnn::operations::ccl::common::uncollapse_placements(value.tensor_topology(), mesh_shape, &reason);
+    TT_FATAL(placements.has_value(), "cannot read the tensor's placement per mesh axis: {}", reason);
+    return std::move(*placements);
+}
+
+bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
+    const auto placements = placements_per_axis(value);
     TT_FATAL(
-        placements.has_value(),
-        "is_sharded_on_axis: cannot tell whether the tensor is sharded on mesh axis {}: {}",
+        axis < placements.size(),
+        "is_sharded_on_axis: mesh axis {} is out of range for a {}-axis device mesh",
         axis,
-        reason);
-    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>((*placements)[axis]);
+        placements.size());
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
 }
 
 std::vector<GradientReduction> gradient_reductions(const autograd::TensorPtr& parameter, const AxisKinds& kinds) {

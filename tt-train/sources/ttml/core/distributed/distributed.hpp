@@ -14,11 +14,14 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
 using Tag = tt::tt_metal::distributed::multihost::Tag;
 using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
-// True when `value` is Shard rather than Replicate on mesh axis `axis` of the current device mesh. A collapsed 1-D
-// label (the default mappers' `{N}, [placement]`) is read as that placement on every mesh axis of size > 1. This
-// decides which axes a gradient is all-reduced along, so a label that is neither one placement per axis nor a
+// `value`'s placement on each axis of its device mesh. A collapsed 1-D label (the default mappers' `{N}, [placement]`)
+// is read as that placement on every mesh axis of size > 1. A label that is neither one placement per axis nor a
 // collapsed label covering the whole mesh is an error, not a guess: guessing Replicate would reduce a shard, guessing
 // Shard would skip a reduction.
+ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_per_axis(
+    const ttnn::Tensor& value);
+
+// True when `value` is Shard rather than Replicate on mesh axis `axis`, read through placements_per_axis.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 
 // What the ranks along a mesh axis share, which decides how a gradient is combined across them.

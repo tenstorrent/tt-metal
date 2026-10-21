@@ -240,9 +240,7 @@ def torch_to_ttml(
     ``mapper`` (a ``ttnn`` mesh mapper) is provided the full host tensor is
     distributed across the mesh according to the mapper's placements, so an
     FSDP-sharded parameter only ever lands on device as its per-device slice
-    (the full weight stays in host RAM). This mirrors how
-    ``ttml.fsdp._shard_replicated_param`` redistributes via
-    ``Tensor.from_numpy(full_np, TILE, dtype, mapper)``.
+    (the full weight stays in host RAM).
     """
     if mapper is not None:
         full_np = t.float().numpy()
@@ -326,15 +324,9 @@ def load_weights_from_hf(
             sharding = Sharding.from_tensor(ttml_params[name])
             mapper = sharding.derive_mapper()
             if mapper is not None and not sharding.is_fully_replicated:
-                # The param is genuinely sharded on some mesh axis. Scale the
-                # local per-device shape back up to the global shape on each
-                # sharded dim using the live distribution shape, writing it back
-                # into ``ttml_shapes`` so ``_prepare_hf_weights`` pads to the global shape
-                # (the mapper re-slices the per-device shards). Then reuse the
-                # mapper Sharding built from that same topology.
-                for axis_idx, placement in enumerate(sharding.placements):
-                    if isinstance(placement, ttnn.PlacementShard):
-                        ttml_shapes[name][placement.dim] *= sharding.dist_shape[axis_idx]
+                # The param is genuinely sharded on some mesh axis: ``_prepare_hf_weights`` pads to its
+                # global shape and the mapper re-slices the per-device shards.
+                ttml_shapes[name] = sharding.shape
                 sharded_mappers[name] = mapper
             else:
                 # Replicated (any param fully_shard leaves un-sharded) or

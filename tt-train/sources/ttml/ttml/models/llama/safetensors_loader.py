@@ -163,9 +163,7 @@ def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
     for axis, placement in enumerate(placements):
         if isinstance(placement, ttnn.PlacementShard) and axis != tp_index:
             raise RuntimeError(f"{subject}: sharded over mesh axis {axis}; this loader places weights over 'tp' only.")
-    if tp is None or tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
-        return None
-    placement = placements[tp.index]
+    placement = placements[tp_index] if tp else None
     if not isinstance(placement, ttnn.PlacementShard):
         return None
     if placement.dim not in (ROW_DIM, COL_DIM):

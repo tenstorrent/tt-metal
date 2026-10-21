@@ -24,12 +24,11 @@ Intended usage (PyTorch FSDP2-style root):
 Hybrid FSDP + DDP (HSDP) on a 2D mesh ``[D, F]`` with axes
 ``("dp", "fsdp")``:
 
-    # fully_shard uses axis "fsdp" (default). sync_gradients all-reduces
-    # DDP-replicated shards across the "dp" axis; FSDP-sharded params are
-    # skipped on the "fsdp" axis (already reduce-scattered in backward-post)
-    # but still reduced on the "dp" axis to average across DP replicas.
-    # The per-param axis filter in ttml.sync_gradients is what makes the
-    # same single call cover pure DDP, pure FSDP, and HSDP.
+    # fully_shard uses axis "fsdp" (default). ttml.sync_gradients averages
+    # each gradient over the data axes its parameter is replicated on: an
+    # FSDP-sharded param is Shard on "fsdp" (reduce-scattered in
+    # backward-post), so it is averaged over "dp" only. The same single call
+    # covers pure DDP, pure FSDP, and HSDP.
 
 Contract:
     * Call ``fully_shard`` BEFORE ``create_optimizer`` so optimizer state
@@ -67,70 +66,6 @@ class _ShardedState(Enum):
 
 def _is_fsdp_wrapped_module(module: Any) -> bool:
     return getattr(module, "_fsdp_state", False) and module._fsdp_state is not None
-
-
-def _get_placements(autograd_tensor: Any) -> List[Any]:
-    """Return the tensor's placement on each mesh axis; see :attr:`ttml.Sharding.placements`."""
-    return ttml.Sharding.from_tensor(autograd_tensor).placements
-
-
-def _is_shard(placement: Any) -> bool:
-    return isinstance(placement, ttnn.PlacementShard)
-
-
-def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
-    """Return the set of tensor dims already sharded on SOME mesh axis."""
-    if placements is None:
-        return set()
-    return {p.dim for p in placements if _is_shard(p)}
-
-
-def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int, n_axes: int) -> bool:
-    """True if the parameter is already sharded on the FSDP axis; the callers then refuse to shard it again or to keep
-    it replicated there.
-
-    A label made with a per-axis mapper has one placement per mesh axis (``n_axes`` entries), and the answer is whether
-    the entry for the FSDP axis is a Shard. ttnn's default mappers produce a different kind of label: one placement
-    that describes the whole mesh at once (the collapsed ``{N}, [placement]``). When that placement is Replicate, every
-    device holds the full tensor, so the parameter is not sharded on the FSDP axis and the answer is ``False``: FSDP
-    goes on to shard it. When that placement is a Shard, the tensor is already split across all N devices of the mesh
-    in one go, not along the FSDP axis with copies along the others, and neither answer is right. ``False`` would make
-    ``fully_shard`` take each device's piece for the full parameter and split it again along the FSDP axis, losing the
-    other pieces. ``True`` would report the parameter as sharded on the FSDP axis, which it is not, and send the caller
-    to the wrong remedy. So that case is an error of its own, naming the real remedy: create the parameter with a mapper
-    that has one placement per mesh axis.
-    """
-    if placements is None:
-        return False
-    if len(placements) != n_axes:  # a collapsed label has an entry at index 0; settle its kind before indexing
-        if any(_is_shard(p) for p in placements):
-            raise RuntimeError(
-                f"FSDP: parameter carries a collapsed 1-D topology label sharded over the whole mesh "
-                f"(placements={placements}), which cannot be read per mesh axis. Create the parameter with "
-                f"a mapper that has one placement per mesh axis (ttnn.create_mesh_mapper / mesh.axis_mapper)."
-            )
-        return False
-    return _is_shard(placements[axis_index])
-
-
-def _per_axis_placements(placements: Optional[List[Any]], n_axes: int, what: str) -> List[Any]:
-    """``placements`` as one entry per mesh axis.
-
-    ``None`` (no topology: unit mesh / older ttnn) and the collapsed ``{N}, [Replicate]`` both mean replicated
-    everywhere. Any other length mismatch -- a collapsed Shard, or a label for a different mesh -- raises: guessing
-    all-Replicate would redistribute one device's shard as if it were the full tensor.
-    """
-    if placements is None:
-        return [ttnn.PlacementReplicate()] * n_axes
-    if len(placements) == n_axes:
-        return list(placements)
-    if len(placements) == 1 and not _is_shard(placements[0]):
-        return [ttnn.PlacementReplicate()] * n_axes
-    raise RuntimeError(
-        f"FSDP: {what} has {len(placements)} placement(s) for a {n_axes}-axis mesh (placements={placements}); only "
-        f"an all-Replicate collapsed label can be read per axis. Create the parameter with a mapper that has one "
-        f"placement per mesh axis (ttnn.create_mesh_mapper / mesh.axis_mapper)."
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -378,24 +313,6 @@ def _pick_shard_dim_from_shape(
     return candidates[0]
 
 
-def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
-    """Best-effort read of the placements list backing a ``CppTensorToMesh``.
-
-    The mapper is the ``ttnn.CppTensorToMesh`` returned by
-    ``ttml.mesh().axis_mapper(...)`` / ``ttnn.create_mesh_mapper(...)``. C++
-    binds ``TensorToMesh::config()`` so we can introspect the original
-    ``MeshMapperConfig.placements`` without a side channel on
-    :class:`TensorMetadata`. Returns ``None`` if ``mapper`` is ``None`` or the
-    accessor isn't available (older ttnn build before ``config()`` was bound).
-    """
-    if mapper is None:
-        return None
-    try:
-        return list(mapper.config().placements)
-    except Exception:
-        return None
-
-
 def _param_shape(parameter: Parameter) -> List[int]:
     """Shape of a Parameter — works for both lazy (``TensorMetadata.shape``)
     and materialized (``autograd_tensor.shape()``) wrappers."""
@@ -405,11 +322,21 @@ def _param_shape(parameter: Parameter) -> List[int]:
     return list(inner.shape())
 
 
-def _param_placements(parameter: Parameter) -> Optional[List[Any]]:
+def _param_placements(parameter: Parameter) -> List[Any]:
+    """The parameter's placement on each mesh axis: from its mapper while lazy, its topology once materialized."""
     inner = parameter.peek_tensor()
-    if isinstance(inner, TensorMetadata):
-        return _placements_from_mapper(inner.mapper)
-    return _get_placements(inner)
+    if not isinstance(inner, TensorMetadata):
+        return ttml.Sharding.from_tensor(inner).placements
+    n_axes = len(ttml.mesh().shape)
+    placements = list(inner.mapper.config().placements) if inner.mapper is not None else []
+    if len(placements) == n_axes:
+        return placements
+    if not any(isinstance(p, ttnn.PlacementShard) for p in placements):
+        return [ttnn.PlacementReplicate()] * n_axes
+    raise RuntimeError(
+        f"FSDP: a lazy parameter's mapper shards it over the whole mesh at once (placements={placements}); "
+        f"create it with a mapper that has one placement per mesh axis (ttnn.create_mesh_mapper / mesh.axis_mapper)."
+    )
 
 
 def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int, axis_size: int) -> Optional[int]:
@@ -423,13 +350,9 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int, axis_size: 
       3. No candidate: return ``None`` and the caller skips the parameter.
          Divisibility is enforced by the caller.
 
-    "Already sharded on another mesh axis" is read from
-    ``parameter.tensor.tensor_topology().placements()`` in the eager case and
-    from ``parameter.peek_tensor().mapper.config().placements`` in the lazy
-    case — same logical question, different source depending on whether the
-    tensor exists yet.
+    "Already sharded on another mesh axis" is read by :func:`_param_placements`.
     """
-    already_sharded = _sharded_tensor_dims(_param_placements(parameter))
+    already_sharded = {p.dim for p in _param_placements(parameter) if isinstance(p, ttnn.PlacementShard)}
     return _pick_shard_dim_from_shape(_param_shape(parameter), already_sharded, axis_index, axis_size)
 
 
@@ -506,159 +429,30 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[List[
 
 
 # ---------------------------------------------------------------------------
-# Sharding: replicated → local shard (stays on device via reduce_scatter trick)
+# Sharding: replicated → local shard
 # ---------------------------------------------------------------------------
 
 
-def _shard_replicated_param(
-    autograd_tensor: Any,
-    shard_dim: int,
-    axis_index: int,
-    axis_size: int,
-) -> Any:
-    """Reshape a tensor's distribution to add Shard{shard_dim} on the FSDP axis,
-    preserving any existing sharding on other mesh axes (e.g. TP).
+def _shard_param(parameter: Parameter, shard_dim: int, axis_index: int, mesh_axis: str) -> None:
+    """Add ``Shard{shard_dim}`` on the FSDP axis, keeping the parameter's placement on every other axis (e.g. TP).
 
-    Approach: aggregate the tensor's data to host via a multi-axis composer,
-    then redistribute with a new mapper whose placements are the original
-    placements with the FSDP axis swapped from Replicate to Shard{shard_dim}.
-    # TODO: This is very slow. Need lazy init to shard once on creation,
-    # or at least a device-side slice-per-device op.
-
-    Returns the new ttnn tensor (the caller is responsible for swapping it
-    into the autograd::Tensor via ``set_value``).
+    A lazy parameter gets a new mapper, so :func:`ttml.materialize_module` allocates it already sharded and never
+    holds the full tensor (required for ~70B models). A materialized one keeps each device's slice on device.
     """
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    mesh_shape = ttml.mesh().shape
-    n_axes = len(mesh_shape)
-
-    placements = _per_axis_placements(_get_placements(autograd_tensor), n_axes, "parameter topology")
-
-    # Build a multi-axis composer that gathers the tensor onto host:
-    #   - For each Shard{tdim} axis, concat along tdim (gather the shards).
-    #   - For each Replicate axis, all shards along it are identical; the
-    #     composer doesn't have a "Replicate" placement, just a concat dim
-    #     per axis. We pick any tensor dim NOT already taken by another
-    #     axis and slice the resulting duplicates off afterwards.
-    # MeshComposerConfig requires every concat dim to be UNIQUE, so we
-    # build the assignment carefully: sharded axes claim their tdim first,
-    # then replicate axes get successive unused dims.
-    rank = autograd_tensor.get_rank()
-    original_shape = list(autograd_tensor.shape())
-    sharded_tensor_dims = {p.dim for p in placements if isinstance(p, ttnn.PlacementShard)}
-    available_for_replicate = [d for d in range(rank) if d not in sharded_tensor_dims]
-
-    composer_dims: List[int] = []
-    replicate_dims_used: List[Tuple[int, int]] = []  # (tensor_dim, original_size)
-    next_replicate_idx = 0
-    for placement in placements:
-        if isinstance(placement, ttnn.PlacementShard):
-            composer_dims.append(placement.dim)
-        else:
-            if next_replicate_idx >= len(available_for_replicate):
-                raise RuntimeError(
-                    f"FSDP: tensor of rank {rank} has too many Replicate mesh "
-                    f"axes to assign unique compose dims (placements={placements}, "
-                    f"mesh_shape={list(mesh_shape)}). The fix is to add a "
-                    f"slice-per-device op so we don't need to roundtrip via host."
-                )
-            d = available_for_replicate[next_replicate_idx]
-            composer_dims.append(d)
-            replicate_dims_used.append((d, original_shape[d]))
-            next_replicate_idx += 1
-
-    composer = ttnn.create_mesh_composer(device, ttnn.MeshComposerConfig(composer_dims))
-    full_np = autograd_tensor.to_numpy(composer=composer)
-
-    if replicate_dims_used:
-        # Each replicate axis stacked the tensor mesh_shape[axis] times along
-        # its assigned dim. Slice each stacking dim back to the original size
-        # to recover one canonical copy. (Sharded axes don't need slicing —
-        # concat across N shards along a dim of (size/N) gives back size.)
-        slicer: List[Any] = [slice(None)] * full_np.ndim
-        for tensor_dim, original_size in replicate_dims_used:
-            slicer[tensor_dim] = slice(0, original_size)
-        full_np = full_np[tuple(slicer)]
-
-    # New placements: keep existing sharding on every other axis (e.g. TP),
-    # install Shard{shard_dim} on the FSDP axis. fully_shard's pre-call
-    # check already verified that ``placements[axis_index]`` was Replicate.
-    new_placements = list(placements)
-    if new_placements[axis_index] != ttnn.PlacementReplicate():
+    placements = _param_placements(parameter)
+    if isinstance(placements[axis_index], ttnn.PlacementShard):
         raise RuntimeError(
-            f"FSDP: tensor of rank {rank} is already sharded on axis {axis_index} (placements={placements})."
+            f"Parameter is already sharded on mesh axis {mesh_axis!r} (placements={placements}). FSDP cannot layer "
+            f"a second shard on the same axis."
         )
-    new_placements[axis_index] = ttnn.PlacementShard(shard_dim)
-    new_mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(new_placements))
-
-    # Redistribute in the dtype the parameter is stored in. to_numpy gave a
-    # float32 array; from_numpy converts it back during host→device.
-    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, autograd_tensor.dtype(), new_mapper)
-    return new_at.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-
-
-def _shard_lazy_param(
-    parameter: Parameter,
-    shard_dim: int,
-    axis_index: int,
-    n_axes: int,
-) -> None:
-    """Install ``Shard{shard_dim}`` on the FSDP axis of a *lazy* parameter's mapper.
-
-    Replaces the parameter's :class:`TensorMetadata` mapper with a fresh one
-    whose placements equal the existing placements (e.g. TP's
-    ``Shard{2}/Shard{3}`` on the ``"tp"`` axis, read back via
-    ``mapper.config().placements``) plus ``Shard{shard_dim}`` on the FSDP
-    axis. When :func:`ttml.materialize_module` later runs, the parameter is
-    allocated already FSDP-sharded — never going through the full-tensor host
-    roundtrip the eager :func:`_shard_replicated_param` does, and never
-    holding the gathered tensor in DRAM.
-    """
-    meta = parameter.peek_tensor()
-    assert isinstance(meta, TensorMetadata)
-
-    # Existing placements (from TP-aware modules' mappers), or all-Replicate
-    # when the param has no explicit mapper.
-    new_placements: List[Any] = _per_axis_placements(_placements_from_mapper(meta.mapper), n_axes, "lazy mapper")
-
-    if isinstance(new_placements[axis_index], ttnn.PlacementShard):
-        raise RuntimeError(
-            f"FSDP: lazy parameter is already sharded on mesh axis {axis_index} "
-            f"(placements={new_placements}). FSDP cannot layer a second shard "
-            f"on the same axis."
-        )
-    new_placements[axis_index] = ttnn.PlacementShard(shard_dim)
-
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    new_mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(new_placements))
-    replace_lazy_mapper(parameter, new_mapper)
-
-
-def _shard_eager_param(
-    parameter: Parameter,
-    shard_dim: int,
-    axis_index: int,
-    axis_size: int,
-    mesh_axis_name: str,
-    n_axes: int,
-) -> None:
-    """Eager-path counterpart to :func:`_shard_lazy_param`.
-
-    Host-roundtrips ``parameter.tensor`` via :func:`_shard_replicated_param`
-    and swaps the result into the autograd tensor in place. Errors if the
-    tensor is already sharded on the FSDP axis (e.g. if some upstream code
-    layered TP onto this same axis).
-    """
+    if isinstance(parameter.peek_tensor(), TensorMetadata):
+        placements[axis_index] = ttnn.PlacementShard(shard_dim)
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        replace_lazy_mapper(parameter, ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements)))
+        return
     param_tensor = parameter.tensor
-    placements = _get_placements(param_tensor)
-    if _already_fsdp_sharded(placements, axis_index, n_axes):
-        raise RuntimeError(
-            f"Parameter is already sharded on mesh axis {mesh_axis_name!r} "
-            f"(placements={placements}). FSDP cannot layer a second shard on "
-            f"the same axis."
-        )
-    sharded = _shard_replicated_param(param_tensor, shard_dim, axis_index, axis_size)
-    param_tensor.set_value(sharded)
+    value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+    param_tensor.set_value(ttml.core.distributed.mesh_partition(value, shard_dim, axis_index))
 
 
 # ---------------------------------------------------------------------------
@@ -786,14 +580,9 @@ def fully_shard(
     state = FSDPState(module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward)
     module._fsdp_state = state
 
-    n_axes = len(mesh.shape)
-
     # Walk Python ``Parameter`` wrappers (one collector for both eager and
     # lazy models — see ``_collect_root_param_wrappers``). For each, decide
-    # the shard dim from shape + existing placements, then dispatch to either
-    # ``_shard_lazy_param`` (rewrites the mapper so materialize allocates
-    # already-sharded — required for ~70B models) or ``_shard_eager_param``
-    # (host-roundtrips the materialized tensor).
+    # the shard dim from shape + existing placements, then ``_shard_param``.
     for names, parameter in _collect_root_param_wrappers(module):
         rel_name = names[0]
         # Already claimed by another wrapper (e.g. tied weight sharded or
@@ -803,7 +592,7 @@ def fully_shard(
         # Match every alias of a tied parameter, not just the first-seen one.
         matched = _matching_replicate_patterns(names, replicate_res)
         if matched:
-            if _already_fsdp_sharded(_param_placements(parameter), axis_index, n_axes):
+            if isinstance(_param_placements(parameter)[axis_index], ttnn.PlacementShard):
                 raise RuntimeError(
                     f"replicate: parameter {rel_name!r} (matched by {matched}) is already sharded on mesh "
                     f"axis {mesh_axis!r}, so it cannot be kept replicated on it."
@@ -846,10 +635,7 @@ def fully_shard(
         if not _is_tile_aligned_shard(shape, chosen, axis_size):
             _warn_misaligned_shard(rel_name, shape, chosen, axis_size)
 
-        if isinstance(parameter.peek_tensor(), TensorMetadata):
-            _shard_lazy_param(parameter, chosen, axis_index, n_axes)
-        else:
-            _shard_eager_param(parameter, chosen, axis_index, axis_size, mesh_axis, n_axes)
+        _shard_param(parameter, chosen, axis_index, mesh_axis)
 
         state.add_managed_param(parameter, chosen)
         _mark_fsdp_managed(parameter, chosen, axis_index)

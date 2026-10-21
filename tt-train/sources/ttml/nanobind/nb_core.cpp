@@ -250,6 +250,21 @@ void py_module(nb::module_& m) {
             "Raw mesh_partition (each device keeps its own slice of `dim` along `cluster_axis`, no collective). "
             "Returns a new ttnn::Tensor.");
 
+        py_distributed.def(
+            "placements_per_axis",
+            [](const ttnn::Tensor& tensor) {
+                nb::list result;
+                for (const auto& placement : ttml::core::distributed::placements_per_axis(tensor)) {
+                    std::visit(
+                        [&result](const auto& p) { result.append(nb::cast(p, nb::rv_policy::copy)); }, placement);
+                }
+                return result;
+            },
+            nb::arg("tensor"),
+            "`tensor`'s placement on each mesh axis. A collapsed 1-D label is expanded: Replicate is Replicate on "
+            "every "
+            "axis, a Shard over the whole mesh is Shard on every axis of size > 1. Raises for a label that is neither "
+            "one placement per mesh axis nor a collapsed label covering the mesh.");
         // The per-axis reading synchronize_gradients uses to pick the axes a gradient is reduced along.
         py_distributed.def(
             "is_sharded_on_axis",
