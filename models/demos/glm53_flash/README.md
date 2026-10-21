@@ -23,28 +23,31 @@ headroom; `tests/test_memory_plan.py` prints the envelope).
 
 ## Performance
 
-Measured 2026-10-21 on an 8x4 Blackhole Galaxy, 45 layers resident, bfp8 experts, traced decode, `tests/test_mesh_model.py`
-(short prompts) and `tests/test_mesh_long_context.py` (long prompts, single prompt per slot). TTFT is the time to the first token of one prompt of the stated input length; decode is the steady-state traced
-step with every slot active at the stated decode ISL (the short-prompt chain test decodes at ISL 16 and measures
-TTFT on a separate 128-token prompt; the long-context rows decode at the prompt length).
+Measured 2026-10-21 on an 8x4 Blackhole Galaxy with the default configuration (hybrid expert layout, 45 layers resident,
+bfp8 experts, fast exact mHC kernels, fused router), `tests/test_mesh_model.py` (short prompts) and
+`tests/test_mesh_long_context.py` (long prompts, one prompt per slot). Decode is the traced steady-state step with every
+slot active at the stated decode ISL. TTFT: for prompts up to 2 K tokens the per-length traced prefill (replay time);
+above that the chunked prefill (16 K chunks, compiled kernels, not traced).
 
 | Batch | Hardware | ISL (tokens) | TTFT (ms) | T/S/U | Target T/S/U | T/S | Notes |
 |-------|----------|-------------:|----------:|------:|-------------:|----:|-------|
-| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 (traced prefill; 869 eager) | 14.3 | 33 | 458 | hybrid expert layout: decode step 69.8 ms |
-| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 854 (eager) | 17.2 | 33 | 551 | EP32 expert layout (`GLM53_MOE_LAYOUT=ep`): decode step 58.1 ms |
-| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) | - | 8.2 | 19 | 2106 | hybrid dense expert layout: decode step 121.6 ms (2026-10-20 run: composite mHC, composite router) |
-| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 1176 (eager) | 7.4 | 19 | 1885 | EP32 expert layout: decode step 135.8 ms (the all-to-all exchange dominates at this batch) |
-| 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31 800 | 9.8 | 60 | 79 | 2061 tok/s prefill; decode on the stream expert op (`GLM53_REGIONS_KEEP_STACKED=1`) |
-| 32  | Galaxy 8x4 (Blackhole) | 65 493 | 36 200 | 10.1 | 33 | 323 | 1811 tok/s prefill |
-| 8   | Galaxy 8x4 (Blackhole) | 1 047 526 | 458 000 | 4.6 | 33 | 37 | 2288 tok/s prefill; decode through the regions expert path (the stacked copy does not fit beside the 1 M caches) |
-| 32  | Galaxy 8x4 (Blackhole) | 1 047 526 (user-partitioned cache) | 751 000 (first user) | pending | 33 | pending | 1394 tok/s prefill per user; decode figures pending the rerun |
-| 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1 201 | 12.5 | - | 25 | vision tower 90 ms; 45 layers bfp4 experts |
+| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 (traced prefill) | 14.3 | 33 | 458 | decode step 69.8 ms |
+| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) | - | 8.2 | 19 | 2106 | dense expert pass; decode step 121.6 ms (2026-10-20 run, re-measure with today's defaults pending) |
+| 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31 800 (chunked prefill) | 9.8 | 60 | 79 | 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
+| 32  | Galaxy 8x4 (Blackhole) | 65 493 | 36 200 (chunked prefill) | 10.1 | 33 | 323 | 1811 tok/s prefill; decode step 99.0 ms |
+| 8   | Galaxy 8x4 (Blackhole) | 1 047 526 | 458 000 (chunked prefill) | 4.6 | 33 | 37 | 2288 tok/s prefill; decode step 219 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
+| 32  | Galaxy 8x4 (Blackhole) | 1 047 526 (user-partitioned cache) | 495 000 (chunked prefill, per user) | pending | 33 | pending | 2118 tok/s prefill per user; decode figures pending the rerun |
+| 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1 201 (eager tower + prefill) | 12.5 | - | 25 | decode step 80 ms; 45 layers bfp4 experts |
+
+Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no
+long-context prefill path yet, so not the default): traced decode step 58.1 ms at 32 users (17.2 tok/s per user,
+551 aggregate) and 135.8 ms at 256 users (7.4 tok/s per user, 1885), same chain PCC and greedy ids.
 
 Accuracy on the same stack: the 16 K and 64 K needle prompts generate 8/8 greedy tokens identical to the HF CPU
 reference (`reference/compare_to_tt.py`); the needle is retrieved at 1 M for distances up to ~460 K tokens; the
 image demo's 16 greedy tokens match HF. Targets are the design goals of `~/ashai/GLM_5.3_DESIGN.md` (19 / 33 / 60
-tok/s per user at 256 / 32 / 8 users); the optimization phase is in progress (fused mHC pre-block, EP32 for high user
-counts, the sparse decode at long context).
+tok/s per user at 256 / 32 / 8 users); the optimization phase is in progress (fused mHC pre-block, the EP32 exchange,
+the sparse decode at long context).
 
 ## How to run
 
