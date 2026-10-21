@@ -37,13 +37,13 @@ that runs them.
 Layering, each knowing strictly less about the hardware than the one below:
 
 ```
-Chain · Step · Registers        no hardware at all
-        ↓
-Golden · OpConfig               blocks → steps          ──self.blocks──▶  DataTransferBlocks
-        ↓                                                                        ↓
-DataCopyGolden · MatmulGolden · Eltwise…                          Quasar… · Wormhole… · Blackhole…
-        ↓
-QuasarEltwiseBinaryGolden · …   the op bound to an ArchProfile
+chain.py      Chain · Step · Registers     no hardware at all
+                     ↓
+golden.py     Golden · OpConfig            blocks → steps   ──self.blocks──▶  DataTransferBlocks
+                     ↓                                                               ↓
+pipelines/    DataCopyGolden · MatmulGolden · …             QuasarArch · WormholeArch · BlackholeArch
+                     ↓
+arch.py       QuasarEltwiseBinaryGolden · …  the op bound to an ArchProfile
 ```
 
 ---
@@ -412,9 +412,9 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 
 | Member | Notes |
 |---|---|
-| `MANTISSA_SPLIT` | `(srcA_bits, srcB_bits)`. Quasar `(7, 7)`. `None` → the product is computed exactly and fidelity is ignored. |
+| `mantissa_split` | `(srcA_bits, srcB_bits)`, read off the golden's `ArchProfile`. Quasar `(7, 7)`. `None` → the product is computed exactly and fidelity is ignored. |
 | `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. `("srcB", "srcA")` on every architecture. |
-| `models_fidelity` | True when `MANTISSA_SPLIT` is set. |
+| `models_fidelity` | True when the architecture's `mantissa_split` is set. |
 | `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. |
 | `K_FACES` | How many MVMULs cover one tile's inner dimension — 2, since SrcA's face is 16×16. One Dest write each. |
 
@@ -480,7 +480,7 @@ result into something wrong everywhere but still plausible-looking:
 Flipping *both* is a no-op on the numbers, which is why the base class carried
 the wrong routing harmlessly for a while: with `("srcA", "srcB")` and
 `srcA @ srcB` the product is still `arg0 @ arg1`. It only becomes a real bug once
-an architecture defines an asymmetric `MANTISSA_SPLIT`, because the split is
+an architecture defines an asymmetric `mantissa_split`, because the split is
 indexed by *register* — so the SrcA penalty would be charged to the wrong
 operand. Wormhole/Blackhole will hit exactly that when their split is filled in,
 SrcA there losing its least significant bit.
@@ -521,8 +521,8 @@ four of them.
 
 | Member | Notes |
 |---|---|
-| `MANTISSA_SPLIT` | `(srcA_bits, srcB_bits)` the multiplier takes per phase. Quasar `(7, 7)` — symmetric. `None` means the split is not modelled and the multiply is exact. |
-| `models_fidelity` | True only for `Elwmul` with `MANTISSA_SPLIT` set. |
+| `mantissa_split` | `(srcA_bits, srcB_bits)` the multiplier takes per phase, from the `ArchProfile`. Quasar `(7, 7)` — symmetric. `None` means the split is not modelled and the multiply is exact. |
+| `models_fidelity` | True only for `Elwmul` with the architecture's `mantissa_split` set. |
 
 A consequence worth stating: a **bf16 operand carries only 7 explicit bits, so its
 low half is always zero** and every phase after AH_BH contributes nothing.
@@ -645,7 +645,7 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
   the device measures 71); a fitted `2^-15` magnitude flush (fit the numbers
   well, no mechanism); per-operand mantissa asymmetry (WH/BH only, Quasar is
   symmetric); and mask-versus-subtract in the split (provably equivalent).
-- **The WH/BH per-phase mantissa split.** `MANTISSA_SPLIT` is set for Quasar
+- **The WH/BH per-phase mantissa split.** `mantissa_split` is set for Quasar
   only, so a Wormhole or Blackhole multiply — matmul and Elwmul alike — runs as
   a single exact product and `math_fidelity` is ignored. That is wrong at
   *every* fidelity, HiFi4 included, since their per-phase masks never cover
