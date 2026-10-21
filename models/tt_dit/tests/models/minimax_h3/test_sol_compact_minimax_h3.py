@@ -484,6 +484,26 @@ def test_resident_matches_chunk(
         f"[resident] rows={rows} k_chunk={k_chunk} tau={tau} density {res.density:.4f}; "
         f"pcc(resident, chunk) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}; pcc(chunk, dense) {p_chunk_dense:.5f}"
     )
+    # Where does it go wrong? PCC per (shard, 64-row query chunk), worst first: a bad chunk position (first / last
+    # per core, the partial tail, one head) points at the loop structure; uniform noise points at the step.
+    S = tuple(mesh_device.shape)[sp_axis]
+    nqc = -(-rows // Q1_CHUNK)
+    worst = []
+    for sh in range(S):
+        for qc in range(nqc):
+            r0 = sh * rows + qc * Q1_CHUNK
+            r1 = min(r0 + Q1_CHUNK, sh * rows + rows, logical_n)
+            if r1 <= r0:
+                continue
+            a_, b_ = base.sol[:, r0:r1], res.sol[:, r0:r1]
+            bad = not torch.isfinite(b_).all()
+            worst.append((float("-inf") if bad else _pcc(a_, b_), sh, qc, bad))
+    worst.sort()
+    logger.info(
+        "[resident] worst (pcc, shard, q_chunk, nonfinite): "
+        + ", ".join(f"({p:.4f},{sh},{qc}{',NaN' if bad else ''})" for p, sh, qc, bad in worst[:12])
+        + f"; chunks below 0.99: {sum(1 for w in worst if w[0] < 0.99)} of {len(worst)}"
+    )
     assert res.modes_logged == {"resident"}, f"factory compiled {sorted(res.modes_logged)}"
     assert base.density == res.density, "the mask must be the chunk-mode one"
     assert p_chunk > 0.999, p_chunk
