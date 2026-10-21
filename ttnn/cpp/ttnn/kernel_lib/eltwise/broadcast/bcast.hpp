@@ -16,7 +16,7 @@ namespace detail {
 
 constexpr uint32_t unary_bcast_config_bits(BroadcastDim dim, InputSpec input_spec, Dst dst) noexcept;
 
-template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct UnaryBcastImpl;
 
 }  // namespace detail
@@ -27,11 +27,11 @@ template <BroadcastDim Dim, InputSpec Input, Dst DstSlot = Dst::D0>
 using UnaryBcast = detail::UnaryBcastImpl<
     Input.cb_id,
     detail::unary_bcast_config_bits(Dim, Input, DstSlot),
-    DataflowBufferFor<Input.pap, Input.cap>>;
+    DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
 /// UnaryBcast -> PackTile. `in` / `out` are the DataflowBuffers named by `Input` / `Output`.
-template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
-ALWI void unary_bcast(IterationShape shape, DFBIn& in, DFBOut& out);
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
+ALWI void unary_bcast(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out);
 
 }  // namespace compute_kernel_lib
 

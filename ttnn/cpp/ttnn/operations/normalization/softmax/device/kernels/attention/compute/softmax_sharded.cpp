@@ -23,10 +23,10 @@ namespace ckl = compute_kernel_lib;
 template <
     std::uint32_t block_w,
     std::uint32_t subblock_w,
-    const auto& dfb_in_tok,
-    const auto& dfb_max_scaler_tok,
-    const auto& dfb_max_tok,
-    const auto& dfb_out_tok,
+    const auto& dfb_in_token,
+    const auto& dfb_max_scaler_token,
+    const auto& dfb_max_token,
+    const auto& dfb_out_token,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -37,9 +37,9 @@ ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& 
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
-        dfb_in_tok,
-        dfb_max_scaler_tok,
-        dfb_max_tok,
+        dfb_in_token,
+        dfb_max_scaler_token,
+        dfb_max_token,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
@@ -47,12 +47,12 @@ ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& 
         ckl::IterationShape::tiles(block_w).block_size(subblock_w),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
-            ckl::input(dfb_in_tok, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
-            ckl::input(dfb_max_tok, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+            ckl::input(dfb_in_token, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb_max_token, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
             dfb_in_obj, dfb_max_obj},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb_out_tok, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_token, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
             dfb_out_obj});
     dfb_out_obj.wait_front(block_w);
 }

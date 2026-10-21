@@ -347,8 +347,8 @@ struct InputSpec {
     InputTileMapping mapping;
     DataFormatReconfig reconfig;
     TileAddressing addressing;
-    dfb::AccessPattern pap = dfb::AccessPattern::UNKNOWN;
-    dfb::AccessPattern cap = dfb::AccessPattern::UNKNOWN;
+    dfb::AccessPattern producer_access_pattern = dfb::AccessPattern::UNKNOWN;
+    dfb::AccessPattern consumer_access_pattern = dfb::AccessPattern::UNKNOWN;
 };
 
 /// The second (srcB) input of a `BinaryFpu`. srcB is the only operand the FPU broadcast path
@@ -374,8 +374,8 @@ struct OutputSpec {
     DestAccumulation dest_accumulation;
     L1Accumulation l1_accumulation;
     PackRelu relu;
-    dfb::AccessPattern pap = dfb::AccessPattern::UNKNOWN;
-    dfb::AccessPattern cap = dfb::AccessPattern::UNKNOWN;
+    dfb::AccessPattern producer_access_pattern = dfb::AccessPattern::UNKNOWN;
+    dfb::AccessPattern consumer_access_pattern = dfb::AccessPattern::UNKNOWN;
 };
 
 /// Bind one input buffer id to its configuration.
@@ -390,17 +390,20 @@ constexpr InputSpec input(
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
 constexpr InputSpec input(
-    DFBBindingToken<Pap, Cap> token,
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
     WaitPolicy wait = WaitPolicy::PerTile,
     PopPolicy pop = PopPolicy::PerTile,
     InputTileMapping mapping = InputTileMapping::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileAddressing addressing = TileAddressing::Direct) noexcept;
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
 constexpr InputSpec input(
-    DFBBindingToken<Pap, Cap> token, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
+    WaitPolicy wait,
+    PopPolicy pop,
+    DataFormatReconfig reconfig) noexcept;
 
 /// Bind srcB of a BinaryFpu and optionally select its intra-tile broadcast. The overload taking
 /// an existing InputSpec makes compile-time helper-produced input configurations composable.
@@ -415,18 +418,18 @@ constexpr BroadcastInputSpec input(
     TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr BroadcastInputSpec input(
     uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
 constexpr BroadcastInputSpec input(
-    DFBBindingToken<Pap, Cap> token,
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
     BroadcastDim broadcast,
     WaitPolicy wait = WaitPolicy::PerTile,
     PopPolicy pop = PopPolicy::PerTile,
     InputTileMapping mapping = InputTileMapping::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileAddressing addressing = TileAddressing::Direct) noexcept;
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
 constexpr BroadcastInputSpec input(
-    DFBBindingToken<Pap, Cap> token,
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
     BroadcastDim broadcast,
     WaitPolicy wait,
     PopPolicy pop,
@@ -445,9 +448,9 @@ constexpr OutputSpec output(
     DestAccumulation dest_accumulation = DestAccumulation::Disabled,
     L1Accumulation l1_accumulation = L1Accumulation::Disabled,
     PackRelu relu = PackRelu::Disabled) noexcept;
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+template <dfb::AccessPattern ProducerAccessPattern, dfb::AccessPattern ConsumerAccessPattern>
 constexpr OutputSpec output(
-    DFBBindingToken<Pap, Cap> token,
+    DFBBindingToken<ProducerAccessPattern, ConsumerAccessPattern> token,
     ReservePolicy reserve = ReservePolicy::PerTile,
     PushPolicy push = PushPolicy::PerTile,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
@@ -534,13 +537,13 @@ constexpr uint32_t binary_fpu_config_bits(
 constexpr uint32_t dest_reuse_binary_config_bits(
     BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept;
 
-template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct CopyTileImpl;
-template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct PackTileImpl;
-template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits, class DFBA, class DFBB>
+template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits, class DataflowBufferA, class DataflowBufferB>
 struct BinaryFpuImpl;
-template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct DestReuseBinaryImpl;
 
 }  // namespace detail
@@ -548,8 +551,10 @@ struct DestReuseBinaryImpl;
 /// Load one input tile into `DstSlot`. Constructor: `{in}`, `{in, base}` (Offset) or `{in, range}` (Strided),
 /// where `in` is the DataflowBuffer named by `Input`.
 template <InputSpec Input, Dst DstSlot = Dst::D0>
-using CopyTile = detail::
-    CopyTileImpl<Input.cb_id, detail::copy_tile_config_bits(DstSlot, Input), DataflowBufferFor<Input.pap, Input.cap>>;
+using CopyTile = detail::CopyTileImpl<
+    Input.cb_id,
+    detail::copy_tile_config_bits(DstSlot, Input),
+    DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
 /// FPU binary of two input tiles into `DstSlot`. Constructor: `{a, b}` — the DataflowBuffers named by
 /// `AInput` and `BInput`, in that order (the same object twice when both name one buffer) — optionally
@@ -564,8 +569,8 @@ using BinaryFpu = detail::BinaryFpuImpl<
     AInput.cb_id,
     BInput.input_spec.cb_id,
     detail::binary_fpu_config_bits(Op, AInput, BInput, DstSlot, Accumulation),
-    DataflowBufferFor<AInput.pap, AInput.cap>,
-    DataflowBufferFor<BInput.input_spec.pap, BInput.input_spec.cap>>;
+    DataflowBufferFor<AInput.producer_access_pattern, AInput.consumer_access_pattern>,
+    DataflowBufferFor<BInput.input_spec.producer_access_pattern, BInput.input_spec.consumer_access_pattern>>;
 
 /// Apply an FPU binary operation between one CB input and `DstSlot`.
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
@@ -575,7 +580,7 @@ template <BinaryFpuOp Op, InputSpec Input, DestReuseType ReuseType, Dst DstSlot 
 using DestReuseBinary = detail::DestReuseBinaryImpl<
     Input.cb_id,
     detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot),
-    DataflowBufferFor<Input.pap, Input.cap>>;
+    DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
 /// Pack `DstSlot` to an output tile. Constructor: `{out}`, `{out, base}` or `{out, range}`, where `out` is the
 /// DataflowBuffer named by `Output`.
@@ -583,7 +588,7 @@ template <OutputSpec Output, Dst DstSlot = Dst::D0>
 using PackTile = detail::PackTileImpl<
     Output.cb_id,
     detail::pack_tile_config_bits(Output, DstSlot),
-    DataflowBufferFor<Output.pap, Output.cap>>;
+    DataflowBufferFor<Output.producer_access_pattern, Output.consumer_access_pattern>>;
 
 // (Chain-shape trait predicates, the EltwiseChain type-list wrapper, and the INVALID_DFB sentinel
 //  are implementation detail — declared in chain.inl, not on this public surface.)

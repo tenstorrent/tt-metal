@@ -33,8 +33,8 @@ constexpr uint32_t unary_bcast_config_bits(BroadcastDim dim, InputSpec input_spe
 
 }  // namespace detail
 
-template <uint32_t Cb, uint32_t ConfigBits, class DFB>
-struct detail::UnaryBcastImpl : InputStream<DFB>, UnaryBcastTag {
+template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
+struct detail::UnaryBcastImpl : InputStream<DataflowBufferType>, UnaryBcastTag {
     static constexpr UnaryBcastConfig Config{ConfigBits};
     static constexpr BroadcastDim Dim = Config.dim();
     static constexpr InputSpec Input = Config.input_spec(Cb);
@@ -43,7 +43,7 @@ struct detail::UnaryBcastImpl : InputStream<DFB>, UnaryBcastTag {
     static constexpr PopPolicy Pop = Input.pop;
     static constexpr InputTileMapping Mapping = Input.mapping;
     static constexpr TileAddressing Addressing = Input.addressing;
-    using Base = InputStream<DFB>;
+    using Base = InputStream<DataflowBufferType>;
     using Base::tile_base;
     using Base::row_stride;
 
@@ -65,17 +65,17 @@ struct detail::UnaryBcastImpl : InputStream<DFB>, UnaryBcastTag {
     static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
     static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<UnaryBcastImpl, std::tuple<DFB>, Args...>(), int> = 0>
+    template <class... Args, std::enable_if_t<rejects_constructor_args<UnaryBcastImpl, std::tuple<DataflowBufferType>, Args...>(), int> = 0>
     UnaryBcastImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
         require_bound_dataflow_buffers<
-            rejects_constructor_args<UnaryBcastImpl, std::tuple<DFB>, Args...>(),
-            leading_mismatched_buffers<std::tuple<DFB>, Args...>()>();
+            rejects_constructor_args<UnaryBcastImpl, std::tuple<DataflowBufferType>, Args...>(),
+            leading_mismatched_buffers<std::tuple<DataflowBufferType>, Args...>()>();
     }
-    ALWI explicit UnaryBcastImpl(DFB& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
-    ALWI UnaryBcastImpl(DFB& in, uint32_t base) noexcept : Base(in, base) {
+    ALWI explicit UnaryBcastImpl(DataflowBufferType& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI UnaryBcastImpl(DataflowBufferType& in, uint32_t base) noexcept : Base(in, base) {
         check_bound_dataflow_buffer<Cb>(in);
     }
-    ALWI UnaryBcastImpl(DFB& in, StridedTileRange range) noexcept : Base(in, range) {
+    ALWI UnaryBcastImpl(DataflowBufferType& in, StridedTileRange range) noexcept : Base(in, range) {
         check_bound_dataflow_buffer<Cb>(in);
     }
 
@@ -94,8 +94,8 @@ struct detail::UnaryBcastImpl : InputStream<DFB>, UnaryBcastTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 };
 
-template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
-ALWI void unary_bcast(IterationShape shape, DFBIn& in, DFBOut& out) {
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, class InputDataflowBuffer, class OutputDataflowBuffer>
+ALWI void unary_bcast(IterationShape shape, InputDataflowBuffer& in, OutputDataflowBuffer& out) {
     eltwise_chain(shape, UnaryBcast<Dim, Input>{in}, PackTile<Output>{out});
 }
 
