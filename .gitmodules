@@ -10,3 +10,6 @@
 	path = tt_metal/third_party/tt-cluster-descriptors
 	url = https://github.com/tenstorrent/tt-cluster-descriptors.git
 	branch = main
+[submodule "models/experimental/timestral/reference"]
+	path = models/experimental/timestral/reference
+	url = git@github.com:mistralai/timestral.git
