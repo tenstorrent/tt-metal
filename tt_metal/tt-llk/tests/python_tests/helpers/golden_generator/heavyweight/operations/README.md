@@ -344,7 +344,7 @@ Two corollaries worth keeping, because both have been chased as leads and are
 dead:
 
 - The Quasar masks are **symmetric** — 7 explicit bits from each operand,
-  matching `MANTISSA_SPLIT = (7, 7)`. The asymmetric 4/6 split in that module's
+  matching `QUASAR.mantissa_split == (7, 7)`. The asymmetric 4/6 split in that module's
   comment is its `else` branch, i.e. **Wormhole/Blackhole**, where SrcA also
   drops its least significant bit.
 - Mask-and-reassemble versus subtract is **not** a source of divergence between
