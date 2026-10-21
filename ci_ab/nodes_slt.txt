@@ -1,0 +1,8 @@
+ci_ab/test_slt_ab.py::test_softmax_large[sl_plain_hf4]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_ns_hf4]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_ns_hf2]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_ns_lofi]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_ns_hf4_f32]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_mask_ns_hf4]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_mask_hf2]
+ci_ab/test_slt_ab.py::test_softmax_large[sl_mask_ns_lofi]
