@@ -517,9 +517,29 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   repetition, so edges need no `channels` field. The builder reads one link per edge today;
   that is an implementation limit, not a schema one.
 - **Cycles are allowed.** Conversion marks one edge per cycle as the loopback.
-- **Linear or fork.** Either every stage has out-degree <= 1 (chain or ring), or the graph is
-  a fork: exactly one in-degree-0 router, each branch a chain, each branch ending in an edge
-  back to the router (FABRIC or HOST). This is the C++ port of `fork_structure` (3.2).
+- **Linear, or one two-branch fork.** Either every stage has out-degree <= 1 (a chain or
+  ring), or the graph is a fork. Forks are supported because dflash needs them: a router
+  feeds a target branch and a draft branch, and both return to it
+  (`build_gpt_oss_dflash_router_pipeline_graph`). A fork is limited to **two branches**:
+  - exactly one router: the only stage with in-degree 0, not counting the branches' return
+    edges;
+  - the router splits into two branches (one entry, two exits) and the two branches join back
+    at the router (two entries, one exit). No other stage splits or joins;
+  - each branch is a chain;
+  - the router's edge into each branch is FABRIC; each branch's return to the router may be
+    FABRIC or HOST.
+
+  This is the stricter of blaze's two checks. `fork_structure` (carve planner, 3.2) accepts
+  any number of branches, but the runtime fork builder `_find_branches`
+  (`pipeline_builder/fork.py`) asserts exactly two and requires the router-to-branch edges
+  over fabric. Tier A follows the runtime, so a descriptor it passes is one blaze can build.
+
+  > **TODO:** lift the two-branch limit as soon as blaze's fork runtime supports more
+  > branches (`_find_branches` asserts `len(succ[router]) == 2`, and branch roles are fixed
+  > by index: 0 is target, 1 is draft). Then the rule becomes "one router, any number of
+  > chain branches", which is what `fork_structure` already accepts. Tier B's router degree
+  > check (2 neighbours per fabric-return branch plus 1 per host-return branch) needs no
+  > change.
 - **HOST transport on any edge.** Blaze supports host hops anywhere in a ring or branch
   (host input, host output and host hops on both sides of a stage), not just on a branch's
   return. Under FLEXIBLE placement no edge may be declared HOST up front, because blaze only
@@ -533,7 +553,12 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
 | `pod8` | pass | a ring of 8; the loopback is `s7 -> s0` |
 | `mixed4` plus `edges { src: "s1" dst: "s1" }` | reject | self-edge |
 | `mixed4` with `s0 -> s1` repeated | pass | two channels on that hop; the builder reads one link per edge, which is a builder limit |
+| dflash: `router -> target0 .. target37 -> router`, `router -> draft0 .. draft10 -> router` (draft return HOST) | pass | one router, two chain branches, both return to it |
 | edges `s0 -> s1`, `s0 -> s2`, `s1 -> s0`; `s2` has no out-edge | reject | out-degree 2 makes it a fork, and the branch ending at `s2` has no edge back to the router (`fork_structure`) |
+| a router with three branches | reject | more than two branches; blaze's fork runtime builds exactly two (TODO above) |
+| a branch stage with out-degree 2 (a fork inside a branch) | reject | only the router may split; each branch must be a chain |
+| two stages with in-degree 0 | reject | two routers; a fork has exactly one |
+| `router -> draft0` declared `transport: HOST` | reject | the router's edge into a branch must be FABRIC; only a branch's return may be HOST |
 | `mixed4` as FLEXIBLE with `s3 -> s0` declared `transport: HOST` | reject | FLEXIBLE plans its own host cuts and only does so when none are declared |
 | `mixed4` as STRICT with `s3 -> s0` declared `transport: HOST` | pass | a host hop anywhere in a ring is allowed |
 | a stage declared `[2, 4]` where every mesh has 4x2 slices | pass here | shapes are logical and never transposed, so Tier B finds no mesh it binds to |
