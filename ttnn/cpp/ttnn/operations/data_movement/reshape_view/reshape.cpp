@@ -579,11 +579,15 @@ std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
         reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) != nullptr) {
         return std::nullopt;
     }
-    auto route = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
-    if (route.demoted) {
+    auto planned = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+    if (!planned.has_value()) {
         return std::nullopt;
     }
-    return std::move(route.plan);
+    const uint32_t num_cores = reshape_codegen::reshape_core_grid(tensor, sub_core_grid).num_cores();
+    if (reshape_codegen::is_demoted(tensor, logical_shape, mem_config, num_cores, *planned)) {
+        return std::nullopt;
+    }
+    return planned;
 }
 
 ttnn::Tensor reshape_dispatch(
@@ -608,9 +612,12 @@ ttnn::Tensor reshape_dispatch(
         const char* violation =
             reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);
         TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
-        auto route = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
-        TT_FATAL(route.plan.has_value(), "reshape_force_codegen: outside the codegen scope: {}", route.violation);
-        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*route.plan));
+        auto planned = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+        TT_FATAL(
+            planned.has_value(),
+            "reshape_force_codegen: outside the codegen scope: {}",
+            reshape_codegen::unsupported_reason(tensor, logical_shape, mem_config, sub_core_grid, nullptr));
+        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*planned));
     }
 
     // No reshape required only when the shape AND the memory config are unchanged. A same-shape

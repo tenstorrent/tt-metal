@@ -75,9 +75,6 @@ struct TileRowsChoice {
     std::shared_ptr<const TileRowsSchedule> schedule;
 };
 
-// Whether every output tile row is one whole tile row of the input.
-bool is_tile_row_permutation(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape);
-
 // nullopt when the shapes are not a tile-row permutation or the plan exceeds its size caps. Memoized on the shapes
 // and the source cap.
 std::optional<TileRowsChoice> plan_tile_rows(

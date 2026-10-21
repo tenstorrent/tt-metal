@@ -48,9 +48,8 @@ bool standard_tile_with_tight_padding(const Tensor& input) {
            padded[-2] == tt::round_up(logical[-2], tile.get_height());
 }
 
-}  // namespace
-
-// Cheapest first.
+// Why the codegen program cannot run this call before any plan is built (placement, layout, dtype, shapes, grid), or
+// nullptr. Cheapest first.
 const char* scope_violation(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -96,8 +95,6 @@ const char* scope_violation(
     return nullptr;
 }
 
-namespace {
-
 // Native reads every source tile each output tile touches; tile rows reads each source once per batch. Thresholds
 // are judged on the full plan, fitted on Blackhole and checked on Wormhole.
 constexpr uint64_t kTileRowsMinReadCut = 8;
@@ -107,10 +104,7 @@ constexpr uint64_t kTileRowsMinReadsSavedPerTile = 16;
 // Two runs per output tile means every output tile is whole face halves of its sources.
 constexpr uint64_t kWholeHalfRunsPerTile = 2;
 
-bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t num_cores) {
-    if (input.dtype() == tt::tt_metal::DataType::UINT16) {
-        return false;
-    }
+bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
     // A width change copies one row per run and loses below the read cut unless the reads it saves outweigh the runs;
     // a refold of whole face halves wins once native needs more than one round.
     const uint64_t out_pages = choice.layout.num_output_pages;
@@ -130,67 +124,20 @@ bool lcm_beats_native(const TilePlan& plan, uint32_t num_cores) {
            kLcmTileSpeedup * tt::div_up(out_tiles, num_cores);
 }
 
-constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
-constexpr const char* kTileStaticFitViolation = "no TILE program fits the static L1 budget even at its smallest plan";
-
-// Tries tile rows and LCM where they beat native, then tile rows, the segment map and LCM where they do not; the first
-// whose smallest plan fits the static window is taken. Tile rows and LCM fall back to the segment map under live L1
-// pressure, so they beat native only while the segment map is within its size caps.
-RouteDecision choose_tile_route(
+// The LCM geometry for dtypes the compute engine round-trips unchanged, else nullopt.
+std::optional<TilePlan> lcm_geometry(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::TensorSpec& spec,
     uint32_t num_cores) {
-    const auto& in_shape = input.logical_shape();
-    const bool native_rejects = input.dtype() == tt::tt_metal::DataType::UINT16;
-    const bool row_permutation = is_tile_row_permutation(in_shape, logical_output_shape);
-    auto rows = plan_tile_rows(in_shape, logical_output_shape);
-    const bool rows_win = rows.has_value() && !native_faster(input, *rows, num_cores);
-
-    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
-    const uint64_t budget = static_l1_budget(input, spec);
-    const uint32_t tile_bytes =
-        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    const auto rows_fit_budget = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
-    const bool rows_fit = rows.has_value() && (rows_fit_budget(*rows) ||
-                                               plan_tile_rows_fitting(in_shape, logical_output_shape, rows_fit_budget));
-    auto lcm = lcm_bit_exact(input.dtype())
-                   ? tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores)
-                   : std::nullopt;
-    const bool lcm_fits = lcm.has_value() && fit_tile(*lcm, budget).has_value();
-    const bool lcm_wins = lcm.has_value() && lcm_beats_native(*lcm, num_cores);
-    const auto mapped_within_caps = [&] {
-        return tile_mapped_within_caps(
-            in_shape, logical_output_shape, static_cast<uint32_t>(input.element_size()), tile_bytes, num_cores);
-    };
-
-    const auto take = [&](TileRoute tile_route, bool beats_native) {
-        RouteDecision route{.plan = LaunchPlan{.tile_route = tile_route}, .demoted = !beats_native};
-        if (tile_route == TileRoute::TileRows) {
-            route.plan->tile_rows = std::move(*rows);
-        } else if (tile_route == TileRoute::Lcm) {
-            route.plan->lcm = lcm;
-        }
-        return route;
-    };
-    if (rows_fit && rows_win) {
-        return take(TileRoute::TileRows, native_rejects || mapped_within_caps());
+    if (!lcm_bit_exact(input.dtype())) {
+        return std::nullopt;
     }
-    if (lcm_fits && lcm_wins) {
-        return take(TileRoute::Lcm, native_rejects || mapped_within_caps());
-    }
-    if (rows_fit) {
-        return take(TileRoute::TileRows, native_rejects);
-    }
-    if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
-        return take(TileRoute::TileMapped, native_rejects || !row_permutation);
-    }
-    if (lcm_fits) {
-        return take(TileRoute::Lcm, native_rejects);
-    }
-    const bool within_caps = rows.has_value() || lcm.has_value() || mapped_within_caps();
-    return {.violation = within_caps ? kTileStaticFitViolation : kTileCapsViolation};
+    return tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores);
 }
+
+constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
+constexpr const char* kTileStaticFitViolation = "no TILE program fits the static L1 budget even at its smallest plan";
 
 // Native's row-major factory treats a stick as NOC-aligned at this multiple.
 constexpr uint32_t kNativeNocAlignment = 16;
@@ -381,6 +328,25 @@ public:
         stick_(rm_geometry(input, logical_output_shape, out_aligned_page_, num_cores_)),
         static_budget_(static_l1_budget(input, output_spec_)) {}
 
+    // The geometries `plan` carries, which the constructor above built for the same call. A slab geometry the plan
+    // lacks is built from the shapes, as live_rm_choice builds it.
+    RmGeometry(
+        const Tensor& input,
+        const ttnn::Shape& logical_output_shape,
+        const tt::tt_metal::MemoryConfig& output_mem_config,
+        uint32_t num_cores,
+        const LaunchPlan& plan) :
+        input_(input),
+        logical_output_shape_(logical_output_shape),
+        output_mem_config_(output_mem_config),
+        num_cores_(num_cores),
+        output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)),
+        out_aligned_page_(plan.out_aligned_page),
+        stick_(plan.rm),
+        static_budget_(static_l1_budget(input, output_spec_)),
+        slab_built_(plan.rm_arbitrary.has_value()),
+        slab_(plan.rm_arbitrary) {}
+
     uint64_t static_budget() const { return static_budget_; }
     const tt::tt_metal::TensorSpec& output_spec() const { return output_spec_; }
 
@@ -389,12 +355,8 @@ public:
     }
 
     std::optional<RmArbitraryPlan> fit_slab(uint64_t l1_budget) {
-        if (!slab_built_) {
-            slab_ = rm_arbitrary_geometry(
-                input_, logical_output_shape_, out_aligned_page_, output_mem_config_.buffer_type(), num_cores_);
-            slab_built_ = true;
-        }
-        return slab_.has_value() ? fit_rm_arbitrary(*slab_, l1_budget) : std::nullopt;
+        const auto& slab_geometry = slab();
+        return slab_geometry.has_value() ? fit_rm_arbitrary(*slab_geometry, l1_budget) : std::nullopt;
     }
 
     // Whether the smallest stick or slab plan fits `l1_budget`, as live_rm_choice tries them.
@@ -402,11 +364,24 @@ public:
 
     bool fits_static() { return fits(static_budget_); }
 
-    LaunchPlan launch_plan() const {
+    // Carries the slab geometry only when the stick program misses the static window.
+    LaunchPlan launch_plan() {
+        if (!fit_stick(static_budget_).has_value()) {
+            slab();
+        }
         return LaunchPlan{.out_aligned_page = out_aligned_page_, .rm = stick_, .rm_arbitrary = slab_};
     }
 
 private:
+    const std::optional<RmArbitraryPlan>& slab() {
+        if (!slab_built_) {
+            slab_ = rm_arbitrary_geometry(
+                input_, logical_output_shape_, out_aligned_page_, output_mem_config_.buffer_type(), num_cores_);
+            slab_built_ = true;
+        }
+        return slab_;
+    }
+
     const Tensor& input_;
     const ttnn::Shape& logical_output_shape_;
     const tt::tt_metal::MemoryConfig& output_mem_config_;
@@ -419,39 +394,7 @@ private:
     std::optional<RmArbitraryPlan> slab_;
 };
 
-uint32_t rm_grid_cores(const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    return static_cast<uint32_t>(reshape_core_grid(input, sub_core_grids).num_cores());
-}
-
 constexpr const char* kRmStaticFitViolation = "no row-major program fits the static L1 budget";
-
-// Whether native measures faster than the row-major program `geometry` admits, for a call whose smallest plan fits the
-// static window. Depends on shapes and static device geometry only, never live L1.
-bool rm_demoted(
-    const Tensor& input,
-    const ttnn::Shape& logical_output_shape,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    RmGeometry& geometry,
-    uint32_t num_cores) {
-    // Native's device operation rejects uint16.
-    if (input.dtype() == tt::tt_metal::DataType::UINT16) {
-        return false;
-    }
-    // The program factory raises when live L1 holds no row-major program, so the call runs native unless every L1
-    // window native runs in also holds the smallest one.
-    if (!geometry.fits(native_rm_scratch(input, logical_output_shape, output_mem_config).footprint(1))) {
-        return true;
-    }
-    if (!rm_native_faster(input, logical_output_shape, output_mem_config, num_cores)) {
-        return false;
-    }
-    // The verdict holds only where native's scratch and the stick program it was measured against both fit the static
-    // window (see native_rm_fits_l1). When only the slab program fits, it reads a batch of windows behind one barrier,
-    // as for widths that do not divide.
-    const uint64_t static_budget = geometry.static_budget();
-    return geometry.fit_stick(static_budget).has_value() &&
-           native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget);
-}
 
 }  // namespace
 
@@ -478,27 +421,159 @@ bool supported_execution_controls(
            (sub_core_grids->num_cores() > 0 && reshape_core_grid(input).contains(*sub_core_grids));
 }
 
-RouteDecision plan_codegen(
+const char* unsupported_reason(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const LaunchPlan* plan) {
+    if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
+        return violation;
+    }
+    const uint32_t num_cores = reshape_core_grid(input, sub_core_grids).num_cores();
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        if (plan == nullptr) {
+            return kRmStaticFitViolation;
+        }
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores, *plan);
+        return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
+    }
+    const auto& in_shape = input.logical_shape();
+    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
+    if (plan == nullptr) {
+        const bool within_caps = plan_tile_rows(in_shape, logical_output_shape).has_value() ||
+                                 lcm_geometry(input, logical_output_shape, spec, num_cores).has_value() ||
+                                 segment_map_within_caps(input, logical_output_shape, num_cores);
+        return within_caps ? kTileStaticFitViolation : kTileCapsViolation;
+    }
+    const uint64_t budget = static_l1_budget(input, spec);
+    if (plan->tile_route == TileRoute::TileRows) {
+        const uint32_t tile_bytes =
+            input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
+        const auto fits = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
+        if (fits(plan->tile_rows) || plan_tile_rows_fitting(in_shape, logical_output_shape, fits).has_value()) {
+            return nullptr;
+        }
+    } else if (plan->tile_route == TileRoute::Lcm) {
+        if (plan->lcm.has_value() && fit_tile(*plan->lcm, budget).has_value()) {
+            return nullptr;
+        }
+    } else if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
+        return nullptr;
+    }
+    return kTileStaticFitViolation;
+}
+
+bool supported_by_codegen(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const LaunchPlan& plan) {
+    return unsupported_reason(input, logical_output_shape, output_mem_config, sub_core_grids, &plan) == nullptr;
+}
+
+std::optional<LaunchPlan> plan_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
-        return {.violation = violation};
+    if (scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids) != nullptr) {
+        return std::nullopt;
     }
     if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
-        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
-        if (!geometry.fits_static()) {
-            return {.violation = kRmStaticFitViolation};
+        RmGeometry geometry(
+            input, logical_output_shape, output_mem_config, reshape_core_grid(input, sub_core_grids).num_cores());
+        LaunchPlan plan = geometry.launch_plan();
+        if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
+            return plan;
         }
-        // Taken before the demotion checks, which may build the slab geometry at other budgets.
-        RouteDecision route{.plan = geometry.launch_plan()};
-        route.demoted = rm_demoted(input, logical_output_shape, output_mem_config, geometry, num_cores);
-        return route;
+        return std::nullopt;
     }
-    return choose_tile_route(
-        input, logical_output_shape, output_mem_config, reshape_core_grid(input, sub_core_grids).num_cores());
+    // Tile rows and LCM where they beat native, then tile rows, the segment map and LCM where they do not.
+    const uint32_t num_cores = reshape_core_grid(input, sub_core_grids).num_cores();
+    const auto supported = [&](const LaunchPlan& plan) {
+        return supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan);
+    };
+    std::optional<LaunchPlan> rows;
+    if (auto tile_rows = plan_tile_rows(input.logical_shape(), logical_output_shape)) {
+        LaunchPlan plan{.tile_route = TileRoute::TileRows, .tile_rows = std::move(*tile_rows)};
+        if (supported(plan)) {
+            rows = std::move(plan);
+        }
+    }
+    if (rows.has_value() && !native_faster(rows->tile_rows, num_cores)) {
+        return rows;
+    }
+    std::optional<LaunchPlan> lcm;
+    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
+    if (auto geometry = lcm_geometry(input, logical_output_shape, spec, num_cores)) {
+        LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = std::move(geometry)};
+        if (supported(plan)) {
+            lcm = std::move(plan);
+        }
+    }
+    if (lcm.has_value() && lcm_beats_native(*lcm->lcm, num_cores)) {
+        return lcm;
+    }
+    if (rows.has_value()) {
+        return rows;
+    }
+    LaunchPlan mapped{.tile_route = TileRoute::TileMapped};
+    if (supported(mapped)) {
+        return mapped;
+    }
+    return lcm;
+}
+
+bool segment_map_within_caps(const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t num_cores) {
+    return tile_mapped_within_caps(
+        input.logical_shape(),
+        logical_output_shape,
+        static_cast<uint32_t>(input.element_size()),
+        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype())),
+        num_cores);
+}
+
+bool is_demoted(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    uint32_t num_cores,
+    const LaunchPlan& plan) {
+    // Native rejects uint16, so demoting would fail the call.
+    if (input.dtype() == tt::tt_metal::DataType::UINT16) {
+        return false;
+    }
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores, plan);
+        // The program factory raises when live L1 holds no row-major program, so the call runs native unless every L1
+        // window native runs in also holds the smallest one.
+        if (!geometry.fits(native_rm_scratch(input, logical_output_shape, output_mem_config).footprint(1))) {
+            return true;
+        }
+        if (!rm_native_faster(input, logical_output_shape, output_mem_config, num_cores)) {
+            return false;
+        }
+        // The verdict holds only where native's scratch and the stick program it was measured against both fit the
+        // static window (see native_rm_fits_l1). When only the slab program fits, it reads a batch of windows behind
+        // one barrier, as for widths that do not divide.
+        const uint64_t static_budget = geometry.static_budget();
+        return geometry.fit_stick(static_budget).has_value() &&
+               native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget);
+    }
+    // Tile rows and LCM fall back to the segment map under live L1 pressure, so they beat native only while the
+    // segment map is within its size caps.
+    if (plan.tile_route == TileRoute::TileRows) {
+        return native_faster(plan.tile_rows, num_cores) ||
+               !segment_map_within_caps(input, logical_output_shape, num_cores);
+    }
+    if (plan.tile_route == TileRoute::Lcm) {
+        return !plan.lcm.has_value() || !lcm_beats_native(*plan.lcm, num_cores) ||
+               !segment_map_within_caps(input, logical_output_shape, num_cores);
+    }
+    // The segment map loses to native only on a tile-row permutation: both widths whole tiles.
+    return input.logical_shape()[-1] % kTileDim == 0 && logical_output_shape[-1] % kTileDim == 0;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

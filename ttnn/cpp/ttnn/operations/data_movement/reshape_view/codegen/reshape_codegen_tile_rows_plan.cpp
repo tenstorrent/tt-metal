@@ -267,10 +267,6 @@ std::optional<TileRowsChoice> memoized_choice(
 
 }  // namespace tile_rows_planner
 
-bool is_tile_row_permutation(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
-    return tile_rows_planner::permutation_shapes(in_shape, out_shape).has_value();
-}
-
 std::optional<TileRowsChoice> plan_tile_rows(
     const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t max_in) {
     using namespace tile_rows_planner;
