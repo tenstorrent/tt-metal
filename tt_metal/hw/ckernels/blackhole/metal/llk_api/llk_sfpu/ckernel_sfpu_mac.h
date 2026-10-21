@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "lltt.h"
@@ -32,7 +33,7 @@ inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 5 : 6;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
-    // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
+    // _llk_math_eltwise_ternary_sfpu_legacy_addrmod_ only sets ADDR_MOD_6 (dest.incr=2)
     // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on SFPSTORE
     // (physical slot 6, direct on Blackhole since there is no addr_mod_base
     // offset), so we must configure it explicitly here.
@@ -91,10 +92,10 @@ inline void mac_init() {
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_mac(
-    [[maybe_unused]] const uint dst_index_in0,  // input a  (fixed at 0)
-    [[maybe_unused]] const uint dst_index_in1,  // input b  (fixed at 1)
-    [[maybe_unused]] const uint dst_index_in2,  // input c  (fixed at 2)
-    [[maybe_unused]] const uint dst_index_out) {  // output  (fixed at 0)
+    [[maybe_unused]] const std::uint32_t dst_index_in0,    // input a  (fixed at 0)
+    [[maybe_unused]] const std::uint32_t dst_index_in1,    // input b  (fixed at 1)
+    [[maybe_unused]] const std::uint32_t dst_index_in2,    // input c  (fixed at 2)
+    [[maybe_unused]] const std::uint32_t dst_index_out) {  // output  (fixed at 0)
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
