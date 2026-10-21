@@ -35,6 +35,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 
@@ -177,6 +178,7 @@ def allocate_kv_cache(
     bounded_sliding_kv_cache=False,
     chunk_sizes=None,
     sliding_window=128,
+    bank_aligned=False,
 ) -> GptOssKVCache:
     """Allocate the two external prefill KV caches (K, V). See :class:`GptOssKVCache`.
 
@@ -222,6 +224,8 @@ def allocate_kv_cache(
     mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
     def _alloc(batch_slots, slot_seq_local, dtype=cache_dtype):
+        if bank_aligned:
+            check_kv_bank_aligned(slot_seq_local * sp, slot_seq_local, get_num_dram_banks(mesh_device))
         # Per-chip cache is one head ([.., 1, ..]); WHICH head a chip holds is decided at write time by
         # how the input chunk is mesh-mapped, not here. Allocated zeroed + ReplicateTensorToMesh: every
         # chip gets the same empty buffer; content diverges on the first update_padded_kv_cache write.
