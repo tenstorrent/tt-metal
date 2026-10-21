@@ -9748,7 +9748,8 @@ tasks:
       op_rows: '>= 1'
       timeline_ok: == 1
   device: true
-  paths: []
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
   brief:
     details: 'X.3 fails only timeline_ok (every test passes; prefill_ms_full is no longer asked, F125). Cause: the P.16 ChunkMemo
       (tt/sparse_attention.py) drops a slot only after the last loaded layer that reads it (model.memo_last). X.3''s op profile
