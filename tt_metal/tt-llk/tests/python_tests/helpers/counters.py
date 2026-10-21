@@ -115,29 +115,39 @@ _SYNC_ZONE_COMPLETE = _parse_uint(_HEADER_TEXT, "SYNC_ZONE_COMPLETE")
 _COUNTER_SELECT_MISSED = _parse_uint(_HEADER_TEXT, "COUNTER_SELECT_MISSED")
 
 
+class CounterReadoutMissing(RuntimeError):
+    """A zone the launch counted has no complete readout from that launch."""
+
+
 def _read_zone_counters(
     location: str, zone: int, zone_name: str, token: int | None = None
 ) -> list[dict]:
     """
     Read performance counter results for a single zone from L1.
 
-    Returns list of result dicts, or empty list if zone was not used (or, with a token, not read out by that launch).
+    Returns list of result dicts, or empty list if zone was not used. With a token the launch counted the zone, so a
+    missing or incomplete readout raises CounterReadoutMissing: the window would otherwise reach the report blank.
     """
+
+    def missing(reason: str) -> list[dict]:
+        if token is not None:
+            raise CounterReadoutMissing(
+                f"Zone {zone_name}: {reason}, but the launch counted it (token {token})"
+            )
+        return []
+
     sync_addr = _zone_sync_ctrl_addr(zone)
     sync_ctrl = read_words_from_device(location=location, addr=sync_addr, word_count=1)
     if not sync_ctrl:
-        return []
+        return missing("the sync word read failed")
 
     sync_word = sync_ctrl[0]
     logger.debug(
         f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
     )
 
-    if token is not None and sync_word >> 8 != token:
-        logger.warning(
-            f"Zone {zone_name}: sync word 0x{sync_word:08x} is not this launch's readout (token {token})"
-        )
-        return []
+    if token is not None and sync_word >> TestConfig._LAUNCH_TOKEN_SHIFT != token:
+        return missing(f"sync word 0x{sync_word:08x} is not this launch's readout")
 
     # Zone was never used
     if sync_word == 0:
@@ -151,7 +161,7 @@ def _read_zone_counters(
             f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
             f"(expected SYNC_ZONE_COMPLETE=0xFF in low byte)"
         )
-        return []
+        return missing(f"sync word 0x{sync_word:08x} is incomplete")
 
     # Shared config (same for all zones): read the metadata layout once.
     config_addr = _zone_config_addr(zone)
@@ -159,11 +169,11 @@ def _read_zone_counters(
         location=location, addr=config_addr, word_count=COUNTER_SLOT_COUNT
     )
     if not metadata:
-        return []
+        return missing("the config read failed")
 
     valid_count = sum(1 for m in metadata if (m & PERF_CFG_VALID_BIT) != 0)
     if valid_count == 0:
-        return []
+        return missing("the readout stored no counter config")
 
     # Per-zone data: 5 bank-cycle words (one OUT_L per bank) + N counter counts.
     data_addr = _zone_data_addr(zone)
@@ -172,7 +182,7 @@ def _read_zone_counters(
         location=location, addr=data_addr, word_count=bank_cycles_words + valid_count
     )
     if len(data) < bank_cycles_words + valid_count:
-        return []
+        return missing("the data read was short")
 
     # Bank cycles are the first 5 words: indexed by bank_id (0..4).
     # Order matches llk::perf::Bank: INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK
@@ -259,13 +269,14 @@ def read_counters(
     """
     Read performance counter results from all zones.
 
-    Iterates zones 0..MAX_ZONES-1; zones with sync_word=0 (never used) are
+    Iterates zones 0..MAX_ZONES-1; without a token, zones with sync_word=0 (never used) are
     skipped silently. MAX_ZONES is set by counters.h (currently 8).
 
     Args:
         location: Tensix core coordinates (e.g., "0,0").
         zones: the zones the launch counted (a bit per zone id), None for all.
-        token: the launch's readout token (counters.h launch_word), None to skip the check.
+        token: the launch's readout token (counters.h launch_word), None to skip the check. With it, a zone in
+            `zones` without this launch's complete readout raises CounterReadoutMissing.
 
     Returns:
         DataFrame with columns:
