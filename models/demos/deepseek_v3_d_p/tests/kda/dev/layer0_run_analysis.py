@@ -229,6 +229,7 @@ def analyze(run: dict, first_call: int = 5120, windows: tuple[int, ...] = (5120,
         "state_snapshots": {
             "tokens": run["state_tokens"],
             "pooled": pooled.tolist(),
+            "pooled_gain": (s[..., 2].sum(-1) / s[..., 1].sum(-1)).tolist(),
             "without_h6": pooled_without_h6.tolist(),
             "median_head": np.median(head, axis=1).tolist(),
             "head_nrmse": {str(h): head[:, h].tolist() for h in LONG_MEMORY_HEADS},
@@ -358,8 +359,9 @@ def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -
 
     Tier 0: output NRMSE over the run; pooled state NRMSE after the last call. Tier 1: output per token (own norm,
     floored) and per 1,024-token window; state per head at the final snapshot and pooled per call-end snapshot.
-    Tier 2: output gain; state gain per head at the final snapshot (head 6 and the head furthest from 1); state per
-    head per snapshot. Positions are token indices (window start, snapshot end) or head ids.
+    Tier 2: output gain; pooled state gain after the last call, and each head's distance from gain 1 there (with the
+    worst head's signed gain); state per head per snapshot. Positions are token indices (window start, snapshot end)
+    or head ids.
     """
     whole = t.sum(0)
     window_starts = np.arange(0, len(t), WINDOW)
@@ -368,8 +370,9 @@ def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -
     head = _ratio(s[..., 0], s[..., 1])  # [snapshots, heads]
     pooled = _ratio(s[..., 0].sum(-1), s[..., 1].sum(-1))
     final_gain = s[-1, :, 2] / s[-1, :, 1]
-    furthest = int(np.abs(final_gain - 1).argmax())
     heads = list(range(HEADS))
+    head_gain_final = _tail(np.abs(final_gain - 1), heads)
+    head_gain_final["worst_gain"] = float(final_gain[head_gain_final["worst_at"]])
     return {
         "tier0": {"output_nrmse": float(_ratio(whole[0], whole[1])), "state_final_nrmse": float(pooled[-1])},
         "tier1": {
@@ -380,8 +383,8 @@ def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -
         },
         "tier2": {
             "output_gain": float(whole[2] / whole[1]),
-            "state_gain_h6": float(final_gain[6]),
-            "state_gain_furthest": {"gain": float(final_gain[furthest]), "head": furthest},
+            "state_gain_final": float(s[-1, :, 2].sum() / s[-1, :, 1].sum()),
+            "state_head_gain_final": head_gain_final,
             "state_head_window": _tail(
                 head.ravel(), [[state_tokens[i], h] for i in range(len(state_tokens)) for h in heads]
             ),
@@ -418,11 +421,8 @@ REPORT_ROWS = {
     ],
     "tier 2": [
         ("output gain", lambda a: f"{a['tiers']['tier2']['output_gain']:.5f}"),
-        ("final state gain h6", lambda a: f"{a['tiers']['tier2']['state_gain_h6']:.5f}"),
-        (
-            "final state gain furthest from 1",
-            lambda a: "{gain:.5f} @ head {head}".format(**a["tiers"]["tier2"]["state_gain_furthest"]),
-        ),
+        ("final state gain", lambda a: f"{a['tiers']['tier2']['state_gain_final']:.5f}"),
+        *_tail_rows("final state per head |1 - gain|", "state_head_gain_final", "tier2", "head"),
         *_tail_rows("state per head per call", "state_head_window", "tier2", "[token, head]"),
     ],
     "continuity": [("state pooled mean", lambda a: _pct(a["tiers"]["continuity"]["state_pooled_mean"]))],
