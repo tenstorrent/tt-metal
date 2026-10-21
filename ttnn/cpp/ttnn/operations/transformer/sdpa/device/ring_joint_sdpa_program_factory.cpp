@@ -3353,6 +3353,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // otherwise false at the two call sites. Measurement knob, not hashed: set it for the whole process.
     if (std::getenv("TT_SOL_STEP_PROFILE") && std::string(std::getenv("TT_SOL_STEP_PROFILE")) == "1") {
         compute_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
+        // The zones push the sparse compute binary past the 70,656 B kernel config buffer (76,960 B measured
+        // 2026-10-21); O2 trims the TRISC binaries ~30 % (same remedy as the K split below).
+        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
