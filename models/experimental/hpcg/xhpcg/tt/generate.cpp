@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <random>
 #include <stdexcept>
 
 #include "generic_op.hpp"
@@ -25,11 +26,14 @@ constexpr uint32_t DM_SLOTS = 6;
 constexpr uint32_t MB_BYTES = 4 * (512 + 4 * 96 * (4 + 3 * 27));  // kernels/fill.h's MB_WORDS
 constexpr uint32_t CHUNKS_RISC1_DEFAULT = 5;  // of every 8 chunks, the writer RISC's share (stencil_matrix/op.py)
 constexpr uint32_t XCAP = 2048, SET_PAGES = 55, JOB_ARGS = 10, MIN_META_PAGES = 8;
-uint32_t g_launch = 0;
-
-uint32_t launch_id() {  // 1 .. 65535: the TRISCs tell this launch's messages from earlier ones (kernels/fill.h)
-    g_launch = g_launch % 65535 + 1;
-    return g_launch;
+uint32_t launch_id() {  // a random nonzero 32-bit nonce per launch: the TRISCs tell this launch's messages from
+                        // words any earlier launch left in L1 (kernels/fill.h)
+    static std::mt19937 gen{std::random_device{}()};
+    uint32_t v = 0;
+    while (v == 0) {
+        v = (uint32_t)gen();
+    }
+    return v;
 }
 
 std::vector<uint32_t> chunk_shares(int rows) {  // a nibble per core row y, in 2 words

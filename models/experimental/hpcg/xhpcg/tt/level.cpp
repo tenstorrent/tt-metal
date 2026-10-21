@@ -15,13 +15,19 @@ int64_t slot_pages(int64_t n_tiles) { return n_tiles + (n_tiles % 2 == 0 ? 1 : 0
 Level::Level(int32_t nx_, int32_t bands_) : nx(nx_), bands(bands_) {
     n = (int64_t)nx * nx * nx;
     const int32_t h = std::max(1, nx / 2);
-    // lines per band for each y parity (the colours share these two): line i of a parity is in band i * bands / h
+    // lines per band for each y parity (the colours share these two): line i of a parity is in band i * bands / h.
+    // An odd nx has one line more than h in its even parity, which can fall in one band more than asked for (13^3:
+    // bands 0 and 1); the layout then has that band, as numpy's bincount (minlength=bands) gives it
     std::array<std::vector<int64_t>, 2> lines;
     for (int py = 0; py < 2; ++py) {
         lines[py].assign(bands, 0);
         const int32_t cy = (nx - py + 1) / 2;
         for (int32_t i = 0; i < cy; ++i) {
-            ++lines[py][(int64_t)i * bands / h];
+            const int64_t band = (int64_t)i * bands / h;
+            if (band >= (int64_t)lines[py].size()) {
+                lines[py].resize(band + 1, 0);
+            }
+            ++lines[py][band];
         }
     }
     int64_t p = 0;
@@ -41,7 +47,10 @@ Level::Level(int32_t nx_, int32_t bands_) : nx(nx_), bands(bands_) {
     stride = slot_pages(P / TILE) * TILE;
 
     // the storage order as small tables (host/native_setup.cpp's Geo; reference/problem.py's _band_tables)
-    nb = bands;
+    nb = 0;
+    for (const auto& b : bstarts) {
+        nb = std::max(nb, (int32_t)b.size() - 1);
+    }
     nl = (nx + 1) / 2;
     line_band.assign(2 * nl, 0);
     band_y0.assign(8 * nb, 0);

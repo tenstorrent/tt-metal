@@ -11,11 +11,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include <ttnn/operations/data_movement/copy/copy.hpp>
 #include <ttnn/operations/trace.hpp>
@@ -58,6 +60,7 @@ struct State {
     Dev* D = nullptr;
     std::vector<std::unique_ptr<DLevel>> lv;
     std::map<const SparseMatrix*, int> level_of;  // HPCG's matrix of each level
+    const SparseMatrix* A0 = nullptr;             // HPCG's fine matrix
     Tensor r, b, x, p, Ap, dbg, part, one, minus_one, inf_slot, rtz, rtz_old, pAp, normr, normr0;
     std::optional<Op> spmv_cg, spmv_start;
     std::map<std::string, Op> v;
@@ -69,6 +72,34 @@ struct State {
 };
 
 std::unique_ptr<State> g_state;
+
+// HPCG_TT_TRACE=1: wait for the card after each stage and say which stage finished (finding a hang)
+void stage(const char* what) {
+    static const bool on = std::getenv("HPCG_TT_TRACE") != nullptr;
+    if (on && Dev::get()) {
+        Dev::get()->sync();
+        std::fprintf(stderr, "hpcg_tt: %s done\n", what);
+    }
+}
+
+// At exit: the traces, then every device tensor, then the card. HPCG's main.cpp returns without a call into the port,
+// and by the time exit handlers run the main thread's thread_local objects are gone, TT-Metal's among them (its
+// GraphTracker's processor list, which every buffer release reads). So the release runs on a new thread, whose
+// thread_local objects are fresh.
+void cleanup() {
+    std::thread([] {
+        if (g_state) {
+            if (g_state->traced) {
+                ttnn::operations::trace::release_trace(g_state->D->d, g_state->tid_start);
+                ttnn::operations::trace::release_trace(g_state->D->d, g_state->tid_iter);
+            }
+            g_state.reset();
+        }
+        if (Dev* D = Dev::get()) {
+            D->close();
+        }
+    }).join();
+}
 
 int level_index(const SparseMatrix& A) {
     if (!g_state) {
@@ -99,10 +130,10 @@ void from_device(DLevel& d, const Tensor& t, double* v) {
     }
 }
 
-float read_scalar(const Tensor& t) {  // word 0 of a one-page device scalar
-    float w[16];
-    g_state->D->read(t, w, 0, sizeof w);
-    return w[0];
+float read_scalar(const Tensor& t) {  // word 0 of a one-page device scalar (reads are whole pages)
+    static std::vector<float> page(TILE);
+    g_state->D->read(t, page.data());
+    return page[0];
 }
 
 void run_mg(State& S, int l) {  // z = M^-1 r on level l: tt/hpcg.py's mg
@@ -143,8 +174,47 @@ void run_iteration(State& S, bool precondition) {  // one CG iteration (tt/hpcg.
 void capture(State& S) {
     // the first launches build every program (TT-NN's program cache); the traces then replay the same launches
     S.v.at("x0")();
-    run_start(S);
-    run_iteration(S, true);
+    stage("x0");
+    if (std::getenv("HPCG_TT_TRACE")) {  // the CG start launch by launch
+        (*S.spmv_start)();
+        stage("spmv_start");
+        for (const char* k : {"r_b", "rr", "nr0_fin", "rtz_inf"}) {
+            S.v.at(k)();
+            stage(k);
+        }
+    } else {
+        run_start(S);
+    }
+    stage("CG start");
+    if (std::getenv("HPCG_TT_TRACE")) {  // the iteration launch by launch
+        DLevel& d0 = *S.lv[0];
+        (*d0.gs_pre)();
+        stage("gs_pre 0");
+        for (int l = 0; l + 1 < (int)S.lv.size(); ++l) {
+            (*S.lv[l]->restrict_)();
+            stage("restrict");
+            (*S.lv[l + 1]->gs_pre)();
+            stage("gs_pre coarse");
+        }
+        for (int l = (int)S.lv.size() - 2; l >= 0; --l) {
+            (*S.lv[l]->prolong)();
+            stage("prolong");
+            (*S.lv[l]->gs)();
+            stage("gs post");
+        }
+        for (const char* k : {"rz", "rz_fin", "p"}) {
+            S.v.at(k)();
+            stage(k);
+        }
+        (*S.spmv_cg)();
+        stage("spmv_cg");
+        for (const char* k : {"pAp", "pAp_fin", "xr", "nr_fin"}) {
+            S.v.at(k)();
+            stage(k);
+        }
+    } else {
+        run_iteration(S, true);
+    }
     S.D->sync();
     S.tid_start = ttnn::operations::trace::begin_trace_capture(S.D->d, std::nullopt);
     run_start(S);
@@ -155,21 +225,10 @@ void capture(State& S) {
     S.traced = true;
 }
 
-// b on the card follows the host's b; when b changed, the level-0 diagonal is checked too and rewritten where it
-// changed (TestCG scales both, through ReplaceMatrixDiagonal and b's values, then restores them)
-void sync_b_and_diagonal(State& S, const SparseMatrix& A, const Vector& b) {
+// the card's level-0 diagonal follows the host's (TestCG scales it through ReplaceMatrixDiagonal, then restores it)
+void sync_diagonal(State& S, const SparseMatrix& A) {
     DLevel& d = *S.lv[0];
     const int64_t n = d.L->n;
-    int changed = 0;
-#pragma omp parallel for reduction(| : changed)
-    for (int64_t i = 0; i < n; ++i) {
-        changed |= b.values[i] != S.b_host[i];
-    }
-    if (!changed) {
-        return;
-    }
-    std::copy(b.values, b.values + n, S.b_host.begin());
-    to_device(d, b.values, S.b);
     int dchanged = 0;
 #pragma omp parallel for reduction(| : dchanged)
     for (int64_t i = 0; i < n; ++i) {
@@ -186,6 +245,23 @@ void sync_b_and_diagonal(State& S, const SparseMatrix& A, const Vector& b) {
         row[d.pos[i]] = (float)S.diag_host[i];
     }
     S.D->write(d.values, row.data(), 13 * L.stride * 4, L.P * 4);
+}
+
+// b on the card follows the host's b; when b changed, the diagonal is checked too (TestCG changes both together)
+void sync_b_and_diagonal(State& S, const SparseMatrix& A, const Vector& b) {
+    DLevel& d = *S.lv[0];
+    const int64_t n = d.L->n;
+    int changed = 0;
+#pragma omp parallel for reduction(| : changed)
+    for (int64_t i = 0; i < n; ++i) {
+        changed |= b.values[i] != S.b_host[i];
+    }
+    if (!changed) {
+        return;
+    }
+    std::copy(b.values, b.values + n, S.b_host.begin());
+    to_device(d, b.values, S.b);
+    sync_diagonal(S, A);
 }
 
 void set_x(State& S, const Vector& x) {
@@ -234,6 +310,7 @@ int optimize(const SparseMatrix& A, const Vector& b) {
     // generation: a launch with no jobs that loads the kernel binaries and builds the fine level's program, then the
     // fine level's launch, then the coarser levels' and the grid transfers' (tt/hpcg.py's order)
     warm_up(D, nc);
+    stage("warm-up");
     auto d0 = std::make_unique<DLevel>();
     d0->L = std::make_unique<Level>(nx, bands[0]);
     const Level& L0 = *d0->L;
@@ -248,6 +325,7 @@ int optimize(const SparseMatrix& A, const Vector& b) {
     d0->values = d0->job->values;
     d0->offsets = d0->job->offsets;
     gen_op(D, {*d0->job})(D);
+    stage("fine-level generation");
     if (!d0->plan->complete_exchange(D)) {  // too many neighbours: re-plan (fewer cores) and generate again
         d0->plan = std::make_unique<Plan>(Plan::stencil(L0, nc, D, false));
         d0->job = stencil_job(D, L0, *d0->plan, S.b, {S.x, S.p}, std::make_pair(d0->values, d0->offsets));
@@ -284,6 +362,7 @@ int optimize(const SparseMatrix& A, const Vector& b) {
         jobs.push_back(jp);
     }
     gen_op(D, jobs)(D);
+    stage("coarse-level and transfer generation");
     S.dbg = D.alloc_rows(2 * nc, 16);  // per-core cycle counters (written only by KDEBUG builds)
 
     std::vector<int64_t> phases = COLOUR_ORDER;  // forward then backward sweep
@@ -381,6 +460,7 @@ int optimize(const SparseMatrix& A, const Vector& b) {
     S.v["rtz_inf"] = dot_finish_op(D, S.inf_slot, 1, S.rtz, nullptr, false, false);
 
     // HPCG's matrices of the levels, and each level's natural -> storage map
+    S.A0 = &A;
     const SparseMatrix* Am = &A;
     for (int l = 0; l < NLEV && Am != nullptr; ++l, Am = Am->Ac) {
         S.level_of[Am] = l;
@@ -394,6 +474,7 @@ int optimize(const SparseMatrix& A, const Vector& b) {
         S.diag_host[i] = *A.matrixDiagonal[i];
     }
     D.sync();
+    std::atexit(cleanup);
     return 0;
 }
 
@@ -451,6 +532,7 @@ int spmv(const SparseMatrix& A, const Vector& x, Vector& y) {
         return 1;
     }
     State& S = *g_state;
+    sync_diagonal(S, *S.A0);  // TestCG may have changed and restored it since the last call
     DLevel& d = *S.lv[l];
     if (l == 0) {  // Ap = A p, the CG SpMV
         to_device(d, x.values, S.p);
@@ -477,6 +559,7 @@ int mg(const SparseMatrix& A, const Vector& r, Vector& x) {
         return 1;
     }
     State& S = *g_state;
+    sync_diagonal(S, *S.A0);  // TestCG may have changed and restored it since the last call
     DLevel& d = *S.lv[l];
     to_device(d, r.values, d.r);
     run_mg(S, l);
@@ -490,6 +573,7 @@ int symgs(const SparseMatrix& A, const Vector& r, Vector& x) {
         return 1;
     }
     State& S = *g_state;
+    sync_diagonal(S, *S.A0);  // TestCG may have changed and restored it since the last call
     DLevel& d = *S.lv[l];
     to_device(d, r.values, d.r);
     to_device(d, x.values, d.z);
@@ -532,6 +616,9 @@ bool dot(local_int_t n, const Vector& x, const Vector& y, double& result) {
     (*s.dot)();
     (*s.fin)();
     result = read_scalar(s.res);
+    if (std::getenv("HPCG_TT_TRACE")) {
+        std::fprintf(stderr, "hpcg_tt: dot n=%d -> %.9g\n", (int)n, result);
+    }
     return true;
 }
 

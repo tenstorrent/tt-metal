@@ -45,12 +45,6 @@ Dev& Dev::open() {
             D.noc_xy.push_back((int64_t)w.x);
             D.noc_xy.push_back((int64_t)w.y);
         }
-        // the card is closed before the runtime's own static objects go (they were made by the open above)
-        std::atexit([] {
-            if (g_dev) {
-                g_dev->close();
-            }
-        });
     }
     return *g_dev;
 }

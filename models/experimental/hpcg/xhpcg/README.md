@@ -29,12 +29,13 @@ On the P150 host, with TT-Metal built (`build_metal.sh`):
 cmake -S models/experimental/hpcg/xhpcg -B build_xhpcg -G Ninja -DCMAKE_CXX_COMPILER=clang++-20 \
       "-DCMAKE_PREFIX_PATH=$TT_METAL_HOME/build/lib/cmake;$TT_METAL_HOME/build/share/cmake"
 cmake --build build_xhpcg -j
-cd $TT_METAL_HOME && TT_METAL_INSPECTOR=0 build_xhpcg/xhpcg --nx=104 --rt=60
+TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME TT_METAL_INSPECTOR=0 build_xhpcg/xhpcg --nx=104 --rt=60
 ```
 
 The grid is `--nx` points per side (`--ny` and `--nz` default to it); `--rt` is the timed phase's length in seconds
-(an official run needs 1,800). Run it from `$TT_METAL_HOME`: the kernels are read by their paths in this repository.
-HPCG writes its results file (`HPCG-Benchmark_3.1_*.txt`) and its log (`hpcg*.txt`) in the current directory.
+(an official run needs 1,800). `TT_METAL_RUNTIME_ROOT` tells TT-Metal where this repository is (Python's `ttnn` sets it
+itself): the kernels are read by their paths in it. HPCG writes its results file (`HPCG-Benchmark_3.1_*.txt`) and its
+log (`hpcg*.txt`) in the current directory.
 
 ## Limits
 
