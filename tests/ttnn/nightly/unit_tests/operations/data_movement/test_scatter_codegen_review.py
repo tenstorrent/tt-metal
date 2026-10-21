@@ -6,7 +6,8 @@
 # test_scatter_codegen_routing.py does not reach: the demotion predicate's axis spelling, small
 # row-axis shapes, an output placement that differs from the input's, empty operands, the bf16
 # reduce path, the unknown reduce string, the out-of-scope clauses that stay native, the index
-# dtypes, an explicit core grid, host-resident operands and an operand padded past tile rounding.
+# dtypes, an explicit core grid, host-resident operands, an operand padded past tile rounding and
+# a row-major call whose resident sticks no longer fit the L1 that is actually free.
 
 import pytest
 import torch
@@ -191,6 +192,27 @@ def test_scatter_codegen_over_padded_tile_operand_stays_native(device, expect_er
     assert added == 0, "auto routed an over-padded TILE operand to codegen; expected native"
     with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
         _force_codegen(xt, -1, it, st)
+
+
+def test_scatter_codegen_row_major_under_l1_pressure_stays_native(device):
+    # The ROW_MAJOR factories keep the whole input and output stick resident in L1, so a stick that
+    # fits an empty L1 can still collide with buffers already living there. The live-L1 gate must
+    # send such a call to native, which streams the stick in chunks, rather than let the program's
+    # CB allocation fail. 300000 bf16 elements: two resident 600 kB sticks fit a free L1 on both
+    # Wormhole and Blackhole but not one with 512 kB already taken.
+    xt, it, st = _make_case([1, 300000], [1, 300000], -1, ttnn.ROW_MAJOR_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert added > 0, "auto fell back to native on a free L1; expected the codegen ROW_MAJOR factory"
+    blocker = ttnn.from_torch(
+        torch.zeros([1, 262144], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    ttnn.deallocate(blocker)
+    assert added == 0, "auto routed a ROW_MAJOR call whose sticks no longer fit live L1 to codegen; expected native"
 
 
 @pytest.mark.parametrize("reduce", ["add", "multiply"])
