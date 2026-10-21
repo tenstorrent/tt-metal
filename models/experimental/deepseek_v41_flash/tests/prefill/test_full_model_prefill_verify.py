@@ -266,8 +266,9 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
             progress(f"teacher-forced chunk {c + 1}/{num_chunks} layer {i + 1}/{num_layers} done", important=False)
         for rows in engram_rows.values():
             ttnn.deallocate(rows)
-        if shared.entry_idx is not None:
-            ttnn.deallocate(shared.entry_idx)
+        for tensor in (shared.entry_idx, shared.candidates):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
         model._free_mirror(mirror)
     for i in range(num_layers):
         logger.info(

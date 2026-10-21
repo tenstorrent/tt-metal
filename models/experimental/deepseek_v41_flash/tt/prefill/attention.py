@@ -19,26 +19,29 @@ compressed path, as the decode block does (see :mod:`..decode.attention`):
 
 Attention builds no mask: every layer runs ``ttnn.transformer.deepseek_v4_prefill_sdpa`` over its sliding window
 ``[tail | chunk]`` and, for a compressed layer, the compressed entries its index source selected. The selection is
-each query's top-``index_topk`` entry rows (every entry while there are no more than ``index_topk``); a row the
-query has not seen yet (``w >= (position + 1) / rate``) is skipped by the op, as is a window row before position 0.
+each query's top-``index_topk`` entry rows, from ``ttnn.transformer.deepseek_v4_prefill_indexer_select``, which
+scores and selects in one pass over the entries each query can see (a query that sees fewer than ``index_topk``
+fills the rest with a sentinel); the attention op skips sentinels and window rows before position 0.
 
 Layers share state, so the layers of a chunk run in order and hand it down in a :class:`PrefillShared`:
 the latest kv source's :class:`~models.experimental.deepseek_v4_flash.tt.prefill.attention.PrefillAttentionState`
-(compressed KV and index keys) and the latest index source's selected rows.
+(compressed KV and index keys), the latest index source's selected rows and the candidates.
 
-V4.1's selection is two-level past ``candidate_topk_blocks * candidate_block_size`` compressed entries (the
-reference's ``select_candidate_blocks``). The ``candidate_source_layer_id`` (layer 20) scores each block of
-``candidate_block_size`` entries by its best index score, always keeps the block holding the query's newest entry,
-and keeps the best ``candidate_topk_blocks`` blocks per query: the candidates, handed down in
-:class:`PrefillShared` as an additive entry mask. The index sources after it (24, 28, 32, 36) restrict their own
-scores to the candidates before their top-``index_topk``; the source's own top-``index_topk`` is unrestricted.
-Below the threshold every reachable block is kept, so the selection is V4's single threshold top-k and no
-candidates are built.
+V4.1's selection is two-level (the reference's ``select_candidate_blocks``). The ``candidate_source_layer_id``
+(layer 20) scores each block of ``candidate_block_size`` entries by its best index score, always keeps the block
+holding the query's newest entry, and keeps the best ``candidate_topk_blocks`` blocks per query
+(``deepseek_v4_prefill_indexer_select_candidates``): the candidates, handed down in :class:`PrefillShared` as
+block ids. Every index source from the candidate source on (20, 24, 28, 32, 36) then selects its
+top-``index_topk`` among its candidate blocks' entries only (``deepseek_v4_prefill_indexer_select_from_candidates``),
+so its cost follows the ``candidate_topk_blocks * candidate_block_size`` pool rather than the context, as decode's
+does. The source's own top-``index_topk`` lies inside its candidates, so restricting it changes nothing; while a
+query sees no more than ``candidate_topk_blocks`` blocks every one is a candidate, so the select is single-level.
 
 Traced prefill (:meth:`DeepSeekV41PrefillAttention.forward_static`) runs V4's static attention over persistent
-buffers: a kv source writes its entries and index keys into front-anchored buffers at the packet's rows, and the
-layers of a stage hand them (and the selection) down in a :class:`PrefillStaticShared`. The chunk's start reaches
-the op as a device tensor, so one trace serves every chunk of a position tier.
+buffers: a kv source writes its entries and index keys into front-anchored buffers at the packet's rows
+(``deepseek_v4_prefill_write_rows``), and the layers of a stage hand them (and the selection) down in a
+:class:`PrefillStaticShared`. The chunk's start reaches every op as a device tensor and every op reads only the
+rows the chunk can see, so one trace serves every chunk of a prompt at a cost that follows its position.
 """
 
 import dataclasses
@@ -47,7 +50,6 @@ from typing import Optional
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.common import _MASK_NEG
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
     _SDPA_CHUNK,
@@ -59,9 +61,6 @@ from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
 )
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache
 
-# Entry columns per pass of the candidate blocks' max: 2 x 128 KB of L1 row staging, a multiple of the tile width.
-_BLOCK_MAX_COLUMNS = 65536
-
 
 @dataclasses.dataclass
 class PrefillShared:
@@ -69,14 +68,13 @@ class PrefillShared:
 
     ``kv_source`` is the latest kv source's state: the compressed KV (``compressed_kv``) and index keys
     (``idx_keys``) the layers of its group read. ``entry_idx`` is the latest index source's selection for the
-    current chunk: uint32 ROW_MAJOR ``[1, 1, T, k]``, each query's selected entry rows (every entry row while there
-    are no more than ``index_topk``; rows the query has not seen yet are skipped by the attention op). Each
+    current chunk: uint32 ROW_MAJOR ``[1, 1, T, index_topk]``, each query's selected entry rows (a query that sees
+    fewer than ``index_topk`` entries fills the rest with ``0xFFFFFFFF``, which the attention op skips). Each
     chunk's index source replaces it, so run a chunk's layers in order.
 
-    ``candidates`` is the candidate source's level-one selection for the current chunk, the additive TILE mask
-    ``[1, 1, T, E]`` the later index sources restrict their scores to (0 on the visible entries of each query's
-    kept blocks, -inf elsewhere), or ``None`` while there are no more than
-    ``candidate_topk_blocks * candidate_block_size`` entries.
+    ``candidates`` is the candidate source's level-one selection for the current chunk: uint32 ROW_MAJOR
+    ``[1, 1, T, candidate_topk_blocks]``, each query's candidate block ids (unused slots ``0xFFFFFFFF``), which the
+    index sources from the candidate source on select among.
     """
 
     kv_source: Optional[PrefillAttentionState] = None
@@ -89,16 +87,9 @@ class PrefillStaticShared:
     """:class:`PrefillShared` for traced prefill: what the layers of one stage hand down within one chunk.
 
     ``entries`` / ``idx_keys`` are the current group's persistent front-anchored buffers on this stage (the kv source's
-    own, or the stage's copy of a source on an earlier stage), ``entry_idx`` the latest index source's selected
-    entry rows (uint32 ROW_MAJOR ``[1, 1, T, min(index_topk, cap)]``, as :attr:`PrefillShared.entry_idx`). A kv
-    source with
-    ``keep_rows`` set also leaves copies of the rows it wrote this chunk in ``new_rows`` (``(entries, keys)``,
-    ROW_MAJOR ``[1, 1, T / rate, width]``), for the next stage.
-
-    ``candidates`` is :attr:`PrefillShared.candidates` over the ``cap`` entry rows (built by the candidate source
-    on this stage, or expanded from the block mask an earlier stage sent). A candidate source with
-    ``keep_candidates`` set also leaves its compact block mask in ``candidate_blocks`` (0/1 bf16 ROW_MAJOR
-    ``[1, 1, T, cap / candidate_block_size]``), for the next stage.
+    own, or the stage's copy of a source on an earlier stage), ``entry_idx`` and ``candidates`` as in
+    :class:`PrefillShared`. A kv source with ``keep_rows`` set also leaves the rows it wrote this chunk in
+    ``new_rows`` (``(entries, keys)``, ROW_MAJOR ``[1, 1, T / rate, width]``), for the next stage.
     """
 
     entries: Optional[ttnn.Tensor] = None
@@ -107,8 +98,6 @@ class PrefillStaticShared:
     keep_rows: bool = False
     new_rows: Optional[tuple] = None
     candidates: Optional[ttnn.Tensor] = None
-    keep_candidates: bool = False
-    candidate_blocks: Optional[ttnn.Tensor] = None
 
 
 @dataclasses.dataclass
@@ -117,51 +106,23 @@ class V41PrefillStaticStep:
 
     As V4's :class:`~models.experimental.deepseek_v4_flash.tt.prefill.attention.PrefillStaticStep`, without masks:
     ``rope[kind]`` = ``(cos, sin)`` ``[1, 1, T, rope_dim]`` for the chunk's tokens, ``entry_rope[rate]`` the same for
-    the chunk's new entries, ``caps[layer_type]`` the entry rows the tier reads (0 for sliding layers),
-    ``entry_rows[rate]`` (uint32 ``[T / rate]``) the rows the chunk's entries go to.
+    the chunk's new entries, ``entry_rows[rate]`` (uint32 ``[T / rate]``) the rows the chunk's entries go to.
 
-    ``start`` is the chunk's start position, int32 ROW_MAJOR ``[1, 1, 1, 1]``, which the attention op reads on device.
-    ``fresh`` marks a bounded replay's first chunk: its window starts at the chunk (the tail holds no token).
-
-    ``index_cuts[layer_type]`` is the indexer's causal cut over the ``cap`` entry rows (bf16 TILE ``[1, 1, T, cap]``,
-    ``_MASK_NEG`` on rows a query has not seen) and ``index_pads[layer_type]`` its zero key pad, on stages with an
-    index source of that type.
-
-    ``candidate_pins[layer_type]`` is bf16 TILE ``[1, 1, T, cap / candidate_block_size]``: ``-_MASK_NEG`` on the
-    block holding each query's newest entry, 0 elsewhere (made from :func:`candidate_pin_keys` and the chunk's
-    start). Present only on the candidate source's stage, in position tiers whose ``cap`` holds more blocks than
-    ``candidate_topk_blocks``.
+    ``start`` is the chunk's start position, int32 ROW_MAJOR ``[1, 1, 1, 1]``, which the indexer and attention ops
+    read on device. ``fresh`` marks a bounded replay's first chunk: its window starts at the chunk (the tail holds
+    no token).
     """
 
     rope: dict
     entry_rope: dict
-    caps: dict
     start: ttnn.Tensor
     fresh: bool = False
-    index_cuts: Optional[dict] = None
-    index_pads: Optional[dict] = None
     entry_rows: Optional[dict] = None
-    candidate_pins: Optional[dict] = None
 
 
 def ratio_layer_type(rate: int) -> str:
-    """The key a compressed layer of ``rate`` uses in a :class:`V41PrefillStaticStep` (caps, index cuts and pads)."""
+    """The layer type of a compressed layer of ``rate`` (one per compress rate; V4.1's ratios share a config type)."""
     return f"compressed_ratio_{rate}"
-
-
-def candidate_pin_keys(num_tokens: int, num_blocks: int, rate: int, block_size: int) -> torch.Tensor:
-    """fp32 ``[T, num_blocks]``: query ``i`` of a chunk starting at ``start`` pins block ``b`` iff ``key[i, b] == start``.
-
-    The pinned block holds the query's newest entry, ``(compress_len - 1) // block_size`` with
-    ``compress_len = (start + i + 1) // rate``. For ``start`` a multiple of ``rate * block_size`` that is
-    ``start / (rate * block_size) + ((i + 1) // rate - 1) // block_size``, so the key is
-    ``rate * block_size * (b - ((i + 1) // rate - 1) // block_size)``. A query with no entry yet (``start == 0``,
-    ``i + 1 < rate``) pins nothing: its keys are all positive. The keys are integers far below ``2**24``, so an fp32
-    compare on device is exact.
-    """
-    query = torch.arange(num_tokens).view(-1, 1)
-    block = torch.arange(num_blocks).view(1, -1)
-    return (rate * block_size * (block - ((query + 1) // rate - 1) // block_size)).float()
 
 
 class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
@@ -200,7 +161,6 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
             tp_size=tp_size,
         )
         cache = _as_cache(cache)
-        # V4's static step keys entry caps by layer type; V4.1's two ratios share one config type.
         self.layer_type = ratio_layer_type(self.rate) if self.rate else SLIDING_ATTENTION
         if self.rate not in (None, 1, 2):
             raise ValueError(f"layer {layer_idx}: no compressor for ratio {self.rate}")
@@ -213,17 +173,9 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         # A source's new entries only reach the layers after it through its own selection.
         assert self.is_index_source or not self.is_kv_source
         assert self.rate or not (self.is_kv_source or self.is_index_source)
-        self.max_entries = config.candidate_topk_blocks * config.candidate_block_size
-        self.candidate_topk_blocks = config.candidate_topk_blocks
-        self.candidate_block_size = config.candidate_block_size
         source = config.candidate_source_layer_id
         self.is_candidate_source = self.is_index_source and layer_idx == source
         self.uses_candidates = self.is_index_source and 0 <= source < layer_idx
-        if self.is_candidate_source and ALIGNMENT % (self.rate * self.candidate_block_size):
-            raise ValueError(
-                f"layer {layer_idx}: chunk starts (multiples of {ALIGNMENT}) must be whole candidate blocks of "
-                f"{self.rate * self.candidate_block_size} tokens"
-            )
 
         def gamma(name: str) -> ttnn.Tensor:
             weight = weights[name]
@@ -260,6 +212,11 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
             self.index_head_dim = config.index_head_dim
             if self.index_head_dim < self.rope_dim or self.index_head_dim % ttnn.TILE_SIZE:
                 raise ValueError(f"index_head_dim {self.index_head_dim} unsupported (rope_dim {self.rope_dim})")
+            # The fused select's widths: deepseek_v4_prefill_indexer_select returns 512 rows, the candidate mode
+            # 2048 blocks of 8.
+            select = (config.index_topk, config.candidate_topk_blocks, config.candidate_block_size)
+            if select != (512, 2048, 8):
+                raise ValueError(f"layer {layer_idx}: the fused indexer select needs (512, 2048, 8), got {select}")
             self.i_q_b_proj = Linear(
                 weights["indexer.wq_b.weight"],
                 device,
@@ -318,82 +275,64 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
     # ------------------------------------------------------------------ #
     # selection
     # ------------------------------------------------------------------ #
-    def _select_rows(self, scores: ttnn.Tensor) -> ttnn.Tensor:
-        """The top-``min(index_topk, E)`` entry rows of each query, uint32 ROW_MAJOR ``[1, 1, T, k]``, from indexer
-        ``scores`` ``[1, 1, T, E]`` (causal cut added). A query that has seen fewer than ``k`` entries also gets rows
-        it has not seen (scored ``_MASK_NEG``); the attention op skips those (``compress_ratio``).
-
-        ``topk_large_indices`` rather than ``ttnn.topk``, which hands it only rows of up to 2^19 entries and
-        runs anything wider (a ratio-1 layer past 512K tokens) on a single core."""
-        flat = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
-        rows = ttnn.experimental.topk_large_indices(flat, k=min(self.index_topk, scores.shape[3]))
+    def _index_inputs(
+        self, latent: ttnn.Tensor, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The fused select's ``(q, weights)``: the post-RoPE indexer queries ``[1, Hi, T, Di]`` and the per-head
+        gates with every scale folded in ``[1, 1, T, Hi]``, both bf16 TILE in DRAM."""
+        flat = self.i_q_b_proj(latent)
+        heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            flat,
+            num_heads=self.index_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         ttnn.deallocate(flat)
-        return rows
+        q = self._rope(heads, cos, sin)
+        ttnn.deallocate(heads)
+        gates = self.i_weights_proj(hidden)
+        weights = ttnn.multiply(gates, self.index_scale)
+        ttnn.deallocate(gates)
+        return q, weights
 
-    def _candidate_blocks(self, scores: ttnn.Tensor, pins: ttnn.Tensor) -> ttnn.Tensor:
-        """Level one of the two-level select: the 0/1 bf16 TILE mask ``[1, 1, T, E / block_size]`` of each query's
-        ``candidate_topk_blocks`` best blocks.
+    def _select(
+        self,
+        latent: ttnn.Tensor,
+        hidden: ttnn.Tensor,
+        idx_keys: ttnn.Tensor,
+        start: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        shared,
+    ) -> None:
+        """Replace ``shared.entry_idx`` (a :class:`PrefillShared` or :class:`PrefillStaticShared`) with this index
+        source's selection for the chunk; the candidate source also replaces ``shared.candidates``.
 
-        ``scores`` ``[1, 1, T, E]`` TILE has the causal cut added; a block scores its best entry. ``pins`` (shaped
-        like the result) lifts the block holding each query's newest entry above every other, so it is always kept.
-        Every block scoring at least the k-th best is kept: a query with fewer than ``k`` reachable blocks keeps
-        unreachable ones too, which the causal cut drops when the mask is expanded (:meth:`_expand_candidates`).
-        """
-        t, e = scores.shape[2], scores.shape[3]
-        size = self.candidate_block_size
-        if e % size:
-            raise ValueError(f"layer {self.layer_idx}: {e} entries are not whole blocks of {size}")
-        # A row-major strided slice per position in the block: a max over a [.., size] axis would read tile padding.
-        # The strided slice stages two whole input rows per core in L1, so it runs over column segments.
-        maxima = []
-        for lo in range(0, e, _BLOCK_MAX_COLUMNS):
-            hi = min(e, lo + _BLOCK_MAX_COLUMNS)
-            segment = scores if hi - lo == e else ttnn.slice(scores, [0, 0, 0, lo], [1, 1, t, hi])
-            rows = ttnn.to_layout(segment, ttnn.ROW_MAJOR_LAYOUT)
-            if segment is not scores:
-                ttnn.deallocate(segment)
-            best = None
-            for j in range(size):
-                part = ttnn.slice(rows, [0, 0, 0, j], [1, 1, t, hi - lo], [1, 1, 1, size])
-                tiled = ttnn.to_layout(part, ttnn.TILE_LAYOUT)
-                ttnn.deallocate(part)
-                if best is None:
-                    best = tiled
-                    continue
-                merged = ttnn.maximum(best, tiled)
-                ttnn.deallocate(best)
-                ttnn.deallocate(tiled)
-                best = merged
-            ttnn.deallocate(rows)
-            maxima.append(best)
-        if len(maxima) == 1:
-            best = maxima[0]
+        ``idx_keys`` is the group's ROW_MAJOR ``[1, 1, E, Di]`` index keys (only the rows a query can see are read)
+        and ``start`` the chunk's start, a 1-element device tensor."""
+        q, weights = self._index_inputs(latent, hidden, cos, sin)
+        if shared.entry_idx is not None:
+            ttnn.deallocate(shared.entry_idx)
+            shared.entry_idx = None
+        if self.is_candidate_source:
+            if shared.candidates is not None:
+                ttnn.deallocate(shared.candidates)
+            shared.candidates = ttnn.transformer.deepseek_v4_prefill_indexer_select_candidates(
+                q, weights, idx_keys, start, compress_ratio=self.rate
+            )
+        if self.is_candidate_source or self.uses_candidates:
+            if shared.candidates is None:
+                raise ValueError(f"layer {self.layer_idx} runs before the candidate source has seen this chunk")
+            shared.entry_idx = ttnn.transformer.deepseek_v4_prefill_indexer_select_from_candidates(
+                q, weights, idx_keys, start, shared.candidates, compress_ratio=self.rate
+            )
         else:
-            best = ttnn.concat(maxima, dim=3)
-            for piece in maxima:
-                ttnn.deallocate(piece)
-        pinned = ttnn.add(best, pins)
-        ttnn.deallocate(best)
-        k = min(self.candidate_topk_blocks, e // size)
-        theta = ttnn.min(ttnn.topk(pinned, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
-        blocks = ttnn.ge(pinned, theta)
-        ttnn.deallocate(pinned)
-        ttnn.deallocate(theta)
-        return blocks
-
-    def _expand_candidates(self, blocks: ttnn.Tensor, cut: ttnn.Tensor) -> ttnn.Tensor:
-        """The block mask ``blocks`` (:meth:`_candidate_blocks`, TILE or ROW_MAJOR) as the additive TILE entry mask
-        ``[1, 1, T, E]``: ``cut`` (the causal cut over the entries) on each query's kept blocks, -inf elsewhere."""
-        entries = ttnn.repeat_interleave(blocks, self.candidate_block_size, dim=3)
-        if entries.layout != ttnn.TILE_LAYOUT:
-            tiled = ttnn.to_layout(entries, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(entries)
-            entries = tiled
-        additive = ttnn.log(entries)
-        ttnn.deallocate(entries)
-        mask = ttnn.add(additive, cut)
-        ttnn.deallocate(additive)
-        return mask
+            shared.entry_idx = ttnn.transformer.deepseek_v4_prefill_indexer_select(
+                q, weights, idx_keys, start, compress_ratio=self.rate
+            )
+        ttnn.deallocate(q)
+        ttnn.deallocate(weights)
 
     def forward(
         self,
@@ -422,6 +361,14 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         cos, sin = self._rope_tables(start + torch.arange(num_tokens))
         q, latent = self._q_stem(hidden, cos, sin, return_latent=True)
         kv = self._kv_stem(hidden, cos, sin)
+        position = ttnn.from_torch(
+            torch.tensor([[[[start]]]], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate,
+        )
 
         entries = None
         if self.rate:
@@ -434,48 +381,7 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
                     raise ValueError(f"layer {self.layer_idx} runs before its kv source has seen this chunk")
                 entries = source.compressed_kv
             if self.is_index_source:
-                if shared.entry_idx is not None:
-                    ttnn.deallocate(shared.entry_idx)
-                shared.entry_idx = None
-                if self.is_candidate_source and shared.candidates is not None:
-                    ttnn.deallocate(shared.candidates)
-                    shared.candidates = None
-                num_entries = entries.shape[2]
-                # Up to index_topk entries top-k selects every one a query has seen: list them all, and the
-                # attention op skips the ones it has not. Past index_topk, select.
-                if num_entries <= self.index_topk:
-                    every = torch.arange(num_entries, dtype=torch.int32).expand(num_tokens, num_entries)
-                    shared.entry_idx = ttnn.from_torch(
-                        every.reshape(1, 1, num_tokens, num_entries),
-                        dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=self._replicate,
-                    )
-                else:
-                    keys = dataclasses.replace(state, idx_keys=shared.kv_source.idx_keys)
-                    scores, cut = self._index_scores(latent, hidden, keys, cos, sin)
-                    if self.is_candidate_source and num_entries > self.max_entries:
-                        num_blocks = num_entries // self.candidate_block_size
-                        pin_keys = candidate_pin_keys(num_tokens, num_blocks, self.rate, self.candidate_block_size)
-                        pins = self._to_device(
-                            torch.where(pin_keys == start, -_MASK_NEG, 0.0).reshape(1, 1, num_tokens, num_blocks)
-                        )
-                        blocks = self._candidate_blocks(scores, pins)
-                        ttnn.deallocate(pins)
-                        shared.candidates = self._expand_candidates(blocks, cut)
-                        ttnn.deallocate(blocks)
-                    elif self.uses_candidates and num_entries > self.max_entries:
-                        if shared.candidates is None or shared.candidates.shape[3] != num_entries:
-                            raise ValueError(
-                                f"layer {self.layer_idx} runs before the candidate source has seen this chunk"
-                            )
-                        restricted = ttnn.add(scores, shared.candidates)
-                        ttnn.deallocate(scores)
-                        scores = restricted
-                    shared.entry_idx = self._select_rows(scores)
-                    ttnn.deallocate(scores)
+                self._select(latent, hidden, shared.kv_source.idx_keys, position, cos, sin, shared)
             elif shared.entry_idx is None:
                 raise ValueError(f"layer {self.layer_idx} runs before its index source has seen this chunk")
 
@@ -485,14 +391,6 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         window = ttnn.concat([tail, chunk_rm], dim=2)  # [1, 1, sw + T, Dh]
         ttnn.deallocate(chunk_rm)
         state.kv_tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
-        position = ttnn.from_torch(
-            torch.tensor([[[[start]]]], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._replicate,
-        )
         attn = self._attend_sdpa(q, window, position, cos, sin, entries, shared.entry_idx if self.rate else None)
         ttnn.deallocate(window)
         ttnn.deallocate(position)
@@ -532,17 +430,12 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
     ) -> ttnn.Tensor:
         """Trace-safe :meth:`forward`: no host traffic, no growing tensors.
 
-        Positions come from ``step`` (RoPE rows, the entries' RoPE and rows, the start, and the tier's entry rows
-        ``cap``), this layer's state is ``bufs`` (updated in place) and the group's state ``shared``. ``hidden``
-        ``[1, 1, T, D]`` -> ``[1, 1, T, D]``.
+        Positions come from ``step`` (RoPE rows, the entries' RoPE and rows, the start), this layer's state is
+        ``bufs`` (updated in place) and the group's state ``shared``. ``hidden`` ``[1, 1, T, D]`` -> ``[1, 1, T, D]``.
 
-        The candidate source builds candidates when ``step`` carries its pins (the tier's ``cap`` holds more than
-        ``candidate_topk_blocks`` blocks); a later index source restricts its scores to ``shared.candidates`` when set.
-        While the real entries fit ``candidate_topk_blocks`` blocks every reachable block is kept, so a tier that
-        builds candidates still selects as the plain top-k does on its early chunks.
-
-        The index source's top-k runs over the tier's ``cap`` rows, so in an early tier a query that has seen fewer
-        than ``k`` entries also lists rows it has not; the attention op skips them.
+        Every op reads only the rows the chunk can see: the kv source writes its ``T / rate`` new rows at the
+        packet's rows, and the select and attention ops take the whole persistent buffers but read the visible
+        prefix (or the candidates' rows) at the start they read on device.
         """
         cos, sin = step.rope[self.rope_kind]
         q, latent = self._q_stem(hidden, cos, sin, return_latent=True)
@@ -550,33 +443,17 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         if self.rate:
             if self.is_kv_source:
                 entries, keys = self._pool_entries(hidden, *step.entry_rope[self.rate])
+                rows = step.entry_rows[self.rate]
+                ttnn.transformer.deepseek_v4_prefill_write_rows(entries, bufs.entries, rows)
+                ttnn.transformer.deepseek_v4_prefill_write_rows(keys, bufs.idx_keys, rows)
                 if shared.keep_rows:
-                    shared.new_rows = (ttnn.clone(entries), ttnn.clone(keys))
-                rows, cap = step.entry_rows[self.rate], step.caps[self.layer_type]
-                self._write_entries(bufs.entries, entries, rows, cap)
-                self._write_entries(bufs.idx_keys, keys, rows, cap)
+                    shared.new_rows = (entries, keys)
+                else:
+                    ttnn.deallocate(entries)
+                    ttnn.deallocate(keys)
                 shared.entries, shared.idx_keys = bufs.entries, bufs.idx_keys
             if self.is_index_source:
-                if shared.entry_idx is not None:
-                    ttnn.deallocate(shared.entry_idx)
-                shared.entry_idx = None
-                keys = dataclasses.replace(bufs, idx_keys=shared.idx_keys)
-                scores, cut = self._index_scores_static(latent, hidden, keys, step, cos, sin)
-                pins = (step.candidate_pins or {}).get(self.layer_type) if self.is_candidate_source else None
-                if pins is not None:
-                    blocks = self._candidate_blocks(scores, pins)
-                    if shared.candidates is not None:
-                        ttnn.deallocate(shared.candidates)
-                    shared.candidates = self._expand_candidates(blocks, cut)
-                    if shared.keep_candidates:
-                        shared.candidate_blocks = ttnn.to_layout(blocks, ttnn.ROW_MAJOR_LAYOUT)
-                    ttnn.deallocate(blocks)
-                elif self.uses_candidates and shared.candidates is not None:
-                    restricted = ttnn.add(scores, shared.candidates)
-                    ttnn.deallocate(scores)
-                    scores = restricted
-                shared.entry_idx = self._select_rows(scores)
-                ttnn.deallocate(scores)
+                self._select(latent, hidden, shared.idx_keys, step.start, cos, sin, shared)
 
         num_tokens = q.shape[2]
         sw = self.sliding_window

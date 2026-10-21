@@ -15,8 +15,9 @@ entries the selection is every visible entry, past it each query attends to its 
 entries at 2048 tokens; ratio 1: 1024 entries at 1024 tokens). Chunked cases exercise the window tail, the
 compressed-entry append and the index keys carried between chunks.
 
-Selection is by threshold on bf16 index scores, so a query whose 512th and 513th entries score within bf16
-resolution can pick the other one; those cost a little PCC, which is why the floor is below a dense layer's.
+Selection is a top-k over index scores made from bf16 operands, so a query whose 512th and 513th entries score
+within that resolution can pick the other one; those cost a little PCC, which is why the floor is below a dense
+layer's.
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
@@ -107,8 +108,9 @@ def test_attention_prefill(device, layers, seq_len, chunk):
             actual[i].append(out)
             _, pcc = comp_pcc(expected[i][start : start + chunk], out, PCC)
             logger.info(f"layer {i} (ratio {config.compress_ratios[i]}) chunk at {start}: PCC {pcc}")
-        if shared.entry_idx is not None:
-            ttnn.deallocate(shared.entry_idx)
+        for tensor in (shared.entry_idx, shared.candidates):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
 
     for i in layers:
         passing, pcc = comp_pcc(expected[i], torch.cat(actual[i]), PCC)
