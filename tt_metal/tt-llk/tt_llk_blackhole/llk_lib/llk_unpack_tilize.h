@@ -413,8 +413,16 @@ inline void _llk_unpack_tilize_(
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-        // Flip to the other context for the next tile
-        switch_config_context_from(context);
+        // Flip to the other context for the next tile; the offset write goes first so the tracked store schedules after it
+        if (context == 0)
+        {
+            TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
+        }
+        else
+        {
+            TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        }
+        unp_cfg_context = 1 - context;
     }
     else
     {
@@ -472,8 +480,16 @@ inline void _llk_unpack_tilize_(
             unpack_to_dest_tile_done(context, unpack_src_format);
         }
 
-        // Switch unpacker config context
-        switch_config_context_from(context);
+        // Switch unpacker config context; the offset write goes first so the tracked store schedules after it
+        if (context == 0)
+        {
+            TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
+        }
+        else
+        {
+            TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        }
+        unp_cfg_context = 1 - context;
     }
 }
 
