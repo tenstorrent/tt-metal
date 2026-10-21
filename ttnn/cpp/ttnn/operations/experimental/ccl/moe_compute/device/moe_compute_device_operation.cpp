@@ -6,6 +6,7 @@
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -17,9 +18,10 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include <array>
+#include <cmath>
 #include <utility>
 
 namespace ttnn::experimental::prim {
@@ -41,6 +43,14 @@ void MoEComputeDeviceOperation::validate_on_program_cache_hit(
 
 void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        (args.activation_type == detail::MoEActivationFunction::CLAMPED_SILU) == args.activation_limit.has_value(),
+        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
+    TT_FATAL(
+        !args.activation_limit.has_value() || (std::isfinite(*args.activation_limit) && *args.activation_limit > 0.0f),
+        "activation_limit must be finite and positive, got {}",
+        args.activation_limit.value_or(0.0f));
+
     // Tilize
     TT_FATAL(
         tensor_args.tilize_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -547,7 +557,10 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
     const std::optional<uint32_t>& bh_ring_size,
-    const std::optional<uint32_t>& num_shared_experts_per_device) {
+    const std::optional<uint32_t>& num_shared_experts_per_device,
+    const std::optional<float>& activation_limit,
+    const tt::tt_metal::MathFidelity math_fidelity,
+    const bool fp32_dest_acc_en) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -744,7 +757,10 @@ std::vector<ttnn::Tensor> moe_compute(
                                      : experimental::prim::MoEComputePath::FullCcl,
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
-            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
+            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
+            .activation_limit = activation_limit,
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

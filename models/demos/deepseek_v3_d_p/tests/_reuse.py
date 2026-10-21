@@ -66,6 +66,8 @@ class _Registry:
         return self.device
 
     def acquire_transformer(self, transformer_cls, mesh_device, variant, config, **ctor_kwargs):
+        # Switched on the built model, so it is not part of the cache key.
+        tp_shard_kv = ctor_kwargs.pop("tp_shard_kv", None)
         key = (
             id(mesh_device),
             transformer_cls.__qualname__,
@@ -79,9 +81,10 @@ class _Registry:
                 f"reusing {transformer_cls.__name__} ({ctor_kwargs.get('num_layers')} layers, "
                 f"max_seq_len={ctor_kwargs.get('max_seq_len')})"
             )
-            return transformer
-        transformer = transformer_cls(mesh_device=mesh_device, config=config, **ctor_kwargs)
-        self.models[key] = transformer
+        else:
+            transformer = transformer_cls(mesh_device=mesh_device, config=config, **ctor_kwargs)
+            self.models[key] = transformer
+        transformer.set_tp_shard_kv(tp_shard_kv)
         return transformer
 
     def release_models(self):

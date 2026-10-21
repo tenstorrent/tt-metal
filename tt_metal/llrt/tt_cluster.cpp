@@ -35,16 +35,16 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tunnels_from_mmio_device.hpp"
-#include "umd/device/utils/semver.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/firmware/firmware_utils.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/utils/semver.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/firmware/firmware_utils.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
@@ -1065,6 +1065,20 @@ void Cluster::noc_multicast_write(
             {core_end.x, core_end.y},
             addr,
             sz_in_bytes);
+    }
+
+    if (this->target_type_ == tt::TargetDevice::Emule) {
+        // The emulated chip has no NOC multicast: write each worker core of the rectangle, as UMD's simulation
+        // backends do. Watcher sanitized the rectangle above; write_core sanitizes each core again.
+        const auto& worker_cores = this->virtual_worker_cores_.at(chip_id);
+        for (auto x = std::min(core_start.x, core_end.x); x <= std::max(core_start.x, core_end.x); x++) {
+            for (auto y = std::min(core_start.y, core_end.y); y <= std::max(core_start.y, core_end.y); y++) {
+                if (worker_cores.contains(tt::tt_metal::CoreCoord(x, y))) {
+                    this->write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(chip_id, x, y), addr);
+                }
+            }
+        }
+        return;
     }
 
     tt::umd::CoreCoord start_coord = soc_desc.get_coord_at(core_start, CoordSystem::TRANSLATED);

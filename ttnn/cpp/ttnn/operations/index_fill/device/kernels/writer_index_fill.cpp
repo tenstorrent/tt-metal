@@ -6,7 +6,14 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch flushes
+// the written range with flush_l2_cache_range instead. Same guard as data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 #include <algorithm>
+#include <cstdint>
 
 bool contains_element(uint32_t* arr, uint32_t size, uint32_t val) {
     return std::find(arr, arr + size, val) != arr + size;
@@ -66,6 +73,18 @@ void kernel_main() {
         for (uint32_t i = 0; i < row_size; ++i) {
             fill_ptr[i] = fill_value;
         }
+        // The fill is baby-RISCV stores and the page is the NoC's source for every filled row below.
+        // A store can retire before its write-request lands in L1, and the RISCV core and the NoC are
+        // different L1 clients with no program-order guarantee between them
+        // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled element so
+        // the fill is processed before the first NoC write is issued. Same construction as #50374.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Quasar DM: the CB write pointer is the cached address, so the fill sits in L1D/L2 while the NoC
+        // reads TL1. Flush the fill page (fences on both sides). Matches fill_rm_interleaved.cpp.
+        flush_l2_cache_range(static_cast<uintptr_t>(fill_addr), static_cast<size_t>(row_size * sizeof(IntType)));
+#else
+        (void)ckernel::load_blocking(fill_ptr + row_size - 1);
+#endif
     }
     cb_fill.push_back(onepage);
 
@@ -104,11 +123,26 @@ void kernel_main() {
             // so all matching indices are filled before the page is split into output writes.
             if constexpr (is_last_dim) {
                 auto* input_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(input_addr);
+                volatile tt_l1_ptr IntType* last_written = nullptr;
                 for (uint32_t i = 0; i < index_size; ++i) {
                     uint32_t global_col = index_ptr[i];
                     if (global_col >= col_start && global_col < col_start + row_size) {
-                        input_ptr[global_col - col_start] = fill_value;
+                        last_written = input_ptr + (global_col - col_start);
+                        *last_written = fill_value;
                     }
+                }
+                // These are baby-RISCV stores into the page the NoC writes out immediately below; the
+                // store queue can still hold them when the NoC command is issued (MemoryOrdering.md).
+                // Read the last one back so all of them are processed first. Same construction as #50374.
+                if (last_written != nullptr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                    // Quasar DM: the CB read pointer is the cached address; flush the input page so the NoC
+                    // sees the scattered elements (fences on both sides).
+                    flush_l2_cache_range(
+                        static_cast<uintptr_t>(input_addr), static_cast<size_t>(row_size * sizeof(IntType)));
+#else
+                    (void)ckernel::load_blocking(last_written);
+#endif
                 }
             }
 

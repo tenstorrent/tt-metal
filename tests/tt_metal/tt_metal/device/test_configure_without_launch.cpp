@@ -20,6 +20,7 @@
 
 #include "device_fixture.hpp"
 #include "impl/program/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -40,7 +41,7 @@ uint32_t read_word(IDevice* device, const CoreCoord& core, uint32_t addr) {
 // Slow dispatch only: the fixture skips otherwise.
 TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotRun) {
     for (const auto& mesh : devices_) {
-        IDevice* device = mesh->get_devices().at(0);
+        auto* device = mesh->impl().get_devices().at(0);
         const CoreCoord core{0, 0};
         // Nothing is allocated in this test, so the allocator's base is free scratch.
         const auto addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
