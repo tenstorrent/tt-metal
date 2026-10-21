@@ -510,3 +510,27 @@ section "With measured efficiencies".
   (TP), SP pairs on the LoudBox (its TP line carries the combine). Router: one fused top-k writing the block's routing
   rows. L4 MoE block 4058 -> 2811 us (chunk 5120), 2423 -> 1791 (2048). Details: FLAT_COMBINE_OVERLAP_WORKLOG.md.
   Next: the fused shared expert and its overlap with the dispatch - ttnn/ttnn/bringup/combine_rf/FUSED_SHARED_EXPERT_PLAN.md.
+
+## 15. Weight cache keying (decided 2026-10-21)
+
+The MoE block's weight cache is keyed on what the device layout depends on, never on the mesh topology.
+
+- **Routed experts: one cache entry per expert**, keyed on (chip core grid, routed width, intermediate, weight dtype,
+  flat layout options). A chip's device tensor is its local experts' blocks placed in its bank regions, assembled at
+  load. Verified on bh-lb-09 (12 x 10, pure DRISC, no Tensix readers; `zz_scratch_flat_epc_layout.py`): for K3, K2.7,
+  GLM-5.3, M3 and GLM-5.3-Flash the plan's layout fields are identical at two experts-per-chip values (28 / 56,
+  12 / 24, 8 / 16, 4 / 8, 9 / 18) and the same experts' blocks are bit-identical; only the down regions' zero padding
+  grows (regions are sized for all local experts). So every mesh, pipeline split, experts-per-chip count (and later
+  expert replication) shares the files.
+- **What does change the blocks:** the chip grid (Galaxy 12 x 10 vs LoudBox 11 x 10 plan differently) and the flat
+  layout (gu64 etc.): chip type and op layout, not topology.
+- **TP-split weights** (shared expert, router gate, latent projections; ~52 MB / chip / layer for K3, 35 MB of it the
+  shared expert): keyed on the TP degree only (each chip's slice); no SP, wraparound or links.
+- **Today (to fix):** main stores one whole-mesh tensorbin per weight (`ShardTensor2dMesh(dims=(0, 1))`,
+  `DISTRIBUTED_GATHER`) in a directory per mesh shape (`{sp}x{tp}`): a cache per mesh shape. The K3 token-split
+  block keys its flat weight cache on the whole plan and experts-per-chip (`k3_flat.<sha>.w_gu`): a cache per
+  experts-per-chip.
+- **API consequence:** `MoEBlock.cache_complete(cache, model, dtypes, mesh_device)` needs only the chip grid and the
+  TP degree, not a Geometry or the chunk (the Galaxy MoE Block artifact's proposal).
+- **Follow-up for the implementation:** the flat plan takes experts_per_chip as an input; it should expose a per-expert
+  layout signature (the fields compared above) as the cache key, and pack a chip's regions from per-expert blobs.
