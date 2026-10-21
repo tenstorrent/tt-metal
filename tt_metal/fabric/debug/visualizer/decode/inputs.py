@@ -21,6 +21,9 @@ from tt_metal.fabric.debug.visualizer.common.manifest_lookup import lookup
 SNAPSHOT_VERSION = 1
 # How much of a SHA a warning shows, as much as the build's kGitShaShort.
 SHORT_SHA = 10
+# The keys decode reads in each router's entry, with their JSON types. started_ns and error can also be null.
+ROUTER_KEYS = {"liveness": list, "core_registers": dict, "areas": dict, "regions": dict, "streams": dict}
+NULLABLE_ROUTER_KEYS = {"started_ns": int, "error": dict}
 
 
 class InputError(ValueError):
@@ -117,7 +120,8 @@ def _get(snapshot, path: str, kind: type, snapshot_path: pathlib.Path):
             raise InputError(f"snapshot {snapshot_path} has no {path}")
         value = value[key]
     if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
-        raise InputError(f"snapshot {snapshot_path}: {path} is {value!r}, not a {kind.__name__}")
+        article = "an" if kind.__name__[0] in "aeiou" else "a"
+        raise InputError(f"snapshot {snapshot_path}: {path} is {value!r}, not {article} {kind.__name__}")
     return value
 
 
@@ -171,7 +175,14 @@ def load_input(
     version = _get(snapshot, "snapshot_version", int, snapshot_path)
     if version != SNAPSHOT_VERSION:
         raise InputError(f"snapshot {snapshot_path} is version {version}; decode reads version {SNAPSHOT_VERSION}")
-    _get(snapshot, "routers", dict, snapshot_path)
+    for path, entry in _get(snapshot, "routers", dict, snapshot_path).items():
+        for key, kind in ROUTER_KEYS.items():
+            _get(snapshot, f"routers.{path}.{key}", kind, snapshot_path)
+        for key, kind in NULLABLE_ROUTER_KEYS.items():
+            if key not in entry:
+                raise InputError(f"snapshot {snapshot_path} has no routers.{path}.{key}")
+            if entry[key] is not None:
+                _get(snapshot, f"routers.{path}.{key}", kind, snapshot_path)
 
     raw_path = snapshot_path.parent / _get(snapshot, "raw.file", str, snapshot_path)
     raw = _read(raw_path, "the snapshot's .bin")

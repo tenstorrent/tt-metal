@@ -118,7 +118,7 @@ names the key, instead of decoding bytes wrong.
 
 ## What it doesn't cover
 
-- **Bitfields.** None of today's structs has any, and the schema grammar has no form for one.
+- **Bitfields.** No struct the manifest describes has any, and the schema grammar has no form for one.
 - **Flags.** The manifest doesn't mark an enum as a bitmask, so combined values come out with no name.
 - **Meaning.** It doesn't know which struct is a routing table, or what a value means. That is for decode's other
   parts, such as [`routes.py`](../routes.py).

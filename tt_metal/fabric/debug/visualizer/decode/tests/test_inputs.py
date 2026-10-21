@@ -40,6 +40,19 @@ def manifest_bytes(**run) -> bytes:
 MANIFEST = manifest_bytes(arch="wormhole_b0")
 
 
+def router_entry():
+    """A router's entry with every key decode reads, as capture writes it for a router it read without an error."""
+    return {
+        "liveness": [],
+        "started_ns": 0,
+        "core_registers": {},
+        "areas": {},
+        "regions": {},
+        "streams": {},
+        "error": None,
+    }
+
+
 class LoadInputTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -60,7 +73,7 @@ class LoadInputTest(unittest.TestCase):
             "snapshot_version": 1,
             "manifest": {"file": str(self.manifest_path), "sha256": sha256(MANIFEST), "run": {}},
             "raw": {"file": self.bin_path.name, "size": len(RAW), "sha256": sha256(RAW)},
-            "routers": {},
+            "routers": {"M0/C0/E0": router_entry()},
         }
         if change is not None:
             change(snapshot)
@@ -127,9 +140,30 @@ class LoadInputTest(unittest.TestCase):
             ("no routers", lambda snapshot: snapshot.pop("routers"), "has no routers"),
             ("a size that isn't a number", lambda snapshot: snapshot["raw"].update(size="16"), r"raw\.size is '16'"),
             ("no manifest hash", lambda snapshot: snapshot["manifest"].pop("sha256"), r"has no manifest\.sha256"),
+            (
+                "a router with no liveness samples",
+                lambda snapshot: snapshot["routers"]["M0/C0/E0"].pop("liveness"),
+                r"has no routers\.M0/C0/E0\.liveness",
+            ),
+            (
+                "a router whose start time isn't a number",
+                lambda snapshot: snapshot["routers"]["M0/C0/E0"].update(started_ns="0"),
+                r"routers\.M0/C0/E0\.started_ns is '0', not an int",
+            ),
+            (
+                "a router with no error key",
+                lambda snapshot: snapshot["routers"]["M0/C0/E0"].pop("error"),
+                r"has no routers\.M0/C0/E0\.error",
+            ),
         ):
             with self.subTest(name), self.assertRaisesRegex(InputError, named):
                 load_input(self.write(change), None)
+
+    def test_a_router_capture_couldnt_open_loads(self):
+        def unopened(snapshot):
+            snapshot["routers"]["M0/C0/E0"].update(started_ns=None, error={"stage": "open"})
+
+        self.assertIsNone(load_input(self.write(unopened), None).snapshot["routers"]["M0/C0/E0"]["started_ns"])
 
     def test_a_file_that_isnt_json_is_refused(self):
         snapshot_path = self.write()

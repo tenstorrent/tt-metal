@@ -51,10 +51,12 @@ Whichever file it finds, its sha256 must be the snapshot's.
 - **Another `.bin`.** Its size and sha256 must be the snapshot's `raw`. A short or swapped `.bin` would put every offset
   on the wrong bytes.
 - **Something that isn't a version 1 fabric snapshot.** That means `kind` and `snapshot_version`, and the keys decode
-  reads, each with its JSON type.
+  reads, each with its JSON type. Those include each router's entry: `liveness`, `core_registers`, `areas`, `regions`
+  and `streams`, and `started_ns` and `error`, which can be null. A router missing one is refused at load, naming the
+  router and the key, rather than failing part way through a decode.
 
-It doesn't look inside the routers. `routers.py` does that, region by region, including the check that each region's
-copied `address` and `size` are its manifest node's.
+It checks only that each router's entry has those keys. `routers.py` looks inside them, region by region, including the
+check that each region's copied `address` and `size` are its manifest node's.
 
 ## Build identity
 
