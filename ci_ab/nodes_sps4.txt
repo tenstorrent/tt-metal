@@ -1,0 +1,4 @@
+ci_ab/test_sps_ab.py::test_sps[rms_t4_lofi]
+ci_ab/test_sps_ab.py::test_sps[rms_t8_lofi]
+ci_ab/test_sps_ab.py::test_sps[ln_t4_lofi]
+ci_ab/test_sps_ab.py::test_sps[ln_t8_lofi]
