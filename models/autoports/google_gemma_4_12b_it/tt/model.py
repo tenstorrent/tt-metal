@@ -51,6 +51,26 @@ from models.autoports.google_gemma_4_12b_it.tt.precision import PrecisionConfig,
 
 HF_MODEL = "google/gemma-4-12B-it"
 HF_REVISION = os.environ.get("HF_REVISION", "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7")
+
+
+def _mounted_snapshot():
+    """Serving harnesses (TTI) mount the checkpoint and export MODEL_WEIGHTS_DIR (or HF_MODEL) as a local snapshot
+    directory. Prefer it when it holds config.json and the safetensors, so the container needs no hub access."""
+    for name in ("MODEL_WEIGHTS_DIR", "HF_MODEL"):
+        value = os.environ.get(name)
+        if value and (Path(value) / "config.json").is_file() and any(Path(value).glob("*.safetensors")):
+            return Path(value)
+    return None
+
+
+MOUNTED_SNAPSHOT = _mounted_snapshot()
+
+
+def pretrained_source():
+    """(name_or_path, revision) for HF config / tokenizer loading: the mounted snapshot, else the pinned hub revision."""
+    if MOUNTED_SNAPSHOT is not None:
+        return str(MOUNTED_SNAPSHOT), None
+    return HF_MODEL, HF_REVISION
 TEXT_PREFIX = "model.language_model."
 
 BLOCK_SIZE = 64
@@ -74,6 +94,8 @@ _DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b
 
 
 def checkpoint_dir():
+    if MOUNTED_SNAPSHOT is not None:
+        return MOUNTED_SNAPSHOT
     from huggingface_hub import snapshot_download
 
     return Path(
@@ -86,7 +108,8 @@ def checkpoint_dir():
 def text_config():
     from transformers import AutoConfig
 
-    cfg = AutoConfig.from_pretrained(HF_MODEL, revision=HF_REVISION).text_config
+    source, revision = pretrained_source()
+    cfg = AutoConfig.from_pretrained(source, revision=revision).text_config
     cfg._attn_implementation = "eager"
     return cfg
 

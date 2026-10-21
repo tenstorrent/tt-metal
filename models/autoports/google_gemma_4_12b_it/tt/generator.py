@@ -52,7 +52,7 @@ import torch
 
 import ttnn
 from models.autoports.google_gemma_4_12b_it.tt.functional_decoder import MAX_DECODE_BATCH
-from models.autoports.google_gemma_4_12b_it.tt.model import HF_MODEL, HF_REVISION, PREFILL_BUCKETS, Gemma4Model
+from models.autoports.google_gemma_4_12b_it.tt.model import PREFILL_BUCKETS, Gemma4Model, pretrained_source
 from models.autoports.google_gemma_4_12b_it.tt.multichip_decoder import NUM_LINKS
 from models.autoports.google_gemma_4_12b_it.tt.sampling import SplitTopKSampling
 from models.common.sampling.tt_sampling import TTSampling
@@ -147,8 +147,9 @@ class Gemma4Generator(Generator):
         self.model = model
         self.mesh = model.mesh
         self.log = log
-        self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL, revision=HF_REVISION)
-        gen_cfg = GenerationConfig.from_pretrained(HF_MODEL, revision=HF_REVISION)
+        source, revision = pretrained_source()
+        self.tokenizer = AutoTokenizer.from_pretrained(source, revision=revision)
+        gen_cfg = GenerationConfig.from_pretrained(source, revision=revision)
         eos = gen_cfg.eos_token_id
         self.eos_token_ids = set(eos if isinstance(eos, list) else [eos])
         # generation_config.suppress_tokens (<image|>, <audio|>): HF generate() masks them in every sampling step
