@@ -414,8 +414,9 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
             }
             log_info(
                 tt::LogOp,
-                "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {} mpfe P1-P3 {} {} {} prof dma {} refresh {} "
-                "write {} flush {} total {} refreshes {} units {}{}",
+                "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {} mpfe P1-P3 {} {} {} prof dma {} refresh "
+                "{} "
+                "write {} flush {} total {} refreshes {} units {} xemu ns {} slot {:#x} room {} issued {}{}",
                 dev->id(),
                 c.str(),
                 v.str(),
@@ -432,6 +433,10 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
                 w[116],
                 w[117],
                 w[118],
+                w[124],
+                w[125],
+                w[127],
+                w[126],
                 jobs);
         }
     }

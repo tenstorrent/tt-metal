@@ -1273,10 +1273,26 @@ reads on the job's stream, UB 2, LEAN 1, M 128): y bit-exact vs the default.
 | ... + each x row written to a receiver: at the load / ahead / spread / cap 4 / without LEAN | 1553 / 1751, 1553 / 1750, 1555 / 1750, 1554 / -, 1553 / 1750 |
 | UB 1 + LEAN 1, x spread / at the load | 1649 / 1790, 1669 / 1790 |
 | UB 1 + LEAN 1 + writes, at the load | HANG at M 80 (triage off, host up; not narrowed - UB 1 is not the configuration) |
-- With UB 2 the whole of option A is free: reads and writes, every ordering, depth, stream, with or without LEAN, sit
-  on the no-x line. All of x's cost on the real path is the relays' NOC1 DRAM reads; read from the DRISC's own bank
-  queue it vanishes. Against the default: -6.8% at M 80, -9.1% at M 160. Left to the floor (1450 / 1573 with x and y
-  at 512 GB/s): 103 / 177 us.
-- With UB 1 the DRISC's per-unit work still binds, so the extra units cost (and the write variant hung).
-Build A as: UB 2, the DRISCs reading the x rows of their bank (bank = page index % banks; the relay chunks get a
-per-chunk arrival count from the 8 banks), any ordering (the simplest: each expert's rows when its load starts).
+- **WRONG, see the correction below:** every UB 2 row above issued no x reads at all (the scratch slot did not fit
+  past UB 2's 5 x 18 KB slots, room 93696 B, and the probe switched itself off silently) - they measure XRD_SKIP only.
+  Only the UB 1 rows issued x reads.
+
+### Correction: option A emulated with every x read issued (2026-10-21, GLM-5.3, real path, y on, relays' x off)
+The probe now takes one weight slot when the scratch does not fit (UB 2: 5 -> 4 units in flight) and reports its state
+in the DRISC dump (ns, scratch slot, room, x reads issued); the no-x baselines are held to the same slots
+(MIMO_FL_DRISC_NS_MAX now also lowers the cap). Issued counts checked on every run (1760 / 3520 over 11 calls = x's
+volume; spread rounds the interval: 1870 / 4224).
+| us | M 80 | M 160 |
+| default (relays read x over NOC1) | 1667 | 1926 |
+| no x reads: UB 2 4 slots / UB 2 + LEAN / UB 1 | 1556 / 1552 / 1613 | 1752 / - / 1740 |
+| UB 2 + x: spread / at each load / one load ahead | 1603 / 1586 / 1586 | 1841 / 1821 / 1827 |
+| UB 2 + x at each load: cap 8 / x first / LEAN / other stream | 1582 / 1583 / 1590 / 1575 | 1823 / 1833 / 1822 / 1813 |
+| UB 2 + LEAN + x as 2 KB segments (6 a row, cap 8: the relays' real granularity) | 1577 | 1816 |
+| UB 1 + LEAN + x at each load | 1671 | 1790 |
+| + each x read written out by the DRISC (to a receiver's landing ring) | HANG (UB 1 and UB 2) | - |
+- x through the DRISC queue is not free: +20..47 us over no x at M 80, +38..89 at M 160. It still beats the default:
+  best M 80 1575 (-5.5%, UB 2, other stream), M 160 1790 (-7.1%, UB 1 + LEAN). At each load (or ahead) beats spread;
+  depth, x first and LEAN change little; 2 KB segments cost the same as 12 KB rows (the per-unit work does not bind at
+  UB 2 + 4 slots).
+- The writes are not measured: the write emulation hangs (garbage into the receivers' landing rings - not the real
+  target; not narrowed). So A's projected gain is ~90 us (M 80) / ~136 us (M 160) less the DRISC -> relay writes.

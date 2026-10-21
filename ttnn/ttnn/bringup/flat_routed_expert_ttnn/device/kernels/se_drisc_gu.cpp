@@ -158,6 +158,9 @@ void kernel_main() {
     for (uint32_t port = 1; port <= 3; ++port) {  // (debug: the controller's MPFE weights as found, P1..P3)
         *word(SE_DRISC_DONE + 4 * port) = gddr_mc_read_mpfe_weight(port);
     }
+    for (uint32_t o = 496; o < 512; o += 4) {  // (debug words: the x emulation's state)
+        *word(o) = 0;
+    }
     *word(SE_DRISC_READY) = SE_DRISC_READY_MAGIC;
     // GDDR MPFE weights (the job descriptor's word, per call): this tile's port, the bank's NOC0 / NOC1 endpoints'
     // ports (RT 3 + NJ ..); the weights as found are restored when the call asks for none and on exit (they persist
@@ -266,8 +269,11 @@ void kernel_main() {
 #endif
             // (transaction ids 1-7 / 8-14 per job; probe SE_DRISC_NS_MAX up to 14: one real job takes ids 1-14, so
             // more units in flight when its L1 room holds more than 7)
+            // (below 7 it lowers the cap: e.g. the x emulation's baseline with its slot count)
             const uint32_t ns_max =
-                SE_DRISC_NS_MAX > 7 && n_real == 1 ? (SE_DRISC_NS_MAX > 14 ? 14 : SE_DRISC_NS_MAX) : 7;
+                SE_DRISC_NS_MAX < 7
+                    ? SE_DRISC_NS_MAX
+                    : (SE_DRISC_NS_MAX > 7 && n_real == 1 ? (SE_DRISC_NS_MAX > 14 ? 14 : SE_DRISC_NS_MAX) : 7);
             J.ns = J.ns > ns_max ? ns_max : J.ns;
             J.trid0 = ns_max > 7 ? 1 : 1 + 7 * k;
             J.units = n_load * J.per_e * (J.rg / J.ub);
@@ -279,7 +285,13 @@ void kernel_main() {
 #endif
             // (perf probe: an extra SE_DRISC_XEMU_B-byte read from this bank every SE_DRISC_XEMU weight units, into a
             // scratch slot past the job's slots, never forwarded: x's DRAM reads moved into the DRISC's own queue)
-            J.xslot = J.ns * J.ub * J.blk + SE_DRISC_XEMU_B <= room ? J.slot0 + J.ns * J.ub * J.blk : 0;
+            if (J.ns * J.ub * J.blk + SE_DRISC_XEMU_B > room) {  // (no room past the slots: one slot fewer)
+                J.ns = (room - SE_DRISC_XEMU_B) / (J.ub * J.blk);
+            }
+            J.xslot = J.ns ? J.slot0 + J.ns * J.ub * J.blk : 0;
+            *word(496) = J.ns;  // (debug words 496..511 of the working region, the dump's "xemu")
+            *word(500) = J.xslot;
+            *word(508) = room;
 #else
             J.xslot = 0;
 #endif
@@ -586,6 +598,7 @@ void kernel_main() {
             }
         }
 #ifdef SE_DRISC_XEMU
+        *word(504) += jobs[0].xi + (nj > 1 ? jobs[1].xi : 0);  // (debug: x reads issued, over the calls)
         for (uint32_t k = 0; k < nj; ++k) {  // (the extra reads drained: the next call's in-order count starts clean)
             if (jobs[k].xslot) {
                 for (uint8_t s = 0; s < 2; ++s) {
