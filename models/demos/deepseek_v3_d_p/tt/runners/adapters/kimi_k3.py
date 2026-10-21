@@ -372,6 +372,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
             return_last_hidden=params.return_last_hidden,
+            metadata_flags_word=params.metadata_flags_word,
             dflash_enabled=params.dflash_enabled,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),

@@ -90,6 +90,8 @@ class PrefillRunParams:
     mtp_levels: int = 0
     # Last rank returns its final hidden state, for PREFILL_FIRST_TOKEN_DIR. Off with kv_only_last_layer.
     return_last_hidden: bool = False
+    # PREFILL_FIRST_TOKEN_RECORD: chunk metadata carries a 4th word, flags, after slot/start/end.
+    metadata_flags_word: bool = False
 
     @property
     def sp_factor(self) -> int:

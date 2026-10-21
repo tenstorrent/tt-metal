@@ -81,6 +81,9 @@ class TtPrefillRuntimeConfig:
     # Last rank: prefill_chunk returns the final hidden state (for `tail_hidden_row`) instead of None.
     # Excludes kv_only_last_layer, MTP and DFlash.
     return_last_hidden: bool = False
+    # Chunk metadata carries a flags word after slot/start/end (PREFILL_FIRST_TOKEN_RECORD), so the traced
+    # path's persistent copy of it is one word wider. Excludes MTP.
+    metadata_flags_word: bool = False
     # The same trim for the last MTP level: it only has to fill its KV slot.
     kv_only_last_mtp_level: bool = True
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
@@ -1008,6 +1011,8 @@ class TtPrefillRuntime:
         # A downstream MTP rank receives a fourth word (provided_levels) and forwards it, so its
         # record is as wide as the D2D message it is copied from.
         words = (0, 0, chunk, 0) if self.config.mtp_levels and not self.config.is_first_rank else (0, 0, chunk)
+        if self.config.metadata_flags_word:
+            words += (0,)
         self._trace_metadata_msg = self._meta_words_dev(words)
 
         controller = SubDeviceTraceController(self.mesh_device)

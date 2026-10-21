@@ -430,7 +430,7 @@ def _forward_shutdown(
 def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
-    words = (WARMUP_METADATA_WORD,) * 3 + ((0,) if MTP_LEVELS else ())
+    words = (WARMUP_METADATA_WORD,) * 3 + ((0,) if MTP_LEVELS else ()) + ((0,) if FIRST_TOKEN_RECORD else ())
     inputs = get_inputs(words) if get_inputs is not None else None
     if inputs is None:
         return
@@ -833,6 +833,7 @@ def main() -> None:
         # is_last_rank, not True: TtPrefillTransformer asserts kv_only_last_layer -> is_last_rank, since a
         kv_only_last_layer=is_last_rank and not MTP_LEVELS and not FIRST_TOKEN_DIR and not FIRST_TOKEN_RECORD,
         return_last_hidden=is_last_rank and bool(FIRST_TOKEN_DIR or FIRST_TOKEN_RECORD),
+        metadata_flags_word=FIRST_TOKEN_RECORD,
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
