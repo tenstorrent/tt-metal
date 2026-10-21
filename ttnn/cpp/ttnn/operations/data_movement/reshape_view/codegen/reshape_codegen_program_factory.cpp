@@ -436,11 +436,7 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
     const Tensor& input = tensor_args.input;
     const auto& plan = operation_attributes.plan;
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
-    const uint32_t out_aligned_page = static_cast<uint32_t>(tensor_return_value.buffer()->aligned_page_size());
-    TT_FATAL(
-        out_aligned_page == plan.out_aligned_page,
-        "Reshape output page {} differs from the page the plan assumed",
-        out_aligned_page);
+    TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == plan.out_aligned_page);
 
     const auto chosen = rcg::live_rm_choice(
         input,
