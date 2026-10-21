@@ -15,10 +15,19 @@
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "lltt.h"
+#include "sfpi.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
+
+// REDUCE_SCALAR pools every face into this DEST row (GAPOOL writes the aligned 4-row block starting here) before
+// the final reduction; the fp32 SUM/AVG tail reads the partial sums from the same block.
+constexpr std::uint32_t REDUCE_SCALAR_SCRATCH_ROW = 4;
+// The fp32 SUM/AVG tail copies the scaler rows into this aligned 8-row DEST block (ELWADD writes rows 8-15).
+constexpr std::uint32_t REDUCE_SCALAR_SCALER_ROW = 8;
+// SFPLOAD/SFPSTORE address bit that selects the odd columns of a 4-row block.
+constexpr std::uint32_t SFPU_ODD_COLS = 2;
 
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
@@ -74,6 +83,78 @@ inline void reduce_row_perform_transpose()
 
     // Restore the operand-driven baseline for the currently configured formats.
     math::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief The fp32-DEST REDUCE_SCALAR SUM/AVG tail: result += sum_k s_k * P_k, all in fp32.
+ *
+ * The face pooling leaves the 16 per-column partial sums P_k in DEST as fp32 datums (block row 0 of the 4-row block
+ * at REDUCE_SCALAR_SCRATCH_ROW). The FPU-only tail moves that row through SrcB and SrcA for the final GAPOOL, and a
+ * Src datum holds 19 bits, so every partial is truncated to TF32 (BF16 for BF16 input) mid-reduction even though
+ * is_fp32_dest_acc_en asked for fp32. With fp32 DEST the partials never cross Src: this reads them from DEST.
+ *
+ * Runs after the FPU has (1) pooled a zeroed SrcA into the result rows, which adds nothing but leaves them defined
+ * as the accumulation so far (zero on a fresh DEST section, or the running sum of a reduce-to-one), and (2) copied
+ * the scaler rows into the block at REDUCE_SCALAR_SCALER_ROW with ELWADD (0 + SrcB, exact), so s_k is the scaler
+ * datum the final GAPOOL would have used for column k (per column, so a non-uniform scaler row keeps its meaning).
+ * Multiplies each partial by its scaler, adds the 16 products with a rotate-and-add butterfly and adds the result
+ * row's column 0, each step one fp32 rounding; no term is split or passes through Src, so nothing underflows that
+ * the true fp32 product would not. Writes column 0 of result row 0 only (the packer reads element [0]).
+ *
+ * Overwrites SFPU LREG0-LREG5 and leaves the lane flags enabled with all lanes on.
+ */
+inline __attribute__((noinline)) void reduce_scalar_fp32_sum()
+{
+    constexpr std::uint32_t RESULT_ROW = 0;
+
+    // Let the face pooling, the zero pool and the scaler copy land in DEST before the SFPU reads them.
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+
+    // Even columns: partial 2c and scaler 2c in lane c; odd columns likewise. The loads fill the SFPMUL/SFPMAD
+    // latency slots.
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /*instr_mod1*/);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW + SFPU_ODD_COLS);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW + SFPU_ODD_COLS);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG0, p_sfpu::LREG4, 0 /*instr_mod1*/); // lane c: s*P of columns 2c, 2c+1
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);              // acc in lane 0
+
+    // Butterfly all-reduce over the 8 lanes of each sub-vector: rotate by 1, 2 and 4, adding each time. On both
+    // architectures the instruction right after a SUBVEC_SHFLROR1 must not read its result (Wormhole additionally
+    // forbids simple-ALU ops such as SFPMOV/SFPAND/SFPIADD/SFPSHFT in that slot; Blackhole would stall), and an
+    // SFPADD result is not readable on the next cycle, hence the SFPNOPs.
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0 /*instr_mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0 /*instr_mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0 /*imm12_math*/, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0 /*instr_mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, 0 /*instr_mod1*/); // lane 0 = acc + sum
+
+    // Store lane 0 of the even columns only, i.e. row 0 column 0 (LTILEID is 2 * lane, zero only in lane 0);
+    // LREG4 is read by the SFPSTORE three instructions after the last SFPADD.
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+    TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LTILEID, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP32, ADDR_MOD_0, RESULT_ROW);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0 /*lreg_c*/, 0 /*lreg_dest*/, sfpi::SFPENCC_MOD1_EI_RI);
+
+    // Let the store land before any later FPU write to this tile.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 }
 
 /**
@@ -218,7 +299,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
     else if constexpr (high_fidelity)
     {
         constexpr int inner_loop_len = to_underlying(math_fidelity);
-        constexpr std::uint32_t dst  = (dim == ReduceDim::REDUCE_SCALAR) ? 4 : 0;
+        constexpr std::uint32_t dst  = (dim == ReduceDim::REDUCE_SCALAR) ? REDUCE_SCALAR_SCRATCH_ROW : 0;
 
         ckernel_template tmp(1, inner_loop_len, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, dst));
         tmp.set_last_inner_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, dst));
@@ -233,7 +314,9 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * REDUCE_ROW SUM/AVG uses MVMUL to multiply each face row by a column-scaler in SrcA, producing the reduced
  * column directly in dest; MAX pools each face row then transposes the result into dest via SrcB.
  * REDUCE_COL pools down rows of faces; REDUCE_SCALAR pools all faces then transposes the partial result
- * into a single column for a final pool.
+ * into a single column for a final pool (with fp32 DEST accumulation and HiFi2 or higher, SUM/AVG instead
+ * finish on the SFPU so the partial sums never cross the 19-bit Src registers; see
+ * @ref reduce_scalar_fp32_sum).
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
@@ -242,6 +325,8 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
  * @param dst_index: Tile index into the destination register.
  * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @note Overwrites SFPU LREG0-LREG5 for fp32-DEST HiFi2+ REDUCE_SCALAR SUM/AVG; re-run any SFPU init that
+ *       preloads an LREG before the next SFPU op (@ref _llk_math_reduce_uninit_ does not restore them).
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
@@ -300,48 +385,68 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
+        // SUM/AVG with fp32 DEST at HiFi2 and up finish on the SFPU (see reduce_scalar_fp32_sum); MAX, LoFi (the
+        // face pooling already consumes only 4 SrcA mantissa bits), 16-bit DEST and int keep the FPU transpose.
+        constexpr bool fp32_sfpu_tail = is_fp32_dest_acc_en && high_fidelity && type != PoolType::MAX && !is_int_fpu_en;
+
         for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
         {
             // Wait and pool
-            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 4>();
+            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, REDUCE_SCALAR_SCRATCH_ROW>();
         }
         // Wait and pool
-        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 4>();
+        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, REDUCE_SCALAR_SCRATCH_ROW>();
 
-        // Need row in dest as column in src A
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-
-        // copy over from dest to B and do transpose
-        // use rows 16 - 31 in src B as scratch
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 4);
-        TTI_GATESRCRST(0b1, 0b1);
-        TTI_TRNSPSRCB;
-        // gate math instructions until src B has been updated
-        TTI_GATESRCRST(0b1, 0b1);
-        // copy over all 16 rows from B to A
-        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
-        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
-        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
-        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
-        // gate math instructions until src A has been updated by MOV instructions
-        TTI_GATESRCRST(0b1, 0b1);
-        // zero out scratch in dest
-        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, 4);
-
-        if constexpr (type == PoolType::MAX)
+        if constexpr (fp32_sfpu_tail)
         {
-            TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+            // Pool a zeroed SrcA into the result rows: adds nothing, but defines them as the accumulation so far.
+            TTI_ZEROSRC(0 /*zero_val*/, 1 /*write_mode*/, 0 /*bank_mask*/, 1 /*src_mask*/);
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            // Copy the scaler rows into DEST exactly (0 + SrcB) and release both source banks.
+            TTI_ELWADD(p_setrwc::CLR_AB, 0 /*dest_accum_en*/, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, REDUCE_SCALAR_SCALER_ROW);
+            reduce_scalar_fp32_sum();
+
+            // Clear the pooled row so the next pooling into this slot starts from zero.
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
         }
         else
         {
-            if constexpr (high_fidelity)
+            // Need row in dest as column in src A
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+
+            // copy over from dest to B and do transpose
+            // use rows 16 - 31 in src B as scratch
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, REDUCE_SCALAR_SCRATCH_ROW);
+            TTI_GATESRCRST(0b1, 0b1);
+            TTI_TRNSPSRCB;
+            // gate math instructions until src B has been updated
+            TTI_GATESRCRST(0b1, 0b1);
+            // copy over all 16 rows from B to A
+            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+            TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+            // gate math instructions until src A has been updated by MOV instructions
+            TTI_GATESRCRST(0b1, 0b1);
+            // zero out scratch in dest
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_SCALAR_SCRATCH_ROW);
+
+            if constexpr (type == PoolType::MAX)
             {
-                for (std::uint32_t i = 0; i < to_underlying(math_fidelity) - 1; i++)
-                {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
-                }
+                TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
-            TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            else
+            {
+                if constexpr (high_fidelity)
+                {
+                    for (std::uint32_t i = 0; i < to_underlying(math_fidelity) - 1; i++)
+                    {
+                        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+                    }
+                }
+                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            }
         }
     }
 }

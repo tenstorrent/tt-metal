@@ -693,10 +693,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
@@ -844,10 +840,6 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
-                    continue;
-                }
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
