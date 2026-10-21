@@ -102,13 +102,19 @@ def _dest_acc_required(formats):
     )
 
 
-def reduce_dest_acc_modes(formats):
-    # Float16 Max and Scalar reduce return NaN with a 32-bit Dest on Wormhole.
-    if formats.input_format == DataFormat.Float16:
-        return [DestAccumulation.No]
+def dest_acc_modes_for_format(formats):
     if _dest_acc_required(formats):
         return [DestAccumulation.Yes]
     return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+def reduce_dest_acc_modes(formats, reduce_dim, pool_type):
+    # Float16 Max and Scalar reduce return NaN with a 32-bit Dest; Sum/Avg Row and Column pass.
+    if formats.input_format == DataFormat.Float16 and (
+        pool_type == ReducePool.Max or reduce_dim == ReduceDimension.Scalar
+    ):
+        return [DestAccumulation.No]
+    return dest_acc_modes_for_format(formats)
 
 
 def _required_dest_acc_mode(formats):
@@ -125,7 +131,8 @@ REDUCE_FORMATS = input_output_formats(
     ]
 ) + [InputOutputFormat(DataFormat.Float16, DataFormat.Float16)]
 
-# Shared with perf_reduce.py; perf narrows formats, tiles and fidelity on top of it.
+# Shared with perf_reduce.py; perf narrows formats, tiles, reduce_dim (Scalar is its own
+# test), fidelity, dest_acc and is_reduce_to_one on top of it.
 REDUCE_SWEEP = dict(
     tile_dimensions=REDUCE_TILE_DIMENSIONS,
     formats=REDUCE_FORMATS,

@@ -3,9 +3,14 @@
 
 """Reduce perf sweep shared by WH/BH (perf_reduce.py) and Quasar (perf_reduce_quasar.py).
 
-Every architecture runs the core matrix; the extensions add what an architecture
-supports on top of it. Keeping both sweeps on one definition is what lets
-compare_test_and_perf.py --cross-arch line the reduce reports up row for row.
+Both sweeps take their formats, reduce dims, pool types and fidelities from here, so
+compare_test_and_perf.py --cross-arch lines the reports up axis by axis. Rows pair
+where both architectures accept the config; the rest stay one-sided:
+
+- Blackhole only: Float16_b Sum/Average at HiFi4 (Quasar caps Float16_b at LoFi)
+  and the Bfp8_b formats.
+- Quasar only: Float32 -> Float16_b with dest_acc=No (WH/BH need a 32-bit Dest for
+  Float32 input), the 1x32 and 16x16 tiles, and MxFp4.
 """
 
 from .format_config import DataFormat, InputOutputFormat
@@ -19,7 +24,6 @@ CORE_FORMATS = [
 ]
 CORE_REDUCE_DIMS = [ReduceDimension.Row, ReduceDimension.Column]
 CORE_POOL_TYPES = [ReducePool.Max, ReducePool.Sum]
-CORE_DEST_ACC = [DestAccumulation.No, DestAccumulation.Yes]
 CORE_TILE_DIMENSIONS = [(32, 32)]
 
 # Formats both architectures add on top of the core.
@@ -32,6 +36,8 @@ WHBH_EXTENSION_FORMATS = SHARED_EXTENSION_FORMATS + [
     InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Bfp8_b),
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
 ]
+# Quasar picks its tile shapes per format in reduce_tile_dimensions (32x16 included).
+WHBH_EXTENSION_TILE_DIMENSIONS = [(32, 16)]
 EXTENSION_POOL_TYPES = [ReducePool.Average]
 
 PERF_POOL_TYPES = CORE_POOL_TYPES + EXTENSION_POOL_TYPES
@@ -39,17 +45,24 @@ PERF_MATH_FIDELITIES = [MathFidelity.LoFi, MathFidelity.HiFi4]
 
 # Scalar reduce runs the column and row passes back to back, so one config is
 # enough to track it; it is a separate test so it is not crossed with the matrix.
+# Both fidelities run on every arch so the scalar rows pair. On Quasar, HiFi4 goes
+# past the functional Float16_b LoFi cap on purpose: it times the extra fidelity phases.
 SCALAR_REPRESENTATIVE = dict(
     formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
     dest_acc=[DestAccumulation.No],
     reduce_dim=[ReduceDimension.Scalar],
     pool_type=[ReducePool.Sum],
-    math_fidelity=[MathFidelity.HiFi4],
+    math_fidelity=PERF_MATH_FIDELITIES,
 )
 
 
 def perf_math_fidelities(pool_type, valid_fidelities=None):
-    """GMPOOL (Max) ignores fidelity; LoFi and HiFi4 bracket the fidelity phase count."""
+    """GMPOOL (Max) ignores fidelity; LoFi and HiFi4 bracket the fidelity phase count.
+
+    ``valid_fidelities`` caps the result to what the format supports (Quasar passes
+    ``get_valid_math_fidelities(formats)``). Wrap calls in a lambda inside ``parametrize``:
+    it treats every parameter name, defaulted or not, as a dependency.
+    """
     if pool_type == ReducePool.Max:
         return [MathFidelity.LoFi]
     return [

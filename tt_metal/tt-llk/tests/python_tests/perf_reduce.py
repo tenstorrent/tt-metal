@@ -11,18 +11,24 @@ from helpers.reduce_perf_matrix import (
     PERF_POOL_TYPES,
     SCALAR_REPRESENTATIVE,
     WHBH_EXTENSION_FORMATS,
+    WHBH_EXTENSION_TILE_DIMENSIONS,
     perf_input_dimensions,
     perf_math_fidelities,
 )
-from test_reduce import REDUCE_SWEEP, _run_reduce_test
+from test_reduce import REDUCE_SWEEP, _run_reduce_test, dest_acc_modes_for_format
 
 PERF_LOOP_FACTOR = 64
-PERF_TILE_DIMENSIONS = [list(td) for td in CORE_TILE_DIMENSIONS] + [[32, 16]]
+CORE_TILE_DIMENSION_LISTS = [list(td) for td in CORE_TILE_DIMENSIONS]
+PERF_TILE_DIMENSIONS = CORE_TILE_DIMENSION_LISTS + [
+    list(td) for td in WHBH_EXTENSION_TILE_DIMENSIONS
+]
 
 REDUCE_PERF_SWEEP = {
     **REDUCE_SWEEP,
     "tile_dimensions": PERF_TILE_DIMENSIONS,
     "formats": CORE_FORMATS + WHBH_EXTENSION_FORMATS,
+    # Perf skips the golden check, so it keeps the Float16 dest_acc=Yes rows the functional sweep drops.
+    "dest_acc": dest_acc_modes_for_format,
     "reduce_dim": CORE_REDUCE_DIMS,
     "pool_type": PERF_POOL_TYPES,
     "math_fidelity": lambda pool_type: perf_math_fidelities(pool_type),
@@ -31,7 +37,7 @@ REDUCE_PERF_SWEEP = {
 
 REDUCE_SCALAR_PERF_SWEEP = {
     **SCALAR_REPRESENTATIVE,
-    "tile_dimensions": [list(td) for td in CORE_TILE_DIMENSIONS],
+    "tile_dimensions": CORE_TILE_DIMENSION_LISTS,
     "is_reduce_to_one": [False],
 }
 

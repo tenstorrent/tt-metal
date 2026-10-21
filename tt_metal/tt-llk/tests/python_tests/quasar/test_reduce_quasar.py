@@ -67,13 +67,15 @@ mathop_mapping = {
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
-REDUCE_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-    ],
-) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+# Float32 joins only through the two pairs the shared perf matrix uses.
+REDUCE_FORMATS = (
+    input_output_formats([DataFormat.Float16_b, DataFormat.Float16])
+    + [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 
 def reduce_dest_sync_modes(*, is_perf=False):
