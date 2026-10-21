@@ -16,10 +16,12 @@ namespace tt::tt_metal::experimental::per_core_allocation {
 // Return a movable view; the caller retains SRAM storage and validates backing bounds.
 // Placements must cover exactly the configured data cores on each selected local device.
 distributed::MeshBuffer create_sram_buffer_view(
-    distributed::MeshDevice& mesh,
-    const distributed::MeshBufferConfig& mesh_config,
-    const distributed::DeviceLocalBufferConfig& local_config,
-    const std::vector<SRAMTensorViewAddress>& placements);
+    distributed::MeshDevice& mesh, const TensorSpec& spec, const std::vector<SRAMTensorViewAddress>& placements);
+
+namespace detail {
+// Check the complete padded write range before constructing a view or initializing a semaphore.
+void validate_sram_address(IDevice& device, uint64_t address, uint64_t bytes);
+}  // namespace detail
 
 // Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
 // each device independently, so the address is only defined once a device is named: there is

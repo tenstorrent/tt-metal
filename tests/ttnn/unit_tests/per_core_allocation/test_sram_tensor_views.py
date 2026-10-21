@@ -8,6 +8,8 @@ import torch
 
 import ttnn
 
+# Views reference caller-owned SRAM; all owning allocations stay explicit in these tests.
+
 
 def _spec(cores, width, per_core=True):
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
@@ -89,7 +91,7 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
     placements = [] if bad == "missing" else [placement]
     if bad == "duplicate":
         placements.append(placement)
-    with expect_error(RuntimeError, "L1 view"):
+    with expect_error(RuntimeError, "SRAM"):
         ttnn.experimental_create_sram_tensor_view(mesh, spec, placements)
 
 
@@ -104,7 +106,8 @@ def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
     assert _address(view, coord, core) == _address(owner, coord, core) + 256
     nested = _view(mesh, _spec([core], 64), view, [(coord, core, 64)])
     assert _address(nested, coord, core) == _address(owner, coord, core) + 320
-    assert ttnn.experimental_l1_tensor_geometry(mesh, coord, nested.spec).aligned_shard_size == 64
+    assert nested.spec.compute_consumed_memory_bytes_per_bank(ttnn.get_l1_alignment(), 1) == 64
+    assert nested.spec.compute_data_cores() == [core]
 
 
 def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
@@ -138,7 +141,7 @@ def test_distinct_per_core_addresses_preserve_backing(per_core_mesh_device, expe
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
     spec = _spec(cores, 256)
-    with expect_error(RuntimeError, "L1 view placements must cover every configured data core"):
+    with expect_error(RuntimeError, "SRAM view placements must cover every configured data core"):
         _view(mesh, spec, owner, [(coord, cores[0], 0)])
     view = _view(mesh, spec, owner, [(coord, cores[0], 0), (coord, cores[1], 256)])
     addresses = [_address(view, coord, core) for core in cores]
@@ -178,13 +181,35 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     torch.testing.assert_close(_read(view), value)
 
 
-def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
+@pytest.fixture
+def selected_mesh(mesh_device):
+    """Keep the selected submesh alive for its tensors and release its command queue on teardown."""
+    mesh_device.quiesce_devices()
+    target = ttnn.MeshCoordinate(0, 1)
+    before = ttnn.experimental_get_l1_occupied_ranges(mesh_device, target)
+    child = mesh_device.create_submesh(ttnn.MeshShape(1, 1), target)
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh_device, target) == before
+    yield child
+    child.quiesce_devices()
+    ttnn.close_mesh_device(child)
+
+
+def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device, selected_mesh):
     """Exercise selected-device allocation, narrow writes and caller-owned backing for native copies."""
-    mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
-    coord = ttnn.MeshCoordinate(0, 1)
+    mesh, core = selected_mesh, ttnn.CoreCoord(0, 0)
+    coord = ttnn.MeshCoordinate(0, 0)
+    other_before = ttnn.experimental_get_l1_occupied_ranges(mesh_device, coord, core)
     baseline = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
-    owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, _spec([core], 768))
+    owner_spec = _spec([core], 768)
+    owner = ttnn.empty(
+        owner_spec.shape,
+        dtype=owner_spec.dtype,
+        layout=owner_spec.layout,
+        device=mesh,
+        memory_config=owner_spec.memory_config,
+    )
     assert owner.device_coords() == [coord]
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh_device, coord, core) == other_before
     address = _address(owner, coord, core)
     mapper = ttnn.create_mesh_mapper(
         mesh, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, 1), coord)
@@ -200,24 +225,16 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     occupied = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
     spec = _spec([core], 17)
     view = _view(mesh, spec, owner, [(coord, core, 256)])
-    geometry = ttnn.experimental_l1_tensor_geometry(mesh, coord, spec)
+    footprint = spec.compute_consumed_memory_bytes_per_bank(ttnn.get_l1_alignment(), 1)
     assert view.spec == spec
     upload(torch.full((1, 17), 7, dtype=torch.uint8), view)
-    # Hand the physical command queue from the parent to the selected-device mesh.
-    mesh.quiesce_devices()
-    submesh = mesh.create_submesh(ttnn.MeshShape(1, 1), coord)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-    try:
-        sem = ttnn.experimental_create_global_semaphore_at_address(submesh, grid, 37, ttnn.BufferType.L1, address + 512)
-        assert ttnn.get_global_semaphore_address(sem) == address + 512
-    finally:
-        # Synchronizing alone leaves the child queue marked in use during parent teardown.
-        submesh.quiesce_devices()
-        ttnn.close_mesh_device(submesh)
+    sem = ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1, address + 512)
+    assert ttnn.get_global_semaphore_address(sem) == address + 512
     data = _read(owner).reshape(-1)
     assert torch.all(data[:256] == 91)
     assert torch.all(data[256:273] == 7)
-    assert torch.all(data[256 + geometry.aligned_shard_size : 512] == 91)
+    assert torch.all(data[256 + footprint : 512] == 91)
     assert data[512:516].tolist() == [37, 0, 0, 0]
     assert torch.all(data[528:] == 91)
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
@@ -232,11 +249,34 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     gc.collect()
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
-    owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, _spec([core], 768))
+    owner = ttnn.empty(
+        owner_spec.shape,
+        dtype=owner_spec.dtype,
+        layout=owner_spec.layout,
+        device=mesh,
+        memory_config=owner_spec.memory_config,
+    )
     view = _view(mesh, _spec([core], 64), owner, [(coord, core, 0)])
+    assert _address(owner, coord, core) == address
+    # Reacquisition must not zero or upload over the bytes written by the previous owner.
+    torch.testing.assert_close(_read(owner).reshape(-1), data)
     del owner
     gc.collect()
     # Raw views deliberately retain nothing, and destroying one must not free the address again.
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
     ttnn.deallocate(view)
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
+
+
+def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device, expect_error):
+    """Reject reserved, unaligned and overflowing semaphore writes without touching backing bytes."""
+    mesh, coord, core = per_core_mesh_device, ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
+    owner = _owner(mesh, core)
+    address = _address(owner, coord, core)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    for invalid, message in ((0, "below allocatable SRAM"), (address + 1, "must be aligned"), (2**32, "overflows")):
+        with expect_error(RuntimeError, message):
+            ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1, invalid)
+    with expect_error(RuntimeError, "ordinary SRAM"):
+        ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1_SMALL, address)
+    assert torch.all(_read(owner) == 0)

@@ -20,6 +20,10 @@
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
+namespace tt::tt_metal {
+class TensorSpec;
+}
+
 namespace tt::tt_metal::distributed {
 
 // Specifies how a buffer is laid out across Memory Banks within a single device.
@@ -83,10 +87,7 @@ struct MeshCoreCoord;
 namespace tt::tt_metal::experimental::per_core_allocation {
 using SRAMTensorViewAddress = std::pair<distributed::MeshCoreCoord, DeviceAddr>;
 distributed::MeshBuffer create_sram_buffer_view(
-    distributed::MeshDevice&,
-    const distributed::MeshBufferConfig&,
-    const distributed::DeviceLocalBufferConfig&,
-    const std::vector<SRAMTensorViewAddress>&);
+    distributed::MeshDevice&, const TensorSpec&, const std::vector<SRAMTensorViewAddress>&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -206,10 +207,7 @@ private:
     MeshBufferState state_;
 
     friend MeshBuffer experimental::per_core_allocation::create_sram_buffer_view(
-        MeshDevice&,
-        const MeshBufferConfig&,
-        const DeviceLocalBufferConfig&,
-        const std::vector<experimental::per_core_allocation::SRAMTensorViewAddress>&);
+        MeshDevice&, const TensorSpec&, const std::vector<experimental::per_core_allocation::SRAMTensorViewAddress>&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,

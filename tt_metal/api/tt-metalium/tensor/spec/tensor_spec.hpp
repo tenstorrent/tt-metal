@@ -102,6 +102,8 @@ public:
 
     Strides compute_strides() const;
     BufferShardingArgs compute_buffer_sharding_args() const;
+    // Return only the cores holding tensor data, without allocating a buffer.
+    std::vector<CoreCoord> compute_data_cores() const;
     size_t compute_packed_buffer_size_bytes() const;
     size_t compute_page_size_bytes() const;
 
