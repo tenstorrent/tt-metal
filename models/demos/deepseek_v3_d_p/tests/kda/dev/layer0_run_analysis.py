@@ -12,8 +12,8 @@ same definitions (``tiers``):
 * per-token NRMSE with the golden's token floor (``golden_floor`` over every token of the golden), so runs of any
   length share one floor;
 * tier 0: output NRMSE over the run, pooled state NRMSE after the last call; tier 1: p50/p95/p99/worst of output per
-  token and per 1,024-token window, final state per head, pooled state per call; tier 2: output gain, final state
-  gain per head, state per head per call.
+  token and per 1,024-token window, final state per head, pooled state per call; tier 2: output gain, final pooled
+  state gain and per-head gain, state per head per call.
 
 Run directory layout::
 
@@ -165,6 +165,7 @@ def analyze(run: dict) -> dict:
             "window_nrmse": _nrmse(window_sums[:, 0], window_sums[:, 1]).tolist(),
             "state_tokens": run["state_tokens"],
             "state_pooled": _nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1)).tolist(),
+            "state_pooled_gain": (s[..., 2].sum(-1) / s[..., 1].sum(-1)).tolist(),
             "state_head_nrmse": _nrmse(s[..., 0], s[..., 1]).tolist(),
         },
     }
@@ -186,8 +187,9 @@ def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -
 
     Tier 0: output NRMSE over the run; pooled state NRMSE after the last call. Tier 1: output per token (own norm,
     floored at ``floor``) and per 1,024-token window; state per head at the final snapshot and pooled per call-end
-    snapshot. Tier 2: output gain; state gain per head at the final snapshot (head 6 and the head furthest from 1);
-    state per head per snapshot. Positions are token indices (window start, snapshot end) or head ids.
+    snapshot. Tier 2: output gain; pooled state gain after the last call, and each head's distance from gain 1 there
+    (with the worst head's signed gain); state per head per snapshot. Positions are token indices (window start,
+    snapshot end) or head ids.
     """
     whole = t.sum(0)
     window_starts = np.arange(0, len(t), WINDOW)
@@ -196,8 +198,9 @@ def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -
     head = _nrmse(s[..., 0], s[..., 1])  # [snapshots, heads]
     pooled = _nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1))
     final_gain = s[-1, :, 2] / s[-1, :, 1]
-    furthest = int(np.abs(final_gain - 1).argmax())
     heads = list(range(s.shape[1]))
+    head_gain_final = _tail(np.abs(final_gain - 1), heads)
+    head_gain_final["worst_gain"] = float(final_gain[head_gain_final["worst_at"]])
     return {
         "tier0": {"output_nrmse": float(_nrmse(whole[0], whole[1])), "state_final_nrmse": float(pooled[-1])},
         "tier1": {
@@ -208,8 +211,8 @@ def tiers(t: np.ndarray, s: np.ndarray, state_tokens: list[int], floor: float) -
         },
         "tier2": {
             "output_gain": float(whole[2] / whole[1]),
-            "state_gain_h6": float(final_gain[6]),
-            "state_gain_furthest": {"gain": float(final_gain[furthest]), "head": furthest},
+            "state_gain_final": float(s[-1, :, 2].sum() / s[-1, :, 1].sum()),
+            "state_head_gain_final": head_gain_final,
             "state_head_window": _tail(
                 head.ravel(), [[state_tokens[i], h] for i in range(len(state_tokens)) for h in heads]
             ),
@@ -252,11 +255,8 @@ REPORT_ROWS = {
     ],
     "tier 2": [
         ("output gain", lambda a: f"{a['tiers']['tier2']['output_gain']:.5f}"),
-        ("final state gain h6", lambda a: f"{a['tiers']['tier2']['state_gain_h6']:.5f}"),
-        (
-            "final state gain furthest from 1",
-            lambda a: "{gain:.5f} @ head {head}".format(**a["tiers"]["tier2"]["state_gain_furthest"]),
-        ),
+        ("final state gain", lambda a: f"{a['tiers']['tier2']['state_gain_final']:.5f}"),
+        *_tail_rows("final state per head distance from gain 1", "state_head_gain_final", "tier2", "head"),
         *_tail_rows("state per head per call", "state_head_window", "tier2", "[token, head]"),
     ],
 }
