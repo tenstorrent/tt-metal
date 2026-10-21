@@ -506,8 +506,7 @@ void CommandList::Impl::verify_no_dram_overlap() const {
             end,
             alloc_begin,
             alloc_end);
-        // The bound tensor's allocation started at this address, so while it is allocated it is the match.
-        if (region.buffer_id.has_value() && allocator->is_buffer_allocated(*region.buffer_id)) {
+        if (region.buffer_id.has_value() && allocator->is_buffer_allocated_at(*region.buffer_id, region.address)) {
             continue;
         }
         log_warning(
@@ -863,7 +862,8 @@ std::shared_ptr<MeshBuffer> CommandListBuilderImpl::allocate_and_commit(
     const BufferType buffer_type = trace_region_size == 0 ? BufferType::DRAM : BufferType::TRACE;
     const std::optional<bool> bottom_up = trace_region_size == 0 ? std::optional<bool>{false} : std::nullopt;
 
-    // Command lists are counted against the trace region the same way traces are, however the two never coexist.
+    // Command lists are counted against the trace region the same way traces are. MeshDevice rejects a trace capture
+    // while a command list exists, and a command-list builder while a trace exists.
     const auto current_size = mesh_device.get_trace_buffers_size();
     TT_FATAL(
         trace_region_size == 0 || current_size + padded_size <= trace_region_size,

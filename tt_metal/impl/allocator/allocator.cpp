@@ -433,10 +433,10 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_dram_allocatio
     return dram_manager_->get_allocated_ranges();
 }
 
-bool AllocatorImpl::is_buffer_allocated(size_t unique_id) const {
+bool AllocatorImpl::is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [unique_id](const Buffer* buffer) {
-        return buffer->unique_id() == unique_id;
+    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [&](const Buffer* buffer) {
+        return buffer->unique_id() == unique_id && buffer->address() == address;
     });
 }
 
