@@ -43,6 +43,13 @@ def structure_steps() -> list[dict]:
     return torch.load(f"{golden_dir()}/ss.pt", weights_only=False)["steps"]
 
 
+def ss_decoder_call() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Structure decoder: latent z_s [1, 8, 16, 16, 16], logits [1, 1, 64, 64, 64], and the pipeline's coords [N, 4]."""
+    ss = torch.load(f"{golden_dir()}/ss.pt", weights_only=False)
+    call = ss["decoder"][0]
+    return call["args"][0], call["out"], ss["coords"]
+
+
 @lru_cache(maxsize=None)
 def conditions() -> dict[str, torch.Tensor]:
     return torch.load(f"{golden_dir()}/cond.pt", weights_only=False)
