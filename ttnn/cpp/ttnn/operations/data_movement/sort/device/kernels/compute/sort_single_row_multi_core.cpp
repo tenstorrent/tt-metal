@@ -177,13 +177,13 @@ void kernel_main() {
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
-                                ckernel::topk_merge<
+                                ckernel::topk_merge<32,
                                     /*idir=*/false,
                                     stable,
                                     DST_ACCUM_MODE,
                                     /*fused=*/false,
                                     /*rank_stamped=*/false,
-                                    tie_order>(/*idst=*/0, m_iter, /*k=*/32);
+                                    tie_order>(/*idst=*/0, m_iter);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order

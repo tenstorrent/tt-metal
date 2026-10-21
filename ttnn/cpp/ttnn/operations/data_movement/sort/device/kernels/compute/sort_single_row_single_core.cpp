@@ -125,8 +125,8 @@ void merge_pass_keys(
             ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
                 0, (int)dir, /*i_end_phase=*/5);
         } else {
-            ckernel::topk_merge</*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
-                0, stage - 1, /*k=*/64);
+            ckernel::topk_merge<64, /*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                0, stage - 1);
             if (dir) {
                 // The merge leaves the smaller keys in DEST 0 and the larger in DEST 1.
                 low = 1;
@@ -437,13 +437,13 @@ void kernel_main() {
                                 tie_order>(
                                 /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge<
+                            ckernel::topk_merge<64,
                                 /*idir=*/false,
                                 stable,
                                 DST_ACCUM_MODE,
                                 /*fused=*/false,
                                 /*rank_stamped=*/false,
-                                tie_order>(/*idst=*/0, m_iter, /*k=*/64);
+                                tie_order>(/*idst=*/0, m_iter);
 
                             if (dir) {
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
