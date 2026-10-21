@@ -51,7 +51,7 @@ def check(rec, path, label, metric, expected, margin):
     )
     if value < lo or value > hi:
         faster = (value > hi) == higher_is_better
-        hint = "; faster than the baseline, update perf_baselines.json in this change" if faster else ""
+        hint = "; faster than the baseline, update the configured baseline in this change" if faster else ""
         print(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}", file=sys.stderr)
         return False
     print(f"{name} GATE PASS")
