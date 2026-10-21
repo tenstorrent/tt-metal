@@ -92,8 +92,8 @@ constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Unsupported on tiles other than 32x32 (asserted in @ref _llk_unpack_A_init_): COL broadcast
- *       with acc_to_dest or unpack to dest, ROW broadcast with acc_to_dest, and transpose with unpack
- *       to dest.
+ *       with acc_to_dest or unpack to dest, and ROW broadcast with acc_to_dest. Transpose of faces
+ *       works with unpack to dest on every tile shape.
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -311,8 +311,11 @@ inline void _llk_unpack_A_mop_config_(
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Asserted unsupported on tiles other than 32x32 (tt-metal#47328): COL broadcast with
- *       acc_to_dest or unpack to dest, ROW broadcast with acc_to_dest, and transpose (of faces or
- *       within face) with unpack to dest.
+ *       acc_to_dest or unpack to dest, and ROW broadcast with acc_to_dest.
+ * @note Asserted unsupported on every tile shape, 32x32 included (tt-llk#1702): within-face
+ *       transpose with unpack to dest. Use transpose_of_faces here and transpose within faces on
+ *       the math thread (llk_math_transpose_dest). Transpose of faces alone works with unpack to
+ *       dest on every tile shape.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -345,11 +348,12 @@ inline void _llk_unpack_A_init_(
     // static_assert in _llk_unpack_A_mop_config_.)
     LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == MAX_NUM_FACES, "Unary Broadcast Row with acc_to_dest: 32x32 only");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
-    // Transpose with unpack to dest (32-bit) has no test on tiles other than 32x32 (tt-metal#47328).
+    // The unpacker's within-face transpose (haloize mode) gives wrong results with unpack to dest
+    // on every tile shape, 32x32 included (tenstorrent/tt-llk#1702 item 15). The compute API
+    // transposes within faces on the math thread instead (transpose_dest).
     LLK_ASSERT(
-        (transpose_of_faces == 0 && within_face_16x16_transpose == 0) || num_faces == MAX_NUM_FACES ||
-            !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format),
-        "Transpose with unpack to dest: 32x32 only");
+        within_face_16x16_transpose == 0 || !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format),
+        "Within-face transpose is not supported with unpack to dest; use transpose_dest on the math thread (tt-llk#1702)");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
