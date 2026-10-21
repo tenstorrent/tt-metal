@@ -38,7 +38,7 @@ traced), prompts prefilled one after another.
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31 800 (chunked prefill) | 9.8 | 60 | 79 | 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
 | 32  | Galaxy 8x4 (Blackhole) | 65 493 | 36 200 (chunked prefill) | 10.1 | 33 | 323 | 1811 tok/s prefill; decode step 99.0 ms; one prompt per row prefilled (8 of 32 slots), the other slots decode at the same position over an unfilled cache (same work, output not checked) |
 | 8   | Galaxy 8x4 (Blackhole) | 1 047 526 | 458 000 (chunked prefill) | 4.6 | 33 | 37 | 2288 tok/s prefill; decode step 219 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
-| 32  | Galaxy 8x4 (Blackhole) | 1 047 526 (user-partitioned cache) | 495 000 (chunked prefill, per user) | pending | 33 | pending | 2118 tok/s prefill per user; every slot prefilled with its own 1 M prompt; decode figures pending the rerun |
+| 32  | Galaxy 8x4 (Blackhole) | 1 047 526 (user-partitioned cache) | 462 000-495 000 (chunked prefill, per user) | 6.2 | 33 | 199 | 2118-2269 tok/s prefill per user, every slot prefilled with its own 1 M prompt; decode step 160.8 ms; the column-3 users' output diverges from the other columns' (under investigation; needle at depth 0.5 not retrieved by any slot, as in the single-user run) |
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1 201 (eager tower + prefill) | 12.5 | - | 25 | decode step 80 ms; 45 layers bfp4 experts |
 
 Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no

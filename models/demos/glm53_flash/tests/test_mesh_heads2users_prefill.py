@@ -312,7 +312,9 @@ def test_dsa_attention_heads2users_long(mesh_device, monkeypatch, n_pos):
     start0 = n_pos - L
     attn, mesh = _attention(mesh_device, raw, cfg)
     ref_cache, part = _caches(mesh_device, cfg, mesh, n_pos + 64 * mesh.rows)
-    users = [0, 1] if mesh.cols > 1 else [0]
+    # GLM53_H2U_USERS: "all" = every column's user (the 1 M x 32-user run's column-3 divergence), else "0,1"
+    _us = os.environ.get("GLM53_H2U_USERS", "0,1")
+    users = list(range(mesh.cols)) if _us == "all" else [u for u in map(int, _us.split(",")) if u < mesh.cols]
     if start0:
         mu, sigma = _x_stats(raw, cfg)
         filled, ci = 0, 0
