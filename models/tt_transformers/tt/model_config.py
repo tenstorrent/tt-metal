@@ -3063,6 +3063,9 @@ class ModelArgs:
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
+                # 8960 and 11008 share 8 cores with dim 1536 / 2048 -> 8-core decode MLP; pad to 48 / 32.
+                "Qwen2.5-3B": 32,
+                "Qwen2.5-1.5B": 48,
                 "QwQ-32B": 16,
                 # 27392/8 = 3424 = 107 tiles (prime) -> find_grid_k_n degenerates to a
                 # single core (1x1 norm grid overflows L1; 1-core MLP matmuls). Pad to
@@ -3428,7 +3431,7 @@ class ModelArgs:
             # slow but correct -- and the log says why. (#45400 review, finding R3)
             logger.warning(f"Could not compute the weight-cache build variant ({e!r}); warm-cache skip disabled.")
             return {"unverifiable": True, "error": f"{type(e).__name__}: {e}"}
-        return {
+        variant = {
             "prefetcher": bool(self.prefetcher),
             "precision": precision,
             # attention.py caches wqkv_bias_decode_sharded_{batch_size}, so batch is in a filename.
@@ -3441,6 +3444,10 @@ class ModelArgs:
             # certifying the other. (#45400 review, finding R2)
             "hf_rope": bool(getattr(self, "use_hf_rope", False)),
         }
+        # mlp.py names the MLP weights .hidden_dim_{hidden_dim} once hidden_dim is padded.
+        if getattr(self, "hidden_dim", None) != getattr(self, "unpadded_hidden_dim", None):
+            variant["hidden_dim"] = int(self.hidden_dim)
+        return variant
 
     def _weight_cache_identity(self, components=None):
         """Marker identity for this build. `components` names the parts being constructed, so a
