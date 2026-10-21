@@ -59,6 +59,7 @@
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -1344,6 +1345,10 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     if (rank == 0) {
         const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(file->path());
         ASSERT_EQ(desc.ranks.size(), static_cast<size_t>(world_size));
+        // Ranks sharing a host each see their own chip as chip 0 (TT_VISIBLE_DEVICES), so the file
+        // must carry the physical PCIe device number. Otherwise every rank on a host would name the
+        // same device.
+        std::map<std::pair<std::string, uint32_t>, int> owner_of_device;
         for (int r = 0; r < world_size; ++r) {
             const auto& rd = desc.ranks[r];
             EXPECT_EQ(rd.rank, r);
@@ -1364,6 +1369,11 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
                 EXPECT_NE(c.stage_gate_base_addr, 0u);
                 EXPECT_TRUE(c.metadata_core.has_value());
                 EXPECT_NE(c.sender_fabric_node_id, c.fabric_node_id);
+                const auto [it, inserted] =
+                    owner_of_device.try_emplace({rd.host_name, c.service_core.pcie_device_id}, r);
+                EXPECT_TRUE(inserted || it->second == r)
+                    << "ranks " << it->second << " and " << r << " both name PCIe device "
+                    << c.service_core.pcie_device_id << " on host " << rd.host_name;
             }
         }
     }
