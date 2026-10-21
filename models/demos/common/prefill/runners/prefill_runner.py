@@ -779,7 +779,6 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
 
 
 def main() -> None:
-    global _first_token_queue
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
 
@@ -865,6 +864,7 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+    global _first_token_queue
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
@@ -1006,7 +1006,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         sink = LayerCompletionRingWriter(producer, is_shutdown=lambda: _shutdown)
         runtime.set_layer_completion_sink(sink)
         source_desc = "host on_layer_complete callback"
-    if FIRST_TOKEN_RECORD and is_last_rank:
+    if FIRST_TOKEN_RECORD and runtime.config.is_last_rank:
         _first_token_queue = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
         # Loaded now, so the first request does not wait on the checkpoint read.
         ADAPTER.warm_host_first_token()
