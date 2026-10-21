@@ -319,6 +319,99 @@ inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_
     tmp.program();
 }
 
+// Contiguous narrow rows of whole 16-byte units: one two-face PACR per tile row as its own stream, the next tile or row rewrites the surplus
+// datums, and the last tile of a pass is a split row so nothing lands past the output. ADDR_MOD_3 holds no increments, x_end is FACE_C_DIM - 1 on entry.
+template <std::uint32_t block_ct_dim, std::uint32_t row_num_datums>
+inline void _llk_pack_untilize_overlap_row_mop_config_(const std::uint32_t face_r_dim)
+{
+    static_assert((row_num_datums > FACE_C_DIM) && (row_num_datums < TILE_C_DIM), "an overlapped row is wider than a face and narrower than a tile");
+    constexpr std::uint32_t seq_start = ckernel::packer::replay_buf_offset;
+
+    load_replay_buf(
+        seq_start,
+        4,
+        []
+        {
+            TTI_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_STRIDED_MODE,
+                ADDR_MOD_3,
+                p_pacr::ADDR_CNT_CTXT_0,
+                0,
+                p_pacr::SINGLE_INTF_ACTIVE,
+                0,
+                0,
+                p_pacr::NO_CTXT_CTRL,
+                0,
+                0);
+            TTI_SETADCXX(p_setadc::PAC, row_num_datums - FACE_C_DIM - 1, 0x0);
+            TTI_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_STRIDED_MODE,
+                ADDR_MOD_2,
+                p_pacr::ADDR_CNT_CTXT_0,
+                0,
+                0b0010,
+                0,
+                0,
+                p_pacr::NO_CTXT_CTRL,
+                0,
+                1);
+            TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        });
+
+    auto both_faces = [](const std::uint32_t addr_mod)
+    {
+        return TT_OP_PACR(
+            p_pacr::CFG_CTXT_0,
+            p_pacr::NO_ROW_PAD_ZERO,
+            p_pacr::DST_ACCESS_STRIDED_MODE,
+            addr_mod,
+            p_pacr::ADDR_CNT_CTXT_0,
+            0,
+            p_pacr::TWO_INTFS_ACTIVE,
+            0,
+            0,
+            p_pacr::NO_CTXT_CTRL,
+            0,
+            1);
+    };
+    ckernel::ckernel_template tmp(face_r_dim, block_ct_dim, both_faces(ADDR_MOD_0));
+    tmp.set_last_inner_loop_instr(both_faces(ADDR_MOD_1));
+    tmp.set_last_outer_loop_instr(lltt::replay_insn(seq_start, 4));
+    tmp.program();
+}
+
+// ADDR_MOD_0 steps the tile in Dest and in L1 (channel 1 Z), 1 ends a row, 2 ends the pass at zero counters.
+inline void _llk_pack_untilize_configure_overlap_addrmod_()
+{
+    addr_mod_pack_t {
+        .z_src = {.incr = 1, .clr = 0},
+        .z_dst = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_0);
+
+    addr_mod_pack_t {
+        .y_src = {.incr = 1, .clr = 0},
+        .y_dst = {.incr = 1, .clr = 0},
+        .z_src = {.incr = 0, .clr = 1},
+        .z_dst = {.incr = 0, .clr = 1},
+    }
+        .set(ADDR_MOD_1);
+
+    addr_mod_pack_t {
+        .y_src = {.incr = 0, .clr = 1},
+        .y_dst = {.incr = 0, .clr = 1},
+        .z_src = {.incr = 0, .clr = 1},
+        .z_dst = {.incr = 0, .clr = 1},
+    }
+        .set(ADDR_MOD_2);
+
+    addr_mod_pack_t {}.set(ADDR_MOD_3);
+}
+
 // Rows of a 32-bit read into a 16-bit output in blocks of three keep the counter form: a W step (INCADCZW) before every
 // PACR and a CFGSHIFTMASK row step. The address-mode form pays a start-up cost there that pacing does not remove.
 inline void _llk_pack_untilize_counter_form_addrmod_()
@@ -476,10 +569,22 @@ inline void _llk_pack_untilize_init_sized_(
 
     _llk_pack_untilize_configure_addrmod_();
 
+    const std::uint32_t dst_row_bytes = (dst_datum_size != 0) ? dst_datum_size * row_num_datums : SCALE_DATUM_SIZE(pack_dst_format, row_num_datums);
+    const bool overlap_row            = split_row && l1_rows_contiguous && !dst_8bit && (dst_row_bytes % 16 == 0) && !l1_row_step_by_cfg;
+
     if constexpr (split_row)
     {
-        addr_mod_pack_t {}.set(ADDR_MOD_3);
-        _llk_pack_untilize_split_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim, row_ends_stream, l1_row_step_by_cfg);
+        if (overlap_row)
+        {
+            _llk_pack_untilize_configure_overlap_addrmod_();
+            _llk_pack_untilize_overlap_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim);
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(dst_row_bytes);
+        }
+        else
+        {
+            addr_mod_pack_t {}.set(ADDR_MOD_3);
+            _llk_pack_untilize_split_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim, row_ends_stream, l1_row_step_by_cfg);
+        }
     }
     else if constexpr (may_pace)
     {
@@ -635,10 +740,22 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_configure_addrmod_();
 
+    const std::uint32_t dst_row_bytes = SCALE_DATUM_SIZE(pack_dst_format, row_num_datums);
+    const bool overlap_row            = split_row && l1_rows_contiguous && !IS_8BIT_FORMAT(pack_dst_format) && (dst_row_bytes % 16 == 0) && !l1_row_step_by_cfg;
+
     if constexpr (split_row)
     {
-        addr_mod_pack_t {}.set(ADDR_MOD_3);
-        _llk_pack_untilize_split_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim, row_ends_stream, l1_row_step_by_cfg);
+        if (overlap_row)
+        {
+            _llk_pack_untilize_configure_overlap_addrmod_();
+            _llk_pack_untilize_overlap_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim);
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(dst_row_bytes);
+        }
+        else
+        {
+            addr_mod_pack_t {}.set(ADDR_MOD_3);
+            _llk_pack_untilize_split_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim, row_ends_stream, l1_row_step_by_cfg);
+        }
     }
     else if constexpr (block_ct_dim == 3)
     {

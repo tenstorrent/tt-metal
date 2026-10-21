@@ -108,9 +108,10 @@ def _row_block_ct_dim(input_dimensions):
     ]
 
 
-# narrow_row: every tile row keeps its first row_datums datums; widths 5 and 21 give byte sizes mostly not a multiple of 16.
+# narrow_row: every tile row keeps its first row_datums datums; widths 5 and 21 give byte sizes mostly not a multiple of 16, and 20, 24, 28 are
+# whole 16-byte units at some data sizes (the packer then steps each tile's row by its own width).
 _NARROW_DIMENSIONS = [[32, 32], [64, 32], [32, 64], [32, 128]]
-_NARROW_ROW_DATUMS = [5, 8, 16, 21, 24]
+_NARROW_ROW_DATUMS = [5, 8, 16, 20, 21, 24, 28]
 
 
 @skip_for_wormhole
