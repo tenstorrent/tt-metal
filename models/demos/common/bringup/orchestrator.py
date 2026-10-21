@@ -1779,6 +1779,8 @@ class Orchestrator:
     def run(self, until: str | None = None, only: str | None = None) -> int:
         stop_at = set(self.led.downstream(until)[1:]) if until else set()
         while True:
+            if self.place_fixes():  # F77 / F143: queued fixes are placed first, so `--only FIX.<n>` can name one
+                continue
             state = self.led.state()
             runnable = [
                 t for t in self.led.runnable() if state.get(t, {}).get("status") != "STOPPED" and t not in stop_at
@@ -1805,8 +1807,6 @@ class Orchestrator:
             if self.pause_file.exists():
                 self.echo(f"paused before {runnable[0]} ({self.pause_file}); `resume` continues")
                 return PAUSED
-            if self.place_fixes():  # F77: the overseer's queued fixes run before anything else
-                continue
             stopped_fix = [
                 t
                 for t, x in self.led.tasks().items()
