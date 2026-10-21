@@ -15,7 +15,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 
@@ -53,7 +53,7 @@ def test_matmul_unpack_tilize(
     )
 
     generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = tilize(
+    golden_tensor = tilize_block(
         generate_golden(
             src_A,
             src_B,
@@ -63,8 +63,9 @@ def test_matmul_unpack_tilize(
             input_B_dimensions=input_dimensions,
             input_A_format=formats.input_format,
             input_B_format=formats.input_format,
-        )
-    )
+        ),
+        input_dimensions,
+    ).flatten()
     golden_tensor = golden_tensor.to(torch_format)
     num_blocks = 32
     golden_tensor = golden_tensor.repeat(num_blocks)

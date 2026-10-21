@@ -48,7 +48,7 @@ from helpers.test_variant_parameters import (
     RESPECT_TRIGGER,
     USE_RUNTIME,
 )
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import tolerances
 
 # 32x32 bf16 tile.
@@ -136,17 +136,7 @@ def _run_reduce_block_max(
     )
 
     # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
-    src_A = torch.cat(
-        [
-            tilize(
-                src_A_rowmajor.reshape(TILE_DIM, block_ct_dim * TILE_DIM)[
-                    :, t * TILE_DIM : (t + 1) * TILE_DIM
-                ].reshape(-1),
-                formats.input_format,
-            )
-            for t in range(block_ct_dim)
-        ]
-    )
+    src_A = tilize_block(src_A_rowmajor, dimensions, formats.input_format).flatten()
     # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
     src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
 
@@ -185,9 +175,11 @@ def _run_reduce_block_max(
     golden_rowmajor = golden_flat.reshape(TILE_DIM, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
-    res = untilize(
-        torch.tensor(res_from_L1, dtype=torch.float32), formats.output_format
-    ).reshape(TILE_DIM, TILE_DIM)
+    res = untilize_block(
+        torch.tensor(res_from_L1, dtype=torch.float32),
+        formats.output_format,
+        dimensions=[TILE_DIM, TILE_DIM],
+    )
     tol = tolerances[formats.output_format]
 
     # Only column [0] of each physical row is defined (the row-max); the packer's
