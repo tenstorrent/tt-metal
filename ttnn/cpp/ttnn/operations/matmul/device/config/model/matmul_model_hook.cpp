@@ -96,6 +96,7 @@ struct Call {
     MatmulDesc desc;
     MatmulProblem problem;
     HardwareDesc hw;
+    Arch arch = Arch::kBlackholeP150;
     std::string key;
 };
 
@@ -217,6 +218,12 @@ std::optional<Call> describe(
 
     // Per-device grid and L1 (a mesh tensor's shapes are its per-device shapes)
     const auto grid = device->compute_with_storage_grid_size();
+    const auto arch = blackhole_arch_for_grid(grid.x, grid.y);
+    if (!arch) {
+        why = fmt::format("no model device entry for a {}x{} grid", grid.x, grid.y);
+        return std::nullopt;
+    }
+    call.arch = *arch;
     call.hw = HardwareDesc::blackhole(grid.x, grid.y, 0);
     call.hw.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
@@ -378,7 +385,7 @@ std::optional<MatmulProgramConfig> choose(
         // The reuse factory doesn't fuse a row bias (matmul post-processes it for an explicit Reuse config)
         std::erase_if(candidates, [](const Candidate& c) { return c.family == Family::kReuse; });
     }
-    const std::vector<double> predicted = m->predict_ns(call->problem, candidates);
+    const std::vector<double> predicted = m->predict_ns(call->problem, candidates, call->arch);
     Pick pick;
     pick.description = candidates.empty() ? "no candidate fits L1" : "the model can't score any candidate";
     std::size_t rejected = 0;

@@ -51,5 +51,42 @@ TEST(MatmulModelFeatures, Smoke) {
     EXPECT_EQ(compute_model_input(prob, c, dev).status, ScoreStatus::kInvalidProblem);
 }
 
+TEST(MatmulModelFeatures, GalaxyGrid) {
+    EXPECT_EQ(blackhole_arch_for_grid(11, 10), Arch::kBlackholeP150);
+    EXPECT_EQ(blackhole_arch_for_grid(8, 8), Arch::kBlackholeP150);
+    EXPECT_EQ(blackhole_arch_for_grid(12, 10), Arch::kBlackholeGalaxy);
+    EXPECT_FALSE(blackhole_arch_for_grid(13, 10).has_value());
+    EXPECT_FALSE(blackhole_arch_for_grid(11, 11).has_value());
+
+    const auto& p150 = device_params(Arch::kBlackholeP150);
+    const auto& glx = device_params(Arch::kBlackholeGalaxy);
+    EXPECT_EQ(glx.worker_grid_x, 12u);
+    EXPECT_EQ(glx.worker_cols[11], 16u);
+    for (std::size_t i = 0; i < p150.worker_grid_x; ++i) {
+        EXPECT_EQ(glx.worker_cols[i], p150.worker_cols[i]);
+    }
+
+    MatmulProblem prob;
+    prob.M = 1024;
+    prob.K = 4096;
+    prob.N = 4096;
+    prob.fidelity = Fidelity::kHiFi2;
+    prob.packer_l1_acc = true;
+    MatmulCandidate c;
+    c.family = Family::k2D;
+    c.grid_x = 12;
+    c.grid_y = 10;
+    c.in0_block_w = 16;
+    c.out_subblock_h = 2;
+    c.out_subblock_w = 4;
+    c.per_core_M = 4;
+    c.per_core_N = 12;
+    c.fuse_batch = true;
+    const ModelInput in = compute_model_input(prob, c, glx);
+    EXPECT_EQ(in.status, ScoreStatus::kOk);
+    EXPECT_TRUE(std::isfinite(in.base_ns));
+    EXPECT_EQ(compute_model_input(prob, c, p150).status, ScoreStatus::kGridExceedsDevice);
+}
+
 }  // namespace
 }  // namespace ttnn::operations::matmul::model

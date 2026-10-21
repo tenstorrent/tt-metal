@@ -38,7 +38,8 @@ public:
     const std::string& sha256() const { return storage_.source_sha256(); }
 
     // Predicted device time (ns) of each candidate; NaN where the model can't score it (status != ok).
-    std::vector<double> predict_ns(const MatmulProblem& problem, std::span<const Candidate> candidates) const;
+    std::vector<double> predict_ns(
+        const MatmulProblem& problem, std::span<const Candidate> candidates, Arch arch = Arch::kBlackholeP150) const;
 
 private:
     explicit ConfigModel(config::model::GbdtModelStorage storage) : storage_(std::move(storage)) {}

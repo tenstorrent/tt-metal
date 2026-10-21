@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/model/matmul_model_selector.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <fstream>
@@ -58,10 +59,13 @@ std::unique_ptr<const ConfigModel> ConfigModel::from_blob(std::span<const std::b
     }
 }
 
-std::vector<double> ConfigModel::predict_ns(const MatmulProblem& problem, std::span<const Candidate> candidates) const {
-    const DeviceParams& device = device_params(Arch::kBlackholeP150);
-    // The memo of placement link loads and L1 compute tables is problem independent; one per thread
-    thread_local ModelCache cache;
+std::vector<double> ConfigModel::predict_ns(
+    const MatmulProblem& problem, std::span<const Candidate> candidates, Arch arch) const {
+    const DeviceParams& device = device_params(arch);
+    // The memo of placement link loads and L1 compute tables is problem independent but device specific; one per
+    // thread and arch
+    thread_local std::array<ModelCache, 2> caches;
+    ModelCache& cache = caches.at(static_cast<std::size_t>(arch));
     std::vector<double> predicted(candidates.size(), std::numeric_limits<double>::quiet_NaN());
     std::vector<double> rows;
     std::vector<double> base;

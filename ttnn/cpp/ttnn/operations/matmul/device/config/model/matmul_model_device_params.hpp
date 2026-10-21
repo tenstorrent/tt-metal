@@ -9,20 +9,22 @@
 // fitted on that chip (fpmodel v18r14 constants.json) and the L1 per-core compute cost tables (L1 model v12). A new
 // device is a new DeviceParams entry; nothing else in the model is device specific.
 //
-// The only entry today is Blackhole p150 (the 11x10 worker grid the model was trained on). Its numbers are copied
-// bit-exactly from the Python reference (bench/models/fpmodel_adapter.py, outputs/overnight/fpmodel/fpmodel/model7.py
-// SPEC, nocload.py ARCH["bh"], bankload.py NB["bh"], matmul-model-data/models/v18r14/bh/constants.json,
-// outputs/tegraph/l1/v12.pkl); do not edit them without retraining.
+// Entries: Blackhole p150 (the 11x10 worker grid the model was trained on) and Blackhole Galaxy (12x10; the p150 entry
+// plus the 12th Tensix column, as the Python reference's bh_glx arch; the model has no 12-column training rows). Its
+// numbers are copied bit-exactly from the Python reference (bench/models/fpmodel_adapter.py,
+// outputs/overnight/fpmodel/fpmodel/model7.py SPEC, nocload.py ARCH["bh"], bankload.py NB["bh"],
+// matmul-model-data/models/v18r14/bh/constants.json, outputs/tegraph/l1/v12.pkl); do not edit them without retraining.
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
 namespace ttnn::operations::matmul::model {
 
-enum class Arch : std::uint8_t { kBlackholeP150 };
+enum class Arch : std::uint8_t { kBlackholeP150, kBlackholeGalaxy };
 
 enum class Fidelity : std::uint8_t { kLoFi, kHiFi2, kHiFi3, kHiFi4 };
 
@@ -117,5 +119,8 @@ struct DeviceParams {
 
 // The parameter table of a device. Throws std::invalid_argument for an arch without an entry.
 const DeviceParams& device_params(Arch arch);
+
+// The Blackhole entry for a worker grid: p150 up to 11x10, Galaxy for 12 columns; std::nullopt when none covers it.
+std::optional<Arch> blackhole_arch_for_grid(std::uint32_t grid_x, std::uint32_t grid_y);
 
 }  // namespace ttnn::operations::matmul::model

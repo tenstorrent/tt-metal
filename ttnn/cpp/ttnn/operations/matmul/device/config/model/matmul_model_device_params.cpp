@@ -133,13 +133,40 @@ constexpr DeviceParams kBlackholeP150{
         },
 };
 
+// Blackhole Galaxy: all 12 unharvested Tensix columns are workers (on p150 the 12th goes to dispatch). The bank does
+// not record which columns each Galaxy chip harvested, so the p150 pattern is assumed (Python reference: bh_glx in
+// bench/m2x2/equations.py); configs up to 11 columns are placed exactly as on p150.
+constexpr DeviceParams make_blackhole_galaxy() {
+    DeviceParams d = kBlackholeP150;
+    d.name = "blackhole_galaxy";
+    d.worker_grid_x = 12;
+    d.worker_cols[11] = 16;
+    return d;
+}
+
+constexpr DeviceParams kBlackholeGalaxy = make_blackhole_galaxy();
+
 }  // namespace
 
 const DeviceParams& device_params(Arch arch) {
     switch (arch) {
         case Arch::kBlackholeP150: return kBlackholeP150;
+        case Arch::kBlackholeGalaxy: return kBlackholeGalaxy;
     }
     throw std::invalid_argument("matmul model: no device parameters for this arch");
+}
+
+std::optional<Arch> blackhole_arch_for_grid(std::uint32_t grid_x, std::uint32_t grid_y) {
+    if (grid_y > kBlackholeP150.worker_grid_y) {
+        return std::nullopt;
+    }
+    if (grid_x <= kBlackholeP150.worker_grid_x) {
+        return Arch::kBlackholeP150;
+    }
+    if (grid_x <= kBlackholeGalaxy.worker_grid_x) {
+        return Arch::kBlackholeGalaxy;
+    }
+    return std::nullopt;
 }
 
 }  // namespace ttnn::operations::matmul::model
