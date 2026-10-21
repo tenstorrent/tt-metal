@@ -66,12 +66,12 @@ class PrefillRuntimeContractTests(unittest.TestCase):
                 self.assertEqual(call["cached_len"], start)
                 self.assertTrue(call["skip_lm_head"])
         self.assertEqual(
-            runtime._layer_completion_sink.call_args_list,
+            runtime._layer_completion_sink.layers_completed.call_args_list,
             [
-                unittest.mock.call(0, 7),
-                unittest.mock.call(35, 7),
-                unittest.mock.call(0, 11),
-                unittest.mock.call(35, 11),
+                unittest.mock.call(0, 1, 0, 0, 992),
+                unittest.mock.call(35, 36, 0, 0, 992),
+                unittest.mock.call(0, 1, 1, 1024, 2016),
+                unittest.mock.call(35, 36, 1, 1024, 2016),
             ],
         )
 
@@ -85,9 +85,9 @@ class PrefillRuntimeContractTests(unittest.TestCase):
             committed.update(queued)
             queued.clear()
 
-        def publish(layer, request):
-            self.assertIn(layer, committed, "ACK published before device KV write completed")
-            acks.append((layer, request))
+        def publish(layer_start, layer_end, slot_id, pos_start, pos_end):
+            self.assertIn(layer_start, committed, "ACK published before device KV write completed")
+            acks.append((layer_start, layer_end, slot_id, pos_start, pos_end))
 
         def forward(_input, **kwargs):
             for layer in (0, 1):
@@ -96,7 +96,7 @@ class PrefillRuntimeContractTests(unittest.TestCase):
             return None
 
         self.synchronize.side_effect = finish_device_work
-        runtime._layer_completion_sink = publish
+        runtime._layer_completion_sink = SimpleNamespace(layers_completed=publish)
         runtime.model.prefill_forward.side_effect = forward
         runtime.prefill_chunk(
             object(),
@@ -106,7 +106,7 @@ class PrefillRuntimeContractTests(unittest.TestCase):
             request_id=13,
             metadata_msg=object(),
         )
-        self.assertEqual(acks, [(0, 13), (1, 13)])
+        self.assertEqual(acks, [(0, 1, 1, 0, 1024), (1, 2, 1, 0, 1024)])
         self.assertEqual(queued, set())
 
     @patch("models.demos.gpt_oss_d_p.tt.tt_prefill_runtime.ttnn.deallocate")
@@ -122,7 +122,7 @@ class PrefillRuntimeContractTests(unittest.TestCase):
                 request_id=7,
                 metadata_msg=object(),
             )
-        runtime._layer_completion_sink.assert_not_called()
+        runtime._layer_completion_sink.layers_completed.assert_not_called()
 
     def test_socket_metadata_does_not_bypass_position_validation(self):
         runtime = self.runtime()
