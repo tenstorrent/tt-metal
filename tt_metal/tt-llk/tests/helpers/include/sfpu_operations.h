@@ -11,7 +11,6 @@
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
@@ -36,11 +35,6 @@
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
 #include "llk_sfpu/ckernel_sfpu_quant.h"
-// Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
-// calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
-// calculate_nez_uint32, calculate_comp_unary_int + their *_init), plus the
-// _calculate_zero_comp_ / _calculate_comp_unary_int_ family merged into the same
-// header; the two families share no symbol names so both can coexist.
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
@@ -105,6 +99,7 @@
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_topk.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
