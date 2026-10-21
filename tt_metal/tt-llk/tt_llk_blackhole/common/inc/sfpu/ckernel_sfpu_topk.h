@@ -1278,6 +1278,123 @@ inline void topk_validate_mode_combo()
     static_assert(!(RANK_STAMPED && TOPK_UINT16_IN_FP32_DEST), "rank-stamped keys and uint16-in-fp32-dest are mutually exclusive");
 }
 
+struct TopkStepInc
+{
+    std::uint32_t inc;
+    bool cr;
+};
+
+// Counter step after group g of a step pass at distance dist: 8 rows, 32 at the second group of a 16 row slab, 4 * dist at the last.
+constexpr TopkStepInc topk_step_inc(const std::uint32_t dist, const std::uint32_t g)
+{
+    const std::uint32_t inner_d = dist >> 3;
+    std::uint32_t off           = 0;
+    TopkStepInc r {8, false};
+    for (std::uint32_t i = 0; i <= g; i++)
+    {
+        off += 8;
+        r = {8, false};
+        if ((i % inner_d) == inner_d - 1)
+        {
+            r   = {4 * dist, true};
+            off = 2 * dist;
+        }
+        else if (off == 16)
+        {
+            r = {32, true};
+        }
+    }
+    return r;
+}
+
+// The direction flips after every pass slab whose datum count equals the sorted sequence length.
+constexpr bool topk_step_dir(const std::uint32_t dist, const std::uint32_t seq, const std::uint32_t g, const bool dir)
+{
+    bool d = dir;
+    for (std::uint32_t j = 0; j < g / (dist >> 3); j++)
+    {
+        d = (2 * dist * (j + 1) == seq) ? !d : d;
+    }
+    return d;
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t DIST,
+    std::uint32_t TOTAL,
+    std::uint32_t SEQ,
+    bool DIR,
+    std::uint32_t G = 0>
+[[gnu::always_inline]] inline void topk_step_pass_ct_groups()
+{
+    constexpr int io = FUSED ? 4 : 8;
+    if constexpr (G < TOTAL / 16)
+    {
+        if constexpr (G == 0)
+        {
+            load_replay_buf<Exec>(TOPK_STEP_LOAD_REPLAY_START, io, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 2 * DIST); });
+        }
+        else
+        {
+            lltt::replay(TOPK_STEP_LOAD_REPLAY_START, io);
+        }
+        bitonic_topk_step_N<STABLE_SORT, TIE_ORDER>(topk_step_dir(DIST, SEQ, G, DIR));
+        if constexpr (G == 0)
+        {
+            load_replay_buf<Exec>(TOPK_STEP_STORE_REPLAY_START, io, [] { bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED, RANK_STAMPED>(4, 2 * DIST); });
+        }
+        else
+        {
+            lltt::replay(TOPK_STEP_STORE_REPLAY_START, io);
+        }
+        bitonic_topk_inc_dest_const<topk_step_inc(DIST, G).inc, topk_step_inc(DIST, G).cr>();
+        topk_step_pass_ct_groups<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, DIR, G + 1>();
+    }
+}
+
+// One step pass of the 64 datum local sort at distance DIST over TOTAL datums with every counter step a constant.
+template <
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t DIST,
+    std::uint32_t TOTAL,
+    std::uint32_t SEQ,
+    bool DIR>
+[[gnu::noinline]] inline void topk_step_pass_ct_dir()
+{
+    topk_step_pass_ct_groups<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, DIR>();
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t DIST,
+    std::uint32_t TOTAL,
+    std::uint32_t SEQ>
+inline void topk_step_pass_ct(const bool dir)
+{
+    if (dir)
+    {
+        topk_step_pass_ct_dir<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, true>();
+    }
+    else
+    {
+        topk_step_pass_ct_dir<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, false>();
+    }
+}
+
+// CT_STEPS: a full local sort (i_start_phase below i_end_phase, 64 datums, i_end_phase 5 at most) runs its step 5 and 6 passes with
+// constant counter steps. A template parameter so that every other instantiation keeps its code.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1285,7 +1402,8 @@ template <
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
-    bool TILE0_SORTED      = false>
+    bool TILE0_SORTED      = false,
+    bool CT_STEPS          = false>
 // TILE0_SORTED: the first value tile (and its index tile) is already sorted in direction idir; phases 0 to 4 then run on the
 // second tile only. A template parameter, since the phase loops below unroll only with constant group bounds.
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
@@ -1662,6 +1780,22 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             {
                                 bitonic_topk_step_pass_macro<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dist, pass_dir, tile1_only, sorted_seq_length);
                             }
+                            else if (CT_STEPS && i_start_phase != i_end_phase)
+                            {
+                                if (ss == 6)
+                                {
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, 64, 64>(pass_dir);
+                                }
+                                else if (ph == 5)
+                                {
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, 64, 64>(pass_dir);
+                                }
+                                else
+                                {
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, TILE0_SORTED ? 32 : 64, 32>(
+                                        pass_dir);
+                                }
+                            }
                             else
                             {
                                 std::uint32_t inner_d    = dist >> 3; // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
@@ -1788,11 +1922,12 @@ template <
     bool STABLE_SORT       = false,
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
-    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    bool CT_STEPS          = false>
 inline __attribute__((always_inline, flatten)) void _bitonic_topk_phases_steps_tile0_sorted_(
     const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
-    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true>(
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, CT_STEPS>(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
