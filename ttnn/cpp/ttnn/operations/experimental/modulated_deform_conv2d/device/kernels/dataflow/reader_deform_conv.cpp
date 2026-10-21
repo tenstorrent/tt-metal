@@ -426,6 +426,19 @@ void kernel_main() {
         }
     }
 
+    // A block's C_out-wide output, which compute hands over once the block is through its last pass.
+    auto write_output = [&](uint32_t block) {
+        output_cb.wait_front(OUT_TILES);
+        const uint32_t tiles_l1 = output_cb.get_read_ptr();
+        const uint32_t first_tile = block * OUT_TILES;
+        for (uint32_t t = 0; t < OUT_TILES; ++t) {
+            CoreLocalMem<uint32_t> src(tiles_l1 + t * tile_nbytes);
+            noc.async_write(src, output_acc, tile_nbytes, {.offset_bytes = 0}, {.page_id = first_tile + t});
+        }
+        noc.async_writes_flushed();
+        output_cb.pop_front(OUT_TILES);
+    };
+
     const uint32_t index_tile_nbytes = get_tile_size(geom_index_cb_index);
     const uint32_t corner_weight_slot_nbytes = CORNERS * get_tile_size(geom_weight_cb_index);
     uint32_t image_page[TILE_ROWS];  // first page of each row's image
@@ -562,6 +575,11 @@ void kernel_main() {
             if (pass == 0 && j + 2 < num_blocks) {
                 stage_geometry(start_block + j + 2);
             }
+            // In the last pass the copy's previous block is through compute by the time this one's
+            // corners are in, and its output goes out while the core works on the blocks after it.
+            if (pass + 1 == PASSES && j >= BLOCK_PARITY + 2) {
+                write_output(block - 2);
+            }
         }
         if constexpr (LOADS_WEIGHT) {
             if (pass + 1 < PASSES) {
@@ -574,17 +592,9 @@ void kernel_main() {
         }
     }
 
-    // The conv's output of this copy's blocks, C_out wide.
-    for (uint32_t j = BLOCK_PARITY; j < num_blocks; j += 2) {
-        output_cb.wait_front(OUT_TILES);
-        const uint32_t tiles_l1 = output_cb.get_read_ptr();
-        const uint32_t first_tile = (start_block + j) * OUT_TILES;
-        for (uint32_t t = 0; t < OUT_TILES; ++t) {
-            CoreLocalMem<uint32_t> src(tiles_l1 + t * tile_nbytes);
-            noc.async_write(src, output_acc, tile_nbytes, {.offset_bytes = 0}, {.page_id = first_tile + t});
-        }
-        noc.async_writes_flushed();
-        output_cb.pop_front(OUT_TILES);
+    // The copy's last block.
+    if (BLOCK_PARITY < num_blocks) {
+        write_output(start_block + BLOCK_PARITY + (num_blocks - 1 - BLOCK_PARITY) / 2 * 2);
     }
     noc.async_write_barrier();
 }
