@@ -309,7 +309,10 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         if os.environ.get("BRINGUP_QUICK") == "1":  # F122: the quick A/B also checks every layer against the golden
             reload()
             pcc = run(count=True, per_layer=True)
-            drift, failed = E.load(g.dir), []  # F131: the ladder's limits, so a `>= limit` gate can judge the quick run
+            drift, failed = (
+                E.load(g.dir, rung_name),
+                [],
+            )  # F131: the ladder's limits, so a `>= limit` gate can judge the quick run
             for i, v in pcc.items():
                 metrics.record(f"pcc_layer_L{i:02d}", v)
                 E.check(drift, f"pcc_layer_L{i:02d}", v, failed)
