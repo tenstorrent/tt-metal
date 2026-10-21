@@ -27,9 +27,9 @@ default eight stages of 3 or 2 layers (0-2, 3-5, 6-8, 9-11, 12-14, 15-16, 17-18,
 The final collapse uses the last layer's FFN ``pre_mix`` (there is no ``hc_head``). Engram layers 1 and 14 read host
 n-gram tables (~101 GB each) when built, and the test is skipped when that RAM is not free.
 
-Prompt length: 16384 tokens by default. Past ``candidate_topk_blocks * candidate_block_size`` = 16384 compressed
-entries the selection is two-level, so longer prompts run too; attention stays dense, so each chunk costs more the
-further in it is.
+Prompt length: 16384 tokens by default. Longer prompts run too: past ``candidate_topk_blocks * candidate_block_size``
+= 16384 compressed entries the two-level select bounds what layers 20 and later score, but the index sources before
+it score every entry a chunk can see, so each chunk costs more the further in it is.
 
 Run it (ttnn venv)::
 
@@ -258,7 +258,7 @@ def _run_demo(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     # Before anything else allocates on the devices: allocating on a device that holds a trace is unsafe.
     progress.step(
         f"preparing the traced prefill for {len(prompt_ids)} tokens in chunks of {chunk_size}: persistent buffers, "
-        "H2D / D2D / D2H sockets, compile the chunk step, capture one trace per stage and position tier (not timed)"
+        "H2D / D2D / D2H sockets, compile the chunk step, capture one trace per stage (not timed)"
     )
     t0 = time.perf_counter()
     model.prepare_traced_prefill(len(prompt_ids), chunk_size)
