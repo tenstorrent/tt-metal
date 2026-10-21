@@ -84,13 +84,20 @@ def _pcc(a, b, logical_n=None):
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _qkv(S, rows, seed=0):
-    """Q/K/V with enough structure that attention is not uniform, so a broken mask shows up in the output."""
+def _qkv(S, rows, seed=0, ramp=True):
+    """Q/K/V with enough structure that attention is not uniform, so a broken mask shows up in the output.
+
+    ramp=False gives pure randn: the routing scores are noise, so the mask is unstructured and its density is
+    P(z > tau) -- ~0.16 at tau 1.0, ~0.10 at 1.3. That is the worst case for the Q-OR (no two Q blocks agree)
+    and the one the timing test has to clear.
+    """
     g = torch.Generator().manual_seed(seed)
     shape = (S, H, rows, D)
     q = torch.randn(shape, generator=g) * 0.5
     k = torch.randn(shape, generator=g) * 0.5
     v = torch.randn(shape, generator=g)
+    if not ramp:
+        return q, k, v
     pos = torch.linspace(-2.0, 2.0, rows).view(1, 1, rows, 1)
     return q + pos, k + pos, v  # positional ramp -> score mass concentrates near the diagonal
 
@@ -527,6 +534,126 @@ def test_partial_tail_block_is_pooled_not_dropped(
     )
     assert pcc_ref > 0.98, f"{mode}: sol vs pooled-tail reference {pcc_ref:.5f}"
     assert pcc_trunc < pcc_dense, "sol is closer to the tail-dropped reference than to dense: the tail block is dropped"
+
+
+TIMING = pytest.mark.skipif(os.environ.get("SOL_TIMING") != "1", reason="set SOL_TIMING=1")
+TIMING_REPS = int(os.environ.get("SOL_TIMING_REPS", "3"))
+# Per-device rows and the production (q_chunk, k_chunk) for compact; pack uses q_chunk 64 with the same k_chunk.
+TIMING_SHAPES = {"5s": (4736, 320, 384), "10s": (9184, 256, 512), "15s": (13664, 256, 512)}
+# tau per data generator: randn lands near density 0.16 / 0.10, the ramp saturates (its middle queries have no
+# signal and keep about half), so it only shows the correlated-mask behaviour at high density.
+TIMING_TAUS = {"randn": (1.0, 1.3), "ramp": (1.0, 3.0)}
+
+
+@TIMING
+@GALAXY_RING
+@pytest.mark.parametrize("data", ["randn", "ramp"])
+@pytest.mark.parametrize("sol_mode", ["compact", "pack"])
+@pytest.mark.parametrize("shape", list(TIMING_SHAPES))
+def test_sol_op_timing(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, shape, sol_mode, data, reset_seeds, capfd
+):
+    """Op-only timing of the ring-joint SDPA (fused K/V all-gather included): dense vs sol at a production shape.
+
+    Same method as test_sol_bench_minimax_h3 (which needs the MiniMax-H3 diffusers patch; this file does not):
+    host sync, launch, host sync, one warm-up then TIMING_REPS timed launches, median reported. The pre-pass is
+    timed separately -- it is the route program's cost and is paid once per layer alongside the op.
+
+    Reads: `[timing] ... dense X ms, sol Y ms, speedup Z x` at the tau whose density is nearest 0.15. Note that a
+    130 W part shrinks the compute-bound dense op more than the data-movement-bound sparse path when moved to a
+    190 W part, so a ratio measured at 130 W is optimistic for production; leave margin above 2x.
+    """
+    import time
+
+    rows, q_prod, k_chunk = TIMING_SHAPES[shape]
+    q_chunk = Q1_CHUNK if sol_mode == "pack" else q_prod
+    S = tuple(mesh_device.shape)[sp_axis]
+    scale = D**-0.5
+    sink_tokens = 300 if rows < 4096 else 849
+    logical_n = S * rows
+    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    mesh_axes = [sp_axis, None, None, None]
+    q, k, v = _qkv(S, rows, ramp=(data == "ramp"))
+    tq, tk, tv = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=mesh_axes, layout=ttnn.TILE_LAYOUT)
+        for x in (q, k, v)
+    )
+    grid = mesh_device.compute_with_storage_grid_size()
+    ckc = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    empty_joint = bf16_tensor(torch.zeros((1, H, 0, D)), device=mesh_device)
+    ln_tensor = logical_length_tensor(mesh_device, logical_n)
+
+    def launch(qc, kc, **sol_kwargs):
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
+            q_chunk_size=qc,
+            k_chunk_size=kc,
+            exp_approx_mode=False,
+        )
+        outs = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tq,
+            tk,
+            tv,
+            empty_joint,
+            empty_joint,
+            empty_joint,
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16),
+            joint_strategy="rear",
+            logical_n=ln_tensor,
+            program_config=program_config,
+            compute_kernel_config=ckc,
+            dim=2,
+            multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
+            num_links=num_links,
+            cluster_axis=sp_axis,
+            mesh_device=mesh_device,
+            topology=topology,
+            subdevice_id=ccl.ccl_sub_device_id,
+            ccl_core_grid_offset=(grid.x - 1, 0),
+            use_column_major_ccl=True,
+            **sol_kwargs,
+        )
+        for t in outs:  # output, joint output (empty), stats: free them so 30 launches at 15 s do not pile up
+            try:
+                ttnn.deallocate(t)
+            except Exception:  # an empty joint output may have nothing to free
+                pass
+
+    def timed(fn):
+        fn()  # compile / warm-up
+        ttnn.synchronize_device(mesh_device)
+        ms = []
+        for _ in range(TIMING_REPS):
+            t0 = time.perf_counter()
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            ms.append(1e3 * (time.perf_counter() - t0))
+        ms.sort()
+        return ms[len(ms) // 2]
+
+    dense_ms = timed(lambda: launch(q_prod, k_chunk))
+    capfd.readouterr()
+    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=TIMING_TAUS[data][0], mode=sol_mode)
+    pre.prepare(geo, sink_tokens, scale)
+    for tau in TIMING_TAUS[data]:
+        pre.tau = tau
+        pre_ms = timed(lambda: pre(tq, tk, tv, scale=scale, report_density=False))
+        sol = pre(tq, tk, tv, scale=scale, report_density=True)
+        sol_kw = dict(
+            sol_block_mask=sol["block_mask"], sol_pooled_k=sol["pooled_k"], sol_pooled_v=sol["pooled_v"], sol_mode=sol_mode
+        )
+        sol_ms = timed(lambda: launch(q_chunk, k_chunk, **sol_kw))
+        modes = _drain_mode_log(capfd)
+        logger.info(
+            f"[timing] {shape} {data} {sol_mode} q{q_chunk}/k{k_chunk} tau={tau} density={pre.last_density:.3f}: "
+            f"dense {dense_ms:.2f} ms, sol {sol_ms:.2f} ms, speedup {dense_ms / sol_ms:.2f}x, prepass {pre_ms:.2f} ms "
+            f"(factory {sorted(modes) or 'cached'})"
+        )
+        assert not modes or modes == {sol_mode}, f"factory compiled {sorted(modes)}"
 
 
 @SLOW
