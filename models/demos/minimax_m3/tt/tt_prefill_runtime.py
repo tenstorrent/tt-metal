@@ -42,7 +42,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
@@ -171,6 +171,11 @@ class TtPrefillRuntime:
         self.hf_config.num_hidden_layers = config.num_layers
 
         self._build_model(state_dict)
+        self.media = None
+        # The media_tag whose rows could not be added: its prompt's first token goes back as a failure.
+        self.media_failed_tag = 0
+        if os.getenv("M3_VISION") == "1" and config.is_first_rank:
+            self._build_vision()
         # RoPE is built once here (whole-cache indexed rope). The KV cache is engine-owned — the adapter
         # allocates it and passes it into compile / prefill_chunk / gather_layer — so it is NOT built here.
         self._build_indexed_rope()
@@ -213,6 +218,47 @@ class TtPrefillRuntime:
             overlap_shared_expert=self.config.overlap_shared_expert,
         )
         self.model_built = True
+
+    def _build_vision(self) -> None:
+        """The vision tower that encodes a request's images and videos, from the checkpoint named by
+        PREFILL_HF_MODEL / HF_MODEL; device weights are cached under <weight cache>/vision."""
+        from models.demos.minimax_m3.reference.vision import VisionArgs, load_vision_state_dict
+
+        from .media import MediaRows
+        from .vision import TtVisionTower
+
+        ckpt = os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL")
+        assert ckpt, "M3_VISION=1 needs PREFILL_HF_MODEL or HF_MODEL to read the vision weights"
+        cache = os.environ.get("M3_VISION_CACHE") or (
+            os.path.join(str(self.config.weight_cache_path), "vision") if self.config.weight_cache_path else None
+        )
+        if cache:
+            os.makedirs(cache, exist_ok=True)
+        tower = TtVisionTower(
+            self.mesh_device,
+            self.model.mesh_config,
+            self.model.ccl_manager,
+            load_vision_state_dict(ckpt),
+            VisionArgs.from_checkpoint(ckpt),
+            cache_dir=cache,
+        )
+        self.media = MediaRows(tower, self.mesh_device, self.config.sp_axis, self.config.chunk_size)
+        logger.info(f"vision tower built (weights cache {cache})")
+
+    def _sample_first_token(self, logits, actual_start: int, actual_end: int, last_tile: int, sample: dict) -> int:
+        """Draw the token after the prompt from the LM-head tile `prefill_forward` returned for get_last_token."""
+        from .media import sample_token
+
+        sp, tp = self.config.sp_factor, self.config.tp_factor
+        positions = rotated_chunk_positions(actual_start, sp, self.config.chunk_size // sp)
+        chip, row = next((c, r) for c, rows in enumerate(positions) for r, p in enumerate(rows) if p == actual_end - 1)
+        dts = ttnn.get_device_tensors(logits)
+        cols, rows_ = self.mesh_device.shape[1], self.mesh_device.shape[0]
+        coord = (lambda j: chip * cols + j) if self.config.sp_axis == 0 else (lambda j: j * cols + chip)
+        shards = [ttnn.to_torch(dts[coord(j)]).float().reshape(-1, dts[coord(j)].shape[-1]) for j in range(tp)]
+        vocab = torch.cat([sh[row - last_tile] for sh in shards])[: self.hf_config.vocab_size]
+        logits.deallocate(True)
+        return sample_token(vocab, sample["temperature"], sample["top_p"], sample["top_k"], sample["seed"], actual_end)
 
     # --- RoPE: whole-cache cos/sin for the INDEXED on-device rope (rotary_embedding_indexed), built ONCE
     # and reused for every chunk. Replaces the old per-chunk to_torch/slice/from_torch reshard (a D2H2D
@@ -386,6 +432,19 @@ class TtPrefillRuntime:
                 actual_start=start,
                 actual_end=start + real,
             )
+        if self.config.is_last_rank and os.getenv("M3_FIRST_TOKEN") == "1":
+            # The LM head and the sampling read-back of a prompt's final chunk.
+            start, real = plan[-1]
+            self.prefill_chunk(
+                self.make_chunk_input([0] * chunk, start),
+                kv_cache,
+                slot_id=0,
+                actual_start=start,
+                actual_end=start + real,
+                sample=dict(temperature=0.0, top_p=1.0, top_k=0, seed=0),
+            )
+        if self.media is not None:
+            self.media.tower.warmup()
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")
@@ -405,6 +464,8 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         metadata_msg=None,
+        media_tag: int = 0,
+        sample: Optional[dict] = None,
     ):
         """Prefill ONE chunk into user ``slot_id``'s slice of the engine-owned ``kv_cache``. With
         ``skip_lm_head`` (the default) returns None — single-rank is headless, the populated cache is the
@@ -443,6 +504,10 @@ class TtPrefillRuntime:
             metadata_msg: the chunk's raw socket metadata tensor; a runtime that captures the chunk as a
                 trace consumes it on-device (the words must sit at a fixed address). This runtime does not
                 trace, so it is accepted and ignored.
+            media_tag: names the request's image/video manifest (tt/media.py); its rows that fall in this chunk
+                are added to the token embedding. 0 = none.
+            sample: on the prompt's final chunk, the first token's sampling params; the chunk then returns that
+                token instead of None.
         """
         if d2h_service is not None:
             raise NotImplementedError(
@@ -471,6 +536,16 @@ class TtPrefillRuntime:
         if self.config.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
             ttnn.deallocate(input_tensor)
+            if media_tag and media_tag != self.media_failed_tag:
+                try:
+                    if self.media is None:
+                        raise RuntimeError("a chunk carries image/video rows but the runtime has no vision tower")
+                    x_embd = self.media.add(x_embd, media_tag, actual_start, actual_end)
+                except Exception:
+                    logger.exception(
+                        f"media {media_tag:016x}: rows not added; the request's first token reports failure"
+                    )
+                    self.media_failed_tag = media_tag
         else:
             x_embd = input_tensor
 
@@ -494,6 +569,14 @@ class TtPrefillRuntime:
             on_layer_complete = self._on_layer_complete
         if on_layer_complete is not None and self.layer_ack_fence is not None:
             on_layer_complete = self.layer_ack_fence.bind(on_layer_complete)
+        last_tile = -1
+        if sample is not None:
+            assert self.config.is_last_rank, "the first token is sampled on the last pipeline rank"
+            sp = self.config.sp_factor
+            rows = rotated_chunk_positions(actual_start, sp, self.config.chunk_size // sp)
+            last_row = next(r for chip_rows in rows for r, p in enumerate(chip_rows) if p == actual_end - 1)
+            last_tile = last_row // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            skip_lm_head, get_last_token = False, last_tile
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed,
@@ -513,6 +596,8 @@ class TtPrefillRuntime:
         if not self.config.is_last_rank:
             # Middle rank: hand the slice's output hidden state to the next rank.
             return out
+        if sample is not None:
+            return self._sample_first_token(out, actual_start, actual_end, last_tile, sample)
         if skip_lm_head:
             if out is not None:
                 out.deallocate(True)
