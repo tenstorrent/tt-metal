@@ -12,20 +12,20 @@ TtCsaIndexer (compressed keys); no Hadamard (the DS41 reference has none), keys 
     w     = (attn_norm @ weights_proj^T) / 64                  [S, 32] (fp32 x, bf16 weight, no act quant)
     score = sum_h w_h relu(q_h . k_t), key t visible iff t < (pos + 1) // ratio
     topk  = the 512 best visible keys per query (fewer visible: pads)
+(the released code's fp8 / fp4 quant-dequant of the query and its matmul input is not emulated: the device keeps
+bf16 and computes in it, agent rule 17; FIX.8)
 
 Per chip (r, c), inputs attn_norm [1, 1, W, H/TP] fp32 (hidden split) and q_resid [1, 1, W, 1280] fp32 (row split,
 replicated over TP), W = S / SP; the chip's queries are rows [c Sq, (c+1) Sq) of its row block, Sq = W / TP, i.e.
 positions start + r W + c Sq + [0, Sq) (natural blocks, any 32-aligned start):
 
-    w   attn_norm (rounded to TF32, setting COMPRESSOR_X: the compressor's fused fp32 projection reads it the same
-        way) @ the chip's K rows of (weights_proj / 64)^T (bf16, exact: 1/64 = 2^-6) -> tt/common.tp_sum (exact
+    w   attn_norm (fp32) @ the chip's K rows of (weights_proj / 64)^T (bf16, exact: 1/64 = 2^-6) -> tt/common.tp_sum (exact
         fp32, K-30) -> the chip's Sq rows (mesh_partition over axis 1) -> bf16 (the score op's gate dtype);
         INDEXER_GLUE=on (P.16): the linear writes the CCL's partial dtype and ONE reduce-scatter by row blocks
         (tt/ccl.sum_rows) gives the chip's Sq rows of the sum directly
-    q   the chip's Sq rows of q_resid -> tt/quant.fp8_qdq (bf16, exact) @ wq_b^T (replicated, all 32 heads; bf16:
-        e4m3 x 2^k is bf16-exact; every head's rope rows de-interleaved at load, tt/rope.deinterleave_perm) at
-        HiFi4 + fp32 acc -> [1, 32, Sq, 128] fp32 -> tt/rope.rope_heads (fp32 SFPU, the reference's interleaved
-        order back) -> tt/quant.fp4_qdq(32, ue8m0) -> bf16 (exact)
+    q   the chip's Sq rows of q_resid -> bf16 @ wq_b^T (replicated, all 32 heads; DENSE_WEIGHTS; every head's rope
+        rows de-interleaved at load, tt/rope.deinterleave_perm) at ATTN_FIDELITY + fp32 acc -> [1, 32, Sq, 128] fp32
+        -> tt/rope.rope_heads (fp32 SFPU, the reference's interleaved order back) -> bf16
     k   the layer's served index-key cache (tt/compressor.TtServedRows, 2_index_k_r2: SP-sharded, TP-replicated,
         bf16 ROW_MAJOR in token units, [rows, 64] per chip; the compressor wrote this chunk's keys) viewed as
         compressed rows [rows / 2, 128] and tiled: block-cyclic over SP with W / 2 compressed rows per SP rank per
@@ -50,13 +50,11 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, dense_dtype, tp_sum
-from .quant import act_q, fp4_q, native, round_tf32
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
 from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads
 from .settings import settings
 
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
-Q_BLOCK = 32  # fp4 block of the index query (ue8m0 scale per block)
 
 
 def _upload(mesh, t, dtype, layout=ttnn.TILE_LAYOUT, dims=None):
@@ -95,7 +93,6 @@ class TtIndexer:
         assert chunk // ratio >= self.topk, f"a chunk's {chunk // ratio} keys < topk {self.topk} (valid_length >= k)"
         assert rope.half * 2 == self.rd, (rope.half, self.rd)
         self.ckc = attn_compute_config(mesh)  # weights_proj, wq_b: ATTN_FIDELITY (P.7)
-        self.round_x = settings.get("COMPRESSOR_X") == "round_tf32" and not native()  # NUMERICS=native: as is
         # wq_b [nh * hd, q_lora] -> W^T [q_lora, nh * hd], every head's rope rows de-interleaved; replicated
         perm = deinterleave_perm(self.hd, self.rd)
         wq = w["wq_b"].float()
@@ -169,14 +166,11 @@ class TtIndexer:
 
     def gates(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """attn_norm [1, 1, W, H/TP] fp32 -> the chip's per-head gates [1, 1, Sq, nh] bf16."""
-        xa = round_tf32(x) if self.round_x else x
         # INDEXER_GLUE=on (P.16): the partial in the CCL's partial dtype (bf16 under fabric_bf16, as q_a's) and ONE
         # reduce-scatter by row blocks: its block is the chip's Sq query rows (no all_gather, mesh_partition, casts)
         rs = self.glue and settings.get("HC_TP_SUM") == "gather_add"
         pdt = ccl.partial_dtype(self.mesh) if rs else ttnn.float32
-        part = ttnn.linear(xa, self.wproj, dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM)
-        if xa is not x:
-            ttnn.deallocate(xa)
+        part = ttnn.linear(x, self.wproj, dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         sub = ccl.sum_rows(self.mesh, part) if rs else None
         if sub is not None:
             ttnn.deallocate(part)
@@ -198,10 +192,11 @@ class TtIndexer:
         return out
 
     def query(self, qr: ttnn.Tensor, start: int) -> ttnn.Tensor:
-        """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16 (fp4 values)."""
+        """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16."""
         sub = self._sub(qr)
-        qq = act_q(sub, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
-        ttnn.deallocate(sub)
+        qq = cast(sub, ttnn.bfloat16)
+        if qq is not sub:
+            ttnn.deallocate(sub)
         q = ttnn.linear(qq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         ttnn.deallocate(qq)
         if self.rope.pairs is not None:
@@ -213,40 +208,31 @@ class TtIndexer:
         qr_ = rope_heads(qh, cos, sin, interleave=True)
         ttnn.deallocate(qh)
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
-        out = fp4_q(qr_, Q_BLOCK, dtype=ttnn.bfloat16)
-        ttnn.deallocate(qr_)
+        out = cast(qr_, ttnn.bfloat16)
+        if out is not qr_:
+            ttnn.deallocate(qr_)
         return out
 
     def _query_glue(self, q: ttnn.Tensor, start: int) -> ttnn.Tensor:
         """ATTN_GLUE=on (P.15): wq_b's output [1, 1, Sq, nh hd] fp32 (consumed) -> the index queries [1, nh, Sq, hd]
         bf16, the values of the reshape + permute path bit for bit: the heads split by nlp_create_q_heads_split (a
-        data move), RoPE on the [.., 64] tails only; native (fp4_q is a cast): the rope's last ops write bf16 and the
-        interleave is a PairPerm matmul on the bf16 tail; official: interleaved in fp32 and quantized as before."""
+        data move), RoPE on the [.., 64] tails only, its last ops writing bf16, the interleave a PairPerm matmul on the
+        bf16 tail."""
         qn, qt = ttnn.experimental.nlp_create_q_heads_split(
             q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM
         )
         ttnn.deallocate(q)
         cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
-        if native():
-            tb = rope_heads(qt, cos, sin, dtype=ttnn.bfloat16)  # [re | ro] bf16
-            ttnn.deallocate(qt)
-            self.rope.free(cos, sin)
-            ti = self.rope.pairs(tb, self.rope.pairs.to_inter)
-            ttnn.deallocate(tb)
-            nb = ttnn.typecast(qn, ttnn.bfloat16, memory_config=DRAM)
-            ttnn.deallocate(qn)
-            out = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM)
-            ttnn.deallocate(nb)
-            ttnn.deallocate(ti)
-            return out
-        tr = rope_heads(qt, cos, sin, interleave=True)
+        tb = rope_heads(qt, cos, sin, dtype=ttnn.bfloat16)  # [re | ro] bf16
         ttnn.deallocate(qt)
         self.rope.free(cos, sin)
-        full = ttnn.concat([qn, tr], dim=-1, memory_config=DRAM)
+        ti = self.rope.pairs(tb, self.rope.pairs.to_inter)
+        ttnn.deallocate(tb)
+        nb = ttnn.typecast(qn, ttnn.bfloat16, memory_config=DRAM)
         ttnn.deallocate(qn)
-        ttnn.deallocate(tr)
-        out = fp4_q(full, Q_BLOCK, dtype=ttnn.bfloat16)
-        ttnn.deallocate(full)
+        out = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM)
+        ttnn.deallocate(nb)
+        ttnn.deallocate(ti)
         return out
 
     def scores(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache, **epilogue) -> tuple[ttnn.Tensor, int]:

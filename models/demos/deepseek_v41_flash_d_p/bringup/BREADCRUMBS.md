@@ -2401,3 +2401,62 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   scaled one ran here; the 512-token tests run in 7.5 min on the real checkpoint).
 - Re-run: the gate in the FIX.7 brief; `BRINGUP_SCALED=0|1 scripts/run_safe_pytest.sh --no-precompile --run-all
   models/demos/deepseek_v41_flash_d_p/reference/test_official_bf16.py -s` (`-k "not margins"` for the 512-token part).
+
+## FIX.8 (overseer, 2026-10-21): onto F131-F142, shipped settings everywhere, parity code deleted
+
+What changed (the tree did not import before: F137 removed `Settings(max_precision=...)`):
+- (1) `tt/settings.py`: MAX_PRECISION and `max_precision=` gone; `Settings("DS41_", TABLE)`. Deleted settings:
+  NUMERICS, COMPRESSOR_X (round_tf32), ENGRAM_KV_QDQ (qdq), ATTN_IN_MM, WINDOW_SDPA (source was the only shipped
+  value; high_precision / exact gone), WINDOW_SDPA_OUT / _SCORES / _PROBS, WINDOW_PIECES (33 -> 24 settings). The
+  "max precision" wording in the remaining descriptions rewritten. settings_lint: 33 files, 0 violations; no
+  emulation default.
+- (2) Deleted files: `tt/quant.py` (277 lines: fp8_qdq, fp4_qdq, round_tf32, native / act_q / fp4_q / tf32_q),
+  `tt/exact_mm.py` (127), `tt/window_exact.py` (266), `tt/perf_attention.py` (81, timed only the deleted sdpa
+  variants). `act_q` / `fp4_q` (their native branch) became `tt/common.py:cast` (x itself when already the dtype,
+  else one typecast). Official branches removed: attention.py (fp32_out / fp32_scores / bf16_probs / fp32_q, the
+  ttnn.bringup.sparse_sdpa call, the exact window path, the glue_out official re-interleave, the official wo_a
+  concat order), sparse_attention.py (exact assert), q_a.py (ExactMatmul), kv.py / compressor.py / indexer.py
+  (`native()` conditions, round_x, fp4 blocks), engram_kv.py (qdq), experts.py (`qdq`, the fork's
+  `fp8_act_quant=` argument: default False now), shared_expert.py (the official flat path: `routed=` plan, unit
+  routing weights, fp8_act_quant), norm.py (quant -> cast), weighted_combine.py (`acc_unpack_fp32=True` dropped: a
+  no-op with COMBINE_ACC=bf16, bf16 values pass srcA exactly), perf_experts / perf_shared_expert (float64 references
+  always native), perf_precision (fork variant dropped). tt/: +279 / -1332 lines. The fork options themselves stay
+  (J2 removes routing_weights / fp8_act_quant); their READMEs' "used by" say the model no longer calls them.
+- (3) Contract helpers from reports/fix8_dev_model_diffs.patch (its settings hunk ignored, (1) supersedes it):
+  `server_rules.state_threshold()` returns a per-(config, layer) limit, the stricter of the server's 0.93 and
+  `e2e_limits.pcc_limit(drift-s4096, state_<kind>_L<i>)`; `caches.pcc_failures` accepts it. On s4096: window L00
+  0.9983, L03 0.9911, L24 0.9972; compress L02 0.9783; index L02 0.9709, L20 0.9728.
+- Two K.1 failures the gate exposed, neither from this change (K.1 last passed 2026-10-17, before P.8 / F128):
+  DS41-93 (integer engram_tail had no contract drift: the hook now checks it exactly, asserts, metric
+  contract_state_exact_engram_tail = 1) and DS41-94 (runner fabric payload 4352 B vs the weighted combine's 10880 B:
+  the runner hung in FlatWithProgramDeviceOperation; DS41Config.FABRIC_PAYLOAD_SIZE now follows EXPERTS_COMBINE).
+- Kept: FIX.5's tt/model.py held wrappers + begin_chunk memo clear, tt/sparse_attention.py doc.
+
+Measured (2x2, defaults):
+- Plain profile, chunk 53248-55296 (test_profile, BRINGUP_TASK=FIX.8): device 104.31 ms a chunk vs P.16's 104.28,
+  7800 programs both, every section within 0.02 ms (attention 40.57, experts 16.84, indexer 12.93); wall 331 ms.
+- M.1 (s4096, native goldens, F135 limits): err_layer L00 .0273/.0561, L01 .0355/.0734, L02 .0547/.1071, L03
+  .0847/.1558, L14 .0572/.1204, L20 .0307/.0519, L21 .0514/.1265, L24 .0309/.0449; err_state max window_kv_L03
+  .0588/.1334; host_transfers_per_layer 0.
+- L.last (53k prefix from the golden): err_layer L00 .0265/.0570, L01 .0346/.0720, L02 .0523/.1077, L03 .0818/.1587,
+  L14 .0618/.1380, L20 .0306/.0507, L21 .0521/.1312, L24 .0281/.0418 (worst share of the margin: L24 67 %);
+  err_state worst window_kv_L21 .0470/.1118.
+- K.1: contract_checks_failed 0, acks_early 0; pcc_producer_kv window_kv .99840 >= .99164, compress_kv .99923 >=
+  .97827, index_k .99977 >= .97088; pcc_contract_state_window_kv .99843 >= .99164; kv_layout, adapter_acks,
+  runner_contract (185 s) pass; runner_smoke skipped (DS41-8).
+- "Not numerically changed": no earlier err_* baseline exists (the tree did not import since F137); every deleted
+  branch was off under the old defaults (NUMERICS=native, WINDOW_SDPA=source, ATTN_IN_MM=fpu), the dropped
+  acc_unpack_fp32 / fp8_act_quant=False are no-ops on the shipped path, and the profile's program count and section
+  times are the same.
+
+Gotchas:
+- The drift gives compress_partial an empty margin (DS41-92: ladder limit 1.8e256, contract PCC limit -3.0): the
+  all-zero state passes anything; a framework fix (exact check of an all-zero state).
+- Frozen per-step tests that still assume the official arithmetic were not touched (test role / J0): e.g.
+  test_c_*_kv / test_c_enc_source_compressor check the fp8 / fp4 grid of the device output and will fail on the
+  bf16 cast; the batched verify (F142) will list them.
+- L.last's gate has no --no-precompile, so its body runs twice (K-52): 11.6 min, longer than one 10-minute call.
+
+Re-run: the FIX.8 gate (brief), one command per call; profile: `BRINGUP_TASK=FIX.8 TT_METAL_DEVICE_PROFILER=1
+TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`.
