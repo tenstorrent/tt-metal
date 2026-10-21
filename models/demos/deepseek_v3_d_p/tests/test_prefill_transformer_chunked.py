@@ -267,9 +267,11 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-# Empty until recalibrated on the scaled-FP8 KV cache: the last table (CI run 38480868957 / job
-# 115586663804, L78/11 chunks/10 iters) was recorded on the bf16 cache, so GLM traced runs are record-only.
-GLM_TRACED_BASELINE_CHUNK_TIMES_S = {}
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
+    # Recalibrated on the scaled-FP8 KV cache, CI run 39456857459 / job 118751643362: ~4% less per chunk
+    # than the bf16 centre (CI run 38480868957 / job 115586663804), widening to ~6% by the last chunk.
+    (78, 11, 10): [0.416, 0.418, 0.428, 0.421, 0.429, 0.429, 0.426, 0.426, 0.438, 0.443, 0.448],
+}
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
