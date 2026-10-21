@@ -594,6 +594,26 @@ class USE_RUNTIME(TemplateParameter):
 
 
 @dataclass
+class SFPU_WALK_FACE_R_DIM(TemplateParameter):
+    """face_r_dim of the region a unary SFPU walk is handed, independent of the tile's own geometry."""
+
+    face_r_dim: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint8_t WALK_FACE_R_DIM = {self.face_r_dim};"
+
+
+@dataclass
+class SFPU_ELTWISE_ARITY(TemplateParameter):
+    """Number of input operands of the elementwise SFPU call: 1 unary, 2 binary, 3 ternary."""
+
+    arity: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int ELTWISE_ARITY = {self.arity};"
+
+
+@dataclass
 class REINIT_MODE(TemplateParameter):
     """Selects the reduce_block_max_row re-arm path: 0=none, 1=short (MOP + addrmods),
     2=minimal (ADDR_MOD_1/2/6), 3=addrmod-only reinit (ADDR_MOD_1/2/3/6)."""
