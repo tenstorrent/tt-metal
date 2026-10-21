@@ -202,10 +202,15 @@ inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t u
 
 /**
  * @brief Initializes the programmable registers for the SFPU
+ * @note Clobbers LREG0.
  */
 inline void _init_sfpu_config_reg_()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
+    // LUT tables (approximate GELU, sigmoid) overwrite LREG9/10, the 0.0 that SFPMUL adds and the 1.0 that SFPADD
+    // multiplies by. Load explicit values: the reset default of config dest 0xA is 0.0, not 1.0.
+    _sfpu_load_config32_(p_sfpconfig::LUT_CONST_LREG9, 0x0000 /* upper16 */, 0x0000 /* lower16 */);
+    _sfpu_load_config32_(p_sfpconfig::LUT_CONST_LREG10, 0x3F80 /* upper16 */, 0x0000 /* lower16 */);
     // Quasar simulator doesn't apply the SFPU const-lreg reset default at boot.
     // Reload programmable constant LREG11 = -1.0 (its RTL reset default) each launch: config_dest=0xB,
     // instr_mod1[0]=1 loads the default. sfpi materializes -1.0 and subtract-based float compares via LREG11.
