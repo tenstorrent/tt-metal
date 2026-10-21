@@ -17,8 +17,8 @@ from helpers.reduce_perf_matrix import (
     CORE_REDUCE_DIMS,
     CORE_TILE_DIMENSIONS,
     PERF_POOL_TYPES,
-    QUASAR_EXTENSION_FORMATS,
     SCALAR_REPRESENTATIVE,
+    SHARED_EXTENSION_FORMATS,
     perf_input_dimensions,
     perf_math_fidelities,
 )
@@ -32,10 +32,10 @@ from quasar.test_reduce_quasar import (
     test_reduce_quasar_mxfp4_2x_gapool as run_reduce_quasar_mxfp4_2x_gapool,
 )
 
-# Quasar has no Bfp8_b, so its extension is the shared pairs, Float16 and the MX smoke pair.
+# Quasar has no Bfp8_b, so its extension is the shared pairs plus the MX smoke pair.
 REDUCE_PERF_FORMATS = (
     CORE_FORMATS
-    + QUASAR_EXTENSION_FORMATS
+    + SHARED_EXTENSION_FORMATS
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
 

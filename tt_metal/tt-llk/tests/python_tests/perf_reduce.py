@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.format_config import DataFormat
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.reduce_perf_matrix import (
@@ -15,7 +17,7 @@ from helpers.reduce_perf_matrix import (
     perf_input_dimensions,
     perf_math_fidelities,
 )
-from test_reduce import REDUCE_SWEEP, _run_reduce_test
+from test_reduce import _run_reduce_test, reduce_dest_acc_modes
 
 PERF_LOOP_FACTOR = 64
 CORE_TILE_DIMENSION_LISTS = [list(td) for td in CORE_TILE_DIMENSIONS]
@@ -23,10 +25,21 @@ PERF_TILE_DIMENSIONS = CORE_TILE_DIMENSION_LISTS + [
     list(td) for td in WHBH_EXTENSION_TILE_DIMENSIONS
 ]
 
+
+def perf_dest_acc_modes(formats):
+    # Float32 -> Float16_b also runs with a 16-bit Dest on WH/BH; that row pairs with Quasar.
+    if (
+        formats.input_format == DataFormat.Float32
+        and formats.output_format == DataFormat.Float16_b
+    ):
+        return [DestAccumulation.No, DestAccumulation.Yes]
+    return reduce_dest_acc_modes(formats)
+
+
 REDUCE_PERF_SWEEP = {
-    **REDUCE_SWEEP,
     "tile_dimensions": PERF_TILE_DIMENSIONS,
     "formats": CORE_FORMATS + WHBH_EXTENSION_FORMATS,
+    "dest_acc": perf_dest_acc_modes,
     "reduce_dim": CORE_REDUCE_DIMS,
     "pool_type": PERF_POOL_TYPES,
     "math_fidelity": lambda pool_type: perf_math_fidelities(pool_type),
