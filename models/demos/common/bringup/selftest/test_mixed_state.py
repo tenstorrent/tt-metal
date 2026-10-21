@@ -37,8 +37,8 @@ def mspec(fx, monkeypatch):
         p = fx(**{**MIXED, **over})
         monkeypatch.setenv("BRINGUP_SPEC", p)
         prompt.build(Spec.load(p))
-        generate_golden.main(["--spec", p, "--rung", "s256"])
-        generate_golden.main(["--spec", p, "--rung", "s512"])
+        generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
+        generate_golden.main(["--spec", p, "--rung", "s512", "--set"])
         return Spec.load(p)
 
     return make
@@ -93,7 +93,8 @@ def test_golden_stores_per_layer_names_and_snapshots(mspec):
     assert g.meta["state_snapshots"] == [0, 64, 128, 192, 224]
     for at in (64, 128, 224):
         want = reference_state_at(s, 1, at)["recurrent"]
-        assert torch.equal(g.state(1, at=at)["recurrent"], want.to(g.state(1, at=at)["recurrent"].dtype))
+        # F128: the golden keeps fp32; one shot here vs chunked there differ in the last fp32 bits only
+        torch.testing.assert_close(g.state(1, at=at)["recurrent"], want.float(), rtol=1e-4, atol=1e-4)
     assert not torch.equal(g.state(1, at=128)["recurrent"], g.state(1)["recurrent"])
     assert torch.equal(g.state(0, at=128)["key"], g.state(0)["key"])  # growing tensors: the consumer slices
     with pytest.raises(FileNotFoundError, match="no snapshot"):
@@ -105,7 +106,7 @@ def test_golden_stores_per_layer_names_and_snapshots(mspec):
 def test_golden_without_fixed_state_is_unchanged(fx, monkeypatch):
     p = fx()
     prompt.build(Spec.load(p))
-    generate_golden.main(["--spec", p, "--rung", "s256"])
+    generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
     g = Golden.for_rung(Spec.load(p), "s256")
     assert g.meta["state_snapshots"] == [] and not list((g.dir / "kv_cache").glob("*_at_*"))
 

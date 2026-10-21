@@ -115,7 +115,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    component limits.
    Maximum precision means the device's full precision for the reference's own dtypes (its native numerics, rule
    17: no parity-only rounding), never more: no fp32 where the reference computes in bf16, no exact or emulated
-   paths to beat a limit. Every accuracy limit is 2 x the noise floor
+   paths to beat a limit. The target of every check is the full-precision reference (F128: goldens and per-step
+   references at `numerics: native`); the reference at its own shipped precision only sets the margin. Every accuracy
+   limit is 2 x the noise floor
    of those dtypes (the gate prints it as `limit ... = 2.0 x the precision model's miss`). When a check fails at the
    reference's precision, find the device error that exceeds the noise floor (a truncation, a bias, a wrong dtype);
    if there is none, stop and report the check, its value and its limit (answer `disagree` on a note asking for it)
@@ -148,9 +150,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    formats. Never add a step that rounds values to a format the device then neither computes nor stores in: fp8 / fp4
    quant-dequant of activations kept in bf16 or fp32, rounding inputs to TF32, a KV cache or key rounded to an fp4 / fp8
    grid but stored wider. A rounding is part of the model only where it is the device's own format: a block format the
-   matmul or the cache really uses (bfp8 / bfp4 tiles, LoFi operands, a KV cache stored in 4 or 8 bits). Per-step
-   checks compare against the reference's native numerics (reference role, `numerics`); the goldens keep the
-   official arithmetic and judge the model end to end. A check that fails only because the device skips such a
+   matmul or the cache really uses (bfp8 / bfp4 tiles, LoFi operands, a KV cache stored in 4 or 8 bits). Every
+   check, per step and end to end, compares against the reference's full-precision numerics (`native`); the
+   official arithmetic only measures the margin (F128). A check that fails only because the device skips such a
    rounding is not a reason to add it: report the check, its value and its limit.
 
 ## Roles
@@ -158,9 +160,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 - **reference**: write the model's standalone CPU reference in `<model_dir>/reference/` against
   `models/demos/common/bringup/reference/interface.py`, and the `reference` hook in `<model_dir>/bringup/hooks.py`.
   The block forward must go through `run_block`, so the block graph is the code. Record every boundary. Load one layer's
-  weights at a time if the model does not fit in host memory. The `reference` hook takes `numerics`: "official"
-  (the default: the released code's arithmetic, for the goldens) or "native" (every rounding that only emulates the
-  reference hardware's formats is off, rule 17), one switch in the reference, not per step (reference/interface.py).
+  weights at a time if the model does not fit in host memory. The `reference` hook takes `numerics`, from the first
+  version: "native" (full precision: fp32, every rounding that only emulates the reference hardware's formats off;
+  the goldens and every per-step check compare against it) or "official" (the released code's arithmetic at its
+  shipped dtype; only its drift from native is used, as the margin, F128); one switch in the reference, not per step
+  (reference/interface.py). A hook without the switch stops every golden and per-step check.
 - **plan**: write `plan.yaml` (placements for every checkpoint tensor, state, extras, activation estimate),
   `plan.md` (per layer type: a table with one row per component, what each chip holds, the collective after it, per-chip
   memory; then the per-chip total and the per-layer collectives; copy the shape of the reference plans in the repo map,

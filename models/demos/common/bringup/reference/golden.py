@@ -11,7 +11,10 @@ One directory per ladder rung, ``<golden_root>/s{seq}_c{chunk}/`` (the prefill s
     chunk_{c:02d}/layer_{i:02d}.safetensors   boundary tensors of layer i in chunk c, keyed by boundary name
     chunk_{c:02d}/model.safetensors       embed, final_norm, top32 ids/values per position, logits of the last 32 rows
 
-``content_hash`` is the sha256 over the sorted (path, file sha256) list of every file except manifest.json.
+``content_hash`` is the sha256 over the sorted (path, file sha256) list of every file except manifest.json and the
+files derived from the golden afterwards (drift.json, F128; official_floor.json, F80).
+F128: the golden is the full-precision reference (fp32, no rounding); ``<rung dir>-official`` holds the same rung at
+the shipped code's precision, used only for its drift (drift.json), the end-to-end margin.
 Tests pin the manifest's hash in their frozen block; a regenerated or edited golden then fails the gate.
 """
 
@@ -43,9 +46,43 @@ def rung_dir(spec: Spec, rung: dict) -> Path:
     return spec.golden_root / rung_dirname(src["seq"], src["chunk"])
 
 
+DERIVED = ("manifest.json", "drift.json", "official_floor.json")  # written after the golden; not in content_hash
+OFFICIAL_SUFFIX = "-official"  # F128: the same rung at the reference's own shipped precision (the margin's source)
+
+
+def official_dir(spec: Spec, rung: dict) -> Path:
+    """F128: the rung's golden at the reference's own precision, next to the full-precision one; only its drift from
+    the full-precision golden is used (reference/drift.py), never as a target."""
+    d = rung_dir(spec, rung)
+    return d.with_name(d.name + OFFICIAL_SUFFIX)
+
+
+def golden_numerics(spec: Spec) -> str:
+    """F128 (owner): goldens are the full-precision reference ('native'), unless the spec says otherwise."""
+    return str(spec.get("golden.numerics") or "native")
+
+
+def reference_at(spec: Spec, numerics: str, **kw):
+    """The CPU reference at ``numerics`` ('native' = full precision, 'official' = the shipped code's roundings). A model
+    whose hooks.reference has no ``numerics`` switch has one arithmetic: allowed only when the spec declares it free of
+    parity roundings (``reference.no_rounding: true``); never a silent fallback to a rounded reference (F128)."""
+    import inspect
+
+    fn = spec.hooks().reference
+    params = inspect.signature(fn).parameters
+    if "numerics" in params or any(p.kind is p.VAR_KEYWORD for p in params.values()):
+        return fn(spec, numerics=numerics, **kw)
+    if numerics != "official" and not spec.get("reference.no_rounding"):
+        raise SystemExit(
+            f"hooks.reference has no `numerics` switch, so it cannot run at {numerics!r} (full precision); add the "
+            "switch (the reference role), or set reference.no_rounding: true if its arithmetic rounds nothing (F128)"
+        )
+    return fn(spec, **kw)
+
+
 def content_hash(d: Path) -> str:
     h = hashlib.sha256()
-    for f in sorted(p for p in d.rglob("*") if p.is_file() and p.name != "manifest.json"):
+    for f in sorted(p for p in d.rglob("*") if p.is_file() and p.name not in DERIVED):
         h.update(f"{f.relative_to(d)}\0{sha256_file(f)}\n".encode())
     return h.hexdigest()
 
@@ -157,9 +194,10 @@ def text_tokens(spec: Spec, n: int, tok=None) -> torch.Tensor:
     return prompt.tokens(spec, n, tok)
 
 
-def store_dtype(t: torch.Tensor, keep_fp32: tuple[str, ...], name: str) -> torch.Tensor:
+def store_dtype(t: torch.Tensor, keep_fp32: tuple[str, ...] | bool, name: str) -> torch.Tensor:
+    """keep_fp32: True keeps every float tensor fp32 (F128: the full-precision golden), else the names kept fp32."""
     if not t.is_floating_point():
         return t.contiguous()
-    if name.endswith(keep_fp32):
+    if keep_fp32 is True or name.endswith(keep_fp32):
         return t.float().contiguous()
     return t.to(torch.bfloat16).contiguous()

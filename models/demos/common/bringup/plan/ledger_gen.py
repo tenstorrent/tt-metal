@@ -33,7 +33,6 @@ from models.demos.common.bringup.intake import trim_checkpoint
 from models.demos.common.bringup.plan.boxes import scaling_applies
 from models.demos.common.bringup.reference.golden import load_spec, rung_dir
 from models.demos.common.bringup.testing import serving as SV
-from models.demos.common.bringup.testing.harness import DEFAULT_THRESHOLDS
 from models.demos.common.bringup.testing.templates import component_test_path, swap_test_path
 
 SAFE = "scripts/run_safe_pytest.sh --run-all"
@@ -47,8 +46,10 @@ PROFILE_ENV = (
 )
 
 
-def thr(spec, key: str) -> str:
-    return f">= {spec.threshold(key, DEFAULT_THRESHOLDS[key])}"
+# F128 (owner): end-to-end accuracy is gated against the limit each test records (calib x the reference's own drift
+# from full precision, testing/e2e_limits.py), never a fixed number
+E2E = {"pcc_layer_L*": ">= limit", "pcc_state_*_L*": ">= limit", "overlap_state_*_L*": ">= limit"}
+E2E_LAST = {"pcc_final_hidden": ">= limit", "top5_overlap": ">= limit"}
 
 
 def rel(spec, p) -> str:
@@ -176,11 +177,13 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                 + (" (the scaled model)" if scaled else ""),
                 "goldens",
                 [prev],
-                f"{PY}.reference.generate_golden --rung {r['name']}",
+                # F128: the full-precision golden (the target), the official one and its drift (the margin)
+                f"{PY}.reference.generate_golden --rung {r['name']} --set",
                 {
                     "golden_layers": f"== {len(spec.layers())}",
                     "golden_chunks": f"== {r['seq'] // r['chunk']}",
                     "golden_hash_ok": "== 1",
+                    "drift_metrics": ">= 1",
                 },
             )
             golden_task[r["name"]] = tid
@@ -343,11 +346,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     # the ladder, the contract and the profile need one model whose hidden state stays on the device.
     if last_swaps:
         multi = next((r for r in ladder if not r.get("prefix_from_golden") and r["seq"] // r["chunk"] > 1), first)
-        am = {
-            "pcc_layer_L*": thr(spec, "layer"),
-            "pcc_state_min": thr(spec, "state"),
-            "host_transfers_per_layer": "== 0",
-        }
+        am = E2E | {"host_transfers_per_layer": "== 0"}
         add(
             "M.1",
             "Assemble the all-device model (hidden state on the device from embedding to final norm)",
@@ -363,10 +362,10 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     prev = None
     for r in ladder:
         tid = f"L.{r['name']}"
-        m = {"pcc_layer_L*": thr(spec, "layer"), "pcc_state_min": thr(spec, "state")} | served_format()
+        m = E2E | served_format()
         layers = r.get("layers") or spec.layers()
         if max(layers) == spec.num_layers - 1:
-            m.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))
+            m.update(E2E_LAST)
         if not r.get("prefix_from_golden") and r["seq"] // r["chunk"] > 1:
             m["host_transfers_per_layer"] = "== 0"  # agent rule 5: no host work in the forward path (warm chunks)
         add(
@@ -402,7 +401,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "contract",
         [f"L.{first['name']}"] + ([smoke] if smoke else []),
         f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py" + contract_cmds(SV.ADAPTER),
-        {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": thr(spec, "state")}
+        {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": ">= limit"}
         # the runner smoke (contract_tests.yaml kind: runner_smoke) runs in this gate and records its answer; a layer
         # subset cannot answer, so it is required only where the intake smoke runs on the device model too
         | ({"smoke_runner_ok": "== 1"} if smoke and SV.runner_smoke(spec, SV.ADAPTER) else {}),
@@ -432,8 +431,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     # accuracy, the warm full prefill (TTFT without the LM head) and one warm chunk at several start positions.
     full = ladder[-1]
     fm = {
-        "pcc_layer_L*": thr(spec, "layer"),
-        "pcc_state_min": thr(spec, "state"),
+        **E2E,
         "prefill_ms_full": "> 0",
         "pos_chunk": ">= 1",
         "op_rows": ">= 1",  # the per-op breakdown (F43) and the pipelined timeline (F44) behind the dashboard
@@ -443,7 +441,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     if run_layers != list(range(len(run_layers))):  # F125: the warm full prefill needs a stack from layer 0, no gaps
         del fm["prefill_ms_full"]
     if max(run_layers) == spec.num_layers - 1:
-        fm.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))
+        fm.update(E2E_LAST)
     add(
         "X.3",
         "Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions",
@@ -486,7 +484,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         ["O.1"],
         f"{PY}.testing.settings_lint && BRINGUP_RUNG={last['name']} {SAFE} --no-precompile"
         " models/demos/common/bringup/tests/test_ladder.py" + contract_cmds_all(),
-        {"settings_violations": "== 0", "pcc_layer_L*": thr(spec, "layer"), "pcc_state_min": thr(spec, "state")},
+        {"settings_violations": "== 0"} | E2E,
         device=True,
         role="settings",
     )

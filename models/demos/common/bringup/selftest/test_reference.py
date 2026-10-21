@@ -102,7 +102,9 @@ def test_golden_subset_stops_at_the_last_selected_layer(fx, monkeypatch):
     built = []
     real = fixture_model.reference
     monkeypatch.setattr(
-        fixture_model, "reference", lambda spec, layers=None, dtype=None: built.append(layers) or real(spec, layers)
+        fixture_model,
+        "reference",
+        lambda spec, layers=None, dtype=None, numerics="native": built.append(layers) or real(spec, layers),
     )
     spec_path = fx(layers=[0, 1])
     prompt.build(Spec.load(spec_path))

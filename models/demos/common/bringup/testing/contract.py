@@ -34,6 +34,7 @@ import torch
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
+from models.demos.common.bringup.testing import e2e_limits as E
 
 PAD = 0xFFFFFFFF
 BLOCK = 32
@@ -259,17 +260,25 @@ def run_contract_test(s, mesh) -> list[str]:
         metrics.record("producer_vs_independent_pcc_gap", gap)
         if gap > 1e-4:
             failed.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
-    if min(mins.values()) < s.threshold("state", 0.97):
-        failed.append(f"producer read-back PCC {mins} below threshold")
+    drift = E.load(g.dir)  # F128: each state's limit = calib x the reference's own drift on its worst layer
+    for k, v in mins.items():
+        lim = E.state_limit(drift, k)
+        metrics.record(f"pcc_producer_kv_{k}_limit", lim)
+        if v < lim:
+            failed.append(f"producer read-back PCC {k} {v:.5f} < limit {lim:.5f}")
     if s.state_fixed:
         if not hasattr(hooks, "contract_state_pcc"):
             failed.append(f"fixed-size state {s.state_fixed} unchecked: hooks.contract_state_pcc is missing")
         else:
             fixed = hooks.contract_state_pcc(s, rt, kv, slot, actual_len, g)
+            if not fixed:
+                failed.append("fixed-size state read-back: hooks.contract_state_pcc returned nothing")
             for k, v in fixed.items():
                 metrics.record(f"pcc_contract_state_{k}", v)
-            if not fixed or min(fixed.values()) < s.threshold("state", 0.97):
-                failed.append(f"fixed-size state read-back PCC {fixed} below threshold")
+                lim = E.state_limit(drift, k)  # F128: keyed by state name, like the producer's
+                metrics.record(f"pcc_contract_state_{k}_limit", lim)
+                if v < lim:
+                    failed.append(f"fixed-size state read-back PCC {k} {v:.5f} < limit {lim:.5f}")
     metrics.record("contract_checks_failed", len(failed))
     for f in failed:
         print(f"FAIL contract: {f}")

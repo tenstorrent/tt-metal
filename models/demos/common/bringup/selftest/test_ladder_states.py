@@ -7,7 +7,7 @@
 import torch
 
 from models.demos.common.bringup.core import metrics
-from models.demos.common.bringup.testing.ladder import index_overlap, overlap_failure
+from models.demos.common.bringup.testing.ladder import index_overlap
 
 
 def test_index_overlap_tolerates_near_tie_flips_and_catches_a_wrong_selector():
@@ -22,23 +22,3 @@ def test_index_overlap_tolerates_near_tie_flips_and_catches_a_wrong_selector():
     assert metrics.pcc(flipped.float(), want.float()) < 0.97  # the PCC the old check used fails it
     wrong = torch.stack([torch.randperm(1024, generator=g)[:64] for _ in range(256)]).to(torch.int32)
     assert index_overlap(wrong, want) < 0.2
-
-
-class _Spec:
-    def __init__(self, waivers=None):
-        self.data = {"tests": {"waivers": waivers or {}}}
-
-    def get(self, key, default=None):
-        return self.data["tests"]["waivers"] if key == "tests.waivers" else default
-
-    def threshold(self, key, default):
-        return default
-
-
-def test_an_owner_waiver_lowers_the_overlap_limit_to_the_structural_floor_only(monkeypatch):
-    monkeypatch.setattr(metrics, "record", lambda *a, **k: None)
-    assert overlap_failure(_Spec(), 0.9) is None
-    assert overlap_failure(_Spec(), 0.69) == "index-state overlap 0.69000"  # F124: no waiver, the limit holds
-    waived = _Spec({"ladder.state_overlap": "native numerics vs fp4-rounded golden selection"})
-    assert overlap_failure(waived, 0.69) is None
-    assert overlap_failure(waived, 0.2) == "index-state overlap 0.20000"  # a wrong selector still fails
