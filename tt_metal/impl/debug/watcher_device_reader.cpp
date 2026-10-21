@@ -1350,22 +1350,14 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 
 void WatcherDeviceReader::Core::DumpEthFwStage() const {
     const auto& hal = reader_.env.get_hal();
-    const uint32_t fw_stage_bytes = hal.get_dev_size(programmable_core_type_, HalL1MemAddrType::FW_STAGE);
-    if (fw_stage_bytes == 0) {
+    const std::vector<uint32_t> stages = tt::llrt::read_eth_fw_stages(
+        hal, reader_.env.get_cluster(), reader_.device_id, virtual_coord_, programmable_core_type_);
+    if (stages.empty()) {
         // FW stage breadcrumb not mapped for this arch (only instrumented on Blackhole).
         return;
     }
-    const uint64_t addr = hal.get_dev_noc_addr(programmable_core_type_, HalL1MemAddrType::FW_STAGE);
-    uint32_t num_slots = fw_stage_bytes / sizeof(uint32_t);
-    const uint32_t num_processors = hal.get_num_risc_processors(programmable_core_type_);
-    if (num_processors < num_slots) {
-        num_slots = num_processors;
-    }
-    std::vector<uint32_t> stages(num_slots, 0);
-    reader_.env.get_cluster().read_core(
-        stages.data(), num_slots * sizeof(uint32_t), {static_cast<size_t>(reader_.device_id), virtual_coord_}, addr);
     fprintf(reader_.f, "fw_stage:");
-    for (uint32_t i = 0; i < num_slots; i++) {
+    for (uint32_t i = 0; i < stages.size(); i++) {
         fprintf(
             reader_.f,
             "%s%s=%s",

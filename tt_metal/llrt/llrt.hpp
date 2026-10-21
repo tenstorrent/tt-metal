@@ -22,6 +22,10 @@
 
 // clang-format on
 
+namespace tt {
+class Cluster;
+}  // namespace tt
+
 namespace tt::tt_metal {
 class MetalContext;
 class MetalEnvImpl;
@@ -98,14 +102,19 @@ void write_binary_to_address(
 // Decode a raw eth_fw_stage value into a short human-readable label.
 std::string eth_fw_stage_to_string(uint32_t stage);
 
-// Read the eth firmware stage breadcrumb for one ethernet processor (0 = erisc/ierisc,
-// 1 = subordinate erisc/ierisc) via UMD. core_type must be ACTIVE_ETH or IDLE_ETH.
-uint32_t read_eth_fw_stage(
-    tt::tt_metal::MetalEnvImpl& env,
+// Read the eth firmware stage breadcrumb of every processor running Metal FW on an ethernet core via UMD,
+// indexed by logical processor (as in get_hw_thread_idx()). Empty when core_type doesn't map the breadcrumb.
+std::vector<uint32_t> read_eth_fw_stages(
+    const tt_metal::Hal& hal,
+    const tt::Cluster& cluster,
     ChipId device_id,
     const tt::tt_metal::CoreCoord& virtual_core,
-    tt_metal::HalProgrammableCoreType core_type,
-    uint32_t processor_index = 0);
+    tt_metal::HalProgrammableCoreType core_type);
+
+// Format stages returned by read_eth_fw_stages() as "<processor>=<stage>" pairs labelled with the HAL
+// processor names of core_type, or "n/a" when there are none.
+std::string format_eth_fw_stages(
+    const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, const std::vector<uint32_t>& stages);
 
 namespace internal_ {
 

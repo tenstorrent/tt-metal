@@ -4,7 +4,6 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -360,15 +359,13 @@ const char* eth_fw_stage_skip_reason(MetalEnvImpl& env) {
 // Decoded eth firmware stage of each processor on an ethernet core, indexed by processor.
 std::vector<std::string> read_eth_fw_stages(
     MetalEnvImpl& env, IDevice* device, const CoreCoord& logical_eth_core, HalProgrammableCoreType core_type) {
-    const auto& hal = env.get_hal();
-    const uint32_t num_slots = std::min<uint32_t>(
-        hal.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t),
-        hal.get_num_risc_processors(core_type));
     const CoreCoord virtual_core = device->ethernet_core_from_logical_core(logical_eth_core);
+    const std::vector<uint32_t> raw_stages =
+        llrt::read_eth_fw_stages(env.get_hal(), env.get_cluster(), device->id(), virtual_core, core_type);
     std::vector<std::string> stages;
-    for (uint32_t processor = 0; processor < num_slots; processor++) {
-        stages.push_back(llrt::eth_fw_stage_to_string(
-            llrt::read_eth_fw_stage(env, device->id(), virtual_core, core_type, processor)));
+    stages.reserve(raw_stages.size());
+    for (const uint32_t stage : raw_stages) {
+        stages.push_back(llrt::eth_fw_stage_to_string(stage));
     }
     return stages;
 }

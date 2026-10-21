@@ -292,6 +292,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/watcher_common.h
     inc/internal/ethernet/dataflow_api.h
     inc/internal/ethernet/erisc.h
+    inc/internal/ethernet/eth_fw_stage.h
     inc/internal/ethernet/eth_ptp.hpp
     inc/internal/ethernet/tt_eth_api.h
     inc/internal/ethernet/tt_eth_ss_regs.h
