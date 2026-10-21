@@ -22,18 +22,19 @@ ttnn::Tensor embedding(
     ttnn::prim::EmbeddingsType embeddings_type,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    bool native_untilize) {
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        // Interleaved tables take the native untilize, whose hash leaves the row count out; the routed
-        // ttnn::untilize may pick the codegen prim, which hashes the full shape.
-        mutable_weight = mutable_weight.is_sharded()
-                             ? ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT)
-                             : ttnn::operations::data_movement::detail::untilize_force_native(mutable_weight);
+        // native_untilize: the native multi-core prim, whose hash leaves an interleaved table's row count out
+        // (the routed untilize may pick the codegen prim, keyed on the full shape).
+        mutable_weight = native_untilize && !mutable_weight.is_sharded()
+                             ? ttnn::operations::data_movement::detail::untilize_force_native(mutable_weight)
+                             : ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto original_input_rank = input_tensor.logical_shape().rank();

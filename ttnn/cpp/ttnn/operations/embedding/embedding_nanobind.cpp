@@ -32,6 +32,7 @@ void py_module(nb::module_& mod) {
             layout (ttnn.Layout): the layout of the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             embeddings_type (ttnn.EmbeddingsType): the type of embeddings. Defaults to `ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC`.
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
+            native_untilize (bool, optional): convert an interleaved TILE_LAYOUT weight table with the native untilize, whose program does not depend on the table's row count. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
@@ -49,7 +50,8 @@ void py_module(nb::module_& mod) {
         nb::arg("embeddings_type").noconvert() = nb::cast(ttnn::prim::EmbeddingsType::GENERIC),
         nb::arg("dtype").noconvert() = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor").noconvert() = nb::none());
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("native_untilize") = false);
 }
 
 }  // namespace ttnn::operations::embedding

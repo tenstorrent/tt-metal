@@ -188,8 +188,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         .data_format_metadata = output_data_format,
     };
 
-    TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
-    TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
+    // Runtime rows: the hash drops the height; the row-major output keeps its width as a static page size.
+    TensorParameter input_param{
+        .unique_id = INPUT, .spec = a.tensor_spec(), .relaxations = {.dynamic_tensor_shape = runtime_rows}};
+    TensorParameter output_param{
+        .unique_id = OUTPUT,
+        .spec = output.tensor_spec(),
+        .relaxations = {.dynamic_tensor_shape = runtime_rows, .match_page_size = true}};
 
     // Split inputs of the runtime-rows kernels: static per-core index, common row count.
     const KernelSpec::RuntimeArgSchema split_runtime_arg_schema = {

@@ -162,14 +162,17 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
 
     // Tensor parameters: the Q input, the optional separate KV input, and the three outputs.  The kernels
     // reach them through TensorAccessor(tensor::<name>); the base addresses ride the bindings.
+    // Every one of them is as tall as the sequence, which the hash drops and the kernels take at runtime.
+    const TensorSpecRelaxations rows_vary{.dynamic_tensor_shape = true};
     Group<TensorParameter> tensor_parameters = {
-        TensorParameter{.unique_id = INPUT_Q, .spec = input_tensor.tensor_spec()},
-        TensorParameter{.unique_id = Q, .spec = q.tensor_spec()},
-        TensorParameter{.unique_id = K, .spec = k.tensor_spec()},
-        TensorParameter{.unique_id = V, .spec = v.tensor_spec()},
+        TensorParameter{.unique_id = INPUT_Q, .spec = input_tensor.tensor_spec(), .relaxations = rows_vary},
+        TensorParameter{.unique_id = Q, .spec = q.tensor_spec(), .relaxations = rows_vary},
+        TensorParameter{.unique_id = K, .spec = k.tensor_spec(), .relaxations = rows_vary},
+        TensorParameter{.unique_id = V, .spec = v.tensor_spec(), .relaxations = rows_vary},
     };
     if (read_from_input_tensor_kv) {
-        tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_KV, .spec = input_tensor_kv->tensor_spec()});
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = INPUT_KV, .spec = input_tensor_kv->tensor_spec(), .relaxations = rows_vary});
     }
 
     KernelSpec::CompilerOptions::Defines reader_defines;

@@ -76,8 +76,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
     // Sharded output: one shard per core, block counts from the shard spec. Interleaved output: the
-    // program owns the full grid and every kernel derives its block range on device from the common
-    // row count, so one program serves every sequence length.
+    // full grid, every kernel deriving its block range on device from the common row count.
     const bool runtime_split = !output_sharded;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
@@ -274,12 +273,16 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // interleaved, and the borrowed output buffer resolves its address from it when the output is
     // sharded.
     // -----------------------------------------------------------------------
-    spec.tensor_parameters.push_back(
-        TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
-    spec.tensor_parameters.push_back(
-        TensorParameter{.unique_id = WEIGHTS_PARAM, .spec = weights_mesh_tensor.tensor_spec()});
-    spec.tensor_parameters.push_back(
-        TensorParameter{.unique_id = OUTPUT_PARAM, .spec = output_mesh_tensor.tensor_spec()});
+    // Runtime split: the hash drops the index length and the table rows, so the index page size (a
+    // row-major width) rides a runtime word, while the table keeps its fixed width as a static page size.
+    const TensorSpecRelaxations index_relaxations{.dynamic_tensor_shape = runtime_split};
+    const TensorSpecRelaxations table_relaxations{.dynamic_tensor_shape = runtime_split, .match_page_size = true};
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec(), .relaxations = index_relaxations});
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = WEIGHTS_PARAM, .spec = weights_mesh_tensor.tensor_spec(), .relaxations = table_relaxations});
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = OUTPUT_PARAM, .spec = output_mesh_tensor.tensor_spec(), .relaxations = index_relaxations});
 
     // -----------------------------------------------------------------------
     // Reader
@@ -364,12 +367,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // -----------------------------------------------------------------------
     // Compute
     //
-    // Sharded output: split across the two core groups, each with its own per_core_block_cnt
-    // compile-time arg, so the two groups are two KernelSpecs of the same source. Interleaved
-    // output: one spec over the full grid that derives its block count on device. The source is
-    // config-selected: the chunked kernel when a block's tiles do not fit the L1 budget in one go
-    // (always on the runtime split, where a single chunk is the unchunked case), the shared tilize
-    // kernel otherwise.
+    // Sharded output: one KernelSpec per core group with its own block count; interleaved: one spec
+    // deriving it on device. The chunked kernel serves chunked blocks and the runtime split.
     // -----------------------------------------------------------------------
     const char* compute_kernel_path =
         use_chunked_processing || runtime_split

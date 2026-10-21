@@ -58,9 +58,8 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0;
     CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet();
     bool row_major = false;
-    // Interleaved: the program owns the full grid and every core derives its (row, head) block range
-    // on device from the common row count; a core past the end of a short input runs zero blocks.
-    // Fewer tile rows than cores splits each row by head too, decided on device from the same word.
+    // Interleaved: the full grid, every core deriving its (row, head) block range on device from the
+    // common row count (split by head too when there are fewer tile rows than cores).
     const bool head_parallel_ok = !in_sharded && !out_sharded && in0_c > 1;
     if (in_sharded) {
         all_cores = a.shard_spec().value().grid;
@@ -261,14 +260,17 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
         }
     }
 
+    // Interleaved: the hash drops the row count, so the parameters accept any height.
+    const TensorSpecRelaxations rows_vary{.dynamic_tensor_shape = !in_sharded && !out_sharded};
     ProgramSpec spec{
         .name = "nlp_concat_heads",
         .kernels = {std::move(reader_spec), std::move(writer_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters =
             {
-                TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()},
-                TensorParameter{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec(), .relaxations = rows_vary},
+                TensorParameter{
+                    .unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec(), .relaxations = rows_vary},
             },
         .work_units = {WorkUnitSpec{
             .name = "main",
