@@ -17,8 +17,8 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
-// A kernel that defines LLK_PACK_ADDR_RMW as 1 writes the per-tile pack address with byte writes, which keeps it clear of the
-// unpack thread's config-bus store. Every other kernel keeps the SETDMAREG + WRCFG write and its ELF.
+// A kernel that defines LLK_PACK_ADDR_RMW as 1 writes the per-tile pack address with byte writes while its DEST is 16-bit, which
+// keeps the pack thread clear of the unpack thread's config-bus store. Every other kernel keeps the SETDMAREG + WRCFG write and its ELF.
 #ifndef LLK_PACK_ADDR_RMW
 #define LLK_PACK_ADDR_RMW 1
 #endif
@@ -610,7 +610,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination<!LLK_PACK_ADDR_RMW>(address);
+    program_packer_destination<!(LLK_PACK_ADDR_RMW && !is_fp32_dest_acc_en)>(address);
 
     ckernel::ckernel_template::run();
 
