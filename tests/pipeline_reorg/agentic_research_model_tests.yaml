@@ -260,7 +260,7 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 50
+      timeout: 35
       tier: 3
   owner_id: U08BGTAMU1W # Marina Vasiljevic
   team: models
