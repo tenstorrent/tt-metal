@@ -3,7 +3,7 @@
 
 """Quasar element-wise binary operations."""
 
-from ...data_transfer_blocks.quasar_data_transfer import QuasarDataTransferBlocks
+from ...data_transfer_blocks import QuasarDataTransferBlocks
 from ..eltwise import EltwiseBinaryGolden
 from .quasar_fidelity import QUASAR_MANTISSA_SPLIT
 

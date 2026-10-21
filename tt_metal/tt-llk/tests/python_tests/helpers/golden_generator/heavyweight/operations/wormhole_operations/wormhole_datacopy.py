@@ -3,7 +3,7 @@
 
 """Wormhole datacopy."""
 
-from ...data_transfer_blocks.wormhole_data_transfer import WormholeDataTransferBlocks
+from ...data_transfer_blocks import WormholeDataTransferBlocks
 from ..datacopy import DataCopyGolden
 
 

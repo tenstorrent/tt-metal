@@ -3,7 +3,7 @@
 
 """Blackhole eltwise."""
 
-from ...data_transfer_blocks.blackhole_data_transfer import BlackholeDataTransferBlocks
+from ...data_transfer_blocks import BlackholeDataTransferBlocks
 from ..eltwise import EltwiseBinaryGolden
 
 

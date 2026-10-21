@@ -3,7 +3,7 @@
 
 """Quasar datacopy."""
 
-from ...data_transfer_blocks.quasar_data_transfer import QuasarDataTransferBlocks
+from ...data_transfer_blocks import QuasarDataTransferBlocks
 from ..datacopy import DataCopyGolden
 
 
