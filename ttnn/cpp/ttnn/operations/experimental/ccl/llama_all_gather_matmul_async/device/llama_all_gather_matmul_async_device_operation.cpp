@@ -223,8 +223,6 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
         rank - 1,
         dim);
 
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input0);
-
     auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input0,
         input1,
@@ -247,7 +245,6 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
 
     auto operation_attributes = ttnn::experimental::prim::LlamaAllGatherMatmulAsyncParams(
         matmul_struct,
-        devices,
         gather_dim,
         num_preferred_links.has_value() ? num_preferred_links.value() : 1,
         num_devices,

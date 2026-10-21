@@ -63,6 +63,13 @@ struct MoEComputeParams {
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
+    // CLAMPED_SILU only: silu(min(gate, limit)) * clamp(up, -limit, limit).
+    std::optional<float> activation_limit;
+
+    // Expert matmuls and activation. math_approx_mode and dst_full_sync_en stay fixed by the kernel.
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+    bool fp32_dest_acc_en = false;
+
     // Same value as combine_params->axis (single source of truth when combine_params is set).
     // ComputeOnly path returns nullopt; Full-path call-sites must unwrap with .value().
     std::optional<uint32_t> cluster_axis() const {
@@ -72,7 +79,7 @@ struct MoEComputeParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(11);
+        attrs.reserve(14);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
@@ -84,6 +91,9 @@ struct MoEComputeParams {
         attrs.emplace_back("bh_ring_size", bh_ring_size);
         attrs.emplace_back("combine_params", combine_params);
         attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));
+        attrs.emplace_back("activation_limit", activation_limit);
+        attrs.emplace_back("math_fidelity", static_cast<uint32_t>(math_fidelity));
+        attrs.emplace_back("fp32_dest_acc_en", fp32_dest_acc_en);
         return attrs;
     }
 };
