@@ -215,25 +215,26 @@ constexpr ArchCostModel WORMHOLE_COST_MODEL{
     .dram_tile_cycles = 10.7,
 };
 
+// Fitted on p100a (11x10 grid, 7 DRAM channels); p150 (more cores and DRAM channels) uses it untuned.
 constexpr ArchCostModel BLACKHOLE_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .unpack_A_tile_cycles = 18.6,
-    .unpack_B_tile_cycles = 0.0,
+    .unpack_A_tile_cycles = 17.4,
+    .unpack_B_tile_cycles = 17.3,
     .subblock_cycles = 0.0,
-    .tile_pack_cycles = 9.5,
-    .tile_reload_cycles = 11.7,
-    .K_chunk_cycles = 734.9,
-    .tile_read_cycles = 101.8,
-    .core_tile_read_cycles = 106.5,
-    .tile_mcast_cycles = 2.0,
-    .tile_write_cycles = 54.0,
-    .K_chunk_read_cycles = 0.0,
-    .K_chunk_mcast_cycles = 409.4,
+    .tile_pack_cycles = 8.5,
+    .tile_reload_cycles = 20.0,
+    .K_chunk_cycles = 1450.2,
+    .tile_read_cycles = 92.9,
+    .core_tile_read_cycles = 0.0,
+    .tile_mcast_cycles = 48.2,
+    .tile_write_cycles = 65.5,
+    .K_chunk_read_cycles = 0.7,
+    .K_chunk_mcast_cycles = 364.6,
     .read_latency_cycles = 0.0,
-    .C_slice_cycles = 0.0,
-    .A_pad_tile_cycles = 462.6,
-    .overlap_exponent = 5.3,
-    .dram_tile_cycles = 6.7,
+    .C_slice_cycles = 1.1,
+    .A_pad_tile_cycles = 544.8,
+    .overlap_exponent = 4.4,
+    .dram_tile_cycles = 8.9,
 };
 
 constexpr ArchCostModel QUASAR_COST_MODEL{
