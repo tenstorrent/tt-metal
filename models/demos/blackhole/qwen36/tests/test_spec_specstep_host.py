@@ -23,6 +23,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.tp import (
     HOLD_SENTINEL,
+    TPGatedDeltaNet,
     spec_conv_sel,
     spec_ctrl_page,
     spec_ctrl_words,
@@ -493,3 +494,36 @@ def test_spec_memory_costs_counts_the_window_pair_under_the_flag(monkeypatch):
     T, C = 4, (4 * 32 * 2 + 8 * 32) // 2
     extra = 3 * 2 * 32 * (-(-(3 + T) // 32)) * (-(-C // 32)) * 32 * 2
     assert on["per_seq"]["gdn_conv_windows"] - off["per_seq"]["gdn_conv_windows"] == extra
+
+
+# --------------------------------------------------------------------------- #
+# Bucketed verify (b rows on the B-wide state): the relaxed n_users checks and max_users
+# --------------------------------------------------------------------------- #
+def _bucket_layer(B, T, calls):
+    g = types.SimpleNamespace(
+        B=B, _spec_shape=(B, T), _spec_fused=True, _verify_win_pair=("wa", "wb"), _spec_ring="ring"
+    )
+    g._gdn_spec_step = lambda *a, **kw: calls.append((a[5:], kw)) or "gated"
+    g._out_proj_tail = lambda gated, R, bucket, decode_ar=None: ("out", R)
+    g._forward_verify_recurrent_fused = lambda x, valid_len, T, n_users, *a, **kw: ("fused", valid_len, n_users)
+    return g
+
+
+@pytest.mark.parametrize("b", [1, 2, 4, 8])
+def test_verify_accepts_bucket_rows_and_passes_max_users(monkeypatch, b):
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
+    calls = []
+    g = _bucket_layer(8, 4, calls)
+    assert TPGatedDeltaNet.forward_verify_recurrent(g, "x", b * 4, n_users=b, spec_ctrl="ctrl") == ("fused", b * 4, b)
+    assert TPGatedDeltaNet._verify_fullbatch_fused(g, "qkv", 4, b, 32, "ctrl") == ("out", b * 4)
+    assert calls == [((4, b), {"max_users": 8})], "T, B=b rows, max_users = the shared state width"
+
+
+def test_verify_rejects_rows_outside_one_to_B(expect_error):
+    g = _bucket_layer(8, 4, [])
+    for n in (0, 9):
+        with expect_error(AssertionError, "rows must be in 1..B"):
+            TPGatedDeltaNet.forward_verify_recurrent(g, "x", 4, n_users=n, spec_ctrl="ctrl")
+    g._spec_shape = (4, 4)
+    with expect_error(AssertionError, "buffers are sized for"):
+        TPGatedDeltaNet.forward_verify_recurrent(g, "x", 8, n_users=2, spec_ctrl="ctrl")

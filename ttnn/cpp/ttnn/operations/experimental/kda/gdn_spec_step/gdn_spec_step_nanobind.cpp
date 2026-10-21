@@ -29,6 +29,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
         taps [1, K, C] BFLOAT16 TILE (tap j in row j). dt_bias / neg_exp_A [1,1,Nv]; weight [Dv] BFLOAT16.
         Returns [1, R, Nv*Dv]: rows u*T + t valid, every other row (incl. the tile padding rows [B*T, R)) exactly 0.
         Keyword Args:
+            max_users (int): default 0 (= B). Ring/ctrl layout width M >= B: ctrl blocks start at word 1+M, ring token
+                stride is M*Nv blocks, ring/ctrl/win may be M wide while only users 0..B-1 are computed.
             fast_mode (bool): default False. gdn_decode_step's fast_mode arithmetic: the T beta/decay gate pairs are
                 computed in software fp32 on the reader (sigmoid / softplus(threshold 20) / exp) instead of the
                 SFPU, and the stored state is the full fp32 sum of the state add (not a SrcA-truncated copy).
@@ -64,7 +66,8 @@ void bind_gdn_spec_step(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_dtype") = ttnn::DataType::BFLOAT16,
         nb::arg("fast_mode") = false,
-        nb::arg("fp32_state") = false);
+        nb::arg("fp32_state") = false,
+        nb::arg("max_users") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_spec_step::detail

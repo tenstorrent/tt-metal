@@ -22,6 +22,7 @@ struct GdnSpecStepParams {
     uint32_t value_dim;
     uint32_t T;            // candidate tokens per user (rows u*T + t of qkvzab)
     uint32_t B;            // users
+    uint32_t max_users = 0;  // ring/ctrl layout width M (0 = B); M >= B. Part of the program hash.
     uint32_t conv_kernel;  // K (4): window length Lw = K - 1 + T
     uint32_t qkvz_dim;     // column offset of the a|b block (= 2*Nk*Dk + 2*Nv*Dv)
     float scale;

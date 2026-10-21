@@ -3186,7 +3186,8 @@ class TPGatedDeltaNet:
         Call it eagerly, before the verify warmup pass, so the warmup compiles every program the
         captured body replays.
         """
-        assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
+        assert 1 <= n_users <= self.B, f"spec verify rows must be in 1..B: n_users={n_users}, B={self.B}"
+        n_users = self.B  # the state buffers are always B wide; a b-row verify (b < B) runs on them
         assert T >= 1, f"T must be at least 1, got {T}"
         assert (
             n_users * T <= tpc.TILE_SIZE
@@ -3283,13 +3284,17 @@ class TPGatedDeltaNet:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
 
-    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B):
+    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B, max_users=None):
         """The one fused dispatch (QWEN36_VERIFY_SPEC_STEP=1): raw [1, B*T, W] projection rows in, gated
         [1, B*T, Nv*Dv] bf16 (L1) out; ring / win[1-par] updated in place. Same call for the verify (ring =
         _spec_ring, the staged ctrl page) and the seed (ring = rec_state, the identity page, T = 1). dt_bias /
         neg_exp_A / norm weight / fast_mode / fp32_state and the default HiFi4 + fp32-accumulate kernel config are
         exactly what _forward_decode_step_op hands gdn_decode_step, so one verify token is one plain decode step."""
         tw = self.tw
+        extra = {}
+        _mu = max_users if max_users is not None else getattr(self, "_spec_max_users", 0)
+        if _mu:
+            extra["max_users"] = int(_mu)
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
             win_a,
@@ -3314,6 +3319,7 @@ class TPGatedDeltaNet:
             output_dtype=ttnn.bfloat16,
             fast_mode=True,
             fp32_state=self._decode_step_fp32_state,
+            **extra,
         )
 
     def _project_qkvzab_raw(self, x, S, out_mc=None):
@@ -3355,7 +3361,8 @@ class TPGatedDeltaNet:
         """
         B, R = n_users, n_users * T
         win = self._verify_win_pair
-        gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B)
+        # B rows (a bucket b <= self.B) run on the shared self.B-wide ring / ctrl page: max_users = the state width.
+        gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B, max_users=self.B)
         ttnn.deallocate(qkvzab)
         return self._out_proj_tail(gated, R, bucket, decode_ar=decode_ar)
 
@@ -3740,7 +3747,7 @@ class TPGatedDeltaNet:
         valid_len  : n_users * T real rows; must fit one 32-row decode tile.
         pre_gathered: x is already full-dim (decode-config verify runs the layer norms in
                      Mode.DECODE, which gathers pre-norm), so skip the all-gather.
-        n_users    : number of real users packed into the tile; must equal self.B.
+        n_users    : number of real users packed into the tile; 1..self.B (a bucket b <= B runs on the B-wide state).
         state_blk_idx: device uint32 ROW_MAJOR [B*Nv], from spec_state_blk_idx(mi, B, Nv). Selects
                      each (user, head)'s initial state block inside the ring.
         conv_sel   : device bf16 TILE [B, K-1+T, K-1+2T] one-hot, from spec_conv_sel(mi, B, T, K).
@@ -3756,11 +3763,11 @@ class TPGatedDeltaNet:
         host commits later by index.
         """
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
-        assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
+        assert 1 <= n_users <= self.B, f"spec verify rows must be in 1..B: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
         T = valid_len // n_users
-        assert self._spec_shape == (n_users, T), (
-            f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
+        assert self._spec_shape == (self.B, T), (
+            f"spec buffers are sized for {self._spec_shape}, verify asked for {(self.B, T)}; "
             "call prepare_spec_verify(n_users, T) before capture"
         )
         if self._spec_fused:

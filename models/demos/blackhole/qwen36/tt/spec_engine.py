@@ -55,6 +55,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
     ChainDevice,
     fused_fit_mode_bounds,
@@ -78,8 +79,11 @@ from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
     host_redo_walk,
 )
 from models.demos.blackhole.qwen36.tt.tp_common import (
+    engine_spec_buckets,
     pack_u32_rows,
     rope_row_index,
+    spec_bucket_hold,
+    spec_buckets_flag,
     spec_chain_audit_enabled,
     spec_chain_audit_every,
     spec_chain_enabled,
@@ -609,6 +613,7 @@ def spec_memory_costs(
     max_seq_len=None,
     num_layers=None,
     mask_buckets=None,
+    buckets=None,
 ):
     """PER-DEVICE bytes of the MTP spec-decode state beyond plain decode. Pure: HF text config + tp only.
 
@@ -622,7 +627,11 @@ def spec_memory_costs(
     Dims follow the model: TILE tensors pad their last two dims to 32; ROW_MAJOR are exact.
     ``fixed`` scales with B only through page tables / selectors / feed rows (all small). Page-table width nb =
     ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``num_layers`` overrides
-    num_hidden_layers (truncated test models); ``mask_buckets`` the engine's last-row selector buckets."""
+    num_hidden_layers (truncated test models); ``mask_buckets`` the engine's last-row selector buckets.
+    ``buckets``: the verify/drafter row buckets (QWEN36_SPEC_BUCKETS; None reads the env, default "1,2,4,8" = on, "8" = off = none beyond B). Each bucket
+    b < B adds to ``fixed.verify_io`` its persistent trace outputs (normed, logits TILE, RM copy, shard logits; b*T rows, TILE pads
+    to 32) and to ``engine_buffers`` its anchor hidden [1,1,b,dim/tp]. Per-bucket page-table slices are not persistent.
+    """
     tp, B, K = int(tp), int(batch_size), int(draft_len)
     T, rows = K + 1, B * (K + 1)
     dim = int(_cfg(text_config, "hidden_size"))
@@ -680,10 +689,24 @@ def spec_memory_costs(
             + _tile_bytes([1, 1, 32, tp * topk_m], bf)  # _vfy_topk_vals_out
             + _tile_bytes([1, 1, 32, tp * topk_m], i32)  # _vfy_topk_ids_out
         )
+    if buckets is None:  # the flag; "8" means off at any engine width (as in MTPSpecEngine.__init__)
+        raw = spec_buckets_flag()
+        buckets = () if raw in ("", "8") else engine_spec_buckets(B)
+    row_bks = sorted(int(b) for b in buckets if int(b) < B)
+    for b in row_bks:  # bucket-local persistent trace outputs (the hand-off targets are the B-row outputs above)
+        rb = b * T
+        verify_io += (
+            _tile_bytes([1, 1, rb, dim_frac], bf)  # normed
+            + _tile_bytes([1, 1, rb, logits_w], bf)
+            + _rm_bytes([1, 1, rb, logits_w], bf)  # logits TILE + RM copy
+        )
+        if topk_m and vocab % tp == 0:
+            verify_io += _tile_bytes([1, 1, rb, vocab // tp], bf)  # shard logits
     block_bytes = 2 * n_local_kv * int(block_size) * head_dim * int(kv_dtype_bytes)
-    buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
+    sel_buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
     engine = (
-        sum(_tile_bytes([1, 1, 1, b], bf) for b in buckets)  # _last_sel
+        sum(_tile_bytes([1, 1, b, dim_frac], bf) for b in row_bks)  # _hp_bufs
+        + sum(_tile_bytes([1, 1, 1, b], bf) for b in sel_buckets)  # _last_sel
         + _rm_bytes([B, nb], i32)
         + B * _rm_bytes([1, nb], i32)  # _mtp_pt, _mtp_pt_rows
         + _tile_bytes([1, 1, B, dim_frac], bf)  # _hp_buf
@@ -747,6 +770,7 @@ class FusedHandle:
         self.lo = self.hi = self.exact = self.fin = self.draft_result = self.perm = None
         self.parity, self.cap, self.skip, self.finished = 0, 0, [], False
         self.gen = None  # per-engine-row generations at creation (see MTPSpecEngine._row_gens)
+        self.bucket = None  # verify row bucket of the step (QWEN36_SPEC_BUCKETS; None while the flag is off)
 
     def wait(self):
         return self._eng._def_wait(self)
@@ -868,6 +892,12 @@ class MTPSpecEngine:
         self.chain_steps = self.chain_audits = 0
         self.chain_breaks = {}  # reason -> count of fused steps that could have chained and ran the host-staged path
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
+        # QWEN36_SPEC_BUCKETS (default "1,2,4,8" = on, "8" = off): the verify / drafter row buckets, the drafter trace id per bucket < B that exists
+        raw = spec_buckets_flag()
+        self._buckets = (
+            (self.B,) if raw in ("", "8") else tuple(engine_spec_buckets(self.B))
+        )  # "8" = off at any engine width
+        self._dr_traces = {}  # bucket b < B -> drafter trace id of b rows (filled when a per-bucket capture exists)
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
@@ -915,6 +945,134 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Host helpers
     # --------------------------------------------------------------------- #
+    # ---- QWEN36_SPEC_BUCKETS: the row bucket of a step, its drafter trace, the lowest-free-row placement
+    def _bucketed(self):
+        """True when more than one bucket is configured (flag != "8"); every bucket hook is a no-op otherwise."""
+        return self._buckets is not None and len(self._buckets) > 1
+
+    def _bucket_has_trace(self, b):
+        """Only B-row traces exist until the per-bucket captures land (_dr_traces: bucket -> drafter trace id)."""
+        return b == self.B or b in (self._dr_traces or {})
+
+    def _bucket_of(self, live_rows):
+        """The bucket a step that runs engine rows ``live_rows`` replays: pick_bucket over the configured buckets, B when that
+        bucket has no trace yet. Pure (no counters). Flag off: B."""
+        if not self._bucketed():
+            return self.B
+        b = pick_bucket(self._buckets, live_rows)
+        return b if self._bucket_has_trace(b) else self.B
+
+    @staticmethod
+    def _active_rows(active):
+        return torch.nonzero(torch.as_tensor(active, dtype=torch.bool).reshape(-1)).reshape(-1).tolist()
+
+    def _bucket_step(self, live_rows):
+        """Per step: the bucket the step runs into ``_vb`` (+ whether a missing trace forced B). Flag off: nothing.
+        QWEN36_SPEC_BUCKET_HOLD: the engine keeps a current bucket ``_bk_cb``. A wanted bucket above it switches up at once. A
+        wanted bucket below it switches down only after HOLD consecutive such steps (to the largest wanted of the streak, so the
+        new bucket fits every step of it), or earlier, free, when the step breaks the chain anyway (_bucket_free_note).
+        HOLD = 0: every down-shift is immediate (the bucket of the live rows)."""
+        if not self._bucketed():
+            return
+        chosen = pick_bucket(self._buckets, live_rows)
+        wanted = self._bucket_of(live_rows)
+        self._vb_fell = chosen != wanted
+        cb, hold = self._bk_cb, spec_bucket_hold()
+        self._bk_cand = None
+        if cb is None or wanted >= cb:
+            cb = wanted
+            self._bk_streak = self._bk_smax = 0
+        else:
+            self._bk_streak += 1
+            self._bk_smax = max(self._bk_smax, wanted)
+            if self._bk_streak >= hold:
+                cb = self._bk_smax
+                self.bucket_downs_hold += 1
+                self._bk_streak = self._bk_smax = 0
+            else:
+                self._bk_cand = self._bk_smax  # the free switch target, if this step breaks the chain anyway
+        self._bk_cb = self._vb = cb
+
+    def _bucket_free_note(self, prev_bucket, kw=None):
+        """The step breaks the chain for a reason other than ``bucket_change``: a pending down-shift happens now, at no extra cost
+        (``kw["bucket"]`` and the step count follow), and a bucket that differs from the previous step's counts as a free switch.
+        """
+        if not self._bucketed():
+            return
+        cand = self._bk_cand
+        if cand is not None:
+            old = self._vb
+            self._bk_cb = self._vb = cand
+            self._bk_cand = None
+            self._bk_streak = self._bk_smax = 0
+            self.bucket_downs_free += 1
+            if kw is not None:
+                kw["bucket"] = cand
+                bs = self.__dict__.setdefault("bucket_steps", {})
+                if bs.get(old, 0) > 0:
+                    bs[old] -= 1
+                    bs[cand] = bs.get(cand, 0) + 1
+        if prev_bucket is not None and prev_bucket != self._vb:
+            self.bucket_free_switch += 1
+
+    def _bucket_kw(self, kw):
+        """Put the step's bucket into the verify kwargs and count the step (flag off: kw unchanged)."""
+        if self._bucketed():
+            kw["bucket"] = self._vb
+            bs = self.__dict__.setdefault("bucket_steps", {})
+            bs[self._vb] = bs.get(self._vb, 0) + 1
+            if self._vb_fell:
+                self.bucket_fallbacks += 1
+        return kw
+
+    def _dr_trace_for(self, b):
+        """Drafter trace id for bucket ``b`` (B, None or no per-bucket capture: the B-row trace)."""
+        if b is None or b == self.B or not self._dr_traces:
+            return self._dr_trace
+        return self._dr_traces.get(b, self._dr_trace)
+
+    def _bucket_note_text(self):
+        """Tail of the periodic fused line: steps per bucket, fallbacks, row swaps (flag on only)."""
+        if not self._bucketed():
+            return ""
+        bs = self.__dict__.get("bucket_steps", {})
+        return (
+            "; buckets "
+            + " ".join(f"{b}:{bs.get(b, 0)}" for b in self._buckets)
+            + f", fallbacks {self.bucket_fallbacks}, row swaps {self.row_swaps}"
+            + f", down-shifts hold {self.bucket_downs_hold} free {self.bucket_downs_free}"
+            + f", free switches {self.bucket_free_switch}"
+        )
+
+    def _pending_rows(self):
+        """Engine rows that a deferred step still in flight (not finished) describes."""
+        rows, h, seen = set(), self._def_last, 0
+        while h is not None and seen < 64:
+            if not h.finished and h.active is not None:
+                rows |= set(self._active_rows(h.active))
+            h, seen = h.prev, seen + 1
+        return rows
+
+    def _claim_low_row(self, slot):
+        """QWEN36_SPEC_BUCKETS, host slot map only: before a NEW request is prefilled into runner slot ``slot``, swap the slot map
+        entries of two FREE runner slots so the request lands on the lowest free engine row (small buckets stay usable). A live
+        row never moves (a re-prefill of a live request does nothing), and nothing moves while a deferred step in flight describes
+        either of the two rows. Counts ``row_swaps``."""
+        if not self._bucketed() or not self.host_slotmap:
+            return
+        free = set(range(self.B)) - self._active
+        swap = plan_row_swap(int(slot), free, self._phys)
+        if swap is None:
+            return
+        a, b = swap
+        if {self._phys[a], self._phys[b]} & self._pending_rows():
+            return
+        logger.info(
+            f"[spec_engine] row swap: slot {a} row {self._phys[a]} <-> slot {b} row {self._phys[b]} (lowest free row)"
+        )
+        self._set_slot_map(apply_row_swap(self._phys, swap))
+        self.row_swaps += 1
+
     def _set_slot_map(self, phys):
         self._phys = [int(r) for r in phys]
         if self._phys == list(range(self.B)):
@@ -986,6 +1144,19 @@ class MTPSpecEngine:
     _mtpw_hidden, _mtpw_phys = (), {}
     join_mtp_trace_replays = 0
 
+    # QWEN36_SPEC_BUCKETS class defaults (set per instance in __init__): None = the flag is off, every hook does nothing
+    _buckets = _dr_traces = _vb = None
+    _hp_bufs = None  # bucket b < B -> persistent anchor hidden [1,1,b,dim/tp] of its drafter body
+    _dr_bks = ()  # the buckets < B whose verify + drafter traces this engine builds (descending), see _bucket_plan
+    _dr_standins = ()  # warm-pass stand-ins of the shared K ids outputs, freed after the captures
+    _addr_snap = None
+    _vb_fell = False  # the last _bucket_step chose a bucket that has no trace yet and ran at B
+    bucket_fallbacks = row_swaps = 0
+    # QWEN36_SPEC_BUCKET_HOLD state: current bucket, the streak of steps wanting less, its largest wanted bucket, the pending free
+    # down-shift target of this step; counters: down-shifts by cause (hold reached / free with another break), switches absorbed
+    _bk_cb = _bk_cand = None
+    _bk_streak = _bk_smax = 0
+    bucket_downs_hold = bucket_downs_free = bucket_free_switch = 0
     _dr_rs_dirty = False  # the device wrote _dr_rs_pt (fused step): _dr_rs_cache no longer mirrors it
     # class defaults of the fused-step state (set per instance in __init__; engines built without it read these)
     _fa = _fa_trace = _fused_cache = _fa_pt_host = None
@@ -1294,6 +1465,11 @@ class MTPSpecEngine:
         for t in (r0, r1):
             ttnn.deallocate(t)
         model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
+        self._dr_bks = self._bucket_plan()
+        if (
+            self._dr_bks
+        ):  # every verify bucket program is compiled here, before any capture (capture forbids cache misses)
+            model.prepare_verify_buckets(self._dr_bks)
         for dn in self._gdn:
             # The seed's sync_conv_win from the packed conv format (the gdn_decode_step op is the plain decode, e.g.
             # QWEN36_VERIFY_SPEC_STEP=1): compile its unpack / copies before capture_decode forbids cache misses.
@@ -1381,6 +1557,19 @@ class MTPSpecEngine:
                 ttnn.deallocate(z)
             for o in self._drafter_body(feed):  # compiles every program of the trace body (scratch-only inputs)
                 ttnn.deallocate(o)
+            if self._dr_bks:  # each drafter bucket body once, handing its ids over to stand-ins of the shared outputs
+                self._dr_standins = tuple(
+                    ttnn.zeros(
+                        [1, 1, B, 1],
+                        device=self.mesh,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(self.K)
+                )
+                for b in self._dr_bks:
+                    self._drafter_body(feed, b, list(self._dr_standins))
             ttnn.synchronize_device(self.mesh)
             ttnn.deallocate(feed)
             if spec_fused_enabled():
@@ -1514,6 +1703,7 @@ class MTPSpecEngine:
         ttnn.synchronize_device(self.mesh)
         self._dr_rs_dirty = True
         logger.info("[spec_engine] fused accept trace captured (greedy walk + drafter inputs on device)")
+        self._log_trace_memory("accept")
         self._capture_fused_sampled()
         self._capture_chain()
 
@@ -1544,6 +1734,7 @@ class MTPSpecEngine:
             "[spec_engine] chain trace captured (device builds the next verify's tokens / aux from the previous fused step"
             f"{'; greedy + sampled variants' if self._ch_trace_s is not None else '; greedy variant'})"
         )
+        self._log_trace_memory("chain")
 
     def _capture_fused_sampled(self):
         """Stage S2, inside the guarded scope: bind the live verify ids and the live topk trace outputs and capture the sampled
@@ -1563,6 +1754,7 @@ class MTPSpecEngine:
         ttnn.end_trace_capture(self.mesh, self._fs_trace, cq_id=0)
         ttnn.synchronize_device(self.mesh)
         logger.info("[spec_engine] fused sampled accept trace captured (union top-k -> sampled walk + drafter inputs)")
+        self._log_trace_memory("accept_s")
 
     def _seed_buffers(self):
         """The device buffers a seed trace bakes in, per GDN layer (compared by identity at replay)."""
@@ -1629,7 +1821,15 @@ class MTPSpecEngine:
         self.mesh.set_program_cache_misses_allowed(False)
         try:
             with trace_allocation_tracker.corruptible_allocation_scope(self.mesh):
-                self.model.record_verify_trace()
+                self.model.record_verify_trace()  # V8: its outputs are the shared buffers
+                if not self._dr_bks:  # with buckets the model logged V8 itself
+                    self._log_trace_memory("V8")
+                snap = self._shared_addrs()
+                if (
+                    self._dr_bks
+                ):  # V4, V2, V1 right after V8 (each main + logits + topk), before any drafter / accept capture
+                    self.model.record_verify_buckets(self._dr_bks)
+                    self._check_shared_addrs(snap, "after the verify buckets")
                 if self.recorded_drafter:  # ids outputs are read right after each replay
                     feed = self.model._vfy_rows_out
                     self._dr_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
@@ -1637,14 +1837,123 @@ class MTPSpecEngine:
                     ttnn.end_trace_capture(self.mesh, self._dr_trace, cq_id=0)
                     ttnn.synchronize_device(self.mesh)
                     logger.info(f"[spec_engine] drafter trace captured (anchor + reseed + {self.K} draft steps)")
+                    self._log_trace_memory("D8")
+                    snap.update(self._shared_addrs())
+                    for b in self._dr_bks:  # D4, D2, D1: no new persistent outputs, they copy into _dr_outs in place
+                        tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                        self._drafter_body(feed, b, self._dr_outs)
+                        ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                        self._dr_traces[b] = tid
+                        ttnn.synchronize_device(self.mesh)
+                        logger.info(f"[spec_engine] drafter bucket trace captured (b={b}: {b * self.T} reseed rows)")
+                        self._log_trace_memory(f"D{b}")
+                    self._check_shared_addrs(snap, "after the drafter buckets")
+                    for t in self._dr_standins:  # warm-pass stand-ins of the shared K ids, used by no trace
+                        ttnn.deallocate(t)
+                    self._dr_standins = ()
                     if self._fa is not None:
+                        snap.update(self._shared_addrs())
                         self._capture_fused()
                 else:
                     logger.info("[spec_engine] drafter runs eagerly (QWEN36_SPEC_EAGER_DRAFTER=1)")
                 self._capture_seed_traces()  # last: every earlier trace keeps its allocation layout
+                self._log_trace_memory("seed")
+                self._check_shared_addrs(snap, "after every capture")
+                self._zero_shared_outputs()
+                self._addr_snap = snap
         finally:
             self.mesh.set_program_cache_misses_allowed(True)
         self.captured = True
+
+    def _zero_shared_outputs(self):
+        """QWEN36_SPEC_BUCKETS: trace capture does not run the ops, so the shared B-row outputs (verify ids / drafter-feed rows /
+        top-k, drafter K ids) hold uninitialized memory until a B-row replay writes them. A bucket replay writes only its own rows,
+        so the rows >= b would stay garbage (the host reads all B rows of the K ids). Write zeros once, in place (no new
+        allocation: the addresses the traces baked in do not move). Flag off: nothing."""
+        if not self._bucketed():
+            return
+        m = self.model
+        outs = [
+            getattr(m, n, None) for n in ("_vfy_ids_out", "_vfy_rows_out", "_vfy_topk_vals_out", "_vfy_topk_ids_out")
+        ]
+        torch_dt = {ttnn.bfloat16: torch.bfloat16, ttnn.uint32: torch.int32}
+        for t in (*outs, *(self._dr_outs or ())):
+            if t is not None:
+                self._stage(torch.zeros(*t.shape, dtype=torch_dt[t.dtype]), t, t.dtype, t.layout)
+        ttnn.synchronize_device(self.mesh)
+
+    def _bucket_plan(self):
+        """The row buckets < B this engine builds verify + drafter traces for (descending); () = none. QWEN36_SPEC_BUCKETS
+        "8" (default) gives (). A flag value the engine cannot serve (no recorded packed drafter, no sharded verify argmax)
+        warns and falls back to the B-row traces only (``_buckets`` becomes (B,))."""
+        if not self._bucketed():
+            return ()
+        why = None
+        if not self.recorded_drafter:
+            why = "the drafter is not recorded (QWEN36_SPEC_EAGER_DRAFTER=1)"
+        elif not spec_hostset_trace_enabled():
+            why = "the packed drafter inputs are off (QWEN36_SPEC_HOSTSET=0)"
+        elif not getattr(self.model, "_vfy_sharded", False):
+            why = "the verify argmax is not sharded (QWEN36_VERIFY_SHARDED_ARGMAX)"
+        bks = tuple(sorted((b for b in self._buckets if b < self.B), reverse=True))
+        if why is not None or not bks:
+            logger.warning(
+                f"[spec_engine] QWEN36_SPEC_BUCKETS={self._buckets} ignored: {why or 'no bucket below B'}; B-row traces only"
+            )
+            self._buckets = (self.B,)
+            return ()
+        logger.info(f"[spec_engine] row buckets {bks} + {self.B}: verify and drafter traces per bucket")
+        return bks
+
+    def _log_trace_memory(self, label):
+        """Log the trace-region / DRAM bytes after the capture ``label`` (model._log_trace_memory; never raises)."""
+        return self.model._log_trace_memory(label)
+
+    def _shared_addrs(self):
+        """name -> buffer address of every persistent buffer a trace baked in that more than one trace (or the host) shares:
+        the verify outputs (ids / drafter-feed rows / topk pair), its token / aux inputs, the drafter outputs and inputs,
+        the accept and chain inputs / outputs. Buffers that do not exist yet are left out. Bound-in buffers (the ids and
+        union inputs of the accept traces) are the verify outputs themselves and are listed once, under the model."""
+        model, out = self.model, {}
+
+        def add(name, t):
+            if t is not None:
+                out[name] = int(t.buffer_address())
+
+        for n in (
+            "_vfy_ids_out",
+            "_vfy_rows_out",
+            "_vfy_topk_vals_out",
+            "_vfy_topk_ids_out",
+            "_vfy_token_buf",
+            "_vfy_aux_buf",
+        ):
+            add(f"model.{n}", getattr(model, n, None))
+        for k, t in enumerate(self._dr_outs or ()):
+            add(f"dr_outs[{k}]", t)
+        for n in ("_dr_pack", "_dr_eye", "_dr_rs_pt", "_hp_buf", "_mtp_pt", "_anchor_sel"):
+            add(n, getattr(self, n, None))
+        for b, t in (self._hp_bufs or {}).items():
+            add(f"_hp_bufs[{b}]", t)
+        for tag, obj, names in (
+            ("fa", self._fa, ("aux_in", "pt_rows_in", "result_out")),
+            ("fs", self._fs, ("samp_in", "result_out")),
+            ("ch_g", self._ch_g, ("ovr_in", "result_in", "aux_prev_in", "tok_out", "vaux_out")),
+            ("ch_s", self._ch_s, ("ovr_in", "result_in", "aux_prev_in", "tok_out", "vaux_out")),
+        ):
+            for n in names:
+                if obj is not None:
+                    add(f"{tag}.{n}", getattr(obj, n, None))
+        return out
+
+    def _check_shared_addrs(self, snap, label):
+        """Every buffer in ``snap`` (from _shared_addrs) must still sit at its address: a hand-off that re-binds its
+        destination (slice_write into a TILE buffer) leaves earlier traces writing the old address, and later captures
+        may place scratch on the new one."""
+        now = self._shared_addrs()
+        moved = {n: (hex(a), hex(now[n]) if n in now else None) for n, a in snap.items() if now.get(n) != a}
+        assert not moved, f"[spec_engine] shared buffers moved {label}: {moved}"
+        logger.info(f"[spec_engine] {len(snap)} shared buffer addresses unchanged {label}")
 
     def shutdown(self):
         """Release the traces and every persistent engine buffer; a later prepare starts over."""
@@ -1653,6 +1962,7 @@ class MTPSpecEngine:
         logger.info("[spec_engine] shutdown: releasing traces")
         model.release_verify_trace()
         model._vfy_prepared_key = None
+        model.__dict__.pop("_vfy_mem_log", None)  # the next prepare / capture logs its memory from zero
         if self.prefill_recorded and getattr(model, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(model.device, model._chunked_trace_id)
             model._chunked_trace_id = None
@@ -1697,12 +2007,16 @@ class MTPSpecEngine:
             if self._fa.ids_standin is not None:  # the warm-pass stand-in (the live ids buffer dies with its trace)
                 ttnn.deallocate(self._fa.ids_standin)
         self._fa, self._fused_cache, self._fa_pt_host, self._dr_rs_dirty = None, None, None, False
+        for tid in (self._dr_traces or {}).values():  # the drafter bucket traces (D4, D2, D1)
+            ttnn.release_trace(self.mesh, tid)
+        self._dr_traces = {}
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
-        for t in (*self._dr_outs, *self._dr_bufs):
+        for t in (*self._dr_outs, *self._dr_bufs, *(self._hp_bufs or {}).values(), *self._dr_standins):
             ttnn.deallocate(t)
-        self._dr_outs, self._dr_bufs = [], []
+        self._dr_outs, self._dr_bufs, self._hp_bufs, self._dr_standins, self._dr_bks = [], [], None, (), ()
+        self._addr_snap = None
         for t in (self._mtpw_pack, self._mtpw_pt):
             if t is not None:
                 ttnn.deallocate(t)
@@ -1779,13 +2093,20 @@ class MTPSpecEngine:
         att = self.mtp.attention
         kv_bytes = nbytes(att.paged_k) + nbytes(att.paged_v)
         n_blocks = int(att.paged_k.shape[0])
+        bks = (getattr(m, "_vfy_bk", None) or {}).values()
         fixed = {
-            "verify_io": sum(nbytes(getattr(m, f"_vfy_{n}", None)) for n in vfy),
+            "verify_io": sum(nbytes(getattr(m, f"_vfy_{n}", None)) for n in vfy)
+            + sum(
+                nbytes(getattr(bk, n, None))
+                for bk in bks
+                for n in ("normed", "shard_logits", "logits_out", "logits_rm_out")
+            ),
             "mtp_scratch_block": kv_bytes // n_blocks,
             "engine_buffers": sum(
                 nbytes(t)
                 for t in (
                     *self._last_sel.values(),
+                    *(self._hp_bufs or {}).values(),
                     self._mtp_pt,
                     *self._mtp_pt_rows,
                     self._hp_buf,
@@ -1939,6 +2260,8 @@ class MTPSpecEngine:
                 # a fallback step ran on the host: its propose runs the drafter over the page table of its own step, which the new
                 # request may reuse; finish it now, as the drained order does
                 self._def_finish_any(self._def_last)
+        if len(getattr(self, "_buckets", None) or ()) > 1:  # QWEN36_SPEC_BUCKETS
+            self._claim_low_row(slot)
         self._row_gens()[self._phys[int(slot)]] += 1
         return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos)
 
@@ -2317,6 +2640,10 @@ class MTPSpecEngine:
         unknown = [u for u in rows if u not in self._active]
         if unknown:
             raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
+        if (
+            self._def_ctx is None
+        ):  # deferred serving decided the bucket in _decode_forward_deferred (before the chain reason)
+            self._bucket_step(rows)
         # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
         to_park = [
             u for u in range(B) if not act[u] and u in self._active and u not in self._fresh and u not in self._parked
@@ -2374,6 +2701,8 @@ class MTPSpecEngine:
             mi_prev = mi_prev.clone()
             mi_prev[fresh] = 0
         elif fresh_now:
+            if self._bucketed():
+                self._vb = self.B  # the eager seed / join runs the B-row traces
             # the seed rewrites every row's durable GDN state: fresh rows left out must re-prefill before their own seed
             self._fresh_dirty |= set(self._fresh) - set(fresh_now)
             for u in sorted(fresh_now):
@@ -2403,6 +2732,7 @@ class MTPSpecEngine:
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
         kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
+        self._bucket_kw(kw)
         if read_topk:
             kw["read_topk"] = True  # only when asked: an older model.verify_traced has no such argument
         if narrow and read_logits and spec_hostset_enabled():
@@ -2838,6 +3168,7 @@ class MTPSpecEngine:
                 )
                 + self._park_note_text()
                 + self._join_trace_note_text()
+                + self._bucket_note_text()
             )
 
     def _join_trace_note_text(self):
@@ -2945,7 +3276,7 @@ class MTPSpecEngine:
         fa, model = self._fa, self.model
         self._check_scratch(pt)
         declined = aux[2, :B].bool()
-        chain = self._chain_plan(tokens, start_pos, active, nv, args)
+        chain = self._chain_plan(tokens, start_pos, active, nv, args, kw)
         if chain is None:
             fa.stage_aux(aux)
         else:  # QWEN36_SPEC_CHAIN: the overlay replaces the aux copy; the chain trace writes aux_in, the token and aux buffers
@@ -2964,7 +3295,7 @@ class MTPSpecEngine:
             self._chain_exec(chain)
             handle = model.verify_stage_and_enqueue(*args, **kw, skip_tokens_h2d=True, skip_aux_h2d=True)
         ttnn.execute_trace(self.mesh, self._fa_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
         # Every non-blocking D2H read is enqueued BEFORE the single synchronize (a from_device(blocking=False) issued
         # after it is never waited on: its host tensor is unfilled). The reads below it are blocking to_torch.
         dr_handles = self._ids_enqueue_reads(self._dr_outs)
@@ -3033,8 +3364,10 @@ class MTPSpecEngine:
             active=torch.as_tensor(active).clone().bool(),
             taken=False,
         )
+        if self._bucketed():
+            self._chain_cand["bucket"] = self._vb
 
-    def _chain_plan(self, tokens, start_pos, active, nv, args):
+    def _chain_plan(self, tokens, start_pos, active, nv, args, kw=None):
         """The previous-step record when THIS fused step (already eligible for the device accept) can take its verify inputs from the
         device, else None (reason counted in ``chain_breaks``; the step then stages tokens / aux on the host exactly as without
         chain mode). Needs: the previous step was a fused step that ran the device accept + drafter, the plugin took its drafts,
@@ -3048,13 +3381,15 @@ class MTPSpecEngine:
         why, self._chain_why = self._chain_why, None
         ev, self._chain_ev = self._chain_ev, None
         reason = self._chain_reason(prev, why, ev, tokens, start_pos, active, nv, args)
+        if reason is not None and reason != "bucket_change":  # a break anyway: a pending bucket down-shift is free now
+            self._bucket_free_note(None if prev is None else prev.get("bucket"), kw)
         if reason is not None:
             cb = self.__dict__.setdefault("chain_breaks", {})
             cb[reason] = cb.get(reason, 0) + 1
             return None
         return prev
 
-    def _chain_reason(self, prev, why, ev, tokens, start_pos, active, nv, args):
+    def _chain_reason(self, prev, why, ev, tokens, start_pos, active, nv, args, skip_bucket=False):
         B, K, T = self.B, self.K, self.T
         if prev is None:
             return why or "first"
@@ -3065,6 +3400,12 @@ class MTPSpecEngine:
         pa = prev["active"]
         if bool((active & ~pa).any()):
             return "row_set"
+        if not skip_bucket and self._bucketed() and prev.get("bucket") != self._vb:
+            # the step's bucket (held, see _bucket_step) differs: a break of its own only when nothing else breaks the chain
+            return (
+                self._chain_reason(prev, why, ev, tokens, start_pos, active, nv, args, skip_bucket=True)
+                or "bucket_change"
+            )
         if (self._ch_trace_g if prev["kind"] == "g" else self._ch_trace_s) is None:
             return "not_captured"
         cont = active & pa
@@ -3391,6 +3732,8 @@ class MTPSpecEngine:
                 sampling = None
         kind_s = sampling is not None
         # ---- which rows chain
+        if self._bucketed():
+            self._bucket_step(self._active_rows(active))
         reason = pre
         if cmask is not None and reason is None:
             if bool((active & ~cmask).any()):
@@ -3401,6 +3744,12 @@ class MTPSpecEngine:
                 reason = self._def_events(active)
             if reason is None and kind_s:
                 reason = self._sampled_ineligible(sampling)
+            if reason is None and self._bucketed() and prev.bucket != self._vb:
+                reason = "bucket_change"  # only when no other reason breaks the chain (that one is counted instead)
+        if self._bucketed() and (cmask is None or (reason is not None and reason != "bucket_change")):
+            self._bucket_free_note(
+                None if prev is None else prev.bucket
+            )  # a break anyway: a pending down-shift is free now
         hint = nv_rows.clone()
         if cmask is not None and reason is None:
             nv_rows = nv_rows.clone()
@@ -3471,6 +3820,7 @@ class MTPSpecEngine:
         ), "verify window past the paged KV capacity"
         args = (clean.tolist(), start_hi.tolist(), mi_prev.tolist())
         kw = dict(read_logits=False, page_tables=vpt, inactive=(~active).tolist())
+        self._bucket_kw(kw)  # the bucket was decided in _decode_forward_deferred
         chain = dict(chain, lo=lo, hi=hi)
         return self._def_enqueue(
             "s" if sampling is not None else "g", clean, start_hi, pt, active, nv_rows, args, kw, sampling, aux, chain
@@ -3540,7 +3890,7 @@ class MTPSpecEngine:
                 *args, **kw, **extra, skip_tokens_h2d=True, skip_aux_h2d=True, skip_kv_check=True, flip_parity=True
             )
         ttnn.execute_trace(self.mesh, self._fa_trace if kind == "g" else self._fs_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
         self._vfeed = model._vfy_rows_out
         self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
         res_t = read(fa.result_out if kind == "g" else fs.result_out)
@@ -3575,6 +3925,8 @@ class MTPSpecEngine:
         h.skip = [bool(s) for s in propose_skip_plan(self._no_draft, B)[0]]
         h.cap = table_capacity(self._last_cap_blocks, self.block_size)
         h.perm = self._phys_perm
+        if self._bucketed():
+            h.bucket = self._vb
         if prev is not None:
             prev.succ = weakref.ref(h)
         self._offered = {u for u in range(B) if not bool(declined[u])}
@@ -3830,7 +4182,7 @@ class MTPSpecEngine:
         fa, fs, model = self._fa, self._fs, self.model
         self._check_scratch(pt)
         declined = aux[2, :B].bool()
-        chain = self._chain_plan(tokens, start_pos, active, nv, args)
+        chain = self._chain_plan(tokens, start_pos, active, nv, args, kw)
         if chain is None:
             fa.stage_aux(aux)  # aux_in / pt_rows_in are shared with the S1 device
         else:
@@ -3854,7 +4206,7 @@ class MTPSpecEngine:
                 *args, **kw, execute_topk=True, skip_tokens_h2d=True, skip_aux_h2d=True
             )
         ttnn.execute_trace(self.mesh, self._fs_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
         dr_handles = self._ids_enqueue_reads(self._dr_outs)
         ttnn.synchronize_device(self.mesh)  # the only one of the step
         ids, vfeed, _ = model.verify_after_external_sync(handle)
@@ -4291,6 +4643,16 @@ class MTPSpecEngine:
         al, z, bf, i32 = self._alloc_host_replicated, torch.zeros, ttnn.bfloat16, torch.int32
         rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
         self._dr_hostset = spec_hostset_trace_enabled()
+        self._hp_bufs = {  # per-bucket anchor hidden [1,1,b,dim/tp]: allocated before any capture, like _hp_buf
+            b: ttnn.zeros(
+                [1, 1, b, self._hp_buf.shape[-1]],
+                device=self.mesh,
+                dtype=self._hp_buf.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for b in self._dr_bks
+        }
         if self._dr_hostset:
             self.model.rope.decode_rm_tables()  # the resident RoPE tables exist before the trace is captured
             self._dr_pack = al(pack_u32_rows([z(n, dtype=i32) for n in self._dr_seg_lens()]), ttnn.uint32, rm)
@@ -4326,14 +4688,34 @@ class MTPSpecEngine:
             self._dr_rs_sin,
         ]
 
-    def _drafter_body(self, feed):
+    def _drafter_body(self, feed, b=None, dst_outs=None):
         """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
         persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
-        tensors [1,1,B] uint32 (step k's drafts)."""
+        tensors [1,1,B] uint32 (step k's drafts).
+
+        ``b`` (a row bucket < B, QWEN36_SPEC_BUCKETS): the same body over engine rows 0..b-1 only (b*T reseed rows, b drafts
+        per step), on the shared B-row inputs (sliced in the trace). Its K ids [1,1,b,1] are handed over IN PLACE (concat of
+        the b new rows with the old rows b..B-1, then ttnn.copy: the destination keeps its address) into ``dst_outs`` (the
+        shared K [1,1,B,1] outputs of the B-row trace, or stand-ins while warming), and ``dst_outs`` is returned. b = B or
+        None is the B-row body, unchanged."""
         B, mtp = self.B, self.mtp
-        d = self._dr_inputs()
+        b = B if b is None or int(b) == B else int(b)
+        bucket = b < B
+        assert not bucket or dst_outs is not None, "a row-bucket drafter body needs the shared K ids outputs"
+        d = self._dr_inputs(b)
+        owned = list(d["owned"])
+        if bucket:
+            rb = b * self.T
+            dim = feed.shape[-1]
+            feed = ttnn.slice(feed, [0, 0, 0, 0], [1, 1, rb, dim])
+            rs_pt = ttnn.slice(self._dr_rs_pt, [0, 0], [rb, self.nb])
+            mtp_pt = ttnn.slice(self._mtp_pt, [0, 0], [b, self.nb])
+            owned += [feed, rs_pt, mtp_pt]
+            hp = self._hp_bufs[b]
+        else:
+            rs_pt, mtp_pt, hp = self._dr_rs_pt, self._mtp_pt, self._hp_buf
         Hp = ttnn.matmul(d["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
-        ttnn.copy(Hp, self._hp_buf)
+        ttnn.copy(Hp, hp)
         ttnn.deallocate(Hp)
         _, hn = mtp.forward_decode(
             feed,
@@ -4341,32 +4723,39 @@ class MTPSpecEngine:
             d["rs_pos"],
             d["rs_cos"],
             d["rs_sin"],
-            self._dr_rs_pt,
+            rs_pt,
             need_logits=False,
             alias_kv_write=True,
-            spec_n_users=B,
+            spec_n_users=b,
         )
         ttnn.deallocate(hn)
-        h, tok, outs = self._hp_buf, d["tok0"], []
+        h, tok, outs = hp, d["tok0"], []
         for k in range(self.K):
-            logits, hn = mtp.forward_decode(h, tok, d["pos"][k], d["cos"][k], d["sin"][k], self._mtp_pt)
+            logits, hn = mtp.forward_decode(h, tok, d["pos"][k], d["cos"][k], d["sin"][k], mtp_pt)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
-            tok = ttnn.reshape(idx, (B, 1))
+            tok = ttnn.reshape(idx, (b, 1))
             outs.append(idx)
-            if h is not self._hp_buf:
+            if h is not hp:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
-        for t in d["owned"]:
+        for t in owned:
             ttnn.deallocate(t)
-        return outs
+        if not bucket:
+            return outs
+        from models.demos.blackhole.qwen36.tt.spec_bucket import handoff_ids_concat
+
+        for idx, dst in zip(outs, dst_outs):
+            handoff_ids_concat(idx, dst, b)  # in place (ttnn.copy), never slice_write: dst keeps its address
+            ttnn.deallocate(idx)
+        return dst_outs
 
     def _dr_seg_lens(self):
         B, K, R = self.B, self.K, self.B * self.T
         return [B] + [B] * K + [R, R, B, R] + [B] * K
 
-    def _dr_inputs(self):
+    def _dr_inputs(self, b=None):
         """The drafter body's inputs as a dict (anchor_sel, rs_tok, rs_pos, rs_cos, rs_sin, tok0, pos[k], cos[k], sin[k],
         owned). Without the packed layout: the persistent buffers (owned = []). With it (``_dr_hostset``): derived from
         ``_dr_pack`` in the trace. Rows of the pack (uint32 [2K+5, W], segment i at row i, columns [0, len)):
@@ -4375,7 +4764,9 @@ class MTPSpecEngine:
         Positions: typecast(uint32 -> int32) of the slice. cos/sin: ttnn.embedding on the RoPE tables
         (model._dl_rope_cos_sin) = the host's bf16 values (rope_row_index). The anchor one-hot: embedding of the anchor
         row index into an identity table (a row copy: 1.0 / 0.0 in bf16, exactly the host's anchor_selector)."""
+        b = self.B if b is None else int(b)
         if not self._dr_hostset:
+            assert b == self.B, "row-bucket drafter bodies need the packed drafter inputs (QWEN36_SPEC_HOSTSET)"
             return dict(
                 anchor_sel=self._anchor_sel,
                 rs_tok=self._dr_rs_tok,
@@ -4388,7 +4779,7 @@ class MTPSpecEngine:
                 sin=self._dr_sin,
                 owned=[],
             )
-        B, K, R, pk, model = self.B, self.K, self.B * self.T, self._dr_pack, self.model
+        B, K, R, pk, model = b, self.K, b * self.T, self._dr_pack, self.model
         owned = []
 
         def seg(row, n):
@@ -4413,7 +4804,11 @@ class MTPSpecEngine:
         rs_pos = i32(seg(K + 2, R), (R,))
         aidx = seg(K + 3, B)
         sel = ttnn.embedding(aidx, self._dr_eye, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        anchor_sel = ttnn.reshape(sel, (1, 1, B, R))
+        anchor_sel = ttnn.reshape(sel, (1, 1, B, self.B * self.T))
+        if b < self.B:  # the one-hot columns of rows >= b*T are all zero (anchor rows are u*T+m, u < b)
+            full = anchor_sel
+            anchor_sel = ttnn.slice(full, [0, 0, 0, 0], [1, 1, B, R])
+            owned.append(full)
         rs_cos, rs_sin = rope(K + 4, R)
         steps = [rope(K + 5 + k, B) for k in range(K)]
         owned.extend([tok0, rs_tok, aidx, anchor_sel])
@@ -4458,7 +4853,7 @@ class MTPSpecEngine:
             stage(pv, self._dr_pos[k], ttnn.int32, rm)
             stage(c, self._dr_cos[k], bf, tile)
             stage(s, self._dr_sin[k], bf, tile)
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
 
@@ -4507,7 +4902,7 @@ class MTPSpecEngine:
         table = self._dr_rs_table(real, pt)
         if table is not None:
             self._stage(table, self._dr_rs_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
         self._prestage_next_verify(cpos, m)

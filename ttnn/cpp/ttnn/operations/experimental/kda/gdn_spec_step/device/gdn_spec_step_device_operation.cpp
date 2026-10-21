@@ -76,6 +76,8 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         kOp);
     const uint32_t Nv = a.num_value_heads, Nk = a.num_key_heads, Dk = a.key_dim, Dv = a.value_dim;
     const uint32_t T = a.T, B = a.B, K = a.conv_kernel;
+    const uint32_t M = a.max_users ? a.max_users : B;  // ring/ctrl layout width
+    TT_FATAL(M >= B, "{}: max_users ({}) must be >= B ({})", kOp, M, B);
     TT_FATAL(Nv > 0 && Nk > 0 && Nv % Nk == 0, "{}: num_value_heads must be a multiple of num_key_heads", kOp);
     // one core per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the factory
     const auto grid = in.qkvzab.device()->compute_with_storage_grid_size();
@@ -132,16 +134,16 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         C,
         ts);
     TT_FATAL(
-        in.ring.logical_volume() >= static_cast<uint64_t>(T) * B * Nv * Dk * Dv && in.ring.logical_shape()[-1] == Dv &&
+        in.ring.logical_volume() >= static_cast<uint64_t>(T) * M * Nv * Dk * Dv && in.ring.logical_shape()[-1] == Dv &&
             in.ring.logical_shape()[-2] == Dk,
-        "{}: ring must hold >= T*B*Nv blocks of [Dk, Dv] (got {})",
+        "{}: ring must hold >= T*M*Nv blocks (M = max_users or B) of [Dk, Dv] (got {})",
         kOp,
         in.ring.logical_shape());
     const auto& cs = in.ctrl.logical_shape();
     const uint32_t words = static_cast<uint32_t>(cs[-1]);
     TT_FATAL(
-        static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= 1 + B + B * Nv && (words * 4) % 64 == 0,
-        "{}: ctrl must be one row-major page [.., N] with N >= 1 + B + B*Nv and N*4 %% 64 == 0 (got {})",
+        static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= 1 + M + M * Nv && (words * 4) % 64 == 0,
+        "{}: ctrl must be one row-major page [.., N] with N >= 1 + M + M*Nv and N*4 %% 64 == 0 (got {})",
         kOp,
         cs);
     TT_FATAL(
@@ -189,7 +191,8 @@ Tensor gdn_spec_step(
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
     bool fast_mode,
-    bool fp32_state) {
+    bool fp32_state,
+    uint32_t max_users) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
@@ -199,6 +202,7 @@ Tensor gdn_spec_step(
             .value_dim = value_dim,
             .T = T,
             .B = B,
+            .max_users = max_users,
             .conv_kernel = conv_kernel,
             .qkvz_dim = qkvz_dim,
             .scale = scale,

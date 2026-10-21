@@ -142,6 +142,50 @@ def spec_fused_audit_every():
     return max(1, int(os.environ.get("QWEN36_SPEC_FUSED_AUDIT_EVERY", "1")))
 
 
+SPEC_BUCKETS_DEFAULT = "1,2,4,8"
+
+
+def spec_buckets_flag():
+    """The raw QWEN36_SPEC_BUCKETS text (default SPEC_BUCKETS_DEFAULT = on; "8" or "" = off), stripped."""
+    return os.environ.get("QWEN36_SPEC_BUCKETS", SPEC_BUCKETS_DEFAULT).strip()
+
+
+def spec_buckets(B=8):
+    """QWEN36_SPEC_BUCKETS (default "1,2,4,8" = on; "8" = one 8-row bucket = off): the verify/drafter row buckets as a sorted tuple.
+    Every value must be in {1, 2, 4, 8} and the engine width B must be the largest; else ValueError."""
+    from models.demos.blackhole.qwen36.tt.spec_bucket import parse_buckets
+
+    return parse_buckets(spec_buckets_flag(), B)
+
+
+def spec_bucket_hold():
+    """QWEN36_SPEC_BUCKET_HOLD (default 16; integer >= 0, 0 = no delay): a step whose live rows fit a smaller row bucket than the
+    current one keeps the current bucket until this many consecutive steps fit the smaller one (or the step breaks the chain
+    anyway), so churn does not pay a bucket_change chain break per down-shift. An up-shift is always immediate."""
+    return max(0, int(os.environ.get("QWEN36_SPEC_BUCKET_HOLD", "16")))
+
+
+def engine_spec_buckets(B=8):
+    """The engine's view of QWEN36_SPEC_BUCKETS: as spec_buckets, but an engine narrower than 8 (B < 8) keeps only the buckets
+    <= B plus B itself, instead of raising; the warning is logged only when QWEN36_SPEC_BUCKETS is explicitly set (unset: clip
+    silently). B >= 8 is as spec_buckets (strict). Bad values still raise.
+    """
+    from models.demos.blackhole.qwen36.tt.spec_bucket import parse_buckets
+
+    text = spec_buckets_flag()
+    if B >= 8:
+        return parse_buckets(text, B)
+    if str(text).strip() in ("", "8"):  # the default: off at any engine width, nothing to clip
+        return (B,)
+    kept = parse_buckets(text, B, clip=True)  # validates every value; drops those > B and adds B
+    dropped = sorted({int(x) for x in str(text).split(",") if x.strip() and int(x) > B})
+    if dropped and "QWEN36_SPEC_BUCKETS" in os.environ:
+        logger.warning(
+            f"QWEN36_SPEC_BUCKETS={text!r}: engine width B={B} is below 8, dropping buckets {dropped}; using {kept}"
+        )
+    return kept
+
+
 def spec_chain_enabled():
     """QWEN36_SPEC_CHAIN (default "0"; needs QWEN36_SPEC_FUSED=1): stage S3c, chain mode in sync serving. A fused step that follows
     a fused step on the same live rows lets the device build the next verify's token and aux buffers (the chain trace, tt/spec_chain.py)

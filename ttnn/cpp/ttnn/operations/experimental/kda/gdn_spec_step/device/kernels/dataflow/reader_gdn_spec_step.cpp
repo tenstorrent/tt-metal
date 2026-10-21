@@ -41,6 +41,7 @@ template <
     uint32_t Nv,
     uint32_t T,
     uint32_t B,
+    uint32_t M,  // ring/ctrl layout width (>= B)
     uint32_t K,
     uint32_t Lw,
     uint32_t Ct,
@@ -118,7 +119,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
             auto p = lock.template get_ptr<volatile uint32_t>();
             par = p[0] & 1u;
             mi = p[1 + u];
-            blk = p[1 + B + bh];
+            blk = p[1 + M + bh];
         }
         ctrl_r.push_back(1);
         ctrl_r.wait_front(1);

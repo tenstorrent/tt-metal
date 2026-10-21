@@ -46,11 +46,28 @@ def serve_device_decode_env_enabled():
 class VerifyHandle:
     """What ``verify_after_external_sync`` needs from ``verify_stage_and_enqueue``."""
 
-    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused")
+    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused", "bucket")
 
-    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused):
+    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused, bucket=None):
         self.rows, self.B = rows, B
         self.read_logits, self.read_topk, self.read_col0, self.fused = read_logits, read_topk, read_col0, fused
+        self.bucket = bucket  # the row bucket b < B the step replayed (QWEN36_SPEC_BUCKETS), None = the B-row traces
+
+
+class _VfyBucket:
+    """One verify row bucket b < B (QWEN36_SPEC_BUCKETS): its traces and bucket-local buffers. The state it runs on (GDN ring,
+    window pair, ctrl / aux / token / page-table buffers, KV) is the shared B-row state; only the b-row outputs live here.
+    ``handoff`` holds the destinations of the in-trace hand-off into the shared B-row outputs: stand-ins while the bucket is
+    warmed (the live B-row outputs do not exist yet), the live ``_vfy_*_out`` tensors while it is captured."""
+
+    def __init__(self, b, rows):
+        self.b, self.rows = b, rows
+        self.dl = None  # _DeviceDecodeLoop(batch=rows)
+        self.trace_id = self.logits_trace_id = self.topk_trace_id = None
+        self.normed = self.shard_logits = self.logits_out = self.logits_rm_out = None  # bucket-local trace outputs
+        self.narrow_ready = False
+        self.handoff = {}  # "ids", "rows", "topk_vals", "topk_ids" -> destination tensor
+        self.standins = []  # tensors freed once the bucket is captured
 
 
 class _ShortPrefillTrace:
@@ -195,6 +212,10 @@ def _page_table_rows(page_tables):
 
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
+
+    # QWEN36_SPEC_BUCKETS row buckets (see _VfyBucket): None / empty = only the B-row verify trace exists.
+    _vfy_bk = None
+    _vfy_last_bucket = None
 
     def __init__(self, mesh_device, args, state_dict, tensor_cache_path=None):
         self.args = args
@@ -2071,29 +2092,32 @@ class Qwen36Model:
         self._vfy_stage_aux(self._vfy_aux_host(self._vfy_row_positions(positions), mi_prev))
         return True
 
-    def _vfy_narrow_logits(self, logits_rm):
+    def _vfy_narrow_logits(self, logits_rm, b=None):
         """Column 0 of every user of the ROW_MAJOR verify logits [1,1,B*T,V] -> [B,1,V] (rows u*T), on the device: a
         view-reshape to [B,T,V] and a slice of the T axis, so a narrow (no-draft) step reads B rows (1/T of the bytes)
         instead of B*T. Pure data movement: the values are the full read's rows u*T."""
-        B, T = self._vfy_B, self._vfy_T
+        B, T = (self._vfy_B if b is None else b), self._vfy_T
         v = ttnn.reshape(logits_rm, (B, T, int(logits_rm.shape[-1])))
         return ttnn.slice(v, [0, 0, 0], [B, 1, int(logits_rm.shape[-1])])
 
-    def _vfy_warm_narrow(self, logits_rm):
+    def _vfy_warm_narrow(self, logits_rm, b=None):
         """Compile the narrow-read slice before any trace is captured (a program compiled while a trace is parked can
-        land in memory the replay writes over). Any failure leaves the narrow read off and the full read in place."""
-        self._vfy_narrow_ready = False
-        if not spec_hostset_enabled() or self._vfy_T < 2:
-            return
-        try:
-            out = self._vfy_narrow_logits(logits_rm)
-            ttnn.synchronize_device(self.device)
-            ttnn.deallocate(out)
-            self._vfy_narrow_ready = True
-        except Exception as e:  # noqa: BLE001 - an optimisation: never block startup
-            logger.warning(f"QWEN36_SPEC_HOSTSET narrow logits read disabled (compile failed: {e})")
+        land in memory the replay writes over). Any failure leaves the narrow read off and the full read in place.
+        ``b``: a bucket's row count (the bucket's own flag ``narrow_ready`` is returned instead of set on the model)."""
+        ready = False
+        if spec_hostset_enabled() and self._vfy_T >= 2:
+            try:
+                out = self._vfy_narrow_logits(logits_rm, b)
+                ttnn.synchronize_device(self.device)
+                ttnn.deallocate(out)
+                ready = True
+            except Exception as e:  # noqa: BLE001 - an optimisation: never block startup
+                logger.warning(f"QWEN36_SPEC_HOSTSET narrow logits read disabled (compile failed: {e})")
+        if b is None:
+            self._vfy_narrow_ready = ready
+        return ready
 
-    def _forward_verify_bucket_tp(self, n_users):
+    def _forward_verify_bucket_tp(self, n_users, bk=None):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
         logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
         layers run the decode flash kernel with the rows as pseudo-users (see capture_verify_trace).
@@ -2110,11 +2134,40 @@ class Qwen36Model:
         sampled request asks. ``shard_logits`` ([1,1,R,vocab/TP] bf16 TILE, the tensor the argmax read) is
         kept alive as a sixth persistent output only under QWEN36_VERIFY_DEVICE_TOPK (``self._vfy_topk``),
         for the topk trace (_forward_verify_topk_body); otherwise it is freed here and the slot is None.
+
+        ``n_users < self._vfy_B`` (a row bucket, QWEN36_SPEC_BUCKETS; ``bk`` is its _VfyBucket) runs the first ``n_users``
+        rows of the shared B-row state: the token buffer and the three page tables are sliced to the bucket's rows, the
+        aux / ctrl words are already sliced by ``rows`` (_vfy_inputs), the GDN op strides its ring by B (max_users). The tail
+        hands its ids and drafter-feed rows over to the shared B-row outputs (``bk.handoff``) inside the trace and returns
+        (None, None, None, None, normed, shard_logits): normed / shard_logits are bucket-local (read by the bucket's logits
+        / topk traces). ``n_users == B`` is the unchanged B-row body.
         """
         T = self._vfy_T
         rows = n_users * T
+        bucket = n_users < self._vfy_B
+        if bucket:
+            assert bk is not None and bk.b == n_users, f"bucket body of {n_users} rows needs its _VfyBucket"
+            assert self._vfy_sharded, "row buckets need the sharded verify"
         kvpos, cos, sin, ctrl, owned = self._vfy_inputs(rows)
-        x = self.embd(self._vfy_token_buf)
+        pt_rows, pt_users, pt_groups = self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf
+        if bucket:
+            nb = self._vfy_nb
+            tok = ttnn.slice(self._vfy_token_buf, [0, 0], [1, rows])
+            pt_rows = ttnn.slice(self._vfy_kvpt_buf, [0, 0], [rows, nb])
+            pt_users = ttnn.slice(self._vfy_kvpt_users, [0, 0], [n_users, nb])
+            G8 = self._vfy_spec_groups
+            if (
+                G8 >= self._vfy_B and G8 % self._vfy_B == 0
+            ):  # the fused spec SDPA's per-group table: users 0..b-1 are the first rows
+                _g = G8 // self._vfy_B * n_users
+                assert _g == int(self._vfy_att0_layer().spec_sdpa_groups(T, n_users)), "spec SDPA group count"
+                pt_groups = ttnn.slice(self._vfy_kvpt1_buf, [0, 0], [_g, nb])
+            else:
+                pt_groups = None  # fused SDPA off: the table is unread
+            x = self.embd(tok)
+            ttnn.deallocate(tok)
+        else:
+            x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         _dar = self._verify_dar(rows)
@@ -2150,16 +2203,16 @@ class Qwen36Model:
                     sin=_sin,
                     mode="decode",
                     position_tensor=kvpos,
-                    page_table=self._vfy_kvpt_buf,
+                    page_table=pt_rows,
                     alias_kv_write=True,
-                    spec_user_page_table=self._vfy_kvpt_users,
+                    spec_user_page_table=pt_users,
                     # The SDPA read folds those rows into a few batch rows (spec_multi_pos_tiles: groups
                     # of 4 candidates, n_users x the single-user split), so the KV cache streams out of
                     # DRAM once per group per layer instead of once per row. The op wants one aliased
                     # page-table row per group; the per-row KV write above still needs the full row-count
                     # alias table. A T with no L1-fitting split (7, 11, ...) uses the legacy per-row call.
                     spec_verify_mode=True,
-                    spec_page_table=self._vfy_kvpt1_buf,
+                    spec_page_table=(pt_groups if pt_groups is not None else self._vfy_kvpt1_buf),
                     n_users=n_users,
                     spec_pos_groups=_pos_groups,
                 )
@@ -2183,6 +2236,10 @@ class Qwen36Model:
                 ttnn.deallocate(_new)
         for _g in _pos_groups or ():
             ttnn.deallocate(_g)
+        if bucket:  # the sliced page tables are per-trace temporaries (never a full-span alias: b < B)
+            for t in (pt_rows, pt_users, pt_groups):
+                if t is not None:
+                    ttnn.deallocate(t)
         if self._vfy_sharded:
             shard_logits, rows_out, normed = self._spec_tail(x, sharded=True)
             idx, val = self.shard_argmax_max_rows(shard_logits, rows)
@@ -2191,10 +2248,23 @@ class Qwen36Model:
             else:
                 ttnn.deallocate(shard_logits)
                 keep = None
-            ids = self._dl_greedy_token_row_batched(idx, val, self._vfy_dl)  # [1,1,1,32] uint32 RM
+            ids = self._dl_greedy_token_row_batched(idx, val, bk.dl if bucket else self._vfy_dl)  # [1,1,1,32] uint32 RM
             for t in owned:
                 ttnn.deallocate(t)
+            if bucket:
+                # In-trace hand-off into the shared B-row outputs the accept / chain / drafter / host read. ids lanes >= rows
+                # are 0 (the argmax pad); the drafter-feed rows >= rows of the shared buffer keep their content.
+                from models.demos.blackhole.qwen36.tt.spec_bucket import handoff_rows_concat
+
+                ttnn.copy(ids, bk.handoff["ids"])
+                handoff_rows_concat(
+                    rows_out, bk.handoff["rows"], rows
+                )  # in place (ttnn.copy): slice_write on a TILE dst re-binds the dst tensor to a new buffer
+                ttnn.deallocate(ids)
+                ttnn.deallocate(rows_out)
+                return None, None, None, None, normed, keep
             return None, rows_out, ids, None, normed, keep
+        assert not bucket, "row buckets need the sharded verify"
         logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
@@ -2209,17 +2279,24 @@ class Qwen36Model:
             ttnn.deallocate(t)
         return logits, rows_out, ids, u, None, None
 
-    def _forward_verify_logits_body(self):
+    def _vfy_att0_layer(self):
+        """The first full-attention layer's attention module (its spec SDPA plan names the group counts)."""
+        return getattr(self, "_vfy_att0", None) or next(
+            layer.attention for layer in self.layers if layer.is_full_attention
+        )
+
+    def _forward_verify_logits_body(self, bk=None):
         """Second verify trace (sharded-argmax mode only): full replicated logits [1,1,R,vocab] + the ROW_MAJOR
         copy, recomputed from the first trace's persistent ``_vfy_normed_out`` (same linear program and input
         as the in-trace shard logits, so the values are the ones the argmax saw). Replayed right after the
         main trace only when read_logits=True (sampled requests, spec_mode == "logits"), or lazily by
-        fetch_verify_logits when a topk read needs the full row (spec_mode == "topk" fallback)."""
-        logits = self._lm_head(self._vfy_normed_out)
+        fetch_verify_logits when a topk read needs the full row (spec_mode == "topk" fallback).
+        ``bk``: a row bucket's _VfyBucket (reads its own ``normed``)."""
+        logits = self._lm_head(self._vfy_normed_out if bk is None else bk.normed)
         u = ttnn.untilize(logits, use_multicore=True)
         return logits, u
 
-    def _forward_verify_topk_body(self):
+    def _forward_verify_topk_body(self, bk=None):
         """Third verify trace (QWEN36_VERIFY_DEVICE_TOPK, sharded-argmax mode only): per-device top-M of the
         main trace's persistent shard logits ``_vfy_shard_logits_out`` [1,1,R,vocab/TP] bf16 TILE, gathered
         over the TP devices. Returns (values [1,1,32,TP*M] bf16, ids [1,1,32,TP*M] uint32); device d's block
@@ -2228,8 +2305,10 @@ class Qwen36Model:
         -1e30 pads (ttnn.topk wants 32 rows and a power-of-two width; the pads never rank above a real
         logit, so a local id >= vocab/TP can only come back from a pad row). The values are the shard
         logits' own bf16 values, unchanged, so they equal what the logits trace's RM readback holds.
-        Replayed right after the main trace when read_topk=True (spec_mode == "topk")."""
-        x = self._vfy_shard_logits_out
+        Replayed right after the main trace when read_topk=True (spec_mode == "topk").
+        ``bk``: a row bucket's _VfyBucket: ranks its own ``shard_logits`` and copies the (same-shape, 32-row) results into the
+        shared topk buffers (``bk.handoff``); returns (None, None) then."""
+        x = self._vfy_shard_logits_out if bk is None else bk.shard_logits
         rows = int(x.shape[2])
         per_shard = int(x.shape[3])
         pad_rows = ttnn.TILE_SIZE - rows
@@ -2244,6 +2323,12 @@ class Qwen36Model:
         g_idx = ttnn.all_gather(idx32, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(vals)
         ttnn.deallocate(idx32)
+        if bk is not None:
+            ttnn.copy(g_vals, bk.handoff["topk_vals"])
+            ttnn.copy(g_idx, bk.handoff["topk_ids"])
+            ttnn.deallocate(g_vals)
+            ttnn.deallocate(g_idx)
+            return None, None
         return g_vals, g_idx
 
     def _vfy_setup_device_topk(self):
@@ -2277,10 +2362,24 @@ class Qwen36Model:
         assert getattr(self, "_vfy_logits_trace_id", None) is not None, "no logits trace (sharded verify off)"
         dev = self.device
         rows = self._vfy_B * self._vfy_T
+        bk = getattr(self, "_vfy_last_bucket", None)  # the last replay ran a row bucket: its own logits trace / rows
+        if bk is not None:
+            ttnn.execute_trace(dev, bk.logits_trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(dev)
+            lt = ttnn.to_torch(ttnn.get_device_tensors(bk.logits_rm_out)[0]).reshape(-1, self.vocab_size)[: bk.rows]
+            return self._vfy_pad_rows(lt, rows)
         ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
         lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
         return lt.reshape(-1, self.vocab_size)[:rows]
+
+    @staticmethod
+    def _vfy_pad_rows(t, rows):
+        """Zero-pad a bucket's [b_rows, W] host readback to the ``rows`` rows the engine expects (the B-row shape)."""
+        n = int(t.shape[0])
+        if n >= rows:
+            return t[:rows]
+        return torch.cat([t, torch.zeros(rows - n, *t.shape[1:], dtype=t.dtype)], dim=0)
 
     def _vfy_setup_sharded_argmax(self, rows):
         """Resolve QWEN36_VERIFY_SHARDED_ARGMAX (default ON) for this verify bucket and allocate the one
@@ -2301,6 +2400,11 @@ class Qwen36Model:
         if why is not None and "RoPE" not in why:  # the RoPE range check is about the decode loop, not verify
             logger.warning(f"QWEN36_VERIFY_SHARDED_ARGMAX ignored: {why}")
             return
+        self._vfy_dl = self._vfy_new_dl(rows)
+        self._vfy_sharded = True
+
+    def _vfy_new_dl(self, rows):
+        """The sharded-argmax constants of a verify bucket of ``rows`` rows (per-device vocab offset), outside any trace."""
         mesh = self.mesh_device
         n = self.num_devices
         per_shard = self.vocab_size // n
@@ -2312,8 +2416,7 @@ class Qwen36Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
         )
-        self._vfy_dl = _DeviceDecodeLoop(batch=rows, shard_base=shard_base)
-        self._vfy_sharded = True
+        return _DeviceDecodeLoop(batch=rows, shard_base=shard_base)
 
     def _vfy_row_positions(self, positions):
         """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""
@@ -2373,6 +2476,31 @@ class Qwen36Model:
         if getattr(self, "_vfy_topk_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_topk_trace_id)
             self._vfy_topk_trace_id = None
+        self.release_verify_buckets()
+
+    def release_verify_buckets(self):
+        """Release every row bucket's traces and bucket-local buffers (dl constants, stand-ins, trace outputs). No-op when
+        there are none. release_verify_trace calls it, so shutdown and a re-prepare drop the buckets with the B-row trace.
+        """
+        bks = getattr(self, "_vfy_bk", None) or {}
+        for b in sorted(bks):
+            bk = bks[b]
+            for name in ("trace_id", "logits_trace_id", "topk_trace_id"):
+                if getattr(bk, name) is not None:
+                    ttnn.release_trace(self.mesh_device, getattr(bk, name))
+                    setattr(bk, name, None)
+            for name in ("normed", "shard_logits", "logits_out", "logits_rm_out"):
+                if getattr(bk, name) is not None:
+                    ttnn.deallocate(getattr(bk, name))
+                    setattr(bk, name, None)
+            for t in bk.standins:
+                ttnn.deallocate(t)
+            bk.standins, bk.handoff = [], {}
+            if bk.dl is not None:
+                bk.dl.release()
+                bk.dl = None
+        self._vfy_bk = {}
+        self._vfy_last_bucket = None
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -2594,6 +2722,8 @@ class Qwen36Model:
         # the spec loop calls dn.seed_spec_state() after capture, which re-initialises token-slot 0 from
         # the live decode state, and the first replay then runs at mi = 0.
         outs = self._forward_verify_bucket_tp(n_users=B)
+        # Shape / dtype / layout / memory config of the shared B-row outputs, for the row buckets' warm stand-ins.
+        self._vfy_specs = {"ids": self._tensor_spec(outs[2]), "rows": self._tensor_spec(outs[1])}
         if self._vfy_sharded:
             # Compile the logits trace's programs too (cache misses are disallowed during capture).
             self._vfy_normed_out = outs[4]
@@ -2606,7 +2736,9 @@ class Qwen36Model:
             if self._vfy_topk:
                 # ... and the topk trace's (pad, stable top-k, typecast, two all-gathers) on the kept shard logits.
                 self._vfy_shard_logits_out = outs[5]
-                for t in self._forward_verify_topk_body():
+                _tk = self._forward_verify_topk_body()
+                self._vfy_specs["topk_vals"], self._vfy_specs["topk_ids"] = (self._tensor_spec(t) for t in _tk)
+                for t in _tk:
                     ttnn.deallocate(t)
                 ttnn.deallocate(self._vfy_shard_logits_out)
                 self._vfy_shard_logits_out = None
@@ -2656,6 +2788,8 @@ class Qwen36Model:
                 self._vfy_topk_vals_out, self._vfy_topk_ids_out = self._forward_verify_topk_body()
                 ttnn.end_trace_capture(dev, self._vfy_topk_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
+        if getattr(self, "_vfy_bk", None):
+            self._log_trace_memory(f"V{B}")
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
         _fused = _att0.spec_sdpa_enabled(T)
@@ -2674,6 +2808,122 @@ class Qwen36Model:
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
         )
 
+    @staticmethod
+    def _tensor_spec(t):
+        return (tuple(t.shape), t.dtype, t.layout, t.memory_config())
+
+    def _log_trace_memory(self, label):
+        """Log (and keep in ``_vfy_mem_log``) the trace-region and DRAM bytes in use after the capture ``label``:
+        ttnn.get_memory_view(mesh, TRACE / DRAM).total_bytes_allocated_per_bank x num_banks. Never raises."""
+        try:
+            tv = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
+            dv = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+            trace_b = int(tv.total_bytes_allocated_per_bank) * int(tv.num_banks)
+            trace_cap = int(tv.total_bytes_per_bank) * int(tv.num_banks)
+            dram_b = int(dv.total_bytes_allocated_per_bank) * int(dv.num_banks)
+        except Exception as e:  # noqa: BLE001 - a log line only
+            logger.warning(f"[spec_bucket] trace memory view unavailable after {label}: {e}")
+            return None
+        log = self.__dict__.setdefault("_vfy_mem_log", {})
+        prev = list(log.values())[-1] if log else (0, 0)
+        log[label] = (trace_b, dram_b)
+        logger.info(
+            f"[spec_bucket] memory after {label}: trace {trace_b / 2**20:.2f} MiB of {trace_cap / 2**20:.0f} MiB "
+            f"(+{(trace_b - prev[0]) / 2**20:.2f}), DRAM allocated {dram_b / 2**20:.1f} MiB (+{(dram_b - prev[1]) / 2**20:.1f}) per device-sum"
+        )
+        return log[label]
+
+    def prepare_verify_buckets(self, buckets):
+        """Warm every row bucket b < B in ``buckets`` (descending), after prepare_verify_trace and before ANY capture."""
+        for b in sorted((int(x) for x in buckets if int(x) < self._vfy_B), reverse=True):
+            self.prepare_verify_bucket(b)
+
+    def record_verify_buckets(self, buckets):
+        """Capture every warmed bucket in ``buckets``, descending (V4, V2, V1), after record_verify_trace (V8)."""
+        for b in sorted((int(x) for x in buckets if int(x) < self._vfy_B), reverse=True):
+            self.record_verify_bucket(b)
+
+    def prepare_verify_bucket(self, b):
+        """Warm the b-row verify bucket (b < B) on the shared B-row state: allocate its persistent buffers (sharded-argmax
+        constants, hand-off stand-ins shaped like the live B-row outputs) and run its main / logits / topk bodies once so
+        every program is compiled before any capture (capture_decode forbids cache misses). Idempotent. The spec loop
+        seeds the GDN state after warmup, as for the B-row trace."""
+        assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
+        B, T = self._vfy_B, self._vfy_T
+        assert 1 <= b < B, f"row bucket {b} must be in [1, {B})"
+        assert self._vfy_sharded, "row buckets need the sharded verify (QWEN36_VERIFY_SHARDED_ARGMAX)"
+        if self._vfy_bk is None:
+            self._vfy_bk = {}
+        if b in self._vfy_bk:
+            return
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        bk = _VfyBucket(b, b * T)
+        self._vfy_bk[b] = bk  # registered first: release_verify_buckets frees a half-built bucket
+        bk.dl = self._vfy_new_dl(bk.rows)
+        torch_dt = {ttnn.bfloat16: torch.bfloat16, ttnn.uint32: torch.int32}
+        for name, (shape, dt, layout, mc) in self._vfy_specs.items():
+            bk.handoff[name] = ttnn.from_torch(
+                torch.zeros(*shape, dtype=torch_dt[dt]),
+                dtype=dt,
+                layout=layout,
+                device=dev,
+                memory_config=mc,
+                mesh_mapper=rep,
+            )
+        bk.standins = list(bk.handoff.values())
+        outs = self._forward_verify_bucket_tp(n_users=b, bk=bk)
+        bk.normed = outs[4]
+        _lg = self._forward_verify_logits_body(bk)
+        bk.narrow_ready = self._vfy_warm_narrow(_lg[1], b)
+        for t in _lg:
+            ttnn.deallocate(t)
+        ttnn.deallocate(bk.normed)
+        bk.normed = None
+        if self._vfy_topk:
+            bk.shard_logits = outs[5]
+            self._forward_verify_topk_body(bk)
+            ttnn.deallocate(bk.shard_logits)
+            bk.shard_logits = None
+        ttnn.synchronize_device(dev)
+
+    def record_verify_bucket(self, b):
+        """Capture the b-row verify bucket's traces (main, logits, topk) after record_verify_trace: the B-row outputs it
+        hands over to must exist, and they only overlap the B-row trace's own intermediates when captured right after it.
+        Capture order: V8, then V4, V2, V1 (record_verify_buckets), each main + logits + topk, all before the drafter and
+        accept captures: the bucket-local outputs (normed / shard logits / logits) are read lazily by fetch_verify_logits
+        after those traces replayed, so nothing captured later may reuse their memory. Logs the trace / DRAM memory."""
+        bk = (getattr(self, "_vfy_bk", None) or {}).get(b)
+        assert bk is not None, f"call prepare_verify_bucket({b}) first"
+        assert (
+            getattr(self, "_vfy_trace_id", None) is not None
+        ), "capture the B-row verify trace (record_verify_trace) first"
+        if bk.trace_id is not None:
+            return
+        dev = self.device
+        bk.handoff = {
+            "ids": self._vfy_ids_out,
+            "rows": self._vfy_rows_out,
+            "topk_vals": getattr(self, "_vfy_topk_vals_out", None),
+            "topk_ids": getattr(self, "_vfy_topk_ids_out", None),
+        }
+        bk.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        outs = self._forward_verify_bucket_tp(n_users=b, bk=bk)
+        ttnn.end_trace_capture(dev, bk.trace_id, cq_id=0)
+        bk.normed, bk.shard_logits = outs[4], outs[5]
+        bk.logits_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        bk.logits_out, bk.logits_rm_out = self._forward_verify_logits_body(bk)
+        ttnn.end_trace_capture(dev, bk.logits_trace_id, cq_id=0)
+        if self._vfy_topk:
+            bk.topk_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._forward_verify_topk_body(bk)
+            ttnn.end_trace_capture(dev, bk.topk_trace_id, cq_id=0)
+        for t in bk.standins:  # warm-pass hand-off targets, used by no trace
+            ttnn.deallocate(t)
+        bk.standins = []
+        logger.info(f"Verify bucket trace (b={b} users x T={self._vfy_T} = {bk.rows} rows) captured")
+        self._log_trace_memory(f"V{b}")
+
     def verify_traced(
         self,
         tokens,
@@ -2684,6 +2934,7 @@ class Qwen36Model:
         inactive=None,
         read_topk=False,
         read_col0=False,
+        bucket=None,
     ):
         """Stage, replay, sync and read one verify step: ``verify_stage_and_enqueue`` then ``verify_sync_and_read``.
 
@@ -2730,6 +2981,7 @@ class Qwen36Model:
             inactive=inactive,
             read_topk=read_topk,
             read_col0=read_col0,
+            bucket=bucket,
         )
         return self.verify_sync_and_read(handle)
 
@@ -2748,6 +3000,7 @@ class Qwen36Model:
         skip_aux_h2d=False,
         skip_kv_check=False,
         flip_parity=False,
+        bucket=None,
     ):
         """First half of ``verify_traced`` (same arguments): validate, stage every per-replay input, and enqueue the
         main trace plus the optional logits / topk traces with ``blocking=False``. No synchronize and no readback.
@@ -2761,6 +3014,10 @@ class Qwen36Model:
         flip the GDN window parity HERE, once per replay, because no ``verify_after_external_sync`` follows (the next step's overlay
         must know its parity word at submit time); the returned handle then has ``fused=False`` so a later after-sync call cannot flip again.
 
+        ``bucket`` (QWEN36_SPEC_BUCKETS): the row bucket b whose traces to replay (None or B = the B-row traces). Everything staged
+        is the same B-row host state; the b-row traces use rows 0..b-1 of it and hand their outputs to the shared B-row buffers. The
+        caller keeps every live row below b (the engine parks the others).
+
         Returns a ``VerifyHandle`` for ``verify_sync_and_read`` (blocking read) or ``verify_after_external_sync``
         (the caller already synchronized the device). Exactly one of those must follow each call: the GDN window
         parity flips there, once per replay.
@@ -2768,11 +3025,18 @@ class Qwen36Model:
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
+        bk = None
+        if bucket is not None and int(bucket) != self._vfy_B:
+            bk = (getattr(self, "_vfy_bk", None) or {}).get(int(bucket))
+            assert bk is not None and bk.trace_id is not None, f"verify bucket {bucket} is not captured"
+        _main_tid = self._vfy_trace_id if bk is None else bk.trace_id
+        _logits_tid = getattr(self, "_vfy_logits_trace_id", None) if bk is None else bk.logits_trace_id
+        _topk_tid = getattr(self, "_vfy_topk_trace_id", None) if bk is None else bk.topk_trace_id
         if read_topk:
             if read_logits:
                 raise ValueError("verify_traced: read_logits and read_topk are exclusive reads")
         if read_topk or execute_topk:
-            if getattr(self, "_vfy_topk_trace_id", None) is None:
+            if _topk_tid is None:
                 raise ValueError("verify_traced(read_topk=True) needs QWEN36_VERIFY_DEVICE_TOPK=1 at capture")
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
@@ -2876,11 +3140,12 @@ class Qwen36Model:
                 self._vfy_aux_staged = None
             else:
                 self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
-        ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(dev, _main_tid, cq_id=0, blocking=False)
+        self._vfy_last_bucket = bk
         if read_logits and self._vfy_sharded:
-            ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
+            ttnn.execute_trace(dev, _logits_tid, cq_id=0, blocking=False)
         if read_topk or execute_topk:
-            ttnn.execute_trace(dev, self._vfy_topk_trace_id, cq_id=0, blocking=False)
+            ttnn.execute_trace(dev, _topk_tid, cq_id=0, blocking=False)
         if flip_parity and _fused:
             for dn in self._vfy_gdn:
                 dn._spec_win_par ^= 1
@@ -2891,6 +3156,7 @@ class Qwen36Model:
             read_topk=read_topk,
             read_col0=read_col0,
             fused=_fused and not flip_parity,
+            bucket=None if bk is None else bk.b,
         )
 
     def verify_sync_and_read(self, handle):
@@ -2915,6 +3181,27 @@ class Qwen36Model:
         ids = [int(v) for v in ids[:rows]]
         lt = None
         self._vfy_last_col0 = False
+        bk = None
+        if getattr(handle, "bucket", None) is not None:
+            # A row bucket replayed: ids / topk come from the shared B-row buffers (rows >= b*T hold zeros / pads), the logits from
+            # the bucket's own b-row copy. Every readback is zero-padded to the B-row shape the engine expects.
+            bk = self._vfy_bk[handle.bucket]
+            if read_logits:
+                if read_col0 and bk.narrow_ready:
+                    sl = self._vfy_narrow_logits(bk.logits_rm_out, bk.b)
+                    lt = ttnn.to_torch(ttnn.get_device_tensors(sl)[0])
+                    ttnn.deallocate(sl)
+                    lt = self._vfy_pad_rows(lt.reshape(bk.b, -1)[:, : self.vocab_size], B)
+                    self._vfy_last_col0 = True
+                else:
+                    lt = ttnn.to_torch(ttnn.get_device_tensors(bk.logits_rm_out)[0])
+                    lt = self._vfy_pad_rows(lt.reshape(-1, self.vocab_size)[: bk.rows], rows)
+            if read_topk:
+                width = self.num_devices * self._vfy_topk_m
+                vals = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_topk_vals_out)[0]).reshape(-1, width)[: bk.rows]
+                idx = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_topk_ids_out)[0]).reshape(-1, width)[: bk.rows]
+                lt = (self._vfy_pad_rows(vals, rows), self._vfy_pad_rows(idx, rows))
+            return ids, self._vfy_rows_out, lt
         if read_logits:
             if read_col0 and getattr(self, "_vfy_narrow_ready", False):
                 # QWEN36_SPEC_HOSTSET narrow step: only column 0 of each user is real. Slice it on the device and read

@@ -128,6 +128,67 @@ def _cmp(tag, a, b, exact):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+@pytest.mark.parametrize("b", [1, 2, 4])
+def test_spec_step_max_users_matches_8row(mesh_device, b, reset_seeds, ensure_gc, monkeypatch):
+    """gdn_spec_step(B=b, max_users=8) on an 8-wide ring / ctrl / window == the 8-row call (B=8, max_users=8) on the
+    same data for users 0..b-1 (output rows, ring blocks, new window rows, bit-identical); users b..7 of the ring and
+    the window are untouched by the b-row call."""
+    mesh = mesh_device
+    M, T = 8, 4
+    _, g, _, _ = _build(mesh, M, monkeypatch)
+    nd = mesh.get_num_devices()
+    Nv, Dk, Dv, C, K = g.Nv, g.Dk, g.Dv, g.qkv_dim_tp, g.K
+    L = K - 1 + T
+    W = (g.qkvz_dim_tp + 2 * Nv + 31) // 32 * 32
+    torch.manual_seed(1234 + b)
+    x_full = torch.randn(1, M * T, W).to(torch.bfloat16)  # rows u*T + t
+    ring0 = 0.1 * torch.randn(T * M * Nv, Dk, Dv)
+    win0 = [torch.randn(M, L, C).to(torch.bfloat16) for _ in range(2)]
+    mi = [int(v) for v in torch.randint(0, T, (M,))]
+    ctrl_t = spec_ctrl_page(mi, M, Nv, parity=0)
+
+    def rep(t, dt, layout=ttnn.TILE_LAYOUT):
+        return ttnn.from_torch(
+            t,
+            dtype=dt,
+            layout=layout,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def run(nb):
+        x = rep(x_full[:, : nb * T].contiguous(), ttnn.bfloat16)
+        wa, wb = rep(win0[0], ttnn.bfloat16), rep(win0[1], ttnn.bfloat16)
+        ring = rep(ring0, ttnn.float32)
+        ctrl = rep(ctrl_t, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        g._spec_max_users = M
+        out = g._gdn_spec_step(x, wa, wb, ring, ctrl, T, nb)
+        o = _cat0(mesh, out)
+        return (
+            o,
+            _cat0(mesh, ring).reshape(nd, T, M, Nv, Dk, Dv),
+            _cat0(mesh, wa).reshape(nd, M, L, C),
+            _cat0(mesh, wb).reshape(nd, M, L, C),
+        )
+
+    o8, r8, a8, b8 = run(M)
+    ob, rb, ab, bb = run(b)
+    r0 = ring0.reshape(1, T, M, Nv, Dk, Dv).expand(nd, -1, -1, -1, -1, -1)
+    w0a, w0b = (w.float().reshape(1, M, L, C).expand(nd, -1, -1, -1) for w in win0)
+    _cmp("max_users: output rows", ob[:, : b * T], o8[:, : b * T], True)
+    _cmp("max_users: ring users < b", rb[:, :, :b], r8[:, :, :b], True)
+    _cmp("max_users: win_a users < b", ab[:, :b], a8[:, :b], True)
+    _cmp("max_users: win_b users < b", bb[:, :b], b8[:, :b], True)
+    assert not torch.equal(rb[:, :, :b], r0[:, :, :b]), "b-row call did not write the ring"
+    assert not torch.equal(bb[:, :b], w0b[:, :b]), "b-row call did not write the window"
+    _cmp("max_users: ring users >= b untouched", rb[:, :, b:], r0[:, :, b:], True)
+    _cmp("max_users: win_a users >= b untouched", ab[:, b:], w0a[:, b:], True)
+    _cmp("max_users: win_b users >= b untouched", bb[:, b:], w0b[:, b:], True)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 @pytest.mark.parametrize("B,T", [(1, 4), (8, 4), (4, 8), (2, 12)])
 def test_layer_verify_specstep_vs_composite_and_decode(mesh_device, B, T, reset_seeds, ensure_gc, monkeypatch):
     mesh = mesh_device

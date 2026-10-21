@@ -43,6 +43,7 @@ ttnn::Tensor gdn_spec_step(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     ttnn::DataType output_dtype = ttnn::DataType::BFLOAT16,
     bool fast_mode = false,
-    bool fp32_state = false);
+    bool fp32_state = false,
+    uint32_t max_users = 0);  // 0 = B; ring/ctrl layout width when > B (rows 0..B-1 of a max_users-wide layout)
 
 }  // namespace ttnn::experimental::kda

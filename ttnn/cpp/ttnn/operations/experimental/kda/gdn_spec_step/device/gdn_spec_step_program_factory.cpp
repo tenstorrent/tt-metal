@@ -80,6 +80,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const uint32_t Nk = a.num_key_heads;
     const uint32_t T = a.T;
     const uint32_t B = a.B;
+    const uint32_t M = a.max_users ? a.max_users : B;  // ring/ctrl layout width
     const uint32_t K = a.conv_kernel;
     const uint32_t Lw = K - 1 + T;
     const uint32_t BH = B * Nv;
@@ -237,6 +238,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"Nv", Nv},
         {"T", T},
         {"B", B},
+        {"M", M},
         {"K", K},
         {"Lw", Lw},
         {"Ct", Ct},
@@ -279,6 +281,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"Nv", Nv},
         {"T", T},
         {"B", B},
+        {"M", M},
         {"Lw", Lw},
         {"Ct", Ct},
         {"out_w_tiles", out_w_tiles},

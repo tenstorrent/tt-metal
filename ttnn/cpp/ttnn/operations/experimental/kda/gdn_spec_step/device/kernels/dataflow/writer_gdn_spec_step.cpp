@@ -55,6 +55,7 @@ template <
     uint32_t Nv,
     uint32_t T,
     uint32_t B,
+    uint32_t M,  // ring/ctrl layout width (>= B)
     uint32_t Lw,
     uint32_t Ct,
     uint32_t out_w_tiles,
@@ -75,7 +76,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t Ch = 2 * Kt + Vt;
     constexpr uint32_t rf = Nv / Nk;
-    constexpr uint32_t BH = B * Nv;
+    constexpr uint32_t BH = M * Nv;
     constexpr uint32_t Lw_w = (Lw + 1) & ~1u;  // even row count (row Lw is an exact zero when Lw is odd)
     const uint32_t hk = h / rf;
     const uint32_t bh = u * Nv + h;
@@ -102,7 +103,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
         auto lock = ctrl_w.scoped_write_lock(1);
         auto p = lock.template get_ptr<volatile uint32_t>();
         par = p[0] & 1u;
-        blk = p[1 + B + bh];
+        blk = p[1 + M + bh];
     }
     ctrl_w.push_back(1);
     ctrl_w.wait_front(1);

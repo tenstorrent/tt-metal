@@ -146,7 +146,8 @@ class Qwen36MTP:
         # same instance) is unaffected: at B=11 both 16 and 64 resolve to min(110, max*B)/B = 10
         # cores/head. Changes the drafter's reduction order, so bf16 near-ties can draft a different
         # token — that only shifts acceptance, never correctness: every draft is arbitrated by verify.
-        self.attention.decode_sdpa_max_cores = 64
+        # QWEN36_MTP_SDPA_MAX_CORES pins it (the bucket equivalence tests set 13: every row count then resolves to the same split).
+        self.attention.decode_sdpa_max_cores = int(os.environ.get("QWEN36_MTP_SDPA_MAX_CORES", "64"))
 
         # QWEN36_DRAFT_SHARDED_ARGMAX=1: the DRAFTER stops all-gathering its full-vocab fp32 logit
         # row. Each device argmaxes its own [1,1,B,vocab/tp] shard and the global winner is picked
@@ -157,6 +158,9 @@ class Qwen36MTP:
         self._sharded_argmax = False
         self._shard_off = None  # [1,1,B,_LANES] int32, per device: d * vocab_shard in every lane
         self._sel_lane = None  # [1,1,B,_LANES*num_devices] int32 replicated: lane j holds j
+        self._argmax_consts = (
+            {}
+        )  # rows -> (shard_off, sel_lane) for rows in the spec buckets + B; rows == B is the pair above
         self._fp32_cfg = None
         self._vocab_shard = 0
         self._maxval_c = 0
@@ -211,25 +215,36 @@ class Qwen36MTP:
         # ShardTensorToMesh(dim=-1) (Qwen36Model.__init__) and ShardTensorToMesh(dim=0) here walks
         # the mesh in the same order, so row d lands on the device that owns vocab block d. The
         # offset is broadcast across all B rows and lanes so the id side never needs a ttnn.pad.
-        off = (torch.arange(nd, dtype=torch.int32) * shard).reshape(nd, 1, 1, 1).repeat(1, 1, B, lanes)
-        self._shard_off = ttnn.from_torch(
-            off.contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
-        )
-        # Lane index of the gathered row, replicated: compared against the winning lane to build the
-        # select mask. int32 so that compare is integer-exact (see _argmax_sharded).
-        self._sel_lane = ttnn.from_torch(
-            torch.arange(nd * lanes, dtype=torch.int32).reshape(1, 1, 1, nd * lanes).repeat(1, 1, B, 1),
-            dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        try:
+            from models.demos.blackhole.qwen36.tt.tp_common import engine_spec_buckets
+
+            bucket_rows = set(engine_spec_buckets(B))
+        except ValueError as e:  # a bad QWEN36_SPEC_BUCKETS value
+            logger.warning(f"MTP drafter argmax constants: only B={B} rows ({e})")
+            bucket_rows = set()
+        self._argmax_consts = {}
+        for rows in sorted(bucket_rows | {B}):
+            off = (torch.arange(nd, dtype=torch.int32) * shard).reshape(nd, 1, 1, 1).repeat(1, 1, rows, lanes)
+            shard_off = ttnn.from_torch(
+                off.contiguous(),
+                dtype=ttnn.int32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            )
+            # Lane index of the gathered row, replicated: compared against the winning lane to build the
+            # select mask. int32 so that compare is integer-exact (see _argmax_sharded).
+            sel_lane = ttnn.from_torch(
+                torch.arange(nd * lanes, dtype=torch.int32).reshape(1, 1, 1, nd * lanes).repeat(1, 1, rows, 1),
+                dtype=ttnn.int32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            self._argmax_consts[rows] = (shard_off, sel_lane)
+        self._shard_off, self._sel_lane = self._argmax_consts[B]
         self._sharded_argmax = True
         logger.info(
             f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
@@ -247,7 +262,7 @@ class Qwen36MTP:
         the fp32 logits it exists to rank. The demo path passes no config because its logits are
         bfloat16, which survives that truncation intact.
         """
-        R, C, B = self._maxval_r, self._maxval_c, self.args.max_batch_size
+        R, C, B = self._maxval_r, self._maxval_c, shard.shape[2]
         cfg = self._fp32_cfg
         padded = ttnn.pad(shard, [(0, 0), (0, 0), (0, 0), (0, R * C - self._vocab_shard)], value=self._NEG_FLOOR)
         grid = ttnn.reshape(padded, (1, B, R, C))  # one [R, C] grid per row
@@ -291,6 +306,9 @@ class Qwen36MTP:
 
         lanes = self._LANES
         topo = self.args.ccl_topology()
+        rows = logits_shard.shape[2]
+        assert rows in self._argmax_consts, f"no argmax constants for {rows} rows (have {sorted(self._argmax_consts)})"
+        shard_off, sel_lane = self._argmax_consts[rows]
 
         # 1. Local argmax over this device's shard. ttnn.argmax needs ROW_MAJOR for the multicore
         #    last-dim path (a TILE input falls back to a single-core internal untilize).
@@ -306,7 +324,7 @@ class Qwen36MTP:
         ttnn.deallocate(lidx4)
         lidx_i = ttnn.typecast(lidx_t, ttnn.int32)
         ttnn.deallocate(lidx_t)
-        gid = ttnn.add(self._shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
+        gid = ttnn.add(shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
         ttnn.deallocate(lidx_i)
 
         # 4. One tile-wide value block per row: lane 0 carries the real max, the rest a floor that can
@@ -344,7 +362,7 @@ class Qwen36MTP:
         #    past every real id by the sentinel, then take the row min. Exactly one lane per row is
         #    left alone. The 0/1 mask goes through bfloat16 for the multiply (2**24 is exact there, and
         #    it is the combination tt_sampling.py validated on device) and back to int32 for the add.
-        nw = ttnn.ne(self._sel_lane, cw_i)  # [1,1,B,lanes*nd] int32 1/0, cw_i column-broadcast over W
+        nw = ttnn.ne(sel_lane, cw_i)  # [1,1,B,lanes*nd] int32 1/0, cw_i column-broadcast over W
         ttnn.deallocate(cw_i)
         nw_b = ttnn.typecast(nw, ttnn.bfloat16)
         ttnn.deallocate(nw)
