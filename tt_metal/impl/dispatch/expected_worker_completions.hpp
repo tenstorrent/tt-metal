@@ -87,6 +87,20 @@ struct ExpectedWorkerCompletions {
         return {counter, counts[counter]};
     }
 
+    // Calls f(wait) with the wait for each of sub_device_id's counters, in the order a clear must wait on and clear
+    // them. The current counter goes first: once it reaches its count, every go of the sub-device has gone out, so no
+    // go is still waiting on a counter that the clear then zeroes. Every path that clears the counters goes through
+    // this.
+    template <typename F>
+    void for_each_clear_wait(SubDeviceId sub_device_id, F&& f) const {
+        const uint32_t base_counter = base_counter_index(sub_device_id);
+        const uint32_t current_slot = sub_devices[*sub_device_id].current_slot;
+        for (uint32_t i = 0; i < num_completion_slots; ++i) {
+            const uint32_t counter = base_counter + ((current_slot + i) % num_completion_slots);
+            f(CompletionWait{counter, counts[counter]});
+        }
+    }
+
     // Total expected completions across sub_device_id's counters, the sub-device's sync count.
     uint32_t total(SubDeviceId sub_device_id) const { return sub_devices[*sub_device_id].total; }
 

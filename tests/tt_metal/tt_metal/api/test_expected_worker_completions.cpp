@@ -146,4 +146,24 @@ TEST(ExpectedWorkerCompletions, CPU_LoadPutsTraceCompletionsOnBaseCounter) {
     EXPECT_EQ(completions[5], 4u);
 }
 
+// A clear visits each of the sub-device's counters once, starting at the current counter and wrapping through its
+// block.
+TEST(ExpectedWorkerCompletions, CPU_ClearWaitsStartAtCurrentCounter) {
+    ExpectedWorkerCompletions completions;
+    completions.reset(2);
+    for (uint32_t i = 0; i < 6; ++i) {
+        completions.add_program(kSubDevice1, i + 1);
+    }
+    ASSERT_EQ(completions.current_counter_index(kSubDevice1), 6u);
+
+    std::vector<CompletionWait> waits;
+    completions.for_each_clear_wait(kSubDevice1, [&](const CompletionWait& wait) { waits.push_back(wait); });
+    const std::vector<uint32_t> expected_counters = {6, 7, 4, 5};
+    ASSERT_EQ(waits.size(), expected_counters.size());
+    for (size_t i = 0; i < waits.size(); ++i) {
+        EXPECT_EQ(waits[i].counter, expected_counters[i]) << i;
+        EXPECT_EQ(waits[i].count, completions[expected_counters[i]]) << i;
+    }
+}
+
 }  // namespace expected_worker_completions_tests

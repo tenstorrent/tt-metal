@@ -3419,32 +3419,27 @@ void add_sub_device_counter_clears(
     uint32_t num_control_acks) {
     const auto& mem_map = metal_ctx.dispatch_mem_map();
     const bool distributed_dispatcher = metal_ctx.get_dispatch_query_manager().distributed_dispatcher();
-    const uint32_t base_counter = expected_num_workers_completed.base_counter_index(sub_device_id);
     const uint32_t current_counter = expected_num_workers_completed.current_counter_index(sub_device_id);
-    const uint32_t num_slots = expected_num_workers_completed.num_completion_slots;
-    // The current counter goes first: once it reaches its count, every go of the sub-device has gone out, so no go is
-    // still waiting on another counter that this then clears.
-    for (uint32_t i = 0; i < num_slots; ++i) {
-        const uint32_t counter = base_counter + ((current_counter - base_counter + i) % num_slots);
-        uint32_t count = expected_num_workers_completed[counter];
-        if (counter == current_counter) {
+    expected_num_workers_completed.for_each_clear_wait(sub_device_id, [&](const CompletionWait& wait) {
+        uint32_t count = wait.count;
+        if (wait.counter == current_counter) {
             count += num_control_acks;
         }
         if (distributed_dispatcher) {
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                mem_map.get_completion_stream(counter),
+                mem_map.get_completion_stream(wait.counter),
                 count,
                 DispatcherSelect::DISPATCH_SUBORDINATE);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            mem_map.get_completion_stream(counter),
+            mem_map.get_completion_stream(wait.counter),
             count,
             DispatcherSelect::DISPATCH_MASTER);
-    }
+    });
 }
 
 void reset_worker_dispatch_state_on_device(

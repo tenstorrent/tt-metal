@@ -66,11 +66,8 @@ void issue_record_event_commands(
     uint32_t num_worker_counters = 0;
     for (const SubDeviceId sub_device_id : sub_device_ids) {
         if (clear_count) {
-            const uint32_t base_counter = expected_num_workers_completed.base_counter_index(sub_device_id);
-            for (uint32_t slot = 0; slot < expected_num_workers_completed.num_completion_slots; ++slot) {
-                worker_waits.at(num_worker_counters++) = {
-                    base_counter + slot, expected_num_workers_completed[base_counter + slot]};
-            }
+            expected_num_workers_completed.for_each_clear_wait(
+                sub_device_id, [&](const CompletionWait& wait) { worker_waits.at(num_worker_counters++) = wait; });
         } else {
             worker_waits.at(num_worker_counters++) = expected_num_workers_completed.current_wait(sub_device_id);
         }
