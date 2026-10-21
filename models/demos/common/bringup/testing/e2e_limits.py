@@ -8,11 +8,13 @@ limit = 1 - e2e.calib x max(1 - drift, 1 - res). No fixed bar; a rung without it
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from models.demos.common.bringup.core import defaults, metrics
 
 CALIB = float(defaults.get("e2e.calib"))
+STATE_KEY = re.compile(r"^pcc_state_(.+)_L\d+$")
 
 
 def load(golden_dir: Path) -> dict:
@@ -42,7 +44,7 @@ def check(drift: dict, metric: str, value: float, failed: list[str]) -> bool:
 
 def state_limit(drift: dict, name: str) -> float:
     """The limit of a state tensor's worst layer (the contract's KV read-back reports each state's worst layer)."""
-    keys = [k for k in drift if k.startswith(f"pcc_state_{name}_L")]
+    keys = [k for k in drift if (m := STATE_KEY.match(k)) and m.group(1) == name]
     if not keys:
         raise KeyError(f"no drift for state {name!r} (F128)")
     return min(limit(drift, k) for k in keys)
