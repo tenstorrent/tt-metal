@@ -8,15 +8,15 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 
+constexpr uint32_t cb_a = get_compile_time_arg_val(0);
+constexpr uint32_t cb_b = get_compile_time_arg_val(1);
+constexpr uint32_t cb_ein = get_compile_time_arg_val(2);
+constexpr uint32_t cb_eout = get_compile_time_arg_val(3);
+constexpr uint32_t kt = get_compile_time_arg_val(4);
+constexpr uint32_t state_tiles = kt * kt;
+
 // E_out = A E_in + B for one head, accumulated in the FP32 DST at the affine prefix's fidelity.
 void kernel_main() {
-    constexpr uint32_t cb_a = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_b = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_ein = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_eout = get_compile_time_arg_val(3);
-    constexpr uint32_t kt = get_compile_time_arg_val(4);
-    constexpr uint32_t state_tiles = kt * kt;
-
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_ein, cb_eout);
     cb_wait_front(cb_a, state_tiles);
     cb_wait_front(cb_b, state_tiles);

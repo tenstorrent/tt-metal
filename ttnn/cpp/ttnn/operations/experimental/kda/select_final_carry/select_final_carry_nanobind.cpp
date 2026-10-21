@@ -43,7 +43,7 @@ void bind_select_final_carry(nb::module_& mod) {
                 the fabric and all of them copy. Defaults to enough cores from the grid's start.
             prefix_on_last_rank (bool, optional): ``prefix_final`` is valid only on the last
                 chronological rank (as the SP relay leaves it): without a split tail that rank
-                multicasts it instead of every rank copying its own.
+                multicasts it to the others.
             semaphores (list[ttnn.GlobalSemaphore], optional): The zeroed barrier and arrival global
                 semaphores, kept alive across calls. Without them each cached program allocates its
                 own when it is built.
@@ -69,9 +69,10 @@ void bind_select_final_carry(nb::module_& mod) {
         mod,
         R"doc(
         ``select_final_carry`` with a projection ``projection_input @ projection_weight`` in the same
-        dispatch, on worker cores the final carry's ``cores`` leave (``ttnn.linear``'s 2D multicast matmul with
-        ``projection_program_config``, on its cores). Nothing reads the carry until the next call, and its program mostly waits on the
-        sequence-parallel fabric, so that wait hides behind the projection's compute.
+        dispatch, on worker cores the final carry's ``cores`` leave (``ttnn.linear``'s 2D multicast matmul
+        with ``projection_program_config``, on its cores). Nothing reads the carry until the next call, and
+        its program mostly waits on the sequence-parallel fabric, so that wait hides behind the projection's
+        compute.
 
         Args:
             rank_final, prefix_final (ttnn.Tensor): As ``select_final_carry``'s.

@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sequence-parallel prefix as a relay around the SP ring (ttnn.experimental.kda.relay_affine_prefix), in place of
-all-gathering every rank's [A | B] summary and chaining all of them on every chip.
+"""The sequence-parallel prefix as a relay around the SP ring (ttnn.experimental.kda.relay_affine_prefix): each rank
+applies its own [A | B] summary to the entry state its predecessor sends and forwards the result.
 
 The relay's landing buffers are L1 tensors sharded one head per head core, at the same address on every device; they
 outlive each call, since a rank's predecessor writes into them before the rank's own call starts. Layers run one after
-another, so one relay per mesh and geometry is shared.
+another, so one relay per mesh and geometry is shared; the final carry's SP-line barrier separates consecutive calls.
 """
 
 from __future__ import annotations
@@ -67,15 +67,15 @@ class RelayAffinePrefix:
     _shared: dict = {}
 
     @classmethod
-    def shared(cls, mesh_device, **kwargs) -> "RelayAffinePrefix":
-        """One relay per mesh and geometry: layers run one after another, so they share its L1 landing buffers."""
+    def shared(cls, mesh_device, **kwargs) -> RelayAffinePrefix:
+        """One relay per mesh and geometry (mesh ids are never reused): layers run one after another, so they share
+        its L1 landing buffers."""
         if kwargs.get("cores") is not None:
             kwargs["cores"] = tuple((c.x, c.y) if hasattr(c, "x") else tuple(c) for c in kwargs["cores"])
-        key = (id(mesh_device), tuple(sorted(kwargs.items(), key=lambda item: item[0])))
-        relay = cls._shared.get(key)
-        if relay is None or relay.mesh_device is not mesh_device:
-            relay = cls._shared[key] = cls(mesh_device, **kwargs)
-        return relay
+        key = (mesh_device.id(), tuple(sorted(kwargs.items(), key=lambda item: item[0])))
+        if key not in cls._shared:
+            cls._shared[key] = cls(mesh_device, **kwargs)
+        return cls._shared[key]
 
     def __init__(
         self,
@@ -124,6 +124,8 @@ class RelayAffinePrefix:
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
+        # Where the entry states land for their reader (the chunk scan, or the entry correction's many cores).
+        self.entry_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     def __call__(self, packed, initial_state, actual_start, output_gate: RelayOutputGate | None = None):
         """Return this rank's entry states and the final state, both [BH, K, K] FP32, and the output gate's output
@@ -153,6 +155,7 @@ class RelayAffinePrefix:
             num_links=self.num_links,
             cores=self.cores,
             sequence_parallel_axis=self.axis,
+            entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
             **gate,
         )
