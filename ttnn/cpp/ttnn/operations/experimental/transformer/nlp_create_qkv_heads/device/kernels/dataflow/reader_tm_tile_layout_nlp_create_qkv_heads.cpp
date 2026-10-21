@@ -9,22 +9,25 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     Noc noc;
 
-    // READER RUNTIME ARGS
-    uint32_t num_blocks = get_arg(args::num_blocks);
-    uint32_t in0_tensor_tile_id = get_arg(args::in0_tensor_tile_id);
-    uint32_t in1_tensor_tile_id = get_arg(args::in1_tensor_tile_id);
+    // Static core index plus the common sequence length in tiles: each core derives its own block
+    // range from the two, so a new length needs no per-core host work.
+    const uint32_t core_idx = get_arg(args::core_idx);
+    const uint32_t seq_tiles = get_arg(args::h_tiles);
 
     // COMPILE TIME ARGS
-    // READER COMPILE TIME ARGS
     constexpr uint32_t q_num_tiles = get_arg(args::q_num_tiles);
     constexpr uint32_t kv_num_tiles = get_arg(args::kv_num_tiles);
-    constexpr bool head_parallel = get_arg(args::head_parallel) != 0;
+    constexpr bool head_parallel_ok = get_arg(args::head_parallel_ok) != 0;
     constexpr uint32_t head_tiles = get_arg(args::head_tiles);
-    constexpr uint32_t seq_tiles = get_arg(args::seq_tiles);
+    constexpr uint32_t in0_w_tiles = get_arg(args::in0_w_tiles);
+    constexpr uint32_t in1_w_tiles = get_arg(args::in1_w_tiles);
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
 
     const auto s0 = TensorAccessor(tensor::input_q);
 
@@ -44,18 +47,25 @@ void kernel_main() {
 
     // Tiles read per barrier; divides the head width.
     constexpr uint32_t tile_batch = get_arg(args::tile_batch);
-    if constexpr (head_parallel) {
+    constexpr uint32_t q_heads = q_num_tiles / head_tiles;
+    constexpr uint32_t kv_heads = kv_num_tiles / head_tiles;
+    constexpr uint32_t slots = q_heads + 2 * kv_heads;
+
+    const uint32_t total_rows = batch * seq_tiles;
+    // Fewer tile rows than cores: split the work per (batch, head, row) instead of per row.
+    const bool head_parallel = head_parallel_ok && total_rows < num_cores;
+    if (head_parallel) {
         // Blocks are (batch, head slot, row); the slots are the Q heads, then K, then V. Tied K and V read the same
         // input columns.
-        constexpr uint32_t q_heads = q_num_tiles / head_tiles;
-        constexpr uint32_t kv_heads = kv_num_tiles / head_tiles;
-        constexpr uint32_t slots = q_heads + 2 * kv_heads;
 #ifdef KV_TIED
         constexpr uint32_t input_heads = q_heads + kv_heads;
 #else
         constexpr uint32_t input_heads = slots;
 #endif
-        for (uint32_t block = in0_tensor_tile_id; block < in0_tensor_tile_id + num_blocks; ++block) {
+        const uint32_t total_blocks = total_rows * slots;
+        const uint32_t first_block = ttnn::runtime_length::balanced_start(core_idx, total_blocks, num_cores);
+        const uint32_t end_block = ttnn::runtime_length::balanced_end(core_idx, total_blocks, num_cores);
+        for (uint32_t block = first_block; block < end_block; ++block) {
             const uint32_t batch_slot = block / seq_tiles;
             const uint32_t row = block % seq_tiles;
             uint32_t slot = batch_slot % slots;
@@ -78,6 +88,10 @@ void kernel_main() {
             }
         }
     } else {
+        const uint32_t first_row = ttnn::runtime_length::balanced_start(core_idx, total_rows, num_cores);
+        const uint32_t num_blocks = ttnn::runtime_length::balanced_end(core_idx, total_rows, num_cores) - first_row;
+        uint32_t in0_tensor_tile_id = first_row * in0_w_tiles;
+        [[maybe_unused]] uint32_t in1_tensor_tile_id = first_row * in1_w_tiles;
         for (uint32_t block = 0; block < num_blocks; block++) {
             // Q
             for (uint32_t i = 0; i < q_num_tiles; i += tile_batch) {

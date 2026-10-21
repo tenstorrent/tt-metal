@@ -36,6 +36,14 @@ struct AllGatherProgramArtifacts {
     }
 };
 
+// Input rows in tiles: the common runtime word the workers derive their tile ranges from.
+uint32_t all_gather_input_Ht(const Tensor& input);
+
+// Worker count per direction the default factory resolves: the explicit num_workers_per_link, else the
+// byte-based heuristic. The program hash folds it in because it fixes the core set.
+uint32_t all_gather_async_num_workers_per_direction(
+    const AllGatherAsyncParams& operation_attributes, const Tensor& input, uint32_t output_data_size_bytes);
+
 struct DefaultMeshWorkloadFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherAsyncParams& operation_attributes,

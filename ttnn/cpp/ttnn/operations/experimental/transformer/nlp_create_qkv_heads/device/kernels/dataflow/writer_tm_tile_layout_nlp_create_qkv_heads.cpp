@@ -10,25 +10,26 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     Noc noc;
 
-    // WRITER RUNTIME ARGS
-    uint32_t num_blocks = get_arg(args::num_blocks);
-    uint32_t q_out_h_dim = get_arg(args::q_out_h_dim);
-    uint32_t q_out_tensor_tile_id = get_arg(args::q_out_tensor_tile_id);
-    uint32_t k_out_tensor_tile_id = get_arg(args::k_out_tensor_tile_id);
-    uint32_t v_out_tensor_tile_id = get_arg(args::v_out_tensor_tile_id);
+    // Static core index plus the common sequence length in tiles; the block range and the output
+    // tile ids are derived from the two (same split as the reader).
+    const uint32_t core_idx = get_arg(args::core_idx);
+    const uint32_t q_out_h_tiles = get_arg(args::h_tiles);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t q_out_h_tiles = get_arg(args::q_out_h_tiles);
     constexpr uint32_t q_out_w_tiles = get_arg(args::q_out_w_tiles);
-    constexpr uint32_t q_out_HtWt = get_arg(args::q_out_HtWt);
     constexpr uint32_t q_out_c = get_arg(args::q_out_c);
     constexpr uint32_t kv_out_c = get_arg(args::kv_out_c);
-    constexpr bool head_parallel = get_arg(args::head_parallel) != 0;
+    constexpr bool head_parallel_ok = get_arg(args::head_parallel_ok) != 0;
     constexpr uint32_t split_width = get_arg(args::split_width);  // zero keeps the full Q output
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+
+    const uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
 
     const auto sq = TensorAccessor(tensor::q);
     const auto sk = TensorAccessor(tensor::k);
@@ -75,19 +76,23 @@ void kernel_main() {
         }
     };
 
-    if constexpr (head_parallel) {
+    const uint32_t total_rows = batch * q_out_h_tiles;
+    const bool head_parallel = head_parallel_ok && total_rows < num_cores;
+    if (head_parallel) {
         // Blocks are (batch, head slot, row) as the reader decodes them; route each to its Q, K or V head.
         constexpr uint32_t slots = q_out_c + 2 * kv_out_c;
-        const uint32_t first_block = q_out_tensor_tile_id / q_out_w_tiles;
-        for (uint32_t block = first_block; block < first_block + num_blocks; ++block) {
+        const uint32_t total_blocks = total_rows * slots;
+        const uint32_t first_block = ttnn::runtime_length::balanced_start(core_idx, total_blocks, num_cores);
+        const uint32_t end_block = ttnn::runtime_length::balanced_end(core_idx, total_blocks, num_cores);
+        for (uint32_t block = first_block; block < end_block; ++block) {
             const uint32_t batch_slot = block / q_out_h_tiles;
             const uint32_t row = block % q_out_h_tiles;
-            const uint32_t batch = batch_slot / slots;
+            const uint32_t batch_idx = batch_slot / slots;
             const uint32_t slot = batch_slot % slots;
             const bool is_q = kv_out_c == 0 || slot < q_out_c;
             const bool is_k = !is_q && slot < q_out_c + kv_out_c;
-            const uint32_t head = is_q ? batch * q_out_c + slot
-                                       : batch * kv_out_c + slot - q_out_c - (is_k ? 0 : kv_out_c);
+            const uint32_t head = is_q ? batch_idx * q_out_c + slot
+                                       : batch_idx * kv_out_c + slot - q_out_c - (is_k ? 0 : kv_out_c);
             uint32_t tile_id = (head * q_out_h_tiles + row) * q_out_w_tiles;
             for (uint32_t w = 0; w < q_out_w_tiles; w += tile_batch) {
                 dfb_qv.wait_front(tile_batch);
@@ -108,6 +113,17 @@ void kernel_main() {
             }
         }
     } else {
+        const uint32_t first_row = ttnn::runtime_length::balanced_start(core_idx, total_rows, num_cores);
+        const uint32_t num_blocks = ttnn::runtime_length::balanced_end(core_idx, total_rows, num_cores) - first_row;
+        const uint32_t first_batch = first_row / q_out_h_tiles;
+        uint32_t q_out_h_dim = first_row % q_out_h_tiles;
+        uint32_t q_out_tensor_tile_id = first_batch * q_out_c * q_out_HtWt + q_out_h_dim * q_out_w_tiles;
+        uint32_t v_out_tensor_tile_id = first_batch * kv_out_c * q_out_HtWt + q_out_h_dim * q_out_w_tiles;
+#ifdef TRANSPOSE_K_HEADS
+        uint32_t k_out_tensor_tile_id = first_batch * kv_out_c * q_out_HtWt + q_out_h_dim;
+#else
+        uint32_t k_out_tensor_tile_id = v_out_tensor_tile_id;
+#endif
         for (uint32_t block = 0; block < num_blocks; block++) {
             // q + create q head --> outputs: [B, num_q_heads, S, head_dim]
             out_tensor_current_tile_id_along_c = q_out_tensor_tile_id;

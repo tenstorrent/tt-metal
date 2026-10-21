@@ -15,21 +15,39 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common_metal2.hpp"
 #include "experimental/kernel_args.h"
+#ifdef RUNTIME_SPLIT
+#include "ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp"
+#endif
 
 void kernel_main() {
     Noc noc;
 
-    const uint32_t input_start_id = get_arg(args::input_start_id);
-    const uint32_t input_start_offset = get_arg(args::input_start_offset);
-    const uint32_t weight_offset = get_arg(args::weight_offset);
-    const uint32_t num_blocks = get_arg(args::num_blocks);
-
-    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
     constexpr uint32_t weight_block_size = get_arg(args::weight_block_size);
     constexpr uint32_t tiles_per_chunk = get_arg(args::tiles_per_chunk);
     constexpr uint32_t input_block_size_bytes = get_arg(args::input_block_size_bytes);
     constexpr uint32_t num_chunks = get_arg(args::num_chunks);
     constexpr uint32_t last_chunk_tiles = get_arg(args::last_chunk_tiles);
+
+#ifdef RUNTIME_SPLIT
+    // Interleaved output: the block range comes from the static core index and the common row
+    // count (32-index blocks per index row), so a new sequence length rewrites one word.
+    const uint32_t core_idx = get_arg(args::core_idx);
+    const uint32_t blocks_per_batch = get_arg(args::blocks_per_batch);
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
+    const uint32_t input_start_id = start_block / blocks_per_batch;
+    const uint32_t input_start_offset = (start_block % blocks_per_batch) * input_block_size_bytes;
+    const uint32_t weight_offset = 0;
+    const uint32_t num_blocks = end_block - start_block;
+    const uint32_t input_page_size = blocks_per_batch * input_block_size_bytes;
+#else
+    const uint32_t input_start_id = get_arg(args::input_start_id);
+    const uint32_t input_start_offset = get_arg(args::input_start_offset);
+    const uint32_t weight_offset = get_arg(args::weight_offset);
+    const uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t input_page_size = get_arg(args::input_page_size);
+#endif
 
     auto input = TensorAccessor(tensor::input);
     // `weight_offset` is this core's column slice of each weight row (non-zero only for width-/

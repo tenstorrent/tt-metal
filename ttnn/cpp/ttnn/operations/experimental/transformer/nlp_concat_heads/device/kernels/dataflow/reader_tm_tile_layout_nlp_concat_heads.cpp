@@ -10,26 +10,32 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/nlp_concat_heads_split.hpp"
 
 void kernel_main() {
     Noc noc;
 
-    // WRITER RUNTIME ARGS
-    uint32_t num_blocks = get_arg(args::num_blocks);
-    uint32_t start_block = get_arg(args::start_block);
+    // Static core index plus the common row count in tiles; the (row, head) block range comes from the two.
+    const uint32_t core_idx = get_arg(args::core_idx);
+    const uint32_t in0_h_tiles = get_arg(args::h_tiles);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t in0_h_tiles = get_arg(args::in0_h_tiles);
     constexpr uint32_t in0_w_tiles = get_arg(args::in0_w_tiles);
     constexpr uint32_t in0_c = get_arg(args::in0_c);
-    constexpr uint32_t in0_HtWt = get_arg(args::in0_HtWt);
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr bool head_parallel_ok = get_arg(args::head_parallel_ok) != 0;
+
+    const uint32_t in0_HtWt = in0_h_tiles * in0_w_tiles;
+    const auto [start_block, end_block] = nlp_concat_heads_block_range(
+        core_idx, in0_h_tiles, batch, in0_c, num_cores, head_parallel_ok);
 
     DataflowBuffer dfb_in0(dfb::in0);
     const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
     const auto s0 = TensorAccessor(tensor::src);
 
     // Blocks are (row, head) in row-major order: one head's tile row each.
-    for (uint32_t block = start_block; block < start_block + num_blocks; ++block) {
+    for (uint32_t block = start_block; block < end_block; ++block) {
         const uint32_t row = block / in0_c;
         const uint32_t head = block % in0_c;
         uint32_t in0_tensor_current_tile_id =

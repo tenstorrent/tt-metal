@@ -9,6 +9,7 @@
 #include "device/embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize_force.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn {
@@ -28,7 +29,11 @@ ttnn::Tensor embedding(
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
+        // Interleaved tables take the native untilize, whose hash leaves the row count out; the routed
+        // ttnn::untilize may pick the codegen prim, which hashes the full shape.
+        mutable_weight = mutable_weight.is_sharded()
+                             ? ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT)
+                             : ttnn::operations::data_movement::detail::untilize_force_native(mutable_weight);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto original_input_rank = input_tensor.logical_shape().rank();

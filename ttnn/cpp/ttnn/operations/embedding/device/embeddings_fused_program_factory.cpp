@@ -20,6 +20,23 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
+namespace {
+// Interleaved output: the one common runtime word, 32-index blocks per index row (S / 32). Every
+// kernel derives its per-core block range from it and a static core index.
+constexpr const char* kLengthArg = "blocks_per_batch";
+
+uint32_t fused_blocks_per_batch(const EmbeddingInputs& tensor_args) {
+    return tensor_args.input_tensor_arg.padded_shape()[-1] / TILE_HEIGHT;
+}
+
+template <typename TableT>
+void merge_into(TableT& dst, const TableT& src) {
+    for (const auto& entry : src) {
+        dst.insert(entry);
+    }
+}
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_program_artifacts(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
@@ -54,14 +71,14 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // weights shape is [1, 1, num_embeddings, num_dim]
 
     uint32_t batch_size = a.padded_shape()[0];
-    uint32_t num_output_rows_per_batch = a.padded_shape()[-1];
-    uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
-    // Note: num_blocks is just blocks along height
-    uint32_t num_blocks = num_output_rows / TILE_HEIGHT;
-    uint32_t num_blocks_per_batch = num_output_rows_per_batch / TILE_HEIGHT;
+    uint32_t num_blocks_per_batch = fused_blocks_per_batch(tensor_args);
     uint32_t num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0, num_tiles_per_block = 0;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
+    // Sharded output: one shard per core, block counts from the shard spec. Interleaved output: the
+    // program owns the full grid and every kernel derives its block range on device from the common
+    // row count, so one program serves every sequence length.
+    const bool runtime_split = !output_sharded;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
@@ -71,18 +88,13 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         num_tiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     } else {
-        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        std::tie(
-            std::ignore,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+        auto grid = device->compute_with_storage_grid_size();
+        all_cores = CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+        core_group_1 = all_cores;
         num_tiles_per_block = weights.padded_shape()[-1] / TILE_WIDTH;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
+    const uint32_t num_cores = all_cores.num_cores();
 
     // Create Buffers
     EmbeddingsIndexType embeddings_index_type;
@@ -298,16 +310,42 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
     };
+    KernelSpec::CompilerOptions::Defines split_defines;
+    if (runtime_split) {
+        split_defines.emplace("RUNTIME_SPLIT", "1");
+    }
+    KernelSpec::CompilerOptions::Defines reader_defines = embedding_defines;
+    merge_into(reader_defines, split_defines);
 
-    Group<std::string> reader_rta_names = {"input_start_id", "input_start_offset", "weight_offset", "num_blocks"};
+    // Split inputs of the runtime-split kernels: static per-core index, common block count.
+    const KernelSpec::CompileTimeArgs split_compile_time_args = {{"batch", batch_size}, {"num_cores", num_cores}};
+    const KernelSpec::RuntimeArgSchema split_runtime_arg_schema = {
+        .runtime_arg_names = {"core_idx"}, .common_runtime_arg_names = {kLengthArg}};
+
+    KernelSpec::CompileTimeArgs reader_compile_time_args = {
+        {"weight_block_size", weight_block_size},
+        {"tiles_per_chunk", tiles_per_chunk},
+        {"input_block_size_bytes", input_block_size_bytes},
+        {"num_chunks", num_chunks},
+        {"last_chunk_tiles", last_chunk_tiles},
+    };
+    KernelSpec::RuntimeArgSchema reader_runtime_arg_schema;
+    if (runtime_split) {
+        merge_into(reader_compile_time_args, split_compile_time_args);
+        reader_runtime_arg_schema = split_runtime_arg_schema;
+    } else {
+        reader_compile_time_args.emplace("input_page_size", input_page_size);
+        reader_runtime_arg_schema.runtime_arg_names = {
+            "input_start_id", "input_start_offset", "weight_offset", "num_blocks"};
+    }
     if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_rta_names.push_back("pad_token");
+        reader_runtime_arg_schema.runtime_arg_names.push_back("pad_token");
     }
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
-        .compiler_options = {.defines = embedding_defines},
+        .compiler_options = {.defines = reader_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
@@ -315,16 +353,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
                 TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
             },
-        .compile_time_args =
-            {
-                {"input_page_size", input_page_size},
-                {"weight_block_size", weight_block_size},
-                {"tiles_per_chunk", tiles_per_chunk},
-                {"input_block_size_bytes", input_block_size_bytes},
-                {"num_chunks", num_chunks},
-                {"last_chunk_tiles", last_chunk_tiles},
-            },
-        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
+        .compile_time_args = std::move(reader_compile_time_args),
+        .runtime_arg_schema = std::move(reader_runtime_arg_schema),
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
@@ -334,14 +364,17 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // -----------------------------------------------------------------------
     // Compute
     //
-    // Split across the two core groups, each with its own per_core_block_cnt compile-time arg, so the
-    // two groups are two KernelSpecs of the same source rather than one spec with the count demoted to
-    // a runtime arg. The source itself is config-selected: the chunked kernel when a block's tiles do
-    // not fit the L1 budget in one go, the shared tilize kernel otherwise.
+    // Sharded output: split across the two core groups, each with its own per_core_block_cnt
+    // compile-time arg, so the two groups are two KernelSpecs of the same source. Interleaved
+    // output: one spec over the full grid that derives its block count on device. The source is
+    // config-selected: the chunked kernel when a block's tiles do not fit the L1 budget in one go
+    // (always on the runtime split, where a single chunk is the unchunked case), the shared tilize
+    // kernel otherwise.
     // -----------------------------------------------------------------------
     const char* compute_kernel_path =
-        use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
-                               : "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp";
+        use_chunked_processing || runtime_split
+            ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
+            : "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp";
 
     // Legacy compute config left every field at its default. ComputeHardwareConfig's common defaults
     // reproduce them (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries)
@@ -371,7 +404,16 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         }
 
         KernelSpec::CompileTimeArgs compute_compile_time_args;
-        if (use_chunked_processing) {
+        KernelSpec::RuntimeArgSchema compute_runtime_arg_schema;
+        if (runtime_split) {
+            compute_compile_time_args = {
+                {"tiles_per_chunk", tiles_per_chunk},
+                {"num_chunks", num_chunks},
+                {"last_chunk_tiles", last_chunk_tiles},
+            };
+            merge_into(compute_compile_time_args, split_compile_time_args);
+            compute_runtime_arg_schema = split_runtime_arg_schema;
+        } else if (use_chunked_processing) {
             compute_compile_time_args = {
                 {"per_core_block_cnt", per_core_block_cnt},
                 {"tiles_per_chunk", tiles_per_chunk},
@@ -386,18 +428,21 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
             };
         }
 
+        KernelSpec::CompilerOptions::Defines compute_defines = split_defines;
+        if (output_sharded) {
+            compute_defines.emplace("OUT_SELF_LOOP", "1");
+        }
+
         return KernelSpec{
             .unique_id = unique_id,
             .source = compute_kernel_path,
             // O3 explicitly: the legacy compute config set no opt_level and so resolved to O3, but
             // Metal 2.0's type-agnostic CompilerOptions defaults to O2. Leaving it unset would drop a
             // level on both compute specs' compile and link.
-            .compiler_options =
-                {.defines = output_sharded ? KernelSpec::CompilerOptions::Defines{{"OUT_SELF_LOOP", "1"}}
-                                           : KernelSpec::CompilerOptions::Defines{},
-                 .opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(compute_dfb_bindings),
             .compile_time_args = std::move(compute_compile_time_args),
+            .runtime_arg_schema = std::move(compute_runtime_arg_schema),
             .hw_config = compute_hw,
         };
     };
@@ -408,12 +453,13 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // A sharded output needs no writer: compute has already packed its tiles into the output shard.
     // TODO: We can use the second risc to do more work in parallel
     // -----------------------------------------------------------------------
+    Group<KernelSpecName> data_movement_kernels = {READER};
     if (!output_sharded) {
-        // Tilized writer
+        KernelSpec::CompileTimeArgs writer_compile_time_args = {{"num_tiles_per_block", num_tiles_per_block}};
+        merge_into(writer_compile_time_args, split_compile_time_args);
         spec.kernels.push_back(KernelSpec{
             .unique_id = WRITER,
-            .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                      "writer_unary_interleaved_start_id_metal2.cpp",
+            .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize_writer.cpp",
             .dfb_bindings =
                 {
                     DFBBinding{
@@ -426,21 +472,18 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
                 {
                     TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
                 },
-            .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+            .compile_time_args = std::move(writer_compile_time_args),
+            .runtime_arg_schema = split_runtime_arg_schema,
             .hw_config = ttnn::create_writer_datamovement_config(),
         });
+        data_movement_kernels.push_back(WRITER);
     }
 
     // -----------------------------------------------------------------------
     // Work units: one per core group, each running the data-movement kernels together with that
     // group's compute spec. The two groups' node sets are disjoint and together cover all_cores.
     // -----------------------------------------------------------------------
-    Group<KernelSpecName> data_movement_kernels = {READER};
-    if (!output_sharded) {
-        data_movement_kernels.push_back(WRITER);
-    }
-
-    if (num_blocks_per_core_group_1 > 0) {
+    if (runtime_split || num_blocks_per_core_group_1 > 0) {
         spec.kernels.push_back(make_compute(COMPUTE_G1, num_blocks_per_core_group_1));
         Group<KernelSpecName> group_1_kernels = data_movement_kernels;
         group_1_kernels.push_back(COMPUTE_G1);
@@ -469,17 +512,28 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE_G1};
 
-    uint32_t input_offset = 0;
-    uint32_t weight_offset = 0;
-    uint32_t tile_offset = 0;
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
+    if (runtime_split) {
+        reader_run_args.common_runtime_arg_values = {{kLengthArg, num_blocks_per_batch}};
+        writer_run_args.common_runtime_arg_values = {{kLengthArg, num_blocks_per_batch}};
+        compute_run_args.common_runtime_arg_values = {{kLengthArg, num_blocks_per_batch}};
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, cores[i], {{"pad_token", pad_token.value()}});
+            }
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
+            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
+        }
+    } else {
+        uint32_t input_offset = 0;
+        uint32_t weight_offset = 0;
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            const CoreCoord& core = cores[i];
 
-        uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
+            uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
-        // Reader
-        {
             AddRuntimeArgsForNode(
                 reader_run_args.runtime_arg_values,
                 core,
@@ -490,17 +544,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
             if (embeddings_type == EmbeddingsType::PADDED) {
                 AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"pad_token", pad_token.value()}});
             }
-        }
 
-        // Writer
-        if (!output_sharded) {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"num_pages", num_tiles_per_block * local_num_blocks}, {"start_id", tile_offset}});
-            tile_offset += local_num_blocks * num_tiles_per_block;
-            input_offset += local_num_blocks;
-        } else {
             weight_offset += weight_block_size;
             if (weight_offset == weight_page_size) {
                 weight_offset = 0;
@@ -511,14 +555,36 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
-    if (!output_sharded) {
+    if (runtime_split) {
         run_args.kernel_run_args.push_back(std::move(writer_run_args));
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
     }
     run_args.tensor_args.emplace(INPUT_PARAM, input_mesh_tensor);
     run_args.tensor_args.emplace(WEIGHTS_PARAM, weights_mesh_tensor);
     run_args.tensor_args.emplace(OUTPUT_PARAM, output_mesh_tensor);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+// A hit re-binds the three tensors and, with an interleaved output, rewrites the common block count
+// the three kernels derive their per-core ranges from (the hash leaves the index length out).
+tt::tt_metal::experimental::ProgramRunArgs EmbeddingsFusedProgramFactory::override_runtime_arguments(
+    const EmbeddingParams& /*operation_attributes*/,
+    const EmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    ProgramRunArgs params;
+    if (!is_sharded(tensor_return_value.buffer()->buffer_layout())) {
+        const uint32_t blocks_per_batch = fused_blocks_per_batch(tensor_args);
+        for (const char* kernel : {"reader", "writer", "compute_group_1"}) {
+            params.kernel_run_args.push_back(KernelRunArgs{
+                .kernel = KernelSpecName{kernel}, .common_runtime_arg_values = {{kLengthArg, blocks_per_batch}}});
+        }
+    }
+    params.tensor_args.emplace(TensorParamName{"input"}, tensor_args.input_tensor_arg.mesh_tensor());
+    params.tensor_args.emplace(TensorParamName{"weights"}, tensor_args.weight_arg.mesh_tensor());
+    params.tensor_args.emplace(TensorParamName{"output"}, tensor_return_value.mesh_tensor());
+    return params;
 }
 
 }  // namespace ttnn::prim

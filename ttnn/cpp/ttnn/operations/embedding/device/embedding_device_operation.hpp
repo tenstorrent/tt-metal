@@ -31,6 +31,12 @@ struct EmbeddingsDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+
+    // Fused factory with an interleaved output: attributes + index dtype/layout/batch + table width and
+    // dtype; the index length and the table row count are runtime. Other factories: full specs.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(

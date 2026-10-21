@@ -12,6 +12,7 @@
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -22,51 +23,15 @@ using namespace tt::tt_metal::experimental;
 
 namespace {
 
-// Single source of truth for the Interleaved factory's per-core work split.  create_program_artifacts()
-// walks `cores` in this order when it emits the per-core runtime args.
-struct InterleavedWorkSplit {
-    std::vector<CoreCoord> cores;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t num_blocks_per_core_group_1 = 0;
-    uint32_t num_blocks_per_core_group_2 = 0;
-    // Q-only head creation with fewer sequence blocks than cores splits the work per (batch, head) instead:
-    // a block is then one head row rather than one full input row.
-    bool head_parallel = false;
-};
-
-InterleavedWorkSplit build_interleaved_work_split(
+// Static part of the head-parallel decision; the dynamic part (fewer tile rows than cores) is taken
+// on device from the common sequence length, so one program serves every length.
+bool head_parallel_allowed(
     const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
-    const Tensor& input_tensor,
     bool input_tensor_kv_present) {
-    const auto& input_shape = input_tensor.padded_shape();
-    const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = grid.y;
-    const uint32_t sequence_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    // Split heads only when the sequence split would leave cores idle. A block is then one (batch, head, row) of
-    // one output: Q heads first, then K, then V.
     const bool q_only = operation_attributes.num_kv_heads == 0;
     const uint32_t head_slots = operation_attributes.num_q_heads + 2 * operation_attributes.num_kv_heads;
-    const bool head_parallel =
-        head_slots > 1 && !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y &&
-        (q_only || (!input_tensor_kv_present && !operation_attributes.q_head_split.has_value()));
-    const uint32_t num_blocks = sequence_blocks * (head_parallel ? head_slots : 1);
-    auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_blocks);
-
-    InterleavedWorkSplit split;
-    split.head_parallel = head_parallel;
-    split.all_cores = std::move(all_cores);
-    split.core_group_1 = std::move(core_group_1);
-    split.core_group_2 = std::move(core_group_2);
-    split.num_blocks_per_core_group_1 = blocks_group_1;
-    split.num_blocks_per_core_group_2 = blocks_group_2;
-    split.cores.reserve(num_cores);
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        split.cores.push_back(CoreCoord{i / num_cores_y, i % num_cores_y});
-    }
-    return split;
+    return head_slots > 1 && !operation_attributes.transpose_k_heads &&
+           (q_only || (!input_tensor_kv_present && !operation_attributes.q_head_split.has_value()));
 }
 
 // The five tensor arguments both factories bind: the Q input, the optional separate KV input and the three
@@ -95,6 +60,14 @@ TensorRunArgs build_qkv_tensor_run_args(
     return tensor_run_args;
 }
 
+// The sequence length in tiles is the one common runtime word of the Interleaved program; every
+// kernel derives its per-core share from it on device.
+constexpr const char* kLengthArg = "h_tiles";
+
+uint32_t interleaved_h_tiles(const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args) {
+    return tensor_args.input_tensor_q.padded_shape()[2] / TILE_HEIGHT;
+}
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interleaved::create_program_artifacts(
@@ -104,8 +77,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     // Spec resource names (function-local: the two factories share one unity translation unit).
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const KernelSpecName COMPUTE_G1{"compute_g1"};
-    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const KernelSpecName COMPUTE{"compute"};
     const DFBSpecName QV{"qv"};        // Q and V head tiles, reader -> writer (K too unless transpose_k_heads)
     const DFBSpecName K_IN{"k_in"};    // K head tiles, reader -> compute (transpose_k_heads only)
     const DFBSpecName K_OUT{"k_out"};  // transposed K head tiles, compute -> writer (transpose_k_heads only)
@@ -150,8 +122,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     // Output shape for Q is: [B, num_q_heads, s, head_dim], shuffled from [B, 1, s, num_q_heads * head_dim]
     // Output shape for K/V is: [B, num_kv_heads, s, head_dim], shuffled from [B, 1, s, num_kv_heads * head_dim]
     // NOTE: Output h and w dims are identical for Q, K, V, so any arg that is related to these dims for q_* can be
-    // shared for K, V
-    uint32_t q_out_h_tiles = input_shape[2] / TILE_HEIGHT;
+    // shared for K, V. The row count (s / 32) is the common runtime word, not a compile-time arg.
     uint32_t q_out_w_tiles = head_dim / TILE_WIDTH;  // tiles along head_dim
     // Tiles the reader and writer move per NoC barrier; the transposed-K path feeds compute one tile at a time.
     uint32_t tile_batch = 8;
@@ -161,17 +132,18 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     if (operation_attributes.transpose_k_heads) {
         tile_batch = 1;
     }
-    uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
-    uint32_t q_out_CHtWt = num_q_heads * q_out_HtWt;
-    uint32_t kv_out_CHtWt = num_kv_heads * q_out_HtWt;
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
+    const uint32_t batch = input_shape[0];
+    const uint32_t h_tiles = interleaved_h_tiles(tensor_args);
+    const bool head_parallel_ok = head_parallel_allowed(operation_attributes, read_from_input_tensor_kv);
 
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor, read_from_input_tensor_kv);
-    const auto& core_group_1 = split.core_group_1;
-    const auto& core_group_2 = split.core_group_2;
-    const uint32_t num_blocks_per_core_group_1 = split.num_blocks_per_core_group_1;
-    const uint32_t num_blocks_per_core_group_2 = split.num_blocks_per_core_group_2;
+    // The program owns the full grid; cores past the end of the row split at a short length run the
+    // DFB protocol with zero blocks.
+    const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
+    const CoreRangeSet all_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const std::vector<CoreCoord> cores = corerange_to_cores(all_cores, std::nullopt, true);
+    const uint32_t num_cores = cores.size();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -238,12 +210,15 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             {
                 {"q_num_tiles", q_num_tiles},
                 {"kv_num_tiles", kv_num_tiles},
-                {"head_parallel", static_cast<uint32_t>(split.head_parallel)},
+                {"head_parallel_ok", static_cast<uint32_t>(head_parallel_ok)},
                 {"head_tiles", q_out_w_tiles},
-                {"seq_tiles", q_out_h_tiles},
+                {"in0_w_tiles", in0_w_tiles},
+                {"in1_w_tiles", in1_w_tiles},
+                {"batch", batch},
+                {"num_cores", num_cores},
                 {"tile_batch", tile_batch},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_tensor_tile_id", "in1_tensor_tile_id"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"core_idx"}, .common_runtime_arg_names = {kLengthArg}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // TODO: Q, K, V doesn't necessarily need to be the same output mem config
@@ -278,20 +253,18 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             },
         .compile_time_args =
             {
-                {"q_out_h_tiles", q_out_h_tiles},
                 {"q_out_w_tiles", q_out_w_tiles},
-                {"q_out_HtWt", q_out_HtWt},
                 {"q_out_c", num_q_heads},
                 {"kv_out_c", num_kv_heads},
-                {"head_parallel", static_cast<uint32_t>(split.head_parallel)},
+                {"head_parallel_ok", static_cast<uint32_t>(head_parallel_ok)},
                 // Non-zero only for the Q head split: output 0 takes the first split_width tiles of every
                 // head row and output 1 (bound as K) the rest.
                 {"split_width", static_cast<uint32_t>(operation_attributes.q_head_split.value_or(0) / TILE_WIDTH)},
+                {"batch", batch},
+                {"num_cores", num_cores},
                 {"tile_batch", tile_batch},
             },
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {"num_blocks", "q_out_h_dim", "q_out_tensor_tile_id", "k_out_tensor_tile_id", "v_out_tensor_tile_id"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"core_idx"}, .common_runtime_arg_names = {kLengthArg}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (read_from_input_tensor_kv) {
@@ -315,15 +288,14 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
         },
     };
 
-    Group<KernelSpecName> work_unit_kernels_g1 = {READER, WRITER};
-    Group<KernelSpecName> work_unit_kernels_g2 = {READER, WRITER};
+    Group<KernelSpecName> work_unit_kernels = {READER, WRITER};
     Group<KernelSpec> kernels;
 
     // If we transpose_k_heads:
     // - reader will write K heads to k_in, instead of qv
     // - compute will wait on k_in and write to k_out
     // - writer will wait on k_out, instead of qv
-    // Neither K buffer exists otherwise; the generic transpose_wh compute kernel binds the two of them.
+    // Neither K buffer exists otherwise.
     if (transpose_k_heads) {
         // For FLOAT32 input, enable fp32 dest accumulation so the JIT data-format selection
         // resolves the unpack-dst buffer to Tf32 (10-bit mantissa) instead of Float16_b (7-bit
@@ -337,37 +309,31 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             compute_hw.unpack_modes.emplace(K_IN, UnpackMode::UnpackToSrc);
         }
 
-        // One compute spec per work-split core group: the block count is a compile-time argument, so
-        // each group compiles its own instance.
-        auto make_compute = [&](const KernelSpecName& unique_id, uint32_t NHtWt) {
-            return KernelSpec{
-                .unique_id = unique_id,
-                .source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh_metal2.cpp",
-                // The legacy compute descriptor resolved to O3; Metal 2.0 defaults every kernel to O2.
-                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-                .dfb_bindings =
-                    {
-                        DFBBinding{
-                            .dfb_spec_name = K_IN,
-                            .accessor_name = "in",
-                            .endpoint_type = DFBEndpointType::CONSUMER,
-                        },
-                        DFBBinding{
-                            .dfb_spec_name = K_OUT,
-                            .accessor_name = "out",
-                            .endpoint_type = DFBEndpointType::PRODUCER,
-                        },
+        kernels.push_back(KernelSpec{
+            .unique_id = COMPUTE,
+            .source =
+                "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/compute/"
+                "transpose_k_heads.cpp",
+            // The legacy compute descriptor resolved to O3; Metal 2.0 defaults every kernel to O2.
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = K_IN,
+                        .accessor_name = "in",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
                     },
-                .compile_time_args = {{"NHtWt", NHtWt}},
-                .hw_config = ComputeHardwareConfig{compute_hw},
-            };
-        };
-        kernels.push_back(make_compute(COMPUTE_G1, num_blocks_per_core_group_1 * kv_num_tiles));
-        work_unit_kernels_g1.push_back(COMPUTE_G1);
-        if (core_group_2.num_cores() > 0) {
-            kernels.push_back(make_compute(COMPUTE_G2, num_blocks_per_core_group_2 * kv_num_tiles));
-            work_unit_kernels_g2.push_back(COMPUTE_G2);
-        }
+                    DFBBinding{
+                        .dfb_spec_name = K_OUT,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                },
+            .compile_time_args = {{"kv_num_tiles", kv_num_tiles}, {"batch", batch}, {"num_cores", num_cores}},
+            .runtime_arg_schema = {.runtime_arg_names = {"core_idx"}, .common_runtime_arg_names = {kLengthArg}},
+            .hw_config = ComputeHardwareConfig{compute_hw},
+        });
+        work_unit_kernels.push_back(COMPUTE);
 
         reader.dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = K_IN,
@@ -397,83 +363,37 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
         });
     }
 
-    KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
-    uint32_t num_blocks_written = 0;
-    for (const CoreCoord& core : split.cores) {
-        uint32_t num_blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+    KernelRunArgs reader_run_args{.kernel = READER, .common_runtime_arg_values = {{kLengthArg, h_tiles}}};
+    KernelRunArgs writer_run_args{.kernel = WRITER, .common_runtime_arg_values = {{kLengthArg, h_tiles}}};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE, .common_runtime_arg_values = {{kLengthArg, h_tiles}}};
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
+        if (transpose_k_heads) {
+            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, cores[i], {{"core_idx", i}});
         }
-
-        uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
-        uint32_t q_out_tensor_tile_id =
-            (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
-        uint32_t v_out_tensor_tile_id =
-            (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
-        uint32_t k_out_tensor_tile_id = transpose_k_heads
-                                            ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
-                                            : v_out_tensor_tile_id;
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {
-                {"num_blocks", num_blocks_per_core},
-                // Head-parallel blocks are (batch, head, row) indices the reader decodes itself.
-                {"in0_tensor_tile_id", split.head_parallel ? num_blocks_written : num_blocks_written * in0_w_tiles},
-                {"in1_tensor_tile_id", num_blocks_written * in1_w_tiles},
-            });
-
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {
-                {"num_blocks", num_blocks_per_core},
-                {"q_out_h_dim", q_out_h_dim},
-                {"q_out_tensor_tile_id",
-                 split.head_parallel ? num_blocks_written * q_out_w_tiles : q_out_tensor_tile_id},
-                {"k_out_tensor_tile_id", k_out_tensor_tile_id},
-                {"v_out_tensor_tile_id", v_out_tensor_tile_id},
-            });
-
-        num_blocks_written += num_blocks_per_core;
     }
 
     kernels.push_back(std::move(reader));
     kernels.push_back(std::move(writer));
-
-    // One work unit per work-split core group; the reader and writer run on both, the per-group compute
-    // instance (when present) only on its own group.
-    Group<WorkUnitSpec> work_units = {
-        WorkUnitSpec{
-            .name = "core_group_1",
-            .kernels = std::move(work_unit_kernels_g1),
-            .target_nodes = core_group_1,
-        },
-    };
-    if (core_group_2.num_cores() > 0) {
-        work_units.push_back(WorkUnitSpec{
-            .name = "core_group_2",
-            .kernels = std::move(work_unit_kernels_g2),
-            .target_nodes = core_group_2,
-        });
-    }
 
     ProgramSpec spec{
         .name = "nlp_create_qkv_heads_interleaved",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters = std::move(tensor_parameters),
-        .work_units = std::move(work_units),
+        .work_units = {WorkUnitSpec{
+            .name = "all_cores",
+            .kernels = std::move(work_unit_kernels),
+            .target_nodes = all_cores,
+        }},
     };
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    if (transpose_k_heads) {
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    }
     run_args.tensor_args = build_qkv_tensor_run_args(tensor_args, output);
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
@@ -919,14 +839,23 @@ tt::tt_metal::experimental::ProgramRunArgs NlpCreateHeadsDeviceOperation::Sharde
     return params;
 }
 
-// The reader takes the input (and optional KV input), the writer the three outputs; all five ride the
-// tensor bindings.  The Interleaved dataflow buffers are not borrowed, so there is nothing to re-point there.
+// The hash drops the row count, so a hit rewrites the one common length word of every kernel (the
+// per-core split is derived on device from it) and re-binds the five tensors.
 tt::tt_metal::experimental::ProgramRunArgs NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const uint32_t h_tiles = interleaved_h_tiles(tensor_args);
     ProgramRunArgs params;
+    params.kernel_run_args = {
+        KernelRunArgs{.kernel = KernelSpecName{"reader"}, .common_runtime_arg_values = {{kLengthArg, h_tiles}}},
+        KernelRunArgs{.kernel = KernelSpecName{"writer"}, .common_runtime_arg_values = {{kLengthArg, h_tiles}}},
+    };
+    if (operation_attributes.transpose_k_heads) {
+        params.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = KernelSpecName{"compute"}, .common_runtime_arg_values = {{kLengthArg, h_tiles}}});
+    }
     params.tensor_args = build_qkv_tensor_run_args(tensor_args, tensor_return_value);
     return params;
 }

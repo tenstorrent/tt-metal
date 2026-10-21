@@ -36,4 +36,13 @@ constexpr uint32_t padded_tiles(uint32_t total_tiles, uint32_t num_cores, uint32
 
 constexpr uint32_t rounds(uint32_t rows, uint32_t workers) { return div_up(rows, workers); }
 
+// Balanced split in split_work_to_cores order: the first `total % num_cores` cores take one extra unit.
+constexpr uint32_t balanced_start(uint32_t core_idx, uint32_t total, uint32_t num_cores) {
+    return core_idx * (total / num_cores) + min_u32(core_idx, total % num_cores);
+}
+
+constexpr uint32_t balanced_end(uint32_t core_idx, uint32_t total, uint32_t num_cores) {
+    return balanced_start(core_idx + 1, total, num_cores);
+}
+
 }  // namespace ttnn::runtime_length

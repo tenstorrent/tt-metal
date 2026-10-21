@@ -17,6 +17,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_program_cache_flat
 from tt_py_test_utils_common.utility_functions import comp_pcc, tt2torch_tensor, skip_for_blackhole
 
 
@@ -111,15 +112,66 @@ def test_nlp_cqkv_q_only_head_parallel_cache_hit(device, isolate_program_cache, 
     assert device.num_program_cache_entries() == 1
 
 
-def test_nlp_cqkv_interleaved_shape_change(device, isolate_program_cache):
-    """Different input shape (seq_len) -> distinct entries (input TensorSpec is hashed)."""
+@pytest.mark.parametrize("transpose_k_heads", (False, True), ids=["no_transpose", "transpose_k"])
+def test_nlp_cqkv_interleaved_shape_change(device, isolate_program_cache, transpose_k_heads):
+    """The row count is a runtime word: a new seq_len hits the program, a new width or dtype misses."""
     head_dim, num_q_heads, num_kv_heads = 64, 8, 2
-    dtype, mem_config = ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG
-    for seq_len in (128, 256):
-        A, in_t = _make_interleaved_input(device, 1, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, mem_config, 1)
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    def run(variant):
+        seq_len, heads, dtype = variant
+        A, in_t = _make_interleaved_input(device, 1, seq_len, head_dim, heads, num_kv_heads, dtype, mem_config, seq_len)
+        outs = _run_interleaved(in_t, heads, num_kv_heads, transpose_k_heads, mem_config)
+        # bfloat8_b is block-quantized on the way in, so only the bfloat16 variants are bit-exact.
+        pcc = 1.0 if dtype == ttnn.bfloat16 else 0.99
+        _check(outs, _refs_interleaved(A, 1, seq_len, head_dim, heads, num_kv_heads, transpose_k_heads), pcc)
+
+    variants = [
+        (128, num_q_heads, ttnn.bfloat16),
+        (256, num_q_heads, ttnn.bfloat16),
+        (32, num_q_heads, ttnn.bfloat16),
+        (128, num_q_heads + 2, ttnn.bfloat16),  # width change: new program
+        (128, num_q_heads, ttnn.bfloat8_b),  # dtype change: new program
+    ]
+    assert_program_cache_flat(device, run, variants, warm_index=0, miss_indices=(3, 4))
+
+
+def _h3_v_split_rows():
+    # Per-chip packed rows served by the MiniMax-H3 DiT on 4x8 (74..470 tile rows), 148 as the warm point.
+    return [148 * 32, 74 * 32, 287 * 32, 427 * 32, 470 * 32]
+
+
+@pytest.mark.parametrize("batch", [1, 2])
+def test_nlp_cqkv_h3_dynamic_rows_flat_cache(device, isolate_program_cache, batch):
+    """H3 V head split ([1,B,M,1792] -> [B,14,M,128], Q-only): one program over every served M, bit-exact."""
+    head_dim, num_q_heads, num_kv_heads = 128, 14, 0
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    def run(seq_len):
+        A, in_t = _make_interleaved_input(device, batch, seq_len, head_dim, num_q_heads, 0, ttnn.bfloat16, mem_config, seq_len)
         outs = _run_interleaved(in_t, num_q_heads, num_kv_heads, False, mem_config)
-        _check(outs, _refs_interleaved(A, 1, seq_len, head_dim, num_q_heads, num_kv_heads, False), 1.0)
-    assert device.num_program_cache_entries() == 2
+        ref = A.reshape(batch, seq_len, num_q_heads, head_dim).transpose(1, 2).to(torch.bfloat16)
+        assert torch.equal(tt2torch_tensor(outs[0]).to(torch.bfloat16), ref), f"V heads mismatch at M={seq_len}"
+
+    assert_program_cache_flat(device, run, _h3_v_split_rows())
+    assert device.num_program_cache_entries() == 1
+
+
+def test_nlp_cqkv_q_only_crosses_head_parallel_threshold(device, isolate_program_cache):
+    """The head-parallel split is decided on device, so lengths on both sides of it share one program."""
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    head_dim, num_q_heads = 64, 4
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    def run(seq_len):
+        A, in_t = _make_interleaved_input(device, 1, seq_len, head_dim, num_q_heads, 0, ttnn.bfloat16, mem_config, seq_len)
+        outs = _run_interleaved(in_t, num_q_heads, 0, False, mem_config)
+        _check(outs[:1], _refs_interleaved(A, 1, seq_len, head_dim, num_q_heads, 0, False)[:1], 1.0)
+
+    # 32 rows (head-parallel), one tile row short of the grid (head-parallel), the grid (row split), beyond it.
+    assert_program_cache_flat(device, run, [32 * num_cores, 32, 32 * (num_cores - 1), 32 * (num_cores + 3)])
+    assert device.num_program_cache_entries() == 1
 
 
 def _make_sharded_input(device, batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, seed):

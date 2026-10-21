@@ -19,6 +19,10 @@ using namespace ccl;
 
 namespace experimental::prim {
 
+uint32_t all_gather_input_Ht(const Tensor& input) {
+    return input.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+}
+
 AllGatherProgramArtifacts::RuntimeArgs AllGatherProgramArtifacts::collect_runtime_args(
     const std::optional<GlobalSemaphore>& barrier,
     const std::vector<GlobalSemaphore>& semaphores,
@@ -31,6 +35,7 @@ AllGatherProgramArtifacts::RuntimeArgs AllGatherProgramArtifacts::collect_runtim
     args[Args::barrier] = barrier ? barrier->address() : 0;
     args[Args::semaphore_0] = semaphores.at(0).address();
     args[Args::semaphore_1] = semaphores.at(1).address();
+    args[Args::input_Ht] = all_gather_input_Ht(input);
     return args;
 }
 
@@ -128,7 +133,6 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     // Tensor Info
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor buffer is null");
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor buffer is null");
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto* mesh_device = input_tensor.device();
@@ -378,7 +382,6 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
         (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
 
-    uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
     constexpr uint32_t TILE_SIZE = 32;
     // Only check tile alignment for the dimension being all-gathered
     uint32_t rank = input_tensor_shape.rank();
@@ -402,7 +405,6 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_SIZE;
 
     uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_SIZE;
-    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_SIZE;
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
@@ -428,10 +430,8 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
         normalized_dim,                   // gather_dim
         batch_head_size,                  // input_batch_head_count (product of the first two dims)
         input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
         input_tensor_C,                   // input_tensor_C
         output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
         output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
@@ -473,10 +473,8 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
         normalized_dim,                   // gather_dim
         batch_head_size,                  // input_batch_head_count (product of the first two dims)
         input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
         input_tensor_C,                   // input_tensor_C
         output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
         output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
@@ -574,34 +572,17 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
                      num_mux_cores_per_direction_per_link + worker];
                 CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
+                // The workers derive their tile ranges on device from the common row count
+                // (all_gather_worker_split.hpp); a pinned chunks_per_sync passes through, 0 means derive.
                 uint32_t global_worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t global_worker_count = num_links * num_workers_per_direction;
-                uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
-                uint32_t remainder = single_batch_head_num_pages % global_worker_count;
-                uint32_t input_tile_id_start =
-                    (global_worker_id * base_pages_per_worker) + std::min(global_worker_id, remainder);
-                uint32_t input_tile_id_end =
-                    ((global_worker_id + 1) * base_pages_per_worker) + std::min(global_worker_id + 1, remainder);
-
-                // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
-                // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
-                // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-                constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
-                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
-                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
-                    HEURISTIC_MAX_CHUNKS_PER_SYNC));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
-
-                uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-                uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
+                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(0);
 
                 std::vector<uint32_t> reader_rt_args = {
-                    dir,                      // direction RT ARG
-                    input_tile_id_start,      // input_tile_id_start RT ARG
-                    input_tile_id_end,        // input_tile_id_end RT ARG
-                    start_pages_read_in_row,  // start_pages_read_in_row RT ARG
-                    start_row_offset,         // start_row_offset RT ARG
-                    chunks_per_sync_val,      // chunks_per_sync RT ARG
+                    dir,                  // direction RT ARG
+                    global_worker_id,     // global_worker_id RT ARG
+                    global_worker_count,  // global_worker_count RT ARG
+                    chunks_per_sync_val,  // chunks_per_sync RT ARG (0 = derive on device)
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -621,11 +602,9 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
                     opposite_core_coord.x,                                       // opposite_core_sem_noc0_x
                     opposite_core_coord.y,                                       // opposite_core_sem_noc0_y
                     dir,                                                         // direction
-                    input_tile_id_start,                                         // input_tile_id_start
-                    input_tile_id_end,                                           // input_tile_id_end
-                    start_pages_read_in_row,                                     // start_pages_read_in_row
-                    start_row_offset,                                            // start_row_offset
-                    chunks_per_sync_val};                                        // chunks_per_sync
+                    global_worker_id,                                            // global_worker_id
+                    global_worker_count,                                         // global_worker_count
+                    chunks_per_sync_val};                                        // chunks_per_sync (0 = derive)
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(
@@ -685,6 +664,7 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     common_args.push_back(barrier_addr);  // smuggled-rta-ok: semaphore, override
     common_args.push_back(semaphore_0);   // smuggled-rta-ok: semaphore, override
     common_args.push_back(semaphore_1);   // smuggled-rta-ok: semaphore, override
+    common_args.push_back(input_tensor_Ht);  // smuggled-rta-ok: runtime row count, override
     desc.kernels[reader_kernel_index].emplace_common_runtime_args(common_args);
     desc.kernels[writer_kernel_index].emplace_common_runtime_args(common_args);
 
@@ -694,6 +674,23 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
 }  // namespace
 
 namespace experimental::prim {
+
+uint32_t all_gather_async_num_workers_per_direction(
+    const AllGatherAsyncParams& operation_attributes, const Tensor& input, uint32_t output_data_size_bytes) {
+    if (operation_attributes.num_workers_per_link.has_value()) {
+        return *operation_attributes.num_workers_per_link;
+    }
+    return default_workers(
+        *input.device(),
+        operation_attributes.sub_device_id,
+        operation_attributes.topology,
+        output_data_size_bytes,
+        operation_attributes.num_links,
+        operation_attributes.ring_size,
+        /*num_directions_per_link=*/2,
+        /*num_mux_cores_per_direction_per_link=*/1,
+        operation_attributes.sub_core_grid);
+}
 
 tt::tt_metal::WorkloadDescriptor DefaultMeshWorkloadFactory::create_workload_descriptor(
     const AllGatherAsyncParams& operation_attributes,
@@ -746,7 +743,7 @@ tt::tt_metal::WorkloadDescriptor DefaultMeshWorkloadFactory::create_workload_des
 void DefaultMeshWorkloadFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const AllGatherAsyncParams& operation_attributes,
-    const AllGatherAsyncInputs& /*tensor_args*/,
+    const AllGatherAsyncInputs& tensor_args,
     Tensor& /*output_tensor*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
     using Args = ttnn::ccl::AllGatherCommonArgs;
@@ -755,12 +752,14 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
                                       : 0u;
     const uint32_t semaphore_0 = static_cast<uint32_t>(operation_attributes.semaphore.at(0).address());
     const uint32_t semaphore_1 = static_cast<uint32_t>(operation_attributes.semaphore.at(1).address());
+    const uint32_t input_Ht = all_gather_input_Ht(tensor_args.input_tensor);
 
     const auto write_common = [&](tt::tt_metal::KernelHandle kernel_id) {
         auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_id);
         common_args[Args::barrier] = barrier_addr;
         common_args[Args::semaphore_0] = semaphore_0;
         common_args[Args::semaphore_1] = semaphore_1;
+        common_args[Args::input_Ht] = input_Ht;
     };
     write_common(kReaderKernelIndex);
     write_common(kWriterKernelIndex);
@@ -794,7 +793,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto* mesh_device = input_tensor.device();
@@ -1064,7 +1062,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
         (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
 
-    uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
     constexpr uint32_t TILE_SIZE = 32;
     // Only check tile alignment for the dimension being all-gathered
     uint32_t rank = input_tensor_shape.rank();
@@ -1085,10 +1082,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
 
     uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_SIZE;
-    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_SIZE;
 
     uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_SIZE;
-    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_SIZE;
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
@@ -1114,10 +1109,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         normalized_dim,                   // gather_dim
         batch_head_size,                  // input_batch_head_count (product of the first two dims)
         input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
         input_tensor_C,                   // input_tensor_C
         output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
         output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
@@ -1152,10 +1145,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         normalized_dim,                   // gather_dim
         batch_head_size,                  // input_batch_head_count (product of the first two dims)
         input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
         input_tensor_C,                   // input_tensor_C
         output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
         output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
@@ -1242,26 +1233,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                      num_mux_cores_per_direction_per_link + worker];
                 CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
+                // The workers derive their tile ranges on device from the common row count
+                // (all_gather_worker_split.hpp); a pinned chunks_per_sync passes through, 0 means derive.
                 uint32_t global_worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t global_worker_count = num_links * num_workers_per_direction;
-                uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
-                uint32_t remainder = single_batch_head_num_pages % global_worker_count;
-                uint32_t input_tile_id_start =
-                    (global_worker_id * base_pages_per_worker) + std::min(global_worker_id, remainder);
-                uint32_t input_tile_id_end =
-                    ((global_worker_id + 1) * base_pages_per_worker) + std::min(global_worker_id + 1, remainder);
-
-                // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
-                // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
-                // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-                constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
-                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
-                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
-                    HEURISTIC_MAX_CHUNKS_PER_SYNC));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
-
-                uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-                uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
+                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(0);
 
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {
@@ -1269,12 +1245,10 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
 
                 std::vector<uint32_t> reader_rt_args = {
-                    dir,                      // direction RT ARG
-                    input_tile_id_start,      // input_tile_id_start RT ARG
-                    input_tile_id_end,        // input_tile_id_end RT ARG
-                    start_pages_read_in_row,  // start_pages_read_in_row RT ARG
-                    start_row_offset,         // start_row_offset RT ARG
-                    chunks_per_sync_val,      // chunks_per_sync RT ARG
+                    dir,                  // direction RT ARG
+                    global_worker_id,     // global_worker_id RT ARG
+                    global_worker_count,  // global_worker_count RT ARG
+                    chunks_per_sync_val,  // chunks_per_sync RT ARG (0 = derive on device)
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1310,11 +1284,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     opposite_core_coord.x,                                       // opposite_core_sem_noc0_x
                     opposite_core_coord.y,                                       // opposite_core_sem_noc0_y
                     dir,                                                         // direction
-                    input_tile_id_start,                                         // input_tile_id_start
-                    input_tile_id_end,                                           // input_tile_id_end
-                    start_pages_read_in_row,                                     // start_pages_read_in_row
-                    start_row_offset,                                            // start_row_offset
-                    chunks_per_sync_val};                                        // chunks_per_sync
+                    global_worker_id,                                            // global_worker_id
+                    global_worker_count,                                         // global_worker_count
+                    chunks_per_sync_val};                                        // chunks_per_sync (0 = derive)
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(

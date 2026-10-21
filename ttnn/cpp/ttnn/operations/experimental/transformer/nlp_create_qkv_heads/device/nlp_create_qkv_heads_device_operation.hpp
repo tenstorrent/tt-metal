@@ -81,6 +81,10 @@ struct NlpCreateHeadsDeviceOperation {
     // Validate the operation when it reuses a program. Usually will have less checks
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
+    // Interleaved: attributes + specs without the row count (the kernels take it as a runtime word).
+    // Sharded: attributes + full specs.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 

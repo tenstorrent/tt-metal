@@ -5,6 +5,8 @@
 #include "nlp_concat_heads_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 namespace ttnn::experimental::prim {
 void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
@@ -61,6 +63,25 @@ void NLPConcatHeadsDeviceOperation::validate_on_program_cache_miss(
             "Output memory config layout must be INTERLEAVED but got {}",
             args.output_mem_config.memory_layout());
     }
+}
+
+void NLPConcatHeadsDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        tensor_args.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+        "Input height {} must be tile aligned",
+        tensor_args.padded_shape()[-2]);
+}
+
+ttsl::hash::hash_t NLPConcatHeadsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    constexpr uint64_t kSalt = 0x6e6c705f636f6e63ULL;  // "nlp_conc"
+    const bool sharded = tensor_args.is_sharded();
+    return tt::tt_metal::operation::hash_operation<NLPConcatHeadsDeviceOperation>(
+        args.output_mem_config,
+        sharded,
+        sharded ? ttsl::hash::hash_objects_with_default_seed(kSalt, tensor_args.tensor_spec())
+                : ttnn::operations::common::hash_spec_without_rows(tensor_args, kSalt));
 }
 
 NLPConcatHeadsDeviceOperation::spec_return_value_t NLPConcatHeadsDeviceOperation::compute_output_specs(
