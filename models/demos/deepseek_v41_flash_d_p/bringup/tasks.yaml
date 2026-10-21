@@ -144,22 +144,24 @@ tasks:
   deps:
   - SG.1
   gate:
-    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096 --set
     metrics:
       golden_layers: == 8
       golden_chunks: == 2
       golden_hash_ok: == 1
+      drift_metrics: '>= 1'
 - id: G.s55296
   title: 'Golden s55296: 55296 tokens in 2048-token chunks (the scaled model)'
   step: goldens
   deps:
   - G.s4096
   gate:
-    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s55296
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s55296 --set
     metrics:
       golden_layers: == 8
       golden_chunks: == 27
       golden_hash_ok: == 1
+      drift_metrics: '>= 1'
 - id: C.swa.attn_hc
   title: swa attn_hc (op) on device, layer 0
   step: implement
@@ -8919,9 +8921,10 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
   paths: *id003
 - id: L.s4096
@@ -8933,9 +8936,10 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
   paths: *id003
 - id: L.last
@@ -8947,8 +8951,9 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
   paths: *id003
 - id: L.s55296
@@ -8960,9 +8965,10 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
   paths: *id003
 - id: K.1
@@ -8979,7 +8985,7 @@ tasks:
     metrics:
       contract_checks_failed: == 0
       acks_early: == 0
-      pcc_producer_kv_*: '>= 0.97'
+      pcc_producer_kv_*: '>= limit'
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
@@ -9038,10 +9044,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.2
   title: 'Routed experts on the fused ttnn.bringup.unified_routed_expert_moe (fork options: routing weight on h, fp8 q(h)
     before w2)'
@@ -9084,10 +9091,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: < 2522
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.3
   title: 'Routed experts on Marko''s flat_routed_expert (V4.1-tuned, imported @ f080c8df021; options: routing weight on h,
     fp8 q(h), bf16 x / h / y, exact bfp8)'
@@ -9132,10 +9140,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: < 2522
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.4
   title: 'Routed experts at LoFi with bfp8 x / h / y tiles and bfp8 weights (Marko''s GLM precision without bfp4) vs full
     precision: owner comparison'
@@ -9178,10 +9187,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.5
   title: Collectives on the bring-up fabric forks (fabric_all_gather, fabric_reduce_scatter with an exact fp32 add) vs stock
     ttnn CCLs
@@ -9225,10 +9235,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.6
   title: 'Partial sums in bf16 on the fabric reduce-scatter (Marko''s GLM-5.3 choice) vs the exact fp32 fabric sums: owner
     comparison'
@@ -9259,10 +9270,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.7
   title: 'Attention matmuls at HiFi2 (MLA projections, sparse SDPA, indexer, q_a; Marko''s GLM-5.3 setting) vs HiFi4: owner
     comparison'
@@ -9297,10 +9309,11 @@ tasks:
       TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.8
   title: 'Routed experts + weighted combine in one program (flat expert + combine_rf), no parity-only rounding, ffn_norm in
     bf16: owner comparison'
@@ -9366,10 +9379,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: < 134.2
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.9
   title: 'Weighted combine with bf16 accumulators: the chunk in one pass (weights streamed once) vs fp32 sums in two passes:
     owner comparison'
@@ -9413,10 +9427,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: < 45.3
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.10
   title: 'Routed expert weights in bfp4 (the checkpoint''s fp4 width, owner rule F117) vs bfp8: owner comparison'
   step: perf
@@ -9453,10 +9468,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: < 38.9
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.11
   title: 'Combine planner on several cores: our column mode on Marko''s multi-core v2 planner vs the one-core planner: owner
     comparison'
@@ -9497,10 +9513,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: < 38.9
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.12
   title: 'Shared expert run by the flat routed expert (always-on slices, bfp8 weights) vs today''s separate shared expert:
     owner comparison'
@@ -9542,10 +9559,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_shared_expert: < 11.4
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.13
   title: 'Realistic defaults (owner rule F123): fp8 weights in bfp8, HiFi2, fp32 accumulation only where needed, stock window
     attention vs today''s: owner comparison'
@@ -9590,10 +9608,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.14
   title: 'Fused mHC: mhc_post also emits the next sublayer''s statistics, mhc_pre collapses with split hidden columns (one
     pass each) vs the addcmul chain: owner comparison'
@@ -9638,10 +9657,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_attn_collapse: < 5.0
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.15
   title: 'Attention and RoPE glue folded into ops (glue report items 1, 2, 6): owner comparison'
   step: perf
@@ -9676,10 +9696,11 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
 - id: P.16
   title: 'Indexer and shared-source glue (glue report items 3, 7, 8, 9, 10): owner comparison'
   step: perf
@@ -9713,10 +9734,56 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
+- id: FIX.6
+  title: 'Reference numerics switch: official | native (full precision)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - R.2
+  - R.3
+  gate:
+    cmd: BRINGUP_TASK=R.2 BRINGUP_SCALED=0 python -m models.demos.common.bringup.intake.check_hf_sanity && BRINGUP_TASK=R.2
+      BRINGUP_SCALED=0 python -m models.demos.common.bringup.reference.check_hf --seq 4096 && BRINGUP_TASK=R.3 BRINGUP_SCALED=0
+      python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    metrics:
+      revision_ok: == 1
+      text_top1_acc: '>= 0.4'
+      smoke_ok: == 1
+      pcc_hidden_L*: '>= 0.9999'
+      pcc_logits: '>= 0.9999'
+      top1_match_frac: '>= 0.99'
+      pcc_hidden: '>= 0.99999'
+      pcc_state_min: '>= 0.99999'
+      graph_errors: == 0
+      boundaries_missing: == 0
+      graph_replay_maxabs: <= 0
+  device: false
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/__init__.py
+  brief:
+    details: 'Owner rule (F128, framework being changed meanwhile): every accuracy check compares the device with the CPU
+      reference at FULL precision; the reference at its own shipped precision only sets the allowed margin. F112 made hooks.reference
+      take numerics, but this model''s hook never did (tt/settings.py NUMERICS: ''the reference hook has no numerics switch
+      for this model''). Add it: hooks.reference(spec, layers=None, dtype=None, numerics=''official''), passed to DS41Reference.
+      ''official'' = today''s arithmetic, bit for bit (default; R.2 / R.3 / goldens unchanged until the framework switches).
+      ''native'' = full precision: every activation fp8 / fp4 quant-dequant in reference/kernels.py and ds41_ref.py (act_quant_dequant,
+      fp4_quant_dequant, fp4_act_quant, the window-KV fp8 q-dq, the compressed-KV / index key / index query fp4 q-dq, the
+      TF32 rounding of gate inputs, any bf16 cast of an intermediate) becomes the identity, all in fp32 / the given dtype;
+      the checkpoint''s weights stay their exact dequantized values (they are the model). One switch, not per step (reference/interface.py
+      docstring). Checks: R.2 and R.3 pass unchanged (official); add a CPU test under reference/ that native and official
+      agree to within the rounding (rel per layer at 4096, ~1e-2) and that native has no quantizer call left (patch the K.*
+      quantizers to raise under native). Report the per-layer rel of official vs native at s4096 (the margins F128 will use).'
+    gate_tasks:
+    - R.2
+    - R.3
 - id: FIX.5
   title: P.16 ChunkMemo cleared at every chunk start
   step: overseer_fix
@@ -9742,11 +9809,12 @@ tasks:
       TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 scripts/run_safe_pytest.sh --run-all
       models/demos/common/bringup/tests/test_profile.py && BRINGUP_TASK=X.3 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       pos_chunk: '>= 1'
       op_rows: '>= 1'
       timeline_ok: == 1
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
@@ -9761,6 +9829,92 @@ tasks:
       timeline_ok == 1, device time unchanged (about 104 ms per chunk), worst layer PCC unchanged.'
     gate_tasks:
     - X.3
+- id: P.17
+  title: 'Glue fold: RoPE as one op, RMS norms as one op, mhc_post options, host-path fixes (fusion report): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.16
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      GLUE_FOLD: 'on'
+    env:
+      GLUE_FOLD: 'off'
+  brief:
+    details: 'Owner (2026-10-21): the chunk is host-bound (~1,786 device-op calls, ~0.08 ms of wall each). Fold the items
+      of /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md. Judged ONLY by speed and the end-to-end
+      metrics against the full-precision reference within the reference''s own margin (F128); bit-identity with the old path
+      is NOT a criterion (owner), so the K-30 rejection of the stock fused rotary ops (bf16 vs fp32 SFPU products) does not
+      stand. (1) RoPE: one fused op per site for all 34 sites per chunk (q, attention output, indexer q, kv, compressor):
+      a stock fused rotary op (rotary_embedding_llama, deepseek_prefill.rotary_embedding_indexed) or a bring-up fork of one
+      where it fits (pair layout, inverse, scale, heads read from the projection output, bf16 inputs where the device stores
+      bf16), a new op only for what nothing existing covers; (2) each RMS norm as one call of ttnn.bringup.rms_norm with new
+      options (exact fp32 statistics, gathered partial sums in, a column window of a wider input, bf16 in / out); (6) mhc_post
+      reading post / comb from the packed mixes and taking a bf16 sublayer output; (4) the Python generic_op path: custom_program_hash
+      on the reduce-scatter''s cached descriptors (no per-call kernel-source hashing), the deallocate and wrapper overhead.
+      Bring-up ops extended behind options (default unchanged, README / INDEX / CHANGELOG current, fork tests). ONE setting
+      GLUE_FOLD {off, on}. Report calls per chunk, host and device ms per section before / after (note: generated/ds41_hostprof/test_opclock.py
+      over-counts per-chunk totals ~1.8x; per-call figures are right). Items 7 (exact mHC exchange, moe_add fold) are allowed
+      too if they pay off end to end. Final check: `python -m models.demos.common.bringup.orchestrator measure --task P.17`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
+      for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13 dec_reuse_12;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+- id: P.18
+  title: 'Static tables: one persistent attention table per KV source, window glue (fusion report item 3): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.17
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      STATIC_TABLES: 'on'
+    env:
+      STATIC_TABLES: 'off'
+  brief:
+    details: 'Owner (2026-10-21): from /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md:
+      (3) one persistent attention table per KV source, history kept in natural order and appended with one slice_write per
+      chunk (no history re-gathers, no 56 MiB concats, no 27-op index remap); shapes constant between chunks; plus the window-path
+      glue (skip the no-op mask, carry the last 128 kv rows, memoize the cache-write index slices). Judged by speed and the
+      F128 end-to-end metrics, not bit-identity with the old path (owner). ONE setting STATIC_TABLES {off, on}. Also measure
+      the trace ceiling once (owner): capture one warm chunk with ttnn trace (begin_trace_capture / execute_trace) as a standalone
+      measurement (not the default path) and report its wall time per chunk next to the untraced one, and what still blocks
+      trace in the forward (dynamic shapes, host-side chunk start). Final check: `python -m models.demos.common.bringup.orchestrator
+      measure --task P.18`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
+      for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13 dec_reuse_12;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9779,17 +9933,20 @@ tasks:
   - P.15
   - P.16
   - FIX.5
+  - P.17
+  - P.18
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
       TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
       && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
       pos_chunk: '>= 1'
       op_rows: '>= 1'
       timeline_ok: == 1
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
 - id: O.1
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
@@ -9820,7 +9977,8 @@ tasks:
       --run all
     metrics:
       settings_violations: == 0
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
+      pcc_layer_L*: '>= limit'
+      pcc_state_*_L*: '>= limit'
+      overlap_state_*_L*: '>= limit'
   device: true
   role: settings
