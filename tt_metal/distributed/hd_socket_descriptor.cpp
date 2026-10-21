@@ -5,7 +5,7 @@
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
-#include <internal/descriptor_file.hpp>
+#include "common/filesystem_utils.hpp"
 #include "hd_socket_descriptor_serialization.hpp"
 
 #include <tt_stl/assert.hpp>
@@ -110,11 +110,12 @@ HDSocketDescriptor from_flatbuffer(const flatbuffer::HDSocketDescriptor& fb) {
 void HDSocketDescriptor::write_to_file(const std::string& path) const {
     flatbuffers::FlatBufferBuilder builder(512);
     builder.Finish(to_flatbuffer(builder, *this));
-    internal::write_file_atomically(path, ttsl::Span<const uint8_t>(builder.GetBufferPointer(), builder.GetSize()));
+    tt::filesystem::write_file_atomically(
+        path, ttsl::Span<const uint8_t>(builder.GetBufferPointer(), builder.GetSize()));
 }
 
 HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
-    const auto bytes = internal::read_file(path);
+    const auto bytes = tt::filesystem::read_file(path);
     const auto* fb = flatbuffer::GetHDSocketDescriptor(bytes.data());
     TT_FATAL(fb, "Failed to parse flatbuffer descriptor from: {}", path);
     return from_flatbuffer(*fb);
@@ -122,7 +123,7 @@ HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
 
 HDSocketDescriptor HDSocketDescriptor::wait_and_read(
     const std::string& descriptor_path, const std::string& expected_type, uint32_t timeout_ms) {
-    const auto bytes = internal::wait_and_read_file(descriptor_path, timeout_ms);
+    const auto bytes = tt::filesystem::wait_and_read_file(descriptor_path, timeout_ms);
     const auto* fb = flatbuffer::GetHDSocketDescriptor(bytes.data());
     TT_FATAL(fb, "Failed to parse flatbuffer descriptor from: {}", descriptor_path);
     auto desc = from_flatbuffer(*fb);

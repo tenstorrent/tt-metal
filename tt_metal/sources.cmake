@@ -4,7 +4,6 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_message.hpp
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_router.hpp
-    api/internal/descriptor_file.hpp
     api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp

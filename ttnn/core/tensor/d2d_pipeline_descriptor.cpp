@@ -9,12 +9,16 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 
 #include <fmt/format.h>
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include <tt_stl/assert.hpp>
-#include <internal/descriptor_file.hpp>
 
 #include "d2d_pipeline_descriptor_generated.h"
 
@@ -25,6 +29,42 @@ namespace dist_fb = tt::tt_metal::distributed::flatbuffer;
 using tt::tt_metal::distributed::PCIeCoreLocation;
 
 namespace {
+
+// Writes to `path + ".tmp"`, then renames it to `path`, so a reader never sees a partial file.
+void write_file_atomically(const std::string& path, const std::vector<uint8_t>& bytes) {
+    const std::string tmp_path = path + ".tmp";
+    std::ofstream ofs(tmp_path, std::ios::binary);
+    TT_FATAL(ofs.is_open(), "Failed to open descriptor file for writing: {}", tmp_path);
+    ofs.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    ofs.close();
+    TT_FATAL(!ofs.fail(), "Failed to write descriptor file: {}", tmp_path);
+    TT_FATAL(
+        std::rename(tmp_path.c_str(), path.c_str()) == 0,
+        "Failed to rename descriptor file from {} to {}: {}",
+        tmp_path,
+        path,
+        std::strerror(errno));
+}
+
+// Waits up to `timeout_ms` for `path` to exist, then returns its contents.
+std::vector<uint8_t> wait_and_read_file(const std::string& path, uint32_t timeout_ms) {
+    const auto start = std::chrono::steady_clock::now();
+    while (!std::filesystem::exists(path)) {
+        if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds(timeout_ms)) {
+            TT_THROW("Timeout waiting for descriptor file: {}", path);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    TT_FATAL(ifs.is_open(), "Failed to open descriptor file for reading: {}", path);
+    const auto pos = ifs.tellg();
+    TT_FATAL(pos > 0, "Descriptor file is empty or unreadable: {}", path);
+    std::vector<uint8_t> bytes(static_cast<std::size_t>(pos));
+    ifs.seekg(0, std::ios::beg);
+    ifs.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    TT_FATAL(!ifs.fail(), "Failed to read descriptor file: {}", path);
+    return bytes;
+}
 
 flatbuffers::Offset<fb::PCIeCoreLocation> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const PCIeCoreLocation& loc) {
@@ -169,13 +209,10 @@ D2DPipelineDescriptor D2DPipelineDescriptor::deserialize(const std::vector<uint8
     return desc;
 }
 
-void D2DPipelineDescriptor::write_to_file(const std::string& path) const {
-    const auto bytes = serialize();
-    tt::tt_metal::internal::write_file_atomically(path, ttsl::Span<const uint8_t>(bytes.data(), bytes.size()));
-}
+void D2DPipelineDescriptor::write_to_file(const std::string& path) const { write_file_atomically(path, serialize()); }
 
 D2DPipelineDescriptor D2DPipelineDescriptor::wait_and_read(const std::string& path, uint32_t timeout_ms) {
-    return deserialize(tt::tt_metal::internal::wait_and_read_file(path, timeout_ms));
+    return deserialize(wait_and_read_file(path, timeout_ms));
 }
 
 std::string d2d_pipeline_descriptor_path(const std::string& service_id) {
