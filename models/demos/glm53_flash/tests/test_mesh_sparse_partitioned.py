@@ -10,7 +10,8 @@ slot) only, the decode step exchanges heads -> users before the traced sparse at
   (eager, then the captured trace replayed), every (row, user, step) output vs its HF dump > 0.995 and the two
   rows byte-equal (replicated prefill, identical tokens).
 * ``test_partitioned_1m_step``: one user per column at position 1 048 576 (cache 1 M + 64 per chip-slot, unseeded),
-  the traced layer step timed on the block.
+  the traced layer step timed on the block; logs the cache footprint and the allocator's DRAM view.
+Both run under either prefill layout (``GLM53_PREFILL_PARTITION=scratch`` (default) | ``heads2users``).
 
     TT_VISIBLE_DEVICES=27,26,31,30,23,22,19,18 TT_MESH_GRAPH_DESC_PATH=<p150_x8 descriptor> MESH_DEVICE=P150x8 \
         pytest models/demos/glm53_flash/tests/test_mesh_sparse_partitioned.py -s --timeout 3600
@@ -28,7 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
-from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tests.utils import log_dram, pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.functional_decoder import FunctionalDecoder, host_streams_to_device
 from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
@@ -68,7 +69,9 @@ def test_partitioned_two_rows_four_users(mesh_device):
         max_seq_len=-(-max(S) // (32 * ROWS)) * (32 * ROWS) + 64,  # prompts pad to 32 * rows on the mesh
         partition_users=True,
     )
-    assert dec.cache.partition and dec.cache.users_per_chip == 1 and dec.cache.slots == 2
+    # the scratch layout holds the user's slot + the prefill scratch slot; heads2users the user's slot only
+    assert dec.cache.partition and dec.cache.users_per_chip == 1
+    assert dec.cache.slots == (1 if dec.cache.prefill_mode == "heads2users" else 2), dec.cache.prefill_mode
     for u, pre in enumerate(pres):
         y = dec.prefill_forward(host_streams_to_device(pre["x_in"], mesh_device, mesh=mesh), user=u, seq_len=S[u])
         out = mesh.to_host(y, rows=2 if mesh.rows > 1 else None).float()[0, 0, : S[u]]
@@ -151,6 +154,13 @@ def test_partitioned_1m_step(mesh_device):
     logger.info(
         f"layer {LAYER} on the ({ROWS},{COLS}) mesh, 1 user per column x {N + 64} positions: built in {time.perf_counter() - t0:.0f} s"
     )
+    c = dec.cache
+    logger.info(
+        f"DSA cache per chip: prefill_mode {c.prefill_mode} slots {c.slots} (scratch {c.scratch}, dummy blocks "
+        f"{c.dummy_blocks}), {c.max_blocks} latent blocks x 32 x {c.latent_dim} bf16 = {c.max_blocks * 32 * c.latent_dim * 2 / 2**30:.2f} GiB, "
+        f"pools {c.index.max_batch} x {c.index.pools_per_user} x {c.index.D} = {c.index.max_batch * c.index.pools_per_user * c.index.D * 2 / 2**20:.0f} MiB"
+    )
+    log_dram(mesh_device, f"after the layer-{LAYER} build at {N + 64} positions")
     U = ROWS * B
     streams = mesh.upload(torch.randn(1, 1, U, 4 * cfg.hidden_size) * 0.5, ttnn.float32, rows=2)
     for pos in (4096, N):

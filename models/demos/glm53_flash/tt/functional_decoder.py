@@ -181,10 +181,13 @@ class FunctionalDecoder(LightweightModule):
         max_seq_len: int,
         block_size: int = TILE,
         partition_users: bool | None = None,
+        prefill_partition: str | None = None,
     ):
         """``partition_users``: the user-partitioned DSA cache on a multi-column mesh (column c of a row owns users
         ``[c*B/cols, (c+1)*B/cols)``; ``max_batch`` % cols == 0; decode through the traced sparse path only).
-        ``None`` = the ``GLM53_PARTITION_USERS`` knob (default off)."""
+        ``None`` = the ``GLM53_PARTITION_USERS`` knob (default off). ``prefill_partition``: how that cache serves a
+        prefill, ``scratch`` | ``heads2users`` (``None`` = the ``GLM53_PREFILL_PARTITION`` knob, default
+        ``scratch``; ``TtLatentCache``)."""
         if partition_users is None:
             partition_users = os.environ.get("GLM53_PARTITION_USERS", "0") == "1"
         self.layer: TtDecoderLayer | None = layer
@@ -208,6 +211,7 @@ class FunctionalDecoder(LightweightModule):
                 block_size=block_size,
                 mesh=self.mesh,
                 partition_users=partition_users,
+                prefill_partition=prefill_partition,
             )
         # persistent batched KDA state (max_batch slots): prefill writes slot `user`, decode reads
         # and updates all slots in place, so captured decode traces always see the live state.

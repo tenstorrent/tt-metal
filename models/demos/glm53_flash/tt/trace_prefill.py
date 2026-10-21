@@ -113,7 +113,7 @@ class PrefillSlot:
     partition: bool  # user-partitioned DSA caches (per-column owner / scratch slots)
     users_per_chip: int
     cache_idx: ttnn.Tensor  # [1] int32 RM: the latent / pooled-key / ring slot the paged fills write (per column when partitioned)
-    scratch_idx: ttnn.Tensor | None  # partitioned caches: the scratch slot every column fills as well
+    scratch_idx: ttnn.Tensor | None  # scratch-layout partitioned caches: the scratch slot every column fills as well
     user_idx: ttnn.Tensor  # [1] int32 RM replicated: the KDA slot (recurrent-state paged fill)
     conv_mask: ttnn.Tensor  # [taps, B, 1] bf16 TILE: 1.0 on row ``user``
     conv_keep: ttnn.Tensor  # [taps, B, 1] bf16 TILE: 1.0 - conv_mask
@@ -130,9 +130,19 @@ class PrefillSlot:
         dsa = [d for d in decoders if not d.is_kda]
         partition = bool(dsa and dsa[0].partition)
         users_per_chip = max_batch // mesh.cols if partition else max_batch
+        # the scratch slot every column fills as well (scratch layout only; the heads2users layout has none: the
+        # non-owner columns' ``cache_idx`` names the dummy row ``users_per_chip`` of the page tables instead)
+        has_scratch = partition and dsa[0].cache.scratch is not None
         rm, i32 = ttnn.ROW_MAJOR_LAYOUT, ttnn.int32
-        cache_idx = _upload(mesh, torch.zeros(1, dtype=torch.int32), i32, rm, mapper=cls._cache_mapper(mesh, partition))
-        scratch_idx = _upload(mesh, torch.tensor([users_per_chip], dtype=torch.int32), i32, rm) if partition else None
+        # one slot value per column when partitioned (the column-sharded upload needs ``cols`` chunks): user 0's
+        cache_idx = _upload(
+            mesh,
+            cls._cache_slots_host(partition, users_per_chip, mesh.cols, 0),
+            i32,
+            rm,
+            mapper=cls._cache_mapper(mesh, partition),
+        )
+        scratch_idx = _upload(mesh, torch.tensor([users_per_chip], dtype=torch.int32), i32, rm) if has_scratch else None
         user_idx = _upload(mesh, torch.zeros(1, dtype=torch.int32), i32, rm)
         rec_pt, kda_zero, taps = None, None, 3
         if kda:
@@ -169,15 +179,18 @@ class PrefillSlot:
         mask[:, user, 0] = 1.0
         return mask, 1.0 - mask
 
-    def _cache_slots(self, user: int) -> torch.Tensor:
-        """The slot every column chip's fills write: the user's slot (non-partitioned), or its slot on the
-        owner column and the scratch slot elsewhere (``TtLatentCache._prefill_views_for``)."""
-        if not self.partition:
+    @staticmethod
+    def _cache_slots_host(partition: bool, users_per_chip: int, cols: int, user: int) -> torch.Tensor:
+        """The slot every column chip's fills write: the user's slot (non-partitioned, [1]), or ([cols]) its slot on
+        the owner column and the scratch slot / dummy row (``users_per_chip`` either way) elsewhere
+        (``TtLatentCache._prefill_views_for``)."""
+        if not partition:
             return torch.tensor([user], dtype=torch.int32)
-        owner, slot = divmod(user, self.users_per_chip)
-        return torch.tensor(
-            [slot if c == owner else self.users_per_chip for c in range(self.mesh.cols)], dtype=torch.int32
-        )
+        owner, slot = divmod(user, users_per_chip)
+        return torch.tensor([slot if c == owner else users_per_chip for c in range(cols)], dtype=torch.int32)
+
+    def _cache_slots(self, user: int) -> torch.Tensor:
+        return self._cache_slots_host(self.partition, self.users_per_chip, self.mesh.cols, user)
 
     def set_user(self, user: int):
         if not 0 <= user < self.max_batch:

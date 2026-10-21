@@ -87,7 +87,13 @@ class TtIndexCache:
     ``users_per_chip`` local users in slots ``[0, users_per_chip)`` plus the prefill scratch slot ``scratch``
     (= ``max_batch - 1``). Decode writes the local slots (page-table views of the first ``users_per_chip``
     rows); prefill writes the scratch slot on every column chip and, on the owner column, the user's slot
-    (per-user sharded page tables), and reads the scratch slot everywhere."""
+    (per-user sharded page tables), and reads the scratch slot everywhere.
+
+    ``dummy`` (the heads2users prefill, sparse_1m.md section 7): no scratch slot; ``max_batch`` = the local
+    users; the non-owner columns of a prefill write into dummies instead: the pool page table and the ring page
+    table get one extra row (index ``max_batch``) that points every block at the LAST pool block of the last
+    slot (never a valid pool: ``pools_per_user`` then leaves >= 32 spare pools above the valid ids) and at one
+    extra ring block; every column reads slot ``user % users_per_chip`` (the owner's holds the user)."""
 
     def __init__(
         self,
@@ -99,15 +105,19 @@ class TtIndexCache:
         mesh=None,
         users_per_chip: int | None = None,
         scratch: int | None = None,
+        dummy: bool = False,
     ):
         self.device = device
         self.mesh = mesh
         self.D = cfg.index_head_dim
         self.P = cfg.index_kpool
         self.max_batch = max_batch
-        self.partition = scratch is not None
+        self.dummy = bool(dummy)
+        assert not (self.dummy and scratch is not None), "scratch slot and dummy writes are alternatives"
+        self.partition = scratch is not None or self.dummy
         self.users_per_chip = max_batch if users_per_chip is None else users_per_chip
         self.scratch = scratch
+        self.dummy_slot: int | None = max_batch if self.dummy else None  # the extra page-table row / ring block
         pools = -(-max_seq_len // self.P)
         # tile-aligned rows per user, plus DECODE_SCORE_SLACK pools the traced decode scorer can never select:
         # it scores with a fixed chunk start in the last 32-token block of the allocation (see
@@ -115,9 +125,12 @@ class TtIndexCache:
         # least index_select_pools visible pools, the width the decode top-k ranks for every user (a short
         # allocation then holds 544 pool rows = 136 KB per user)
         pools = max(pools, cfg.index_select_pools)
-        # rounded to 256 pools (8 tiles): the batched decode scorer streams the keys in 8-tile chunks
-        self.pools_per_user = -(-(pools + DECODE_SCORE_SLACK) // (8 * TILE)) * (8 * TILE)
+        # rounded to 256 pools (8 tiles): the batched decode scorer streams the keys in 8-tile chunks; the dummy
+        # layout keeps a whole spare block (32 pools) above the valid ids: the prefill dummy pool block
+        slack = max(DECODE_SCORE_SLACK, TILE) if self.dummy else DECODE_SCORE_SLACK
+        self.pools_per_user = -(-(pools + slack) // (8 * TILE)) * (8 * TILE)
         self.pool_blocks = self.pools_per_user // TILE
+        assert not self.dummy or self.pools_per_user - TILE >= pools, (self.pools_per_user, pools)
         self.pool_dtype = POOL_DTYPE
         self.pool_cache = ttnn.zeros(
             (max_batch * self.pool_blocks, 1, TILE, self.D),
@@ -127,27 +140,27 @@ class TtIndexCache:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         pt = torch.arange(max_batch * self.pool_blocks, dtype=torch.int32).reshape(max_batch, self.pool_blocks)
+        ring_ids = torch.arange(max_batch, dtype=torch.int32).reshape(max_batch, 1)
+        n_ring = max_batch
+        if self.dummy:
+            # the extra row: every block of a non-owner's prefill chunk lands on the last block of the last slot
+            # (the spare pools above every valid id); the extra ring block is the ring dummy
+            pt = torch.cat([pt, torch.full((1, self.pool_blocks), max_batch * self.pool_blocks - 1, dtype=torch.int32)])
+            ring_ids = torch.cat([ring_ids, torch.tensor([[max_batch]], dtype=torch.int32)])
+            n_ring = max_batch + 1
+        self._pt_host, self._ring_ids_host = pt, ring_ids
         self.page_table = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         # raw rings: one 32-row block per user, row = position % P (rows >= P unused)
-        self.ring_k = ttnn.zeros(
-            (max_batch, 1, TILE, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self.ring_g = ttnn.zeros(
-            (max_batch, 1, TILE, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-        self.ring_page_table = ttnn.from_torch(
-            torch.arange(max_batch, dtype=torch.int32).reshape(max_batch, 1),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
+        self.ring_k = ttnn.zeros((n_ring, 1, TILE, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.ring_g = ttnn.zeros((n_ring, 1, TILE, self.D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        self.ring_page_table = ttnn.from_torch(ring_ids, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         # constants for the prefill tail writes (one row per call): slot ids and single-user page tables,
         # uploaded once here so no host->device write happens inside a prefill pass
         rm = lambda t: ttnn.from_torch(t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         self._slot_ids = [rm(torch.tensor([j], dtype=torch.int32)) for j in range(self.P)]
-        self._user_pts = [rm(torch.tensor([[u]], dtype=torch.int32)) for u in range(max_batch)]
+        self._user_pts = [rm(torch.tensor([[u]], dtype=torch.int32)) for u in range(n_ring)]
         # decode page-table views: the paged ops pair batch entry b with page-table row b, so a decode of the
-        # users_per_chip local users needs tables of exactly that many rows (the scratch slot is left out)
+        # users_per_chip local users needs tables of exactly that many rows (the scratch slot / dummy row is left out)
         B = self.users_per_chip
         if self.partition:
             self._decode_pt = ttnn.slice(self.page_table, [0, 0], [B, self.pool_blocks])
@@ -158,34 +171,40 @@ class TtIndexCache:
 
     # ------------------------------------------------------ user-partitioned prefill
     def prefill_slot(self, user: int) -> int:
-        """The slot every column chip READS during the prefill of ``user`` (the scratch slot when partitioned)."""
-        return self.scratch if self.partition else user
+        """The slot every column chip READS during the prefill of ``user``: the scratch slot (scratch layout), the
+        user's local slot (dummy layout: real on the owner column, discarded elsewhere), or the user."""
+        if self.scratch is not None:
+            return self.scratch
+        return user % self.users_per_chip if self.dummy else user
 
     def _owner_rows(self, user: int, table_host: torch.Tensor) -> torch.Tensor:
-        """[cols, W] host rows: row c = the user's slot row of ``table_host`` on its owner column, the scratch row elsewhere."""
+        """[cols, W] host rows: row c = the user's slot row of ``table_host`` on its owner column, the scratch (or
+        dummy) row elsewhere."""
         cols = self.mesh.cols
         owner, slot = user // self.users_per_chip, user % self.users_per_chip
-        return torch.stack([table_host[slot] if c == owner else table_host[self.scratch] for c in range(cols)])
+        other = self.scratch if self.scratch is not None else self.dummy_slot
+        return torch.stack([table_host[slot] if c == owner else table_host[other] for c in range(cols)])
 
     def prefill_pool_views(self, user: int) -> list[ttnn.Tensor]:
         """Page-table views ([1, pool_blocks], batch_idx 0) a prefill of ``user`` fills: its own row when not
-        partitioned; partitioned: the per-chip owner/scratch row and the (replicated) scratch row."""
+        partitioned; partitioned: the per-chip owner/scratch (or owner/dummy) row and, with a scratch slot, the
+        (replicated) scratch row."""
         key = ("pools", user)
         if not self.partition:
             if key not in self._prefill_views:
                 self._prefill_views[key] = self._pool_table_row(user)
             return [self._prefill_views[key]]
         if key not in self._prefill_views:
-            pt = torch.arange(self.max_batch * self.pool_blocks, dtype=torch.int32).reshape(
-                self.max_batch, self.pool_blocks
-            )
+            pt = self._pt_host
             self._prefill_views[key] = self.mesh.upload(
                 self._owner_rows(user, pt), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
             )
-            if ("pools", "scratch") not in self._prefill_views:
+            if self.scratch is not None and ("pools", "scratch") not in self._prefill_views:
                 self._prefill_views[("pools", "scratch")] = self.mesh.upload(
                     pt[self.scratch : self.scratch + 1], ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
                 )
+        if self.scratch is None:
+            return [self._prefill_views[key]]
         return [self._prefill_views[key], self._prefill_views[("pools", "scratch")]]
 
     def _pool_table_row(self, user: int) -> ttnn.Tensor:
@@ -193,15 +212,17 @@ class TtIndexCache:
         return ttnn.slice(self.page_table, [user, 0], [user + 1, self.pool_blocks])
 
     def prefill_ring_tables(self, user: int) -> list[ttnn.Tensor]:
-        """[1, 1] ring page tables a prefill tail write of ``user`` goes to (owner/scratch per chip + scratch)."""
+        """[1, 1] ring page tables a prefill tail write of ``user`` goes to (owner/scratch or owner/dummy per chip,
+        plus the scratch block with a scratch slot)."""
         if not self.partition:
             return [self._user_pts[user]]
         key = ("ring", user)
         if key not in self._prefill_views:
-            ids = torch.arange(self.max_batch, dtype=torch.int32).reshape(self.max_batch, 1)
             self._prefill_views[key] = self.mesh.upload(
-                self._owner_rows(user, ids), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
+                self._owner_rows(user, self._ring_ids_host), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
             )
+        if self.scratch is None:
+            return [self._prefill_views[key]]
         return [self._prefill_views[key], self._user_pts[self.scratch]]
 
     def pools_batched(self) -> ttnn.Tensor:
@@ -240,7 +261,7 @@ class TtIndexCache:
             ttnn.experimental.paged_fill_cache(
                 self.pool_cache, pooled, self.page_table, batch_idx_tensor=slot.cache_idx
             )
-            if self.partition:
+            if self.scratch is not None:
                 ttnn.experimental.paged_fill_cache(
                     self.pool_cache, pooled, self.page_table, batch_idx_tensor=slot.scratch_idx
                 )
@@ -279,7 +300,7 @@ class TtIndexCache:
         per ring instead of one row write per tail position)."""
         for ring, tile in ((self.ring_k, k_tile), (self.ring_g, g_tile)):
             ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.cache_idx)
-            if self.partition:
+            if self.scratch is not None:
                 ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.scratch_idx)
 
     def rings(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:

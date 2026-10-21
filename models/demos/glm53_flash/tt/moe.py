@@ -41,6 +41,7 @@ import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -53,6 +54,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     gate_up_stream_layout,
     stream_memory_config,
 )
+from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
@@ -245,7 +247,44 @@ class TtRouter(LightweightModule):
         self.fused_sigmoid = os.environ.get("GLM53_ROUTER_FUSED_SIGMOID", "1") == "1"
         self.lin_gate_sig = DecodeLinear(device, self.w_gate, activation=ttnn.UnaryOpType.SIGMOID)
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
+        # decode (T <= 32): ONE generic op after the gate matmul (custom_ops/router_topk) instead of the 16-op
+        # composite; same outputs. GLM53_ROUTER_FUSED=1 is the default since 2026-10-21 (0 = the composite); ``topk`` tie-break semantics (see README)
+        self.fused = os.environ.get("GLM53_ROUTER_FUSED", "1") == "1"
+        self.fused_op = RouterTopk(device, E=self.E, k=self.k, scale=cfg.routed_scaling_factor) if self.fused else None
+        if self.fused:
+            logger.info("TtRouter: fused decode router (custom_ops/router_topk, GLM53_ROUTER_FUSED=1)")
         self._const: dict[tuple, ttnn.Tensor] = {}
+
+    def _scores(self, x: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """The fp32 sigmoid scores [1,1,T,E] of x (sigmoid fused into the gate matmul for decode shapes)."""
+        if self.fused_sigmoid and T <= TILE:
+            return self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+        logits = self.lin_gate(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+        scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
+        ttnn.deallocate(logits)
+        return scores
+
+    def _forward_fused(self, x: ttnn.Tensor, T: int, dense_only: bool = False, ep_rows: bool = False):
+        """The fused path: gate matmul (sigmoid fused) + ONE ``RouterTopk`` program writing exactly the tensors
+        ``_forward_topk`` returns for the mode (outputs allocated per call: inside the trace under capture)."""
+        if self.fused_op is None:
+            self.fused_op = RouterTopk(self.device, E=self.E, k=self.k, scale=self.cfg.routed_scaling_factor)
+        op = self.fused_op
+        scores = self._scores(x, T)
+        if ep_rows:  # bf16 weights + uint32 ids, no dense matrix
+            w16, idx = op.allocate_w(T, ttnn.bfloat16), op.allocate_idx(T, ttnn.uint32)
+            op(scores, self.bias, T, w=w16, idx=idx)
+            ttnn.deallocate(scores)
+            return w16, idx, None
+        dense = op.allocate_dense(T)
+        if dense_only:
+            op(scores, self.bias, T, dense=dense)
+            ttnn.deallocate(scores)
+            return None, None, dense
+        w, idx32 = op.allocate_w(T, ttnn.float32), op.allocate_idx(T, ttnn.float32)
+        op(scores, self.bias, T, dense=dense, w=w, idx=idx32)
+        ttnn.deallocate(scores)
+        return w, idx32, dense
 
     def _forward_topk(self, scores, choice, T, dense_only=False, ep_rows=False):
         """One fp32 ``ttnn.topk`` (stable bitonic network: exact fp32 ranking, lowest index on ties) over the
@@ -304,6 +343,8 @@ class TtRouter(LightweightModule):
         biased scores), which swaps the 8th expert on ~20% of real tokens; the composite is exact.
         """
         T = x.shape[-2]
+        if self.fused and T <= TILE and self.tie_break == "topk":
+            return self._forward_fused(x, T, dense_only=dense_only, ep_rows=ep_rows)
         if self.fused_sigmoid and T <= TILE and self.tie_break == "topk":
             scores = self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # sigmoid fused
         else:
@@ -1192,7 +1233,8 @@ class TtEPExperts(LightweightModule):
     bf16 tail of every token row (``[x | w]``, one dispatch instead of two), the ids as the dispatch's uint16
     metadata (exact: bf16 tiles cannot hold ids 257..287), both read directly by the kernels (``ep_rm``); the
     combine is ``local_reduce`` (one row per (device, token)) into a zeroed ``[K, T]`` slot tensor (it writes the
-    slot of the device's first expert in the token's list and leaves the others untouched) summed over K. The
+    slot of the device's first expert in the token's list and leaves the others untouched; an L1 copy of a DRAM zero
+    constant shared by the model's EP layers, never a per-layer L1 constant: see ``combine_rows``) summed over K. The
     fabric must be a 1D one (``GLM53_FABRIC=1d``, the default once GLM53_MOE_LAYOUT=ep: the dispatch writer sends 1D
     hop packets and the Blackhole CI covers these ops under FABRIC_1D only)."""
 
@@ -1298,7 +1340,6 @@ class TtEPExperts(LightweightModule):
         )
         self.ops = {}
         self._pad = {}
-        self._zero_slots = {}
         self.act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
         # GLM53_EP_KSUM=fast (default): the K-slot sum as one fast_reduce_nc kernel (+ a slice below 32 rows); sum:
         # the generic ttnn.sum (permute + reduce + permute). Equal results (PCC 1.000000 / 0.999999 at 4 / 32 users)
@@ -1431,13 +1472,25 @@ class TtEPExperts(LightweightModule):
         l1 = ttnn.L1_MEMORY_CONFIG
         Td = out.shape[-2]
         out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (1, Td, 1, H))
-        # the zeroed slot tensor as a device copy of a persistent zero constant (ttnn.zeros is a host write: not
-        # allowed inside a trace); the constant is made on the first (eager) call for this T
-        if (K, T) not in self._zero_slots:
-            self._zero_slots[(K, T)] = ttnn.zeros(
-                (K, T, 1, H), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, memory_config=l1
-            )
-        slots = ttnn.clone(self._zero_slots[(K, T)], memory_config=l1)
+        # the zeroed slot tensor as an L1 copy of a zero constant (ttnn.zeros is a host write: not allowed inside a
+        # trace); the constant is made on the first (eager) call for this T and shared by every EP layer of the model
+        # (``GLMMesh.const``). It lives in DRAM: as a per-layer L1 constant ([K, T, 1, H] bf16 row-major = K*T pages
+        # of 8 KB, round-robin from L1 bank 0) it pinned 24 KB (32 users/row) / 8 KB (4 users/row) of the first
+        # cores' L1 per MoE layer, and on the 45-layer 8x4 e2e the static CBs of a later program clashed with the L1
+        # buffers after 9 layers at 32 users/row (paged_update_cache) / 42 at 4 (the gate|up dispatch op):
+        # _logs/mesh/test_8x4_45L_bfp8_v17ep_B32.log / _B4.log. The footprint depends on T only (not on the EP group
+        # size), which single-layer block tests never reach.
+        zeros = self.mesh.const(
+            ("ep_zero_slots", K, T, H),
+            lambda: ttnn.zeros(
+                (K, T, 1, H),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+        )
+        slots = ttnn.clone(zeros, memory_config=l1)
         y = ttnn.all_to_all_combine(
             out_rm, meta, self.mapping, local_reduce=True, output_tensor=slots, **self.a2a_kwargs
         )  # [K, T, 1, H]

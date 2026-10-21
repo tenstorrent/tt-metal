@@ -70,6 +70,8 @@ class GLMMesh:
     cols: int
     topology: ttnn.Topology | None = None  # None = ttnn default for the fabric
     _ccl: object = field(default=None, repr=False, compare=False)  # lazy TT_CCL (async collectives)
+    # device constants shared by every module of the model (``const``): one tensor per key instead of one per layer
+    _consts: dict = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_device(cls, mesh_device, topology=None) -> "GLMMesh":
@@ -195,6 +197,17 @@ class GLMMesh:
                 tmp.unlink(missing_ok=True)
                 raise
         return t
+
+    def const(self, key: tuple, make: Callable[[], ttnn.Tensor]) -> ttnn.Tensor:
+        """A device constant shared by every module built on this mesh: ``make()`` runs once per ``key`` (on the
+        first, eager use), later callers get the same tensor. For constants whose only role is to be copied (the
+        zeroed slot tensor of the EP combine): one DRAM tensor per shape for the model instead of one per layer.
+        Persistent constants must stay out of L1: an interleaved L1 constant per layer (8 KB pages round-robin from
+        bank 0) pins the first cores' L1, and after enough layers the static circular buffers of the next program
+        clash with the L1 buffers (the EP32 8x4 e2e, doc/mesh/README.md)."""
+        if key not in self._consts:
+            self._consts[key] = make()
+        return self._consts[key]
 
     # ------------------------------------------------------------------ readback
     def device_tensors(self, x: ttnn.Tensor) -> list[ttnn.Tensor]:

@@ -560,7 +560,9 @@ class TtMHCFast(LightweightModule):
         """The fused pre-block op for this wrap's norm weight (built once; the weight is read back to the host)."""
         weight, eps = norm
         if self.pre_block is None or self._pre_block_norm is not weight:
-            w = ttnn.to_torch(weight).float().reshape(-1)
+            # the norm weight is replicated over the mesh: read shard 0 (a plain to_torch of a mesh tensor needs a composer)
+            shards = ttnn.get_device_tensors(weight)
+            w = ttnn.to_torch(shards[0] if shards else weight).float().reshape(-1)
             self.pre_block = MhcPreBlock(
                 self.device,
                 self._fn_raw,
