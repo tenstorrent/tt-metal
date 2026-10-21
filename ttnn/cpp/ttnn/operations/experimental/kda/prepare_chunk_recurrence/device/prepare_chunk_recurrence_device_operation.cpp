@@ -3,10 +3,14 @@
 
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
@@ -24,32 +28,21 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
-    check_allocated_device_tensor(in.q, operation_name, "q");
-    const auto arch = in.q.device()->arch();
+    for (const auto& [tensor, name] : std::array{
+             std::pair{&in.q, "q"},
+             std::pair{&in.k, "k"},
+             std::pair{&in.v, "v"},
+             std::pair{&in.g, "g"},
+             std::pair{&in.beta, "beta"}}) {
+        check_allocated_device_tensor(*tensor, operation_name, name);
+        check_layout(*tensor, Layout::TILE, operation_name, name);
+        check_dtype(*tensor, DataType::BFLOAT16, operation_name, name);
+        check_interleaved(*tensor, operation_name, name);
+        check_same_device(in.q, *tensor, operation_name, name);
+    }
+    const auto* mesh = in.q.device();
+    const auto arch = mesh->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
-    check_layout(in.q, Layout::TILE, operation_name, "q");
-    check_dtype(in.q, DataType::BFLOAT16, operation_name, "q");
-    check_interleaved(in.q, operation_name, "q");
-    check_allocated_device_tensor(in.k, operation_name, "k");
-    check_layout(in.k, Layout::TILE, operation_name, "k");
-    check_dtype(in.k, DataType::BFLOAT16, operation_name, "k");
-    check_interleaved(in.k, operation_name, "k");
-    check_allocated_device_tensor(in.v, operation_name, "v");
-    check_layout(in.v, Layout::TILE, operation_name, "v");
-    check_dtype(in.v, DataType::BFLOAT16, operation_name, "v");
-    check_interleaved(in.v, operation_name, "v");
-    check_allocated_device_tensor(in.g, operation_name, "g");
-    check_layout(in.g, Layout::TILE, operation_name, "g");
-    check_dtype(in.g, DataType::BFLOAT16, operation_name, "g");
-    check_interleaved(in.g, operation_name, "g");
-    check_allocated_device_tensor(in.beta, operation_name, "beta");
-    check_layout(in.beta, Layout::TILE, operation_name, "beta");
-    check_dtype(in.beta, DataType::BFLOAT16, operation_name, "beta");
-    check_interleaved(in.beta, operation_name, "beta");
-    check_same_device(in.q, in.k, operation_name, "k");
-    check_same_device(in.q, in.v, operation_name, "v");
-    check_same_device(in.q, in.g, operation_name, "g");
-    check_same_device(in.q, in.beta, operation_name, "beta");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
 
@@ -97,6 +90,28 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
         "unsupported KDA prep BF16 mask 0x{:x}",
         attrs.output_bf16_mask);
+
+    // The batched inverse holds all of a core's work items at once, so the heads' chunks must spread over the cores
+    // thinly enough for the program's buffers to fit the L1 free per core.
+    const auto distribution = kda_factory_detail::distribute_prep(
+        mesh->compute_with_storage_grid_size(),
+        attrs.num_heads * attrs.num_chunks,
+        std::numeric_limits<uint32_t>::max());
+    const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
+    const uint64_t dfb_bytes = prepare_chunk_recurrence_l1_bytes(attrs, max_items);
+    const uint64_t l1_bytes =
+        mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    TT_FATAL(
+        dfb_bytes <= l1_bytes,
+        "{}: {} work items per core ({} heads x {} chunks) need {} bytes of L1, {} of them per item for the batched "
+        "inverse, only {} are available",
+        operation_name,
+        max_items,
+        attrs.num_heads,
+        attrs.num_chunks,
+        dfb_bytes,
+        prepare_chunk_recurrence_inverse_tiles_per_item * tt::tile_size(tt::DataFormat::Float32),
+        l1_bytes);
 }
 
 PrepareChunkRecurrenceOperation::spec_return_value_t PrepareChunkRecurrenceOperation::compute_output_specs(
