@@ -1,0 +1,16 @@
+-p
+no:cacheprovider
+--maxfail=300
+-q
+tests/ttnn/unit_tests/operations/eltwise/test_add.py
+tests/ttnn/unit_tests/operations/eltwise/test_mul.py
+tests/ttnn/unit_tests/operations/eltwise/test_unary.py
+tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
+tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_bcast_fp32_dest_acc.py
+tests/ttnn/unit_tests/operations/data_movement/test_tilize.py
+tests/ttnn/unit_tests/operations/data_movement/test_untilize.py
+tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py
+tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py
+tests/ttnn/unit_tests/operations/data_movement/test_concat.py
+tests/ttnn/unit_tests/operations/data_movement/test_clone.py
+tests/ttnn/unit_tests/operations/data_movement/test_permute.py

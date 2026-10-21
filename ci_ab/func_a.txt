@@ -1,0 +1,8 @@
+-p
+no:cacheprovider
+--maxfail=300
+-q
+tests/ttnn/unit_tests/operations/matmul/test_matmul.py
+tests/ttnn/unit_tests/operations/matmul/test_linear.py
+tests/ttnn/unit_tests/operations/matmul/test_addmm.py
+tests/ttnn/unit_tests/operations/conv/test_conv2d.py
