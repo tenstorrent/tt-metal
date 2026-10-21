@@ -360,6 +360,23 @@ def _d2d_send_indices(
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
 
 
+def _replicated(dev):
+    return ttnn.create_mesh_mapper(
+        dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+    )
+
+
+def _metadata_tensor(words, dev) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=dev,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_replicated(dev),
+    )
+
+
 def _d2d_recv(inbound) -> tuple:
     t0 = time.perf_counter()
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
@@ -379,21 +396,10 @@ def _d2d_send(
     if metadata_msg is not None:
         md_tensor = metadata_msg
     else:
-        backing = outbound.get_backing_tensor()
         words = forward_metadata_words(meta["entries"])
         if MTP_LEVELS:
             words.append(int(meta["provided_levels"]))
-        md_tensor = ttnn.from_torch(
-            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=backing.device(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                backing.device(),
-                ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
-            ),
-        )
+        md_tensor = _metadata_tensor(words, outbound.get_backing_tensor().device())
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
@@ -493,53 +499,15 @@ def _entry_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
     return ttnn.slice(inp, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def _replicated(dev):
-    return ttnn.create_mesh_mapper(
-        dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
-    )
-
-
-_zero_rows_cache: dict = {}
-
-
-def _zero_rows(like: ttnn.Tensor, rows: int) -> ttnn.Tensor:
-    shape = list(like.shape)
-    shape[2] = rows
-    key = (tuple(shape), like.dtype, like.layout)
-    if key not in _zero_rows_cache:
-        dev = like.device()
-        _zero_rows_cache[key] = ttnn.from_torch(
-            torch.zeros(*shape),
-            dtype=like.dtype,
-            layout=like.layout,
-            device=dev,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=_replicated(dev),
-        )
-    return _zero_rows_cache[key]
-
-
-def _entry_metadata(entry, like: ttnn.Tensor) -> ttnn.Tensor:
-    """The entry as a single-chunk metadata tensor."""
-    dev = like.device()
-    return ttnn.from_torch(
-        torch.tensor([entry.slot, entry.start, entry.end], dtype=torch.int32).reshape(1, 1, 1, -1),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=dev,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=_replicated(dev),
-    )
-
-
 def _prefill_entries(runtime, kv_caches, inp, entries: list, c: int, d2h_service=None):
     """A packed forward run one non-empty entry at a time through prefill_chunk, entry k as chunk c + k. Returns
     the activation in the packed layout, empty entries as zero rows."""
     rows = CHUNK_SIZE // _sp
+    dev = inp.device()
     real = [e for e in entries if not e.is_empty]
     outs = []
     for k, entry in enumerate(real):
-        md = _entry_metadata(entry, inp)
+        md = _metadata_tensor([entry.slot, entry.start, entry.end], dev)
         out = runtime.prefill_chunk(
             _entry_rows(inp, k, rows),
             kv_caches,
@@ -557,9 +525,16 @@ def _prefill_entries(runtime, kv_caches, inp, entries: list, c: int, d2h_service
     ttnn.deallocate(inp)
     if not outs:
         return None
-    missing = len(entries) - len(real)
-    parts = outs + ([_zero_rows(outs[0], missing * rows)] if missing else [])
-    act = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert len(outs) == len(real), f"prefill_chunk returned {len(outs)} activations for {len(real)} entries"
+    if len(real) < len(entries):
+        shape = list(outs[0].shape)
+        shape[2] = (len(entries) - len(real)) * rows
+        outs.append(
+            ttnn.zeros(
+                shape, dtype=outs[0].dtype, layout=outs[0].layout, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        )
+    act = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     for o in outs:
         ttnn.deallocate(o)
     return act
@@ -945,15 +920,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:
-        mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(
-            mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
-        )
         idx_inbound = getattr(runtime, "receives_indexer_indices", False)
         idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
         assert FORWARD_CHUNKS == 1 or not (
             idx_inbound or idx_outbound
         ), "PREFILL_FORWARD_CHUNKS > 1 does not carry indexer indices between ranks"
+        mesh_device.clear_loaded_sub_device_manager()
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(
+            mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
+        )
         if idx_inbound or idx_outbound:
             idx_in, idx_out = build_d2d_index_endpoints(
                 mesh_device, rank, runtime.indexer_indices_shape(), inbound=idx_inbound, outbound=idx_outbound

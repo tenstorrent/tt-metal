@@ -16,12 +16,15 @@ from models.demos.common.prefill.forward_entries import (
 )
 from models.demos.common.prefill.runners import prefill_runner as runner
 
-C, F = 1024, 4
+C, SP, F = 1024, 8, 4
 
 
 class _Tensor:
     def is_allocated(self):
         return True
+
+    def device(self):
+        return None
 
 
 class _PackedRuntime:
@@ -108,7 +111,83 @@ class _PerEntryRuntime(_PackedRuntime):
 
 def test_per_entry_forwards_run_each_chunk_once(loop, monkeypatch):
     monkeypatch.setattr(runner, "_entry_rows", lambda inp, k, rows: _Tensor())
-    monkeypatch.setattr(runner, "_entry_metadata", lambda entry, like: _Tensor())
+    monkeypatch.setattr(runner, "_metadata_tensor", lambda words, dev: _Tensor())
     runtime = _PerEntryRuntime()
     loop(runtime, FORWARDS, supports_packed_forward=False)
     assert runtime.calls == list(enumerate(e for f in FORWARDS for e in f))
+
+
+class _Act:
+    dtype = layout = None
+
+    def __init__(self, shape, origin=None):
+        self.shape = list(shape)
+        self.origin = origin
+
+    def device(self):
+        return None
+
+    def is_allocated(self):
+        return True
+
+
+class _D2D:
+    def get_backing_tensor(self):
+        return _Act([])
+
+    def wait_for_fabric_links(self):
+        pass
+
+    def release_fabric_links(self):
+        pass
+
+
+class _EchoRuntime(_PackedRuntime):
+    def __init__(self):
+        super().__init__()
+        self.config = SimpleNamespace(is_first_rank=False, is_last_rank=False, use_trace=False)
+
+    def prefill_chunk(
+        self, inp, kv, *, slot_id, actual_start, actual_end, request_id=0, d2h_service=None, metadata_msg=None
+    ):
+        self.calls.append((request_id, PrefillEntry(slot_id, actual_start, actual_end)))
+        return inp
+
+
+def test_downstream_rank_joins_entries_and_forwards_the_metadata(monkeypatch):
+    _configure(monkeypatch, supports_packed_forward=False)
+    monkeypatch.setattr(runner, "_sp", SP)
+    rows, hidden = C // SP, 64
+    joined, sent = [], []
+
+    def concat(parts, dim, memory_config=None):
+        assert dim == 2
+        joined.append([p.origin if isinstance(p.origin, int) else ("zeros", p.shape[2]) for p in parts])
+        return _Act([1, 1, sum(p.shape[2] for p in parts), hidden])
+
+    def outbound(service, activation, metadata):
+        sent.append((activation.shape, metadata.origin.flatten().tolist()))
+
+    monkeypatch.setattr(
+        runner.ttnn, "slice", lambda t, s, e, memory_config=None: _Act([1, 1, e[2] - s[2], hidden], s[2])
+    )
+    monkeypatch.setattr(runner.ttnn, "zeros", lambda shape, **kw: _Act(shape))
+    monkeypatch.setattr(runner.ttnn, "from_torch", lambda t, **kw: _Act(t.shape, t))
+    monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
+    monkeypatch.setattr(runner.ttnn, "concat", concat)
+    monkeypatch.setattr(runner.ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", outbound)
+    words = [forward_metadata_words(pad_entries(f, F)) for f in FORWARDS] + [sentinel_words(SHUTDOWN_WORD, F)]
+    it = iter(words)
+    monkeypatch.setattr(
+        runner,
+        "_d2d_recv",
+        lambda d2d_in: (_Act([1, 1, F * rows, hidden]), runner._meta_from_words(next(it)), _Tensor()),
+    )
+
+    runtime = _EchoRuntime()
+    runner.run_request_loop(runtime, None, 1, 3, d2d_rows=0, d2d_width=0, d2d_in=_D2D(), d2d_out=_D2D())
+
+    assert runtime.calls == list(enumerate(e for f in FORWARDS for e in f))
+    assert joined == [[0, rows, 2 * rows, ("zeros", rows)], [0, ("zeros", 3 * rows)], [0, rows, 2 * rows, 3 * rows]]
+    assert [s for s, _ in sent[:-1]] == [[1, 1, F * rows, hidden]] * len(FORWARDS)
+    assert [w for _, w in sent] == words

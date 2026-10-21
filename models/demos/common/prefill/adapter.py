@@ -153,8 +153,7 @@ class PrefillModelAdapter(ABC):
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
-    # Whether the runtime implements prefill_forward (several chunk entries per forward). Without it the runner
-    # runs a PREFILL_FORWARD_CHUNKS > 1 forward one entry at a time. See docs/ADDING_A_PREFILL_MODEL.md.
+    # The runtime implements prefill_forward; without it PREFILL_FORWARD_CHUNKS > 1 runs prefill_chunk per entry.
     supports_packed_forward: bool = False
 
     def fabric_payload_size(self) -> int:
