@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Configuration classes for transformer training."""
+
 import os
 import yaml
 from dataclasses import dataclass
@@ -38,6 +39,9 @@ class DeviceConfig:
         # Megatron sequence parallelism shares the "tp" axis (requires enable_tp), so it only
         # toggles the model's sequence-sharded residual path, not mesh construction.
         self.enable_sp = device_config.get("enable_sp", False)
+        # Context parallelism claims a "cp" mesh axis: each rank holds a contiguous chunk of every
+        # sequence and attention runs as a ring along it.
+        self.enable_cp = device_config.get("enable_cp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.

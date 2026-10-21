@@ -40,6 +40,8 @@ namespace ttml::ops::distributed {
  *             - Step 0: causal mask (local K/V)
  *             - Steps where source device < current device: full attention
  *             - Steps where source device > current device: skip (no computation)
+ * @param cluster_axis The mesh axis the ring runs along. Defaults to the CP axis of the
+ *             ParallelismContext. Device i along it holds the i-th sequence chunk.
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
@@ -50,6 +52,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    std::optional<uint32_t> cluster_axis = std::nullopt);
 
 }  // namespace ttml::ops::distributed

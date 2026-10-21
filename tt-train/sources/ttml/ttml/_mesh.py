@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools, operator, os, re
-from typing import Iterable
+from typing import Iterable, Mapping
 import ttnn
 import ttml
 from .parallel import is_sequence_parallel
@@ -19,6 +19,8 @@ class Mesh:
     Maps a flat set of devices onto a logical grid where each axis has a name
     (e.g. ``("dp", "tp")``).  Axis names are used throughout the TP/DP stack to
     look up shard dimensions, communicate across the correct device subset, etc.
+    A ``"cp"`` axis carries context parallelism: each rank holds a contiguous
+    chunk of the sequence and attention runs as a ring along that axis.
     """
 
     shape: tuple[int, ...]
@@ -69,6 +71,18 @@ class Mesh:
         placements = [ttnn.PlacementReplicate() for _ in self.shape]
         placements[cluster_axis] = ttnn.PlacementShard(tdim)
         return ttnn.MeshMapperConfig(placements)
+
+    def shard_mapper(self, dims: Mapping[str, int]) -> ttnn.CppTensorToMesh:
+        """Return a mapper that shards tensor dim ``dims[name]`` across each named mesh axis.
+
+        Axes not named in ``dims`` replicate, so ``{"dp": 0, "cp": 3}`` gives every dp group its own
+        batch slice and every cp rank its own sequence chunk.
+        """
+        placements = [ttnn.PlacementReplicate() for _ in self.shape]
+        for name, tdim in dims.items():
+            placements[self.axis_index(name)] = ttnn.PlacementShard(tdim)
+        dev = ttml.autograd.AutoContext.get_instance().get_device()
+        return ttnn.create_mesh_mapper(dev, ttnn.MeshMapperConfig(placements))
 
 
 # Mirrors get_max_dimensions_for_architecture() in tt_metal/fabric/mesh_graph_descriptor.cpp
@@ -183,8 +197,25 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
                 pass
         raise
 
+    if mesh.has_axis("cp") and mesh.axis_size("cp") > 1:
+        _init_ring_transport()
+
     global _mesh
     _mesh = mesh
+
+
+def _init_ring_transport() -> None:
+    """Set up the fabric sockets ring attention shifts K/V through along the "cp" axis.
+
+    The socket manager caches sockets bound to the open MeshDevice, so it is rebuilt on every open.
+    The distributed context is process-wide and created once.
+    """
+    ctx = ttml.autograd.AutoContext.get_instance()
+    try:
+        ctx.get_distributed_context()
+    except RuntimeError:
+        ctx.initialize_distributed_context()
+    ctx.initialize_socket_manager(ttml.core.distributed.SocketType.FABRIC)
 
 
 def close_device_mesh() -> None:
@@ -233,8 +264,12 @@ def mesh() -> Mesh:
 
 
 def sync_gradients(parameters):
-    """Turn each device's local gradient into the global one; call once per step."""
-    average_gradients(parameters, axis_names=("dp", "fsdp"))
+    """Turn each device's local gradient into the global one; call once per step.
+
+    Each cp rank's loss is the mean over its own sequence chunk, so the global mean averages over cp
+    as it does over dp; ring attention has already routed dK/dV back to the rank that owns the keys.
+    """
+    average_gradients(parameters, axis_names=("dp", "fsdp", "cp"))
     sum_sp_gradients(parameters, axis_name="tp")
 
 

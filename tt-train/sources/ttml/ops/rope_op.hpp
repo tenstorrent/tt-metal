@@ -46,11 +46,15 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
 
 ttnn::Tensor gen_trans_mat();
 
+// Under context parallelism each device holds a contiguous chunk of the sequence, so the
+// caches are sharded along the sequence across `cp_axis` (default: the ParallelismContext's
+// CP axis) and `sequence_length` in the returned params is the per-device chunk.
 RotaryEmbeddingParams build_rope_params(
     uint32_t sequence_length,
     uint32_t head_dim,
     float theta = 10000.0F,
-    RopeScalingParams rope_scaling_params = RopeScalingParams{});
+    RopeScalingParams rope_scaling_params = RopeScalingParams{},
+    std::optional<uint32_t> cp_axis = std::nullopt);
 // Throws an exception if the input is bad, parameters are bad, or the two are
 // incompatible with one another.
 void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);

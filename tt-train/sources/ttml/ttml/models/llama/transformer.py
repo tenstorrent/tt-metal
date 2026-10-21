@@ -168,6 +168,7 @@ class LlamaBlock(AbstractModuleBase):
         tp_strategy: TPStrategy = TPStrategy.NONE,
         out_proj_init: Optional[Callable] = None,
         down_proj_init: Optional[Callable] = None,
+        cp_axis: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -192,6 +193,7 @@ class LlamaBlock(AbstractModuleBase):
             bias_linears=attention_bias,
             tp_strategy=tp_strategy,
             out_proj_init=out_proj_init,
+            cp_axis=cp_axis,
         )
 
     def forward(

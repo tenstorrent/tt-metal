@@ -248,7 +248,11 @@ ttnn::Tensor gen_trans_mat() {
 }
 
 RotaryEmbeddingParams build_rope_params(
-    uint32_t sequence_length, uint32_t head_dim, float theta, RopeScalingParams scaling_params) {
+    uint32_t sequence_length,
+    uint32_t head_dim,
+    float theta,
+    RopeScalingParams scaling_params,
+    std::optional<uint32_t> cp_axis) {
     if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
@@ -260,16 +264,24 @@ RotaryEmbeddingParams build_rope_params(
         throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
 
-    // If ParallelismContext is initialized and CP is enabled, shard freqs across the CP axis.
+    // Under CP (explicit axis, else the ParallelismContext's), shard freqs across the CP axis.
     std::shared_ptr<ttnn::distributed::TensorToMesh> mapper;
     uint32_t local_seq_len = sequence_length;
 
-    if (autograd::ctx().is_parallelism_context_initialized()) {
-        auto& pctx = autograd::ctx().get_parallelism_context();
-        std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
-        const uint32_t cp_size = pctx.get_cp_size();
+    if (!cp_axis.has_value() && autograd::ctx().is_parallelism_context_initialized()) {
+        cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis();
+    }
+    if (cp_axis.has_value()) {
+        auto* device = &autograd::ctx().get_device();
+        const auto mesh_shape = device->shape();
+        TT_FATAL(
+            cp_axis.value() < mesh_shape.dims(),
+            "RoPE cp_axis {} is out of range for mesh shape {}",
+            cp_axis.value(),
+            mesh_shape);
+        const uint32_t cp_size = mesh_shape[cp_axis.value()];
 
-        if (cp_axis.has_value() && cp_size > 1) {
+        if (cp_size > 1) {
             TT_FATAL(
                 sequence_length % cp_size == 0,
                 "sequence_length ({}) must be divisible by cp_size ({})",
@@ -277,7 +289,6 @@ RotaryEmbeddingParams build_rope_params(
                 cp_size);
             local_seq_len = sequence_length / cp_size;
 
-            auto* device = &autograd::ctx().get_device();
             mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis.value());
         }
     }

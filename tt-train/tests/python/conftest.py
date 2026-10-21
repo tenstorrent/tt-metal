@@ -61,11 +61,15 @@ def pytest_collection_modifyitems(config, items):
 # cooperate with an already-open mesh.
 
 TP_MESH_SHAPE = (1, 2)
+CP_TP_MESH_SHAPE = (2, 4)
 
 _TTML_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_MGD_ROOT = os.path.join(_TTML_ROOT, "..", "tt_metal", "fabric", "mesh_graph_descriptors")
 _MGD_FOR_ARCH_AND_SHAPE = {
     ("blackhole", TP_MESH_SHAPE): os.path.join(_TTML_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
     ("wormhole_b0", TP_MESH_SHAPE): os.path.join(_TTML_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
+    ("blackhole", CP_TP_MESH_SHAPE): os.path.join(_MGD_ROOT, "p150_x8_mesh_graph_descriptor.textproto"),
+    ("wormhole_b0", CP_TP_MESH_SHAPE): os.path.join(_MGD_ROOT, "t3k_mesh_graph_descriptor.textproto"),
 }
 
 
@@ -160,6 +164,26 @@ def tp_mesh():
     except Exception as e:  # noqa: BLE001
         _close_mesh(previous_mgd)
         pytest.skip(f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}")
+
+    yield ttml.mesh()
+
+    _close_mesh(previous_mgd)
+
+
+# ---------------------------------------------------------------------------
+# Shared [2, 4] context-parallel x tensor-parallel mesh
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def cp_tp_mesh():
+    """A ``[2, 4]`` mesh with axes ``("cp", "tp")``, per requesting module.
+
+    Ring attention runs along ``"cp"``; models that do not use tensor parallelism simply
+    replicate across ``"tp"``. Context parallelism names its axis explicitly, so no
+    ParallelismContext is installed. Skips the requesting tests if eight devices are unavailable.
+    """
+    previous_mgd = _open_mesh_or_skip(CP_TP_MESH_SHAPE, ("cp", "tp"), "'cp' x 'tp'")
 
     yield ttml.mesh()
 
