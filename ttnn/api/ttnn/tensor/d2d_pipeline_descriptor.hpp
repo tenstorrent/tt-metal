@@ -47,10 +47,18 @@ struct D2DReceiverDescriptor {
     bool operator==(const D2DReceiverDescriptor&) const = default;
 };
 
+// Every receiver across one pipeline-stage boundary (e.g. the activations plus a side channel).
+// They carry the same chunk, so a reader ungates all of them together.
+struct D2DBoundaryDescriptor {
+    std::vector<D2DReceiverDescriptor> receivers;
+
+    bool operator==(const D2DBoundaryDescriptor&) const = default;
+};
+
 struct D2DRankDescriptor {
     int rank = 0;
     std::string host_name;
-    std::vector<D2DReceiverDescriptor> receivers;  // one per pipeline stage this rank receives into
+    std::vector<D2DBoundaryDescriptor> boundaries;  // one per pipeline stage this rank receives into
 
     bool operator==(const D2DRankDescriptor&) const = default;
 };

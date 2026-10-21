@@ -1304,7 +1304,9 @@ TEST_F(CrossProcessD2DFixture, ForwardChainStress) {
     }
 }
 
-// Every rank exports its inbound receiver; rank 0 gets the whole chain.
+// Every rank exports its inbound boundary; rank 0 gets the whole chain. Each boundary has two
+// channels, like the prefill runner's activations plus indexer indices: a gated one with
+// metadata, then a plain one.
 TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     const auto& ctx = DistributedContext::get_current_world();
     const int world_size = *ctx->size();
@@ -1316,30 +1318,36 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     constexpr uint32_t kMetadataBytes = 16;
     const ttnn::D2DStageGateConfig gate_cfg{.num_gates = 2, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 4};
     const ttnn::Shape global_shape({1, 1, 32, 64});
-    std::unique_ptr<D2DStreamServiceReceiver> inbound;
-    std::unique_ptr<D2DStreamServiceSender> outbound;
-    if (rank > 0) {
-        auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, kMetadataBytes);
-        cfg.stage_gate = gate_cfg;
-        inbound = D2DStreamService::create_receiver(
-            mesh_device_,
-            std::move(cfg),
-            D2DEndpointConfig{.sender_rank = Rank{rank - 1}, .receiver_rank = Rank{rank}, .distributed_context = ctx});
-    }
-    if (rank + 1 < world_size) {
-        outbound = D2DStreamService::create_sender(
-            mesh_device_,
-            make_cfg(mesh_device_, global_shape, kWorkerCores, kMetadataBytes),
-            D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
+    const D2DEndpointConfig from_prev{
+        .sender_rank = Rank{rank - 1}, .receiver_rank = Rank{rank}, .distributed_context = ctx};
+    const D2DEndpointConfig to_next{
+        .sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx};
+    // Channels between the same two ranks pair up in creation order, so every rank builds them
+    // in the same order: inbound before outbound, gated before plain.
+    std::vector<std::unique_ptr<D2DStreamServiceReceiver>> inbound;
+    std::vector<std::unique_ptr<D2DStreamServiceSender>> outbound;
+    for (const bool gated : {true, false}) {
+        const uint32_t metadata_bytes = gated ? kMetadataBytes : 0;
+        if (rank > 0) {
+            auto cfg = make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes);
+            if (gated) {
+                cfg.stage_gate = gate_cfg;
+            }
+            inbound.push_back(D2DStreamService::create_receiver(mesh_device_, std::move(cfg), from_prev));
+        }
+        if (rank + 1 < world_size) {
+            outbound.push_back(D2DStreamService::create_sender(
+                mesh_device_, make_cfg(mesh_device_, global_shape, kWorkerCores, metadata_bytes), to_next));
+        }
     }
 
-    std::vector<const D2DStreamServiceReceiver*> receivers;
-    if (inbound) {
-        receivers.push_back(inbound.get());
+    std::vector<std::vector<const D2DStreamServiceReceiver*>> boundaries;
+    if (!inbound.empty()) {
+        boundaries.push_back({inbound[0].get(), inbound[1].get()});
     }
     // Only the root writes, so its pid keeps the path unique.
     auto file = D2DStreamService::export_pipeline_descriptor(
-        "gtest_cross_process_export_" + std::to_string(getpid()), receivers, Rank{0}, ctx);
+        "gtest_cross_process_export_" + std::to_string(getpid()), boundaries, Rank{0}, ctx);
     EXPECT_EQ(file != nullptr, rank == 0);
     if (rank == 0) {
         const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(file->path());
@@ -1352,28 +1360,35 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
             const auto& rd = desc.ranks[r];
             EXPECT_EQ(rd.rank, r);
             EXPECT_FALSE(rd.host_name.empty());
-            ASSERT_EQ(rd.receivers.size(), r > 0 ? 1u : 0u);
-            if (rd.receivers.empty()) {
+            ASSERT_EQ(rd.boundaries.size(), r > 0 ? 1u : 0u);
+            if (rd.boundaries.empty()) {
                 continue;
             }
-            const auto& rx = rd.receivers[0];
-            EXPECT_EQ(rx.sender_rank, r - 1);
-            EXPECT_EQ(rx.metadata_size_bytes, kMetadataBytes);
-            EXPECT_EQ(rx.stage_gate, gate_cfg);
-            EXPECT_EQ(rx.stage_gate_stride_bytes, tt::tt_metal::hal::get_l1_alignment());
-            EXPECT_NE(rx.metadata_addr, 0u);
-            ASSERT_FALSE(rx.coords.empty());
-            for (const auto& c : rx.coords) {
-                EXPECT_NE(c.backing_tensor_addr, 0u);
-                EXPECT_NE(c.stage_gate_base_addr, 0u);
-                EXPECT_TRUE(c.metadata_core.has_value());
-                EXPECT_NE(c.sender_fabric_node_id, c.fabric_node_id);
-                const auto [it, inserted] =
-                    owner_of_device.try_emplace({rd.host_name, c.service_core.pcie_device_id}, r);
-                EXPECT_TRUE(inserted || it->second == r)
-                    << "ranks " << it->second << " and " << r << " both name PCIe device "
-                    << c.service_core.pcie_device_id << " on host " << rd.host_name;
+            const auto& receivers = rd.boundaries[0].receivers;
+            ASSERT_EQ(receivers.size(), 2u);
+            for (size_t i = 0; i < receivers.size(); ++i) {
+                const auto& rx = receivers[i];
+                const bool gated = i == 0;
+                EXPECT_EQ(rx.sender_rank, r - 1);
+                EXPECT_EQ(rx.metadata_size_bytes, gated ? kMetadataBytes : 0u);
+                EXPECT_EQ(rx.stage_gate, gated ? gate_cfg : ttnn::D2DStageGateConfig{});
+                EXPECT_EQ(rx.stage_gate_stride_bytes, gated ? tt::tt_metal::hal::get_l1_alignment() : 0u);
+                EXPECT_EQ(rx.metadata_addr != 0u, gated);
+                ASSERT_FALSE(rx.coords.empty());
+                for (const auto& c : rx.coords) {
+                    EXPECT_NE(c.backing_tensor_addr, 0u);
+                    EXPECT_EQ(c.stage_gate_base_addr != 0u, gated);
+                    EXPECT_EQ(c.metadata_core.has_value(), gated);
+                    EXPECT_NE(c.sender_fabric_node_id, c.fabric_node_id);
+                    const auto [it, inserted] =
+                        owner_of_device.try_emplace({rd.host_name, c.service_core.pcie_device_id}, r);
+                    EXPECT_TRUE(inserted || it->second == r)
+                        << "ranks " << it->second << " and " << r << " both name PCIe device "
+                        << c.service_core.pcie_device_id << " on host " << rd.host_name;
+                }
             }
+            // Two channels into one chip use different service cores.
+            EXPECT_NE(receivers[0].coords.at(0).service_core, receivers[1].coords.at(0).service_core);
         }
     }
     ctx->barrier();
@@ -1389,12 +1404,15 @@ TEST(CrossProcessD2DExport, BadCallFailsOnEveryRank) {
         GTEST_SKIP() << "Needs >= 2 ranks; got " << world_size;
     }
     const std::string service_id = "gtest_cross_process_export_fail_" + std::to_string(getpid());
-    const std::vector<const D2DStreamServiceReceiver*> none;
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>> none;
 
-    // Only the last rank fails.
-    const std::vector<const D2DStreamServiceReceiver*> null_receiver{nullptr};
+    // Only the last rank fails, first on a null receiver, then on a boundary with no receivers.
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>> null_receiver{{nullptr}};
     EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(
         service_id, rank == world_size - 1 ? null_receiver : none, Rank{0}, ctx));
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>> empty_boundary{{}};
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(
+        service_id, rank == world_size - 1 ? empty_boundary : none, Rank{0}, ctx));
 
     // The ranks disagree on the root.
     EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{rank == 0 ? 1 : 0}, ctx));

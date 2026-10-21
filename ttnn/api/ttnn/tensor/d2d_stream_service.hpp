@@ -360,12 +360,13 @@ public:
         const D2DEndpointConfig& endpoints);
 
     // Collective over `ctx` (default: world): every rank calls it with the receivers it owns,
-    // one per pipeline stage it receives into (empty if none). `root` gathers them and writes
-    // them to d2d_pipeline_descriptor_path(service_id). Returns the file on `root`, which removes
-    // it when destroyed; null elsewhere.
+    // grouped by boundary: one list per pipeline stage it receives into, holding every receiver
+    // across that boundary (empty if none). `root` gathers them and writes them to
+    // d2d_pipeline_descriptor_path(service_id). Returns the file on `root`, which removes it when
+    // destroyed; null elsewhere.
     static std::unique_ptr<D2DPipelineDescriptorFile> export_pipeline_descriptor(
         const std::string& service_id,
-        const std::vector<const D2DStreamServiceReceiver*>& receivers,
+        const std::vector<std::vector<const D2DStreamServiceReceiver*>>& boundaries,
         tt::tt_metal::distributed::multihost::Rank root = tt::tt_metal::distributed::multihost::Rank{0},
         std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx = nullptr);
 

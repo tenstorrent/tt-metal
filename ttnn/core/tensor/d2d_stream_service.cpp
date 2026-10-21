@@ -1860,7 +1860,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
 
 std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_descriptor(
     const std::string& service_id,
-    const std::vector<const D2DStreamServiceReceiver*>& receivers,
+    const std::vector<std::vector<const D2DStreamServiceReceiver*>>& boundaries,
     tt::tt_metal::distributed::multihost::Rank root,
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx) {
     using tt::tt_metal::distributed::multihost::Rank;
@@ -1884,9 +1884,16 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
         std::array<char, 256> host{};
         gethostname(host.data(), host.size() - 1);
         local = {.rank = rank, .host_name = host.data()};
-        for (const auto* receiver : receivers) {
-            TT_FATAL(receiver != nullptr, "D2DStreamService::export_pipeline_descriptor: null receiver");
-            local.receivers.push_back(receiver->describe());
+        for (size_t b = 0; b < boundaries.size(); ++b) {
+            TT_FATAL(
+                !boundaries[b].empty(),
+                "D2DStreamService::export_pipeline_descriptor: boundary {} has no receivers",
+                b);
+            auto& boundary = local.boundaries.emplace_back();
+            for (const auto* receiver : boundaries[b]) {
+                TT_FATAL(receiver != nullptr, "D2DStreamService::export_pipeline_descriptor: null receiver");
+                boundary.receivers.push_back(receiver->describe());
+            }
         }
         if (rank != *root) {
             payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
