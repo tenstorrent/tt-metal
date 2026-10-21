@@ -44,7 +44,7 @@
   cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompileSweep/*wormhole_ternary_*:CPU_KernelCompileSweep/*wormhole_dm_*'
   skus:
     github_hosted_cpu:
-      timeout: 10
+      timeout: 6
   team: ttnn
   budget_type: merge_gate
   owner_id: U0BK8PFEXGU # Igor Jankowski
@@ -71,7 +71,7 @@
   cmd: TT_METAL_CACHE=$(mktemp -d) /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompileSweep/*blackhole_ternary_*:CPU_KernelCompileSweep/*blackhole_dm_*'
   skus:
     github_hosted_cpu:
-      timeout: 10
+      timeout: 6
   team: ttnn
   budget_type: merge_gate
   owner_id: U0BK8PFEXGU # Igor Jankowski
