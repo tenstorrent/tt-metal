@@ -51,8 +51,7 @@ def run_case(device, case):
     in_layout = R if op in ("tilize", "tilize_vp") else T
     mc_in = DRAM
     if cores:
-        h = shp[-2] // cores
-        mc_in = shard_mc((h, shp[-1]), cores)
+        mc_in = shard_mc(shp, cores)
     t = ttnn.from_torch(x, dtype=din, layout=in_layout, device=device, memory_config=mc_in)
     if op == "tilize":
         out = ttnn.tilize(t, memory_config=mc_in)
