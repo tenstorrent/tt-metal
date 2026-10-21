@@ -85,8 +85,10 @@ def _run_reduce_quasar_perf(
     dest_acc=reduce_dest_acc_modes,
     reduce_dim=CORE_REDUCE_DIMS,
     pool_type=PERF_POOL_TYPES,
+    # Core formats keep both fidelities so they pair with WH/BH; init lowers Float16_b itself.
     math_fidelity=lambda formats, pool_type: perf_math_fidelities(
-        pool_type, get_valid_math_fidelities(formats)
+        pool_type,
+        None if formats in CORE_FORMATS else get_valid_math_fidelities(formats),
     ),
     **PERF_MEASUREMENT,
 )

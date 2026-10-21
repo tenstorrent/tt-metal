@@ -7,8 +7,7 @@ Both sweeps take their formats, reduce dims, pool types and fidelities from here
 compare_test_and_perf.py --cross-arch lines the reports up axis by axis. Rows pair
 where both architectures accept the config; the rest stay one-sided:
 
-- Blackhole only: Float16_b Sum/Average at HiFi4 (Quasar caps Float16_b at LoFi)
-  and the Bfp8_b formats.
+- Blackhole only: the Bfp8_b formats.
 - Quasar only: Float32 -> Float16_b with dest_acc=No (WH/BH need a 32-bit Dest for
   Float32 input), the 1x32 and 16x16 tiles, and MxFp4.
 """
@@ -46,7 +45,8 @@ PERF_MATH_FIDELITIES = [MathFidelity.LoFi, MathFidelity.HiFi4]
 # Scalar reduce runs the column and row passes back to back, so one config is
 # enough to track it; it is a separate test so it is not crossed with the matrix.
 # Both fidelities run on every arch so the scalar rows pair. On Quasar, HiFi4 goes
-# past the functional Float16_b LoFi cap on purpose: it times the extra fidelity phases.
+# past the functional Float16_b LoFi cap on purpose: init drops the phases Float16_b
+# cannot use, so the pair shows what HiFi4 costs on WH/BH and not on Quasar.
 SCALAR_REPRESENTATIVE = dict(
     formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
     dest_acc=[DestAccumulation.No],
