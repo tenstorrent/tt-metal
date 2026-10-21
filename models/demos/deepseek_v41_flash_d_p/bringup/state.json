@@ -4282,8 +4282,9 @@
     "t": "2026-10-21T09:42:21"
    }
   ],
-  "attempt": 3,
-  "attempts": 0,
+  "attempt": 4,
+  "attempts": 1,
+  "duration_s": 6.1,
   "history": [
    {
     "status": "RESET",
@@ -4307,11 +4308,28 @@
     "role": "overseer",
     "status": "RESUMED",
     "t": "2026-10-21T14:55:33"
+   },
+   {
+    "s": 6.1,
+    "status": "FAIL",
+    "t": "2026-10-21T18:27:18"
    }
   ],
+  "last_run": "2026-10-21T18:27:18",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/FIX.5.log",
+  "metrics": {},
+  "rc": 1,
+  "reason": [
+   "  cmd rc=1 (6s), log: /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/FIX.5.log",
+   "  MISSING  pos_chunk (need >= 1)",
+   "  MISSING  op_rows (need >= 1)",
+   "  MISSING  timeline_ok (need == 1)",
+   "  MISSING  err_layer_L* (need <= limit)",
+   "  MISSING  err_state_*_L* (need <= limit)"
+  ],
   "role": "overseer",
-  "started": "2026-10-21T12:33:21",
-  "status": "TODO",
+  "started": "2026-10-21T18:27:11",
+  "status": "RUNNING",
   "waiting": null
  },
  "FIX.6": {
@@ -4553,24 +4571,30 @@
  },
  "G.s4096": {
   "attempts": 0,
-  "duration_s": 542.0,
+  "duration_s": 547.2,
   "history": [
    {
     "s": 542.0,
     "status": "PASS",
     "t": "2026-10-15T22:26:22"
+   },
+   {
+    "s": 547.2,
+    "status": "PASS",
+    "t": "2026-10-21T18:37:15"
    }
   ],
-  "last_run": "2026-10-15T22:26:22",
+  "last_run": "2026-10-21T18:37:15",
   "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/G.s4096.log",
   "metrics": {
+   "drift_metrics": 47,
    "golden_chunks": 2,
    "golden_hash_ok": 1,
    "golden_layers": 8
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-10-15T22:17:20",
+  "started": "2026-10-21T18:28:07",
   "status": "PASS"
  },
  "G.s55296": {
