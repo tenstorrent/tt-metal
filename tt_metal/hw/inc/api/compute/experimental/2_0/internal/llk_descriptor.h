@@ -79,11 +79,11 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
     return round_up_l1_words(mantissa_bytes + exp_bytes);
 }
 
-// NOTE (matmul partial_face): the id-free matmul passes TensorShapes to the LLK, which derives partial_face
-// itself. UNPACK and MATH use DIFFERENT thresholds:
-//   * MATH  (llk_math_matmul.h):       partial_face = (in0 face_r_dim < FACE_R_DIM).
+// NOTE (matmul partial_face): the id-free matmul computes partial_face inline at its two call sites, NOT via
+// a shared helper, because UNPACK and MATH use DIFFERENT thresholds:
+//   * MATH  (llk_math_matmul.h):       partial_face = (shape.total_row_dim() < FACE_R_DIM).
 //   * UNPACK (llk_unpack_AB_matmul.h): partial_face = (shape.total_row_dim() < TILE_R_DIM), matching the
-//     host-side Tile::partial_face (tile height < TILE_HEIGHT).
+//     host-side Tile::partial_face (tile height < TILE_HEIGHT) via get_operand_partial_face().
 // A one-face-high operand (total_row_dim() == 16) is thus partial-face to the unpacker (16 < 32) but
 // full-face to the math (16 == FACE_R_DIM, not <). Matmul per-tile L1 size is tile_stride_words.
 
