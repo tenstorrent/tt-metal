@@ -261,7 +261,6 @@ MatmulUnifiedPlan make_plan(
     plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, plan.num_reader_threads);
     const bool more_than_one_slice = C_slices_per_core * plan.K_chunks_per_C_slice_padded > 1;
     plan.operand_buffer_depth = more_than_one_slice ? std::max(MIN_OPERAND_BUFFER_DEPTH, plan.num_reader_threads) : 1;
-    plan.C_buffer_depth = C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
     // One C slice's bias per reader thread, and at least two when the core has several, so a single reader reads
     // the next C slice's bias (and the A and B slices behind it) while compute uses this one.
     const uint32_t bias_buffer_depth =
@@ -277,6 +276,11 @@ MatmulUnifiedPlan make_plan(
     plan.C_entries_per_thread =
         tt::div_up(num_subblocks, plan.num_compute_threads) * subblock_M_tiles * subblock_N_tiles;
     plan.C_entry_bytes = tt::tile_size(plan.C_format);
+    // Several C slices per core double-buffer C_slice, unless two would not fit one DFB: the next C slice then waits
+    // for the writer to drain this one.
+    const uint64_t C_slice_bytes = (uint64_t)plan.C_entries_per_thread * plan.num_compute_threads * plan.C_entry_bytes;
+    plan.C_buffer_depth =
+        C_slices_per_core > 1 && C_BUFFER_DEPTH * C_slice_bytes <= MAX_DFB_EXTENT_BYTES ? C_BUFFER_DEPTH : 1;
     plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
     plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads * plan.C_buffer_depth;
     // A copied operand's DFB holds operand_buffer_depth slices; a borrowed DFB is the resident shard itself.
