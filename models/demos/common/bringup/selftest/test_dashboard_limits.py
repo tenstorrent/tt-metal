@@ -43,3 +43,9 @@ def test_state_keeps_the_limits_of_gated_metrics():
     got.update(pcc_swap_out={"value": 0.999}, pcc_swap_out_limit={"value": 0.99})
     kept = state_metrics({"pcc_swap_out": ">= limit"}, got)
     assert kept == {"pcc_swap_out": 0.999, "pcc_swap_out_limit": 0.99}
+
+
+def test_state_keeps_only_gated_metrics_even_when_few():
+    """F129: a gate with a few informational metrics no longer copies them into state.json (results/ has them)."""
+    got = {"pcc_layer_L00": {"value": 0.99}, "pcc_layer_L00_limit": {"value": 0.98}, "chunk_seconds_c00": {"value": 1}}
+    assert state_metrics({"pcc_layer_L*": ">= limit"}, got) == {"pcc_layer_L00": 0.99, "pcc_layer_L00_limit": 0.98}
