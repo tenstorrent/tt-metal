@@ -237,6 +237,14 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
     }
 }
 
+// A block-float output of full four-face tiles, one tile per CB page, from a source that takes the tilize pack program.
+inline bool llk_pack_tilize_block_is_closable(const std::uint32_t output_id, const std::uint32_t input_operand) {
+    return IS_BFP_FORMAT(pack_dst_format[output_id]) &&
+           !IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand])) &&
+           get_output_num_faces(output_id) == 4 && get_output_face_r_dim(output_id) == FACE_R_DIM &&
+           !get_output_partial_face(output_id) && llk_pack_block_is_closable(output_id);
+}
+
 // Packs ntiles DEST tiles to the output tiles from output_tile_index on with the program
 // llk_pack_init<PackMode::Tilize> set up, one run for the block when the tiles are contiguous.
 template <bool is_fp32_dest_acc_en>
@@ -275,6 +283,14 @@ inline void llk_pack_tilize_block(
             _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Tilize>(
                 start_tile_index, pack_tile_addr, ntiles);
         }
+        return;
+    }
+
+    if (ntiles > 1 && llk_pack_tilize_block_is_closable(output_id, input_operand)) {
+        const std::uint32_t pack_tile_addr =
+            get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
+        _llk_pack_tilize_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            start_tile_index, pack_tile_addr, ntiles, get_local_cb_interface(output_id).fifo_page_size << 4);
         return;
     }
 
