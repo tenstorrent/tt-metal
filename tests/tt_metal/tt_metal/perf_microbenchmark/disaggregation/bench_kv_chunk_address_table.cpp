@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Benchmark suite for KvChunkAddressTable lookup performance.
+// Benchmark suite for CacheAddressTable lookup performance.
 //
 // Measures the typical decode access pattern:
 //   for a fixed slot_id:
@@ -18,21 +18,21 @@
 #include <vector>
 #include <algorithm>
 
-#include "internal/disaggregation/kv_chunk_address_table.hpp"
+#include "internal/disaggregation/cache_address_table.hpp"
 #include "experimental/fabric/fabric_types.hpp"
 
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
 using tt::tt_fabric::MeshId;
-using tt::tt_metal::internal::disaggregation::KvCacheLocation;
-using tt::tt_metal::internal::disaggregation::KvChunkAddressTable;
-using tt::tt_metal::internal::disaggregation::KvChunkAddressTableConfig;
+using tt::tt_metal::internal::disaggregation::CacheLocation;
+using tt::tt_metal::internal::disaggregation::CacheAddressTable;
+using tt::tt_metal::internal::disaggregation::CacheAddressTableConfig;
 
 constexpr uint32_t kPageSizeBytes = 1088 * 18;  // bfp8 KV chunk size
 
 // Populate the entire table with synthetic data.
-void populate_table(KvChunkAddressTable& table) {
+void populate_table(CacheAddressTable& table) {
     const auto& config = table.config();
 
     // Register a single device group (typical for non-replicated case).
@@ -41,7 +41,7 @@ void populate_table(KvChunkAddressTable& table) {
     for (uint32_t slot = 0; slot < config.num_slots; slot++) {
         for (uint32_t layer = 0; layer < config.num_layers; layer++) {
             for (uint32_t pos = 0; pos < config.max_sequence_length; pos += config.chunk_n_tokens) {
-                KvCacheLocation loc{
+                CacheLocation loc{
                     .noc_addr = 0x8000'0000 + (static_cast<uint64_t>(pos / config.chunk_n_tokens) * kPageSizeBytes),
                     .size_bytes = kPageSizeBytes,
                     .device_group_index = grp,
@@ -62,13 +62,13 @@ void BM_LookupIndividual(benchmark::State& state) {
     const uint32_t num_slots = static_cast<uint32_t>(state.range(2));
     constexpr uint32_t chunk_n_tokens = 32;
 
-    KvChunkAddressTableConfig config{
+    CacheAddressTableConfig config{
         .num_layers = num_layers,
         .max_sequence_length = max_seq_len,
         .num_slots = num_slots,
         .chunk_n_tokens = chunk_n_tokens,
     };
-    KvChunkAddressTable table(config);
+    CacheAddressTable table(config);
     populate_table(table);
 
     // Fixed slot, iterate all layers and positions.
@@ -100,13 +100,13 @@ void BM_LookupRange(benchmark::State& state) {
     const uint32_t num_slots = static_cast<uint32_t>(state.range(2));
     constexpr uint32_t chunk_n_tokens = 32;
 
-    KvChunkAddressTableConfig config{
+    CacheAddressTableConfig config{
         .num_layers = num_layers,
         .max_sequence_length = max_seq_len,
         .num_slots = num_slots,
         .chunk_n_tokens = chunk_n_tokens,
     };
-    KvChunkAddressTable table(config);
+    CacheAddressTable table(config);
     populate_table(table);
 
     const uint32_t slot = 0;
@@ -139,13 +139,13 @@ void BM_LookupMigratePattern(benchmark::State& state) {
     const uint32_t range_tokens = static_cast<uint32_t>(state.range(3));
     constexpr uint32_t chunk_n_tokens = 32;
 
-    KvChunkAddressTableConfig config{
+    CacheAddressTableConfig config{
         .num_layers = num_layers,
         .max_sequence_length = max_seq_len,
         .num_slots = num_slots,
         .chunk_n_tokens = chunk_n_tokens,
     };
-    KvChunkAddressTable table(config);
+    CacheAddressTable table(config);
     populate_table(table);
 
     const uint32_t slot = 0;

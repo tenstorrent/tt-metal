@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/disaggregation/kv_chunk_table_cache.hpp>
+#include <internal/disaggregation/cache_address_table_cache.hpp>
 
 #include <filesystem>
 #include <random>
@@ -56,13 +56,13 @@ void write_atomically(const std::function<void(const std::string&)>& write_table
 
 }  // namespace
 
-std::string default_kv_chunk_table_cache_dir() {
+std::string default_cache_address_table_cache_dir() {
     const std::string root = MetalContext::instance_exists() ? get_cache_root(MetalContext::instance().rtoptions())
                                                              : get_cache_root(llrt::RunTimeOptions{});
     return (fs::path(root) / "kv-chunk-tables").string();
 }
 
-std::string kv_chunk_table_cache_path(const std::string& cache_dir, const std::string& seed, const std::string& key) {
+std::string cache_address_table_cache_path(const std::string& cache_dir, const std::string& seed, const std::string& key) {
     tt::StableHasher hasher;
     for (const std::string& part : {seed, key}) {
         hasher.update(static_cast<uint64_t>(part.size()));
@@ -71,7 +71,7 @@ std::string kv_chunk_table_cache_path(const std::string& cache_dir, const std::s
     return (fs::path(cache_dir) / fmt::format("{:016x}.pb", hasher.digest())).string();
 }
 
-bool get_or_build_kv_chunk_table(
+bool get_or_build_cache_address_table(
     const std::string& cache_dir,
     const std::string& seed,
     const std::string& key,
@@ -81,7 +81,7 @@ bool get_or_build_kv_chunk_table(
         write_atomically(write_table, out_path);
         return false;
     }
-    const fs::path cached = kv_chunk_table_cache_path(cache_dir, seed, key);
+    const fs::path cached = cache_address_table_cache_path(cache_dir, seed, key);
     std::error_code ec;
     if (fs::is_regular_file(cached, ec) && copy_atomically(cached, out_path)) {
         log_info(tt::LogMetal, "KV chunk table cache hit: {}", cached.string());

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Serialization benchmark: Protobuf binary vs text export/import for KvChunkAddressTable.
+// Serialization benchmark: Protobuf binary vs text export/import for CacheAddressTable.
 //
 // Args: [num_layers, max_seq_len, num_slots]
 
@@ -17,21 +17,21 @@ namespace {
 
 using tt::tt_fabric::FabricNodeId;
 using tt::tt_fabric::MeshId;
-using tt::tt_metal::internal::disaggregation::KvCacheLocation;
-using tt::tt_metal::internal::disaggregation::KvChunkAddressTable;
-using tt::tt_metal::internal::disaggregation::KvChunkAddressTableConfig;
+using tt::tt_metal::internal::disaggregation::CacheLocation;
+using tt::tt_metal::internal::disaggregation::CacheAddressTable;
+using tt::tt_metal::internal::disaggregation::CacheAddressTableConfig;
 
 constexpr uint32_t kPageSizeBytes = 1088 * 18;
 
-KvChunkAddressTable make_table(uint32_t num_layers, uint32_t max_seq_len, uint32_t num_slots) {
+CacheAddressTable make_table(uint32_t num_layers, uint32_t max_seq_len, uint32_t num_slots) {
     constexpr uint32_t chunk_n_tokens = 32;
-    KvChunkAddressTableConfig cfg{
+    CacheAddressTableConfig cfg{
         .num_layers = num_layers,
         .max_sequence_length = max_seq_len,
         .num_slots = num_slots,
         .chunk_n_tokens = chunk_n_tokens,
     };
-    KvChunkAddressTable table(cfg);
+    CacheAddressTable table(cfg);
     auto grp = table.add_device_group({FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 1)});
     table.set_fabric_node_host(FabricNodeId(MeshId{0}, 0), "host-0");
     table.set_fabric_node_host(FabricNodeId(MeshId{0}, 1), "host-0");
@@ -39,7 +39,7 @@ KvChunkAddressTable make_table(uint32_t num_layers, uint32_t max_seq_len, uint32
     for (uint32_t slot = 0; slot < num_slots; slot++) {
         for (uint32_t layer = 0; layer < num_layers; layer++) {
             for (uint32_t pos = 0; pos < max_seq_len; pos += chunk_n_tokens) {
-                KvCacheLocation loc{
+                CacheLocation loc{
                     .noc_addr = 0x8000'0000 + (static_cast<uint64_t>(pos / chunk_n_tokens) * kPageSizeBytes),
                     .size_bytes = kPageSizeBytes,
                     .device_group_index = grp,
@@ -51,7 +51,7 @@ KvChunkAddressTable make_table(uint32_t num_layers, uint32_t max_seq_len, uint32
     return table;
 }
 
-uint64_t count_entries(const KvChunkAddressTable& table) {
+uint64_t count_entries(const CacheAddressTable& table) {
     const auto& cfg = table.config();
     return static_cast<uint64_t>(cfg.num_layers) * (cfg.max_sequence_length / cfg.chunk_n_tokens) * cfg.num_slots;
 }

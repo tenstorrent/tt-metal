@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Lightweight KvChunkAddressTable inspector — no protobuf / ttnn dependency.
+"""Lightweight CacheAddressTable inspector — no protobuf / ttnn dependency.
 
 Reads the proto wire format directly (varint/length-delimited decoding over
 ~60 lines), so it runs on ANY host with any Python 3, against a chunk-map .pb
