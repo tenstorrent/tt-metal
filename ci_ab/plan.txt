@@ -1,0 +1,6 @@
+b1 M ids/all.txt all
+b1 H ids/all.txt all
+b1 H2 ids/all.txt all
+b2 H2 ids/all.txt all
+b2 M ids/all.txt all
+b2 H ids/all.txt all
