@@ -266,7 +266,7 @@ class Gemma4ForCausalLM:
         trace_prefill = (
             not on_host
             and not continuation
-            and getattr(gen, "prefill_trace_enabled", False)
+            and gen.prefill_trace_enabled
             and gen.serving_prefill_eligible(sampling_params)
         )
         if trace_prefill:
@@ -390,9 +390,9 @@ class Gemma4ForCausalLM:
             seed_offsets = (torch.as_tensor(start_pos).flatten() - 1).clamp_min(0)
             if signature != self._sampling_signature:
                 eager_decode = self._has_eager_decode_trace()
-                reuse_trace = (
-                    getattr(gen, "prefill_prepared", None) is not None or eager_decode
-                ) and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=eager_decode)
+                reuse_trace = (gen.prefill_prepared is not None or eager_decode) and gen.can_reuse_serving_decode(
+                    sampling_params, allow_eager_prefill=eager_decode
+                )
                 gen.configure_sampling(
                     sampling_params, prompt_tokens=prompt_tokens, seed_offsets=seed_offsets, _reuse_trace=reuse_trace
                 )

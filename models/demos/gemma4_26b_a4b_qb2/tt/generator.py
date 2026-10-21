@@ -40,10 +40,8 @@ class _Gemma4SamplingGenerator(SamplingGenerator):
             output_tensor=self._public_tokens,
         )
 
-    def _run_sampling(self, logits, *, penalties_on, tt_out_tok, count_tokens=True):
-        output = super()._run_sampling(
-            logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
-        )
+    def _run_sampling(self, logits, *, tt_out_tok=None, **sampling_kwargs):
+        output = super()._run_sampling(logits, tt_out_tok=tt_out_tok, **sampling_kwargs)
         if tt_out_tok is not None and tt_out_tok is self._feedback_tokens:
             self.format_public_tokens()
         return output
@@ -96,21 +94,6 @@ class Gemma4Generator:
         self.prefill_prepared = None
         self.prefill_trace_id = None
         self.prefill_sampling_trace_id = None
-        print(f"PREFILL_TRACE_POLICY enabled={self.prefill_trace_enabled} max_length=1024 entries=1", flush=True)
-        policies = {
-            (
-                layer.layer.moe.experts.prefill.short_prefill_batch_tokens,
-                tuple(
-                    (rows, configs[0].in0_block_w, configs[1].in0_block_w, configs[1].per_core_N)
-                    for rows, configs in layer.layer.moe.experts.prefill.prefill_configs.items()
-                ),
-            )
-            for layer in self.model.layers
-        }
-        print(
-            f"PREFILL_EXPERT_POLICIES {sorted(policies)} fields=(rows,gateK,downK,downN) wider_rows=128..256",
-            flush=True,
-        )
         self._trace_returns_logits = False
         self.output_trace_id = None
         self.output_buffer = None
@@ -171,7 +154,7 @@ class Gemma4Generator:
             self._release_trace()
         temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
         self.sampled_mode = any(value != 0.0 for value in temperatures)
-        if getattr(self, "prefill_prepared", None) is not None and (
+        if self.prefill_prepared is not None and (
             self.host_sampling
             or self.sampled_mode
             or any(value != 0 for value in formatted.presence_penalty + formatted.frequency_penalty)
@@ -225,7 +208,7 @@ class Gemma4Generator:
 
     def _release_trace(self):
         for name in ("prefill_trace_id", "prefill_sampling_trace_id"):
-            if (trace := getattr(self, name, None)) is not None:
+            if (trace := getattr(self, name)) is not None:
                 ttnn.release_trace(self.mesh, trace)
                 setattr(self, name, None)
         if self.output_trace_id is not None:
@@ -440,7 +423,7 @@ class Gemma4Generator:
     def prefill_forward(
         self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, slots=None, start_pos=None
     ):
-        if getattr(self, "prefill_prepared", None) is not None:
+        if self.prefill_prepared is not None:
             self._release_trace()
             self.prefill_prepared = None
         slots = list(range(len(prompt_lens))) if slots is None else list(slots)

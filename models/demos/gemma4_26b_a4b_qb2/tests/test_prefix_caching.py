@@ -19,6 +19,7 @@ def test_continuation_preserves_absolute_positions(monkeypatch, start, end):
     calls = []
     cache, tables = object(), object()
     generator = object.__new__(Gemma4Generator)
+    generator.prefill_prepared = None
 
     def forward(ids, **kwargs):
         calls.append((ids.clone(), kwargs))
@@ -44,6 +45,7 @@ def test_continuation_preserves_absolute_positions(monkeypatch, start, end):
 @pytest.mark.parametrize("starts,ends", [([-1], [33]), ([33], [33]), ([34], [33]), ([0, 32], [33])])
 def test_invalid_continuation_fails_before_upload(starts, ends, expect_error):
     generator = object.__new__(Gemma4Generator)
+    generator.prefill_prepared = None
     generator.model = SimpleNamespace(max_seq_len=2048)
     generator._upload_page_tables = Mock(side_effect=AssertionError("Invalid interval reached upload"))
     with expect_error(ValueError, "Invalid logical prefill interval|Start-position and batch dimensions differ"):
@@ -74,6 +76,7 @@ def test_traced_suffix_uses_explicit_tokens_without_sampling(monkeypatch):
     monkeypatch.setattr(ttnn, "reshape", torch.reshape)
     monkeypatch.setattr(ttnn, "clone", torch.clone)
     generator = object.__new__(Gemma4Generator)
+    generator.prefill_prepared = None
     generator.model = SimpleNamespace(max_seq_len=2048, config=SimpleNamespace(vocab_size=16))
     generator._upload_page_tables = lambda value: value
     generator.decode_forward = Mock(return_value=torch.zeros(1, 1, 32, 4))

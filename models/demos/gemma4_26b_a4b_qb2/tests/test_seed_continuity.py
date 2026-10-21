@@ -9,7 +9,8 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator
+from models.common.sampling.generator import SamplingGenerator as CommonSamplingGenerator
+from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator, _Gemma4SamplingGenerator
 from models.demos.gemma4_26b_a4b_qb2.tt.generator_vllm import Gemma4ForCausalLM
 
 
@@ -111,3 +112,21 @@ def test_prefill_and_first_decode_use_adjacent_seeds(adapter):
     before = adapter.generator.draws[-1]
     decode(adapter, [8], [42], reset=True)
     assert adapter.generator.draws[-1][0] == before[0] + 1
+
+
+@pytest.mark.parametrize("grammar_on", [None, False, True])
+@pytest.mark.parametrize("feedback", [False, True])
+def test_sampling_wrapper_forwards_common_arguments(monkeypatch, grammar_on, feedback):
+    sampler = object.__new__(_Gemma4SamplingGenerator)
+    sampler.bind_public_tokens(object(), object())
+    sampler.format_public_tokens = Mock()
+    sample = Mock(return_value=object())
+    monkeypatch.setattr(CommonSamplingGenerator, "_run_sampling", sample)
+    logits = object()
+    arguments = dict(penalties_on=False, tt_out_tok=sampler._feedback_tokens if feedback else None, count_tokens=False)
+    if grammar_on is not None:
+        arguments["grammar_on"] = grammar_on
+
+    assert sampler._run_sampling(logits, **arguments) is sample.return_value
+    sample.assert_called_once_with(logits, **arguments)
+    assert sampler.format_public_tokens.call_count == int(feedback)

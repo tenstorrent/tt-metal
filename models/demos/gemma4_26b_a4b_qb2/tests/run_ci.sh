@@ -54,13 +54,8 @@ export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300
 export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false GEMMA4_26B_ALLOW_HOST_SAMPLING=1
 
 git clone https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
-gemma_plugin_ref=0a76258e14ca7237067ca9a22ec02e257bee570a
-plugin_ref="${VLLM_TT_PLUGIN_REF:-$gemma_plugin_ref}"
-if [ "$plugin_ref" = main ]; then
-    echo "::warning::Ignoring VLLM_TT_PLUGIN_REF=main; using the validated Gemma revision" >&2
-    plugin_ref=$gemma_plugin_ref
-fi
-git -C "$work/vllm-tt-plugin" checkout "$plugin_ref"
+# Keep installation and serving on the validated plugin revision.
+git -C "$work/vllm-tt-plugin" checkout 0a76258e14ca7237067ca9a22ec02e257bee570a
 git -C "$work/vllm-tt-plugin" rev-parse HEAD > "$results/plugin-revision.txt"
 unset VLLM_TT_PLUGIN_REF
 pushd "$work/vllm-tt-plugin"
