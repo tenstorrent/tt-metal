@@ -14,12 +14,22 @@ rank-4 permutes.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.experimental.trellis2.reference import ss_decoder_host as host
+from models.tt_dit.layers.conv3d import get_conv3d_config
 
 ALIGN = 32
+TT_DIT_BLOCKING = (128, 256, 512, 768)  # input channel counts with a blocking in tt_dit get_conv3d_config
+
+
+def _fp32_conv() -> bool:
+    """Activations, weights and convs in fp32 (conv3d's fp32-exact path): bf16 gave 3x the CPU bf16 floor in 64^3 flips,
+    fp32 is below it at 1.84 s vs 0.15 s (S10 G4a). TRELLIS2_SSDEC_FP32_CONV=0 restores bf16."""
+    return os.environ.get("TRELLIS2_SSDEC_FP32_CONV", "1") == "1"
 
 
 def _hifi4(device):
@@ -40,22 +50,32 @@ def _pad_channels(t: torch.Tensor, dim: int) -> torch.Tensor:
 class _Conv3d:
     """k x k x k conv with symmetric zero padding on a row-major [1, D, H, W, C] activation."""
 
-    def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device, out_dtype=ttnn.bfloat16) -> None:
+    def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device) -> None:
         self.device = device
+        dtype = ttnn.float32 if _fp32_conv() else ttnn.bfloat16
         self.k = w.shape[-1]
+        # Pad C_out to a multiple of 32 with zero filters (tt_dit never runs conv3d below 32); callers slice.
+        w, b = _pad_channels(w, 0), _pad_channels(b, 0)
         self.out_channels = w.shape[0]
-        self.out_dtype = out_dtype
-        self.config = ttnn.Conv3dConfig(
-            weights_dtype=ttnn.bfloat16,
-            output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        )
-        weight = ttnn.from_torch(_pad_channels(w.float(), 1), dtype=ttnn.bfloat16, pad_value=0)
+        self.out_dtype = dtype
+        # Default blocking keeps whole channel blocks in L1, which overflows at 512 -> 1024; tt_dit's Wan table fits.
+        in_channels = w.shape[1] + (-w.shape[1] % ALIGN)
+        if dtype == ttnn.float32:
+            self.config = get_conv3d_config(in_channels, device.compute_with_storage_grid_size(), weights_dtype=dtype)
+        elif in_channels in TT_DIT_BLOCKING:
+            self.config = get_conv3d_config(in_channels, device.compute_with_storage_grid_size())
+        else:
+            self.config = ttnn.Conv3dConfig(
+                weights_dtype=ttnn.bfloat16,
+                output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            )
+        weight = ttnn.from_torch(_pad_channels(w.float(), 1), dtype=dtype, pad_value=0)
         self.weight = ttnn.experimental.prepare_conv3d_weights(
             weight_tensor=weight, C_in_block=self.config.C_in_block, alignment=ALIGN, device=device
         )
         self.bias = ttnn.from_torch(
-            b.float().reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0
+            b.float().reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0
         )
         self.compute_kernel_config = _hifi4(device)
         self._zero_planes: dict[tuple, ttnn.Tensor] = {}
@@ -91,16 +111,24 @@ class _Conv3d:
 
 
 class _NormSiLU:
-    """Channel LayerNorm (affine, eps 1e-5) + SiLU on the tile-major [1, 1, N, C] view."""
+    """Channel LayerNorm (affine, eps 1e-5) + SiLU on the tile-major [1, 1, N, C] view.
+
+    In fp32 with one bf16 cast at the end, as TRELLIS.2's LayerNorm32: the bf16 version shrank every norm output by
+    0.1-0.2% (S10 probe), which flips near-zero logits. TRELLIS2_SSDEC_FP32_NORM=0 restores bf16 for A/B runs.
+    """
 
     def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device) -> None:
+        self.fp32 = os.environ.get("TRELLIS2_SSDEC_FP32_NORM", "1") == "1"
+        dtype = ttnn.float32 if self.fp32 else ttnn.bfloat16
         to_dev = lambda t: ttnn.from_torch(
-            t.float().reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            t.float().reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
         self.weight, self.bias = to_dev(w), to_dev(b)
         self.compute_kernel_config = _hifi4(device)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.fp32 and x.dtype != ttnn.float32:
+            x = ttnn.typecast(x, ttnn.float32)
         y = ttnn.layer_norm(
             x,
             weight=self.weight,
@@ -108,7 +136,8 @@ class _NormSiLU:
             epsilon=host.NORM_EPS,
             compute_kernel_config=self.compute_kernel_config,
         )
-        return ttnn.silu(y)
+        y = ttnn.silu(y)
+        return ttnn.typecast(y, ttnn.bfloat16) if self.fp32 and not _fp32_conv() else y
 
 
 def _tokens(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -163,13 +192,13 @@ class TtSSDecoder:
                 w, b = host.shuffle_weight_order(s[f"blocks.{i}.conv.weight"], s[f"blocks.{i}.conv.bias"])
                 self.blocks.append(("up", _Conv3d(w, b, device=mesh_device)))
         self.out_norm = _NormSiLU(s["out_layer.0.weight"], s["out_layer.0.bias"], device=mesh_device)
-        self.out_conv = _Conv3d(
-            s["out_layer.2.weight"], s["out_layer.2.bias"], device=mesh_device, out_dtype=ttnn.float32
-        )
+        # Logits come out in the conv dtype: a bf16-input conv3d with an fp32 output returns garbage (scale 0 vs the
+        # mirror, S10 probe); bf16 rounding never changes a logit's sign, so occupancy (logits > 0) is unaffected.
+        self.out_conv = _Conv3d(s["out_layer.2.weight"], s["out_layer.2.bias"], device=mesh_device)
 
     def forward_device(self, z: ttnn.Tensor) -> ttnn.Tensor:
-        """Row-major [1, 16, 16, 16, 32] (latent channels zero-padded to 32) -> row-major [1, 64, 64, 64, 1] fp32."""
-        dhw = tuple(z.shape[1:4])
+        """Row-major [1, 16, 16, 16, 32] (latent channels zero-padded to 32) -> row-major [1, 64, 64, 64, 32] (channel 0 is the logit)."""
+        dhw = tuple(z.shape)[1:4]
         h = _tokens(self.input_layer(z))
         for block in self.middle:
             h = block(h, dhw)
@@ -178,12 +207,13 @@ class TtSSDecoder:
                 h = block(h, dhw)
             else:
                 g = _shuffle(block(_grid(h, dhw)))
-                dhw = tuple(g.shape[1:4])
+                dhw = tuple(g.shape)[1:4]
                 h = _tokens(g)
         return self.out_conv(_grid(self.out_norm(h), dhw))
 
     def __call__(self, z: torch.Tensor) -> torch.Tensor:
         x = _pad_channels(z.float().permute(0, 2, 3, 4, 1), 4)
-        x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        dtype = ttnn.float32 if _fp32_conv() else ttnn.bfloat16
+        x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         out = ttnn.to_torch(ttnn.get_device_tensors(self.forward_device(x))[0]).float()
         return out[..., : host.OUT_CHANNELS].permute(0, 4, 1, 2, 3).contiguous()
