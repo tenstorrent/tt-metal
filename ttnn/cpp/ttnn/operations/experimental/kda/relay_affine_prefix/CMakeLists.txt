@@ -48,7 +48,8 @@ install(
         ttnn_op_experimental_kda_relay_affine_prefix
     FILE_SET
     kernels
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/kda/relay_affine_prefix
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/kda/relay_affine_prefix
         COMPONENT ttnn-runtime
 )
 

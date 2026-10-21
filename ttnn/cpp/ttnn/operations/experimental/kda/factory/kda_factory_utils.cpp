@@ -247,6 +247,18 @@ tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoo
         .merge_ranges();
 }
 
+bool same_cores(const tt::tt_metal::CoreRangeSet& set, std::span<const tt::tt_metal::CoreCoord> cores) {
+    const auto set_cores = tt::tt_metal::corerange_to_cores(set);
+    return std::set<tt::tt_metal::CoreCoord>(set_cores.begin(), set_cores.end()) ==
+           std::set<tt::tt_metal::CoreCoord>(cores.begin(), cores.end());
+}
+
+std::vector<tt::tt_metal::CoreCoord> shard_cores(const Tensor& tensor) {
+    const auto& shard = *tensor.memory_config().shard_spec();
+    return tt::tt_metal::corerange_to_cores(
+        shard.grid, std::nullopt, shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+}
+
 tt::tt_metal::CBDescriptor cb_descriptor(
     uint32_t index,
     uint32_t pages,
@@ -272,6 +284,17 @@ tt::tt_metal::CBDescriptor sharded_cb_descriptor(uint32_t index, const Tensor& t
         shard.grid);
     cb.buffer = tensor.buffer();
     return cb;
+}
+
+tt::tt_metal::ComputeConfigDescriptor compute_config_descriptor(
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        ttnn::get_compute_kernel_config_args(arch, compute_kernel_config);
+    return tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 }
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

@@ -372,9 +372,7 @@ class ttKDA:
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
         )
-        # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
-        # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
-        self.kda_compute_config = ttnn.init_device_compute_kernel_config(
+        self.norm_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -402,12 +400,10 @@ class ttKDA:
             )[0]
             if base is None:
                 return 0
-            extra = program_config.input_projection_extra_gate_tiles
+            per_core = base.per_core_N + program_config.input_projection_extra_gate_tiles
         else:
             # The matmul program's own blocking (T=2048 and T=2560: 25 tiles per core) and one more column.
-            base_per_core = -(-base_tiles // grid.x)
-            extra = 1
-        per_core = (base.per_core_N if program_config.tuned_projection_matmuls else base_per_core) + extra
+            per_core = -(-base_tiles // grid.x) + 1
         return max(0, min(self.config.v_dim // ttnn.TILE_SIZE, per_core * grid.x - base_tiles))
 
     def _matmul_core_grid(self, program_config) -> ttnn.CoreGrid | None:
@@ -558,7 +554,7 @@ class ttKDA:
             config.num_heads,
             epsilon=config.norm_eps,
             memory_config=self.norm_output_memory_config,
-            compute_kernel_config=self.kda_compute_config,
+            compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
         )
@@ -669,6 +665,7 @@ class ttKDA:
             ttnn.deallocate(result.output_gate)
         else:
             output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+        ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         if self.carry_with_output_projection:
