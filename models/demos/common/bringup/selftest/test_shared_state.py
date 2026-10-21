@@ -38,7 +38,7 @@ def sspec(fx, monkeypatch):
         p = fx(**{**cfg, **over})
         monkeypatch.setenv("BRINGUP_SPEC", p)
         prompt.build(Spec.load(p))
-        generate_golden.main(["--spec", p, "--rung", "s256"])
+        generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
         return Spec.load(p)
 
     return make
@@ -72,7 +72,7 @@ def test_golden_refuses_a_missing_source(fx, monkeypatch):
     p = fx(**KV, layers="1-2")
     prompt.build(Spec.load(p))
     with pytest.raises(SystemExit, match="select layer 0"):
-        generate_golden.main(["--spec", p, "--rung", "s256"])
+        generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
 
 
 @pytest.mark.parametrize("cfg", [KV, REC], ids=["kv", "recurrent"])

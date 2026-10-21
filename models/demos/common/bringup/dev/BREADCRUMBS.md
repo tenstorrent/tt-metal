@@ -1418,3 +1418,19 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F127 (overseer, 2026-10-21): a fix job carries its own write paths (`overseer fix --paths`, default the model's tt/ dir)
   on top of its gate tasks' paths. DeepSeek-V4.1 FIX.5 was gated on X.3, a scripted task with no paths, so its agent could
   not edit tt/ and stopped without a change. Selftest: test_overseer.py.
+- F128 (owner, 2026-10-21; the end-to-end half of F80, deferred on 10-16 and lost): the device is judged against the
+  full-precision reference; the reference at its own shipped precision only sets the margin, per step AND end to end.
+  - Goldens: `golden.numerics: native` (fp32 compute, no quantize-dequantize, stored fp32); `generate_golden --set`
+    (the G tasks) also makes `<rung>-official` (numerics official at `reference.shipped_dtype`, default bf16) and
+    `drift.json` (reference/drift.py: per layer, state, top-k overlap, final hidden, top-5; plus a bf16 resolution
+    floor). content_hash leaves out the derived drift.json / official_floor.json.
+  - Limits (testing/e2e_limits.py): 1 - e2e.calib (2.0) x max(1 - drift, 1 - res); ladder (pcc_layer_L*,
+    pcc_state_*_L*, overlap_state_*_L*, pcc_final_hidden, top5_overlap) and contract (pcc_producer_kv_*,
+    pcc_contract_state_*) record `<metric>_limit`; ledger_gen writes `>= limit` for M.1, L.*, K.1, X.3, Z.1. The fixed
+    thresholds layer / state / state_overlap / final_hidden / top5 are gone (defaults.yaml); F124's waiver is gone.
+  - No silent fallback: reference.golden.reference_at stops when hooks.reference has no `numerics` switch and the run
+    asks for native (unless `reference.no_rounding: true`); per-step references (interface.step_reference) go through
+    it too. F112 had fallen back to the rounded arithmetic, so DeepSeek-V4.1's per-step checks were rounded as well.
+  - Docs: the skill's accuracy section, agents' rules 14 / 17 and the reference role, the hooks template.
+  - Guards (selftest/test_e2e_limits.py): the limit math, no fallback, drift on synthetic goldens, no generated device
+    gate with a fixed accuracy number, no threshold() call in ladder / contract, defaults at native.

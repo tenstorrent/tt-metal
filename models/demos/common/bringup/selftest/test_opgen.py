@@ -93,7 +93,7 @@ def gspec(fx, monkeypatch):
         monkeypatch.setenv("BRINGUP_SPEC", p)
         s = Spec.load(p)
         prompt.build(s)
-        generate_golden.main(["--spec", p, "--rung", "s256"])
+        generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
         Ledger(s.bringup_dir).write_tasks(generate(s, fixture_model.Reference()))
         return Spec.load(p)
 
@@ -332,7 +332,7 @@ def test_the_ladder_records_the_bridge_and_keeps_host_transfers_at_zero(fx, monk
     monkeypatch.setenv("BRINGUP_SPEC", p)
     s = Spec.load(p)
     prompt.build(s)
-    generate_golden.main(["--spec", p, "--rung", "s256"])
+    generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
     tt = fake_ttnn(1)
 
     class BridgedModel(fixture_model.FakeDeviceModel):

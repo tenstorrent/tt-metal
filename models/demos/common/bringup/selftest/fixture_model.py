@@ -255,7 +255,7 @@ class Tokenizer:
 
 
 # ---- hooks module interface (the selftest spec points "hooks" at this module)
-def reference(spec, layers=None, dtype=torch.float32):
+def reference(spec, layers=None, dtype=torch.float32, numerics="native"):  # F128: rounds nothing, both the same
     return Reference(spec, layers, dtype, broken_graph=bool(spec.get("fixture.broken_graph")))
 
 

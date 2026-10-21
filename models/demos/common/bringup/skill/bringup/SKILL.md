@@ -239,9 +239,24 @@ done reaches the agents as a note, so the fix and its lesson land where the next
 - **Your files.** `overseer.yaml`, `supervision.md` and the dashboards are yours; the agent path check ignores them, so
   write them at any time. Anything else in the tree only at a pause.
 
-### Accuracy limits come from the noise floor, never a fixed bar
+### Accuracy: the full-precision reference is the target; the reference's own precision is only the margin
 
-Owner rule (DeepSeek-V4.1 run1). Every accuracy limit of the component and swap tests is calib (2.0; 3.5 for the low
+Owner rule (stated many times; F80, F128). The device is always compared with the CPU reference at FULL precision
+(fp32, every quantize-dequantize of the shipped code off: `numerics: native`), never with the reference's rounded
+arithmetic. The reference at its shipped precision (its dtypes and roundings, `numerics: official`) only measures how
+far a real implementation may land from the truth, and every limit is calib x that, per step and end to end:
+- per step (component, swap): the noise floor below;
+- end to end (ladder per layer, state and top-k overlap, final hidden, top-5; the contract's KV read-back; X.3; Z.1):
+  calib (`e2e.calib`, 2.0) x the official golden's drift from the full-precision golden on the same rung
+  (`<rung>-official`, `drift.json`; G tasks make all three with `generate_golden --set`; testing/e2e_limits.py).
+There is no fixed end-to-end bar and no silent fallback: a model whose hooks.reference has no `numerics` switch stops
+(unless `reference.no_rounding: true`), and a selftest fails if any generated device gate holds a fixed accuracy
+number. Never propose a waiver, a golden that follows the device's numerics, or a "match the rounded reference" check:
+check first that the comparison is against full precision with the drift as margin. A deferred part of an owner rule
+is queued at once (a framework task or a fix job), never left in a hand-off (F80 deferred the end-to-end half; it was
+lost for five days).
+
+Per step. Every accuracy limit of the component and swap tests is calib (2.0; 3.5 for the low
 precision kinds) x the step's noise floor on the same comparison: the larger of the official code's own arithmetic
 on the same inputs (task R.5 taps it per step; the reference role writes the hook and `official_taps.yaml`) and the
 input nudge (the fp32 step on its inputs moved inside their official dtype's rounding cell; testing/noise_floor.py),

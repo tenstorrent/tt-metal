@@ -64,7 +64,7 @@ Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything 
 | intake | spec.yaml | person + `/bringup` | `approve intake` |
 | reference | R.1 checkpoint, R.2 HF parity, R.3 chunked + graph replay | agent | PCC vs HF >= 0.9999, chunked == one-shot, graph replays exactly |
 | trim | R.4 (layer subsets only) | script | only layers 0..last subset layer kept, tensors byte-identical (F47) |
-| goldens | G.<rung> | script | manifest with content hash, every layer and chunk |
+| goldens | G.<rung> | script | the full-precision golden (the target), the official one and their drift (the margin, F128) |
 | box | B.1 | script | mesh opens, collectives exact |
 | serving | SC.1 | `serving-contract` agent | `serving_contract.md` has every section and the tt-d-gen sha; every listed contract test exists; a runner test is listed (F58) |
 | plan | PL.0 ledger, PL.1 plan | agent + person | memory fits per-chip DRAM, every step mapped, a `## Serving contract` section, approved |
