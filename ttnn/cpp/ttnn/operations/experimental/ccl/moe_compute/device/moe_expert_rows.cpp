@@ -30,6 +30,7 @@
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 
 namespace ttnn::experimental::prim {
@@ -37,6 +38,7 @@ namespace ttnn::experimental::prim {
 namespace {
 
 using expert_rows::GroupRun;
+using ttnn::experimental::ccl::add_semaphore_descriptor;
 
 constexpr uint32_t kWordBytes = sizeof(uint32_t);
 constexpr uint32_t kBf16Bytes = sizeof(uint16_t);
@@ -108,7 +110,15 @@ enum MoEComputeOutput : uint32_t {
     kCombineOutput = 5,
 };
 constexpr uint32_t kOutputsWithCombine = 6;
-constexpr size_t kCombineBarrierSemaphores = 2;  // FullCcl: the combine's init and final barriers
+
+// The expert rows program's kernels, in order
+constexpr uint32_t kRowsReaderKernelIdx = 0;
+constexpr uint32_t kRowsWriterKernelIdx = 1;
+constexpr uint32_t kRowsComputeKernelIdx = 2;
+// The placement program with the combine starts with selective_reduce_combine's kernels: its reader, then its writer
+// (then, with FullCcl, its mux kernels). The writer's runtime arg 4 is the cross-device semaphore address.
+constexpr uint32_t kPlaceCombineWriterKernelIdx = 1;
+constexpr uint32_t kPlaceCombineWriterSemaphoreArgIdx = 4;
 
 bool expert_rows_arch(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0; }
 
@@ -1213,9 +1223,9 @@ std::variant<CostedPlan, std::string> choose_row_tiles(
     return best;
 }
 
-// Reader runtime args 1..6, which override_runtime_arguments patches: the routing inputs, the routing table, and the
-// layer's W0/W1 and W2 (the bank address of the layer's first expert).
-constexpr uint32_t kReaderBufferArgs = 1;
+// Reader runtime args 5..6, which override_runtime_arguments patches: the layer's W0/W1 and W2 (the bank address of
+// the layer's first expert), offsets into the weights that move with layer_id.
+constexpr uint32_t kReaderLayerWeightArgs = 5;
 // The bank address of `layer` of prepared weights whose (layer, expert) holds tiles_per_expert tiles per bank.
 uint32_t layer_address(const ttnn::Tensor& weights, uint32_t layer, uint32_t local_experts, uint32_t tiles_per_expert) {
     const uint64_t address = uint64_t{weights.buffer()->address()} +
@@ -1228,41 +1238,12 @@ uint32_t layer_address(const ttnn::Tensor& weights, uint32_t layer, uint32_t loc
     return static_cast<uint32_t>(address);
 }
 
-std::array<uint32_t, 6> reader_buffer_args(
-    const MoEExpertRowsParams& args,
-    const MoEExpertRowsInputs& tensor_args,
-    const ttnn::Tensor& table,
-    const PreparedLayout& layout) {
+std::array<uint32_t, 2> layer_weight_args(
+    const MoEExpertRowsParams& args, const MoEExpertRowsInputs& tensor_args, const PreparedLayout& layout) {
     const uint32_t local_experts = args.shape.local_experts;
     return {
-        tensor_args.expert_indices_tensor.buffer()->address(),
-        tensor_args.expert_scores_tensor.buffer()->address(),
-        tensor_args.expert_mapping_tensor.buffer()->address(),
-        table.buffer()->address(),
         layer_address(tensor_args.w0_w1_tensor, args.layer_id, local_experts, layout.piece_tiles),
         layer_address(tensor_args.w2_tensor, args.layer_id, local_experts, layout.w2_tiles)};
-}
-
-// Writer runtime args 0..1, which override_runtime_arguments patches: x and the row buffer.
-std::array<uint32_t, 2> writer_buffer_args(const MoEExpertRowsInputs& tensor_args, const ttnn::Tensor& rows) {
-    return {tensor_args.input_tensor.buffer()->address(), rows.buffer()->address()};
-}
-
-// place.cpp runtime args 0..5 and feed.cpp runtime args 0..2, which override_runtime_arguments patches.
-std::array<uint32_t, 6> place_buffer_args(
-    const ttnn::Tensor& rows, const ttnn::Tensor& table, const std::vector<ttnn::Tensor>& outputs) {
-    return {
-        rows.buffer()->address(),
-        outputs[kETPages].buffer()->address(),
-        outputs[kExpertActivation].buffer()->address(),
-        outputs[kExpertTokenCounts].buffer()->address(),
-        outputs[kTilizeOutput].buffer()->address(),
-        table.buffer()->address()};
-}
-
-std::array<uint32_t, 3> feed_buffer_args(
-    const ttnn::Tensor& rows, const ttnn::Tensor& table, const std::vector<ttnn::Tensor>& outputs) {
-    return {rows.buffer()->address(), table.buffer()->address(), outputs[kTilizeOutput].buffer()->address()};
 }
 
 // The tiles of one shard per (layer, expert) of prepared weights: their last three dims.
@@ -1270,22 +1251,29 @@ uint32_t prepared_tiles_per_expert(const ttnn::Shape& shape) {
     return shape[-3] * (shape[-2] / tt::constants::TILE_HEIGHT) * (shape[-1] / tt::constants::TILE_WIDTH);
 }
 
-tt::tt_metal::CBHandle create_cb(
-    tt::tt_metal::Program& program,
+void create_cb(
+    tt::tt_metal::ProgramDescriptor& desc,
     const CoreRangeSet& cores,
     uint32_t index,
     uint32_t bytes,
     tt::DataFormat format,
     uint32_t page_bytes) {
-    return tt::tt_metal::CreateCircularBuffer(
-        program, cores, tt::tt_metal::CircularBufferConfig(bytes, {{index, format}}).set_page_size(index, page_bytes));
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = bytes,
+        .core_ranges = cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index),
+            .data_format = format,
+            .page_size = page_bytes,
+        }}},
+    });
 }
 
 // `count` consecutive semaphores on `cores`, all 0; returns the first id.
-uint32_t create_semaphores(tt::tt_metal::Program& program, const CoreRangeSet& cores, uint32_t count) {
-    const uint32_t first = tt::tt_metal::CreateSemaphore(program, cores, 0);
+uint32_t create_semaphores(tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t count) {
+    const uint32_t first = add_semaphore_descriptor(desc, cores, 0);
     for (uint32_t i = 1; i < count; ++i) {
-        tt::tt_metal::CreateSemaphore(program, cores, 0);
+        add_semaphore_descriptor(desc, cores, 0);
     }
     return first;
 }
@@ -1553,12 +1541,15 @@ MoEExpertRowsDeviceOperation::tensor_return_value_t MoEExpertRowsDeviceOperation
     return {create_device_tensor(specs[0], device), create_device_tensor(specs[1], device)};
 }
 
-ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> MoEExpertRowsFactory::create_at(
+namespace {
+
+// The expert rows program on the device at mesh_coordinate.
+tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
     const MoEExpertRowsParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const MoEExpertRowsInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto& s = args.shape;
     const uint32_t hidden_tiles = s.hidden_tiles();
@@ -1629,23 +1620,23 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
         cb_partials,
     };
     const CbSizes& cbs = plan.cbs;
-    create_cb(program, all_set, cb_x, cbs.x, tt::DataFormat::Float16_b, kTileBytesBf16);
-    create_cb(program, all_set, cb_w, cbs.w, tt::DataFormat::Bfp4_b, weight_tile_bytes);
-    create_cb(program, all_set, cb_activated, cbs.activated, tt::DataFormat::Float16_b, kTileBytesBf16);
-    create_cb(program, all_set, cb_intermediate, cbs.intermediate, tt::DataFormat::Float16_b, kTileBytesBf16);
-    create_cb(program, all_set, cb_rows, cbs.rows, tt::DataFormat::Float16_b, kTileBytesBf16);
-    create_cb(program, all_set, cb_ctl, cbs.ctl, tt::DataFormat::UInt32, plan.ctl_bytes);
-    create_cb(program, all_set, cb_routing, cbs.routing, tt::DataFormat::UInt32, routing.size);
-    create_cb(program, all_set, cb_scratch, cbs.scratch, tt::DataFormat::UInt32, cbs.scratch);
+    create_cb(desc, all_set, cb_x, cbs.x, tt::DataFormat::Float16_b, kTileBytesBf16);
+    create_cb(desc, all_set, cb_w, cbs.w, tt::DataFormat::Bfp4_b, weight_tile_bytes);
+    create_cb(desc, all_set, cb_activated, cbs.activated, tt::DataFormat::Float16_b, kTileBytesBf16);
+    create_cb(desc, all_set, cb_intermediate, cbs.intermediate, tt::DataFormat::Float16_b, kTileBytesBf16);
+    create_cb(desc, all_set, cb_rows, cbs.rows, tt::DataFormat::Float16_b, kTileBytesBf16);
+    create_cb(desc, all_set, cb_ctl, cbs.ctl, tt::DataFormat::UInt32, plan.ctl_bytes);
+    create_cb(desc, all_set, cb_routing, cbs.routing, tt::DataFormat::UInt32, routing.size);
+    create_cb(desc, all_set, cb_scratch, cbs.scratch, tt::DataFormat::UInt32, cbs.scratch);
     if (cbs.ones > 0) {
-        create_cb(program, all_set, cb_ones, cbs.ones, tt::DataFormat::Float16_b, kTileBytesBf16);
+        create_cb(desc, all_set, cb_ones, cbs.ones, tt::DataFormat::Float16_b, kTileBytesBf16);
     }
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest(
+    tt::tt_metal::ComputeConfigDescriptor::UnpackToDestModes unpack_to_dest(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (cbs.partials > 0) {
         // partials go back into DEST exactly: FP32 tiles unpacked straight to DEST, 16-bit tiles through SrcA
         const tt::DataFormat format = partials_format(args.fp32_dest_acc_en);
-        create_cb(program, all_set, cb_partials, cbs.partials, format, tt::tile_size(format));
+        create_cb(desc, all_set, cb_partials, cbs.partials, format, tt::tile_size(format));
         if (args.fp32_dest_acc_en) {
             unpack_to_dest[cb_partials] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
@@ -1653,13 +1644,13 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
 
     // semaphores: routing (entries at the root, table ready), intermediate slots, x slots; with credits also those that
     // hand a slot back (every group core freed it)
-    const uint32_t sem_entries = tt::tt_metal::CreateSemaphore(program, all_set, 0);
-    const uint32_t sem_table = tt::tt_metal::CreateSemaphore(program, all_set, 0);
-    const uint32_t sem_intermediate = create_semaphores(program, all_set, plan.intermediate_slots);
-    const uint32_t sem_x = create_semaphores(program, all_set, plan.x_slots);
+    const uint32_t sem_entries = add_semaphore_descriptor(desc, all_set, 0);
+    const uint32_t sem_table = add_semaphore_descriptor(desc, all_set, 0);
+    const uint32_t sem_intermediate = create_semaphores(desc, all_set, plan.intermediate_slots);
+    const uint32_t sem_x = create_semaphores(desc, all_set, plan.x_slots);
     const uint32_t sem_intermediate_free =
-        plan.slot_credits ? create_semaphores(program, all_set, plan.intermediate_slots) : 0;
-    const uint32_t sem_x_free = plan.slot_credits ? create_semaphores(program, all_set, plan.x_slots) : 0;
+        plan.slot_credits ? create_semaphores(desc, all_set, plan.intermediate_slots) : 0;
+    const uint32_t sem_x_free = plan.slot_credits ? create_semaphores(desc, all_set, plan.x_slots) : 0;
 
     // several row tiles per job: the root deals the jobs to the groups by the cost model's predicted job time
     // (rows_reader.cpp), in cycles scaled down by a power of two while a group's most jobs (its ctl list) could
@@ -1676,7 +1667,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
         deal_unit *= 2.0;
     }
     auto deal_units = [&](double cycles) { return static_cast<uint32_t>(std::ceil(cycles / deal_unit)); };
-    const std::unordered_map<std::string, uint32_t> reader_ct = {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs reader_ct = {
         {"cb_w", cb_w},
         {"cb_routing", cb_routing},
         {"cb_ctl", cb_ctl},
@@ -1741,7 +1732,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     tt::tt_metal::TensorAccessorArgs(*tensor_args.expert_mapping_tensor.buffer()).append_to(reader_ct_pos);
     tt::tt_metal::TensorAccessorArgs(*table_tensor.buffer()).append_to(reader_ct_pos);
 
-    const std::unordered_map<std::string, uint32_t> writer_ct = {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs writer_ct = {
         {"cb_activated", cb_activated},
         {"cb_intermediate", cb_intermediate},
         {"cb_routing", cb_routing},
@@ -1775,7 +1766,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     tt::tt_metal::TensorAccessorArgs(*tensor_args.input_tensor.buffer()).append_to(writer_ct_pos);
     tt::tt_metal::TensorAccessorArgs(*rows_tensor.buffer()).append_to(writer_ct_pos);
 
-    const std::unordered_map<std::string, uint32_t> compute_ct = {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs compute_ct = {
         {"block_tiles", plan.block_tiles},
         {"cb_w", cb_w},
         {"hidden_tiles", hidden_tiles},
@@ -1800,35 +1791,41 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
 
     // readers on NOC 0, writers on NOC 1: one kernel each over the whole core set, one binary per program written to
     // the cores' rectangles
-    const auto reader = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + kReaderKernel,
-        all_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = reader_ct_pos,
-            .named_compile_args = reader_ct});
-    const auto writer = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + kWriterKernel,
-        all_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = writer_ct_pos,
-            .named_compile_args = writer_ct});
-    const auto compute = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + kComputeKernel,
-        all_set,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = args.math_fidelity,
-            .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .dst_full_sync_en = false,
-            .unpack_to_dest_mode = unpack_to_dest,
-            .math_approx_mode = true,
-            .named_compile_args = compute_ct});
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kKernelDir) + kReaderKernel,
+        .core_ranges = all_set,
+        .compile_time_args = std::move(reader_ct_pos),
+        .named_compile_time_args = std::move(reader_ct),
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::NOC_0,
+            },
+    });
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kKernelDir) + kWriterKernel,
+        .core_ranges = all_set,
+        .compile_time_args = std::move(writer_ct_pos),
+        .named_compile_time_args = std::move(writer_ct),
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::NOC_1,
+            },
+    });
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kKernelDir) + kComputeKernel,
+        .core_ranges = all_set,
+        .named_compile_time_args = std::move(compute_ct),
+        .config =
+            tt::tt_metal::ComputeConfigDescriptor{
+                .math_fidelity = args.math_fidelity,
+                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .dst_full_sync_en = false,
+                .unpack_to_dest_mode = std::move(unpack_to_dest),
+                .math_approx_mode = true,
+            },
+    });
 
     // runtime args: per core, plus common args shared by every core of a kernel
     std::vector<uint32_t> reader_common = {static_cast<uint32_t>(sources.size())};
@@ -1839,12 +1836,11 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
     reader_common.insert(reader_common.end(), shard_banks.begin(), shard_banks.end());
     std::vector<uint32_t> writer_common = virtual_coords.xs;
     writer_common.insert(writer_common.end(), virtual_coords.ys.begin(), virtual_coords.ys.end());
-    tt::tt_metal::SetCommonRuntimeArgs(program, reader, reader_common);
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer, writer_common);
+    desc.kernels[kRowsReaderKernelIdx].common_runtime_args = std::move(reader_common);
+    desc.kernels[kRowsWriterKernelIdx].common_runtime_args = std::move(writer_common);
     const CoreCoord root = mesh_device->worker_core_from_logical_core(plan.cores.front().core);
     const uint32_t program_cores = plan.cores.size();
-    const auto reader_buffers = reader_buffer_args(args, tensor_args, table_tensor, layout);
-    const auto writer_buffers = writer_buffer_args(tensor_args, rows_tensor);
+    const auto layer_weights = layer_weight_args(args, tensor_args, layout);
     for (uint32_t core_index = 0; core_index < program_cores; ++core_index) {
         const ExpertRowsCore& c = plan.cores[core_index];
         std::vector<CoreCoord> group_cores;
@@ -1853,11 +1849,16 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
                 group_cores.push_back(o.core);
             }
         }
-        std::vector<uint32_t> reader_args = {c.bank};
-        reader_args.insert(reader_args.end(), reader_buffers.begin(), reader_buffers.end());
-        reader_args.insert(
-            reader_args.end(),
-            {shards[c.ring_position].w0_w1_first_tile + c.first_column_group * layout.pair_tiles,
+        tt::tt_metal::KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(c.bank);
+        reader_args.push_back(tensor_args.expert_indices_tensor.buffer());
+        reader_args.push_back(tensor_args.expert_scores_tensor.buffer());
+        reader_args.push_back(tensor_args.expert_mapping_tensor.buffer());
+        reader_args.push_back(table_tensor.buffer());
+        reader_args.append(
+            {layer_weights[0],
+             layer_weights[1],
+             shards[c.ring_position].w0_w1_first_tile + c.first_column_group * layout.pair_tiles,
              c.column_groups,
              c.first_output_group,
              c.output_groups,
@@ -1869,11 +1870,12 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
              device_id,
              c.half_column ? 1u : 0u,
              c.half_output ? 1u : 0u});
-        tt::tt_metal::SetRuntimeArgs(program, reader, c.core, reader_args);
+        desc.kernels[kRowsReaderKernelIdx].emplace_runtime_args(c.core, reader_args);
 
-        std::vector<uint32_t> writer_args(writer_buffers.begin(), writer_buffers.end());
-        writer_args.insert(
-            writer_args.end(),
+        tt::tt_metal::KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(tensor_args.input_tensor.buffer());
+        writer_args.push_back(rows_tensor.buffer());
+        writer_args.append(
             {c.activated_columns,
              c.first_column,
              c.output_groups,
@@ -1881,41 +1883,51 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
              c.output_tiles,
              c.group,
              core_index % plan.group_cores});
-        const auto group_mask = core_mask(group_cores, grid);
-        writer_args.insert(writer_args.end(), group_mask.begin(), group_mask.end());
-        tt::tt_metal::SetRuntimeArgs(program, writer, c.core, writer_args);
+        writer_args.append(core_mask(group_cores, grid));
+        desc.kernels[kRowsWriterKernelIdx].emplace_runtime_args(c.core, writer_args);
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            compute,
+        desc.kernels[kRowsComputeKernelIdx].emplace_runtime_args(
             c.core,
             {c.column_groups, c.output_groups, c.ring_position, c.half_column ? 1u : 0u, c.half_output ? 1u : 0u});
     }
-    return {
-        std::move(program), shared_variables_t{.reader_kernel = reader, .writer_kernel = writer, .cores = all_cores}};
+    return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor MoEExpertRowsFactory::create_workload_descriptor(
+    const MoEExpertRowsParams& args,
+    const MoEExpertRowsInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    for (const auto& coord : tensor_coords.coords()) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             build_expert_rows_program_descriptor(args, coord, tensor_args, tensor_return_value)});
+    }
+    return workload;
 }
 
 void MoEExpertRowsFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    tt::tt_metal::Program& program,
     const MoEExpertRowsParams& args,
     const MoEExpertRowsInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
+    // Buffer addresses are bindings. The layer's weight addresses are offsets that layer_id moves.
     const auto& s = args.shape;
     const uint32_t ring = shard_banks_of(tensor_args.w0_w1_tensor).size();
     const PreparedLayout layout = prepared_layout(s.hidden_tiles(), s.intermediate_tiles(), s.has_bias, ring);
-    const auto reader_buffers = reader_buffer_args(args, tensor_args, tensor_return_value[1], layout);
-    const auto writer_buffers = writer_buffer_args(tensor_args, tensor_return_value[0]);
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared = cached_workload.shared_variables.at(range);
-        for (uint32_t i = 0; i < shared.cores.size(); ++i) {
-            const CoreCoord& core = shared.cores[i];
-            auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel, core);
-            for (uint32_t a = 0; a < reader_buffers.size(); ++a) {
-                reader_args[kReaderBufferArgs + a] = reader_buffers[a];
+    const auto layer_weights = layer_weight_args(args, tensor_args, layout);
+    auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kRowsReaderKernelIdx);
+    for (auto& reader_args_column : reader_args_by_core) {
+        for (auto& reader_args : reader_args_column) {
+            if (reader_args.size() == 0) {
+                continue;
             }
-            auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, shared.writer_kernel, core);
-            for (uint32_t a = 0; a < writer_buffers.size(); ++a) {
-                writer_args[a] = writer_buffers[a];
+            for (uint32_t a = 0; a < layer_weights.size(); ++a) {
+                reader_args[kReaderLayerWeightArgs + a] = layer_weights[a];
             }
         }
     }
@@ -1928,47 +1940,10 @@ void MoEExpertRowsFactory::override_runtime_arguments(
 // rows into the double buffer with the ring program's handshake; the combine cores run selective_reduce_combine's own
 // kernels (with FullCcl, its fabric path and mux cores).
 //-----------------------------------------------------------------------------------------------------------------
-MoEComputePlaceFactory::cached_mesh_workload_t MoEComputePlaceFactory::create_mesh_workload(
-    const MoEComputeParams& args,
-    const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
-    const MoEComputeInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    std::optional<GlobalSemaphore> init_barrier_semaphore;
-    std::optional<GlobalSemaphore> final_barrier_semaphore;
-    if (args.path == MoEComputePath::FullCcl) {
-        // the combine's barrier counters, above the mux's ceiling where an L1_SMALL region exists (as the standalone
-        // selective_reduce_combine allocates them)
-        auto* mesh_device = tensor_args.tilize_input_tensor.device();
-        const CoreRangeSet combine_set = CoreRangeSet(ttsl::Span<const CoreCoord>(args.combine_params->worker_cores));
-        const auto buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-        init_barrier_semaphore =
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_set, 0, buffer_type);
-        // only when the caller passes none (value_or would create one either way)
-        final_barrier_semaphore =
-            args.combine_params->optional_cross_device_semaphore.has_value()
-                ? *args.combine_params->optional_cross_device_semaphore
-                : ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_set, 0, buffer_type);
-        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
-    }
-    const std::vector<ttnn::MeshCoordinate> all_coordinates = mesh_coordinates.coords();
-    for (const auto& coord : all_coordinates) {
-        auto cached_program = create_at(
-            args,
-            coord,
-            all_coordinates,
-            tensor_args,
-            tensor_return_value,
-            init_barrier_semaphore,
-            final_barrier_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
-    }
-    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
-}
+namespace {
 
-ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t> MoEComputePlaceFactory::create_at(
+// The placement program on the device at mesh_coordinate.
+tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     const MoEComputeParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
@@ -1984,7 +1959,7 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
     TT_FATAL(
         !ccl || (init_barrier_semaphore.has_value() && final_barrier_semaphore.has_value()),
         "moe_compute expert rows place: FullCcl needs the combine's barrier semaphores");
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::ProgramDescriptor desc;
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
     const ttnn::Tensor& rows = *tensor_args.expert_rows_tensor;
     const ttnn::Tensor& table = *tensor_args.expert_rows_table_tensor;
@@ -2013,11 +1988,11 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
     const GridCoords virtual_coords = grid_coords(mesh_device, grid);
     auto virt = [&](const CoreCoord& c) { return mesh_device->worker_core_from_logical_core(c); };
 
-    shared_variables_t shared;
+    std::vector<CoreCoord> cores;  // place.cpp's cores; with the combine also feed.cpp's, in ring order
     uint32_t done_sem = 0, meta_sem = 0;
     CoreCoord lead, sync;
     if (!combine) {
-        shared.cores = get_moe_combine_cores(
+        cores = get_moe_combine_cores(
             mesh_device, height_shards, width_shards, hidden_size, CoreRangeSet{}, args.bh_ring_size);
     } else {
         TT_FATAL(
@@ -2036,24 +2011,24 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
             hidden_size,
             args.combine_params->mux_core_range_set,
             args.bh_ring_size);
-        shared.cores = selection.matmul_cores;
-        const uint32_t ring = shared.cores.size();
+        cores = selection.matmul_cores;
+        const uint32_t ring = cores.size();
         const auto& combine_params = *args.combine_params;
         TT_FATAL(
             combine_params.worker_cores.size() >= height_shards * width_shards,
             "moe_compute expert rows place: {} combine cores, need {}",
             combine_params.worker_cores.size(),
             height_shards * width_shards);
-        shared.combine_cores.assign(
+        const std::vector<CoreCoord> combine_cores(
             combine_params.worker_cores.begin(), combine_params.worker_cores.begin() + height_shards * width_shards);
-        const CoreRangeSet feed_set = CoreRangeSet(ttsl::Span<const CoreCoord>(shared.cores));
-        const CoreRangeSet combine_set = CoreRangeSet(ttsl::Span<const CoreCoord>(shared.combine_cores));
+        const CoreRangeSet feed_set = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
+        const CoreRangeSet combine_set = CoreRangeSet(ttsl::Span<const CoreCoord>(combine_cores));
         // the combine reader multicasts its metadata semaphore over its cores' bounding box
-        meta_sem = tt::tt_metal::CreateSemaphore(program, CoreRangeSet(combine_set.bounding_box()).merge(feed_set), 0);
-        const uint32_t sync_sem = tt::tt_metal::CreateSemaphore(program, combine_set.merge(feed_set), 0);
-        done_sem = tt::tt_metal::CreateSemaphore(program, feed_set, 0);
-        lead = virt(shared.cores[0]);
-        sync = virt(shared.combine_cores[0]);
+        meta_sem = add_semaphore_descriptor(desc, CoreRangeSet(combine_set.bounding_box()).merge(feed_set), 0);
+        const uint32_t sync_sem = add_semaphore_descriptor(desc, combine_set.merge(feed_set), 0);
+        done_sem = add_semaphore_descriptor(desc, feed_set, 0);
+        lead = virt(cores[0]);
+        sync = virt(combine_cores[0]);
 
         const ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensors{
             .dense_input_tensor = tensor_return_value[kMatmulOutput],
@@ -2080,11 +2055,11 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
                 end,
                 width_shards);
             for (uint32_t c = begin; c < end; ++c) {
-                feeders_by_column[c].push_back(shared.cores[r]);
+                feeders_by_column[c].push_back(cores[r]);
             }
         }
-        const auto artifacts = build_selective_reduce_combine_program_artifacts(
-            program,
+        append_selective_reduce_combine_to_descriptor(
+            desc,
             combine_params,
             mesh_coordinate,
             all_mesh_coordinates,
@@ -2095,23 +2070,13 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
             meta_sem,
             sync_sem,
             feeders_by_column);
-        if (ccl) {
-            shared.combine_semaphores = {*init_barrier_semaphore, *final_barrier_semaphore};
-        }
-        shared.combine_reader = artifacts.reader_kernel_id;
-        shared.combine_writer = artifacts.writer_kernel_id;
-        shared.combine_data_cb = artifacts.data_cb_handle;
 
         // feed.cpp: feeder r streams the W2 output columns ring position r owns in the ring program
         const uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * rows.element_size();
         const FeedLayout feed = feed_layout(place, layouts, tile_width_bytes);
         constexpr uint32_t kFeedCb = 1;
-        tt::tt_metal::CreateCircularBuffer(
-            program,
-            feed_set,
-            tt::tt_metal::CircularBufferConfig(feed.bytes, {{kFeedCb, tt::DataFormat::UInt32}})
-                .set_page_size(kFeedCb, feed.bytes));
-        const std::unordered_map<std::string, uint32_t> feed_ct = {
+        create_cb(desc, feed_set, kFeedCb, feed.bytes, tt::DataFormat::UInt32, feed.bytes);
+        tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs feed_ct = {
             {"cb_scratch", kFeedCb},
             {"local_experts", local_experts},
             {"height_shards", height_shards},
@@ -2132,16 +2097,18 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
         std::vector<uint32_t> feed_pos;
         tt::tt_metal::TensorAccessorArgs(*rows.buffer()).append_to(feed_pos);
         tt::tt_metal::TensorAccessorArgs(*table.buffer()).append_to(feed_pos);
-        shared.feed_kernel = tt::tt_metal::CreateKernel(
-            program,
-            std::string(kKernelDir) + "feed.cpp",
-            feed_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::NOC_1,
-                .compile_args = feed_pos,
-                .named_compile_args = feed_ct});
-        const auto feed_buffers = feed_buffer_args(rows, table, tensor_return_value);
+        const uint32_t feed_kernel = desc.kernels.size();
+        desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+            .kernel_source = std::string(kKernelDir) + "feed.cpp",
+            .core_ranges = feed_set,
+            .compile_time_args = std::move(feed_pos),
+            .named_compile_time_args = std::move(feed_ct),
+            .config =
+                tt::tt_metal::DataMovementConfigDescriptor{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt::tt_metal::NOC::NOC_1,
+                },
+        });
         for (uint32_t r = 0; r < ring; ++r) {
             const uint32_t first_shard = layouts[r].first_output_tile / shard_width_tiles;
             const uint32_t last_shard =
@@ -2154,25 +2121,24 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
                 r,
                 first_shard,
                 last_shard);
-            std::vector<uint32_t> feed_args(feed_buffers.begin(), feed_buffers.end());
-            feed_args.insert(feed_args.end(), {layouts[r].first_output_tile, layouts[r].output_tiles});
-            for (const auto& c : shared.combine_cores) {
+            tt::tt_metal::KernelDescriptor::RTArgList feed_args;
+            feed_args.push_back(rows.buffer());
+            feed_args.push_back(table.buffer());
+            feed_args.push_back(dense_out.buffer());
+            feed_args.append({layouts[r].first_output_tile, layouts[r].output_tiles});
+            for (const auto& c : combine_cores) {
                 const CoreCoord v = virt(c);
                 feed_args.push_back(v.x);
                 feed_args.push_back(v.y);
             }
-            tt::tt_metal::SetRuntimeArgs(program, *shared.feed_kernel, shared.cores[r], feed_args);
+            desc.kernels[feed_kernel].emplace_runtime_args(cores[r], feed_args);
         }
     }
 
-    const CoreRangeSet set = CoreRangeSet(ttsl::Span<const CoreCoord>(shared.cores));
-    tt::tt_metal::CreateCircularBuffer(
-        program,
-        set,
-        tt::tt_metal::CircularBufferConfig(place.scratch_bytes, {{0, tt::DataFormat::UInt32}})
-            .set_page_size(0, place.scratch_bytes));
+    const CoreRangeSet set = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
+    create_cb(desc, set, 0, place.scratch_bytes, tt::DataFormat::UInt32, place.scratch_bytes);
 
-    const std::unordered_map<std::string, uint32_t> ct = {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs ct = {
         {"cb_scratch", 0},
         {"tokens", tokens},
         {"top_k", top_k},
@@ -2185,7 +2151,7 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
         {"activation_row_bytes", place.activation_row},
         {"grid_w", grid.x},
         {"grid_h", grid.y},
-        {"program_cores", static_cast<uint32_t>(shared.cores.size())},
+        {"program_cores", static_cast<uint32_t>(cores.size())},
         {"row_bytes", hidden_size * kBf16Bytes},
         {"place_dense", combine ? 0u : 1u},
         {"done_semaphore_id", done_sem},
@@ -2210,20 +2176,27 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
     tt::tt_metal::TensorAccessorArgs(*e_t_out.buffer()).append_to(ct_pos);
     tt::tt_metal::TensorAccessorArgs(*activation_out.buffer()).append_to(ct_pos);
     tt::tt_metal::TensorAccessorArgs(*table.buffer()).append_to(ct_pos);
-    shared.place_kernel = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + "place.cpp",
-        set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = ct_pos,
-            .named_compile_args = ct});
-    const auto place_buffers = place_buffer_args(rows, table, tensor_return_value);
-    for (uint32_t i = 0; i < shared.cores.size(); ++i) {
-        std::vector<uint32_t> place_args(place_buffers.begin(), place_buffers.end());
-        place_args.insert(
-            place_args.end(),
+    const uint32_t place_kernel = desc.kernels.size();
+    desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = std::string(kKernelDir) + "place.cpp",
+        .core_ranges = set,
+        .compile_time_args = std::move(ct_pos),
+        .named_compile_time_args = std::move(ct),
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::NOC_0,
+            },
+    });
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        tt::tt_metal::KernelDescriptor::RTArgList place_args;
+        place_args.push_back(rows.buffer());
+        place_args.push_back(e_t_out.buffer());
+        place_args.push_back(activation_out.buffer());
+        place_args.push_back(counts_out.buffer());
+        place_args.push_back(dense_out.buffer());
+        place_args.push_back(table.buffer());
+        place_args.append(
             {combine ? 0 : i / width_shards,
              combine ? 0 : i % width_shards,
              i,
@@ -2231,55 +2204,75 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
              static_cast<uint32_t>(lead.y),
              static_cast<uint32_t>(sync.x),
              static_cast<uint32_t>(sync.y)});
-        place_args.insert(place_args.end(), virtual_coords.xs.begin(), virtual_coords.xs.end());
-        place_args.insert(place_args.end(), virtual_coords.ys.begin(), virtual_coords.ys.end());
-        tt::tt_metal::SetRuntimeArgs(program, shared.place_kernel, shared.cores[i], place_args);
+        place_args.append(virtual_coords.xs);
+        place_args.append(virtual_coords.ys);
+        desc.kernels[place_kernel].emplace_runtime_args(cores[i], place_args);
     }
-    return {std::move(program), std::move(shared)};
+    return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor MoEComputePlaceFactory::create_workload_descriptor(
+    const MoEComputeParams& args,
+    const MoEComputeInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    std::optional<GlobalSemaphore> init_barrier_semaphore;
+    std::optional<GlobalSemaphore> final_barrier_semaphore;
+    if (args.path == MoEComputePath::FullCcl) {
+        // the combine's barrier counters, above the mux's ceiling where an L1_SMALL region exists (as the standalone
+        // selective_reduce_combine allocates them)
+        auto* mesh_device = tensor_args.tilize_input_tensor.device();
+        const CoreRangeSet combine_set = CoreRangeSet(ttsl::Span<const CoreCoord>(args.combine_params->worker_cores));
+        const auto buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+        init_barrier_semaphore =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_set, 0, buffer_type);
+        // only when the caller passes none (value_or would create one either way)
+        final_barrier_semaphore =
+            args.combine_params->optional_cross_device_semaphore.has_value()
+                ? *args.combine_params->optional_cross_device_semaphore
+                : ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_set, 0, buffer_type);
+        workload.semaphores.push_back(*init_barrier_semaphore);
+        workload.semaphores.push_back(*final_barrier_semaphore);
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
+    }
+    const std::vector<ttnn::MeshCoordinate> all_coordinates = tensor_coords.coords();
+    for (const auto& coord : all_coordinates) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             build_place_program_descriptor(
+                 args,
+                 coord,
+                 all_coordinates,
+                 tensor_args,
+                 tensor_return_value,
+                 init_barrier_semaphore,
+                 final_barrier_semaphore)});
+    }
+    return workload;
 }
 
 void MoEComputePlaceFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    tt::tt_metal::Program& program,
     const MoEComputeParams& args,
-    const MoEComputeInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    const auto place_buffers =
-        place_buffer_args(*tensor_args.expert_rows_tensor, *tensor_args.expert_rows_table_tensor, tensor_return_value);
-    const auto feed_buffers =
-        feed_buffer_args(*tensor_args.expert_rows_tensor, *tensor_args.expert_rows_table_tensor, tensor_return_value);
-    for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& shared = cached_workload.shared_variables.at(range);
-        for (const auto& core : shared.cores) {
-            auto& place_args = tt::tt_metal::GetRuntimeArgs(program, shared.place_kernel, core);
-            for (uint32_t a = 0; a < place_buffers.size(); ++a) {
-                place_args[a] = place_buffers[a];
+    const MoEComputeInputs& /*tensor_args*/,
+    std::vector<ttnn::Tensor>& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
+    // Buffer addresses are bindings. Only the caller-owned cross-device semaphore address can move.
+    if (args.path != MoEComputePath::FullCcl || !args.combine_params->optional_cross_device_semaphore.has_value()) {
+        return;
+    }
+    const uint32_t cross_device_semaphore_addr =
+        static_cast<uint32_t>(args.combine_params->optional_cross_device_semaphore->address());
+    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kPlaceCombineWriterKernelIdx);
+    for (auto& writer_args_column : writer_args_by_core) {
+        for (auto& writer_args : writer_args_column) {
+            if (writer_args.size() == 0) {
+                continue;
             }
-            if (shared.feed_kernel.has_value()) {
-                auto& feed_args = tt::tt_metal::GetRuntimeArgs(program, *shared.feed_kernel, core);
-                for (uint32_t a = 0; a < feed_buffers.size(); ++a) {
-                    feed_args[a] = feed_buffers[a];
-                }
-            }
-        }
-        if (shared.feed_kernel.has_value()) {
-            const ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensors{
-                .dense_input_tensor = tensor_return_value[kMatmulOutput],
-                .dense_activations_tensor = tensor_return_value[kExpertActivation],
-                .dense_token_maps_tensor = tensor_return_value[kETPages],
-                .dense_token_counts_tensor = tensor_return_value[kExpertTokenCounts],
-                .optional_output_tensor = tensor_args.optional_output_tensor};
-            const bool barriers = shared.combine_semaphores.size() == kCombineBarrierSemaphores;
-            selective_reduce_combine_helper_override_runtime_arguments(
-                program,
-                shared.combine_reader,
-                shared.combine_writer,
-                shared.combine_data_cb,
-                shared.combine_cores,
-                combine_tensors,
-                tensor_return_value[kCombineOutput],
-                barriers ? shared.combine_semaphores[0].address() : 0,
-                barriers ? shared.combine_semaphores[1].address() : 0,
-                args.combine_params->optional_cross_device_semaphore);
+            writer_args[kPlaceCombineWriterSemaphoreArgIdx] = cross_device_semaphore_addr;
         }
     }
 }

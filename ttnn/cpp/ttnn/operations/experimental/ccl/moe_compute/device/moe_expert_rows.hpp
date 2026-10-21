@@ -17,9 +17,10 @@
 #include <vector>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "moe_compute_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -94,24 +95,18 @@ struct MoEExpertRowsInputs {
 };
 
 struct MoEExpertRowsFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel = 0;
-        tt::tt_metal::KernelHandle writer_kernel = 0;
-        std::vector<CoreCoord> cores;
-    };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const MoEExpertRowsParams& args,
-        const ttnn::MeshCoordinate& mesh_coordinate,
         const MoEExpertRowsInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const MoEExpertRowsParams& args,
         const MoEExpertRowsInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
 struct MoEExpertRowsDeviceOperation {
@@ -133,38 +128,18 @@ struct MoEExpertRowsDeviceOperation {
 // (ComputeOnly), or the metadata, the double-buffer feed and selective_reduce_combine's kernels (SingleDevice,
 // FullCcl).
 struct MoEComputePlaceFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle place_kernel = 0;
-        std::vector<CoreCoord> cores;  // place.cpp's cores; with the combine also feed.cpp's, in ring order
-        std::optional<tt::tt_metal::KernelHandle> feed_kernel;
-        tt::tt_metal::KernelHandle combine_reader = 0;
-        tt::tt_metal::KernelHandle combine_writer = 0;
-        tt::tt_metal::CBHandle combine_data_cb = 0;
-        std::vector<CoreCoord> combine_cores;
-        std::vector<GlobalSemaphore> combine_semaphores;  // FullCcl: the combine's init and final barriers
-    };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const MoEComputeParams& args,
-        const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
-        const MoEComputeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const MoEComputeParams& args,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
         const MoEComputeInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value,
-        const std::optional<GlobalSemaphore>& init_barrier_semaphore,
-        const std::optional<GlobalSemaphore>& final_barrier_semaphore);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const MoEComputeParams& args,
         const MoEComputeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
 // The expert rows parameters when this call should run the expert rows programs instead of the ring program, else
