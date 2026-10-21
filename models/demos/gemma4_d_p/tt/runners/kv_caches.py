@@ -15,6 +15,7 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
     init_global_ring_kv_cache,
     init_sliding_ring_kv_cache,
     ring_cache_capacity,
+    ring_cache_seq_len,
 )
 
 
