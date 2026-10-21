@@ -230,3 +230,18 @@ def test_no_channel_means_no_drain():
 def test_scheduler_segment_name():
     """Frozen: tt-d-gen's ack_shm_name configs attach to this name."""
     assert scheduler_shm_name("svc") == "/tt_prefill_layer_completions_svc"
+
+
+def test_first_token_records_are_collected_not_counted():
+    token = msg(163_839, 163_839, pos_start=128, pos_end=200)  # beyond num_layers: only a token can be this
+    ring = FakeRing(per_layer() + [token] + per_layer(pos_start=128, pos_end=200))
+    d = LayerCompletionRingReader(ring, num_layers=NUM_LAYERS, first_token_records=True)
+    assert d.wait_for(2 * NUM_LAYERS, timeout_s=5) == 2 * NUM_LAYERS
+    assert d.first_tokens == [Completion._make(token)]
+    assert d.completed_chunks == 2
+
+
+def test_without_the_mode_an_empty_span_is_still_a_producer_bug():
+    d = LayerCompletionRingReader(FakeRing([msg(2, 2)]), num_layers=NUM_LAYERS)
+    with pytest.raises(ValueError, match="out of bounds"):
+        d.step()

@@ -95,7 +95,11 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 
 METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# PREFILL_FIRST_TOKEN_RECORD=1 (the runner's mode of the same name): a 4th metadata word, flags, with bit 0 on a
+# request's last chunk; the runner answers with a first-token record on the completion ring.
+FIRST_TOKEN_RECORD = os.environ.get("PREFILL_FIRST_TOKEN_RECORD", "0") == "1"
+SAMPLE_FIRST_TOKEN = 1
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if FIRST_TOKEN_RECORD else 0)
 
 
 def _load_env_config() -> None:
@@ -121,7 +125,9 @@ def _load_env_config() -> None:
 _load_env_config()
 
 
-def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
+def _pack_metadata(slot_id: int, actual_start: int, actual_end: int, flags: int = 0) -> bytes:
+    if FIRST_TOKEN_RECORD:
+        return struct.pack("<4I", slot_id, actual_start, actual_end, flags)
     return struct.pack("<3I", slot_id, actual_start, actual_end)
 
 
@@ -1520,6 +1526,20 @@ def _run_validator(rank: int, world_size: int) -> None:
         sys.exit(1)
 
 
+def _log_first_tokens(drain, expected: int, timeout_s: float = 600.0) -> None:
+    """Wait for one first-token record per sampled chunk, and log each as `[producer] FIRST_TOKEN`."""
+    deadline = time.perf_counter() + timeout_s
+    while len(drain.reader.first_tokens) < expected and time.perf_counter() < deadline:
+        time.sleep(0.01)
+    got = list(drain.reader.first_tokens)
+    for c in got:
+        logger.info(
+            f"[producer] FIRST_TOKEN slot={c.slot_id} start={c.pos_start} end={c.pos_end} token={c.layer_start}"
+        )
+    if len(got) != expected:
+        logger.error(f"[producer] {len(got)} first-token record(s), expected {expected}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="prefill_producer",
@@ -1587,8 +1607,12 @@ def main() -> None:
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
         tokens = _chunk_slice(pool, actual_start, actual_isl)
-        metadata = _pack_metadata(slot_id, actual_start, actual_end)
-        logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+        flags = SAMPLE_FIRST_TOKEN if FIRST_TOKEN_RECORD and actual_end >= actual_isl else 0
+        metadata = _pack_metadata(slot_id, actual_start, actual_end, flags)
+        logger.info(
+            f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}"
+            + (" sample_first_token" if flags else "")
+        )
         push_start = time.perf_counter()
         _push(
             service,
@@ -1601,7 +1625,9 @@ def main() -> None:
 
     # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
     # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
-    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    drain = start_layer_completion_drain(
+        completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers, first_token_records=FIRST_TOKEN_RECORD
+    )
     try:
         warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
         if warmup_chunks > 0:
@@ -1617,6 +1643,8 @@ def main() -> None:
         # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
         # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
         wait_for_layer_completions(drain, chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes))
+        if FIRST_TOKEN_RECORD and drain is not None:
+            _log_first_tokens(drain, stats.completed + (1 if warmup_chunks > 0 else 0))
     finally:
         if drain is not None:
             drain.stop()
