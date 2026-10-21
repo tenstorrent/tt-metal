@@ -89,7 +89,7 @@ HELPERS = (
 Provides:
 - pytorch_{op}: the reference, the model's own CPU step as a standalone function (fp32 inside).
 - create_ttnn_input_tensor: the one torch -> ttnn chokepoint.
-- TOLERANCES: {{dtype: (pcc, rel_rms)}}, from the model's frozen component test threshold.
+- TOLERANCES: {{dtype: (pcc, rel_rms)}}, from the step's recorded noise-floor limit (F138).
 - run_{op}: builds random inputs for one case and checks the op against the reference.
 """
 

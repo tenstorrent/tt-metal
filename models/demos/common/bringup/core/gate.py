@@ -28,7 +28,7 @@ from pathlib import Path
 
 from models.demos.common.bringup.core import freeze
 from models.demos.common.bringup.core import metrics as M
-from models.demos.common.bringup.core.ledger import Ledger, satisfied
+from models.demos.common.bringup.core.ledger import Ledger, fixed_accuracy, satisfied
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
 OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt, "==": operator.eq}
@@ -406,7 +406,9 @@ def run_gate(
     unfrozen = []
     if record and task.get("tests") and not task.get("frozen"):  # freeze's own validation runs use record=False
         unfrozen = ["tests declared but not frozen (run: freeze <id>)"]
-    pre = [f"  {e}" for e in unfrozen + freeze.verify(spec.repo, task) + device_policy_errors(task)]
+    pre = [
+        f"  {e}" for e in unfrozen + freeze.verify(spec.repo, task) + device_policy_errors(task) + fixed_accuracy(task)
+    ]
     if pre:
         res = GateResult(tid, "FAIL", lines=pre)
         if record:

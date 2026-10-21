@@ -5,7 +5,6 @@
 sets the margin. These guard the rule across the framework, not one model."""
 
 import ast
-import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -175,4 +174,4 @@ def test_goldens_and_per_step_references_default_to_full_precision():
 
     assert G.TARGET_NUMERICS == "native"  # F132: a constant, not a switch
     assert defaults.get("golden.numerics", None) is None and defaults.get("tests.step_numerics", None) is None
-    assert json.dumps(defaults.get("thresholds")).find("state_overlap") < 0
+    assert defaults.get("thresholds", None) is None  # F138: no fixed accuracy number at all

@@ -1555,3 +1555,30 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   - Not done: the diagnosis for a failing swap-test step (component tests only).
   - Selftests: test_model_settings.py (no max-precision setting or machinery, the emulation lint, the CPU diagnosis),
     test_perf_ab.py::test_every_frozen_test_runs_on_both_sides_at_the_shipped_settings.
+- F138 (owner, 2026-10-21; audit V10, V14, V16, V20-V22): no fixed accuracy number anywhere.
+  - Gone: defaults.yaml `thresholds` (component, block, swap_step_*, swap_out_rel), harness DEFAULT_THRESHOLDS and
+    Spec.threshold (harness.threshold raises with the reason), tests.low_precision_kinds / component_calib_low, and
+    the fixed component limits (component_rel / floor / margin / row / ratio / bias / select / select_rel / rowsum /
+    index_row). Spec.validate refuses `thresholds` and `tests.low_precision_kinds`.
+  - No floor means FAIL ("cannot judge: no noise floor"), never a fixed fallback: float_limits needs the floor, the
+    swap step / tail / block-out checks fail without one; selection / index checks without a floor give statistics
+    only.
+  - The second-input probe factors are structural, renamed struct_* (struct_probe, struct_second_rel / row / ratio,
+    struct_scaled_rel, struct_col_factor; the waiver's structural bound), kept apart from the accuracy limits.
+  - run_component_test: checks="auto" only (the golden-only path is gone); a frozen test's literal THRESHOLD is
+    recorded (`<step>_threshold_literal`, `pcc_swap_out_threshold_literal`), never gated; the freeze refuses a test
+    with a numeric THRESHOLD; the templates write `THRESHOLD = None`.
+  - Ledger.validate and every gate run (core/gate pre-checks, so an overseer-added task is caught too) refuse an
+    accuracy metric (pcc_ / err_ / overlap_ / top1 / top5) gated on a number in a device task or a perf pick; the
+    reference's own CPU checks (intake, reference, goldens) keep theirs.
+  - Every ladder state gates as err_state_<name>_L<i> (index states: the missed fraction 1 - overlap, as per step);
+    ledger_gen's `overlap_state_*_L* >= limit` (F128) went MISSING on every model without an index state.
+  - op_request's tolerance is the step's recorded err_*_limit only (no PCC 0.99 / rel 0.02 fallback; refused
+    without one).
+  - Dashboard (V16): the trail is each layer's rel error (sqrt(2 (1 - PCC)) where only PCC was recorded) with the
+    per-layer limit curve its run recorded; a layer is red when over its limit; the final row shows the worst layer
+    with its limit. The removed D.thresholds (fixed lines at undefined values) are gone from both templates.
+  - The device-format weight term (V20) is F137's CPU diagnosis (testing/devfmt.py), not a separate number.
+  - Selftests: test_no_fixed_numbers.py (ledger, spec, freeze, AST, every `limit` condition recorded by its gate's
+    test on the fixture for C / S / L / M.1; the committed-ledger lint is xfail strict until F140); updated
+    component / swap / opgen / dashboard tests.

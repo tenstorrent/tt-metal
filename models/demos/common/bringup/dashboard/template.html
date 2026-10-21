@@ -303,7 +303,7 @@ section[hidden]{display:none}
   </section>
 
   <section aria-labelledby="s-pcc">
-    <div class="sec-head"><h2 id="s-pcc">PCC trail by layer</h2><p id="pcc-sub"></p></div>
+    <div class="sec-head"><h2 id="s-pcc">Error trail by layer</h2><p id="pcc-sub"></p></div>
     <div class="legend" id="pcc-legend"></div>
     <div class="svg-wrap" id="pcc-wrap"><svg id="pcc" viewBox="0 0 900 300" width="100%" role="img" aria-label="Per-layer PCC chart"></svg></div>
     <details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Table view</summary><div class="tbl-wrap"><table id="pcc-table"></table></div></details>
@@ -478,13 +478,13 @@ function dag(){
   });
   $("#dag-sub").textContent = `One block per block type; ${D.layer_types.length} layers in total${D.subset ? `, ${D.selected_layers.length} selected on device` : ""}`;
   const latest = [...D.trails].reverse().find(t => t.device);
-  const pm = latest ? Object.fromEntries(latest.points) : {};
+  const pm = latest ? Object.fromEntries(latest.points) : {}, lm = latest ? Object.fromEntries(latest.limits || []) : {};
   const strip = $("#strip"); strip.style.gridTemplateColumns = `repeat(${D.layer_types.length}, minmax(0,1fr))`;
   strip.innerHTML = D.layer_types.map((ty, i) => {
-    const p = pm[i]; const bad = p != null && p < D.thresholds.layer;
+    const p = pm[i]; const bad = p != null && lm[i] != null && p > lm[i];
     const sel = D.selected_layers.includes(i);
     const st = `border-color:color-mix(in srgb,var(${btColor(ty)}) 60%,var(--line));` + (p != null ? `background:${bad ? "color-mix(in srgb,var(--crit) 22%,var(--surface))" : "var(--dev-fill)"}` : "") + (sel ? "" : ";opacity:.4");
-    return `<div style="${st}" title="L${i} · ${ty}${sel ? "" : " · not selected"}${p != null ? " · PCC " + p.toFixed(5) : " · not yet on device"}">${i}</div>`;
+    return `<div style="${st}" title="L${i} · ${ty}${sel ? "" : " · not selected"}${p != null ? " · rel " + p.toExponential(2) + (lm[i] != null ? " (limit " + lm[i].toExponential(2) + ")" : "") : " · not yet on device"}">${i}</div>`;
   }).join("");
   $("#strip-legend").innerHTML = D.block_types.map(bt => `<span><span class="sw" style="border:1.5px solid var(${btColor(bt)});background:transparent"></span>${esc(bt)}</span>`).join("");
 }
@@ -518,41 +518,39 @@ function sharding(){
 
 function pccChart(){
   const tr = D.trails, svg = $("#pcc"), N = D.layer_types.length;
-  $("#pcc-sub").textContent = `Plotted as 1 − PCC on a log scale; lower is better. Dashed lines mark the ${D.thresholds.layer} layer and ${D.thresholds.final_hidden} end-to-end gates.`;
-  if (!tr.length){ $("#pcc-wrap").innerHTML = `<div class="empty">No per-layer PCC recorded yet</div>`; return; }
+  $("#pcc-sub").textContent = `Each layer's output error vs the full-precision golden (rel L2; √(2(1 − PCC)) where only PCC was recorded), log scale, lower is better. Dashed: the per-layer limit each run recorded (calib × the reference's own drift).`;
+  if (!tr.length){ $("#pcc-wrap").innerHTML = `<div class="empty">No per-layer error recorded yet</div>`; return; }
   const W = 900, H = 300, m = {l:64, r:20, t:14, b:40};
-  const lo = -13, hi = -0.5;
+  const lo = -8, hi = 0.5;
   const x = i => m.l + (W - m.l - m.r) * i / Math.max(1, N - 1);
-  const y = v => { const e = Math.log10(Math.max(1 - v, 1e-13)); return m.t + (H - m.t - m.b) * (e - hi) / (lo - hi); };
+  const y = v => { const e = Math.log10(Math.max(v, 1e-8)); return m.t + (H - m.t - m.b) * (e - hi) / (lo - hi); };
   const cols = SERIES.map(css);
   const muted = css("--muted"), line = css("--line"), ink2 = css("--ink2");
   let s = "";
-  for (let e = -12; e <= -1; e += 1){ const yy = m.t + (H - m.t - m.b) * (e - hi) / (lo - hi);
+  for (let e = -8; e <= 0; e += 1){ const yy = m.t + (H - m.t - m.b) * (e - hi) / (lo - hi);
     s += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${line}" stroke-width="1"/>`;
-    if (e % 2 === 0 || e === -1) s += `<text x="${m.l - 8}" y="${yy + 4}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">1e${e}</text>`; }
-  for (const p of [D.thresholds.layer, D.thresholds.final_hidden].filter((v, i, a) => a.indexOf(v) === i)){ const yy = y(p);
-    s += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${css("--crit")}" stroke-dasharray="5 4" stroke-width="1.2"/>
-      <text x="${W - m.r}" y="${yy - 5}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">PCC ${p}</text>`; }
+    if (e % 2 === 0) s += `<text x="${m.l - 8}" y="${yy + 4}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">1e${e}</text>`; }
+  tr.forEach((t, k) => { if ((t.limits || []).length) s += `<polyline points="${t.limits.map(([i, v]) => `${x(i)},${y(v)}`).join(" ")}" fill="none" stroke="${cols[k % cols.length]}" stroke-dasharray="5 4" stroke-width="1.2"/>`; });
   const step = Math.max(1, Math.ceil(N / 10));
   for (let i = 0; i < N; i += step) s += `<text x="${x(i)}" y="${H - m.b + 18}" font-size="11" text-anchor="middle" fill="${ink2}" font-family="IBM Plex Mono, monospace">L${i}</text>`;
   s += `<text x="${(W + m.l)/2}" y="${H - 6}" font-size="11.5" text-anchor="middle" fill="${muted}">decoder layer output</text>`;
-  s += `<text x="14" y="${(H - m.b + m.t)/2}" font-size="11.5" text-anchor="middle" fill="${muted}" transform="rotate(-90 14 ${(H - m.b + m.t)/2})">1 − PCC</text>`;
+  s += `<text x="14" y="${(H - m.b + m.t)/2}" font-size="11.5" text-anchor="middle" fill="${muted}" transform="rotate(-90 14 ${(H - m.b + m.t)/2})">rel L2 error</text>`;
   tr.forEach((t, k) => { const pts = t.points.map(([i, v]) => `${x(i)},${y(v)}`).join(" ");
     s += `<polyline points="${pts}" fill="none" stroke="${cols[k % cols.length]}" stroke-width="2" stroke-linejoin="round"/>`;
     for (const [i, v] of t.points.length < 8 ? t.points : [t.points.at(-1)]) s += `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${cols[k % cols.length]}" stroke="${css("--surface")}" stroke-width="2"/>`; });
   s += `<line id="xh" y1="${m.t}" y2="${H - m.b}" stroke="${muted}" stroke-width="1" visibility="hidden"/>`;
   s += `<rect id="hit" x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/>`;
   svg.innerHTML = s;
-  $("#pcc-legend").innerHTML = tr.map((t, k) => `<span><span class="sw" style="background:${cols[k % cols.length]}"></span>${esc(t.label)} · min ${Math.min(...t.points.map(p => p[1])).toFixed(5)}</span>`).join("");
+  $("#pcc-legend").innerHTML = tr.map((t, k) => `<span><span class="sw" style="background:${cols[k % cols.length]}"></span>${esc(t.label)} · worst ${Math.max(...t.points.map(p => p[1])).toExponential(2)}</span>`).join("");
   const hit = svg.querySelector("#hit"), xh = svg.querySelector("#xh");
   hit.addEventListener("mousemove", e => { const r = svg.getBoundingClientRect(); const px = (e.clientX - r.left) * W / r.width;
     const i = Math.max(0, Math.min(N - 1, Math.round((px - m.l) / (W - m.l - m.r) * (N - 1))));
     xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
-    const rows = tr.map((t, k) => { const p = t.points.find(q => q[0] === i); return p ? `<span style="color:${cols[k % cols.length]}">■</span> ${esc(t.label)}: ${p[1].toFixed(7)}` : null; }).filter(Boolean);
+    const rows = tr.map((t, k) => { const p = t.points.find(q => q[0] === i); const l = (t.limits || []).find(q => q[0] === i); return p ? `<span style="color:${cols[k % cols.length]}">■</span> ${esc(t.label)}: ${p[1].toExponential(3)}${l ? " (limit " + l[1].toExponential(3) + ")" : ""}` : null; }).filter(Boolean);
     showTip(e, `<b>Layer ${i}</b> · ${D.layer_types[i]}<br>${rows.join("<br>") || "no data"}`); });
   hit.addEventListener("mouseleave", () => { hideTip(); xh.setAttribute("visibility", "hidden"); });
   $("#pcc-table").innerHTML = `<thead><tr><th>Layer</th>${tr.map(t => `<th>${esc(t.label)}</th>`).join("")}</tr></thead><tbody>` +
-    D.layer_types.map((ty, i) => `<tr><td class="mono">L${i} ${ty}</td>${tr.map(t => { const p = t.points.find(q => q[0] === i); return `<td class="mono">${p ? p[1].toFixed(7) : "—"}</td>`; }).join("")}</tr>`).join("") + "</tbody>";
+    D.layer_types.map((ty, i) => `<tr><td class="mono">L${i} ${ty}</td>${tr.map(t => { const p = t.points.find(q => q[0] === i); return `<td class="mono">${p ? p[1].toExponential(3) : "—"}</td>`; }).join("")}</tr>`).join("") + "</tbody>";
 }
 
 function timing(){
@@ -772,7 +770,7 @@ function finalTests(){
     return `<tr><td>${esc(r.label)}</td><td>${res(r.ran, r.ok)}</td><td title="${esc(r.prompt)}">${esc(short(r.prompt, 48))}</td><td class="mono">${esc(r.expected)}</td>
       <td class="mono">${r.ran ? esc(JSON.stringify(r.answer)) : `<span class="sub">—</span>`}</td><td class="num">${r.ran && r.seconds != null ? fmtDur(r.seconds) : "—"}</td><td class="mono" style="font-size:12px">${det || "—"}</td></tr>`; }).join("");
   const L = F.ladder, C = F.contract, lines = [];
-  if (L) lines.push(["Full-target ladder", !L.ran ? NR : `${pill(L.status)} <span class="mono">${esc(L.rung)} (${L.seq.toLocaleString()} in ${L.chunk.toLocaleString()}): min layer PCC ${fmt(L.min_pcc)} · top-1 ${L.top1 != null ? fmt(L.top1) : "—"} · top-5 ${L.top5 != null ? fmt(L.top5) : "—"}</span> <span class="sub mono">${esc(L.task)}</span>`]);
+  if (L) lines.push(["Full-target ladder", !L.ran ? NR : `${pill(L.status)} <span class="mono">${esc(L.rung)} (${L.seq.toLocaleString()} in ${L.chunk.toLocaleString()}): ${L.worst_err_limit != null ? `worst layer L${L.worst_err_layer} rel ${L.worst_err.toExponential(2)} (limit ${L.worst_err_limit.toExponential(2)})` : `min layer PCC ${fmt(L.min_pcc)}`} · top-1 ${L.top1 != null ? fmt(L.top1) : "—"} · top-5 ${L.top5 != null ? fmt(L.top5) : "—"}</span> <span class="sub mono">${esc(L.task)}</span>`]);
   else lines.push(["Full-target ladder", NR]);
   if (C){ const ok = C.passed === C.total;
     lines.push(["Contract tests", `<span class="mono ${ok ? "metric-ok" : "metric-bad"}">${C.passed}/${C.total} passed</span>` + (C.failed ? ` <span class="metric-bad">${C.failed} failed</span>` : "") +
