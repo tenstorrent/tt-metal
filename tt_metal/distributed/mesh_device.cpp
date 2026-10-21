@@ -713,42 +713,31 @@ namespace {
 // Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
 class TransitContextGuard {
 public:
-    TransitContextGuard(ContextId context_id, bool env_owns_context) {
-        if (!env_owns_context) {
-            context_id_ = context_id;
-        }
+    // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
+    // (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
+    // close, preserving the legacy create-only behavior.
+    explicit TransitContextGuard(MetalEnv& env) {
+        auto& env_impl = MetalEnvAccessor(env).impl();
+        const bool env_owns_context = env_impl.has_registered_context();
+        context_id_ =
+            env_owns_context ? ContextId{env_impl.ensure_context_registered(env)} : MetalContext::create_instance(env);
+        destroy_on_exit_ = !env_owns_context;
     }
     TransitContextGuard(const TransitContextGuard&) = delete;
     TransitContextGuard& operator=(const TransitContextGuard&) = delete;
     ~TransitContextGuard() {
-        if (context_id_.has_value()) {
-            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
+        if (destroy_on_exit_) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, context_id_);
         }
     }
-    bool holds_context() const { return context_id_.has_value(); }
-    void release() { context_id_.reset(); }
+    ContextId context_id() const { return context_id_; }
+    bool holds_context() const { return destroy_on_exit_; }
+    void release() { destroy_on_exit_ = false; }
 
 private:
-    std::optional<ContextId> context_id_;
+    ContextId context_id_;
+    bool destroy_on_exit_ = false;
 };
-
-// The context a mesh device should use, and whether the env already owns it.
-// TODO: https://github.com/tenstorrent/tt-metal/issues/46299 — delete this struct once ContextId is removed.
-struct MeshDeviceContext {
-    ContextId context_id;
-    bool env_owns_context;
-};
-
-// If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
-// (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
-// close, preserving the legacy create-only behavior.
-MeshDeviceContext context_for_mesh_device(MetalEnv& env) {
-    auto& env_impl = MetalEnvAccessor(env).impl();
-    const bool env_owns_context = env_impl.has_registered_context();
-    const ContextId context_id =
-        env_owns_context ? ContextId{env_impl.ensure_context_registered(env)} : MetalContext::create_instance(env);
-    return {context_id, env_owns_context};
-}
 
 }  // namespace
 
@@ -756,10 +745,9 @@ std::shared_ptr<MeshDevice> MeshDevice::open_mesh_device(
     MetalEnv& env, const MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
-    const auto [context_id, env_owns_context] = context_for_mesh_device(env);
-    TransitContextGuard context_guard(context_id, env_owns_context);
+    TransitContextGuard context_guard(env);
     auto mesh_device = MeshDeviceImpl::create(
-        context_id,
+        context_guard.context_id(),
         config,
         options.l1_small_size,
         options.trace_region_size,
@@ -776,10 +764,9 @@ std::shared_ptr<MeshDevice> MeshDevice::open_mesh_device(
 
 std::shared_ptr<MeshDevice> MeshDevice::open_unit_mesh(
     MetalEnv& env, ChipId device_id, const CreateMeshDeviceOptions& options) {
-    const auto [context_id, env_owns_context] = context_for_mesh_device(env);
-    TransitContextGuard context_guard(context_id, env_owns_context);
+    TransitContextGuard context_guard(env);
     auto mesh_device = MeshDeviceImpl::create_unit_mesh(
-        context_id,
+        context_guard.context_id(),
         device_id,
         options.l1_small_size,
         options.trace_region_size,
@@ -796,10 +783,9 @@ std::shared_ptr<MeshDevice> MeshDevice::open_unit_mesh(
 
 std::map<ChipId, std::shared_ptr<MeshDevice>> MeshDevice::open_unit_meshes(
     MetalEnv& env, ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
-    const auto [context_id, env_owns_context] = context_for_mesh_device(env);
-    TransitContextGuard context_guard(context_id, env_owns_context);
+    TransitContextGuard context_guard(env);
     auto result = MeshDeviceImpl::create_unit_meshes(
-        context_id,
+        context_guard.context_id(),
         std::vector<ChipId>(device_ids.begin(), device_ids.end()),
         options.l1_small_size,
         options.trace_region_size,
