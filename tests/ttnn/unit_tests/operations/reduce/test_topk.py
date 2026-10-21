@@ -220,6 +220,25 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
+@pytest.mark.parametrize("W", [40, 1000])
+@pytest.mark.parametrize("largest", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_topk_padded_width_sentinel_ties(W, largest, dtype, device):
+    """Rows with fewer than k values beyond the pad sentinel must not return indices into the padding."""
+    k = 32
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch.manual_seed(0)
+    torch_input = torch.full((1, 1, 32, W), float("-inf") if largest else float("inf"), dtype=torch_dtype)
+    torch_input[..., :10] = torch.randn((1, 1, 32, 10), dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True)
+    values = ttnn.to_torch(ttnn_values)
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert bool((indices < W).all()), "index points into the padding"
+    assert_equal(torch.topk(torch_input, k, dim=-1, largest=largest, sorted=True).values, values)
+    assert_equal(values, torch.gather(torch_input, -1, indices))
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),

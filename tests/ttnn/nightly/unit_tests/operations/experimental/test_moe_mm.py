@@ -637,3 +637,35 @@ def test_moe_gate_mm_program_cache(device):
         assert device.cache_entries_counter.total == 1
     finally:
         device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, id="dispatch_row")],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_iters", [8])
+def test_moe_gate_mm_row_dispatch_repeat(device, num_iters):
+    """Relaunch moe_gate_mm on Wormhole with row dispatch so a group-mask hang fails this test."""
+    if not is_wormhole_b0():
+        pytest.skip("moe_gate_mm's ring is hardcoded for Wormhole's 12 DRAM views")
+
+    layout = _moe_gate_mm_layout(device)
+    if layout is None:
+        pytest.skip("moe_gate_mm requires exactly 12 DRAM-aligned cores")
+
+    allocated = _allocate_moe_gate_mm(device, layout, seed=0)
+    for _ in range(num_iters):
+        ttnn.experimental.deepseek.moe.moe_gate_mm(
+            allocated["tt_input"],
+            w_tensor=allocated["tt_w"],
+            output_tensor=allocated["tt_output"],
+            layer_id=0,
+            column_id=0,
+        )
+        ttnn.synchronize_device(device)
+
+    torch_top8 = _reference_top8_values(allocated["torch_input"], allocated["torch_w"], allocated["torch_bias"])
+    tt_values, _tt_indices = prepare_output_tensor(ttnn.to_torch(allocated["tt_output"]), layout["ring2cores"])
+    metrics = get_accuracy_metrics(torch_top8[0], tt_values)
+    assert metrics["pcc"] >= PCC_THRESHOLD, f"repeated moe_gate_mm PCC {metrics['pcc']:.6f}"
