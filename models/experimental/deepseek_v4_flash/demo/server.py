@@ -11,8 +11,10 @@ themselves:
 * ``GET    /v1/models``           -- the served model
 * ``POST   /v1/chat/completions`` -- chat completions (``stream=true`` for SSE)
 * ``POST   /v1/completions``      -- legacy text completions
+* ``POST   /v1/chat/completions/<id>/cancel`` -- stop one completion (extension; also ``/v1/completions/<id>/cancel``)
 * ``GET    /v1/sessions``         -- active KV-cache sessions / usage (extension)
 * ``DELETE /v1/sessions/<user>``  -- reset one session (extension)
+* ``POST   /v1/sessions/<user>/cancel`` -- stop every completion of ``user`` (extension)
 * ``GET    /health``              -- liveness
 
 **Decode over the device sockets.** The model is loaded once and kept resident;
@@ -67,6 +69,13 @@ dispatch order. HTTP threads never touch the device -- they submit a turn and re
 reply -- so total throughput scales with the users while each reply streams
 independently. A request that arrives with every slot busy waits for one to free.
 
+**Stopping.** A turn stops when its client disconnects (checked every ``_CLIENT_POLL_SECONDS`` while the
+request waits on its reply, streamed or not) or on a cancel request, which names the completion's ``id`` (the
+first streamed chunk and the ``X-Request-Id`` header carry it) or the ``user``. A decoding turn ends once its
+step in flight is back, keeping the reply so far. A turn still on its prompt ends once its replayed steps are
+back, or, in the traced prefill, its chunks in flight; its reply is empty. The session's cache then ends
+part-way through that prompt, so the next request on the slot resumes from an earlier turn or re-prefills.
+
 **Live console.** On a terminal the server runs a split view (``demo/tui.py``): a status
 header with uptime, active turns, throughput and the KV block pool, a row per cache slot
 showing who holds it and how fast it is decoding, and under it the log with the time in a
@@ -78,7 +87,7 @@ debug lines (each request's sender, options and messages, admissions, slot assig
 page allocations, prefill lengths, per-user tok/s), ``v`` switches those logged prompts
 between the full text and a 200-character snippet (``--prompt-snippet`` starts on the
 snippet), ``p`` pauses the scroll,
-``c`` clears it and ``q`` quits. ``--debug`` starts with those lines on and ``--no-tui``
+``c`` clears it, ``k`` stops every running turn (see "Stopping") and ``q`` quits. ``--debug`` starts with those lines on and ``--no-tui``
 (or a redirected stdout) falls back to plain logging.
 
 **OpenAI compatibility notes.**
@@ -135,6 +144,7 @@ import contextlib
 import json
 import os
 import queue
+import socket
 import sys
 import threading
 import time
@@ -214,6 +224,14 @@ def _thinking_requested(value) -> bool:
 
 class _ClientGone(Exception):
     """The SSE client hung up mid-stream; stop generating and drop the reply."""
+
+
+class _PromptStopped(Exception):
+    """A stopped turn's traced prefill, raised between its chunks."""
+
+
+# How often a request waiting on its reply checks that its client is still connected.
+_CLIENT_POLL_SECONDS = 0.5
 
 
 def _error_parts(exc: Exception) -> tuple[int, str, str]:
@@ -1014,7 +1032,7 @@ class _Turn:
     Created by the HTTP thread, then owned by the :class:`_Scheduler` thread, which is
     the only one allowed to touch the model or the :class:`UserSession`. The two
     threads meet at :attr:`events` (the reply, delta by delta) and :attr:`cancelled`
-    (the client hung up), both of which are thread-safe.
+    (the client hung up or asked to stop), both of which are thread-safe.
 
     A turn starts in the ``prefill`` phase, feeding its prompt tokens, and moves to
     ``decode`` once the last of them has been fed. A long prompt has :attr:`device_prefill`
@@ -1235,6 +1253,8 @@ class _Scheduler:
         self._wake = threading.Condition()
         self._stop = False
         self._broken: Exception | None = None  # a failed readback; see _abort_all
+        # Slots whose cache ends part-way through a stopped turn's prompt (see _stop_prompt), which no request continues.
+        self._cut_short: set[int] = set()
         # Prompt tokens/s replayed through decode, for :meth:`_choose_feed`. Seeded with what the
         # 8 x TP4 layout replays with the prefetcher off; each long enough replay refines it.
         self.replay_rate = _REPLAY_RATE_SEED
@@ -1369,9 +1389,14 @@ class _Scheduler:
         Runs here rather than on the HTTP thread because a rewind
         (``UserSession.reset``) frees KV blocks and rewrites page tables on the
         device."""
+        if turn.cancelled.is_set():
+            self._stop_prompt(turn)
+            return
         user = self.engine.users[turn.slot]
         turn.t_admit = time.perf_counter()
         continuing = False
+        cut_short = turn.slot in self._cut_short
+        self._cut_short.discard(turn.slot)
         logger.debug(
             f"admitting user {turn.user_key!r} (slot {turn.slot}, sid {user.sid}): "
             f"queued {turn.t_admit - turn.t_submit:.3f}s, at pos {user.pos}/{self.engine.max_seq}, "
@@ -1379,7 +1404,11 @@ class _Scheduler:
         )
         try:
             self.server._apply_options(user, turn.body)
-            if _continues(turn.body["messages"], user.messages) or not self._resume(user, turn):
+            if cut_short and not self._resume(user, turn):
+                user.reset()
+            if not turn.resumed_from and (
+                cut_short or _continues(turn.body["messages"], user.messages) or not self._resume(user, turn)
+            ):
                 continuing = self.server._sync_messages(user, turn.body["messages"])
                 if continuing:
                     user.messages.append(turn.message)
@@ -1391,6 +1420,8 @@ class _Scheduler:
                 self._choose_feed(user, turn, continuing)
             self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
+            if cut_short:
+                self._cut_short.add(turn.slot)
             if turn.rebuilt or turn.resumed_from:
                 user.reset()  # the cache was already rewound: start the conversation afresh next time
             elif continuing:
@@ -1669,6 +1700,7 @@ class _Scheduler:
                     turn.phase == _Turn.PREFILL
                     and (turn.device_prefill or turn.replay_ids)
                     and turn.fed == turn.prefill_from
+                    and not turn.cancelled.is_set()
                 ):
                     t_drain = time.perf_counter()
                     drained = len(self._inflight) + len(self.engine._replay_q)
@@ -1676,6 +1708,9 @@ class _Scheduler:
                         return
                     self._prefill_on_device(turn, time.perf_counter() - t_drain, drained)
                 steps = self._plan(turn)
+            except _PromptStopped:
+                self._stop_prompt(turn)
+                continue
             except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
                 if turn.pending:
                     turn.error = e
@@ -1780,6 +1815,8 @@ class _Scheduler:
 
         def progress(done: int) -> None:
             turn.mark_prefill_chunk(base + done)
+            if turn.cancelled.is_set():
+                raise _PromptStopped()
 
         row = self.server.prefiller.run(
             user,
@@ -1803,15 +1840,16 @@ class _Scheduler:
     def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
         """The steps this turn dispatches now, as ``(token_id, pos, last_prompt_token)``.
 
-        Touches no device state, but finishes a decoding turn that is done (EOS, its
-        ``max_tokens``, the context, or a client that hung up).
+        Touches no device state, but finishes a turn that is done (EOS, its ``max_tokens``,
+        the context, or stopped).
         """
         engine = self.engine
         user = engine.users[turn.slot]
         if turn.phase == _Turn.PREFILL:
-            # A client that hangs up mid-prompt is not abandoned here: the prompt is fed
-            # to the end so the KV cache matches the stored conversation, and the turn
-            # then finishes with an empty reply.
+            if turn.cancelled.is_set():
+                if not turn.pending:
+                    self._stop_prompt(turn)
+                return []
             room = self.prefill_chunk - len(turn.pending)
             if not turn.prompt_left or room < (self.prefill_chunk + 1) // 2:
                 return []
@@ -2006,7 +2044,7 @@ class _Scheduler:
             f"{turn.prefill_seconds:.2f}s = {prefill_rate:.1f} tok/s, decoded {len(turn.generated)} at "
             f"{turn.mean_decode_rate:.2f} tok/s mean, {turn.decode_rate:.2f} tok/s at the end, "
             f"context {user.pos}/{self.engine.max_seq}, finish={'length' if turn.hit_cap else 'stop'}"
-            f"{', client gone' if turn.cancelled.is_set() else ''}, {len(self._active)} turns still active"
+            f"{', stopped' if turn.cancelled.is_set() else ''}, {len(self._active)} turns still active"
         )
         logger.debug(f"user {turn.user_key!r} finished: pool {self._pool_summary()}")
         turn.events.put(
@@ -2019,6 +2057,34 @@ class _Scheduler:
                     "reasoning_content": turn.stream.reasoning,
                     "tool_calls": turn.stream.tool_calls,
                     "finish_reason": ("length" if turn.hit_cap else "tool_calls" if turn.stream.tool_calls else "stop"),
+                },
+            )
+        )
+
+    def _stop_prompt(self, turn: _Turn) -> None:
+        """End a turn stopped before its prompt was in, with an empty reply.
+
+        Only called with no steps of this turn in flight. An admitted turn's cache ends part-way through its
+        prompt (or, after a stopped traced prefill, wherever the rewind of :meth:`_Prefiller.run` left it), and
+        its stored conversation already holds the prompt's message, so the slot goes into :attr:`_cut_short`."""
+        if turn in self._active:
+            self._cut_short.add(turn.slot)
+        self._retire(turn)
+        turn.t_done = time.perf_counter()
+        logger.info(
+            f"user {turn.user_key!r} (slot {turn.slot}): stopped after {turn.fed}/{len(turn.ids)} prompt tokens, "
+            f"{len(self._active)} turns still active"
+        )
+        turn.events.put(
+            (
+                "done",
+                {
+                    "prompt_tokens": len(turn.ids),
+                    "completion_tokens": 0,
+                    "content": "",
+                    "reasoning_content": "",
+                    "tool_calls": [],
+                    "finish_reason": "stop",
                 },
             )
         )
@@ -2093,6 +2159,8 @@ class GenerationServer:
         self.pool = _SlotPool(engine)
         self._created = int(time.time())
         self.scheduler = _Scheduler(self, prefill_chunk, decode_ahead)
+        self._turns: dict[str, _Turn] = {}  # running turns by request id, for cancel()
+        self._turns_lock = threading.Lock()
 
     # -- lifecycle -------------------------------------------------------------- #
     def start(self) -> None:
@@ -2142,6 +2210,35 @@ class GenerationServer:
     def session_rows(self) -> list[dict]:
         return self.pool.rows()
 
+    def cancel(self, request_id: str) -> bool:
+        """Stop the turn generating ``request_id``; returns whether one was running."""
+        with self._turns_lock:
+            turn = self._turns.get(request_id)
+        if turn is None:
+            return False
+        logger.info(f"user {turn.user_key!r}: stop requested for {request_id}")
+        turn.cancelled.set()
+        return True
+
+    def cancel_user(self, user_key: str) -> int:
+        """Stop every turn generating for ``user_key``; returns how many there were."""
+        with self._turns_lock:
+            turns = [turn for turn in self._turns.values() if turn.user_key == user_key]
+        if turns:
+            logger.info(f"user {user_key!r}: stop requested for {len(turns)} turn(s)")
+        for turn in turns:
+            turn.cancelled.set()
+        return len(turns)
+
+    def cancel_all(self) -> int:
+        """Stop every running turn (the console's ``k`` key); returns how many there were."""
+        with self._turns_lock:
+            turns = list(self._turns.values())
+        logger.info(f"stop requested for all {len(turns)} running turn(s)")
+        for turn in turns:
+            turn.cancelled.set()
+        return len(turns)
+
     # -- conversation sync ------------------------------------------------------ #
     def _sync_messages(self, user: UserSession, messages: list[dict]) -> bool:
         """Align the session's stored conversation with the request's history.
@@ -2177,12 +2274,13 @@ class GenerationServer:
         return False
 
     # -- generation ------------------------------------------------------------- #
-    def generate(self, user_key: str, body: dict, on_chunk) -> dict:
+    def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
         """Run one chat-completion turn for ``user_key``.
 
         ``on_chunk(reasoning, content)`` receives the reply's new text as it resolves
         (either argument can be empty); raising ``_ClientGone`` aborts the turn, keeping
-        the reply generated so far.
+        the reply generated so far. So does :meth:`cancel` of ``request_id``, or
+        ``client_gone()`` returning true, which is polled while the turn runs.
 
         Blocks until the reply is complete, but holds nothing except this user's own
         lock: the decode steps run on the scheduler thread, interleaved with the other
@@ -2209,23 +2307,41 @@ class GenerationServer:
         # when they carry the same ``user`` (or none). Held until the reply is complete:
         # the turn decodes into this slot's KV session.
         slot = self.pool.acquire(user_key, messages)
+        request_id = request_id or uuid.uuid4().hex
         try:
             turn = _Turn(user_key, slot, body, sampler, max_tokens)
+            with self._turns_lock:
+                self._turns[request_id] = turn
             self.scheduler.submit(turn)
-            return self._relay(turn, on_chunk)
+            return self._relay(turn, on_chunk, client_gone)
         finally:
+            with self._turns_lock:
+                self._turns.pop(request_id, None)
             self.pool.release(slot)
 
     @staticmethod
-    def _relay(turn: _Turn, on_chunk) -> dict:
+    def _relay(turn: _Turn, on_chunk, client_gone=None) -> dict:
         """Forward a turn's events to ``on_chunk`` until it finishes.
 
-        A client that hangs up (``_ClientGone`` out of ``on_chunk``) cancels the turn but
-        does not abandon it: the loop keeps draining, silently, until the scheduler
-        reports the turn done, so the session is left consistent and its steps in flight
-        are still read off the socket in order."""
+        A client that hangs up (``_ClientGone`` out of ``on_chunk``, or ``client_gone()``,
+        polled every ``_CLIENT_POLL_SECONDS``) cancels the turn but does not abandon it:
+        the loop keeps draining, silently, until the scheduler reports the turn done, so
+        the session is left consistent and its steps in flight are still read off the
+        socket in order."""
+        polled = time.monotonic()
         while True:
-            kind, *payload = turn.events.get()
+            try:
+                kind, *payload = turn.events.get(timeout=_CLIENT_POLL_SECONDS)
+            except queue.Empty:
+                kind = None
+            now = time.monotonic()
+            if client_gone is not None and not turn.cancelled.is_set() and now - polled >= _CLIENT_POLL_SECONDS:
+                polled = now
+                if client_gone():
+                    logger.info(f"user {turn.user_key!r}: client disconnected, stopping its turn")
+                    turn.cancelled.set()
+            if kind is None:
+                continue
             if kind == "delta":
                 if turn.cancelled.is_set():
                     continue
@@ -2315,8 +2431,18 @@ class _Handler(BaseHTTPRequestHandler):
         logger.warning(f"{self.command} {self.path} -> {status} {err_type}: {message}")
         self._send_json({"error": {"message": message, "type": err_type, "code": status}}, status)
 
-    def _sse_start(self) -> None:
+    def _client_gone(self) -> bool:
+        """Whether the client has closed the connection: a peek that reads EOF, or a dead socket."""
+        try:
+            return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+        except BlockingIOError:
+            return False
+        except OSError:
+            return True
+
+    def _sse_start(self, request_id: str) -> None:
         self.send_response(200)
+        self.send_header("X-Request-Id", request_id)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
@@ -2385,8 +2511,13 @@ class _Handler(BaseHTTPRequestHandler):
             }
 
         if stream:
-            self._sse_start()
-            first = [True]
+            self._sse_start(completion_id)
+            if chat:
+                # Sent at once rather than with the first text, so a client has the id to cancel during the prefill.
+                try:
+                    self._sse_event(frame({"role": "assistant", "content": ""}, None))
+                except (BrokenPipeError, ConnectionResetError):
+                    return
             stopped = [False]
 
             def on_chunk(reasoning: str, content: str) -> None:
@@ -2394,9 +2525,6 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 if chat:
                     delta: dict = {}
-                    if first[0]:
-                        delta["role"] = "assistant"
-                        first[0] = False
                     if reasoning:
                         delta["reasoning_content"] = reasoning
                     if content:
@@ -2410,7 +2538,7 @@ class _Handler(BaseHTTPRequestHandler):
                     raise _ClientGone()
 
             try:
-                stats = self.api.generate(user_key, body, on_chunk)
+                stats = self.api.generate(user_key, body, on_chunk, completion_id, self._client_gone)
             except _ClientGone:
                 return
             except Exception as e:
@@ -2435,9 +2563,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            stats = self.api.generate(user_key, body, lambda r, c: None)
+            stats = self.api.generate(user_key, body, lambda r, c: None, completion_id, self._client_gone)
         except Exception as e:
-            self._send_error_json(e)
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self._send_error_json(e)
             return
         if chat:
             message = {"role": "assistant", "content": stats["content"]}
@@ -2450,20 +2579,21 @@ class _Handler(BaseHTTPRequestHandler):
             choices = [
                 {"index": 0, "text": stats["content"], "logprobs": None, "finish_reason": stats["finish_reason"]}
             ]
-        self._send_json(
-            {
-                "id": completion_id,
-                "object": object_kind,
-                "created": created,
-                "model": model,
-                "choices": choices,
-                "usage": {
-                    "prompt_tokens": stats["prompt_tokens"],
-                    "completion_tokens": stats["completion_tokens"],
-                    "total_tokens": stats["prompt_tokens"] + stats["completion_tokens"],
-                },
-            }
-        )
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):  # a client that hung up stopped the turn
+            self._send_json(
+                {
+                    "id": completion_id,
+                    "object": object_kind,
+                    "created": created,
+                    "model": model,
+                    "choices": choices,
+                    "usage": {
+                        "prompt_tokens": stats["prompt_tokens"],
+                        "completion_tokens": stats["completion_tokens"],
+                        "total_tokens": stats["prompt_tokens"] + stats["completion_tokens"],
+                    },
+                }
+            )
 
     # -- routing ---------------------------------------------------------------- #
     def do_GET(self) -> None:
@@ -2521,6 +2651,16 @@ class _Handler(BaseHTTPRequestHandler):
                 self._completion(body, chat=True)
             elif path == "/v1/completions":
                 self._completion(body, chat=False)
+            elif path.startswith(("/v1/chat/completions/", "/v1/completions/")) and path.endswith("/cancel"):
+                request_id = unquote(path.rsplit("/", 2)[1])
+                if not self.api.cancel(request_id):
+                    raise RequestError(404, f"no running completion {request_id!r}")
+                self._send_json({"id": request_id, "object": "completion.cancel", "cancelled": True})
+            elif path.startswith("/v1/sessions/") and path.endswith("/cancel"):
+                user_key = unquote(path[len("/v1/sessions/") : -len("/cancel")])
+                if not user_key:
+                    raise RequestError(400, "missing user in path")
+                self._send_json({"object": "session", "id": user_key, "cancelled": self.api.cancel_user(user_key)})
             else:
                 raise RequestError(404, f"unknown endpoint: POST {path}")
         except Exception as e:
@@ -2909,6 +3049,7 @@ def serve(
                 on_toggle_prompt=_toggle_full_prompt,
                 full_prompt=_LOG_FULL_PROMPT[0],
                 debug=args.debug,
+                on_stop_all=api.cancel_all,
             ):
                 prefill_mode = (
                     f"traced prefill up to {prefiller.max_len} tokens in chunks of {prefiller.chunk_size}"
