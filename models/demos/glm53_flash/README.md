@@ -24,15 +24,16 @@ headroom; `tests/test_memory_plan.py` prints the envelope).
 ## Performance
 
 Measured 2026-10-21 on an 8x4 Blackhole Galaxy, 45 layers resident, bfp8 experts, traced decode, `tests/test_mesh_model.py`
-(short prompts) and `tests/test_mesh_long_context.py` (long prompts, single prompt per slot). TTFT is the time to the first
-token of one prompt of the stated input length; decode is the steady-state traced step with every slot active.
+(short prompts) and `tests/test_mesh_long_context.py` (long prompts, single prompt per slot). TTFT is the time to the first token of one prompt of the stated input length; decode is the steady-state traced
+step with every slot active at the stated decode ISL (the short-prompt chain test decodes at ISL 16 and measures
+TTFT on a separate 128-token prompt; the long-context rows decode at the prompt length).
 
 | Batch | Hardware | ISL (tokens) | TTFT (ms) | T/S/U | Target T/S/U | T/S | Notes |
 |-------|----------|-------------:|----------:|------:|-------------:|----:|-------|
-| 32  | Galaxy 8x4 (Blackhole) | 128 | 353 (traced prefill; 869 eager) | 14.3 | 33 | 458 | hybrid expert layout: decode step 69.8 ms (chain at ISL 16 + 128-token TTFT) |
-| 32  | Galaxy 8x4 (Blackhole) | 128 | 854 (eager) | 17.2 | 33 | 551 | EP32 expert layout (`GLM53_MOE_LAYOUT=ep`): decode step 58.1 ms |
-| 256 | Galaxy 8x4 (Blackhole) | 16 | - | 8.2 | 19 | 2106 | hybrid dense expert layout: decode step 121.6 ms (2026-10-20 run: composite mHC, composite router) |
-| 256 | Galaxy 8x4 (Blackhole) | 16 | - | 7.4 | 19 | 1885 | EP32 expert layout: decode step 135.8 ms (the all-to-all exchange dominates at this batch) |
+| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 (traced prefill; 869 eager) | 14.3 | 33 | 458 | hybrid expert layout: decode step 69.8 ms |
+| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 854 (eager) | 17.2 | 33 | 551 | EP32 expert layout (`GLM53_MOE_LAYOUT=ep`): decode step 58.1 ms |
+| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) | - | 8.2 | 19 | 2106 | hybrid dense expert layout: decode step 121.6 ms (2026-10-20 run: composite mHC, composite router) |
+| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 1176 (eager) | 7.4 | 19 | 1885 | EP32 expert layout: decode step 135.8 ms (the all-to-all exchange dominates at this batch) |
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31 800 | 9.8 | 60 | 79 | 2061 tok/s prefill; decode on the stream expert op (`GLM53_REGIONS_KEEP_STACKED=1`) |
 | 32  | Galaxy 8x4 (Blackhole) | 65 493 | 36 200 | 10.1 | 33 | 323 | 1811 tok/s prefill |
 | 8   | Galaxy 8x4 (Blackhole) | 1 047 526 | 458 000 | 4.6 | 33 | 37 | 2288 tok/s prefill; decode through the regions expert path (the stacked copy does not fit beside the 1 M caches) |
