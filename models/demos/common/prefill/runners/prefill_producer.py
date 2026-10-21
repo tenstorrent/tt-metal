@@ -20,7 +20,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    connect_layer_completion_channel,
+    start_layer_completion_drain,
+    wait_for_layer_completions,
+)
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -33,6 +38,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -152,17 +158,19 @@ def _h2d_rows(tokens, actual_start: int = 0):
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
 
 
-def _mtp_rows(pool, actual_start: int, actual_isl=None):
+def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
+    """``[sp, 1, num_mtp_tokens]`` lookahead ids sent after each chip's chunk ids: the ``MTP_LEVELS`` ids after the
+    chip's last position, then pad; a split chip whose second run lies at or past ``actual_end`` takes the next
+    chip's first ids."""
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
+    actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
+    slots = mtp_lookahead_positions(actual_start, sp, stride, actual_end, MTP_LEVELS)
     align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
-    # Each chip's lookahead follows its own last row: actual_start + (c + 1) * stride for a chunk-aligned start,
-    # the rotated last position otherwise (see _h2d_rows).
-    last = [row[-1] for row in rotated_chunk_positions(actual_start, sp, stride)]
-    rows = [_pool_slice(pool, last[c] + 1, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
+    rows = [_pool_slice(pool, chip_slots[0], MTP_LEVELS, actual_isl) + align_pad for chip_slots in slots]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
@@ -272,20 +280,8 @@ def _read_device_map(timeout_s: int, rank: int | None = None, num_ranks: int = 1
     return device_map
 
 
-def _connect_layer_ack_channel(timeout_s: int):
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
-    try:
-        channel = ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
-    except Exception as e:
-        logger.warning(f"[producer] could not connect LayerAck channel {shm_name}: {e}; skipping ack wait.")
-        return None
-    logger.info(f"[producer] connected LayerAck channel {shm_name}")
-    return channel
-
-
-def _ack_layers_per_chunk(kv_table) -> int:
-    """Layer acks one chunk produces across all ranks.
+def _completion_layers_per_chunk(kv_table) -> int:
+    """Layer completions one chunk produces across all ranks.
 
     NUM_ACK_LAYERS counts only what the model's own layers emit; DFlash acks the drafter's context K/V
     past the verifier's last layer, so the runner emits more. Read the wider count off the published
@@ -302,25 +298,9 @@ def _ack_layers_per_chunk(kv_table) -> int:
     return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
 
 
-def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
-    if ack_channel is None:
-        return 0
-    drained = 0
-    last_logged = -1
-    start = time.perf_counter()
-    while drained < expected:
-        drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[producer] layer acks {drained}/{expected}")
-            last_logged = drained
-        if drained >= expected:
-            break
-        if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[producer] timed out at {drained}/{expected} acks after {timeout_s}s")
-            break
-        time.sleep(0.01)
-    logger.info(f"[producer] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
-    return drained
+def _completion_layer_bound(chunk_layers: int) -> int:
+    """Global ack-layer axis per chunk: the model's layers plus the rows acked past them (MTP, DFlash)."""
+    return NUM_LAYERS + (chunk_layers - NUM_ACK_LAYERS)
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
@@ -1583,8 +1563,9 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and ack_channel is None:
+    # Without verification the completions are left to whatever consumer owns the channel.
+    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and completion_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
             "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
@@ -1593,11 +1574,13 @@ def main() -> None:
         sys.exit(1)
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
-            "channel (pure token feeder; the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the completion "
+            "channel (pure token feeder; the real consumer owns it). Some consumer must be attached, or "
+            "the runner waits on its full completion ring."
         )
 
-    ack_layers = _ack_layers_per_chunk(kv_table)
+    chunk_layers = _completion_layers_per_chunk(kv_table)
+    layer_bound = _completion_layer_bound(chunk_layers)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1608,22 +1591,35 @@ def main() -> None:
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
         _push(
-            service, payload_bytes, _h2d_rows(tokens, actual_start), _mtp_rows(pool, actual_start, actual_isl), metadata
+            service,
+            payload_bytes,
+            _h2d_rows(tokens, actual_start),
+            _mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
+            metadata,
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
-    if warmup_chunks > 0:
-        logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
-        for cidx in range(warmup_chunks):
-            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
-        service.barrier()
-        if ack_channel is not None:
-            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
-        logger.info("[producer] warmup complete; starting the measured request")
+    # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
+    # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
+    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    try:
+        warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
+        if warmup_chunks > 0:
+            logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            for cidx in range(warmup_chunks):
+                push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+            service.barrier()
+            wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            logger.info("[producer] warmup complete; starting the measured request")
 
-    stats = run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
+        stats = run_schedule(cfg, push_fn=push_chunk)
+        service.barrier()
+        # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
+        # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
+        wait_for_layer_completions(drain, chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes))
+    finally:
+        if drain is not None:
+            drain.stop()
 
     sorted_ms = sorted(stats.push_ms)
     total_tokens = stats.total_pushes * CHUNK_SIZE
@@ -1633,8 +1629,6 @@ def main() -> None:
         f"push_ms p50={_percentile(sorted_ms, 0.5):.1f} p90={_percentile(sorted_ms, 0.9):.1f} "
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
-
-    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

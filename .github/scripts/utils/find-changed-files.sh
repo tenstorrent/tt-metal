@@ -53,6 +53,7 @@ while IFS= read -r FILE; do
             # Pins the ttsim release that fetch-ttsim downloads for every sim_* SKU. An
             # incompatible simulator build breaks the ttsim pipelines and nothing else, so
             # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
+            # The Quasar LLK PR gate subscribes to the same flag.
             TTSIM_CI_CHANGED=true
             ;;
         tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
@@ -119,10 +120,20 @@ while IFS= read -r FILE; do
             LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
+        # Shared perf counter headers and Python package: both the LLK perf harness (every arch, quasar
+        # included) and the metal tools/tracy consume them, so run both sides.
+        tt_metal/tt-llk/tools/include/perf_counters/**|tt_metal/tt-llk/tools/python/**)
+            LLK_QUASAR_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            LLK_PERF_CHANGED=true
+            TOOLS_CHANGED=true
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml|tests/pipeline_reorg/llk_pr_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
@@ -272,6 +283,46 @@ while IFS= read -r FILE; do
 done <<< "$CHANGED_FILES"
 # ----------------------------------------------------------------------------
 
+# tt-metalium-api-headers-changed: runs the misc-include-cleaner gate on the
+# tt_metal public headers (include-cleaner job in code-analysis.yaml; the job
+# always sweeps every public header and fails on any finding). Set by a change
+# to a tt_metal/api header, to a file that decides which headers the gate sees
+# (the TT_METAL_PUBLIC_API manifest, the target that consumes it, and the iwyu
+# preset that generates the verification stubs), or to a file that defines or
+# detects the check, so a PR that edits the check also exercises it.
+# Deliberately not derived from tt-metalium-changed, which fires on any
+# tt_metal source.
+#
+# pr-gate.yaml only calls code-analysis.yaml when run-clang-tidy (computed
+# below) is true. Headers reach it through CPP_SOURCE_FOR_CLANG_TIDY_CHANGED
+# and the manifest, target and preset through RAW_CMAKE_CHANGED;
+# code-analysis.yaml is already a key workflow. The check's config, script and
+# tests, and the change detection itself (find-changed-files.sh and its
+# action.yml), are promoted to key-workflow changes here so that a PR which
+# breaks the detector still runs the check it implements. That does not force
+# a full clang-tidy scan: do-full-scan only follows a clang-tidy config change,
+# main, or force-scan.
+TTMETALIUM_API_HEADERS_CHANGED=false
+while IFS= read -r FILE; do
+    case "$FILE" in
+        tt_metal/api/*(*/)*.@(h|hpp|tpp|inl)|\
+        tt_metal/sources.cmake|\
+        tt_metal/CMakeLists.txt|\
+        CMakePresets.json|\
+        .github/workflows/code-analysis.yaml)
+            TTMETALIUM_API_HEADERS_CHANGED=true
+            ;;
+        .github/api-include-cleaner.clang-tidy|\
+        .github/scripts/utils/run_api_header_include_cleaner.py|\
+        .github/scripts/utils/test_run_api_header_include_cleaner.py|\
+        .github/scripts/utils/find-changed-files.sh|\
+        .github/actions/find-changed-files/action.yml)
+            TTMETALIUM_API_HEADERS_CHANGED=true
+            CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
+            ;;
+    esac
+done <<< "$CHANGED_FILES"
+
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
@@ -280,6 +331,14 @@ for submodule_path in $SUBMODULE_PATHS; do
         break
     fi
 done
+
+# A submodule bump (notably UMD) can change what the public headers should
+# include, e.g. when a header's symbol moves to another header. The api-header
+# include-cleaner gate sweeps every public header in ~40 s, so run it on any
+# submodule change instead of only when a tt_metal/api header is edited.
+if [ "$SUBMODULE_CHANGED" = true ]; then
+    TTMETALIUM_API_HEADERS_CHANGED=true
+fi
 
 # run-clang-tidy: should the code-analysis (clang-tidy) job run? Computed
 # from the dedicated C/C++-only scan and the RAW pre-fallback flags above
@@ -332,6 +391,7 @@ declare -A changes=(
     [cmake-changed]=$CMAKE_CHANGED
     [clang-tidy-config-changed]=$CLANG_TIDY_CONFIG_CHANGED
     [tt-metalium-changed]=$TTMETALIUM_CHANGED
+    [tt-metalium-api-headers-changed]=$TTMETALIUM_API_HEADERS_CHANGED
     [tt-nn-changed]=$TTNN_CHANGED
     [tt-metalium-tests-changed]=$TTMETALIUM_TESTS_CHANGED
     [tt-nn-tests-changed]=$TTNN_TESTS_CHANGED

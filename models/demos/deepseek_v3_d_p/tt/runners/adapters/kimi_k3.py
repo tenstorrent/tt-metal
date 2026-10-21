@@ -51,6 +51,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
     routing_use_l1_small_for_semaphores = True
 
+    # Dedups the MLA KV cache only. PREFILL_TP_SHARD_KV=0 rolls back to the TP-replicated cache.
+    supports_tp_shard_kv = True
+    tp_shard_kv_default = True
+
     # --- test metadata ---
     hf_repo_id = "moonshotai/Kimi-K3"
     env_var = "KIMI_K3_HF_MODEL"
@@ -161,6 +165,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=schedule.num_mla_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
             )
 
         # The KDA layers' migration state: one consolidated slab per state kind, sized to this rank's
@@ -239,7 +244,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
         return 1 + boundary_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
     # --- migration table configs: 0 = kvpe, 1 = KDA recurrent, 2 = KDA convolution ---
-    kda_golden_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_vllm_code_debug_1M_head_tail"
+    kda_golden_default = (
+        "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/k3_vllm_code_debug_1M_head_tail"
+    )
 
     def cache_kind(self, config_id: int) -> str:
         """What table config `config_id` describes; consumers must not infer this from the config count."""
@@ -334,6 +341,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
         )
         return TtKimiK3Runtime(
             mesh_device=mesh_device,

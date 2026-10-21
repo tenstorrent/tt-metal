@@ -334,10 +334,12 @@ void kernel_main() {
     // so must not be popped.
     dfb_xmm_obj.pop_front(num_tiles_per_block);
 #endif
-    dfb_im_obj.wait_front(num_tiles_per_block);
 
 #ifdef FUSE_GAMMA
     {
+        // The intermediate tiles were packed and pushed above. Wait for them before the loop
+        // below reads them back by tile index. The gamma stage is their only reader and pops them.
+        dfb_im_obj.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_im, dfb_gamma);
         if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out);
@@ -405,5 +407,48 @@ void kernel_main() {
         dfb_out_obj.push_back(num_tiles_per_block);
         dfb_beta_src_obj.pop_front(num_tiles_per_block);
     }
+#endif
+
+#ifdef IS_ALLGATHER_WORKER
+    if (enable_sqrt) {
+        // The global-reduce scaler tile is pushed once and read by tile index across the reductions
+        // above without being popped. Pop it under the same guard that gated the wait, so the buffer
+        // is left balanced on every core.
+        dfb_scaler_global_obj.pop_front(1);
+    } else {
+        // The writer pushes the global scaler on every all-to-all worker, but only the ones that
+        // finish the reduction (enable_sqrt) use it. dummy_unpack orders the pop after the wait on
+        // Quasar (nothing unpacked it here).
+        dfb_scaler_global_obj.wait_front(1);
+        dummy_unpack(dfb_scaler_global);
+        dfb_scaler_global_obj.pop_front(1);
+    }
+    const bool eps_consumed = enable_sqrt;
+#else
+    const bool eps_consumed = false;
+#endif
+    if (!eps_consumed) {
+        // The writer pushes one eps tile on every core, but only the cores that finish the variance
+        // (above) consume it. Release it here on the others.
+        dfb_eps_obj.wait_front(1);
+        dummy_unpack(dfb_eps);
+        dfb_eps_obj.pop_front(1);
+    }
+#ifdef OUT_SELF_LOOP
+    // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
+    // Every path above pushes num_tiles_per_block into it once; pop them so the buffer is left balanced.
+    dfb_out_obj.wait_front(num_tiles_per_block);
+    dummy_unpack(dfb_out);
+    dfb_out_obj.pop_front(num_tiles_per_block);
+#endif
+#ifdef FUSE_GAMMA
+    // Gamma is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_gamma_obj.pop_front(block_w);
+#endif
+#ifdef FUSE_BETA
+    // Beta is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_beta_obj.pop_front(block_w);
 #endif
 }

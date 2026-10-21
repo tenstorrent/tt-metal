@@ -16,6 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -25,6 +26,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::bench {
 
@@ -537,7 +539,7 @@ void FabricMuxV2BenchmarkContext::initialize() {
     TT_FATAL(mesh_device_ != nullptr, "Failed to create full mesh device for mux-v2 standalone benchmark");
 
     device_ = nullptr;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         if (device != nullptr && device->id() == 0) {
             device_ = device;
             break;
@@ -625,6 +627,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const auto channel_buffer_size_bytes = packet_header_size_bytes + resolved_payload_size_bytes;
 
     tt::tt_fabric::FabricMuxV2Config mux_config(
+        *mesh_device,
         static_cast<uint8_t>(benchmark_case.num_senders),
         benchmark_case.num_buffers_per_channel,
         channel_buffer_size_bytes,

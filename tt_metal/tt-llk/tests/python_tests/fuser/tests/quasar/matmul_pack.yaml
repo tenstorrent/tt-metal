@@ -22,7 +22,7 @@ operations:
         in1: "input_B"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "matmul_out"
         block_size: [64, 64]

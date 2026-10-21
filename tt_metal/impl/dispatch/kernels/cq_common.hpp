@@ -135,6 +135,19 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
 }
 #endif
 
+// Fills in where workers report done for a go: the dispatcher sending it (at NOC 0 virtual coordinates noc_x, noc_y)
+// and this CQ's completion counters, offset by completion_counter_offset. The host leaves both out of the go, so a go
+// recorded in a trace replays on any CQ.
+FORCE_INLINE uint32_t add_go_signal_done_target(
+    uint32_t go_signal_value, uint32_t noc_x, uint32_t noc_y, uint32_t completion_counter_offset) {
+    go_msg_t go_msg;
+    go_msg.all = go_signal_value;
+    go_msg.master_x = noc_x;
+    go_msg.master_y = noc_y;
+    go_msg.dispatch_message_offset += completion_counter_offset;
+    return go_msg.all;
+}
+
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
 #ifdef ARCH_BLACKHOLE
@@ -157,6 +170,58 @@ FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
     return get_noc_addr_helper(packed_rect, offset);
 #endif
 }
+
+#if defined(NOC_ATT_ENABLED)
+// Stateful CQ reads whose source is a bank id. The address backend turns the bank id
+// into the operand's base (under ATT a DRAM bank maps straight to its selector, with no
+// table search). So the command-queue kernels can name DRAM and L1 banks by bank number
+// and let the address backend produce the address, instead of naming them by coordinates
+// and converting. These sit here, not in the V3 API header, because the backend and the
+// bank tables are only available once the dataflow address layer has been included.
+template <bool is_dram>
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_bank_base(uint32_t bank, uint8_t noc) {
+    return noc_address_backend::bank_address<is_dram>(bank, 0, noc);
+}
+
+// The split-source noc_read_with_state with the source base taken from a bank id.
+// Kept as its own function so the bank resolve only happens under the NOC flag.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    bool is_dram,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state_bank(
+    uint32_t noc, uint32_t bank, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        noc_v3_cq_state[cmd_buf].src_local = src_addr;
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_state[cmd_buf].src_base = noc_v3_cq_bank_base<is_dram>(bank, noc);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_state[cmd_buf].src_base | noc_v3_cq_state[cmd_buf].src_local);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        noc_async_read_inc_num_issued(1, noc);
+    }
+}
+#endif  // NOC_ATT_ENABLED
 
 template <
     enum CQNocFlags flags,
@@ -640,7 +705,7 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
+        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
     }
 
     // Returns how much data is available. Will block until data is available. Tracks via blocked
@@ -697,19 +762,19 @@ public:
 
 private:
     FORCE_INLINE void release_block_pages() {
-        // When finishing a block, don't immediately return it, but just store the number of nonposted write requests
-        // issued. We will wait for writes to be sent and will return the  block when the next block is finished; this
-        // allows time for writes from that block to complete. Note: this is incorrect if writes can be sent out of
-        // order. We should use transaction IDs instead in that case.
+        // When finishing a block, don't immediately return it, but just checkpoint the nonposted writes issued so
+        // far. We will wait for writes to be sent and will return the block when the next block is finished; this
+        // allows time for writes from that block to complete. Note: on archs that checkpoint with a count, this is
+        // incorrect if writes can be sent out of order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
             WAYPOINT("CBRW");
-            while (!noc_nonposted_writes_sent_at_count(noc_index, this->block_noc_writes_to_clear_));
+            while (!noc_nonposted_writes_sent_since(noc_index, this->block_writes_checkpoint_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
             released_prev_block_ = true;
         }
-        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
+        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
     }
 
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
@@ -718,8 +783,8 @@ private:
     }
 
     bool released_prev_block_{false};
-    // Snapshot of nonposted write requests issued at block entry; used to wait/clear before releasing credits.
-    uint32_t block_noc_writes_to_clear_{0};
+    // Checkpoint of the nonposted writes issued at block entry; used to wait/clear before releasing credits.
+    uint32_t block_writes_checkpoint_{0};
 };
 
 template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>

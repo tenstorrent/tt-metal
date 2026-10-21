@@ -51,7 +51,7 @@ ROWS, COLS = 4, 8  # SP=4 (rows), TP=8 (cols), EP=32
 
 def _raise_nproc_limit():
     """Raise RLIMIT_NPROC to the hard limit so tt-metal's parallel kernel JIT (a burst of g++/make
-    procs) doesn't starve with EAGAIN mid-build. See M3's harness for the full rationale."""
+    procs) doesn't starve with EAGAIN mid-build."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
     if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
         try:

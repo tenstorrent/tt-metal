@@ -165,10 +165,14 @@ jobs:
         continue-on-error: true
         # CHIP_ARCH has no script flag: helpers/chip_architecture.py reads it from the
         # environment at import so the suite does not probe for real silicon.
+        # --no-ignore: this report counts every collected test. Known ttsim gaps
+        # stay in tests/pipeline_reorg/ttsim-skip-list.yaml for the quasar PR gate.
         env:
           CHIP_ARCH: ${{ steps.arch.outputs.name }}
+          ARCH: ${{ steps.arch.outputs.name }}
         run: |
-          ${{ matrix.test-group.cmd }} --architecture ${{ steps.arch.outputs.name }}
+          set -euo pipefail
+          ${{ matrix.test-group.cmd }} --architecture "$ARCH" --no-ignore
 
       # Rename the timestamped outputs to stable per-arch names so the artifact has predictable
       # filenames (the script writes ttsim_<timestamp>.{xml,html} plus latest.* symlinks, which
@@ -300,6 +304,7 @@ jobs:
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"
             echo "| 💥 Crashed | ${crashed_disp} |"
+            echo "| 🚫 Skip list | disabled |"
             echo "| 📈 Pass rate | ${pass_pct}% |"
             echo ""
             echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."

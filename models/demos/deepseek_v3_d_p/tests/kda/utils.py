@@ -55,14 +55,24 @@ def collect_mesh_accuracy_and_determinism_results(
     run: Callable[[], Sequence[ttnn.Tensor]],
     *,
     count: int = 3,
+    defined: Sequence[ttnn.Tensor | None] | None = None,
 ) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...]]:
-    """Retain first mesh outputs and reduce exact repeat mismatches on device."""
+    """Retain first mesh outputs and reduce exact repeat mismatches on device.
+
+    ``ttnn.ne`` compares values: +0 and -0, and subnormals and zero, compare equal.
+    ``defined`` optionally gives, per output, a 0/1 mask broadcastable to it that
+    selects the defined elements; mismatches elsewhere, such as NaN padded rows
+    (NaN != NaN), are ignored. ``None`` compares the whole output.
+    """
     if count <= 1:
         raise ValueError("count must be greater than one")
 
     reference_outputs = tuple(run())
     if not reference_outputs:
         raise ValueError("run must return at least one output")
+    masks = tuple(defined) if defined is not None else (None,) * len(reference_outputs)
+    if len(masks) != len(reference_outputs):
+        raise ValueError("defined must give one mask or None per output")
 
     mismatch_marker = None
     for _ in range(1, count):
@@ -71,7 +81,7 @@ def collect_mesh_accuracy_and_determinism_results(
             for output in outputs:
                 ttnn.deallocate(output)
             raise ValueError("run returned a different number of outputs")
-        for reference, output in zip(reference_outputs, outputs, strict=True):
+        for reference, output, mask in zip(reference_outputs, outputs, masks, strict=True):
             if (
                 output.shape != reference.shape
                 or output.dtype != reference.dtype
@@ -82,6 +92,11 @@ def collect_mesh_accuracy_and_determinism_results(
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
             mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
+            if mask is not None:
+                # The 0/1 mismatch is finite, so masking it by multiplication is exact.
+                defined_mismatch = ttnn.multiply(mismatch, mask)
+                ttnn.deallocate(mismatch)
+                mismatch = defined_mismatch
             current_marker = ttnn.max(mismatch)
             ttnn.deallocate(mismatch)
             if mismatch_marker is None:
@@ -169,16 +184,34 @@ def reconstruct_convolution_at_sp_rank(
     )
 
 
+# Convolution-state NRMSE bar for K3's bfloat8_b projections: q/k/v feed the convolution state directly.
+KIMI_K3_CONVOLUTION_NRMSE = 0.009
+
+
+@dataclass(frozen=True)
+class LayerNrmseThresholds:
+    """NRMSE thresholds for a KDA layer's three results: output, recurrent state, convolution state.
+
+    No defaults: K3's bfloat8_b projections pass `KIMI_K3_CONVOLUTION_NRMSE`, bfloat16-projection
+    layers keep a tighter convolution bar, and a default would silently loosen one of them.
+    """
+
+    output: float
+    recurrent: float
+    convolution: float
+
+
 def compare_cpu_device(
     name: str,
     expected: torch.Tensor,
     actual: torch.Tensor,
     *,
     pcc_threshold: float,
+    nrmse_threshold: float | None,
 ) -> tuple[float, list[str]]:
     """Run the shared accuracy contract without hiding later tensor results."""
     try:
-        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold)
+        pcc = assert_accurate(expected, actual, name=name, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse_threshold)
     except AssertionError as error:
         return float("nan"), [str(error)]
     return pcc, []
@@ -195,8 +228,14 @@ def check_kimi_k3_accuracy(
     tensor_parallel_axis: int,
     *,
     pcc_threshold: float,
+    nrmse: LayerNrmseThresholds,
+    valid_length: int | None = None,
 ) -> dict[str, float]:
-    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint."""
+    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint.
+
+    ``valid_length`` restricts the output to rows before an ``actual_end``; padded rows
+    are unspecified. Input rows must be in natural order (``actual_start`` of zero).
+    """
     sequence_parallel_axis = 1 - tensor_parallel_axis
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]
@@ -209,13 +248,15 @@ def check_kimi_k3_accuracy(
         tp_dim=2,
         sp_dim=1,
     )
+    if valid_length is not None:
+        actual_output = actual_output[:, :valid_length]
     golden_output = golden_output.to(torch.bfloat16)
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
     local_width = case.config.num_heads // tp_size * case.config.head_k_dim
     output_pcc, failures = compare_cpu_device(
-        f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold
+        f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse.output
     )
     pcc = {"output": output_pcc}
     for sp_rank in range(sp_size):
@@ -235,6 +276,7 @@ def check_kimi_k3_accuracy(
             golden_state.recurrent,
             actual_recurrent,
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.recurrent,
         )
         pcc[f"sp_rank_{sp_rank}_recurrent"] = recurrent_pcc
         failures.extend(recurrent_failures)
@@ -243,6 +285,7 @@ def check_kimi_k3_accuracy(
             golden_convolution,
             actual_convolution,
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse.convolution,
         )
         pcc[f"sp_rank_{sp_rank}_convolution"] = convolution_pcc
         failures.extend(convolution_failures)
@@ -512,6 +555,7 @@ def assert_matches_reference(
     tp_axis: int,
     config: KDAConfig,
     label: str,
+    nrmse: LayerNrmseThresholds,
     state_linf_threshold: float | None = 0.6,
     pcc_threshold: float = 0.999,
 ) -> None:
@@ -525,7 +569,7 @@ def assert_matches_reference(
         natural_output[:, : expected_output.shape[1]],
         name=f"{label} output",
         pcc_threshold=pcc_threshold,
-        rmse_threshold=0.05,
+        nrmse_threshold=nrmse.output,
         linf_threshold=0.25,
     )
 
@@ -541,7 +585,7 @@ def assert_matches_reference(
             reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
             name=f"{label} sp_rank={sp_rank} recurrent",
             pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
+            nrmse_threshold=nrmse.recurrent,
             linf_threshold=state_linf_threshold,
         )
         assert_accurate(
@@ -549,6 +593,6 @@ def assert_matches_reference(
             reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
             name=f"{label} sp_rank={sp_rank} convolution",
             pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
+            nrmse_threshold=nrmse.convolution,
             linf_threshold=0.1,
         )

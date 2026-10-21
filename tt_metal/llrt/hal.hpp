@@ -457,7 +457,6 @@ private:
     uint32_t neo_tile_counters_buffer_capacity_offset_{};
 
     bool has_remapper_{};
-    bool noc_att_enabled_{};
     uint32_t remapper_global_control_addr_{};
     uint32_t remapper_client_l_config_base_addr_{};
     uint32_t remapper_client_r_config_base_addr_{};
@@ -560,7 +559,6 @@ public:
     uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
 
     bool has_remapper() const { return has_remapper_; }
-    bool noc_att_enabled() const { return noc_att_enabled_; }
     uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
     uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
     uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
@@ -725,7 +723,9 @@ public:
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
-    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+    // The dispatcher that sends the go fills in its own coordinates and adds its CQ's completion counter base to
+    // dispatch_message_offset, so a go names only the sub-device's completion counter.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t dispatch_message_offset) const;
 
     // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
     void set_iram_text_size(

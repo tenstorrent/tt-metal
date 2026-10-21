@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/device/device_impl.hpp"
@@ -18,7 +19,7 @@ namespace {
 const tt::tt_metal::Device& concrete_device(const IDevice& device) {
     if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(&device)) {
         TT_FATAL(mesh->num_devices() == 1, "Experimental NOC geometry APIs are only supported on unit MeshDevice.");
-        const auto* only_device = mesh->get_devices().front();
+        const auto* only_device = mesh->impl().get_devices().front();
         TT_FATAL(only_device != nullptr, "Device pointer cannot be null");
         return concrete_device(*only_device);
     }
@@ -75,7 +76,7 @@ uint32_t get_worker_noc_hop_distance(
         // when the mesh is homogeneously harvested. A co-owner composing a peer's coordinate -- to
         // keep mesh-level allocation sequences symmetric -- has nothing else to measure on.
         // Mirrors get_optimal_dram_bank_to_logical_worker_assignment(NOC, coord).
-        const auto local_devices = mesh_device->get_devices();
+        const auto local_devices = mesh_device->impl().get_devices();
         TT_FATAL(
             !local_devices.empty(),
             "get_worker_noc_hop_distance: MeshCoordinate {} maps to a remote device and this mesh has no local "

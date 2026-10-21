@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/math.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
@@ -161,6 +162,17 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
+    const bool local_only = num_links == 0;
+    TT_FATAL(
+        !local_only || ((mesh_device->shape().mesh_size() == 1 ||
+                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                        operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
+        "Zero-link prefill dispatch requires a singleton communication domain, dispatch_group_size=1, and Linear "
+        "topology");
+    TT_FATAL(
+        !local_only || (operation_attributes.experts_per_chip > 0 &&
+                        operation_attributes.num_routed_experts == operation_attributes.experts_per_chip),
+        "Local prefill dispatch requires all routed experts on its only chip");
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
@@ -181,7 +193,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     constexpr uint32_t MAX_WORKER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
+    // Local NoC work still needs a sender group for mailboxes, drains, and sentinels.
+    uint32_t effective_num_links = local_only ? 1 : std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -553,7 +566,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     }
 
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        local_only ? std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{}
+                   : ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
@@ -599,7 +613,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     log_debug(
         tt::LogOp, "Fabric max packet size: {} bytes, L1 alignment: {} bytes", fabric_max_packet_size, l1_alignment);
 
@@ -945,7 +959,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         const bool any_fp8 =
             operation_attributes.fp8_output || input_tensor.dtype() == tt::tt_metal::DataType::FP8_E4M3;
         untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = any_fp8,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
             // tiles, but pack_untilize_block uses block_ct_dim. Full-sync 32-bit restores the
