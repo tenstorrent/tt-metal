@@ -367,3 +367,5 @@ The 16 K needle run reached the decode capture and failed in the heads <-> users
 documented split/concat), so the 4-user dim landed on the tile-row position, where the op only accepts
 multiples of 16. Fixed in the helper (cf302fd6434); the (2,4) partitioned test had never passed before, so
 this path is being validated for the first time by the 16 K / 131 K runs on the fixed code.
+
+KDA sequence-parallel prefill on 8 rows: a 32 K chunk needs 128 summary-owner cores (8 groups x 16 local heads) but the grid has 120, so the long-context runs use 16 K chunks (64 owners); the limit is chunk <= 24 K on the 8x4 with the default group size <= 20.
