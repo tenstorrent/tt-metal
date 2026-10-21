@@ -4,11 +4,12 @@
 """DeviceSampler on one Galaxy row (TP=8) against the exact full-vocabulary draw, eager and traced.
 
 The decode users (rows 0-3 of a [32, 152576] fp32 logit tile) cycle through sets of temperature / top_k / top_p, each
-with fresh uniforms. The reference is vLLM's rule over the whole vocabulary (softmax(logits / T), or over the top_k
-logits; keep a token while the mass ranked above it is below top_p) with the same inverse-CDF draw, so the device
-token must equal it on every row whose nucleus and top_k lie in the row's CANDIDATES_PER_CHIP most likely tokens,
-except where the uniform lands within rounding of a bucket edge. Greedy rows must take the argmax, the lowest id
-among tied maxima. Rows past the users must get token 0. The traced replays draw new uniforms each step and time the
+drawn several times. The reference is vLLM's rule over the whole vocabulary (softmax(logits / T), or over the top_k
+logits; keep a token while the mass ranked above it is below top_p) with the same inverse-CDF draw and the uniform
+the device's splitmix64 stream gives (replayed on the host from the seeds), so the device token must equal it on
+every row whose nucleus and top_k lie in the row's CANDIDATES_PER_CHIP most likely tokens, except where the uniform
+lands within rounding of a bucket edge. Greedy rows must take the argmax, the lowest id among tied maxima, and leave
+their stream alone. Rows past the users must get token 0. The traced replays draw anew each step and time the
 sampling head.
 """
 
@@ -38,6 +39,29 @@ PARAM_SETS = [
     ((0.6, 1.0, 0.0, 1.0), (-1, 50, -1, 3), (0.95, 1.0, 1.0, 0.8)),
 ]
 SCALES = [(6.0, 4.0, 3.0, 2.5), (5.0, 2.0, 1.0, 0.7), (8.0, 3.0, 1.5, 4.0)]
+MASK = (1 << 64) - 1
+
+
+class Streams:
+    """The device's per-row splitmix64 streams (kernels/sample_fixed.hpp), replayed on the host."""
+
+    def __init__(self, gen):
+        self.seeds = torch.randint(-(2**62), 2**62, (B,), generator=gen, dtype=torch.int64)
+        self.state = [int(x) & MASK for x in self.seeds]
+
+    def draw(self, sampled):
+        """The next uniforms of the sampled rows (others 0, their streams unchanged)."""
+        out = torch.zeros(B, dtype=torch.float64)
+        for r in range(B):
+            if not sampled[r]:
+                continue
+            self.state[r] = (self.state[r] + 0x9E3779B97F4A7C15) & MASK
+            z = self.state[r]
+            z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
+            z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
+            z ^= z >> 31
+            out[r] = (z >> 40) / float(1 << 24)
+        return out
 
 
 def make_logits(gen, scales):
@@ -131,11 +155,12 @@ def test_device_sampler(mesh_device):
         )
         for i, (temperature, top_k, top_p) in enumerate(PARAM_SETS):
             temperature, top_k, top_p = torch.tensor(temperature), torch.tensor(top_k), torch.tensor(top_p)
-            hosts, _ = sampler.host_params(temperature, top_k, top_p)
+            streams = Streams(gen)
+            hosts, _ = sampler.host_params(temperature, top_k, top_p, seeds=streams.seeds)
             sampler.set_params(hosts)
+            sampled = [r < USERS and float(temperature[r]) != 0 and int(top_k[r]) != 1 for r in range(B)]
             for d in range(DRAWS):
-                uniform = torch.rand(B, generator=gen)
-                sampler.set_uniforms(uniform)
+                uniform = streams.draw(sampled)
                 tokens = read_tokens(sampler(logits_tt, token_input=token_input))
                 assert torch.equal(read_tokens(token_input), tokens), "token_input differs from next_tokens"
                 ref = reference(logits, temperature, top_k, top_p, uniform)
@@ -152,13 +177,13 @@ def test_device_sampler(mesh_device):
         # Traced: capture once, replay with new uniforms (the last parameter set).
         if s == len(SCALES) - 1:
             sampler(logits_tt, token_input=token_input)
+            streams.draw(sampled)  # that step's draw; the capture below runs nothing
             ttnn.synchronize_device(plan.mesh_device)
             trace = ttnn.begin_trace_capture(plan.mesh_device, cq_id=0)
             out = sampler(logits_tt, token_input=token_input)
             ttnn.end_trace_capture(plan.mesh_device, trace, cq_id=0)
             for d in range(DRAWS):
-                uniform = torch.rand(B, generator=gen)
-                sampler.set_uniforms(uniform)
+                uniform = streams.draw(sampled)
                 ttnn.execute_trace(plan.mesh_device, trace, cq_id=0, blocking=False)
                 tokens = read_tokens(out)
                 b, e = check(
@@ -173,14 +198,7 @@ def test_device_sampler(mesh_device):
                 ttnn.execute_trace(plan.mesh_device, trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(plan.mesh_device)
             per = (time.perf_counter() - t0) / REPLAYS
-            t0 = time.perf_counter()
-            for _ in range(REPLAYS):
-                sampler.set_uniforms(torch.rand(B, generator=gen))
-            ttnn.synchronize_device(plan.mesh_device)
-            logger.info(
-                f"DeviceSampler traced: {1e3 * per:.3f} ms per step; set_uniforms "
-                f"{1e3 * (time.perf_counter() - t0) / REPLAYS:.3f} ms"
-            )
+            logger.info(f"DeviceSampler traced: {1e3 * per:.3f} ms per step")
             ttnn.release_trace(plan.mesh_device, trace)
         logits_tt.deallocate(True)
     logger.info(f"{compared} rows compared, {exact_rows} inside the candidates, mismatches there: {bad}")

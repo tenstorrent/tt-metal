@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Times each stage of DeviceSampler on one Galaxy row (TP=8): every stage is captured in its own trace and replayed
-back to back. Also dumps the stages' outputs for a row with tied maxima. Run with pytest under the Galaxy lock."""
+"""DeviceSampler stages on one Galaxy row (TP=8): checks each chip's candidates and normalizer against the host, then
+times each stage, captured in its own trace and replayed back to back. Run with pytest under the Galaxy lock."""
 
 import time
 
@@ -17,6 +17,7 @@ from models.experimental.mimo_v2_6_flash.tt.device_sampler import DeviceSampler
 
 VOCAB = 152576
 B = 32
+USERS = 4
 REPLAYS = 30
 
 
@@ -37,14 +38,20 @@ def timed(plan, name, fn):
     return out
 
 
+def raw_words(t, chip=0):
+    """A one-tile uint32 TILE tensor's page as stored (faces in order), int64 [1024]."""
+    x = ttnn.to_torch(ttnn.get_device_tensors(t)[chip]).to(torch.int64).reshape(32, 32) & 0xFFFFFFFF
+    return torch.cat([x[r : r + 16, c : c + 16].reshape(-1) for r in (0, 16) for c in (0, 16)])
+
+
 @pytest.mark.parametrize("device_params", [{**GALAXY_DEVICE_PARAMS, "trace_region_size": 64 << 20}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_sampler_stages(mesh_device):
     plan = MeshPlan(dp_submeshes(mesh_device)[0])
     vl = VOCAB // plan.tp
-    s = DeviceSampler(plan, vl, 4, B)
+    s = DeviceSampler(plan, vl, USERS, B)
     torch.manual_seed(0)
-    logits = torch.randn(1, 1, B, VOCAB) * 3
+    logits = torch.randn(1, 1, B, VOCAB) * torch.tensor([3.0, 6.0, 1.0, 2.0] + [1.0] * (B - USERS)).reshape(1, 1, -1, 1)
     logits[0, 0, 0, 70000] = logits[0, 0, 0, 3000] = logits[0, 0, 0].max() + 1.0
     logits_tt = ttnn.from_torch(
         logits,
@@ -54,70 +61,35 @@ def test_sampler_stages(mesh_device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=plan.shard(3),
     )
-    hosts, _ = s.host_params(
-        torch.tensor([0.6, 1.0, 1.0, 1.0]), torch.tensor([-1, -1, -1, -1]), torch.tensor([0.95] * 4)
-    )
-    s.set_params(hosts)
+    temps = torch.tensor([0.6, 1.0, 0.8, 1.5])
+    host, _ = s.host_params(temps, torch.tensor([-1, -1, -1, -1]), torch.tensor([0.95] * USERS))
+    s.set_params(host)
 
-    # Row 0 intermediates against the host, eagerly before any trace.
+    # Each chip's sorted list and normalizer against the host, eagerly before any trace.
     s._scan(logits_tt)
     s._chip_merge()
-    sums = s._normalizer(logits_tt)
-    cands = plan.all_gather(s.chip_cands, dim=-1)
-    sums_all = plan.all_gather(sums, dim=-1)
-    s._merge(cands, sums_all, None)
-    t = 0.6
-    chips = logits[0, 0, 0].double().reshape(plan.tp, vl)
-    dev_sums = ttnn.to_torch(ttnn.get_device_tensors(sums_all)[0]).float()  # [1, 1, 32, tp * 32]
-    dev_max = [ttnn.to_torch(d).float()[0, 0, :4, 0].tolist() for d in ttnn.get_device_tensors(s.chip_max)]
     for ch in range(plan.tp):
-        m = chips[ch].max()
-        host = torch.exp((chips[ch] - m) / t).sum()
-        logger.info(
-            f"DUMP chip {ch}: max {float(m):.5f} dev max {dev_max[ch][0]:.5f} host S {float(host):.6f} device S {float(dev_sums[0, 0, 0, ch * 32]):.6f}"
-        )
-    tok = ttnn.to_torch(ttnn.get_device_tensors(s.next_tokens)[0])
-    logger.info(f"DUMP tokens {tok.reshape(-1)[:4].tolist()}")
-    host0 = logits[0, 0, :, :vl].double()
-    m0 = host0.max(dim=-1, keepdim=True).values
-    x = ttnn.subtract(logits_tt, s.chip_max)
-    hx = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).double()[0, 0]
-    logger.info(
-        f"DUMP sub rows0-5 max err {[(hx[r] - (host0[r] - (m0[r] if r < 4 else 0))).abs().max().item() for r in range(6)]}"
-    )
-    inv = ttnn.to_torch(ttnn.get_device_tensors(s.inv_temp)[0]).double()[0, 0, :6, 0]
-    logger.info(f"DUMP inv_temp {inv.tolist()}")
-    y = ttnn.multiply(x, s.inv_temp)
-    hy = ttnn.to_torch(ttnn.get_device_tensors(y)[0]).double()[0, 0]
-    logger.info(f"DUMP mul row0 {hy[0, :4].tolist()} host {((host0[0, :4] - m0[0]) / 0.6).tolist()}")
-    e = ttnn.exp(y)
-    he = ttnn.to_torch(ttnn.get_device_tensors(e)[0]).double()[0, 0]
-    logger.info(f"DUMP exp row0 sum {he[0].sum().item()} row1 {he[1].sum().item()} row5 {he[5].sum().item()}")
-    ss = ttnn.sum(e, dim=-1, keepdim=True)
-    hs = ttnn.to_torch(ttnn.get_device_tensors(ss)[0]).double()[0, 0, :6, 0]
-    logger.info(f"DUMP sum {hs.tolist()}")
+        words = raw_words(s.chip_cands, ch)
+        for u in range(USERS):
+            row = logits[0, 0, u, ch * vl : (ch + 1) * vl].double()
+            vals, idx = torch.sort(row, descending=True, stable=True)
+            got = words[u * 64 : u * 64 + 64].reshape(32, 2)
+            assert torch.equal(
+                got[:, 1], idx[:32]
+            ), f"chip {ch} user {u}: ids {got[:8, 1].tolist()} != {idx[:8].tolist()}"
+            host_s = float(torch.exp((row - vals[0]) / float(temps[u])).sum())
+            dev_s = int(words[512 + u * 4] + (words[512 + u * 4 + 1] << 32)) / 2**30
+            assert abs(dev_s - host_s) <= 2e-6 * host_s, f"chip {ch} user {u}: normalizer {dev_s} != {host_s}"
+            if ch < 2:
+                logger.info(f"DUMP chip {ch} user {u}: normalizer device {dev_s:.7f} host {host_s:.7f}")
 
-    logger.info(f"STAGE grid {plan.mesh_device.compute_with_storage_grid_size()}")
     timed(plan, "scan", lambda: s._scan(logits_tt))
-    s64 = DeviceSampler(plan, vl, 4, B, scan_cores=64)
+    timed(plan, "chip_merge", lambda: s._chip_merge())
+    cands = timed(plan, "gather_cands", lambda: plan.all_gather(s.chip_cands, dim=-1))
+    timed(plan, "merge", lambda: s._merge(cands, None))
+    timed(plan, "full", lambda: s(logits_tt))
+    s64 = DeviceSampler(plan, vl, USERS, B, scan_cores=64)
+    s64.set_params(host)
     timed(plan, "scan64", lambda: s64._scan(logits_tt))
     timed(plan, "chip_merge64", lambda: s64._chip_merge())
-    timed(plan, "chip_merge", lambda: s._chip_merge())
-    sums = timed(plan, "normalizer", lambda: s._normalizer(logits_tt))
-    timed(plan, "norm_sub_mul", lambda: ttnn.multiply(ttnn.subtract(logits_tt, s.chip_max), s.inv_temp))
-    e = ttnn.exp(logits_tt)
-    timed(plan, "norm_exp", lambda: ttnn.exp(logits_tt))
-    timed(plan, "norm_sum_w", lambda: ttnn.sum(e, dim=-1, keepdim=True))
-    eb = ttnn.typecast(e, ttnn.bfloat16)
-    timed(plan, "norm_sum_w_bf16", lambda: ttnn.sum(eb, dim=-1, keepdim=True))
-    for name in ("moreh_sum",):
-        f = getattr(ttnn, name, None)
-        if f is not None:
-            try:
-                timed(plan, "norm_" + name, lambda: f(e, dim=3, keepdim=True))
-            except Exception as ex:  # noqa: BLE001 - probe only
-                logger.info(f"STAGE norm_{name}: unsupported ({str(ex)[:120]})")
-    cands = timed(plan, "gather_cands", lambda: plan.all_gather(s.chip_cands, dim=-1))
-    sums_all = timed(plan, "gather_sums", lambda: plan.all_gather(sums, dim=-1))
-    timed(plan, "merge", lambda: s._merge(cands, sums_all, None))
-    timed(plan, "full", lambda: s(logits_tt))
+    timed(plan, "full64", lambda: s64(logits_tt))

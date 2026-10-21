@@ -28,11 +28,12 @@ Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample
 steps per replica (captured in ``warmup_model_decode``) that also computes each slot's token and writes it, with the
 slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back): the greedy step (GreedyHead), or,
 while a lane holds a row with temperature > 0, the sampled step (DeviceSampler: temperature, top_k up to
-``max_device_top_k``, top_p; one uniform per row from the host each step). With ``sample_on_device_mode`` the plugin
+``max_device_top_k``, top_p; its random stream is on device, seeded with the parameters). With
+``sample_on_device_mode`` the plugin
 samples on device unless a row asks for what the sampler lacks (a top_k past its candidates, pure temperature
 sampling without top_p or top_k, a seed, penalties, logprobs or structured output send the whole batch to host
 sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
-``supports_async_decode``): a steady step copies nothing but the sampled rows' uniforms (the trace reads its RoPE
+``supports_async_decode``): a steady step copies nothing (the trace reads its RoPE
 cos / sin from device tables at its own positions; past 128K context it copies those of the adapter's own position
 counter), and its tokens are read back without blocking. Prefill runs
 eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
@@ -508,8 +509,6 @@ class MiMoV2ForCausalLM:
                 )
             if enable_trace and model.decode_trace is None:
                 raise RuntimeError("decode trace requested before warmup_model_decode captured it")
-            if sample:
-                model.sampler.set_uniforms(torch.rand(model.max_batch))
             if reload_inputs:
                 handle = model.decode_enqueue(tok, pos, sample=sample)
             else:
