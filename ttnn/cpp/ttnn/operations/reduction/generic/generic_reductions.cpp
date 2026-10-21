@@ -699,7 +699,6 @@ Tensor sum(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
@@ -711,7 +710,7 @@ Tensor sum(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
+            /*correction=*/true,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
@@ -725,7 +724,6 @@ Tensor mean(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
@@ -737,7 +735,7 @@ Tensor mean(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
+            /*correction=*/true,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
@@ -751,7 +749,6 @@ Tensor max(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
     /* Scaling is applied after reduction, so flip the op for negative scalars:
@@ -764,7 +761,7 @@ Tensor max(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
+            /*correction=*/true,
             sub_core_grids,
             fast_and_approximate_mode);
     }
@@ -775,7 +772,7 @@ Tensor max(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        correction,
+        /*correction=*/true,
         sub_core_grids,
         fast_and_approximate_mode);
 }
@@ -787,7 +784,6 @@ Tensor min(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
     TT_FATAL(
@@ -805,7 +801,7 @@ Tensor min(
             memory_config_arg,
             compute_kernel_config,
             scalar,
-            correction,
+            /*correction=*/true,
             sub_core_grids,
             fast_and_approximate_mode);
     }
@@ -816,7 +812,7 @@ Tensor min(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        correction,
+        /*correction=*/true,
         sub_core_grids,
         fast_and_approximate_mode);
 }
