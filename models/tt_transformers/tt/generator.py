@@ -658,22 +658,28 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # core range". Leaving it in DECODE matches main.
             self.mode = previous_mode
 
-    def _will_row_shard_prefill(self, tokens, sampling_params):
+    def _will_row_shard_prefill(self, tokens, sampling_params, prompt_lens=None):
         """Whether this prefill will be dispatched to the model's row-sharded batched path.
 
         Single source of truth for that decision -- both the dispatch itself and the choice of where to
         hoist decode trace preparation depend on it, and they must not drift apart.
 
-        Only used when device sampling is active (sampling_params is not None) and the prompt uses the
-        harmony chat template (first token is <|start|>=200006). Host sampling needs the single-user
-        prefill path that returns full logits per user.
+        Only used when device sampling is active (sampling_params is not None) and every prompt is a
+        harmony chat prompt ending in the assistant header (<|start|>=200006, assistant=173781): that path
+        skips the LM head and returns <|channel|>, which only continues that header. Host sampling needs
+        the single-user prefill path that returns full logits per user.
         """
-        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        if prompt_lens is None:
+            prompt_lens = [tokens.shape[1]] * tokens.shape[0]
+        ends_with_assistant_header = all(
+            int(n) >= 2 and int(tokens[i, 0]) == 200006 and tokens[i, int(n) - 2 : int(n)].tolist() == [200006, 173781]
+            for i, n in enumerate(prompt_lens)
+        )
         return bool(
             getattr(self.model[0], "users_row_sharded", False)
             and tokens.shape[0] > 1
             and sampling_params is not None
-            and is_harmony
+            and ends_with_assistant_header
         )
 
     def _overrides_prefill_capture(self):
@@ -1245,7 +1251,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and not self._defer_trace_recording
                 and not self._defer_prefill_recording
                 and not self._any_trace_captured()
-                and not self._will_row_shard_prefill(tokens, sampling_params)
+                and not self._will_row_shard_prefill(tokens, sampling_params, prompt_lens)
                 and not self._overrides_prefill_capture()
                 and not self._uses_prefetcher()
             )
@@ -1272,7 +1278,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Excluded: the row-sharded batched path deadlocks either way round -- once a decode program is
             # compiled its MoE dispatch can no longer be trace-captured, and compiling decode before any
             # prefill deadlocks in the MoE combine. It keeps main's late decode compile.
-            and not self._will_row_shard_prefill(tokens, sampling_params)
+            and not self._will_row_shard_prefill(tokens, sampling_params, prompt_lens)
             # Excluded: models that customise the capture step. Deferred recording prepares through the
             # base helper and records later, which skips whatever a _capture_trace_prefill override does
             # between its compile pass and its capture.
@@ -1349,7 +1355,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # See _will_row_shard_prefill for when this path is taken.
-        if self._will_row_shard_prefill(tokens, sampling_params):
+        if self._will_row_shard_prefill(tokens, sampling_params, prompt_lens):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,
