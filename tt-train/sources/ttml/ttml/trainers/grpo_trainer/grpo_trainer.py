@@ -59,7 +59,8 @@ class RolloutBatch:
         completions: B ragged completion token IDs (one per prompt in
             single-generation mode; per prompt-completion pair otherwise).
         logprobs: [B, max_completion_length] float32. Per-generated-token
-            log pi_old(a_t | s_t). Padding positions are don't-care; the
+            log pi_old(a_t | s_t): the full-vocab log_softmax of the raw logits,
+            without temperature/top_k/top_p. Padding positions are don't-care; the
             trainer masks them out.
     """
 
