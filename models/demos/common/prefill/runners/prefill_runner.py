@@ -40,6 +40,7 @@ from models.demos.common.prefill.runners.migration import (
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
     activation_global_spec,
+    axis_mapper_config,
     build_h2d_service,
     compute_layer_split,
 )
@@ -51,6 +52,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     make_h2d_spec,
     num_mtp_tokens,
     open_mesh_device,
+    stage_mesh_shape,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
@@ -97,22 +99,36 @@ LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4
 # One metadata-only D2H socket page: the ack record padded to the PCIe alignment.
 LAYER_ACK_RECORD_BYTES = 64
 
-H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 MODEL_CFG = ADAPTER.model_config
 
-D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
-    placements=[
-        ttnn.PlacementShard(2),
-        ttnn.PlacementShard(3) if ADAPTER.pipeline_activation_emb_tp_sharded else ttnn.PlacementReplicate(),
-    ]
-)
-INDEX_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementShard(3)])
-
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
-GLOBAL_MESH_SHAPE = (_sp, _tp)
+# Mesh axis SP runs on; TP takes the other. 1 for a 4x4 tray-half stage, whose only ring is axis 1.
+SP_AXIS = int(os.environ.get("PREFILL_SP_AXIS", 0))
+TP_AXIS = 1 - SP_AXIS
+GLOBAL_MESH_SHAPE = stage_mesh_shape(_sp, _tp, SP_AXIS)
+
+# Token ids shard over SP; the sequence (dim 2) of the D2D activation shards over SP and its embedding
+# (dim 3) over TP.
+H2D_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(0), ttnn.PlacementReplicate(), SP_AXIS)
+D2D_MAPPER_CONFIG = axis_mapper_config(
+    ttnn.PlacementShard(2),
+    ttnn.PlacementShard(3) if ADAPTER.pipeline_activation_emb_tp_sharded else ttnn.PlacementReplicate(),
+    SP_AXIS,
+)
+# Indexer indices: rows (dim 2) over SP, top-k (dim 3) over TP.
+INDEX_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(2), ttnn.PlacementShard(3), SP_AXIS)
+
+
+def _weight_cache_path():
+    # Only adapters with an SP-axis-keyed cache take sp_axis; the rest have only ever run at SP_AXIS=0.
+    if SP_AXIS == 0:
+        return ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE)
+    return ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE, sp_axis=SP_AXIS)
+
+
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
@@ -251,8 +267,10 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     assert len(chips) == 1, f"expected one chip whose lookahead starts at {meta['actual_end']}, got {chips}"
     device_tensors = ttnn.get_device_tensors(mtp_tokens)
     assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
-    # H2D_MAPPER_CONFIG shards SP over mesh axis 0 and device tensors are row-major, so chip c is device c * _tp
-    ids = ttnn.to_torch(device_tensors[chips[0] * _tp]).view(torch.int32).flatten()
+    # H2D_MAPPER_CONFIG shards SP over mesh axis SP_AXIS and device tensors are row-major, so SP chip c
+    # is device c * _tp at SP_AXIS=0 and device c at SP_AXIS=1.
+    sp_stride = GLOBAL_MESH_SHAPE[1] if SP_AXIS == 0 else 1
+    ids = ttnn.to_torch(device_tensors[chips[0] * sp_stride]).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
     provided = 0
     for tok in ids[:MTP_LEVELS].tolist():
@@ -400,7 +418,7 @@ def build_d2d_pipeline_endpoints(
 def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound: bool, outbound: bool):
     def _common():
         return dict(
-            global_spec=indexer_indices_global_spec(per_chip_shape, GLOBAL_MESH_SHAPE),
+            global_spec=indexer_indices_global_spec(per_chip_shape, (_sp, _tp)),
             mapper=ttnn.create_mesh_mapper(mesh_device, INDEX_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
@@ -566,7 +584,7 @@ def _forward_shutdown(
     d2d_out.release_fabric_links()
     if idx_out is not None:
         _, _, rows, k = idx_shape
-        sp, tp = GLOBAL_MESH_SHAPE
+        sp, tp = _sp, _tp  # factors; GLOBAL_MESH_SHAPE is (TP, SP) when SP runs on mesh axis 1
         idx_dummy = ttnn.from_torch(
             torch.zeros(1, 1, sp * rows, tp * k, dtype=torch.int64),
             dtype=ttnn.uint32,
@@ -1021,9 +1039,10 @@ def _print_config() -> None:
         ("PREFILL_MODEL", ADAPTER.name),
         ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)),
         ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)),
-        ("resolved weight_cache_path", str(ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE))),
+        ("resolved weight_cache_path", str(_weight_cache_path())),
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
+        ("PREFILL_SP_AXIS", f"{SP_AXIS} (mesh shape {GLOBAL_MESH_SHAPE})"),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         (
@@ -1081,6 +1100,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
+        "sp_axis": SP_AXIS,
         "mtp_levels": MTP_LEVELS,
         "mtp_decode_levels": MTP_DECODE_LEVELS,
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
@@ -1167,8 +1187,10 @@ def main() -> None:
         mtp_levels=MTP_LEVELS,
         mtp_decode_levels=MTP_DECODE_LEVELS,
         forward_chunks=FORWARD_CHUNKS,
-        weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        weight_cache_path=_weight_cache_path(),
         tp_shard_kv=TP_SHARD_KV,
+        sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
         sparse_kv_cache_format=_sparse_kv_cache_format(),
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
@@ -1201,7 +1223,7 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS_BUDGET, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
+    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS_BUDGET, sp_factor=_sp, mtp_levels=MTP_LEVELS)
     # The drafter partial rides beside the hidden, as a 2H width or as its own plane (the adapter's choice).
     dflash_plane = int(DFLASH_ENABLED and ADAPTER.dflash_partial_separate_plane)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED and not dflash_plane)
@@ -1235,7 +1257,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             return service
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS), service_id)
+        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS), service_id)
 
     inbound, outbound = D2DBoundary(), D2DBoundary()
     socket_receivers_file = None
