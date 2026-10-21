@@ -24,9 +24,15 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         the two global ``semaphores`` (entry and final arrival) must outlive the call: a peer writes them before
         this rank's call starts. Calls must be separated by an SP-line barrier.
 
+        With ``output_gate_program_config`` (a ``ttnn.MatmulMultiCoreReuseMultiCastProgramConfig``),
+        ``output_gate_input @ output_gate_weight`` runs in the same dispatch as ``ttnn.linear`` runs it with that
+        config, on its cores (``allowed_worker_cores``, or the grid from (0, 0)); its first
+        ``output_gate_copied_columns`` tile columns are copied from ``output_gate_copy_source`` by
+        ``output_gate_copy_cores``.
+
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: FP32 ``[B*H, K, K]`` entry states and the final state (valid on the
-            first and last chronological ranks).
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor | None]: FP32 ``[B*H, K, K]`` entry states, the final
+            state (valid on the first and last chronological ranks) and the output gate's BFLOAT16 output.
         )doc",
         &ttnn::experimental::kda::relay_affine_prefix,
         nb::arg("packed").noconvert(),
@@ -42,7 +48,16 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("cores"),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("entry_memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("output_gate_input") = nb::none(),
+        nb::arg("output_gate_weight") = nb::none(),
+        nb::arg("output_gate_program_config") = nb::none(),
+        nb::arg("output_gate_compute_kernel_config") = nb::none(),
+        nb::arg("output_gate_memory_config") = nb::none(),
+        nb::arg("output_gate_copy_source") = nb::none(),
+        nb::arg("output_gate_copy_source_column") = 0,
+        nb::arg("output_gate_copied_columns") = 0,
+        nb::arg("output_gate_copy_cores") = std::vector<tt::tt_metal::CoreCoord>{});
 }
 
 }  // namespace ttnn::operations::experimental::kda::relay_affine_prefix::detail

@@ -29,6 +29,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
+        factory/kda_projection.cpp
         factory/kda_factory_utils.cpp
         kda_performance_model.cpp
 )

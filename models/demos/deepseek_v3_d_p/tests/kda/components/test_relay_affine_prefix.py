@@ -77,7 +77,8 @@ def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
         num_links=_sp_links(mesh_device, 0),
         local_rows=_ROWS,
     )
-    entry, final = relay(packed, initial_tt, actual_start)
+    entry, final, gate = relay(packed, initial_tt, actual_start)
+    assert gate is None
     chained_entry, chained_final = distributed_prefix(
         packed,
         initial_tt,

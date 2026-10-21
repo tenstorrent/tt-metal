@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -49,21 +50,40 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.num_links > 0, "{}: num_links must be positive", operation_name);
     TT_FATAL(
         !attrs.cores || attrs.cores->size() >= attrs.num_links, "{}: needs a core per fabric link", operation_name);
+    if (attrs.projection) {
+        TT_FATAL(
+            attrs.cores && in.projection_input && in.projection_weight,
+            "{}: a projection needs its input, weight and the carry's cores",
+            operation_name);
+        kda_factory_detail::check_projection(
+            *in.projection_input, *in.projection_weight, attrs.projection->program_config, operation_name);
+    }
 }
 
 SelectFinalCarryOperation::spec_return_value_t SelectFinalCarryOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    return {tt::tt_metal::TensorSpec(
-        in.prefix_final.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::FLOAT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            attrs.output_mem_config))};
+    const auto spec =
+        [](const ttnn::Shape& shape, tt::tt_metal::DataType dtype, const tt::tt_metal::MemoryConfig& memory) {
+            return tt::tt_metal::TensorSpec(
+                shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
+        };
+    spec_return_value_t specs = {
+        spec(in.prefix_final.logical_shape(), tt::tt_metal::DataType::FLOAT32, attrs.output_mem_config)};
+    if (attrs.projection) {
+        auto shape = in.projection_input->logical_shape();
+        shape[-1] = in.projection_weight->logical_shape()[-1];
+        specs.push_back(spec(shape, tt::tt_metal::DataType::BFLOAT16, attrs.projection->output_mem_config));
+    }
+    return specs;
 }
 
 SelectFinalCarryOperation::tensor_return_value_t SelectFinalCarryOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    return {create_device_tensor(compute_output_specs(attrs, in)[0], in.prefix_final.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : compute_output_specs(attrs, in)) {
+        outputs.push_back(create_device_tensor(spec, in.prefix_final.device()));
+    }
+    return outputs;
 }
 
 Tensor select_final_carry(

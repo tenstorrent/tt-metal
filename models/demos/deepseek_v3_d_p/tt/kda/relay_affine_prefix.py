@@ -11,6 +11,8 @@ another, so one relay per mesh and geometry is shared.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import ttnn
 
 # Fabric configs that wrap a mesh axis (axis 0 = rows), as ttnn::ccl::get_usable_topology sees them.
@@ -39,6 +41,24 @@ def persistent_semaphores(mesh_device, count: int) -> list:
     # The zeroed counters must land before any device's program can increment a peer's.
     ttnn.synchronize_device(mesh_device)
     return semaphores
+
+
+@dataclass(frozen=True)
+class RelayOutputGate:
+    """input @ weight run in the relay's dispatch on worker cores the relay leaves idle (ttnn.linear's 2D multicast
+    matmul with program_config, on its cores):
+    the output's first ``copied_columns`` tile columns are copied from ``copy_source`` (from tile column
+    ``copy_source_column``) by ``copy_cores``, the projection's columns follow."""
+
+    input: ttnn.Tensor
+    weight: ttnn.Tensor
+    program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+    compute_config: ttnn.DeviceComputeKernelConfig
+    memory_config: ttnn.MemoryConfig
+    copy_source: ttnn.Tensor | None = None
+    copy_source_column: int = 0
+    copied_columns: int = 0
+    copy_cores: list = field(default_factory=list)
 
 
 class RelayAffinePrefix:
@@ -105,8 +125,22 @@ class RelayAffinePrefix:
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
 
-    def __call__(self, packed, initial_state, actual_start):
-        """Return this rank's entry states and the final state, both [BH, K, K] FP32."""
+    def __call__(self, packed, initial_state, actual_start, output_gate: RelayOutputGate | None = None):
+        """Return this rank's entry states and the final state, both [BH, K, K] FP32, and the output gate's output
+        (None without one)."""
+        gate = {}
+        if output_gate is not None:
+            gate = dict(
+                output_gate_input=output_gate.input,
+                output_gate_weight=output_gate.weight,
+                output_gate_program_config=output_gate.program_config,
+                output_gate_compute_kernel_config=output_gate.compute_config,
+                output_gate_memory_config=output_gate.memory_config,
+                output_gate_copy_source=output_gate.copy_source,
+                output_gate_copy_source_column=output_gate.copy_source_column,
+                output_gate_copied_columns=output_gate.copied_columns,
+                output_gate_copy_cores=list(output_gate.copy_cores),
+            )
         return ttnn.experimental.kda.relay_affine_prefix(
             packed,
             initial_state,
@@ -120,4 +154,5 @@ class RelayAffinePrefix:
             cores=self.cores,
             sequence_parallel_axis=self.axis,
             compute_kernel_config=self.compute_config,
+            **gate,
         )
