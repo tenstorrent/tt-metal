@@ -179,8 +179,9 @@ void kernel_main() {
     const auto tile_row_map_accessor = TensorAccessor(tile_row_map_args, tile_row_map_addr);
     CircularBuffer cb_tile_row_map(tile_row_map_cb);
     if (tile_row_start < tile_row_end) {
-        noc.async_read(
-            tile_row_map_accessor, cb_tile_row_map, tile_row_map_accessor.get_aligned_page_size(), {.page_id = 0}, {});
+        // The accessor's page size is the compiling launch's; read the live entries (16 B rounded).
+        const uint32_t map_bytes = (total_tile_rows * sizeof(uint32_t) + 15u) & ~15u;
+        noc.async_read(tile_row_map_accessor, cb_tile_row_map, map_bytes, {.page_id = 0}, {});
     }
     volatile tt_l1_ptr uint32_t* tile_row_map =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_tile_row_map.get_write_ptr());
