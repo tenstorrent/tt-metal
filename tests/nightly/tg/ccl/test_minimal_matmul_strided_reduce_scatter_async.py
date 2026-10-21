@@ -11,8 +11,11 @@ from models.common.utility_functions import is_wormhole_b0
 
 from tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async import (
     MinimalMatmulStridedReduceScatterTestConfig,
+    create_global_semaphores,
     run_minimal_matmul_strided_reduce_scatter_impl,
 )
+from tests.ttnn.utils_for_testing import assert_program_cache_flat
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def _make_fabric_router_config(max_packet_payload_size_bytes):
@@ -1116,3 +1119,225 @@ def test_minimal_matmul_strided_reduce_scatter_adopted_blockings(mesh_device, nu
         cluster_axis=0,
         mm_window_blocks=cfg.mm_window_blocks,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# MiniMax-H3 ff2 (K=3584, N=5376, reduce-scatter over the 4-device TP ring): the packed row count
+# is a runtime quantity, so one program serves every length the DiT serves (74..470 tile rows per
+# chip) with the program cache flat; the ring semaphore sets alternate across calls as in the model.
+# ---------------------------------------------------------------------------------------------
+
+H3_FF2_K = 3584
+H3_FF2_N = 5376
+# 12x8 matmul grid, (6, 4, 8) blocking, subblock (2, 2), 2-block L1 window, 5 RS workers per link.
+H3_FF2_BLOCKING = dict(M_block_size=6, K_block_size=4, N_block_size=8, subblock_h=2, subblock_w=2)
+H3_FF2_MM_GRID = ttnn.CoreCoord(12, 8)
+H3_FF2_NUM_LINKS = 2
+H3_FF2_RS_WORKERS_PER_LINK = 5
+H3_FF2_WINDOW_BLOCKS = 2
+# 5 s 16:9 first (the warm length), then the smallest served length and three more up to the cap.
+H3_TILE_ROWS = (148, 74, 287, 427, 470)
+H3_CAPACITY_TILE_ROWS = 470
+H3_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}
+
+
+class _H3FusedFf2:
+    """One H3 ff2 MMRS layer on the mesh: fixed weights, counter arrays and two alternating
+    semaphore sets. `run` takes activations of any row count."""
+
+    def __init__(self, mesh_device, cluster_axis, dtype=ttnn.bfloat16, seed=0):
+        import torch
+
+        self.mesh_device = mesh_device
+        self.cluster_axis = cluster_axis
+        self.ring = mesh_device.shape[cluster_axis]
+        self.dtype = dtype
+        self.slice_n = H3_FF2_N // self.ring
+        self.calls = 0
+        self.dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        self.l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+        torch.manual_seed(seed)
+        torch_weight = torch.randn([self.ring, 1, H3_FF2_K, H3_FF2_N], dtype=torch.float32)
+        shard_dims = [None, None]
+        shard_dims[cluster_axis] = 0
+        self.weight = ttnn.from_torch(
+            torch_weight,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=self.dram,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+        )
+        # The ring sums the per-device partial products, so the golden is x @ sum_d(W_d).
+        self.torch_weight_sum = torch_weight.sum(dim=0)
+        self.torch_gate = torch.randn([1, 1, 1, self.slice_n], dtype=torch.float32)
+        self.gate = self._replicate(self.torch_gate)
+
+        grid = mesh_device.compute_with_storage_grid_size()
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        slots = grid.x * grid.y
+        counter_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self.progress_counters = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([slots, slots]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, counter_mem
+        )
+        self.credit_counters = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([slots, slots]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, counter_mem
+        )
+        self.semaphores = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(2)]
+        self.barriers = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(2)]
+
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.matmul_config = ttnn.MinimalMatmulConfig(**H3_FF2_BLOCKING, compute_with_storage_grid_size=H3_FF2_MM_GRID)
+
+    def _replicate(self, torch_tensor):
+        # Converted and tilized on the host: keeps the NaN poison and runs no tilize program on
+        # the device, so the program cache only ever sees the MMRS op.
+        return ttnn.from_torch(
+            torch_tensor,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=self.dtype,
+            memory_config=self.dram,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            preserve_nan_values=True,
+        )
+
+    def inputs(self, rows, residual_rows=None):
+        """Fresh activations and residual for `rows`; the residual may be taller (NaN beyond rows)."""
+        import torch
+
+        residual_rows = residual_rows or rows
+        torch_x = torch.randn([1, 1, rows, H3_FF2_K], dtype=torch.float32)
+        torch_a = torch.randn([1, 1, residual_rows, self.slice_n], dtype=torch.float32)
+        torch_a[:, :, rows:, :] = float("nan")
+        reduced = torch_x @ self.torch_weight_sum
+        golden = [
+            torch.addcmul(torch_a[:, :, :rows, :], chunk, self.torch_gate, value=1.0)
+            for chunk in torch.chunk(reduced, self.ring, dim=3)
+        ]
+        return self._replicate(torch_x), self._replicate(torch_a), golden
+
+    def run(self, x, residual, rs_output=None):
+        s = self.calls % 2
+        self.calls += 1
+        _, out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            x,
+            self.weight,
+            3,
+            self.semaphores[s],
+            ttnn.CoreCoord(0, H3_FF2_MM_GRID.y),
+            num_links=H3_FF2_NUM_LINKS,
+            memory_config_mm=self.l1,
+            rs_output_mem_config=self.dram,
+            rs_intermediate_mem_config=self.dram,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=self.cluster_axis,
+            config=self.matmul_config,
+            compute_kernel_config=self.compute_config,
+            barrier_semaphore=self.barriers[s],
+            num_workers_per_link=H3_FF2_RS_WORKERS_PER_LINK,
+            chunk_width_in_mm_blocks=1,
+            optional_rs_output_tensor=rs_output,
+            fused_ternary_scalar=1.0,
+            addcmul_input_tensor1=residual,
+            addcmul_input_tensor2=self.gate,
+            mm_progress_counters=self.progress_counters,
+            mm_window_blocks=H3_FF2_WINDOW_BLOCKS,
+            mm_credit_counters=self.credit_counters,
+        )
+        return out
+
+    def to_torch(self, out):
+        """Concatenate the ring's slices along N; the other mesh axis is replicated and dropped."""
+        concat_mesh_shape = list(self.mesh_device.shape)
+        concat_mesh_shape[1 - self.cluster_axis] = 1
+        concat_dims = [3, 3]
+        concat_dims[1 - self.cluster_axis] = 0
+        return ttnn.to_torch(
+            out,
+            mesh_composer=ttnn.create_mesh_composer(
+                self.mesh_device, ttnn.MeshComposerConfig(concat_dims, ttnn.MeshShape(concat_mesh_shape))
+            ),
+        )
+
+    def check(self, out, golden, rows, allowed_pcc=0.99):
+        import torch
+
+        torch_out = self.to_torch(out)[:, :, :rows, :]
+        pccs = []
+        for device_id, chunk in enumerate(torch.chunk(torch_out, self.ring, dim=3)):
+            passed, pcc = comp_pcc(golden[device_id], chunk, allowed_pcc)
+            logger.info(f"rows={rows} ring position {device_id}: PCC {pcc:.6f}")
+            assert passed, f"rows={rows} ring position {device_id} RS FAILED: PCC {pcc}"
+            pccs.append(pcc)
+        return min(pccs)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("device_params", [H3_DEVICE_PARAMS], indirect=True, ids=["fabric_ring"])
+def test_minimal_matmul_strided_reduce_scatter_h3_flat_cache(mesh_device):
+    """Warm at 148 tile rows, then serve the other H3 lengths from the same program (no misses,
+    alternating semaphore sets), with PCC against torch at every length. A dtype change must miss."""
+    if is_wormhole_b0():
+        pytest.skip("MiniMax-H3 12x8 matmul grid needs the Blackhole 12x10 compute grid")
+    bf16 = _H3FusedFf2(mesh_device, cluster_axis=0, dtype=ttnn.bfloat16)
+    bf8 = _H3FusedFf2(mesh_device, cluster_axis=0, dtype=ttnn.bfloat8_b, seed=1)
+    pcc_by_rows = {}
+
+    def run(variant):
+        layer, tile_rows = variant
+        rows = tile_rows * 32
+        x, residual, golden = layer.inputs(rows)
+        out = layer.run(x, residual)
+        allowed_pcc = 0.99 if layer.dtype == ttnn.bfloat16 else 0.98
+        pcc_by_rows[(str(layer.dtype), rows)] = layer.check(out, golden, rows, allowed_pcc)
+
+    variants = [(bf16, tile_rows) for tile_rows in H3_TILE_ROWS] + [(bf8, H3_TILE_ROWS[0])]
+    entries = assert_program_cache_flat(mesh_device, run, variants, warm_index=0, miss_indices=(len(variants) - 1,))
+    logger.info(f"program cache entries after the sweep: {entries}; PCC per (dtype, rows): {pcc_by_rows}")
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("device_params", [H3_DEVICE_PARAMS], indirect=True, ids=["fabric_ring"])
+def test_minimal_matmul_strided_reduce_scatter_h3_nan_pad(mesh_device):
+    """A capacity-sized persistent RS output and a capacity-sized residual, NaN-poisoned beyond the
+    live rows: the live rows must match torch and the rows beyond must never be read or written."""
+    import torch
+
+    if is_wormhole_b0():
+        pytest.skip("MiniMax-H3 12x8 matmul grid needs the Blackhole 12x10 compute grid")
+    layer = _H3FusedFf2(mesh_device, cluster_axis=0)
+    cap_rows = H3_CAPACITY_TILE_ROWS * 32
+    rs_output = layer._replicate(torch.full([1, 1, cap_rows, layer.slice_n], float("nan"), dtype=torch.float32))
+    assert torch.isnan(layer.to_torch(rs_output)).all(), "the NaN poison must survive the upload"
+
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    previous = None
+    for tile_rows in (148, 74, 287):
+        rows = tile_rows * 32
+        x, residual, golden = layer.inputs(rows, residual_rows=cap_rows)
+        out = layer.run(x, residual, rs_output=rs_output)
+        torch_out = layer.to_torch(out)
+        layer.check(out, golden, rows)
+        beyond = torch_out[:, :, rows:, :]
+        if previous is None:
+            assert torch.isnan(beyond).all(), "rows beyond the live length were written"
+        else:
+            # Rows beyond this call's length must still hold whatever the earlier calls left there.
+            stale = previous[:, :, rows:, :]
+            assert torch.equal(beyond.nan_to_num(-1.0), stale.nan_to_num(-1.0)), "rows beyond the live length were written"
+        assert torch.isnan(torch_out[:, :, cap_rows - 32 :, :]).all(), "capacity rows were written"
+        previous = torch_out
+    assert mesh_device.num_program_cache_entries() == 1, "the three lengths must share one program"
