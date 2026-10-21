@@ -459,6 +459,30 @@ struct OperationFpuFastTilizeWh : Operation<Exu::Fpu, Hoistable::No>
         AddrMod>;
 };
 
+// ---------------------------
+// OPERATION - SFPU TYPECAST
+// ---------------------------
+
+struct OperationSfpuTypecast : Operation<Exu::Sfpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationSfpuTypecast, T>;
+
+    struct InputFormat : Field<std::uint32_t>
+    {
+    };
+
+    struct OutputFormat : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationSfpuTypecast,
+        /* Fields */
+        InputFormat,
+        OutputFormat>;
+};
+
 // ------------------
 // OPERATION - PACK
 // ------------------
@@ -535,7 +559,7 @@ using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBina
 
 using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuFastTilizeWh>;
 
-using SfpuOperations = OperationList<>;
+using SfpuOperations = OperationList<OperationSfpuTypecast>;
 
 using PackOperations = OperationList<OperationPack, OperationPackUntilize, OperationPackFastTilizeWh>;
 

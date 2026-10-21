@@ -11,7 +11,11 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_quant.h"  // for INT8_SIGN_MASK
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
+#include "sfpu/common.h"
+#include "sfpu/traverse.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace sfpi;
 
@@ -1190,3 +1194,513 @@ inline void init_typecast_int8_to_fp32() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+namespace llk::sfpu {
+
+namespace detail {
+
+template <DataFormat...>
+inline constexpr bool typecast_always_false = false;
+
+/// No SFPU work: the unpacker / packer convert the pair on their own.
+struct TypecastNoop {
+    static constexpr bool RUNS_SFPU = false;
+
+    static void init() {}
+};
+
+/// Base of every pair that runs an SFPU kernel.
+struct TypecastKernel {
+    static constexpr bool RUNS_SFPU = true;
+};
+
+/**
+ * @brief The kernel for one (read, write) pair: the formats as @ref Typecast::read_format and
+ *        @ref Typecast::write_format see them.
+ *
+ * One specialization per supported pair. A pair that shares another pair's kernel inherits it. A pair with no
+ * specialization is not a supported typecast and fails to compile when used.
+ *
+ * execute converts one face: Typecast::execute walks the faces of SHAPE with walk_faces and calls it once per
+ * face, so a body covers the face's vectors with iterate_face_vectors<SHAPE> and never counts iterations itself.
+ *
+ * todo(sstanisic): skeleton. Each body names the ckernel::sfpu::init_typecast_* / calculate_typecast_* it
+ * will absorb; those free functions stay as the reference implementation until then. Their ITERATIONS loop
+ * becomes iterate_face_vectors<SHAPE>.
+ */
+template <DataFormat IN, DataFormat OUT>
+struct TypecastImpl {
+    static_assert(typecast_always_false<IN, OUT>, "not a supported typecast");
+};
+
+/// Same read and write format is NOOP.
+template <DataFormat FORMAT>
+struct TypecastImpl<FORMAT, FORMAT> : TypecastNoop {};
+
+// ---- Float32 -> ------------------------------------------------------------------------------------------------
+
+/// Round to nearest even: the packer's own Float32 -> Float16_b conversion rounds ties away from zero (#34376).
+/// Block-float outputs write as Float16_b, so Float32 -> Bfp* rounds here first as well.
+template <>
+struct TypecastImpl<DataFormat::Float32, DataFormat::Float16_b> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_fp32_to_fp16b
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_fp32_to_fp16b
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Float32, DataFormat::Int32> : TypecastKernel {
+    static void init() {}
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_fp32_to_int32
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Float32, DataFormat::UInt32> : TypecastKernel {
+    static void init() {}
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_fp32_to_uint32
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Float32, DataFormat::UInt16> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_fp32_to_uint16
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_fp32_to_uint16<.., IS_FP32_DEST_ACC_EN>
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Float32, DataFormat::UInt8> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_fp32_to_uint8
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_fp32_to_uint8
+    }
+};
+
+/// Int8 is packed from the same byte as UInt8.
+template <>
+struct TypecastImpl<DataFormat::Float32, DataFormat::Int8> : TypecastImpl<DataFormat::Float32, DataFormat::UInt8> {};
+
+// ---- Float16_b (and Bfp8_b, Bfp4_b, Bfp2_b) -> : reads as the same fp32 as Float32, except there is nothing to
+// ---- round for a Float16_b write, so only that pair differs
+// -----------------------------
+
+template <>
+struct TypecastImpl<DataFormat::Float16_b, DataFormat::Float32> : TypecastNoop {};
+
+template <>
+struct TypecastImpl<DataFormat::Float16_b, DataFormat::Int32> : TypecastImpl<DataFormat::Float32, DataFormat::Int32> {};
+
+template <>
+struct TypecastImpl<DataFormat::Float16_b, DataFormat::UInt32> : TypecastImpl<DataFormat::Float32, DataFormat::UInt32> {
+};
+
+template <>
+struct TypecastImpl<DataFormat::Float16_b, DataFormat::UInt16> : TypecastImpl<DataFormat::Float32, DataFormat::UInt16> {
+};
+
+template <>
+struct TypecastImpl<DataFormat::Float16_b, DataFormat::UInt8> : TypecastImpl<DataFormat::Float32, DataFormat::UInt8> {};
+
+template <>
+struct TypecastImpl<DataFormat::Float16_b, DataFormat::Int8> : TypecastImpl<DataFormat::Float32, DataFormat::UInt8> {};
+
+// ---- Int32 -> ----------------------------------------------------------------------------------------------------
+
+template <>
+struct TypecastImpl<DataFormat::Int32, DataFormat::Float32> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_int32_to_fp32
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_int32_to_fp32
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Int32, DataFormat::Float16_b> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_int32_to_fp16b
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_int32_to_fp16b
+    }
+};
+
+/// One 32-bit Dest word, reinterpreted.
+template <>
+struct TypecastImpl<DataFormat::Int32, DataFormat::UInt32> : TypecastNoop {};
+
+template <>
+struct TypecastImpl<DataFormat::Int32, DataFormat::UInt16> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_int32_to_uint16
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_int32_to_uint16
+    }
+};
+
+// ---- UInt32 (and UInt8, zero-extended) ->
+// ---------------------------------------------------------------------------------------------------
+
+template <>
+struct TypecastImpl<DataFormat::UInt32, DataFormat::Float32> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint32_to_fp32
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint32_to_fp32
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::UInt32, DataFormat::Float16_b> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint32_to_fp16b
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint32_to_fp16b
+    }
+};
+
+/// One 32-bit Dest word, reinterpreted.
+template <>
+struct TypecastImpl<DataFormat::UInt32, DataFormat::Int32> : TypecastNoop {};
+
+template <>
+struct TypecastImpl<DataFormat::UInt32, DataFormat::UInt16> : TypecastKernel {
+    static void init() {}
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint32_to_uint16
+    }
+};
+
+/// Low byte of the word, +256 so a negative value wraps the way the UInt8 packer expects.
+template <>
+struct TypecastImpl<DataFormat::UInt32, DataFormat::UInt8> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint_to_uint8
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint_to_uint8<.., false>
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::UInt32, DataFormat::Int8> : TypecastImpl<DataFormat::UInt32, DataFormat::UInt8> {};
+
+template <>
+struct TypecastImpl<DataFormat::Int32, DataFormat::UInt8> : TypecastImpl<DataFormat::UInt32, DataFormat::UInt8> {};
+
+template <>
+struct TypecastImpl<DataFormat::Int32, DataFormat::Int8> : TypecastImpl<DataFormat::UInt32, DataFormat::UInt8> {};
+
+// ---- UInt16 -> ---------------------------------------------------------------------------------------------------
+
+template <>
+struct TypecastImpl<DataFormat::UInt16, DataFormat::Float32> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint16_to_fp32
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint16_to_fp32<.., IS_FP32_DEST_ACC_EN>
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::UInt16, DataFormat::Float16_b> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint16_to_fp16b
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint16_to_fp16b
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::UInt16, DataFormat::UInt32> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint16_to_uint32
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint16_to_uint32<.., IS_FP32_DEST_ACC_EN>
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::UInt16, DataFormat::Int32> : TypecastImpl<DataFormat::UInt16, DataFormat::UInt32> {};
+
+/// As UInt32 -> UInt8, masking the word to 16 bits first.
+template <>
+struct TypecastImpl<DataFormat::UInt16, DataFormat::UInt8> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_uint_to_uint8
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_uint_to_uint8<.., true>
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::UInt16, DataFormat::Int8> : TypecastImpl<DataFormat::UInt16, DataFormat::UInt8> {};
+
+// ---- Int8 -> : the raw 2's complement byte, zero-extended in Dest (its CB is declared UInt8) ---------------------
+
+/// Also serves the Float16_b / Bfp8_b outputs: every value is in [-128, 127] and so exact in bfloat16.
+template <>
+struct TypecastImpl<DataFormat::Int8, DataFormat::Float32> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_int8_to_fp32
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_int8_to_fp32
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Int8, DataFormat::Float16_b> : TypecastImpl<DataFormat::Int8, DataFormat::Float32> {};
+
+/// Sign-extend the byte to Int32.
+template <>
+struct TypecastImpl<DataFormat::Int8, DataFormat::Int32> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_int8_input
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_int8_to_int32<.., false>
+    }
+};
+
+template <>
+struct TypecastImpl<DataFormat::Int8, DataFormat::UInt32> : TypecastImpl<DataFormat::Int8, DataFormat::Int32> {};
+
+/// Sign-extend, clamp negatives to 0, store as UInt16.
+template <>
+struct TypecastImpl<DataFormat::Int8, DataFormat::UInt16> : TypecastKernel {
+    static void init() {
+        // todo(sstanisic): init_typecast_int8_input
+    }
+
+    template <const ckernel::TensorShape& SHAPE, bool IS_FP32_DEST_ACC_EN>
+    static void execute() {
+        // todo(sstanisic): calculate_typecast_int8_to_int32<.., true /* CLAMP_TO_UINT16 */>
+    }
+};
+
+/// The same raw byte for the packer.
+template <>
+struct TypecastImpl<DataFormat::Int8, DataFormat::UInt8> : TypecastNoop {};
+
+}  // namespace detail
+
+/**
+ * @brief Typecast of a Dest tile, in place.
+ *
+ * init<IN, OUT>() before executing a pair, execute<IN, OUT, ...>(dst) per tile, uninit() when done. A pair the
+ * unpacker / packer convert on their own (@ref runs_sfpu false) still needs the init and must not be executed.
+ */
+class Typecast {
+public:
+    /// The formats a typecast accepts on either side.
+    static constexpr bool supported_format(DataFormat format) {
+        switch (format) {
+            case DataFormat::Float32:
+            case DataFormat::Float16_b:
+            case DataFormat::Bfp8_b:
+            case DataFormat::Bfp4_b:
+            case DataFormat::Bfp2_b:
+            case DataFormat::Int32:
+            case DataFormat::UInt32:
+            case DataFormat::UInt16:
+            case DataFormat::UInt8:
+            case DataFormat::Int8: return true;
+            default: return false;
+        }
+    }
+
+    /// Int32, UInt32, UInt16, UInt8 and Int8: held as an integer word in Dest.
+    static constexpr bool is_integral(DataFormat format) {
+        switch (format) {
+            case DataFormat::Int32:
+            case DataFormat::UInt32:
+            case DataFormat::UInt16:
+            case DataFormat::UInt8:
+            case DataFormat::Int8: return true;
+            default: return false;
+        }
+    }
+
+    /// Float32 and the Float16_b family (Float16_b, Bfp8_b, Bfp4_b, Bfp2_b): held as a float in Dest.
+    static constexpr bool is_floating(DataFormat format) {
+        switch (format) {
+            case DataFormat::Float32:
+            case DataFormat::Float16_b:
+            case DataFormat::Bfp8_b:
+            case DataFormat::Bfp4_b:
+            case DataFormat::Bfp2_b: return true;
+            default: return false;
+        }
+    }
+
+    /**
+     * @brief Resolve the Dest format a kernel reads for an L1 input format.
+     *
+     * Two important points:
+     * 1. Dest cannot hold block float formats directly, only as Float16_b or Float32.
+     *     - For this reason the Bfp formats are aliased to Float16_b.
+     * 2. 8-bit integers are always held in a 32-bit integer Dest.
+     *     - UInt8 is held as a plain UInt32 in Dest. For this reason UInt8 is aliased to UInt32.
+     *     - Int8 is zero-extended into a UInt32 in Dest and interpreted as Int8 during the conversion.
+     *       Int8 is not aliased so that it can be correctly interpreted later.
+     *
+     */
+    static constexpr DataFormat read_format(DataFormat format) {
+        switch (format) {
+            case DataFormat::Bfp8_b:
+            case DataFormat::Bfp4_b:
+            case DataFormat::Bfp2_b: return DataFormat::Float16_b;
+            case DataFormat::UInt8: return DataFormat::UInt32;
+            default: return format;
+        }
+    }
+
+    /**
+     * @brief Resolve the Dest format a kernel must leave for an L1 output format.
+     *
+     * Two points:
+     * 1. The packer encodes block float formats from Float16_b.
+     *     - For this reason the Bfp formats are aliased to Float16_b.
+     * 2. The packer writes Int8 and UInt8 from the same raw byte in Dest.
+     *     - For this reason Int8 is aliased to UInt8.
+     */
+    static constexpr DataFormat write_format(DataFormat format) {
+        switch (format) {
+            case DataFormat::Bfp8_b:
+            case DataFormat::Bfp4_b:
+            case DataFormat::Bfp2_b: return DataFormat::Float16_b;
+            case DataFormat::Int8: return DataFormat::UInt8;
+            default: return format;
+        }
+    }
+
+    /// The kernel of the IN -> OUT pair.
+    template <DataFormat IN, DataFormat OUT>
+    using Impl = detail::TypecastImpl<read_format(IN), write_format(OUT)>;
+
+    /// Whether IN -> OUT runs an SFPU kernel; the unpacker / packer convert the rest on their own.
+    template <DataFormat IN, DataFormat OUT>
+    static constexpr bool runs_sfpu() {
+        return Impl<IN, OUT>::RUNS_SFPU;
+    }
+
+    /**
+     * @brief Program the SFPU for the IN -> OUT pair.
+     *
+     * @tparam IN: L1 input format
+     * @tparam OUT: L1 output format
+     */
+    template <DataFormat IN, DataFormat OUT>
+    static inline __attribute__((always_inline)) void init() {
+        static_assert(supported_format(IN), "typecast: IN is not a typecast format");
+        static_assert(supported_format(OUT), "typecast: OUT is not a typecast format");
+
+        SAN_HOOK(llk::san::init<OperationSfpuTypecast>(
+            StateVal<OperationSfpuTypecast::InputFormat>(static_cast<std::uint32_t>(IN)),
+            StateVal<OperationSfpuTypecast::OutputFormat>(static_cast<std::uint32_t>(OUT))));
+
+        _llk_math_eltwise_unary_sfpu_init_once_();
+        ckernel::addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ckernel::ADDR_MOD_6);
+        ckernel::math::reset_counters(ckernel::p_setrwc::SET_ABD_F);
+        Impl<IN, OUT>::init();
+    }
+
+    /**
+     * @brief Convert Dest tile @p dst from IN to OUT, in place.
+     *
+     * @tparam IN: L1 input format, as passed to init
+     * @tparam OUT: L1 output format, as passed to init
+     * @tparam IS_FP32_DEST_ACC_EN: Whether Dest is in 32-bit mode
+     * @tparam SYNC: Dest sync mode @p dst is checked against, values = <SyncHalf/SyncFull>
+     * @tparam SHAPE: Region of the tile to convert
+     * @tparam PADDING: Whether the call may convert lanes outside SHAPE. See @ref PaddingAgnostic.
+     * @param dst: Dest tile to convert
+     */
+    template <
+        DataFormat IN,
+        DataFormat OUT,
+        bool IS_FP32_DEST_ACC_EN,
+        ckernel::DstSync SYNC,
+        const ckernel::TensorShape& SHAPE = ckernel::DEFAULT_TENSOR_SHAPE,
+        PaddingAgnostic PADDING = PaddingAgnostic::Yes>
+    static inline __attribute__((always_inline)) void execute(const std::uint32_t dst) {
+        static_assert(runs_sfpu<IN, OUT>(), "this typecast has no SFPU kernel; do not execute it");
+        // The kernels convert whole 16x16 faces.
+        static_assert(
+            PADDING == PaddingAgnostic::Yes ||
+                (SHAPE.face_r_dim == ckernel::MAX_FACE_R_DIM && SHAPE.face_c_dim == ckernel::MAX_FACE_C_DIM),
+            "typecast converts whole faces, so a padding-sensitive call needs full faces");
+        LLK_VALIDATE_TENSOR_SHAPE_MATH("llk::sfpu::Typecast::execute", SHAPE);
+        _llk_math_eltwise_sfpu_assert_dst_index_<SYNC>(dst, "dst exceeds max dest tiles");
+        SAN_HOOK(llk::san::execute<OperationSfpuTypecast>(
+            StateVal<OperationSfpuTypecast::InputFormat>(static_cast<std::uint32_t>(IN)),
+            StateVal<OperationSfpuTypecast::OutputFormat>(static_cast<std::uint32_t>(OUT)),
+            StateDiscard<std::uint32_t>(dst),
+            StateDiscard<std::uint32_t>(dst)));
+
+        walk_faces<SHAPE>(dst, []() __attribute__((always_inline)) {
+            Impl<IN, OUT>::template execute<SHAPE, IS_FP32_DEST_ACC_EN>();
+        });
+    }
+
+    /// Undo init. Typecast leaves no state a later op depends on.
+    static inline __attribute__((always_inline)) void uninit() {}
+};
+
+}  // namespace llk::sfpu
