@@ -331,6 +331,30 @@ class TtKDA(LightweightModule):
             ttnn.deallocate(t)
 
     # ---------------------------------------------------------------- prefill
+    def summary_group_chunks(self, local_chunks: int) -> int:
+        """Chunks per summary group of the sequence-parallel grouped scan for ``local_chunks`` 32-row chunks per
+        row: the largest divisor of ``local_chunks`` up to 20 (the Kimi-K3 production range, one serial scan of at
+        most 20 chunks per owner core) whose group count keeps ``local heads x groups`` summary owners within
+        the worker grid, else the smallest divisor that does (a 4 K-row slab = 128 chunks with 16 local heads
+        needs 32: 4 groups x 16 heads = 64 owners; 16 would ask for 128 of the 120 cores).
+        ``GLM53_KDA_GROUP_CHUNKS`` overrides (A/B of the group size)."""
+        override = os.environ.get("GLM53_KDA_GROUP_CHUNKS")
+        if override:
+            g = int(override)
+            if local_chunks % g:
+                raise ValueError(f"GLM53_KDA_GROUP_CHUNKS={g} does not divide the local chunk count {local_chunks}")
+            return g
+        grid = self.device.compute_with_storage_grid_size()
+        capacity = int(grid.x) * int(grid.y)
+        divisors = [d for d in range(1, local_chunks + 1) if local_chunks % d == 0]
+        fits = [d for d in divisors if (local_chunks // d) * self.H <= capacity]
+        if not fits:
+            raise ValueError(
+                f"no summary group size fits {self.H} local heads x {local_chunks} chunks on {capacity} cores"
+            )
+        small = [d for d in fits if d <= 20]
+        return max(small) if small else min(fits)
+
     def prefill_layer(self, active_seq_len: int) -> ttKDA:
         """ttKDA instance for one physical (32-aligned) chunk length; weights are shared."""
         if active_seq_len % ttnn.TILE_SIZE:
@@ -340,18 +364,12 @@ class TtKDA(LightweightModule):
             kw = {}
             if self.mesh.rows > 1:
                 # sequence-parallel over the rows: the grouped scan needs summary_group_chunks to divide the
-                # LOCAL chunk count (active_seq_len / rows / 32); largest divisor <= the default 20
+                # LOCAL chunk count (active_seq_len / rows / 32) and one summary-owner core per (local head,
+                # group): heads * groups <= the worker grid (120 on P150); see summary_group_chunks
                 local_chunks = active_seq_len // self.mesh.rows // ttnn.TILE_SIZE
-                # the grouped scan gives every (group, local head) a summary-owner core: (local_chunks / g) * H must
-                # fit the compute grid (120 on Blackhole), so a chunk of 8 K rows per row (256 local chunks) needs
-                # g >= 32 rather than the default's largest divisor <= 20 (which gave 128 owners and a ValueError)
-                grid = self.device.compute_with_storage_grid_size()
-                capacity = grid.x * grid.y
-                divisors = [d for d in range(1, local_chunks + 1) if local_chunks % d == 0]
-                fits = [d for d in divisors if (local_chunks // d) * self.H <= capacity]
-                small = [d for d in fits if d <= 20]
-                g = max(small) if small else (min(fits) if fits else max(divisors))
-                kw["recurrence"] = KDARecurrenceProgramConfig(summary_group_chunks=g)
+                kw["recurrence"] = KDARecurrenceProgramConfig(
+                    summary_group_chunks=self.summary_group_chunks(local_chunks)
+                )
             program_config = KDAProgramConfig(
                 gated_rms_output_dtype=ttnn.bfloat16,
                 input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
