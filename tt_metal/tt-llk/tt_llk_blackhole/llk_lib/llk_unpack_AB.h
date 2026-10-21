@@ -138,6 +138,26 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         }
         else
         {
+            if (tensor_shape.face_r_dim < FACE_R_DIM)
+            {
+                // A short face fills only its own rows, but the math op can read more (ELWMUL reads at least 8).
+                // Zero each bank first, once the math thread releases it, so the rows past the face hold zeros and
+                // not the previous op's data. Both sources are cleared: a stale NaN or Inf times zero is still NaN.
+                constexpr std::uint32_t replay_buf_len = 4;
+                load_replay_buf(
+                    0,
+                    replay_buf_len,
+                    []
+                    {
+                        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                        TTI_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    });
+                ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, lltt::replay_insn(0, replay_buf_len));
+                tmp.program();
+                return;
+            }
             ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
             tmp.program();
         }

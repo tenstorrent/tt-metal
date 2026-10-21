@@ -264,6 +264,17 @@ inline void _llk_unpack_A_mop_config_(
             {
                 const std::uint32_t outerloop     = num_faces;
                 constexpr std::uint32_t innerloop = 1;
+                if (tensor_shape.face_r_dim < FACE_R_DIM)
+                {
+                    // A short face fills only its own rows, but datacopy moves all 16. Zero the bank first, once the
+                    // math thread releases it, so the rows past the face hold zeros and not the previous op's data.
+                    static constexpr std::uint32_t clear_srca =
+                        TT_OP_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                    ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb_set_dvalid);
+                    tmp.set_start_op(clear_srca);
+                    tmp.program();
+                    return;
+                }
                 ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
                 tmp.program();
