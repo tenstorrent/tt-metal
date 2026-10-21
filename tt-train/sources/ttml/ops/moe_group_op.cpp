@@ -56,9 +56,9 @@ MoEGroupOutputs moe_group_op(
                 std::ref(*device));
 
             // Step A — d(dispatched) via row-scatter, H = hidden_dim. Skipped
-            // when grouped's grad was never accumulated (some test paths only
-            // exercise the d(scores) branch).
-            if (grouped_out->is_grad_initialized()) {
+            // when dispatched is frozen or grouped's grad was never accumulated
+            // (some test paths only exercise the d(scores) branch).
+            if (dispatched->get_requires_grad() && grouped_out->is_grad_initialized()) {
                 auto d_grouped = grouped_out->get_grad();
                 auto d_dispatched = ttml::metal::moe_ungroup(d_grouped, plan, offsets, ones_gs, e_local, d, b, s);
                 dispatched->add_grad(d_dispatched);
@@ -69,7 +69,7 @@ MoEGroupOutputs moe_group_op(
             // k_slot[i] and 0 elsewhere; metal::moe_ungroup with that as
             // expert_out and ones_gs as the per-row weight produces
             // d(scores)[D,B,S,K].
-            if (!grouped_scores_out->is_grad_initialized()) {
+            if (!scores->get_requires_grad() || !grouped_scores_out->is_grad_initialized()) {
                 return;
             }
             auto d_grouped_scores = grouped_scores_out->get_grad();

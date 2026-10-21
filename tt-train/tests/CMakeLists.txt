@@ -44,6 +44,7 @@ set(SOURCES
     ops/k_split_gram_matmul_op_test.cpp
     optimizers/adamw_fp32_parameter_test.cpp
     ops/matmul_op_test.cpp
+    ops/grad_skipping_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
