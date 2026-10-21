@@ -68,6 +68,22 @@ def hi_lo_split(x: torch.Tensor) -> torch.Tensor:
     return torch.cat([hi, x - hi], dim=-1)
 
 
+def sdpa_program_config(grid, n_kv: int, *, windowed: bool, large_k_chunk: bool) -> ttnn.SDPAProgramConfig:
+    """SDPA chunking for n_kv keys. Each online-softmax rescale over a key chunk adds ~+1.2e-4 to the output scale with
+    fp32 dest accumulation (block 29 self-attn: +3.9e-3 at 32 chunks of 128, +5.9e-4 at 4 chunks of 1024), so use the
+    largest chunk that divides the keys; q chunk 64 keeps k chunk 1024 within L1. The windowed kernel's buffers
+    overflow L1 at k chunk 1024, so it stops at 512."""
+    k_chunk = 128
+    if large_k_chunk:
+        k_chunk = next(c for c in (1024, 512, 256, 128) if n_kv % c == 0 and not (windowed and c > 512))
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid,
+        q_chunk_size=64 if k_chunk == 1024 else 128,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+
+
 def _norm_in(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.typecast(x, ttnn.bfloat16) if x.dtype != ttnn.bfloat16 else x
 
@@ -151,18 +167,8 @@ class Attention(Module):
 
     def _sdpa_program_config(self, n_kv: int, windowed: bool) -> ttnn.SDPAProgramConfig:
         if (n_kv, windowed) not in self._sdpa_program_configs:
-            # Each online-softmax rescale over a key chunk adds ~+1.2e-4 to the output scale with fp32 dest
-            # accumulation (block 29 self-attn: +3.9e-3 at 32 chunks of 128, +5.9e-4 at 4 chunks of 1024), so use the
-            # largest chunk that divides the keys; q chunk 64 keeps k chunk 1024 within L1. The windowed kernel's
-            # buffers overflow L1 at k chunk 1024, so it stops at 512.
-            k_chunk = 128
-            if self.sdpa_large_k_chunk:
-                k_chunk = next(c for c in (1024, 512, 256, 128) if n_kv % c == 0 and not (windowed and c > 512))
-            self._sdpa_program_configs[n_kv, windowed] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.grid,
-                q_chunk_size=64 if k_chunk == 1024 else 128,
-                k_chunk_size=k_chunk,
-                exp_approx_mode=False,
+            self._sdpa_program_configs[n_kv, windowed] = sdpa_program_config(
+                self.grid, n_kv, windowed=windowed, large_k_chunk=self.sdpa_large_k_chunk
             )
         return self._sdpa_program_configs[n_kv, windowed]
 
