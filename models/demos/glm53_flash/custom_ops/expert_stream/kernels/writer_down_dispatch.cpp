@@ -13,7 +13,8 @@
 // (mailbox) and writes its summed output tiles out[r, col0 ..]. The pass rows come from the table the gate|up op wrote
 // (uint16 rows [n, e, t_0 ..]).
 //
-// runtime args: [counts_addr (EP: idx_addr), table_addr, act_addr, out_addr, col0, (EP) base_addr]
+// runtime args: [counts_addr (EP: idx_addr), table_addr, act_addr, out_addr, col0, (EP) base_addr, (EP = 2) t_valid,
+//                idx_page]
 
 #include <stdint.h>
 
@@ -59,7 +60,6 @@ void kernel_main() {
     constexpr uint32_t slot_tiles = J * cols;
     constexpr uint32_t table_elems = table_bytes / 2;
 
-    const auto s_c = TensorAccessor(counts_args, counts_addr, tile_page);
     const auto s_tab = TensorAccessor(table_args, table_addr, table_bytes);
     const auto s_act = TensorAccessor(act_args, act_addr, tile_page);
     const auto s_out = TensorAccessor(out_args, out_addr, tile_page);
@@ -68,8 +68,18 @@ void kernel_main() {
     constexpr uint32_t c_tiles = EP ? RT : E_TILES;
     cb_reserve_back(cb_c, c_tiles);
     const uint32_t c_l1 = get_write_ptr(cb_c);
-    for (uint32_t i = 0; i < c_tiles; ++i) {
-        noc_async_read(s_c.get_noc_addr(i), c_l1 + i * tile_page, tile_page);
+    uint32_t t_valid = T;
+    if constexpr (EP == 2) {  // the id rows [t_valid, K] UINT16 packed at K elements per token
+        t_valid = get_arg_val<uint32_t>(6);
+        const auto s_c = TensorAccessor(counts_args, counts_addr, get_arg_val<uint32_t>(7));
+        for (uint32_t t = 0; t < t_valid; ++t) {
+            noc_async_read(s_c.get_noc_addr(t), c_l1 + t * K * 2, K * 2);
+        }
+    } else {
+        const auto s_c = TensorAccessor(counts_args, counts_addr, tile_page);
+        for (uint32_t i = 0; i < c_tiles; ++i) {
+            noc_async_read(s_c.get_noc_addr(i), c_l1 + i * tile_page, tile_page);
+        }
     }
     uint16_t n_tok[E], passes[E], base[E];
     if constexpr (EP) {
@@ -80,7 +90,11 @@ void kernel_main() {
         noc_async_read(s_b.get_noc_addr(0), b_l1, 32);
         noc_async_read_barrier();
         const uint32_t expert_base = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(b_l1);
-        count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+        if constexpr (EP == 2) {
+            count_from_rows<E, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), t_valid, expert_base, n_tok);
+        } else {
+            count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+        }
     } else {
         noc_async_read_barrier();
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);

@@ -237,6 +237,34 @@ def ep_index_tiles(idx: torch.Tensor, wts: torch.Tensor, device, K: int = MAX_PI
     return mk(it), mk(wt)
 
 
+def rm_page_bytes(t: ttnn.Tensor) -> int:
+    """The aligned page size of a ROW_MAJOR interleaved L1 tensor (one page per row; 16-byte L1 alignment). The EP
+    row-major routing path keeps the dispatched rows and the metadata in L1 (the all_to_all outputs' memory config),
+    so a DRAM tensor (64-byte pages) is rejected rather than mis-addressed."""
+    assert t.layout == ttnn.ROW_MAJOR_LAYOUT, t.layout
+    assert t.memory_config().buffer_type == ttnn.BufferType.L1, "EP row-major routing tensors must live in L1"
+    return -(-t.shape[-1] * 2 // 16) * 16
+
+
+def ep_rm_inputs(x: torch.Tensor, idx: torch.Tensor, wts: torch.Tensor, device):
+    """Host -> device, the mesh path's per-chip inputs as all_to_all_dispatch delivers them: the token rows with the
+    routing weights as a K-wide BF16 tail ([1, 1, T, H + K] ROW_MAJOR L1) and the ids [1, T, 1, K] UINT16 ROW_MAJOR
+    L1 (``ExpertDispatch(ep=True, ep_rm=True)``)."""
+    T, K = idx.shape
+    xw = torch.cat([x.float(), wts.float()], dim=-1).bfloat16().reshape(1, 1, T, -1)
+    xw_dev = ttnn.from_torch(
+        xw, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    idx_dev = ttnn.from_torch(
+        idx.to(torch.int32).reshape(1, T, 1, K),
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    return xw_dev, idx_dev
+
+
 def ep_base_tensor(base: int, device, mesh_mapper=None):
     """The per-chip expert base id as a [1, 1, 1, 16] UINT16 ROW_MAJOR page (on a mesh: [D, 1, 1, 16] sharded)."""
     t = torch.zeros(1, 1, 1, 16, dtype=torch.int32) if isinstance(base, int) else base
@@ -529,12 +557,18 @@ class ExpertGateUpDispatch(_BankStreamOp):
         picks: int = MAX_PICKS,
         w_dtype=ttnn.bfloat8_b,
         units: bool = False,
+        ep_rm: bool = False,
     ):
         super().__init__(device, groups)
         assert T % TILE == 0 and T <= 256, T  # counts are exact BF16 integers up to 256
         assert groups <= 32, groups
         self.E, self.K, self.I, self.T = E, K, I, T
         self.ep, self.picks = ep, picks  # EP: routing = top-k index / weight tiles + the chip's expert base
+        # ep_rm (the mesh path): the ids as the dispatch metadata rows [t_valid, K] UINT16 and the weights as the
+        # K-wide BF16 tail of every token row ([x | w] ROW_MAJOR, both in L1); t_valid <= T rows are scanned
+        self.ep_rm = ep_rm
+        assert not (ep_rm and not ep), "ep_rm is an EP mode"
+        assert not (ep_rm and units), "the units kernels take the tile-layout routing only"
         # units: the (expert, column pair) work units (`*_gate_up_dispatch_units.cpp`) instead of whole experts per
         # core: 11-12 % faster with many active full-width experts (36 per chip), 2x SLOWER with few (the 8x4's 9)
         self.units = units
@@ -552,9 +586,11 @@ class ExpertGateUpDispatch(_BankStreamOp):
         self.row_bytes = K * 2
         self.P = max_passes(T, E)
 
-    def __call__(self, x_rm, routing, counts, w13, act, table, base=None):
+    def __call__(self, x_rm, routing, counts, w13, act, table, base=None, t_valid=None):
         """Non-EP: routing [1,1,T,E] BF16 TILE, counts [1,1,1,E]. EP: routing = the weight tiles [1,1,T,32],
-        counts = the index tiles [1,1,T,32] (``ep_index_tiles``), base = ``ep_base_tensor``."""
+        counts = the index tiles [1,1,T,32] (``ep_index_tiles``), base = ``ep_base_tensor``. EP row-major: x_rm =
+        the [x | w] rows (L1), counts = the id rows [1, t_valid, 1, K] UINT16 (L1), routing unused (pass x_rm),
+        t_valid = the valid row count (<= T)."""
         cb_xrm, cb_x, cb_w, cb_r, cb_c0, cb_c1, cb_d, cb_h, cb_t, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
         e_tiles = -(-self.E // TILE)
         rt = self.T // TILE
@@ -574,6 +610,14 @@ class ExpertGateUpDispatch(_BankStreamOp):
         ]
         assert (base is not None) == self.ep, "EP mode takes the expert base tensor"
         extra_rt = [base.buffer_address()] if self.ep else []
+        writer_extra = list(extra_rt)
+        if self.ep_rm:
+            assert t_valid is not None and 0 < t_valid <= self.T, (t_valid, self.T)
+            assert tuple(counts.shape)[1] == t_valid and tuple(counts.shape)[-1] == self.picks, counts.shape
+            assert x_rm.shape[-1] == self.K + self.picks, x_rm.shape
+            extra_rt += [t_valid, rm_page_bytes(counts)]
+            writer_extra += [t_valid, rm_page_bytes(counts), rm_page_bytes(x_rm)]
+        ep_mode = 2 if self.ep_rm else int(self.ep)
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [w13.buffer_address(), counts.buffer_address(), bank, vc, r] + extra_rt
@@ -585,7 +629,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
                 table.buffer_address(),
                 bank,
                 r,
-            ] + extra_rt
+            ] + writer_extra
         reader_ct = [
             cb_w,
             cb_c0,
@@ -596,7 +640,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
             self.w_tile,
             self.page_bytes,
             self.ppb,
-            int(self.ep),
+            ep_mode,
             self.T,
             self.picks,
         ]
@@ -617,7 +661,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
             self.row_bytes,
             TABLE_WIDTH * 2,
             self.ppb,
-            int(self.ep),
+            ep_mode,
             self.picks,
         ]
         for t in (x_rm, routing, counts, act, table, base if self.ep else counts):
@@ -642,12 +686,21 @@ class ExpertDownDispatch(_BankStreamOp):
     per-pass h buffer is P x cols tiles)."""
 
     def __init__(
-        self, device, E: int, I: int, H: int, T: int, readers: int = 8, ep: bool = False, picks: int = MAX_PICKS
+        self,
+        device,
+        E: int,
+        I: int,
+        H: int,
+        T: int,
+        readers: int = 8,
+        ep: bool = False,
+        picks: int = MAX_PICKS,
+        ep_rm: bool = False,
     ):
         super().__init__(device, readers)
         assert T % TILE == 0 and T <= 256, T
         self.E, self.I, self.H, self.T = E, I, H, T
-        self.ep, self.picks = ep, picks
+        self.ep, self.picks, self.ep_rm = ep, picks, ep_rm
         self.seg_tiles = I // TILE
         self.C = H // TILE // self.banks
         assert self.C % readers == 0, (self.C, readers)
@@ -675,12 +728,16 @@ class ExpertDownDispatch(_BankStreamOp):
             else:
                 raise ValueError(f"down dispatch does not fit L1 at T = {T}, E = {E}, I = {I}")
 
-    def __call__(self, act, table, counts, w2, out, base=None):
+    def __call__(self, act, table, counts, w2, out, base=None, t_valid=None):
         cb_a, cb_w, cb_c0, cb_c1, cb_t, cb_id, cb_h, cb_g, cb_m, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
         e_tiles = -(-self.E // TILE)
         c_tiles = self.T // TILE + 1 if self.ep else e_tiles
         assert (base is not None) == self.ep, "EP mode takes the expert base tensor"
         extra_rt = [base.buffer_address()] if self.ep else []
+        if self.ep_rm:
+            assert t_valid is not None and 0 < t_valid <= self.T, (t_valid, self.T)
+            extra_rt += [t_valid, rm_page_bytes(counts)]
+        ep_mode = 2 if self.ep_rm else int(self.ep)
         cbs = [
             self._cb(cb_a, ttnn.bfloat16, BF16_TILE_BYTES, self.a_slots * self.seg_tiles),
             self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, self.w_slots * self.block_tiles),
@@ -718,7 +775,7 @@ class ExpertDownDispatch(_BankStreamOp):
             self.bank_expert_stride,
             BFP8_TILE_BYTES,
             self.page_bytes,
-            int(self.ep),
+            ep_mode,
             self.T,
             self.picks,
             self.w_slots,
@@ -742,7 +799,7 @@ class ExpertDownDispatch(_BankStreamOp):
             self.H // TILE,
             TABLE_WIDTH * 2,
             cb_m,
-            int(self.ep),
+            ep_mode,
             self.picks,
         ]
         for t in (counts, table, act, out, base if self.ep else counts):
@@ -779,13 +836,18 @@ class ExpertDispatch:
         ep: bool = False,
         w13_dtype=ttnn.bfloat8_b,
         units: bool = False,
+        ep_rm: bool = False,
     ):
-        self.gate_up = ExpertGateUpDispatch(device, E, K, I, T, groups, ep=ep, w_dtype=w13_dtype, units=units)
-        self.down = ExpertDownDispatch(device, E, I, H, T, down_readers, ep=ep)
-        self.E, self.K, self.I, self.H, self.T, self.ep = E, K, I, H, T, ep
+        self.gate_up = ExpertGateUpDispatch(
+            device, E, K, I, T, groups, ep=ep, w_dtype=w13_dtype, units=units, ep_rm=ep_rm
+        )
+        self.down = ExpertDownDispatch(device, E, I, H, T, down_readers, ep=ep, ep_rm=ep_rm)
+        self.E, self.K, self.I, self.H, self.T, self.ep, self.ep_rm = E, K, I, H, T, ep, ep_rm
         self.P = self.gate_up.P
 
-    def alloc(self, device, act_l1: bool = True):
+    def alloc(self, device, act_l1: bool = True, t_valid: int | None = None):
+        """act / table / out for one call; ``t_valid`` (EP row-major) gives ``out`` its logical row count (the
+        tile padding to T stays physical, so ``to_layout(ROW_MAJOR)`` yields exactly the dispatched rows)."""
         act = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, self.P, TILE, self.I]),
             ttnn.bfloat16,
@@ -797,7 +859,11 @@ class ExpertDispatch:
             ttnn.Shape([1, 1, self.P, TABLE_WIDTH]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
         )
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, self.T, self.H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([1, 1, t_valid or self.T, self.H]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
         return act, table, out
 
@@ -807,11 +873,12 @@ class ExpertDispatch:
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x_rm, routing_counts(routing)
 
-    def forward(self, x_rm, routing, counts, w13, w2, act, table, out, base=None):
+    def forward(self, x_rm, routing, counts, w13, w2, act, table, out, base=None, t_valid=None):
         """Non-EP: (x_rm, routing, counts). EP: routing = weight tiles, counts = index tiles, base = the chip's
-        expert base page (``ep_index_tiles`` / ``ep_base_tensor``)."""
-        self.gate_up(x_rm, routing, counts, w13, act, table, base=base)
-        self.down(act, table, counts, w2, out, base=base)
+        expert base page (``ep_index_tiles`` / ``ep_base_tensor``). EP row-major: x_rm = the [x | w] rows, counts =
+        the id rows, t_valid = the dispatched row count (``ep_rm_inputs``)."""
+        self.gate_up(x_rm, routing, counts, w13, act, table, base=base, t_valid=t_valid)
+        self.down(act, table, counts, w2, out, base=base, t_valid=t_valid)
         return out
 
     __call__ = forward

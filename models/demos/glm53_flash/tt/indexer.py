@@ -39,7 +39,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
+from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
 
 TILE = 32
 SENTINEL = 0xFFFFFFFF
@@ -206,13 +208,17 @@ class TtIndexCache:
         """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
         return ttnn.reshape(self.pool_cache, [self.max_batch, 1, self.pools_per_user, self.D])
 
-    def write_pools(self, pooled: ttnn.Tensor, user: int, start_pool: int = 0):
+    def write_pools(self, pooled: ttnn.Tensor, user: int, start_pool: int = 0, slot=None):
         """pooled [1,1,n,D] bf16 -> pools [start_pool, start_pool + n) of ``user``. The write is
         tile-granular (paged_fill_cache copies whole 32-pool tiles from the block ``start_pool // 32``
         on), so a start inside a tile first re-reads that tile's earlier pools from the cache and the
-        rows past ``n`` are zero-padded (they are pools not yet complete, never selectable)."""
+        rows past ``n`` are zero-padded (they are pools not yet complete, never selectable).
+        ``slot`` (``trace_prefill.PrefillSlot``, start_pool == 0): the slot index comes from its device
+        tensors (trace-replayable for any user)."""
         n = pooled.shape[-2]
         b0, r0 = start_pool // TILE, start_pool % TILE
+        if slot is not None and start_pool:
+            raise ValueError("a device-slot pool write starts at pool 0")
         if r0:
             blk = (
                 self.prefill_slot(user) * self.pool_blocks + b0
@@ -230,7 +236,15 @@ class TtIndexCache:
             pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n), (0, 0)], value=0.0)
         if pooled.dtype != self.pool_dtype:  # paged_fill_cache wants the cache dtype (paged_update_cache casts itself)
             pooled = ttnn.typecast(pooled, self.pool_dtype)
-        if b0 == 0 and not self.partition:
+        if slot is not None:
+            ttnn.experimental.paged_fill_cache(
+                self.pool_cache, pooled, self.page_table, batch_idx_tensor=slot.cache_idx
+            )
+            if self.partition:
+                ttnn.experimental.paged_fill_cache(
+                    self.pool_cache, pooled, self.page_table, batch_idx_tensor=slot.scratch_idx
+                )
+        elif b0 == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
         else:
             # page-table view(s) of the target slot's blocks from b0 on (device slices: no host upload in the pass)
@@ -259,6 +273,15 @@ class TtIndexCache:
             ttnn.experimental.paged_update_cache(ring, sh, update_idxs_tensor=slots, page_table=pt)
             ttnn.deallocate(sh)
 
+    def write_ring_block(self, k_tile: ttnn.Tensor, g_tile: ttnn.Tensor, slot):
+        """k_tile / g_tile [1,1,32,D] bf16 (row j = the ring row of slot j, rows >= P unused) -> the whole
+        ring block of the slot ``slot`` names on device (the traced prefill's tail write: one tile copy
+        per ring instead of one row write per tail position)."""
+        for ring, tile in ((self.ring_k, k_tile), (self.ring_g, g_tile)):
+            ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.cache_idx)
+            if self.partition:
+                ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.scratch_idx)
+
     def rings(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Rows 0..P-1 of every decode user's rings: ([B,1,P,D], [B,1,P,D]), B = the local users."""
         B = self.users_per_chip
@@ -269,9 +292,12 @@ class TtIndexCache:
 
 
 class TtDSAIndexer(LightweightModule):
-    def __init__(self, device, cfg: GLM53FlashConfig, idx_state_dict: dict[str, torch.Tensor]):
-        """``idx_state_dict``: raw tensors of ``self_attn.indexer.`` (prefix stripped)."""
+    def __init__(self, device, cfg: GLM53FlashConfig, idx_state_dict: dict[str, torch.Tensor], mesh=None):
+        """``idx_state_dict``: raw tensors of ``self_attn.indexer.`` (prefix stripped). ``mesh`` (``tt/mesh.py``
+        ``GLMMesh``): needed by the slab-local sequence-parallel prefill, whose per-row query positions are
+        uploaded as row-sharded constants (``select(row_starts=...)``)."""
         self.device = device
+        self.mesh = mesh
         self.cfg = cfg
         self.Hi, self.D, self.P = cfg.index_n_heads, cfg.index_head_dim, cfg.index_kpool
         sd = idx_state_dict
@@ -292,8 +318,13 @@ class TtDSAIndexer(LightweightModule):
         self.hifi2 = _compute(device, ttnn.MathFidelity.HiFi2, packer_l1_acc=True)
         self.fp32 = _compute(device)
         self.score_cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+        self._grid = device.compute_with_storage_grid_size()
         self._mesh_rows = tuple(device.shape)[0] if isinstance(device, ttnn.MeshDevice) else 1
         self._prefill_scorer: IndexScoreDecode | None = None
+        self._topk_rows: TopkRows | None = None  # per-row bounded top-k (the multi-row prefill selection)
+        # test hook: emulate mesh row r of a multi-row mesh on one chip (the shared scorer's chunk start + r*Sq
+        # offset applied explicitly, the selection bounded per row as on the mesh)
+        self.row_offset_sim = 0
         self._const_cache: dict[tuple, ttnn.Tensor] = {}
         self.stage_timer = None  # TtDSA.set_stage_timer installs a StageTimer (test instrumentation)
 
@@ -303,10 +334,12 @@ class TtDSAIndexer(LightweightModule):
 
     # ------------------------------------------------------------- stems
     def keys_and_gates(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """x [1,1,T,4096] bf16 -> (k [1,1,T,D] bf16 (LayerNorm'd), g [1,1,T,D] bf16 gate logits)."""
-        k = ttnn.linear(x, self.w_k, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        """x [1,1,T,4096] bf16 -> (k [1,1,T,D] bf16 (LayerNorm'd), g [1,1,T,D] bf16 gate logits). The narrow
+        stems run through ``prefill_linear`` (fixed K blocking) so a position's pooled key is the same whatever the
+        chunk length it was prefilled in (the single-shot / chunked equality; decode rows keep the default)."""
+        k = prefill_linear(x, self.w_k, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         k = ttnn.layer_norm(k, weight=self.knorm_w, bias=self.knorm_b, epsilon=1e-6, compute_kernel_config=self.fp32)
-        g = ttnn.linear(x, self.w_gate, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        g = prefill_linear(x, self.w_gate, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return k, g
 
     def _pool_groups(self, kp: ttnn.Tensor, gp: ttnn.Tensor) -> ttnn.Tensor:
@@ -335,16 +368,33 @@ class TtDSAIndexer(LightweightModule):
         already computed by the caller's fused stem). ``rows_form``: q as [1,T,Hi,D] instead (query t's heads as
         the rows of its tile row: the custom scorer's layout, ``select(q_rows_form=True)``)."""
         T = x.shape[-2]
-        q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
+        if T > TILE and os.environ.get("GLM53_PREFILL_STEMS", "fixed") == "fixed":
+            # M-independent (fixed K blocking) like the k / gate stems: the index queries decide the top-k, and a
+            # one-ulp difference between chunk / slab lengths flips near-tie selections (tt/dsa.py ``_stem``)
+            q = prefill_linear(
+                q_resid, self.w_qb, self._grid, row_block=1024, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2
+            )
+        else:
+            q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
         q = ttnn.reshape(q, [1, T, self.Hi, self.D])  # [1,T,Hi,D]
         if not rows_form:
             q = ttnn.transpose(q, 1, 2)  # [1,Hi,T,D]
-        if w is None:
-            w = ttnn.linear(x, self.w_weights, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi]
+        if w is None:  # [1,1,T,Hi]; fixed K blocking for prefill rows (see keys_and_gates)
+            w = prefill_linear(x, self.w_weights, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return q, w
 
     # ------------------------------------------------------- maintenance
-    def maintain_prefill(self, x: ttnn.Tensor, cache: TtIndexCache, user: int, seq_len: int, start: int = 0):
+    def maintain_prefill(
+        self,
+        x: ttnn.Tensor | None,
+        cache: TtIndexCache,
+        user: int,
+        seq_len: int,
+        start: int = 0,
+        slot=None,
+        ring_sel: ttnn.Tensor | None = None,
+        kg=None,
+    ):
         """Maintain the index for a prefill chunk holding positions ``[start, start + seq_len)`` of
         ``user`` (x row i = position start + i; rows past ``seq_len`` are padding): write every pool
         that becomes complete and leave the rows of the still-incomplete last pool in the ring.
@@ -352,9 +402,33 @@ class TtDSAIndexer(LightweightModule):
         The chunk boundary may fall inside a pool (``start % P != 0``): that pool's earlier rows are in
         the ring (written as the previous chunk's tail), so it is completed from the ring rows plus
         this chunk's first ``P - start % P`` rows; a chunk that ends inside it only extends the ring.
-        With ``start == 0`` this is the single-shot maintenance (pools from 0, tail rows to slots 0..)."""
+        With ``start == 0`` this is the single-shot maintenance (pools from 0, tail rows to slots 0..).
+
+        ``slot`` + ``ring_sel`` (the traced fixed-length prefill, tt/trace_prefill.py; start == 0): the
+        prompt length is not a host value, so EVERY pool of the padded chunk is written (the pools past
+        the prompt are rewritten from the ring by decode before they become selectable: pool p is
+        selectable only once position 4p+3 was decoded) and the ring block gets the rows ``ring_sel``
+        selects (the last prompt position of each ``% P`` class, chosen on the host as a one-hot
+        ``[1,1,32,T_pad]`` selector and applied with an exact HiFi4 matmul); the slot index comes from
+        ``slot``'s device tensors.
+        ``kg = (k_idx, g_idx)``: the chunk's stems ``[1,1,T_pad,D]`` already computed by the caller (the
+        slab-local sequence-parallel prefill gathers them over the mesh rows; ``x`` is then unused); they
+        are consumed (deallocated) here either way."""
         P, D = self.P, self.D
-        k_idx, g_idx = self.keys_and_gates(x)  # [1,1,T_pad,D]
+        k_idx, g_idx = self.keys_and_gates(x) if kg is None else kg  # [1,1,T_pad,D]
+        if slot is not None:
+            T = k_idx.shape[-2]
+            if start or T % (TILE * P):
+                raise ValueError(f"traced index maintenance: start == 0 and T_pad % {TILE * P} == 0 (got {start}, {T})")
+            pooled = self.pool(k_idx, g_idx)  # [1,1,T_pad/P,D]: every pool of the padded chunk
+            cache.write_pools(pooled, user, start_pool=0, slot=slot)
+            ttnn.deallocate(pooled)
+            k_tile = ttnn.matmul(ring_sel, k_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)  # [1,1,32,D]
+            g_tile = ttnn.matmul(ring_sel, g_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+            cache.write_ring_block(k_tile, g_tile, slot)
+            for t in (k_idx, g_idx, k_tile, g_tile):
+                ttnn.deallocate(t)
+            return
         end = start + seq_len
         r = start % P  # rows of pool start // P already in the ring
         lead = min((P - r) % P, seq_len)  # this chunk's rows of that straddling pool
@@ -450,6 +524,8 @@ class TtDSAIndexer(LightweightModule):
         num_pools_valid: int,
         row: int | None = None,
         q_rows_form: bool = False,
+        row_starts: tuple[int, ...] | None = None,
+        pos_floor: int = 0,
     ) -> ttnn.Tensor:
         """Top-2048 token ids (+ tail, sentinel-padded to a multiple of 128) for queries at absolute
         positions ``query_start + s``. Returns [1,1,T,W] uint32 ROW_MAJOR. With ``row`` only that query
@@ -457,30 +533,52 @@ class TtDSAIndexer(LightweightModule):
         expansion and the top-k, so a decode query costs one row of the key-wide pass instead of the
         32 rows of its padded block; the result is [1,1,1,W] (identical to row ``row`` of the full one).
         ``q_rows_form``: ``q`` is [1,T,Hi,D] and the scores come from the custom scorer (``_score_prefill_rows``:
-        per-row causal bounds, no per-device chunk offset, hence the form for multi-row meshes)."""
+        per-row causal bounds, no per-device chunk offset, hence the form for multi-row meshes).
+        ``row_starts`` (slab-local sequence-parallel prefill, custom scorer only): one query start per MESH
+        ROW -- mesh row r's queries sit at ``max(row_starts[r] + s, pos_floor)``; the causal bounds and the
+        tail ids are then built per row and uploaded row-sharded (replicated over the columns), so every
+        row selects for its own slab with one program. ``pos_floor`` clamps the positions of rows that are
+        attended by the dense path anyway (a mixed chunk's superset rows): they then select a valid full
+        pool prefix instead of a short one, and their result is discarded by the caller."""
         T = q.shape[1] if q_rows_form else q.shape[-2]
-        # one spare tile beyond the valid pools: the op requires the (32-aligned) chunk start to lie inside
-        # kv_len*P tokens, and a decode query at position a may sit in a block starting at a - a%32 >= 4*pools.
-        # The spare rows are causally invisible to the real query (pool p visible iff 4p+3 <= a).
-        kv_len = min(cache.pools_per_user, max(TILE, -(-(num_pools_valid + 1) // TILE) * TILE))
-        # On a mesh the op treats every device as a sequence-parallel rank by default (device r along
-        # the whole-mesh ring scores with chunk_start + r*Sq); the queries here are REPLICATED over the
-        # tensor-parallel columns, so the SP axis is the row axis (extent 1 on a single-row mesh ->
-        # every chip uses chunk_start as-is). Multi-row meshes are the Phase-3 SP prefill engine.
+        positions = self._row_positions(T, query_start, row_starts, pos_floor)  # host [R, T] int64 (R = rows or 1)
+        # Multi-row meshes with the shared scorer: the op treats the mesh rows as sequence-parallel ranks
+        # (``seq_shard_axes=[0]``: row r scores with chunk start + r*Sq; the queries are REPLICATED over the
+        # tensor-parallel columns). The v1 prefill replicates the prompt over the rows too, so row r >= 1 scores
+        # a SUPERSET of its queries' causal pools (up to (start + r*Sq + t + 1)/P instead of (start + t + 1)/P;
+        # row 0 exact); the per-row bounded top-k (``_topk_bounded``) then ranks every row over its exact
+        # causal prefix only, so every row selects what a single chip selects. ``extra`` = the largest offset in
+        # query rows (``row_offset_sim`` emulates row r on one chip); the scored width covers every row's start.
+        # Slab-local rows (``row_starts``: mesh row r's queries start at row_starts[r], a contiguous slab of the
+        # chunk per row, sub-blocks of T rows inside it): the op's offset r*T is a superset of every row's true
+        # start when the chunk start is max_r(row_starts[r] - r*T) (exact on the row attaining it, the last one
+        # for equal slabs), so the same bounded top-k with the rows' TRUE bounds (row-sharded) selects exactly.
+        bounded = False
+        if row_starts is not None and not q_rows_form:
+            R = len(row_starts)
+            op_start = max(s - r * T for r, s in enumerate(row_starts))
+            bounded = R > 1
+            # every row's chunk start (op_start + r*T) must lie inside the scored width: cover the last row's end
+            kv_len = self._kv_len(cache, max(num_pools_valid, (op_start + R * T) // self.P))
+        else:
+            op_start = query_start + self.row_offset_sim * T
+            extra = 0 if q_rows_form else self._extra_rows()
+            bounded = bool(extra)
+            kv_len = self._kv_len(cache, num_pools_valid, extra * T)
         if q_rows_form:
             scores = scores_valid = None
-            scores_rm = self._score_prefill_rows(q, w, cache, user, query_start=query_start, kv_len=kv_len)
+            scores_rm = self._score_prefill_rows(q, w, cache, user, positions=positions, kv_len=kv_len)
             self._mark("index_score")
         else:
-            if self._mesh_rows != 1:
-                # the shared op gives mesh row r the chunk start + r*Sq (sequence-parallel rows); replicated or
-                # independent rows score through the custom scorer instead (GLM53_PREFILL_SCORER)
-                raise NotImplementedError("sparse selection on a multi-row mesh needs q_rows_form (custom scorer)")
+            if bounded and row is not None:
+                raise NotImplementedError(
+                    "per-row decode selection on a multi-row mesh (the traced decode selects on device)"
+                )
             scores = ttnn.experimental.indexer_score_dsa(
                 q,
                 cache.pools_batched(),
                 w,
-                chunk_start_idx=query_start,
+                chunk_start_idx=op_start,
                 key_compression_ratio=self.P,
                 program_config=self.score_cfg,
                 cache_batch_idx=user,
@@ -495,7 +593,7 @@ class TtDSAIndexer(LightweightModule):
             if kv_len < scores.shape[-1]:
                 scores_valid = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
             scores_rm = ttnn.to_layout(scores_valid, ttnn.ROW_MAJOR_LAYOUT)
-        tail = self._tail_ids(T, query_start)  # [1,1,T,P-1] uint32 (cached per geometry)
+        tail = self._tail_ids(T, query_start, positions=positions)  # [1,1,T,P-1] uint32 (cached per geometry)
         row_slice = None
         if row is not None:
             row_slice = ttnn.slice(scores_rm, [0, 0, row, 0], [1, 1, row + 1, scores_rm.shape[-1]])
@@ -510,9 +608,12 @@ class TtDSAIndexer(LightweightModule):
         # top-512 POOLS over the pool scores (a 4x-expanded token-level top-2048 selects the same whole
         # pools, at 4x the top-k width plus a single-core repeat_interleave of the row: 10.6 ms vs 1.2 ms
         # per decode row at 262 K pools, and a [S, 4W] bf16 intermediate in prefill)
-        top_p = ttnn.experimental.topk_large_indices(
-            scores_rm if row_slice is None else row_slice, k=k_pools, valid_length=kv_len
-        )  # [1,1,T,512] uint32 pool ids (never a sentinel: >= 512 visible pools is the caller's contract)
+        if bounded:
+            top_p = self._topk_bounded(scores_rm, T, kv_len, positions)  # [1,1,T,512]: each row's exact prefix
+        else:
+            top_p = ttnn.experimental.topk_large_indices(
+                scores_rm if row_slice is None else row_slice, k=k_pools, valid_length=kv_len
+            )  # [1,1,T,512] uint32 pool ids (never a sentinel: >= 512 visible pools is the caller's contract)
         self._mark("topk")
         # pool id p -> token ids 4p + j: exact in fp32 (ids < 2^24), [1,1,T,2048] uint32
         top_f = ttnn.typecast(top_p, ttnn.float32)
@@ -537,31 +638,91 @@ class TtDSAIndexer(LightweightModule):
 
     @property
     def prefill_scorer_custom(self) -> bool:
-        """``GLM53_PREFILL_SCORER``: ``auto`` (default: the custom scorer on multi-row meshes, the shared
-        ``indexer_score_dsa`` on one row / one chip), ``custom``, ``shared``."""
+        """``GLM53_PREFILL_SCORER``: ``auto`` / ``shared`` (default: the shared ``indexer_score_dsa``, on multi-row
+        meshes with the per-row bounded top-k of ``select``) or ``custom`` (the prefill form of
+        ``custom_ops/index_score_decode``: every query row re-streams the slot's pooled keys, O(T x N) DRAM traffic:
+        10.9 s per 16 K-token chunk per layer at 1 M positions against 0.5 s for the shared op, doc/mesh/prefill_1m_cost.md).
+        """
         mode = os.environ.get("GLM53_PREFILL_SCORER", "auto")
-        if mode == "auto":
-            return self._mesh_rows != 1
-        assert mode in ("custom", "shared"), mode
+        assert mode in ("auto", "custom", "shared"), mode
         return mode == "custom"
 
+    def _row_positions(
+        self, T: int, query_start: int, row_starts: tuple[int, ...] | None, pos_floor: int
+    ) -> torch.Tensor:
+        """Absolute query positions as a host int64 [R, T]: one row (``query_start + s``) in the single-device
+        form, one per mesh row (``max(row_starts[r] + s, pos_floor)``) in the slab-local form (R = mesh rows)."""
+        s = torch.arange(T, dtype=torch.int64)
+        if row_starts is None:
+            return (query_start + s).reshape(1, T)
+        if self.mesh is None or len(row_starts) != self.mesh.rows:
+            raise ValueError(f"row_starts {row_starts} must list one start per mesh row ({self.mesh})")
+        return torch.clamp(torch.tensor(row_starts, dtype=torch.int64).reshape(-1, 1) + s, min=pos_floor)
+
+    def _const(self, t: torch.Tensor, dtype, per_row: bool) -> ttnn.Tensor:
+        """Upload a host constant: replicated (``per_row=False``, or one chip) or with dim 0 split over the mesh
+        rows and replicated over the columns (the slab-local prefill's per-row geometry; dim 0 = R entries)."""
+        if per_row and self.mesh is not None and self.mesh.rows > 1:
+            return self.mesh.upload(t, dtype, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+
+    def _extra_rows(self) -> int:
+        """The largest chunk-start offset of a mesh row in query rows (rows - 1 on a multi-row mesh; the emulated
+        row on one chip)."""
+        return max(self._mesh_rows - 1, self.row_offset_sim)
+
+    def _kv_len(self, cache: TtIndexCache, num_pools_valid: int, extra_tokens: int = 0) -> int:
+        """The scored width in pools: one spare tile beyond the valid pools (the op requires the (32-aligned) chunk
+        start to lie inside kv_len*P tokens, and a decode query at position a may sit in a block starting at
+        a - a%32 >= 4*pools; the spare rows are causally invisible to the real query: pool p visible iff
+        4p+3 <= a), plus the pools covering the row-offset superset of a multi-row mesh (``extra_tokens``)."""
+        return min(cache.pools_per_user, max(TILE, -(-(num_pools_valid + 1 + extra_tokens // self.P) // TILE) * TILE))
+
+    def prefill_rows_form(self, cache: TtIndexCache, *, query_start: int, T: int, num_pools_valid: int) -> bool:
+        """Whether a prefill sub-block of ``T`` queries at ``query_start`` goes through the custom scorer
+        (``queries_and_weights(rows_form=True)`` + ``_score_prefill_rows``): the GLM53_PREFILL_SCORER=custom mode,
+        or a sub-block whose multi-row superset would start past the pooled-key allocation (the last chunks of a
+        prompt filling the whole allocation: the shared op needs every row's chunk start inside the scored width)."""
+        if self.prefill_scorer_custom:
+            return True
+        extra = self._extra_rows()
+        return bool(extra) and (query_start + extra * T) // self.P >= self._kv_len(cache, num_pools_valid, extra * T)
+
+    def _topk_bounded(self, scores_rm: ttnn.Tensor, T: int, kv_len: int, positions: torch.Tensor) -> ttnn.Tensor:
+        """Top-512 pools of every score row over its own causal prefix (pools < floor((position + 1) / P),
+        clamped to [512, kv_len]) through ``custom_ops/topk_rows``: [1,1,T,kv_len] bf16 ROW_MAJOR -> [1,1,T,512]
+        uint32. The columns a mesh row's offset adds beyond a row's bound are never ranked. ``positions`` [R, T]
+        (``_row_positions``): R = the mesh rows gives every row its own bounds (row-sharded upload)."""
+        if self._topk_rows is None:
+            self._topk_rows = TopkRows(self.device, k=self.cfg.index_select_pools)
+        k = self.cfg.index_select_pools
+        R = positions.shape[0]
+        bounds = ((positions + 1) // self.P).clamp(k, kv_len).to(torch.int32).reshape(R * T, 1)
+        valid = self._const(bounds, ttnn.uint32, per_row=R > 1)  # [T, 1] per chip
+        out = ttnn.zeros((T, 1, 1, k), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        self._topk_rows(ttnn.reshape(scores_rm, [T, 1, 1, kv_len]), valid, out)
+        ttnn.deallocate(valid)
+        return ttnn.reshape(out, [1, 1, T, k])
+
     def _score_prefill_rows(
-        self, q: ttnn.Tensor, w: ttnn.Tensor, cache: TtIndexCache, user: int, *, query_start: int, kv_len: int
+        self, q: ttnn.Tensor, w: ttnn.Tensor, cache: TtIndexCache, user: int, *, positions: torch.Tensor, kv_len: int
     ) -> ttnn.Tensor:
         """Pool scores of T prefill queries through the batched decode scorer (``custom_ops/index_score_decode``):
         query t is one "user" of the op (its Hi = 32 index heads as the rows of its [32, D] block, ``q`` [1,T,Hi,D]),
         every user scores the same slot ``user`` over the first ``kv_len`` (256-rounded) pools, and the causal bound
-        of row t (pools < floor((query_start + t + 1) / P)) is written as -inf by the op's per-row mask -- no
-        per-device chunk offset, so mesh rows holding replicated or independent prompts score alike (the shared op
-        gives row r the start + r*Sq of a sequence-parallel ring). [1,1,T,cols] bf16 ROW_MAJOR, cols >= kv_len."""
+        of row t (pools < floor((position + 1) / P)) is written as -inf by the op's per-row mask -- no per-device
+        chunk offset, so mesh rows holding replicated or independent prompts score alike (the shared op gives row
+        r the start + r*Sq of a sequence-parallel ring); ``positions`` [R, T] (host, ``_row_positions``) with R =
+        mesh rows gives every row its own bounds (row-sharded upload). [1,1,T,cols] bf16 ROW_MAJOR, cols >= kv_len."""
         T = q.shape[1]
         W = cache.pools_per_user
         if self._prefill_scorer is None:
             self._prefill_scorer = IndexScoreDecode(self.device)
         unit = TILE * self._prefill_scorer.KC
         cols = min(W, -(-kv_len // unit) * unit)
-        bounds = torch.tensor([[min(cols, (query_start + t + 1) // self.P)] for t in range(T)], dtype=torch.int32)
-        valid_rows = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        R = positions.shape[0]
+        bounds = torch.clamp((positions + 1) // self.P, max=cols).to(torch.int32).reshape(R * T, 1)
+        valid_rows = self._const(bounds, ttnn.uint32, per_row=R > 1)  # [T, 1] per chip
         out = ttnn.zeros((T, 1, 1, cols), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         self._prefill_scorer(q, w, cache.pools_batched(), out, valid_rows=valid_rows, slot=user, cols=cols)
         ttnn.deallocate(valid_rows)
@@ -620,20 +781,22 @@ class TtDSAIndexer(LightweightModule):
             )
         return self._const_cache[key]
 
-    def _tail_ids(self, T: int, query_start: int) -> ttnn.Tensor:
-        """Token ids of the incomplete tail pool of each query (position a = query_start + s):
-        4*floor((a+1)/4) + j for j < (a+1) % 4, else the sentinel. Built once per (T, query_start)
-        geometry from host ints (chunk geometry, not data) and cached on device."""
-        key = ("tail", T, query_start)
+    def _tail_ids(self, T: int, query_start: int, positions: torch.Tensor | None = None) -> ttnn.Tensor:
+        """Token ids of the incomplete tail pool of each query (position a = query_start + s, or row r of
+        ``positions`` [R, T] on mesh row r): 4*floor((a+1)/4) + j for j < (a+1) % 4, else the sentinel. Built
+        once per geometry from host ints (chunk geometry, not data) and cached on device (row-sharded when R
+        = the mesh rows > 1)."""
+        if positions is None:
+            positions = (torch.arange(T, dtype=torch.int64) + query_start).reshape(1, T)
+        R = positions.shape[0]
+        key = ("tail", T, tuple(positions[:, 0].tolist()), tuple(positions[:, -1].tolist()), R)
         if key not in self._const_cache:
             P = self.P
-            rows = torch.arange(T, dtype=torch.int64).reshape(1, 1, T, 1) + query_start  # a
+            rows = positions.reshape(R, 1, T, 1)  # a
             base = (rows + 1) // P * P
-            ids = torch.stack([base + j for j in range(P - 1)], dim=-1).reshape(1, 1, T, P - 1)
+            ids = torch.stack([base + j for j in range(P - 1)], dim=-1).reshape(R, 1, T, P - 1)
             ids = torch.where(ids <= rows, ids, torch.full_like(ids, SENTINEL))
-            self._const_cache[key] = ttnn.from_torch(
-                ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
+            self._const_cache[key] = self._const(ids, ttnn.uint32, per_row=R > 1)  # [1,1,T,P-1] per chip
         return self._const_cache[key]
 
     def _sentinels(self, T: int, n: int) -> ttnn.Tensor:
