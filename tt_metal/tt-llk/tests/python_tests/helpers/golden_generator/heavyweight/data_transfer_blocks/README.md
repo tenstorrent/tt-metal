@@ -18,13 +18,26 @@ what one already costs.
 
 ## Contents
 
+`DataTransferBlocks` is a **façade**. The transfers themselves live on one unit
+per hardware stage in `units/`, and an architecture (`arch.py`) is a set of
+those units injected into the façade. Nothing subclasses the façade and nothing
+overrides a transfer — see [Where an architecture plugs in](#where-an-architecture-plugs-in).
+
 | File | What is in it |
 |---|---|
-| `data_transfer_blocks.py` | `DataTransferBlocks` — the shared base, one method per boundary, plus the format model. It cannot be constructed without an architecture's format set. |
+| `data_transfer_blocks.py` | `DataTransferBlocks` — the façade. One method per boundary, each a single delegation to a unit. |
+| `arch.py` | `ArchGolden` and the three architectures, each assembling its units |
+| `l1_support.py` | `L1Support` — an architecture's L1 format set, the support checks, and the L1 read/write path. Shared by the unpacker and the packer, so it belongs to neither. |
+| `storage.py` | The precision rules as pure functions: what a src datum, a Dest slot and the feedback path each hold. Directly testable without an architecture. |
 | `l1_codec.py` | `pack_to_l1` / `unpack_from_l1` — the bytes boundary |
 | `pack_effects.py` | ReLU, edge masking, and what stochastic rounding costs us |
-| `quasar_data_transfer/` | MX formats, no block float |
-| `wormhole_data_transfer/` `blackhole_data_transfer/` | Block float, no MX |
+| `units/unpack.py` | `Unpack` — L1 → SrcA/SrcB/SrcS/Dest, both legality tables, and the Dest-format derivation |
+| `units/fpu.py` | `Fpu` — src → Dest, and Dest back to a src register |
+| `units/pack.py` | `Pack` — Dest → L1, the pack legality table and the edge-mask polarity |
+
+There is no `units/sfpu.py`: nothing here models the SFPU, so the class would be
+empty and every architecture would have to supply a no-op. It arrives with the
+first real SFPU block.
 
 ---
 
@@ -69,7 +82,7 @@ families, and the family — not the L1 format — is what the FPU reads.**
 `src_format` on the unpack blocks overrides the storage format the unpacker
 lands the buffer in; `None` lets the architecture choose. The override is a real
 knob, but not an unrestricted one: which src formats an L1 format can land in is
-a property of the unpacker, held per architecture in `UNPACK_TO_SRC_FORMATS` and
+a property of the unpacker, held per architecture in `Unpack.to_src_formats` and
 checked on **both** the explicit and the defaulted path. `Int32` has no legal
 SrcA/SrcB target at all — it reaches Dest or SrcS only — and an integer input
 does not become a float in a src register. An architecture that leaves the table
@@ -94,7 +107,7 @@ mask path, which is not on the datum path.
 > sets the exponent *range*, not the mantissa width. Precision in a src register
 > is `min(input mantissa bits, 10)`.
 
-### `_to_src_storage` — the two losses the unpacker takes
+### `storage.to_src_storage` — the two losses the unpacker takes
 
 | src family | Mantissa | Exponent range |
 |---|---|---|
@@ -103,7 +116,7 @@ mask path, which is not on the datum path.
 | `Float32` | Not a legal SrcA/SrcB target at all — a 19-bit datum cannot hold it, so `l1_to_srcA` refuses it. A `Float32` **input** lands as `Tf32`, `Float16` or `Float16_b`, all of which keep 10 bits. Full fp32 survives only through `l1_to_dest` and `l1_to_srcS`. | |
 | integer | Passes through unchanged. | |
 
-Truncation, never rounding: `_truncate_src_mantissa` calls
+Truncation, never rounding: `storage.truncate_src_mantissa` calls
 `truncate_mantissa(values, SRC_MANT_BITS)`, which masks off the low
 `23 - 10 = 13` bits of the float32 mantissa.
 
@@ -138,7 +151,7 @@ second instruction. Because the rounding happens on this write, **it happens on
 every pass**. Accumulating at full precision and rounding once at the end would
 model an accumulator the hardware does not have.
 
-### `_to_dest_storage` — the FPU writes no denormal
+### `storage.to_dest_storage` — the FPU writes no denormal
 
 Narrows to the Dest dtype, then flushes anything below that format's smallest
 normal. The rule it models: when the FPU's result is valid and the operation is
@@ -171,7 +184,7 @@ hardware does.
 > This cannot be inferred from `out_format`, which is why `OpConfig.dest_format`
 > is a required field.
 
-### `_dest_to_src_storage` — the feedback path
+### `storage.dest_to_src_storage` — the feedback path
 
 Driven by the **Dest** format, not the src format. The src format is consulted
 *only* to decide whether a wide Dest needs its exponent rebiasing. Every case is
@@ -369,7 +382,7 @@ Masking at tile edges. Up to `EDGE_MASK_COUNT = 4` masks of
 
 | Field | Notes |
 |---|---|
-| `masks` | The raw register values. **What a set bit means depends on the architecture**: on Quasar it masks the datum (the packer inverts the register before the gasket), on Wormhole/Blackhole it keeps it. The blocks resolve this through `EDGE_MASK_MASKED_WHEN_SET`, so `dest_to_l1` applies the right one. |
+| `masks` | The raw register values. **What a set bit means depends on the architecture**: on Quasar it masks the datum (the packer inverts the register before the gasket), on Wormhole/Blackhole it keeps it. `Pack` resolves this through its `edge_mask_masked_when_set`, so `dest_to_l1` applies the right one. |
 | `select` | Which mask each **row** uses: one index for every row, or one per row. The hardware selector is 2 bits per row, so a row cannot mix masks. `from_face_select_words(masks, words)` builds it from Quasar's four `EDGE_MASK_SELECT_FACE*` words. |
 | `mode` | `EdgeMaskMode.ZERO`, or `NEG_SATURATE` — the latter exists so a masked datum *loses* a following max-reduce rather than winning it at zero. |
 
