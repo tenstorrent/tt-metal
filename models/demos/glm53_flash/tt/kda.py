@@ -342,7 +342,15 @@ class TtKDA(LightweightModule):
                 # sequence-parallel over the rows: the grouped scan needs summary_group_chunks to divide the
                 # LOCAL chunk count (active_seq_len / rows / 32); largest divisor <= the default 20
                 local_chunks = active_seq_len // self.mesh.rows // ttnn.TILE_SIZE
-                g = max(d for d in range(1, min(20, local_chunks) + 1) if local_chunks % d == 0)
+                # the grouped scan gives every (group, local head) a summary-owner core: (local_chunks / g) * H must
+                # fit the compute grid (120 on Blackhole), so a chunk of 8 K rows per row (256 local chunks) needs
+                # g >= 32 rather than the default's largest divisor <= 20 (which gave 128 owners and a ValueError)
+                grid = self.device.compute_with_storage_grid_size()
+                capacity = grid.x * grid.y
+                divisors = [d for d in range(1, local_chunks + 1) if local_chunks % d == 0]
+                fits = [d for d in divisors if (local_chunks // d) * self.H <= capacity]
+                small = [d for d in fits if d <= 20]
+                g = max(small) if small else (min(fits) if fits else max(divisors))
                 kw["recurrence"] = KDARecurrenceProgramConfig(summary_group_chunks=g)
             program_config = KDAProgramConfig(
                 gated_rms_output_dtype=ttnn.bfloat16,
