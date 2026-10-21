@@ -151,7 +151,7 @@ tt_metal/hw/inc/hostdev/profiler_zone_id.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/ckernels/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT
 tt_metal/hw/ckernels/*/metal/llk_api/experimental/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @atatuzunerTT
-tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @nmauriceTT @atatuzunerTT @mateusznowakTT
+tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @nmauriceTT @atatuzunerTT @mateusznowakTT @iklemenskiTT @mmoscickiTT @ijankowskiTT
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema
 tt_metal/hw/firmware/ @abhullar-tt @arikTT @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
@@ -262,6 +262,7 @@ tt_metal/**/inspector* @tenstorrent/metalium-developers-triage
 
 # LLK in-tree (tt_metal/tt-llk/) — mirrors tenstorrent/tt-llk CODEOWNERS
 tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/umd-admins @tenstorrent-github-bot
+tt_metal/third_party/tt-cluster-descriptors @Riddy21 @aliuTT @cfjchu @ubcheema @p1-0tr @tenstorrent-github-bot
 tt_metal/tt-llk/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT
 tt_metal/tt-llk/.claude/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT

@@ -13,7 +13,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

@@ -276,6 +276,7 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_runner_kv_cache_table -k "torus-xy and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
@@ -711,7 +712,7 @@
 # * Each section runs in its own subshell under `timeout -k 2m <N>m`; a timeout is a FAIL.
 # * The first failed section ends the job with its exit code, and later sections report NOT RUN:
 #   nothing resets the devices between sections (tt-metal#57706).
-- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k"
+- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k + runtime contract + mHC head TP-sharded accuracy"
   fabric_profile: torus_xy
   cmd: |
     titles=(
@@ -720,6 +721,8 @@
       "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
       "(DeepSeek-V4-Flash) CSA chunked accuracy 13k@5k"
       "(DeepSeek-V4-Pro) CSA chunked accuracy 13k@5k"
+      "(DeepSeek-V4) runtime contract"
+      "(DeepSeek-V4) mHC head TP-sharded accuracy"
     )
     summary=""
     section_start() {
@@ -743,7 +746,7 @@
       for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
         summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
       done
-      echo "===== DeepSeek-V4 prefill suite summary ====="
+      echo "===== DeepSeek-V4 prefill attention suite summary ====="
       printf '%s' "$summary"
     }
 
@@ -794,6 +797,24 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    section_start 6
+    (
+      timeout -k 2m 2m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_runtime_contract.py -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 7
+    (
+      timeout -k 2m 3m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
@@ -801,9 +822,96 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12+15+25 = 66). No margin: models/demo/bh_sc1 in
-      # .github/time_budget.yaml is full (1790/1790), so anything above 66 fails verify-time-budgets.
-      timeout: 66
+      # Sum of the section timeouts (6+8+12+15+25+2+3 = 71).
+      timeout: 71
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4) transformer accuracy 5k"
+      "(DeepSeek-V4) transformer chunked accuracy 10k@5k"
+      "(DeepSeek-V4) transformer pipeline-split accuracy 5k"
+      "(DeepSeek-V4) transformer chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 prefill transformer suite summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 37m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 2
+    (
+      timeout -k 2m 34m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 3
+    (
+      timeout -k 2m 27m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_pipeline_split.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 4
+    (
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_golden.py -k "torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_prefill_suite
+  # Per-section tokens: `-f test-type=<token>` selects this job.
+  test_tags: [dsv4_flash, dsv4_pro, transformer, v4_transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts (37+34+27+30 = 128).
+      timeout: 128
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -880,6 +988,143 @@
   budget_type: demo
   sp_config: sc1
 
+# Runs only when named: excluded from "all", tags and the nightly by its own test_group (see the
+# dsv4-depth job in blaze-models-prefill-tests.yaml). Flash and Pro are separate legs so a failure in
+# one does not stop the other. Pro runs as three sections in one leg: layers 0-9 graded per layer, then
+# the end-to-end tail graded at the last layer; each section after the first reads the streams the one
+# before it writes to generated/v4_depth_handoff.
+- name: "(DeepSeek-V4-Flash) transformer full-depth chunked accuracy 55k@5k vs vLLM golden"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Flash) transformer layers 0-42 chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 transformer full-depth summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 67m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_flash_transformer_depth -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_transformer_depth
+  test_group: dsv4_transformer_depth
+  skus:
+    bh_sc1:
+      # Measured 52.3 min x 1.25 + 1, charged to models/demo/bh_sc1.
+      timeout: 67
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "(DeepSeek-V4-Pro) transformer layers 0-9 + end-to-end chunked accuracy 55k@5k vs vLLM golden, three processes"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Pro) transformer layers 0-9 chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4-Pro) transformer end-to-end layers 10-35 chunked 55k@5k"
+      "(DeepSeek-V4-Pro) transformer end-to-end layers 36-60 chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      rm -rf generated/v4_depth_handoff
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 transformer full-depth summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 66m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_head -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 2
+    (
+      timeout -k 2m 117m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers10to35" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 3
+    (
+      timeout -k 2m 106m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers36to60" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_transformer_depth
+  test_group: dsv4_transformer_depth
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts, each measured x 1.25 + 1 (51.7 -> 66, 92.1 -> 117, 83.8 -> 106),
+      # charged to models/demo/bh_sc1.
+      timeout: 289
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 
 # ===== Gemma4-31B D_P =================================================================================
 
@@ -940,6 +1185,38 @@
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
+# checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy 256k@8k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_d_p_prefill_accuracy
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    # The Weka copy of the traces reads much faster than /mnt/models.
+    export GEMMA4_GPU_TRACE_ROOT=/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p
+    export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
+    mpirun --bind-to none --pernode --tag-output \
+      python3 -m pytest \
+        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' \
+        -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
+  test_type: gemma4_d_p_prefill_accuracy
+  test_tags: [gemma4_d_p, kv_cache, accuracy]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 1
+      release_ready: false
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
   team: models
   sp_config: sc1
 
@@ -1165,7 +1442,7 @@
 
       timeout -k 2m 44m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4 and sp_only" -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"

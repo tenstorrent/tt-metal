@@ -270,6 +270,7 @@ ttnn::Tensor concat(
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
+    TT_FATAL(groups > 0, "ttnn.concat: groups must be greater than 0");
     const auto mem_config =
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now

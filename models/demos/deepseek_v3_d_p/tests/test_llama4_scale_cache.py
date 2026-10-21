@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only coverage for the sharing of Mistral's llama4 query-scale cache.
 
-One entry is a [1, heads_local, chunk, width] bf16 device tensor (3.28 MB/device at 8x4 / chunk 5120)
-and an offset is visited once per request, so a per-ttMLA cache multiplied residency by the layer
-count: 24 GB/device at 1,048,576 tokens over 36 layers. TtPrefillTransformer builds ONE dict and
-threads it through every TtPrefillBlock into ttMLA.
+One entry is a [1, 1, chunk, q_lora_rank] bf16 device tensor (1.31 MB/device at 8x4 / chunk 5120;
+the scale multiplies the q_a latent, see rope._llama4_scale_geometry) and an offset is visited once
+per request, so a per-ttMLA cache would multiply residency by the layer count: 9.6 GB/device at
+1,048,576 tokens over 36 layers. TtPrefillTransformer builds ONE dict and threads it through every
+TtPrefillBlock into ttMLA.
 
 What must hold is that every layer reaches the SAME dict and that the cache key stays
 layer-independent (nothing the tensor derives from varies by layer -- see ttMLA._llama4_scale). Both
