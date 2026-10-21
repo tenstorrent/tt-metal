@@ -26,6 +26,8 @@ e2e:                       # F128 (owner): end-to-end limits = calib x the refer
   calib: 2.0               # (reference/drift.py, testing/e2e_limits.py); no fixed end-to-end bar exists
 reference:
   shipped_dtype: bfloat16  # F128: the dtype the shipped code computes in (the official golden, the margin's source)
+  margin_source: reference # F136: reference (numerics official) | hf_official (owner-signed: hooks.hf_model at
+                           # shipped_dtype, layer outputs and top-5 only) for a reference that cannot run at it
 thresholds:                # per-step fallbacks only (component / swap when no noise floor); end-to-end: e2e above
   component: 0.99
   block: 0.98

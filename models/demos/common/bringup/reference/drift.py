@@ -222,11 +222,79 @@ def contract_entries(s, ref, g: Golden, layers: list[int], rep: dict, tail_at: i
     return out
 
 
+def compute_hf(s, rung_name: str) -> dict:
+    """F136, ``reference.margin_source: hf_official`` (the owner's choice for a reference that cannot run at its
+    shipped precision): the official modelling code (hooks.hf_model) at reference.shipped_dtype, one pass over the
+    rung's tokens, each run after a gap started from the golden block input; layer outputs of the last chunk and
+    top-5 only (no states, no final hidden: their gates then stop). Not matched on a prefix rung (no golden prefix)."""
+    from models.demos.common.bringup.reference.check_hf import hf_layers, load_hf
+    from models.demos.common.bringup.reference.generate_golden import run_starts
+    from models.demos.common.bringup.testing.ladder import rung_layers, sampled_rows
+
+    rung = s.rung(rung_name)
+    g = Golden.for_rung(s, rung_name)
+    layers = rung_layers(s, rung, g)
+    ends_at_last = layers[-1] == s.num_layers - 1
+    model = load_hf(s, None if ends_at_last else max(layers) + 1).to(
+        getattr(torch, str(s.get("reference.shipped_dtype")))
+    )
+    blocks, outs, handles = hf_layers(s, model), {}, []
+    for li in set(run_starts(layers)) - {0}:
+        x = torch.cat([g.layer(c, li)["in"] for c in range(g.n_chunks)]).float()
+
+        def feed(m, args, kwargs, x=x):
+            h = args[0] if args else kwargs["hidden_states"]
+            h = x.reshape(h.shape).to(h.dtype)
+            return ((h, *args[1:]), kwargs) if args else (args, {**kwargs, "hidden_states": h})
+
+        handles.append(blocks[li].register_forward_pre_hook(feed, with_kwargs=True))
+    for li in layers:
+        handles.append(
+            blocks[li].register_forward_hook(
+                lambda m, i, o, li=li: outs.__setitem__(li, o[0] if isinstance(o, tuple) else o)
+            )
+        )
+    with torch.no_grad():
+        logits = model(g.tokens()[None], use_cache=False).logits[0].float()
+    for h in handles:
+        h.remove()
+    keep, a, b = tuple(s.get("golden.keep_fp32", [])), (g.n_chunks - 1) * g.chunk, g.seq
+    out = {}
+    for i in layers:
+        o = outs[i].reshape(-1, outs[i].shape[-1])[a:b]
+        out[f"layer_L{i:02d}"] = dict(_float_entry(store_dtype(o, keep, "out"), g.layer(g.n_chunks - 1, i)["out"]))
+    if ends_at_last:
+        rows = sampled_rows(g.chunk)
+        top1 = g.model(g.n_chunks - 1)["top32_ids"][rows][:, 0].long()
+        top5 = logits[a:b][rows].topk(5, dim=-1).indices
+        out["top5"] = {
+            "overlap": float((top5 == top1[:, None]).any(-1).float().mean()),
+            "overlap_res": 1.0 - 1.0 / max(top1.numel(), 1),
+            "region": None,
+        }
+    for e in out.values():
+        e.update(source="hf_official", matched=not rung.get("prefix_from_golden"))
+    return out
+
+
+def margin(d: dict) -> dict:
+    """F136: whether the reference's shipped precision moves anything: layers whose drift exceeds one rounding. None
+    (and an identical official run) means no margin source: every limit would be one rounding of the target."""
+    lay = {k: e for k, e in d.items() if k.startswith("layer_L")}
+    return {
+        "official_identical": int(all(e["rel"] == 0 for e in lay.values())),
+        "drift_layers": len(lay),
+        "drift_layers_above_res": sum(e["rel"] > e["rel_res"] for e in lay.values()),
+    }
+
+
 def compute(s, rung_name: str) -> dict:
     """The drift entries of one rung (and the contract's, on the contract rung)."""
     from models.demos.common.bringup.testing.contract import contract_rung
     from models.demos.common.bringup.testing.ladder import rung_layers
 
+    if s.get("reference.margin_source") == "hf_official":
+        return compute_hf(s, rung_name)
     rung = s.rung(rung_name)
     g = Golden.for_rung(s, rung_name)
     if g.manifest.get("numerics", "official") != "native":

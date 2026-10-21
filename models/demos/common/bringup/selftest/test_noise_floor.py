@@ -256,6 +256,30 @@ def test_the_official_floor_is_generated_and_checks_the_tap_map(gspec, monkeypat
     assert OF.generate(s, write=False)["unmapped"]
 
 
+def test_r5_checks_the_references_official_numerics_against_the_taps(gspec, monkeypatch):  # noqa: F811
+    """F136 (V13): the reference's own official numerics (the end-to-end margin's source) must reproduce each tapped
+    official step; one that does not (here: 1 % off) is an error of R.5."""
+    from models.demos.common.bringup.selftest import fixture_model
+    from models.demos.common.bringup.testing import official_floor as OF
+
+    s = gspec()
+    monkeypatch.setattr(s.hooks(), "official_taps", _fake_official(s), raising=False)
+    doc = OF.generate(s, write=False)
+    assert not doc["official_ref_errors"] and got()["official_ref_vs_taps_errors"] == 0
+    native = fixture_model.reference
+
+    def off_by_one_percent(spec, layers=None, dtype=torch.float32, numerics="native"):
+        ref = native(spec, layers, dtype, numerics)
+        if numerics == "official" and dtype != torch.float32:
+            comp = ref.component
+            ref.component = lambda L, n: (lambda ctx, *x: 1.01 * comp(L, n)(ctx, *x))
+        return ref
+
+    monkeypatch.setattr(fixture_model, "reference", off_by_one_percent)
+    doc = OF.generate(s, write=False)
+    assert doc["official_ref_errors"] and not doc["errors"] and got()["official_ref_vs_taps_errors"] > 0
+
+
 def test_the_official_floor_command_reads_the_spec_from_the_gate_env(gspec, monkeypatch):  # noqa: F811
     """F80: the R.5 gate command has no --spec; the gate runner sets BRINGUP_SPEC."""
     from models.demos.common.bringup.testing import official_floor as OF

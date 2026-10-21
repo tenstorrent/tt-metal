@@ -23,7 +23,8 @@ For every tapped step this runs the fp32 CPU step on the official inputs and rec
 It also checks the tap map: the fp32 step on the official inputs must give the official output within calib x the
 step's input-nudge floor (a mis-mapped input or output is far outside it), unless official_taps.yaml explains why the
 official code rounds more inside the step (`explained`, with the evidence; the overseer reviews each). Gate metrics: official_taps_steps (>= 1),
-official_taps_errors (== 0), official_taps_unmapped (== 0: every step of every golden layer is tapped).
+official_taps_errors (== 0), official_taps_unmapped (== 0: every step of every golden layer is tapped),
+official_ref_vs_taps_errors (== 0, F136: the reference's own official numerics reproduce each tapped step).
 """
 
 from __future__ import annotations
@@ -67,6 +68,32 @@ def _ctx(ref, layer: int, g, c: int, s, taps: dict):
     return ctx, "official"
 
 
+def official_vs_taps(s, layers, g, c: int, taps: dict, pending: list) -> list[str]:
+    """F136 (audit V13): the reference's own official numerics (reference_at official, reference.shipped_dtype; the
+    end-to-end margin's source) on each tapped step's official inputs must give the tapped official output within the
+    tap check's limit: the -official arithmetic is shown to be the shipped code's, step by step."""
+    from models.demos.common.bringup.testing import component_checks as CC
+
+    if not pending:
+        return []
+    off = reference_at(s, "official", layers=layers, dtype=getattr(torch, str(s.get("reference.shipped_dtype"))))
+    errs = []
+    for L, st, t, lim in pending:
+        ctx = _ctx(off, L, g, c, s, taps)[0]
+        try:
+            y = off.component(L, st.name)(ctx, *[x.clone() if isinstance(x, torch.Tensor) else x for x in t["inputs"]])
+        except Exception as e:  # noqa: BLE001 - reported as the step's failure
+            errs.append(f"L{L:02d}.{st.name}: the reference's official numerics raised {type(e).__name__}: {e}")
+            continue
+        e = CC.rel(y.float(), t["output"].float().reshape(y.shape))
+        if not e <= lim:
+            errs.append(
+                f"L{L:02d}.{st.name}: the reference at numerics official vs the tapped official output rel {e:.3g} > "
+                f"{lim:.3g}: its official arithmetic is not the shipped code's (the end-to-end margin's source)"
+            )
+    return errs
+
+
 def generate(s, write: bool = True) -> dict:
     from models.demos.common.bringup.testing import component_checks as CC
     from models.demos.common.bringup.testing import noise_floor as NF
@@ -80,7 +107,7 @@ def generate(s, write: bool = True) -> dict:
     taps = hooks.official_taps(s, layers, g.tokens(), c, g.chunk)
     ref = reference_at(s, TARGET_NUMERICS, layers=layers)  # F132: vs the step the tests compare with
     k = CC.limits(s)["component_calib"]
-    out, errors, unmapped, n = {}, [], [], 0
+    out, errors, unmapped, n, pending = {}, [], [], 0, []
     for L in layers:
         bt = s.block_type_of(L)
         for st in ref.block_graph(L):
@@ -138,14 +165,17 @@ def generate(s, write: bool = True) -> dict:
                     "so, say why with the evidence in official_taps.yaml (`explained`)"
                 )
             out[f"L{L:02d}.{st.name}"] = {str(c): rec}
+            pending.append((L, st, t, lim))
             n += 1
-    doc = {"chunk": c, "steps": out, "unmapped": unmapped, "errors": errors}
+    off_errors = official_vs_taps(s, layers, g, c, taps, pending)
+    doc = {"chunk": c, "steps": out, "unmapped": unmapped, "errors": errors, "official_ref_errors": off_errors}
     if write:
         (g.dir / "official_floor.json").write_text(json.dumps(doc, indent=1) + "\n")
     metrics.record("official_taps_steps", n)
     metrics.record("official_taps_errors", len(errors))
     metrics.record("official_taps_unmapped", len(unmapped))
-    for e in errors:
+    metrics.record("official_ref_vs_taps_errors", len(off_errors))
+    for e in errors + off_errors:
         print(f"FAIL {e}")
     if unmapped:
         print(f"FAIL not tapped: {', '.join(unmapped)}")
