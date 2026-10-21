@@ -248,6 +248,9 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     }
 
+    // The weight slices go to the reader with fewer blocks on the busiest cores: with an odd count
+    // the even reader has one more block of corners to gather.
+    const uint32_t weight_parity = max_blocks % 2;
     auto reader_ct = [&](bool first) {
         KernelDescriptor::CompileTimeArgs ct{
             first ? offset_mask_arena_cb : odd_offset_mask_arena_cb,
@@ -288,6 +291,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             weight_receiver_sem_id,
             chunk_tiles,
             sharded_input ? input.shard_spec()->shape[0] : 0u,  // pages per shard
+            weight_parity,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
