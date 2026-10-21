@@ -583,3 +583,16 @@ L1 clash, "statically allocated circular buffers in program N clash with L1 buff
 `__call__` from `TtEPExperts.run_experts`). EP=8 on a (2,4) block passed earlier; the 32-way exchange's larger per-chip
 token buffers overflow the L1 plan of the EP decode graph. Open item for the EP32 track; the hybrid layout is unaffected.
 The EP weight conversion is cold on the first run (43 s per layer, 33 min), cached afterwards.
+
+### Fresh-model TTFT and the keep-stacked decode (v19 / v20, 09:40-09:55)
+
+A fresh-model `-k ttft` with the fast configuration gives chain PCC 0.901 on the 128-token prompt (fresh wrap 0.944;
+fast after the chain test's decode chain 0.861): on 8 rows that prompt is 32 rows per chip, so `TtMHCSplit` serves it
+through the fast decode-tile path (`PREFILL_IMPL=wrap` serves prompts above 32 rows per chip), which costs ~0.04 of
+PCC on this short prompt and the chain ordering the rest; long prompts take the wrap path (16 K / 64 K HF-identical).
+
+`GLM53_REGIONS_KEEP_STACKED=1`: block T2 3/3 with decode through the stacked path (PCC 0.99995-0.99996, above the
+regions-kernel decode's 0.99986-0.99999); on the 8x4 both expert forms fit at 64 K, needle found and 8/8 identical to
+HF, decode 165.6 ms per step with wrap mHC vs 215.9 ms through the regions kernel under the same wrap config
+(the fast mHC through regions gave 148.3 ms; fast + stacked is the combination to measure next, ~100 ms expected at one
+user per row).
