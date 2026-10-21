@@ -12,8 +12,8 @@
 #include "ckernel_sfpu.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
+#include "sfpu/shim.h"
 
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_ternary_sfpu_init_()
