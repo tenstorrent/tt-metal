@@ -910,9 +910,16 @@ def _h3_embedding_lengths():
     return [148 * 32, 74 * 32, 287 * 32, 427 * 32, 470 * 32]
 
 
-def _run_fused_gather(device, indices, torch_weights, embeddings_type=ttnn.EmbeddingsType.GENERIC, pad_token=None):
+def _run_fused_gather(
+    device,
+    indices,
+    torch_weights,
+    embeddings_type=ttnn.EmbeddingsType.GENERIC,
+    pad_token=None,
+    weights_layout=ttnn.ROW_MAJOR_LAYOUT,
+):
     input_tensor = ttnn.from_torch(indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=weights_layout, device=device)
     output = ttnn.embedding(
         input_tensor, weights, padding_idx=pad_token, embeddings_type=embeddings_type, layout=ttnn.TILE_LAYOUT
     )
@@ -940,8 +947,10 @@ def test_embedding_fused_dynamic_index_length_flat_cache(device, batch_size, emb
 
 
 @pytest.mark.parametrize("hidden_embedding_dim", [96, 32])
-def test_embedding_fused_dynamic_table_rows_flat_cache(device, hidden_embedding_dim):
-    """The H3 output select: a capacity-sized index over a table whose row count follows the request."""
+@pytest.mark.parametrize("weights_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm_table", "tile_table"])
+def test_embedding_fused_dynamic_table_rows_flat_cache(device, hidden_embedding_dim, weights_layout):
+    """The H3 output select: a capacity-sized index over a table whose row count follows the request.
+    A TILE table adds the wrapper's untilize, which must stay flat too (two programs in all)."""
     torch.manual_seed(0)
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
@@ -950,12 +959,12 @@ def test_embedding_fused_dynamic_table_rows_flat_cache(device, hidden_embedding_
     def run(table_rows):
         torch_weights = torch_random((table_rows, hidden_embedding_dim), -1.0, 1.0, dtype=torch.bfloat16)
         indices = torch.randint(0, table_rows, (1, capacity))
-        _run_fused_gather(device, indices, torch_weights)
+        _run_fused_gather(device, indices, torch_weights, weights_layout=weights_layout)
 
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     assert_program_cache_flat(device, run, [rows * 8 for rows in _h3_embedding_lengths()])
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == (2 if weights_layout == ttnn.TILE_LAYOUT else 1)
 
 
 def test_embedding_fused_width_or_dtype_change_misses(device):
@@ -966,7 +975,7 @@ def test_embedding_fused_width_or_dtype_change_misses(device):
     def run(variant):
         batch, sentence_size, width, index_dtype = variant
         torch_weights = torch_random((512, width), -0.1, 0.1, dtype=torch.bfloat16)
-        indices = torch.randint(0, 512, (batch, sentence_size))
+        indices = torch.randint(0, 250, (batch, sentence_size))  # every index exact in a bfloat16 index tensor
         input_tensor = _indices_to_device(indices, index_dtype, ttnn.ROW_MAJOR_LAYOUT, device)
         weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         output = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT)
