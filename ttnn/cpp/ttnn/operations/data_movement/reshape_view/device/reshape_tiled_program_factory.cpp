@@ -246,7 +246,7 @@ Tensor compute_reshape_mapping_host_tensor(
     const tt::tt_metal::TensorLayout mapping_layout(
         tt::tt_metal::convert_to_data_type<decltype(flat_mapping_vector)::value_type>(),
         ttnn::ROW_MAJOR_LAYOUT,
-        MemoryConfig());
+        MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1));
 
     return Tensor::from_vector(flat_mapping_vector, tt::tt_metal::TensorSpec(mapping_shape, mapping_layout));
 }
@@ -297,10 +297,12 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
-    // Host-compute and upload the input->output page-mapping tensor.
+    // Host-compute and upload the input->output page-mapping tensor into L1 memory.
+    // Placing the op-owned mapping tensor in L1 isolates it from trace replay operations
+    // that write to DRAM, preventing DRAM address collisions and hangs when compiled after end_trace_capture (#61727).
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
-                                .to_device(device);
+                                .to_device(device, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1));
 
     const uint32_t mapping_page_size = mapping_tensor.logical_shape()[-1];
     // Quasar has no UInt32 device format (tt::is_data_format_supported rejects it in ValidateProgramSpec),
@@ -314,9 +316,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
 
     // Op-owned tensor: move the owning MeshTensor out of the built Tensor into the artifact so its
     // device allocation outlives the cached program (~Tensor would otherwise force-deallocate it).
-    // The mapping depends only on the hashed input/output shapes, so on a cache hit the cached
-    // mapping is always valid; operation_attributes.recreate_mapping_tensor stays ignored (it is
-    // excluded from the program hash).
+    // The mapping tensor resides in L1 so its buffer cannot be corrupted by subsequent trace replays in DRAM.
     std::vector<tt::tt_metal::MeshTensor> op_owned;
     op_owned.reserve(1);
     op_owned.push_back(mapping_tensor.device_storage().release_mesh_tensor());

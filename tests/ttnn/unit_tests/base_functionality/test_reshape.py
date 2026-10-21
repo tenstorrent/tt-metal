@@ -1078,3 +1078,45 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
     ttnn.synchronize_device(device)
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+def test_reshape_tile_after_execute_trace(device):
+    """Tiled reshape after trace capture and replay must not hang due to mapping tensor collision (#61727)."""
+    torch.manual_seed(0)
+    input_shape = (1, 1, 32, 64)
+    reshaped_shape = (1, 1, 64, 32)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # 1. Warmup and capture trace with a simple device operation
+    x = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    _ = ttnn.neg(x)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    # 2. Replay trace
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.synchronize_device(device)
+    ttnn.release_trace(device, tid)
+
+    # 3. Perform tiled reshape on device; mapping tensor in L1 avoids DRAM trace collisions
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.reshape(tt_in, reshaped_shape)
+    ttnn.synchronize_device(device)
+
+    actual = ttnn.to_torch(tt_out)
+    expected = torch_input.reshape(reshaped_shape)
+    assert_equal(expected, actual)
+
