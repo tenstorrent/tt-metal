@@ -385,6 +385,34 @@ def test_dsa_attention_slab_r4097(mesh_device, monkeypatch):
     assert not failures, "\n".join(failures)
 
 
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+@pytest.mark.parametrize("S", [128, 1024])
+def test_dsa_attention_slab_dense(mesh_device, monkeypatch, S):
+    """All-dense chunks (the TTFT shapes: S tokens, S/rows per slab), equality + warm walls v1 vs slab + stages."""
+    raw, cfg = _load(attn_only=True)
+    x_in = torch.load(R4097 / f"layer{LAYER}_prefill.pt")["x_in"][:, :S]
+    rows_t = attention_input(raw, cfg, x_in)
+    attn, cache, mesh = _attention(mesh_device, raw, cfg, max_batch=2, max_seq_len=S + 64 * mesh_device.shape[0])
+    timer = StageTimer(mesh_device)
+    failures, _ = _run_variant(attn, cache, mesh, rows_t, (S,), 0, 2048, monkeypatch)
+    walls = {"v1": [], "slab": []}
+    for it in range(3):
+        for name, slab in (("v1", False), ("slab", True)):
+            _, _, w, _ = attn_prefill(
+                attn, cache, mesh, rows_t, int(slab), (S,), 0, slab, 2048, monkeypatch, None, False
+            )
+            walls[name].append(w[0])
+    _, _, _, st = attn_prefill(attn, cache, mesh, rows_t, 1, (S,), 0, True, 2048, monkeypatch, timer, False)
+    stg = "  ".join(f"{g} {v * 1e3:.2f}" for g, v in st[0].items() if v)
+    logger.info(
+        f"TIMING dense chunk S={S} on {MESH}: v1 warm min {min(walls['v1']) * 1e3:.1f} ms (all {[f'{w * 1e3:.1f}' for w in walls['v1']]}) | "
+        f"slab warm min {min(walls['slab']) * 1e3:.1f} ms (all {[f'{w * 1e3:.1f}' for w in walls['slab']]}); slab stages ms: {stg}"
+    )
+    assert not failures, "\n".join(failures)
+
+
 # ----------------------------------------------------------------------------------- layer, R4097
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)

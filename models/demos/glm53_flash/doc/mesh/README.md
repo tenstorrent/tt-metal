@@ -453,3 +453,23 @@ cache fill + index 8, stems 7, slab gathers 3. The sparse a2a cuts sparse_sdpa f
 8192 / 4096-row slab at 16 K (64 heads on a quarter of the rows instead of 32 padded heads on all rows) for
 ~5 ms of exchange per sub-block. The next terms are the scorer + top-k group (replicated over the columns: the
 same heads-to-sequence split would divide it by 4) and the per-sub-block fixed costs (constants, zeros, slices).
+
+All-dense chunks, the TTFT shapes (`test_dsa_attention_slab_dense`, `11_dense_short.log`: layer-3 attention, one chunk
+of S tokens = S/2 rows per slab, warm minimum of 3, bit-exact in both cases):
+
+| S | v1 warm | slab-local warm | slab stages (stage-synchronized) |
+|---|---|---|---|
+| 128 | 3.0 ms | 2.7 ms | stems 0.61, cache fill + index 0.92, dense SDPA 0.97, o_proj 0.35, the three gathers 0.40 |
+| 1024 | 6.9 ms | 5.7 ms | stems 2.98, cache fill + index 5.84, dense SDPA 3.64, o_proj 2.23, gathers 2.91 |
+
+TTFT, resident model layers 0-21 on the (2,4) block, 128-token prompt (`test_mesh_model.py -k ttft`, S=128): first
+greedy token 21097 == the host head on the HF rows with both paths, chain pcc vs HF rows 0.964823 identical; warm
+TTFT 365 ms slab-local (`12_ttft_22L_slab_warmcache.log`, cold 1.6 s) against 399 ms v1
+(`10_ttft_22L_v1.log`, cold 7.1 s), both on the warm (2,4) weight cache.
+
+Not done / next: the scorer + top-k group is still replicated over the columns (the heads-to-sequence split would
+divide it by 4); the mixed first chunk's uniform superset costs one dense block per row plus the sparse path over
+the dense rows (a caller splitting the first chunk at 2048 avoids it); the traced prefill keeps v1; the
+single-chip `tests/test_select_rows.py` check (a mesh row's selections == the single-chip ids) was not re-run here
+(no single-chip grant): the block tests compare the slab rows with the merged v1 rows, which that test validated
+against the single-chip ids by emulation. Logs: `_logs/agents/slabattn/`.
