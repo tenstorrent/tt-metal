@@ -94,7 +94,15 @@ def gspec(fx, monkeypatch):
         s = Spec.load(p)
         prompt.build(s)
         generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
-        Ledger(s.bringup_dir).write_tasks(generate(s, fixture_model.Reference()))
+        led = Ledger(s.bringup_dir)
+        led.write_tasks(generate(s, fixture_model.Reference()))
+        for tid, t in led.tasks().items():  # F138: the component gates' recorded noise-floor limits (their CPU floor)
+            if tid.startswith("C."):
+                step = tid.split(".")[-1]
+                (led.results_dir / f"{tid}.json").parent.mkdir(parents=True, exist_ok=True)
+                (led.results_dir / f"{tid}.json").write_text(
+                    json.dumps({"metrics": {f"err_{step}_L00_limit": {"value": 0.01}}})
+                )
         return Spec.load(p)
 
     return make
@@ -163,7 +171,7 @@ def test_generator_fills_the_mechanical_parts(gspec):
     assert req["component"] == {"block_type": "blk", "step": "attn_norm", "kind": "norm", "stateful": False}
     x = req["interface"]["inputs"][0]
     assert x["name"] == "in" and x["shape"] == ["S", 64] and x["dtype"] == "bfloat16" and x["placement"] == "replicate"
-    assert req["interface"]["chunks"] == [64, 128] and req["tolerance"] == {"pcc": 0.99, "rel_rms": 0.141}
+    assert req["interface"]["chunks"] == [64, 128] and req["tolerance"] == {"pcc": 0.99995, "rel_rms": 0.01}
     assert req["acceptance"]["test"].endswith("test_c_blk_attn_norm.py") and req["acceptance"]["golden"].endswith(
         "manifest.json"
     )
@@ -648,7 +656,7 @@ def test_op_export_writes_the_prompt_and_a_suite_whose_reference_is_the_requests
     assert fs.TARGET == {"dtype": ["<bfloat16>"], "layout": ["<TILE_LAYOUT>"], "memory_layout": ["<INTERLEAVED>"]}
     assert fs.INPUTS == [((64, 64), (128, 64), (64, 128)), ((128, 64), (128, 64), (64, 128))] and fs.INVALID == []
     helpers = (g / "helpers.py").read_text()
-    assert "TOLERANCES = {ttnn.bfloat16: (0.99, 0.141)}" in helpers and "from eval.metrics import" in helpers
+    assert "TOLERANCES = {ttnn.bfloat16: (0.99995, 0.01)}" in helpers and "from eval.metrics import" in helpers
     assert "import models" not in helpers and "from models" not in helpers
     # the suite's reference is the request's reference.py, verbatim
     fn = next(n for n in ast.parse(helpers).body if isinstance(n, ast.FunctionDef) and n.name == "pytorch_fixture_mlp")
@@ -822,3 +830,12 @@ def test_status_and_op_requests_show_deferrals(gspec, capsys):
     assert (
         "fixture_mlp" in out and "draft" in out and "blk.mlp [C.blk.mlp DEFERRED]" in out and "searched 2 places" in out
     )
+
+
+def test_an_op_request_takes_only_the_recorded_noise_floor_limit(gspec):  # noqa: F811
+    """F138: no fixed PCC 0.99 / rel 0.02 tolerance; a step whose limit was never recorded is refused."""
+    s = gspec()
+    led = Ledger(s.bringup_dir)
+    (led.results_dir / "C.blk.attn_norm.json").unlink()
+    with pytest.raises(ValueError, match="no recorded noise-floor limit"):
+        OR.generate(s, "C.blk.attn_norm", "fixture_norm")

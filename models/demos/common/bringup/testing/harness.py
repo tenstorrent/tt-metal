@@ -39,8 +39,6 @@ from models.demos.common.bringup.core.runs import IMPL_ENV
 from models.demos.common.bringup.reference.golden import Golden, load_spec
 from models.demos.common.bringup.reference.interface import Ctx
 
-DEFAULT_THRESHOLDS = {k: defaults.get(f"thresholds.{k}") for k in ("component", "block")}
-
 
 def impl_mode() -> str:
     from models.demos.common.bringup.testing.mutate import kind_of
@@ -68,12 +66,11 @@ def device_timeout(s):
 
 
 def threshold(s, key: str) -> float:
-    if key not in DEFAULT_THRESHOLDS:  # F131: layer / state / final_hidden / top5 went with F128
-        raise KeyError(
-            f"thresholds.{key} no longer exists (F128): an end-to-end limit is calib x the reference's drift, "
-            "testing/e2e_limits.py (check / state_limit on the rung's drift.json)"
-        )
-    return s.threshold(key, DEFAULT_THRESHOLDS[key])
+    """F138 (owner): no fixed accuracy number exists; this stays only to fail an old test with the reason."""
+    raise KeyError(
+        f"thresholds.{key} no longer exists (F128, F138): every accuracy limit is calib x a noise floor (per step: "
+        "render the test with checks='auto', THRESHOLD None; end to end: testing/e2e_limits.py)"
+    )
 
 
 def component_golden(s) -> tuple[Golden, int]:

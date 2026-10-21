@@ -48,7 +48,7 @@ PROFILE_ENV = (
 # F128 (owner): end-to-end accuracy is gated against the limit each test records (calib x the reference's own drift
 # from full precision, testing/e2e_limits.py), never a fixed number
 # F135: float tensors by their rel L2 error (as per step), selections by their overlap; PCC is a diagnostic
-E2E = {"err_layer_L*": "<= limit", "err_state_*_L*": "<= limit", "overlap_state_*_L*": ">= limit"}
+E2E = {"err_layer_L*": "<= limit", "err_state_*_L*": "<= limit"}  # index states: the missed fraction (F138)
 E2E_LAST = {"err_final_hidden": "<= limit", "top5_overlap": ">= limit"}
 
 

@@ -47,6 +47,8 @@ CODE_ROOT = FRAMEWORK.parents[3]
 REFUSED = {
     "golden.numerics": "F132: goldens are always the full-precision reference (native)",
     "tests.step_numerics": "F132: per-step checks always compare with the full-precision reference (native)",
+    "thresholds": "F138: no fixed accuracy number; every limit is calib x a noise floor (drop the key)",
+    "tests.low_precision_kinds": "F138: no looser calib by step kind; the device-format cost is a CPU diagnostic",
 }
 
 REQUIRED = {
@@ -411,9 +413,6 @@ class Spec:
             if r["name"] == name:
                 return r
         raise SpecError(f"no ladder rung {name!r}")
-
-    def threshold(self, key: str, default: float) -> float:
-        return float(self.get(f"thresholds.{key}", default))
 
     def hooks(self):
         return importlib.import_module(self.data["hooks"])

@@ -16,12 +16,11 @@ Per-step swap checks (F49, ``run_swap_test(..., checks="steps")``, what the rend
 block-out gate alone misses most single-step bugs (a norm or a gate removes a scale, the residual dominates out), so
 every swapped step is also gated on its own output, against the CPU step run on the SAME inputs the swapped step
 received (captured in the override, so upstream device error is not blamed on it) and against the golden:
-    swap_<step>_vs_cpu / _vs_golden   the step's component-test compare mode and threshold (COMPARE / THRESHOLD read
-                                      from its frozen test file with ast; default PCC or match, thresholds.component)
-    float outputs: swap_<step>_finite, _rel (<= thresholds.swap_step_rel, 0.02), _row (worst row rel L2 <=
-                   thresholds.swap_step_row, 0.05), _ratio_min / _ratio_max (every row's norm ratio within
-                   1 +- thresholds.swap_step_ratio, 0.02), _bias (median row norm ratio within 1 +-
-                   thresholds.swap_step_bias, 0.01: a systematic scale; precision error is unbiased)
+    swap_<step>_vs_cpu / _vs_golden   the step's component-test compare mode (COMPARE read from its frozen test file
+                                      with ast; default PCC or match), the limit from the noise floor (F80)
+    float outputs: swap_<step>_finite, _rel, _row / column own floors (F83), _bias, _reselect: every limit calib x
+                   the step's noise floor on the same inputs (input nudge, official arithmetic), never below one
+                   rounding of the output to its dtype; no floor means FAIL ("cannot judge", F138)
     swap_<step>_cpu_bridge            device mode: the model handed a CPU bridge, so the step is not on the device
 Stateful steps (attention and indexer write caches): the CPU check runs BEFORE the swapped step, on a copy of the
 context whose state is a deep copy, so neither the check nor its order changes the state the rest of the block reads;
@@ -37,7 +36,7 @@ import math
 
 import torch
 
-from models.demos.common.bringup.core import defaults, metrics
+from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.interface import run_block, step_reference
 from models.demos.common.bringup.testing import accuracy_guard, determinism
 from models.demos.common.bringup.testing.harness import (
@@ -47,7 +46,6 @@ from models.demos.common.bringup.testing.harness import (
     device_ctx,
     impl_mode,
     reference_ctx,
-    threshold,
 )
 from models.demos.common.bringup.testing.mutate import kind_of, mutated_step, target_step
 
@@ -91,55 +89,25 @@ def run_component_test(
     compare_mode: str | None = None,
     thr: float | None = None,
     metric: str | None = None,
-    checks: str | None = None,
+    checks: str | None = "auto",
 ) -> bool:
-    """checks=None: the gate vs the golden only (compare_mode, thr). checks="auto" (F56): also the built-in checks
-    by output kind and the second inputs (testing/component_checks.py); BRINGUP_IMPL=mutations runs the freeze sweep
-    (CPU) instead."""
-    if checks not in (None, "auto"):
-        raise ValueError(f"checks={checks!r}: None or 'auto'")
-    if checks == "auto":
-        ok = _run_auto(s, step, layer, mesh, compare_mode, thr, metric)
-    else:
-        ok = _run_golden(s, step, layer, mesh, compare_mode, thr, metric)
+    """checks="auto" (F56): the error gate vs the golden and the built-in checks by output kind and the second inputs
+    (testing/component_checks.py), every limit from the noise floor; BRINGUP_IMPL=mutations runs the freeze sweep
+    (CPU) instead. F138: the golden-only path (checks=None, a fixed threshold) is gone, and a frozen test's literal
+    THRESHOLD is recorded as a diagnostic, never gated."""
+    if checks != "auto":
+        raise ValueError(
+            f"checks={checks!r}: the golden-only path with a fixed threshold is gone (F138); render the test with "
+            "checks='auto' (testing/templates.py)"
+        )
+    if thr is not None:
+        metrics.record(f"{step}_threshold_literal", thr)
+        print(
+            f"note {step}: the test's THRESHOLD {thr} is recorded, not gated (F138: limits come from the noise floor)"
+        )
+    ok = _run_auto(s, step, layer, mesh, compare_mode, None, metric)
     accuracy_guard.note(s, ok)  # a perf pick that fails its frozen test is never profiled (testing/accuracy_guard.py)
     return ok
-
-
-def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
-    g, c = component_golden(s)
-    layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
-    ref = step_reference(s, [*s.state_sources(layer), layer], torch.float32)  # F65: its sources; F112: numerics
-    st = _step(ref, layer, step)
-    gl = g.layer(c, layer)
-    inputs = [gl[i].float() if gl[i].is_floating_point() else gl[i] for i in st.inputs]
-    want = gl[st.output]
-    from models.demos.common.bringup.plan.op_request import deferred_steps
-
-    if impl_mode() == "device" and (s.block_type_of(layer), step) in deferred_steps(s):
-        print(f"FAIL {step}: deferred to op-gen (task DEFERRED); it runs on the CPU until the op is delivered")
-        return False
-    fn = module_under_test(s, ref, mesh, layer, step)
-    if getattr(fn, "cpu_bridge", False):
-        print(f"FAIL {step}: device_component returned a CPU bridge; a deferred step is not on the device")
-        return False
-    rctx = reference_ctx(ref, layer, g, c, s)
-    out = fn(rctx, device_ctx(layer, g, c, s), *inputs)
-    mode = compare_mode or default_mode(want)
-    name = metric or f"pcc_{step}_L{layer:02d}"
-    _, ok = compare(name, out, want, mode, threshold(s, "component") if thr is None else thr)
-    from models.demos.common.bringup.testing.component_checks import _clone, _mixed
-
-    b_inputs = [_mixed(t, i) for i, t in enumerate(inputs)]
-    det = _deterministic(
-        s,
-        step,
-        name,
-        lambda: fn(rctx, device_ctx(layer, g, c, s), *_clone(inputs)),
-        lambda: fn(rctx, device_ctx(layer, g, c, s), *_clone(b_inputs)),
-        out,
-    )
-    return ok and det
 
 
 def _deterministic(s, step: str, name: str, run_a, run_b, first) -> bool:
@@ -195,9 +163,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
             outs[case.name] = e
     print(ex.describe())
     ok = CC.error_gate(err_name, outs["golden"], want, ex)
-    if ex.thr_literal:  # a frozen test's literal THRESHOLD still gates too
-        ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, ex.thr, ex.thr_how) and ok
-    elif outs["golden"].numel() == want.numel():
+    if outs["golden"].numel() == want.numel():
         metrics.record(name, CC.gate_value(outs["golden"], want, ex.kind, compare_mode))  # PCC: a diagnostic only
     ok = not ex.evaluate(outs) and ok
     if not ok and impl_mode() == "device" and ex.kind == "float":  # F137: logic or precision, on the CPU only
@@ -223,7 +189,6 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     return ok and det
 
 
-SWAP_STEP_DEFAULTS = {k: v for k, v in defaults.get("thresholds").items() if k.startswith("swap_")}  # defaults.yaml
 SPARSE_ZEROS = 0.75  # a float output with at least this fraction of exact zeros is a selection (router weights)
 
 
@@ -356,11 +321,16 @@ def _capturing(
 def _calib(s, kind) -> float:
     from models.demos.common.bringup.testing import component_checks as CC
 
-    low = kind in tuple(s.get("tests.low_precision_kinds") or CC.LOW_PRECISION_KINDS)
-    return CC.calib(CC.limits(s), low)
+    return CC.calib(CC.limits(s))
 
 
 _STEP_CTX: dict = {}  # step -> (floor, chain) of the running swap test (F79: frozen tests wrap _check_step)
+
+
+def CC_limits(s) -> dict:
+    from models.demos.common.bringup.testing.component_checks import limits
+
+    return limits(s)
 
 
 def CC_rel(a, b) -> float:
@@ -395,12 +365,10 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
     _, chunk = component_golden(s)
     ar = NF.arith(s, layer, st.name, chunk) or {}
 
-    def lim(name, floor_outs, want, arith_pcc=None, res_dtype="bf16"):  # a frozen test's THRESHOLD, else the floor
-        if thr is not None:
-            return thr
+    def lim(name, floor_outs, want, arith_pcc=None, res_dtype="bf16"):  # the noise floor; F138: nothing else
         if not floor_outs:
-            print(f"note {name}: no noise floor; limit {threshold(s, 'component')} (spec thresholds.component)")
-            return threshold(s, "component")
+            print(f"FAIL {name}: cannot judge: no noise floor (F138: no fixed limit exists)")
+            return math.inf
         mv = min(NF.value(mode, o, want) for o in floor_outs)
         if arith_pcc is not None and mode == "pcc":
             mv = min(mv, arith_pcc)
@@ -409,7 +377,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         metrics.record(f"{name}_limit", v)
         return v
 
-    if thr is not None or not cpu.is_floating_point():  # a literal THRESHOLD, or an integer output (match / overlap)
+    if not cpu.is_floating_point():  # an integer output (match / overlap)
         ok = compare(f"{tag}_vs_cpu", got, cpu, mode, lim(f"{tag}_vs_cpu", outs, cpu, res_dtype=out_dtype))[1] and ok
         if golden is not None:
             ag = (ar.get("vs_golden") or {}).get("pcc_vs_golden")
@@ -461,7 +429,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
     if not finite:
         print(f"FAIL {tag}: non-finite output")
         return False
-    lim = {k_: s.threshold(k_, v) for k_, v in SWAP_STEP_DEFAULTS.items()}
+    lim = {"swap_step_reselect": math.inf, "swap_step_bias": math.inf}
     err = component_error(s, block_type, st.name, layer) if mode == "pcc" else None
     if err is not None:
         metrics.record(f"{tag}_component_err", err)
@@ -475,7 +443,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         rel_lim = k * max(me["rel"], res_e["rel"])
         lim["swap_step_row"] = k * max(me["row"], res_e["row"])
         lim["swap_step_ratio"] = k * max(dev(me), dev(res_e))
-        share = s.threshold("component_bias_share", 0.5)
+        share = CC_limits(s)["component_bias_share"]
         lim["swap_step_bias"] = max(k * abs(me["bias"]), k * abs(res_e["bias"]), share * rel_lim)
         nres = [step_errors(o, cpu).get("reselected") for o in outs]
         if any(r is not None for r in nres):
@@ -489,9 +457,9 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             fl = NF.flips(scores, kk, NF.support(got.float(), kk, w), nsc, NF.support(cpu, kk, w))
             for k_, v in fl.items():
                 metrics.record(f"{tag}_flip_{k_}", v)
-    else:  # no floor: the step's own component-gate error (F73), else the spec's fixed limits (printed)
-        print(f"note {tag}: no noise floor; spec swap_step_* limits")
-        rel_lim = lim["swap_step_calib"] * max(err, res_e["rel"]) if err is not None else lim["swap_step_rel"]
+    else:  # F138: no floor, no limit to judge by (the fixed swap_step_* fallbacks are gone)
+        print(f"FAIL {tag}: cannot judge: no noise floor for this step (F138: no fixed limit exists)")
+        rel_lim = lim["swap_step_row"] = lim["swap_step_ratio"] = -math.inf
     metrics.record(f"{tag}_rel_limit", rel_lim)
     e = step_errors(got, cpu)
     own = None
@@ -572,7 +540,7 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
         return True
     from models.demos.common.bringup.testing import component_checks as CC
 
-    tag, lim = f"swap_{last.name}_out", s.threshold("swap_out_rel", SWAP_STEP_DEFAULTS["swap_out_rel"])
+    tag, lim = f"swap_{last.name}_out", -math.inf  # F138: the noise floor below, else cannot judge
 
     def run_tail(first: torch.Tensor) -> torch.Tensor:
         env = dict(seen)
@@ -592,8 +560,8 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
     metrics.record(f"{tag}_row", e["row"])  # diagnosis only: a routing flip moves single rows
     # F72: the limit is the noise floor, not a fixed number: what a correct bf16 device step does to the block out
     # (the model's own rounding steps amplify it), i.e. the same tail from the step's bf16 precision model, times
-    # the one calibration margin. swap_out_rel only when the model cannot run
-    how = "fixed"
+    # the one calibration margin; no limit when the model cannot run (F138)
+    how = "cannot judge: no noise floor"
     model = snapshot.get("model")
     model = [model] if isinstance(model, torch.Tensor) else list(model or [])
     if model and cpu.is_floating_point():  # F98: a correct device step's output is at least rounded to bf16; the
@@ -607,7 +575,7 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
             k = CC.limits(s)["component_calib"]  # one margin over the noise floor; no fixed floor or cap (owner)
             lim, how = k * max(em, res), f"{k} x the noise floor's {em:.6f} (bf16 resolution {res:.6f})"
         except Exception as ex:  # noqa: BLE001
-            print(f"note: the tail from {last.name}'s noise floor raised {type(ex).__name__}: {ex}; fixed limit")
+            print(f"FAIL: the tail from {last.name}'s noise floor raised {type(ex).__name__}: {ex}; cannot judge")
     metrics.record(f"{tag}_rel_limit", lim)
     ok = e["rel"] <= lim
     print(
@@ -710,15 +678,12 @@ def run_swap_test(
     for n, t in seen.items():
         if n not in ("in", "out") and n in gl:
             compare(f"pcc_swap_{n}", t, gl[n], default_mode(gl[n]), 0.0)  # the trail, for diagnosis; not gated
-    literal_thr = thr is not None
+    if thr is not None:  # F138: a frozen test's literal THRESHOLD is recorded, never gated
+        metrics.record("pcc_swap_out_threshold_literal", thr)
     chain = _model_chain(s, ref, hooks, steps, layer, g, c, swapped, block_type)
     gout = gl["out"].float()
-    if literal_thr:  # a frozen test's literal THRESHOLD still gates the PCC
-        metrics.record("pcc_swap_out_limit", thr)
-        _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
-    else:
-        compare("pcc_swap_out", seen["out"], gl["out"], "pcc", 0.0)  # PCC: a diagnostic only
-        ok = True
+    compare("pcc_swap_out", seen["out"], gl["out"], "pcc", 0.0)  # PCC: a diagnostic only
+    ok = True
     # F81: the gated metric is the block out's rel error vs the golden, against calib x the nudged block's
     from models.demos.common.bringup.testing import component_checks as CC
 
@@ -729,9 +694,8 @@ def run_swap_test(
         fl = max(CC.rel(r["out"], gout) for r in chain)
         res = CC.rel(fp32_out.float().to(torch.bfloat16).float(), fp32_out.float())
         elim, how = k * max(fl, res), f"{k} x the nudged block's rel vs the golden {fl:.3g} (bf16 {res:.3g})"
-    else:
-        elim = math.sqrt(2 * (1 - threshold(s, "block")))
-        how = f"no noise-floor block: the rel of spec thresholds.block ({threshold(s, 'block')})"
+    else:  # F138: no fixed fallback
+        elim, how = -math.inf, "cannot judge: the noise-floor block did not run"
     e = CC.rel(seen["out"], gout) if seen["out"].numel() == gout.numel() else math.inf
     metrics.record("err_swap_out", e)
     metrics.record("err_swap_out_limit", elim)

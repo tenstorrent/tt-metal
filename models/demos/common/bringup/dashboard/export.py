@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import time
@@ -34,7 +35,6 @@ from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.core.spec import parse_layers
 from models.demos.common.bringup.reference.golden import load_spec
-from models.demos.common.bringup.testing.harness import DEFAULT_THRESHOLDS
 from models.demos.common.bringup.testing.profiler import phase_of
 
 HERE = Path(__file__).resolve().parent
@@ -396,16 +396,24 @@ def build(spec) -> dict:
 
     trails = []
     r2 = M.load("R.2", res)
-    pts = sorted((int(k.rsplit("L", 1)[1]), v["value"]) for k, v in r2.items() if re.match(r"pcc_hidden_L\d+$", k))
+    pts = sorted(
+        (int(k.rsplit("L", 1)[1]), as_rel(v["value"])) for k, v in r2.items() if re.match(r"pcc_hidden_L\d+$", k)
+    )
     if pts:
-        trails.append({"task": "R.2", "label": "CPU reference vs HF", "points": pts, "device": False})
+        trails.append({"task": "R.2", "label": "CPU reference vs HF", "points": pts, "limits": [], "device": False})
     timing, positions = [], None
     for t in tasks:
         m = M.load(t["id"], res)
-        pts = sorted((int(k.rsplit("L", 1)[1]), v["value"]) for k, v in m.items() if re.match(r"pcc_layer_L\d+$", k))
+        pts, lims = layer_errors(m)
         if pts:
             trails.append(
-                {"task": t["id"], "label": f"{t['id']} {t['title'].split(':')[0]}", "points": pts, "device": True}
+                {
+                    "task": t["id"],
+                    "label": f"{t['id']} {t['title'].split(':')[0]}",
+                    "points": pts,
+                    "limits": lims,
+                    "device": True,
+                }
             )
         # performance only: the ladder is an accuracy run (reads every layer back) and never appears here
         timing += [r for r in timing_rows(spec, t, m) if not r["how"].startswith("ladder")]
@@ -456,9 +464,23 @@ def build(spec) -> dict:
         "knowledge": knowledge_summary(spec),
         "boxes": boxes_summary(spec, res),
         "runtime": runtime_summary(spec),
-        "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
     }
+
+
+def as_rel(pcc: float) -> float:
+    """sqrt(2 (1 - pcc)): the rel L2 of an unbiased error with that PCC (where only PCC was recorded)."""
+    return math.sqrt(2 * max(0.0, 1.0 - pcc))
+
+
+def layer_errors(m: dict) -> tuple[list, list]:
+    """F135 / F138: a task's per-layer output error (err_layer_L*, else as_rel of pcc_layer_L*) and the limits its
+    test recorded (err_layer_L*_limit), as [(layer, value)] lists."""
+    err = {int(k.rsplit("L", 1)[1]): v["value"] for k, v in m.items() if re.match(r"err_layer_L\d+$", k)}
+    if not err:
+        err = {int(k.rsplit("L", 1)[1]): as_rel(v["value"]) for k, v in m.items() if re.match(r"pcc_layer_L\d+$", k)}
+    lims = {int(k.split("_L")[1][:-6]): v["value"] for k, v in m.items() if re.match(r"err_layer_L\d+_limit$", k)}
+    return sorted(err.items()), sorted(lims.items())
 
 
 def final_tests(spec, led, state) -> dict:
@@ -540,6 +562,9 @@ def final_tests(spec, led, state) -> dict:
             pcc = [x["value"] for k, x in m.items() if re.match(r"pcc_layer_L\d+$", k)]
             if not pcc or not (same or tid == f"L.{r['name']}"):
                 continue
+            pts, lims = layer_errors(m)
+            lim = dict(lims)
+            worst = max(pts, key=lambda p: p[1] / lim[p[0]] if lim.get(p[0]) else 0.0)
             t = max(x.get("t", "") for x in m.values())
             if best is None or t >= best["t"]:
                 best = {
@@ -547,6 +572,9 @@ def final_tests(spec, led, state) -> dict:
                     "t": t,
                     "status": st(tid),
                     "min_pcc": min(pcc),
+                    "worst_err": worst[1],  # F138: the worst layer by the share of its limit used
+                    "worst_err_layer": worst[0],
+                    "worst_err_limit": lim.get(worst[0]),
                     "top1": v("top1_match"),
                     "top5": v("top5_overlap"),
                     "final_hidden": v("pcc_final_hidden"),
