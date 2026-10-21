@@ -6,6 +6,7 @@
 import json
 import os
 import signal
+import struct
 import time
 from typing import Optional
 
@@ -21,6 +22,7 @@ from models.demos.common.prefill.runners.migration import (
     migration_table_path,
     setup_kv_chunk_table,
 )
+from models.demos.common.prefill.runners.prefill_results import PrefillResultRing, results_shm_name
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
     activation_global_spec,
@@ -52,7 +54,9 @@ def _apply_manifest_env():
 _apply_manifest_env()
 
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-METADATA_SIZE_BYTES = 12
+# 12: {slot, start, end}. 48 adds flags, media_tag, the first token's sampling params and request_seq.
+METADATA_SIZE_BYTES = int(os.environ.get("PREFILL_METADATA_BYTES", 12))
+METADATA_FLAG_FIRST_TOKEN = 1
 
 # Worker grid for the socket copies on both ends of a stage boundary (activation <-> backing tensor).
 # Each worker copies its page slice with one NoC round trip per page, so the copy time divides by the
@@ -136,6 +140,7 @@ assert not (DFLASH_ENABLED and not USE_TRACE), (
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
+_results: Optional[PrefillResultRing] = None
 _shutdown = False
 
 
@@ -191,11 +196,22 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of
 
 def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
+    meta = {
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
+    if METADATA_SIZE_BYTES >= 48:
+        flags, media_tag, temperature, top_p, top_k, seed, request_seq = struct.unpack(
+            "<IQffIIQ", m[3:12].numpy().tobytes()
+        )
+        meta.update(flags=flags, media_tag=media_tag, request_seq=request_seq)
+        meta["sample"] = (
+            dict(temperature=temperature, top_p=top_p, top_k=top_k, seed=seed)
+            if flags & METADATA_FLAG_FIRST_TOKEN
+            else None
+        )
+    return meta
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -426,6 +442,8 @@ def _compute_and_send(
     )
 
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
+    if "flags" in meta:
+        mtp_kwargs.update(media_tag=meta["media_tag"], sample=meta["sample"])
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -437,6 +455,10 @@ def _compute_and_send(
         metadata_msg=metadata_msg,
         **mtp_kwargs,
     )
+    if meta.get("sample") is not None and runtime.config.is_last_rank:
+        failed = meta["media_tag"] != 0 and getattr(runtime, "media_failed_tag", 0) == meta["media_tag"]
+        _results.push(meta["slot_id"], meta["actual_end"], out, meta["request_seq"], status=int(failed))
+        logger.info(f"[pp rank {rank}] FIRST_TOKEN c={c} {where} token={out}")
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
@@ -735,6 +757,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    global _results
+    if METADATA_SIZE_BYTES >= 48 and runtime.config.is_last_rank:
+        _results = PrefillResultRing(results_shm_name(ack_shm_name))
+        logger.info(f"[pp rank {rank}] first-token results ring {_results.name}")
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     router = None
     d2h_service = None
