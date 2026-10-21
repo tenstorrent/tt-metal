@@ -798,3 +798,14 @@ regions expert kernel (no stacked copy; 13.2 GiB free after the prefills, so `GL
 gives the 90 ms block-op decode). Bisect continues at 256 K. To-do once the chips are free: make `regions` the
 default prefill path with the stacked copy kept whenever the memory planner says it fits (validate the MoE unit test
 and the traced prefill on a block first: the regions path must be trace-safe for prompts of 33..2048 tokens).
+
+**256 K x 4 users per row, regions path (19:40, `long_8x4_N262144_4users_regions.log`):** TTFT 135.8 / 109.9 / 109.8 /
+109.0 s (1928-2403 tok/s), needles 32/32, **users agree, rows agree False**: every chain answers
+'amber-falcon-7391</think>' and then rows 2-3 (users 1-3) / row 5 (user 0) pick token 154842 where row 0 picks 154827
+(a special-token near-tie). So rows are not bit-identical at long context even with every slot correct; the users of
+a row are. Hypothesis: the hybrid MoE sums the expert partials over the 8 rows in a ring (reduce-scatter), so each
+row accumulates its tokens' sums in a different fp order (a 2-row block hides this: a+b == b+a); near-tie steps then
+flip per row. The 1 M user-3 difference needs a within-row asymmetry on top. Two knobs added to the long test for the
+next 1 M experiments: `GLM53_LONG_USER_ORDER=3,0,1,2` (is it column 3 or the last prefill / the memory state?) and
+`GLM53_LONG_REPEAT_USER0=1` (prefill user 0 again at the end: same first token and last-chunk logits = the 1 M prefill
+is deterministic in that memory state).
