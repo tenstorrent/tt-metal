@@ -116,6 +116,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     // The second reader stages the odd blocks' geometry inputs.
     constexpr uint8_t odd_offset_mask_arena_cb = tt::CBIndex::c_1;
     constexpr uint8_t odd_geom_in_cb = tt::CBIndex::c_21;
+    constexpr uint8_t geom_scratch_cb = tt::CBIndex::c_22;
 
     // A core's blocks are consecutive output rows, which sample a band of input rows: the dilated
     // kernel's rows plus the bottom corners' row, widened by a margin on each side for the offsets.
@@ -170,6 +171,9 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         push_cb(cb, GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
     }
     push_cb(geom_kernel_cb, 2, fp32_tile_nbytes, tt::DataFormat::Float32);
+    // The geometry's fp32 intermediates between its rounds in dest: a block pushes five, so each
+    // block starts at the front and its four last stay contiguous.
+    push_cb(geom_scratch_cb, 5, fp32_tile_nbytes, tt::DataFormat::Float32);
     const uint32_t even_slots = std::max<uint32_t>(1, (max_blocks + 1) / 2);
     const uint32_t odd_slots = std::max<uint32_t>(1, max_blocks / 2);
     push_cb(geom_index_cb, even_slots, int32_tile_nbytes, tt::DataFormat::Int32);
@@ -360,21 +364,22 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         has_bias ? 1u : 0u,
         attrs.relu ? 1u : 0u,
         chunks,
-        odd_geom_in_cb};
-    // The geometry runs in fp32 and keeps eight tiles in dest at once, which takes full-sync dest;
-    // its fp32 inputs unpack straight to dest, as srcA would round them to TF32. Each pass's matmul
-    // reduction accumulates in fp32 too.
+        odd_geom_in_cb,
+        geom_scratch_cb};
+    // The geometry runs in fp32: its inputs and intermediates unpack straight to dest, as srcA would
+    // round them to TF32. Each pass's matmul reduction accumulates in fp32 too. Half-sync dest, four
+    // fp32 tiles a half, lets math fill one half while the packer drains the other.
     // HiFi2 for the corner products and the matmul: it drops the products' low bits, which costs
     // about as much accuracy as rounding the output to bfloat16, and the cycles it saves are on the
     // conv's critical path.
     ComputeConfigDescriptor compute_config{};
     compute_config.fp32_dest_acc_en = true;
     compute_config.math_fidelity = MathFidelity::HiFi2;
-    compute_config.dst_full_sync_en = true;
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     compute_config.unpack_to_dest_mode[geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_config.unpack_to_dest_mode[odd_geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_config.unpack_to_dest_mode[geom_kernel_cb] = UnpackToDestMode::UnpackToDestFp32;
+    compute_config.unpack_to_dest_mode[geom_scratch_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_desc.config = compute_config;
 
     uint32_t block_cursor = 0;

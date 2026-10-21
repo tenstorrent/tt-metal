@@ -71,12 +71,12 @@ constexpr bool RELU = get_compile_time_arg_val(25);
 constexpr uint32_t CHUNKS = get_compile_time_arg_val(26);  // passes per kernel position
 // The odd blocks' geometry inputs, staged by their reader; geom_in_cb holds the even ones'.
 constexpr uint32_t odd_geom_in_cb_index = get_compile_time_arg_val(27);
+constexpr uint32_t geom_scratch_cb_index = get_compile_time_arg_val(28);
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 constexpr uint32_t WEIGHT_SLICE_TILES = channel_tiles * OUT_TILES;
-// Output tiles per dest pass: full-sync dest holds eight fp32 tiles.
-constexpr uint32_t OUT_CHUNK = 8;
-static_assert(channel_tiles <= OUT_CHUNK, "a block's columns of one pass fit dest at once");
+// Tiles per dest acquire: a half of half-sync dest holds four fp32 tiles.
+constexpr uint32_t DEST_TILES = 4;
 
 // Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in the reader's order.
 constexpr uint32_t IN_DY = 0;
@@ -170,114 +170,143 @@ inline void copy_values(uint32_t from, uint32_t to) {
         GEOM_FACES)));
 }
 
-// dst = (lo <= dst < hi), as 1.0 or 0.0; scratch is overwritten.
-inline void in_range(uint32_t dst, uint32_t scratch, uint32_t lo_fp32, uint32_t hi_fp32) {
-    copy_values(dst, scratch);
+// dst *= (lo <= src < hi), a factor of 1.0 or 0.0; scratch is overwritten.
+inline void zero_outside(uint32_t dst, uint32_t src, uint32_t scratch, uint32_t lo_fp32, uint32_t hi_fp32) {
+    copy_values(src, scratch);
     unary_ge_tile_init();
-    geom_ge(dst, lo_fp32);
+    geom_ge(scratch, lo_fp32);
+    mul_binary_tile_init();
+    geom_mul(dst, scratch, dst);
+    copy_values(src, scratch);
     unary_lt_tile_init();
     geom_lt(scratch, hi_fp32);
     mul_binary_tile_init();
     geom_mul(dst, scratch, dst);
 }
 
-// Sample point (y, x) = origin + kernel offset + offset; (y0, x0) = floor; ly = y - y0 and
-// lx = x - x0. Per axis the near weight is (1 - l) and the far one l, each zeroed where its
-// corner row or column lies outside the input; a corner's weight is the product of its two
-// axis weights and the mask. Eight dest tiles are live at once, which full-sync dest holds
-// in fp32.
+// Loads one axis of the sample point into dest tiles 0 to 2 and leaves p = origin + kernel offset
+// + offset in tile 0 and its floor p0 in tile 1.
+inline void axis_point(uint32_t in_cb_index, uint32_t offset_tile, uint32_t origin_tile, uint32_t kernel_tile) {
+    copy_init(in_cb_index);
+    copy_tile(in_cb_index, offset_tile, 0);
+    copy_tile(geom_kernel_cb_index, kernel_tile, 2);
+    // The reader writes each row's window origin in column 0 only.
+    unary_bcast_init<BroadcastType::COL>(in_cb_index);
+    unary_bcast<BroadcastType::COL>(in_cb_index, origin_tile, 1);
+    unary_bcast_uninit<BroadcastType::COL>(in_cb_index);
+
+    add_binary_tile_init();
+    geom_add(0, 1, 0);
+    geom_add(0, 2, 0);
+    copy_values(0, 1);
+    rounding_op_tile_init();
+    geom_floor(1);
+}
+
+// One axis's weights from the point axis_point leaves: the far weight l = p - p0 in tile 0 and the
+// near weight (1 - l) in tile 3, each zeroed where its corner lies outside [0, size); p0 stays in
+// tile 1 and tile 2 is scratch.
+inline void axis_weights(uint32_t size_fp32, uint32_t size_less_one_fp32) {
+    sub_binary_tile_init();
+    geom_sub(0, 1, 0);
+    copy_values(0, 3);
+    binop_with_scalar_tile_init();
+    geom_rsub_scalar(3, FP32_ONE);
+    zero_outside(3, 1, 2, FP32_ZERO, size_fp32);
+    zero_outside(0, 1, 2, FP32_MINUS_ONE, size_less_one_fp32);
+}
+
+// The block's geometry in five rounds of dest, each at most four fp32 tiles, its intermediates kept
+// in fp32 L1 between rounds: the rows' weights and y0 * W, the top-left corner's page y0 * W + x0,
+// the columns' weights, then the corners' weights, two a round. A corner's weight is its row weight
+// times the mask times its column weight. A round unpacks all its inputs before any SFPU op: an
+// unpack to dest does not wait for the SFPU ops still in flight on the tile it overwrites.
 void compute_geometry(uint32_t in_cb_index, uint32_t index_cb_index, uint32_t weight_cb_index) {
     CircularBuffer geom_in_cb(in_cb_index);
     CircularBuffer index_cb(index_cb_index);
     CircularBuffer weight_cb(weight_cb_index);
+    CircularBuffer scratch_cb(geom_scratch_cb_index);
     geom_in_cb.wait_front(GEOM_IN_TILES);
     reconfig_data_format_srca(in_cb_index);
-    copy_init(in_cb_index);
 
+    // Scratch: y0 * W, the near row's weight, the far row's.
     tile_regs_acquire();
-    copy_tile(in_cb_index, IN_DY, 0);
-    copy_tile(in_cb_index, IN_DX, 3);
-    copy_tile(in_cb_index, IN_MASK, 6);
-    copy_tile(geom_kernel_cb_index, KERNEL_Y, 2);
-    copy_tile(geom_kernel_cb_index, KERNEL_X, 5);
-    // The reader writes each row's window origin in column 0 only.
-    unary_bcast_init<BroadcastType::COL>(in_cb_index);
-    unary_bcast<BroadcastType::COL>(in_cb_index, IN_ORIGIN_Y, 1);
-    unary_bcast<BroadcastType::COL>(in_cb_index, IN_ORIGIN_X, 4);
-    unary_bcast_uninit<BroadcastType::COL>(in_cb_index);
-
-    sigmoid_tile_init();
-    sigmoid_tile<GEOM_FACES>(6);  // the mask, from its logits
-
-    add_binary_tile_init();
-    geom_add(0, 1, 0);
-    geom_add(0, 2, 0);  // y
-    geom_add(3, 4, 3);
-    geom_add(3, 5, 3);  // x
-    copy_values(0, 1);
-    copy_values(3, 4);
-    rounding_op_tile_init();
-    geom_floor(1);  // y0
-    geom_floor(4);  // x0
-    sub_binary_tile_init();
-    geom_sub(0, 1, 0);  // ly
-    geom_sub(3, 4, 3);  // lx
-
-    // The top-left corner's page in its image.
+    axis_point(in_cb_index, IN_DY, IN_ORIGIN_Y, KERNEL_Y);
+    axis_weights(IN_H_FP32, IN_H_LESS_ONE_FP32);
     copy_values(1, 2);
     binop_with_scalar_tile_init();
     geom_mul_scalar(2, IN_W_FP32);
+    tile_regs_commit();
+    scratch_cb.reserve_back(3);
+    tile_regs_wait();
+    pack_reconfig_data_format(geom_scratch_cb_index);
+    pack_tile(2, geom_scratch_cb_index);
+    pack_tile(3, geom_scratch_cb_index);
+    pack_tile(0, geom_scratch_cb_index);
+    tile_regs_release();
+    scratch_cb.push_back(3);
+
+    // The top-left corner's page.
+    scratch_cb.wait_front(3);
+    tile_regs_acquire();
+    copy_init(geom_scratch_cb_index);
+    copy_tile(geom_scratch_cb_index, 0, 3);
+    scratch_cb.pop_front(1);
+    axis_point(in_cb_index, IN_DX, IN_ORIGIN_X, KERNEL_X);
     add_binary_tile_init();
-    geom_add(2, 4, 2);
-
-    // Rows: y0 inside the input weighs (1 - ly), y0 + 1 inside weighs ly.
-    copy_values(1, 5);
-    in_range(5, 7, FP32_ZERO, IN_H_FP32);
-    copy_values(0, 7);
-    binop_with_scalar_tile_init();
-    geom_rsub_scalar(7, FP32_ONE);
-    mul_binary_tile_init();
-    geom_mul(7, 5, 7);  // near row weight
-    in_range(1, 5, FP32_MINUS_ONE, IN_H_LESS_ONE_FP32);
-    geom_mul(0, 1, 0);  // far row weight
-
-    // Columns, the same way.
-    copy_values(4, 5);
-    in_range(5, 1, FP32_ZERO, IN_W_FP32);
-    copy_values(3, 1);
-    binop_with_scalar_tile_init();
-    geom_rsub_scalar(1, FP32_ONE);
-    mul_binary_tile_init();
-    geom_mul(1, 5, 1);  // near column weight
-    in_range(4, 5, FP32_MINUS_ONE, IN_W_LESS_ONE_FP32);
-    geom_mul(3, 4, 3);  // far column weight
-
-    geom_mul(7, 6, 7);  // near row * mask
-    geom_mul(0, 6, 0);  // far row * mask
-    geom_mul(7, 1, 4);  // corner 0
-    geom_mul(7, 3, 7);  // corner 1
-    geom_mul(0, 1, 1);  // corner 2
-    geom_mul(0, 3, 0);  // corner 3
-
+    geom_add(3, 1, 3);
     typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Int32>();
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_fp32_to_int32, (APPROX, 8 /* ITERATIONS */), 2, GEOM_FACES));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_fp32_to_int32, (APPROX, 8 /* ITERATIONS */), 3, GEOM_FACES));
     tile_regs_commit();
-    geom_in_cb.pop_front(GEOM_IN_TILES);
-
     index_cb.reserve_back(1);
-    weight_cb.reserve_back(CORNERS);
     tile_regs_wait();
     pack_reconfig_data_format(index_cb_index);
-    pack_tile(2, index_cb_index);
-    pack_reconfig_data_format(weight_cb_index);
-    pack_tile(4, weight_cb_index);
-    pack_tile(7, weight_cb_index);
-    pack_tile(1, weight_cb_index);
-    pack_tile(0, weight_cb_index);
+    pack_tile(3, index_cb_index);
     tile_regs_release();
     index_cb.push_back(1);
+
+    // Scratch: the near column's weight, the far column's.
+    tile_regs_acquire();
+    axis_point(in_cb_index, IN_DX, IN_ORIGIN_X, KERNEL_X);
+    axis_weights(IN_W_FP32, IN_W_LESS_ONE_FP32);
+    tile_regs_commit();
+    scratch_cb.reserve_back(2);
+    tile_regs_wait();
+    pack_reconfig_data_format(geom_scratch_cb_index);
+    pack_tile(3, geom_scratch_cb_index);
+    pack_tile(0, geom_scratch_cb_index);
+    tile_regs_release();
+    scratch_cb.push_back(2);
+
+    // Scratch now holds near row, far row, near column, far column; corners 0 and 1 lie on the
+    // near row, 2 and 3 on the far one.
+    scratch_cb.wait_front(4);
+    weight_cb.reserve_back(CORNERS);
+    for (uint32_t row = 0; row < 2; ++row) {
+        tile_regs_acquire();
+        copy_init(geom_scratch_cb_index);
+        copy_tile(geom_scratch_cb_index, row, 0);
+        copy_tile(geom_scratch_cb_index, 2, 1);
+        copy_tile(geom_scratch_cb_index, 3, 2);
+        copy_init(in_cb_index);
+        copy_tile(in_cb_index, IN_MASK, 3);
+        sigmoid_tile_init();
+        sigmoid_tile<GEOM_FACES>(3);  // the mask, from its logits
+        mul_binary_tile_init();
+        geom_mul(0, 3, 0);  // the row's weight times the mask
+        geom_mul(0, 1, 3);
+        geom_mul(0, 2, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(weight_cb_index);
+        pack_tile(3, weight_cb_index);
+        pack_tile(0, weight_cb_index);
+        tile_regs_release();
+    }
+    scratch_cb.pop_front(4);
     weight_cb.push_back(CORNERS);
+    geom_in_cb.pop_front(GEOM_IN_TILES);
 }
 
 }  // namespace
@@ -319,34 +348,38 @@ void kernel_main() {
             reconfig_data_format_srca(corner_cb_index);
             pack_reconfig_data_format(tiled_cb_index);
             pack_reconfig_l1_acc(0);
-            tilize_init(corner_cb_index, BLOCK_TILES, tiled_cb_index);
+            fast_tilize_init(corner_cb_index, BLOCK_TILES, tiled_cb_index);
             corner_block_cb.wait_front(BLOCK_TILES);
             tiled_cb.reserve_back(BLOCK_TILES);
-            tilize_block(corner_cb_index, BLOCK_TILES, tiled_cb_index);
+            fast_tilize_block(corner_cb_index, BLOCK_TILES, tiled_cb_index);
             tiled_cb.push_back(BLOCK_TILES);
             corner_block_cb.pop_front(BLOCK_TILES);
-            tilize_uninit(corner_cb_index, tiled_cb_index);
+            fast_tilize_uninit(corner_cb_index, tiled_cb_index, BLOCK_TILES);
 
             // The four corners' products sum in dest: ELWMUL adds into dest, which every acquire
             // starts at zero, so each column tile is packed once.
             bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_index);
             tiled_cb.wait_front(BLOCK_TILES);
+            scalar_cb.wait_front(CORNERS);
             column_cb.reserve_back(channel_tiles);
-            tile_regs_acquire();
-            for (uint32_t corner = 0; corner < CORNERS; ++corner) {
-                scalar_cb.wait_front(1);
-                for (uint32_t t = 0; t < channel_tiles; ++t) {
-                    mul_tiles_bcast<BroadcastType::COL>(tiled_cb_index, scalar_index, corner * channel_tiles + t, 0, t);
+            for (uint32_t t0 = 0; t0 < channel_tiles; t0 += DEST_TILES) {
+                const uint32_t tiles = channel_tiles - t0 < DEST_TILES ? channel_tiles - t0 : DEST_TILES;
+                tile_regs_acquire();
+                for (uint32_t corner = 0; corner < CORNERS; ++corner) {
+                    for (uint32_t t = 0; t < tiles; ++t) {
+                        mul_tiles_bcast<BroadcastType::COL>(
+                            tiled_cb_index, scalar_index, corner * channel_tiles + t0 + t, corner, t);
+                    }
                 }
-                scalar_cb.pop_front(1);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t t = 0; t < tiles; ++t) {
+                    pack_tile(t, column_cb_index);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t t = 0; t < channel_tiles; ++t) {
-                pack_tile(t, column_cb_index);
-            }
-            tile_regs_release();
             column_cb.push_back(channel_tiles);
+            scalar_cb.pop_front(CORNERS);
             tiled_cb.pop_front(BLOCK_TILES);
 
             // The block's output += its columns times the pass's weight slice: fp32 in dest over the
@@ -354,8 +387,8 @@ void kernel_main() {
             column_cb.wait_front(channel_tiles);
             reconfig_data_format(conv_weight_cb_index, column_cb_index);
             pack_reconfig_data_format(acc_cb_index);
-            for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += OUT_CHUNK) {
-                const uint32_t chunk = OUT_TILES - n0 < OUT_CHUNK ? OUT_TILES - n0 : OUT_CHUNK;
+            for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
+                const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
                 matmul_block_init(column_cb_index, conv_weight_cb_index, 0, chunk, 1, channel_tiles);
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < channel_tiles; ++k) {
@@ -393,8 +426,8 @@ void kernel_main() {
         CircularBuffer output_cb(out_index);
         output_cb.reserve_back(OUT_TILES);
         pack_reconfig_data_format(out_index);
-        for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += OUT_CHUNK) {
-            const uint32_t chunk = OUT_TILES - n0 < OUT_CHUNK ? OUT_TILES - n0 : OUT_CHUNK;
+        for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
+            const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
             if constexpr (HAS_BIAS) {
                 add_bcast_rows_init(acc_cb_index, bias_cb_index);
             } else {
