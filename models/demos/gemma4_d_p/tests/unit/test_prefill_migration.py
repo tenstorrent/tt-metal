@@ -13,8 +13,8 @@ import ttnn
 from models.demos.common.prefill.runners import migration_driver, prefill_producer
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
 from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
-from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
-from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
+from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4Caches
+from models.demos.gemma4_d_p.tt.runners.cache_address_table import build_kv_chunk_address_table
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     PREPARED_GPU_TRACE_LAYOUT,
     cache_metrics,
@@ -36,7 +36,7 @@ def caches_and_mesh():
         base = address
         return SimpleNamespace(dtype=ttnn.bfloat8_b, buffer_address=lambda: base)
 
-    caches = Gemma4KvCaches(
+    caches = Gemma4Caches(
         layers=[SlidingRingKVCache(tensor(), tensor()) for _ in range(5)] + [GlobalRingKVCache(tensor())],
         layer_types=("sliding_attention",) * 5 + ("full_attention",),
         num_users=6,
@@ -58,19 +58,19 @@ def test_migration_stages_preserve_each_tensor_and_semantic_layer(caches_and_mes
     runtime.config = SimpleNamespace(num_layers=6, chunk_size=256)
     runtime.mesh_device = mesh
     monkeypatch.setattr(runtime, "_check_cache", lambda supplied: None)
-    stages = runtime.kv_migration_stages(caches, 0, 6)
+    stages = runtime.cache_stages(caches, 0, 6)
     assert [(stage.first_layer, stage.count) for stage in stages] == [
         (layer, 1) for layer in range(5) for _ in range(2)
     ] + [(5, 1)]
     assert len({stage.base_addr for stage in stages}) == 11
     with expect_error(ValueError, "all layers on one rank"):
-        runtime.kv_migration_stages(caches, 1, 5)
+        runtime.cache_stages(caches, 1, 5)
     with expect_error(ValueError, "one stage per cache tensor"):
-        runtime.build_kv_chunk_table(caches, "unused.pb", stage_layouts=[])
+        runtime.build_cache_address_table(caches, "unused.pb", stage_layouts=[])
     layouts = [[dict(rank=0, base_addr=stage.base_addr, first_layer=stage.first_layer, count=1)] for stage in stages]
     layouts[0][0]["base_addr"] += 32
     with expect_error(ValueError, "does not match"):
-        runtime.build_kv_chunk_table(caches, "unused.pb", stage_layouts=layouts)
+        runtime.build_cache_address_table(caches, "unused.pb", stage_layouts=layouts)
 
 
 def test_loopback_byte_check_covers_all_configs_and_detects_corruption(caches_and_mesh, monkeypatch, tmp_path):
@@ -356,7 +356,7 @@ def test_prepared_gpu_reference_preserves_heads_and_prefixes(tmp_path, layer):
     [(3, 32, torch.bfloat16, "head names"), (4, 16, torch.bfloat16, "shape"), (4, 32, torch.float32, "BF16")],
 )
 def test_prepared_gpu_reference_rejects_invalid_tensors(tmp_path, expect_error, head_count, tokens, dtype, message):
-    from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
+    from models.demos.gemma4_d_p.tt.runners.cache_address_table import CONFIG_NAMES
 
     directory = tmp_path / "kv_cache"
     directory.mkdir()

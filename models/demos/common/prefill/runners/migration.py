@@ -18,7 +18,7 @@ import ttnn
 _DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
 
 
-class KvCacheStage(NamedTuple):
+class CacheStage(NamedTuple):
     base_addr: int
     first_layer: int
     count: int
@@ -329,7 +329,7 @@ def serialize_device_map(mesh_device, path: str) -> str:
     return path
 
 
-def serialize_kv_chunk_table(
+def serialize_cache_address_table(
     *,
     table_builder,
     num_layers: int,
@@ -346,10 +346,10 @@ def serialize_kv_chunk_table(
     cfg.chunk_n_tokens = chunk_n_tokens
     cfg.chunk_size_bytes = chunk_size_bytes
     table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
-    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+    return serialize_prebuilt_cache_address_table(table=table, path=path)
 
 
-def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
+def serialize_prebuilt_cache_address_table(*, table, path: str) -> str:
     _serialize_table_to_path(table, path)
     logger.info(
         f"[migration] KV chunk address table serialized to {path} "
@@ -410,7 +410,7 @@ def export_device_map_file_and_gather_stage_layouts(mesh_device, stages, mesh_sh
     rank = int(ttnn.distributed_context_get_rank())
     write_device_map_rank_sidecar(_build_device_map(mesh_device, mesh_shape), device_map_path, rank)
     # A collective: past it, every rank's sidecar exists.
-    stage_layouts = allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+    stage_layouts = allgather_cache_stage_layouts(mesh_device, stages, mesh_shape)
     host_tag = _host_tag_int()
     host_ranks = [s["rank"] for s in stage_layouts[0] if s["host_tag"] == host_tag]
     num_chips = merge_device_map_rank_sidecars(device_map_path, host_ranks, rank)
@@ -421,7 +421,7 @@ def export_device_map_file_and_gather_stage_layouts(mesh_device, stages, mesh_sh
 def deliver_device_map_and_gather_stage_layouts(mesh_device, stages, mesh_shape, rank):
     device_map = _build_device_map(mesh_device, mesh_shape)
     _deliver_local_device_map(device_map, rank)
-    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+    return allgather_cache_stage_layouts(mesh_device, stages, mesh_shape)
 
 
 def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
@@ -445,14 +445,14 @@ def _host_tag_int():
     return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
 
 
-def allgather_kv_stage_layouts(mesh_device, stages, mesh_shape):
+def allgather_cache_stage_layouts(mesh_device, stages, mesh_shape):
     return [
-        allgather_kv_stage_layout(mesh_device, stage.base_addr, mesh_shape, stage.first_layer, stage.count)
+        allgather_cache_stage_layout(mesh_device, stage.base_addr, mesh_shape, stage.first_layer, stage.count)
         for stage in stages
     ]
 
 
-def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers):
+def allgather_cache_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers):
     rows = mesh_shape[0]
     cols = mesh_shape[1]
     base_addr = int(kv_base_addr)
@@ -499,8 +499,8 @@ def get_num_dram_banks(mesh_device):
     return mesh_device.dram_grid_size().x
 
 
-def setup_kv_chunk_table(
-    runtime, kv_caches, mesh_device, mesh_shape, *, rank: int, num_ranks: int, first_layer_idx: int, num_my_layers: int
+def setup_cache_address_table(
+    runtime, caches, mesh_device, mesh_shape, *, rank: int, num_ranks: int, first_layer_idx: int, num_my_layers: int
 ):
     """Gather every rank's KV stage layouts, have rank 0 build the merged chunk table, and hand it on.
 
@@ -538,12 +538,12 @@ def setup_kv_chunk_table(
     if not file_export:
         remove_stale_device_map_sidecars(device_map_json_path)
 
-    if not hasattr(runtime, "kv_migration_stages"):
+    if not hasattr(runtime, "cache_stages"):
         raise RuntimeError(
-            f"runtime {type(runtime).__name__} does not implement kv_migration_stages, so its KV cache "
+            f"runtime {type(runtime).__name__} does not implement cache_stages, so its KV cache "
             "layout cannot be described and no chunk table can be built (see docs/ADDING_A_PREFILL_MODEL.md §2)."
         )
-    kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+    kv_stages = runtime.cache_stages(caches, first_layer_idx, num_my_layers)
 
     if not kv_stages:
         if num_ranks > 1 or publish or file_export:
@@ -568,7 +568,7 @@ def setup_kv_chunk_table(
         if publish:
             stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, mesh_shape, rank)
         else:
-            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, mesh_shape)
+            stage_layouts = allgather_cache_stage_layouts(mesh_device, kv_stages, mesh_shape)
         device_map_path = rank_scoped_device_map_path(device_map_json_path, rank, num_ranks)
         serialize_device_map(mesh_device, device_map_path)
         logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
@@ -580,8 +580,8 @@ def setup_kv_chunk_table(
         )
         return None
 
-    table_path = runtime.build_kv_chunk_table(
-        kv_caches,
+    table_path = runtime.build_cache_address_table(
+        caches,
         table_path,
         first_layer_idx=first_layer_idx,
         num_my_layers=num_my_layers,

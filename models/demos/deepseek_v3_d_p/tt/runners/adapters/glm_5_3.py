@@ -27,7 +27,7 @@ from typing import Callable
 
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config, glm_5_3_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
-from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaCaches
 
 
 class GLM53Adapter(MLAPrefillAdapter):
@@ -59,8 +59,8 @@ class GLM53Adapter(MLAPrefillAdapter):
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_5_3_hf_config(max_seq=max_seq)
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
-        """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (the runner
+    def allocate_caches(self, *, mesh_device, hf_config, params) -> MlaCaches:
+        """GLM is sparse (DSA), so it owns TWO device caches, returned as a Caches tuple (the runner
         hands the whole tuple to every runtime call; the runtime pulls index 0 as the primary KV cache
         and index 1 as the secondary index cache):
 
@@ -118,7 +118,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
         )
-        return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
+        return MlaCaches(kvpe=kvpe_cache, index=index_cache)
 
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     # FP8 repo (a bf16 checkout would diverge from an FP8-derived trace). The bare

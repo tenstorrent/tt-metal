@@ -11,12 +11,12 @@ KV-cache PCC.
 
 Cache ownership: the runtime can OWN its KV cache (``owns_kv_cache=True``, used by the standalone
 galaxy harness — ``self.kv_cache``) OR run engine-owned (``owns_kv_cache=False``, the adapter path:
-the engine allocates via ``GptOssPrefillAdapter.allocate_kv_cache`` and passes the ``KvCaches`` tuple
+the engine allocates via ``GptOssPrefillAdapter.allocate_caches`` and passes the ``Caches`` tuple
 into every call). ``prefill_chunk`` / ``compile`` / ``gather_layer`` / ``kv_cache_pcc_check`` accept
 an optional cache arg that defaults to ``self.kv_cache``.
 
-Migration hooks (Gate 1–2 in ``PREFILL_MIGRATION_TESTING.md``): ``build_kv_chunk_table`` (via
-``tt/runners/kv_chunk_table.py``), ``kv_migration_stages``, ``read_slot_kv``, and
+Migration hooks (Gate 1–2 in ``PREFILL_MIGRATION_TESTING.md``): ``build_cache_address_table`` (via
+``tt/runners/cache_address_table.py``), ``cache_stages``, ``read_slot_kv``, and
 ``set_layer_completion_sink``. Request-mode H2D delivers SP-sharded uint32 tokens; ``prefill_chunk``
 embeds them on the first rank (same path as ``make_chunk_input``).
 
@@ -76,7 +76,7 @@ class TtPrefillRuntimeConfig:
     cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
     # When True the runtime allocates + owns its KV cache (self.kv_cache) — the standalone galaxy
-    # harness path. The adapter/engine path sets this False and passes the engine-owned KvCaches in.
+    # harness path. The adapter/engine path sets this False and passes the engine-owned Caches in.
     owns_kv_cache: bool = True
     # No trace-replay mode in this runtime; the common prefill runner reads the field.
     use_trace: bool = False
@@ -210,7 +210,7 @@ class TtPrefillRuntime:
 
     def _resolve_kv(self, kv_caches) -> GptOssKVCache:
         """Resolve the GptOssKVCache from the (optional) caller arg. Accepts None (use self-owned),
-        a GptOssKVCache, or the engine's KvCaches tuple (index 0)."""
+        a GptOssKVCache, or the engine's Caches tuple (index 0)."""
         if kv_caches is None:
             assert self.kv_cache is not None, "runtime has no KV cache (owns_kv_cache=False): pass kv_caches"
             return self.kv_cache
@@ -400,24 +400,24 @@ class TtPrefillRuntime:
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
-    def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
-        """One ``KvCacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
+    def cache_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
+        """One ``CacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
 
-        Single-rank, so ``build_kv_chunk_table`` ignores the gathered layouts and resolves each K/V
+        Single-rank, so ``build_cache_address_table`` ignores the gathered layouts and resolves each K/V
         config's own ``buffer_address()``; this one stage only satisfies the runner's gather.
 
         A bounded sliding cache has no chunk-table layout yet, so it reports no stage and the runner
         serves without a table."""
-        from models.demos.common.prefill.runners.migration import KvCacheStage
+        from models.demos.common.prefill.runners.migration import CacheStage
 
         kv = self._resolve_kv(kv_caches)
         if kv.bounded_sliding:
             return []
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
-        return [KvCacheStage(int(kv.k.buffer_address()), first_layer_idx, num_my_layers)]
+        return [CacheStage(int(kv.k.buffer_address()), first_layer_idx, num_my_layers)]
 
-    def build_kv_chunk_table(
+    def build_cache_address_table(
         self,
         kv_caches,
         path: str,
@@ -434,12 +434,12 @@ class TtPrefillRuntime:
             len(layout) == 1 for layout in stage_layouts
         ), f"GPT-OSS KV chunk table is single-rank, got stage layouts from {[len(l) for l in stage_layouts]} ranks"
         del first_layer_idx, num_my_layers, stage_layouts
-        from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+        from models.demos.gpt_oss_d_p.tt.runners.cache_address_table import build_and_serialize_cache_address_table
 
         kv = self._resolve_kv(kv_caches)
         assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
         c = self.config
-        return build_and_serialize_kv_chunk_table(
+        return build_and_serialize_cache_address_table(
             mesh_device=self.mesh_device,
             kv_cache=kv,
             seq_len=c.max_seq_len,

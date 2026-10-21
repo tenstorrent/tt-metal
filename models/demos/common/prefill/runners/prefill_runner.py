@@ -22,7 +22,7 @@ from models.demos.common.prefill.runners.migration import (
     migration_file_export_enabled,
     migration_publish_enabled,
     migration_table_path,
-    setup_kv_chunk_table,
+    setup_cache_address_table,
 )
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
@@ -453,7 +453,7 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
 
 def _compute_and_send(
     runtime,
-    kv_caches,
+    caches,
     rank: int,
     c: int,
     inp,
@@ -478,7 +478,7 @@ def _compute_and_send(
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
     out = runtime.prefill_chunk(
         inp,
-        kv_caches,
+        caches,
         slot_id=meta["slot_id"],
         actual_start=meta["actual_start"],
         actual_end=meta["actual_end"],
@@ -527,7 +527,7 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 def run_request_loop(
     runtime,
-    kv_caches,
+    caches,
     rank: int,
     num_ranks: int,
     *,
@@ -594,7 +594,7 @@ def run_request_loop(
             continue
         t = _compute_and_send(
             runtime,
-            kv_caches,
+            caches,
             rank,
             c,
             inp,
@@ -754,12 +754,12 @@ def main() -> None:
     if USE_TRACE and getattr(runtime, "capture_trace", None) is None:
         raise RuntimeError(
             f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
-            "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
+            "capture_trace(caches); run with PREFILL_USE_TRACE=0."
         )
-    kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    runtime.compile(kv_caches)
+    caches = ADAPTER.allocate_caches(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(caches)
 
-    _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+    _serve_request(runtime, caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
     _release_trace = getattr(runtime, "release_trace", None)
     if _release_trace is not None:
@@ -770,7 +770,7 @@ def main() -> None:
     logger.info(f"[pp rank {rank}] shutdown complete")
 
 
-def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _serve_request(runtime, caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
@@ -919,9 +919,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
-    migration_endpoint = setup_kv_chunk_table(
+    migration_endpoint = setup_cache_address_table(
         runtime,
-        kv_caches,
+        caches,
         mesh_device,
         GLOBAL_MESH_SHAPE,
         rank=rank,
@@ -933,7 +933,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     def _capture_trace() -> None:
         if d2d_out is not None:
             _forward_send_warmup(runtime, d2d_out, rank, idx_out)
-        runtime.capture_trace(kv_caches)
+        runtime.capture_trace(caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
             for _ in range(n_warm):
@@ -951,7 +951,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     try:
         run_request_loop(
             runtime,
-            kv_caches,
+            caches,
             rank,
             num_ranks,
             d2d_rows=d2d_activation_rows,

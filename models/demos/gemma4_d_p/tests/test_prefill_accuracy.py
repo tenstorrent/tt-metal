@@ -245,7 +245,7 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypat
     print(f"Accuracy test results: {output_root}", flush=True)
 
     params = run_params(adapter)
-    kv_cache = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    kv_cache = adapter.allocate_caches(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime = adapter.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_cache)
     runtime.capture_trace(kv_cache)

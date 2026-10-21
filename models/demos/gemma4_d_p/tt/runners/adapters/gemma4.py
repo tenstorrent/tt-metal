@@ -89,7 +89,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             raise ValueError(f"Invalid Gemma4 cache config {config_id}")
         return 640 if config_id < 4 else 256
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+    def allocate_caches(self, *, mesh_device, hf_config, params):
         validate_params(params)
         from models.demos.gemma4_d_p.config import MeshConfig
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs

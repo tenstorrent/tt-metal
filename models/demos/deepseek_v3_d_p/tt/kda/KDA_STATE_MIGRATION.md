@@ -18,7 +18,7 @@ contract (`k3_disagg_contract.md`, tt-blaze #3634): one version of both states s
 prefill state (`kda_position` in `utils/kv_cache_utils.py`). The KV Manager needs this: it requires
 equal `chunk_n_tokens` on both sides and walks one position range for every config of a layer, so
 both states must fill the same window. The runtime declares the three caches as migration stages in
-this order (`TtKimiK3Runtime.kv_migration_stages`), numbered in compacted slot space; the adapter
+this order (`TtKimiK3Runtime.cache_stages`), numbered in compacted slot space; the adapter
 maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 
 ## Native form and contract form
@@ -32,7 +32,7 @@ maps configs back to layers with `cache_kind` / `cache_layer_rows`.
 with `H_local = 96 / TP`, `D = 128`, `K - 1 = 3`. Heads are TP-sharded; every SP row holds a replica.
 
 The contract form is a second copy the engine owns (`KdaStates`, allocated by
-`KimiK3Adapter.allocate_kv_cache`, one consolidated slab per state kind so a `KvCacheStage` can name
+`KimiK3Adapter.allocate_caches`, one consolidated slab per state kind so a `CacheStage` can name
 it by one base address):
 
 * recurrent slab `[slots * L, H_local, D, D]` FP32 TILE, ND-sharded DRAM, shard `[1, 1, D, 32]`

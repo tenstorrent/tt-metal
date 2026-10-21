@@ -176,7 +176,7 @@ def build_kv_chunk_address_table(
     return table
 
 
-def build_and_serialize_kv_chunk_table(
+def build_and_serialize_cache_address_table(
     *,
     mesh_device,
     kv_cache,

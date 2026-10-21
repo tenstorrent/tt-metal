@@ -14,7 +14,7 @@ They are not the same and the difference is not cosmetic. `ttMLA._cache_batch_id
 count, so a rank starting at layer 24 owns MLA layers 27, 31, ... whose slots must be 0, 1, ... —
 not the 6, 7, ... that `KimiK3Config.mla_kv_slot()` returns. That classmethod is the model-wide
 map and is correct only for a rank whose `first_layer_idx` is 0; on any other rank it yields a
-plausible, wrong, out-of-range slot. `KimiK3Adapter.allocate_kv_cache` states the same rule. Use
+plausible, wrong, out-of-range slot. `KimiK3Adapter.allocate_caches` states the same rule. Use
 `kv_slot_of_local` here.
 """
 

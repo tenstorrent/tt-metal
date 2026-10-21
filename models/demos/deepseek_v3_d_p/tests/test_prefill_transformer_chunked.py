@@ -2010,7 +2010,7 @@ def run_chunked_transformer_updated(
         tp_axis=tp_axis if tp_shard_kv else None,
         # KV slabs, which is NOT the layer count on a hybrid model: Kimi-K3 writes a slab only
         # on full-attention layers, so 24 layers need 6. Same one-slab-per-layer assumption
-        # that makes build_kv_chunk_table reject the model outright (#54892).
+        # that makes build_cache_address_table reject the model outright (#54892).
         num_kvpe_cache_layers=getattr(variant, "num_kv_cache_layers", lambda n: n)(num_layers),
         num_users=1,
     )

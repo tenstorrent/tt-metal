@@ -28,7 +28,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
-from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaCaches
 
 # NOTE: the heavy model stack (TtPrefillRuntime / TtPrefillTransformer, the MoE gate, transformers'
 # AutoConfig) is imported lazily inside the methods that need it. This keeps `import ...adapters` cheap
@@ -94,14 +94,14 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # KV cache + runtime build
     # ------------------------------------------------------------------
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> MlaKvCaches:
+    def allocate_caches(self, *, mesh_device, hf_config, params: PrefillRunParams) -> MlaCaches:
         """Allocate the MLA kvpe KV cache (qk_rope_head_dim + kv_lora_rank per token; one shared cache of
         num_users * num_layers user-major slots). Dense MLA has no indexer cache, so ``index`` stays None.
         ``params.tp_shard_kv`` stripes it over SP*TP instead of TP-replicating it. The engine owns the
         returned cache and passes it into every runtime call."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
-        return MlaKvCaches(
+        return MlaCaches(
             kvpe=allocate_mla_kvpe_cache(
                 mesh_device=mesh_device,
                 hf_config=hf_config,
@@ -123,7 +123,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
-        is stateless w.r.t. the KV cache — the engine allocates it (allocate_kv_cache) and
+        is stateless w.r.t. the KV cache — the engine allocates it (allocate_caches) and
         passes it into each runtime call; the runtime knows the layout to read/write it."""
         from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology

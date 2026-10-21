@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import ttnn
-from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.adapter import Caches
 
 if TYPE_CHECKING:
     from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class MlaKvCaches(KvCaches):
+class MlaCaches(Caches):
     """DeepSeek-family prefill caches owned by the common prefill engine.
 
     ``kvpe`` is the primary MLA cache with explicit physical encoding. ``index`` is the optional DSA
@@ -28,7 +28,7 @@ class MlaKvCaches(KvCaches):
 
 
 @dataclass
-class KimiK3KvCaches(MlaKvCaches):
+class KimiK3Caches(MlaCaches):
     """Kimi-K3's caches: the MLA kvpe cache plus the contract copy of every KDA layer's state.
 
     ``kda_states`` is migration stage 1 (recurrent) and 2 (convolution) next to kvpe at 0. It is None

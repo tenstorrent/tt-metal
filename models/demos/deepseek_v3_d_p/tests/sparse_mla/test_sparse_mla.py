@@ -194,7 +194,7 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
     ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory).
 
-    Layer-slot count mirrors the serving adapter (glm_5_3.py allocate_kv_cache): the indexer strides the
+    Layer-slot count mirrors the serving adapter (glm_5_3.py allocate_caches): the indexer strides the
     folded user-major cache by num_full_indexer_layers (only ``full`` layers own an index slot), so the
     cache must carry that many layer slots for update_padded_kv_cache's cache_batch % num_layers check to
     hold. Falls back to 1 when the config has no ``indexer_types`` (every layer full,

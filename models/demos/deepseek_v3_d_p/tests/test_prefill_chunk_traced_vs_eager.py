@@ -130,7 +130,7 @@ def _build(mesh_device, hf_config, weight_cache_path, num_layers, num_links, use
         use_trace=use_trace,
     )
     runtime = adapter.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    kv_caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    kv_caches = adapter.allocate_caches(mesh_device=mesh_device, hf_config=hf_config, params=params)
     return runtime, kv_caches
 
 

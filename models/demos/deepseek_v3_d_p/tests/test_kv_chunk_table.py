@@ -4,7 +4,7 @@
 from types import SimpleNamespace
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+from models.demos.deepseek_v3_d_p.tt.runners import cache_address_table
 
 
 def test_glm_merged_table_config_names_survive_protobuf_round_trip(tmp_path, monkeypatch):
@@ -19,10 +19,10 @@ def test_glm_merged_table_config_names_survive_protobuf_round_trip(tmp_path, mon
         buffer_address=lambda: 0x20000,
     )
     stage_layouts = [[{"rank": 0, "first_layer": 0, "count": 1, "base_addr": base}] for base in (0x10000, 0x20000)]
-    monkeypatch.setattr(kv_chunk_table, "populate_kv_chunk_address_table_block_cyclic", lambda **kwargs: None)
+    monkeypatch.setattr(cache_address_table, "populate_kv_chunk_address_table_block_cyclic", lambda **kwargs: None)
     monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
 
-    path = kv_chunk_table._build_and_serialize_merged_kv_chunk_table(
+    path = cache_address_table._build_and_serialize_merged_cache_address_table(
         mesh_device=None,
         caches=[("kvpe", cache), ("index", index_cache)],
         seq_len=32,
@@ -46,7 +46,7 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
     cache = SimpleNamespace(shape=(1, 1, 32, 32), dtype=ttnn.bfloat8_b, buffer_address=lambda: 0x10000)
     geometry = KdaContractGeometry.from_kda_config(kimi_k3_kda_config(), mesh_shape=(8, 4), sp_axis=0, tp_axis=1)
     kda_layout = [{"rank": 0, "first_layer": 0, "count": 1, "base_addr": 0x20000}]
-    spec = kv_chunk_table.KdaTableSpec(
+    spec = cache_address_table.KdaTableSpec(
         geometry=geometry,
         recurrent=None,
         convolution=None,
@@ -54,13 +54,13 @@ def test_kimi_k3_kda_config_names_match_decode(tmp_path, monkeypatch):
         convolution_layout=kda_layout,
         layer_rows=[0],
     )
-    monkeypatch.setattr(kv_chunk_table, "populate_kv_chunk_address_table_block_cyclic", lambda **kwargs: None)
-    monkeypatch.setattr(kv_chunk_table, "populate_kv_chunk_address_table_kda", lambda **kwargs: None)
+    monkeypatch.setattr(cache_address_table, "populate_kv_chunk_address_table_block_cyclic", lambda **kwargs: None)
+    monkeypatch.setattr(cache_address_table, "populate_kv_chunk_address_table_kda", lambda **kwargs: None)
     # The cache double has no topology; this test is about config names, not the KV layout.
-    monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: False)
+    monkeypatch.setattr(cache_address_table, "is_tp_deduped_kv_cache", lambda *_: False)
     monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
 
-    path = kv_chunk_table._build_and_serialize_merged_kv_chunk_table(
+    path = cache_address_table._build_and_serialize_merged_cache_address_table(
         mesh_device=None,
         caches=[("kvpe", cache), ("kda_recurrent", spec), ("kda_convolution", spec)],
         seq_len=32,

@@ -27,7 +27,7 @@ from typing import Optional
 
 from loguru import logger
 
-from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
+from models.demos.common.prefill.adapter import Caches, PrefillModelAdapter, PrefillRunParams
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 
 
@@ -102,8 +102,8 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # KV cache + runtime build
     # ------------------------------------------------------------------
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
-        """Allocate the GQA K/V cache and return it as this model's ``KvCaches`` subclass.
+    def allocate_caches(self, *, mesh_device, hf_config, params: PrefillRunParams) -> Caches:
+        """Allocate the GQA K/V cache and return it as this model's ``Caches`` subclass.
 
         Target layout (tt-blaze#4141): one packed cache per tensor, per chip
         ``[num_users * num_layers, 1, max_seq_len / sp, head_dim]`` bfloat8_b, user-major
@@ -133,7 +133,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
         """Build the model + runtime for this rank.
 
         The runtime is stateless w.r.t. the KV cache (``owns_kv_cache=False``): the engine allocated
-        it via ``allocate_kv_cache`` and passes it into every call that touches it.
+        it via ``allocate_caches`` and passes it into every call that touches it.
         """
         from models.demos.llama_3p1_8b_d_p.tt.model_config import resolve_weights_path
         from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import build_runtime

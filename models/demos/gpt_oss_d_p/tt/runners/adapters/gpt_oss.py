@@ -22,13 +22,13 @@ from typing import Optional
 
 from loguru import logger
 
-from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
+from models.demos.common.prefill.adapter import Caches, PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 
 
 @dataclass
-class GptOssKvCaches(KvCaches):
-    """Concrete KvCaches for GPT-OSS: a list holding the single GptOssKVCache (k+v struct),
+class GptOssCaches(Caches):
+    """Concrete Caches for GPT-OSS: a list holding the single GptOssKVCache (k+v struct),
     indexable so the runtime's _resolve_kv pulls the cache back via [0] (engine treats it opaquely)."""
 
     caches: list
@@ -95,14 +95,14 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # KV cache + runtime build
     # ------------------------------------------------------------------
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
+    def allocate_caches(self, *, mesh_device, hf_config, params: PrefillRunParams) -> Caches:
         """Allocate the GQA K/V cache (one shared cache of num_users * num_layers user-major slots;
         K/V heads on the TP cols, sequence SP-sharded block-cyclic). Dense GQA has no secondary cache,
-        so the returned KvCaches holds just the one GptOssKVCache at index 0. The engine owns it and
+        so the returned Caches holds just the one GptOssKVCache at index 0. The engine owns it and
         passes it into every runtime call.
 
         Index 0 is a ``GptOssKVCache`` (``.k`` / ``.v`` tensors). Migration uses the multi-config
-        table in ``tt/runners/kv_chunk_table.py`` (config 0..N-1 = k heads, N..2N-1 = v heads).
+        table in ``tt/runners/cache_address_table.py`` (config 0..N-1 = k heads, N..2N-1 = v heads).
         """
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
@@ -110,7 +110,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         layer_types = getattr(hf_config, "layer_types", None)
         if layer_types is not None:
             layer_types = list(layer_types)[params.first_layer_idx : params.first_layer_idx + params.num_layers]
-        return GptOssKvCaches(
+        return GptOssCaches(
             [
                 allocate_kv_cache(
                     mesh_device,
@@ -129,7 +129,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
-        cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
+        cache (owns_kv_cache=False): the engine allocated it via allocate_caches and passes it into
         each call."""
         import ttnn
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
@@ -146,7 +146,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             weight_cache_path=params.weight_cache_path,
             # Same knob as the standalone harness; the tilized cache files are keyed by dtype.
             expert_weight_dtype=(ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b),
-            owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
+            owns_kv_cache=False,  # engine owns the cache (from allocate_caches); passed into every call
             # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
             topology=(
                 ttnn.Topology.Linear if os.getenv("PREFILL_TOPOLOGY", "ring") == "linear" else ttnn.Topology.Ring
@@ -154,7 +154,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             first_layer_idx=params.first_layer_idx,
-            # Same knob as allocate_kv_cache, so the runtime's gating (migration / cache-read
+            # Same knob as allocate_caches, so the runtime's gating (migration / cache-read
             # asserts) agrees with the engine-owned cache it is handed.
             bounded_sliding_kv_cache=_bounded_sliding_kv_cache_enabled(),
         )

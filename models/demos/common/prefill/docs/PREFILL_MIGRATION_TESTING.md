@@ -410,7 +410,7 @@ flags go after the script's three positional arguments and reach every rank verb
 This is also the KV-correctness precondition: prefill must write correct KV before migration means
 anything. The runner serialises the KV-chunk table and device map and nothing else; the producer reads
 each chunk device-lessly via `read_dram_umd` — the same UMD path the migration worker uses — and PCCs
-against golden. This isolates one question: is `build_kv_chunk_table` correct? No endpoint, no worker and
+against golden. This isolates one question: is `build_cache_address_table` correct? No endpoint, no worker and
 no MPI are involved. Requires the producer to implement a read-back for this model's cache layout (see
 `prefill_producer.py`). `PREFILL_MAX_SEQ_LEN` must be at least `chunks * CHUNK_SIZE` or the runner
 asserts when a chunk overruns the cache — it no longer derives from a chunk count.
@@ -538,8 +538,8 @@ gates you intend to run require.
 
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
-| 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
+| 1 | `build_cache_address_table` | serialises the block-cyclic layout; issues no comms |
+| 2 | `cache_stages` | one `CacheStage` per migratable cache, for the cross-stage table merge |
 | 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
 | 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |

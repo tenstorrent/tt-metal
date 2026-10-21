@@ -50,7 +50,7 @@ def _caches(first, count, num_users=1, *, kvpe=True, kda=True):
 
 @pytest.mark.parametrize("first,count", SPLITS, ids=[f"L{f}-{f + c}" for f, c in SPLITS])
 def test_four_galaxy_split_emits_three_stages_in_compacted_slot_space(first, count):
-    stages = _runtime(first, count).kv_migration_stages(_caches(first, count))
+    stages = _runtime(first, count).cache_stages(_caches(first, count))
     assert len(stages) == 3
     kvpe, recurrent, convolution = stages
     mla_before = sum(1 for layer in KimiK3Config.mla_layer_ids() if layer < first)
@@ -62,24 +62,24 @@ def test_four_galaxy_split_emits_three_stages_in_compacted_slot_space(first, cou
 
 
 def test_compacted_kda_slots_tile_the_model():
-    firsts = [_runtime(f, c).kv_migration_stages(_caches(f, c))[1] for f, c in SPLITS]
+    firsts = [_runtime(f, c).cache_stages(_caches(f, c))[1] for f, c in SPLITS]
     assert [(s.first_layer, s.count) for s in firsts] == [(0, 18), (18, 18), (36, 18), (54, 15)]
     assert sum(s.count for s in firsts) == len(KimiK3Config.kda_layer_ids()) == 69
 
 
 def test_single_galaxy_24_layer_rank():
-    stages = _runtime(0, 24).kv_migration_stages(_caches(0, 24))
+    stages = _runtime(0, 24).cache_stages(_caches(0, 24))
     assert [(s.first_layer, s.count) for s in stages] == [(0, 6), (0, 18), (0, 18)]
 
 
 def test_layer_zero_only_rank_has_no_kvpe_stage_but_keeps_three():
-    stages = _runtime(0, 1).kv_migration_stages(_caches(0, 1))
+    stages = _runtime(0, 1).cache_stages(_caches(0, 1))
     assert (stages[0].base_addr, stages[0].first_layer, stages[0].count) == (0, 0, 0)
     assert [(s.first_layer, s.count) for s in stages[1:]] == [(0, 1), (0, 1)]
 
 
 def test_kda_only_later_rank_keeps_the_kvpe_layout_contiguous():
-    first, second = (_runtime(f, c).kv_migration_stages(_caches(f, c))[0] for f, c in [(0, 12), (12, 3)])
+    first, second = (_runtime(f, c).cache_stages(_caches(f, c))[0] for f, c in [(0, 12), (12, 3)])
     assert (second.base_addr, second.first_layer, second.count) == (0, 3, 0)
     layout = [{"first_layer": s.first_layer, "count": s.count} for s in (first, second)]
     assert merged_num_layers(layout) == 3
@@ -87,13 +87,13 @@ def test_kda_only_later_rank_keeps_the_kvpe_layout_contiguous():
 
 def test_missing_slabs_or_mismatched_slabs_are_refused(expect_error):
     with expect_error(RuntimeError, "no KDA state slabs"):
-        _runtime(0, 24).kv_migration_stages(_caches(0, 24, kda=False))
+        _runtime(0, 24).cache_stages(_caches(0, 24, kda=False))
     caches = _caches(24, 24)
     caches.kda_states.layer_ids = caches.kda_states.layer_ids[:-1]
     with expect_error(RuntimeError, "cover layers"):
-        _runtime(24, 24).kv_migration_stages(caches)
+        _runtime(24, 24).cache_stages(caches)
     with expect_error(RuntimeError, "DFlash"):
-        _runtime(0, 24, dflash=True).kv_migration_stages(_caches(0, 24))
+        _runtime(0, 24, dflash=True).cache_stages(_caches(0, 24))
 
 
 def test_table_layer_rows_follow_the_gathered_stages():

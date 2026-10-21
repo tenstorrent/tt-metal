@@ -18,7 +18,7 @@ from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import TILE_HEIGHT, GlobalRingKVCache
-from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
+from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4Caches
 
 _BFP8_TILE_BYTES = 1088
 GLOBAL_CHUNK_BYTES = GLOBAL_PACKED_DIM // ttnn.TILE_SIZE * _BFP8_TILE_BYTES
@@ -108,8 +108,8 @@ def _cache_streams(kv_caches):
 
 
 def _mesh_config(mesh_device, kv_caches):
-    if not isinstance(kv_caches, Gemma4KvCaches):
-        raise TypeError(f"expected Gemma4KvCaches, got {type(kv_caches).__name__}")
+    if not isinstance(kv_caches, Gemma4Caches):
+        raise TypeError(f"expected Gemma4Caches, got {type(kv_caches).__name__}")
     mesh_config = MeshConfig(mesh_device)
     cp = mesh_config.cp_degree
     tp = mesh_config.tp_degree
@@ -125,7 +125,7 @@ def _fabric_node_id(mesh_device, mesh_config, cp_row, tp_column):
     return mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coordinates))
 
 
-def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_size: int):
+def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4Caches, chunk_size: int):
     """Describe global packed rows and sliding K/V rows directly from compute caches."""
     mesh_config = _mesh_config(mesh_device, kv_caches)
     cp = mesh_config.cp_degree
@@ -187,7 +187,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
 _TABLE_CACHE_SEED = "gemma4_d_p:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 
 
-def kv_chunk_table_cache_key(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_size: int):
+def kv_chunk_table_cache_key(*, mesh_device, kv_caches: Gemma4Caches, chunk_size: int):
     """Every input build_kv_chunk_address_table reads, as JSON-serializable values."""
     mesh_config = _mesh_config(mesh_device, kv_caches)
     nodes = []
@@ -213,7 +213,7 @@ def kv_chunk_table_cache_key(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_si
     )
 
 
-def build_and_serialize_kv_chunk_table(*, path: str, mesh_device, kv_caches: Gemma4KvCaches, chunk_size: int) -> str:
+def build_and_serialize_cache_address_table(*, path: str, mesh_device, kv_caches: Gemma4Caches, chunk_size: int) -> str:
     inputs = dict(mesh_device=mesh_device, kv_caches=kv_caches, chunk_size=chunk_size)
     hit = ttnn.experimental.disaggregation.get_or_build_kv_chunk_table(
         _TABLE_CACHE_SEED, kv_chunk_table_cache_key(**inputs), lambda: build_kv_chunk_address_table(**inputs), path

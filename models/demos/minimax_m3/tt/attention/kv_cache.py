@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import ttnn
-from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.adapter import Caches
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
@@ -17,7 +17,7 @@ BH_NUM_DRAM_BANKS = 8
 
 
 @dataclass
-class MiniMaxKVCache(KvCaches):
+class MiniMaxKVCache(Caches):
     """M3's on-device prefill KV cache: three persistent, user-major packed device caches, each per-chip
     shape ``[num_users*num_layers, 1, seq_local, head_dim]`` on the DRAM ND-shard substrate, written in
     place by ``ttnn.experimental.deepseek_prefill.update_padded_kv_cache(slot_idx, layer_idx, ...)``:

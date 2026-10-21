@@ -9,11 +9,11 @@ is registered in ``models/demos/common/prefill/adapter.py:ADAPTER_PATHS`` and ``
 selects it.
 
 It subclasses ``MLAPrefillAdapter`` for the config/cache/reference plumbing. The inherited
-``allocate_kv_cache`` would size the cache to ``params.num_layers``, which is wrong for a stack
+``allocate_caches`` would size the cache to ``params.num_layers``, which is wrong for a stack
 where only 24 of 93 layers own a slab, so this class overrides it -- along with ``build_runtime``,
 ``num_kv_cache_layers``, ``kv_slot_layer_ids``, ``layer_split_boundaries`` and
 ``pipeline_activation_planes`` -- to answer in MLA-slot space. The same override also allocates the
-KDA layers' migration state (``KimiK3KvCaches.kda_states``), which ``TtKimiK3Runtime`` exposes as
+KDA layers' migration state (``KimiK3Caches.kda_states``), which ``TtKimiK3Runtime`` exposes as
 migration stages 1 and 2 next to kvpe at 0 (issue #57403).
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
@@ -133,7 +133,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         return KimiSparseMoeBlock
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+    def allocate_caches(self, *, mesh_device, hf_config, params):
         """Size the KV cache to this rank's FULL-ATTENTION layers, not its layers.
 
         The inherited allocator takes `params.num_layers` and would reserve 93 slots per user for a
@@ -151,7 +151,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """
         from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3Caches
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
         schedule = KimiK3LayerSchedule.build(KimiK3Config, params.first_layer_idx, params.num_layers)
@@ -181,7 +181,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
                 tp_axis=params.tp_axis,
             )
             kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
-        return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
+        return KimiK3Caches(kvpe=kvpe, kda_states=kda_states)
 
     def layer_split_boundaries(self, num_layers: int):
         """Pipeline ranks may only start on an AttnRes block boundary.
@@ -212,7 +212,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """How many KV slabs `num_layers` of this model actually need.
 
         Dense models answer `num_layers`. Kimi-K3 writes a slab only on full-attention layers, so a
-        24-layer slice needs 6, not 24 — the same assumption that makes `build_kv_chunk_table`
+        24-layer slice needs 6, not 24 — the same assumption that makes `build_cache_address_table`
         reject the model outright (#54892).
         """
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule

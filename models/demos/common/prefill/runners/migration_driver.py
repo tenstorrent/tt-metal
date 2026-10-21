@@ -696,7 +696,7 @@ def _run_validator(rank: int, world_size: int, args) -> None:
     logger.info(f"[migration_driver] validator rank={rank}: GO received, {len(resident)} resident slot(s)")
 
     try:
-        kv_table = producer._read_kv_chunk_table(timeout_s)
+        kv_table = producer._read_cache_address_table(timeout_s)
     except Exception as e:
         logger.error(f"[migration_driver] validator rank={rank}: KV table read raised {type(e).__name__}: {e}")
         kv_table = None
@@ -845,7 +845,7 @@ def main() -> None:
         wait_for_layer_completions,
     )
 
-    kv_table = producer._read_kv_chunk_table(timeout_s)
+    kv_table = producer._read_cache_address_table(timeout_s)
     completion_channel = connect_layer_completion_channel(timeout_s)
 
     driver.attach()

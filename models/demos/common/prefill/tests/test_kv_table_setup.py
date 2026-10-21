@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Device-free checks of setup_kv_chunk_table's dispatch: which transport each
+"""Device-free checks of setup_cache_address_table's dispatch: which transport each
 PREFILL_ENABLE_MIGRATION x PREFILL_MIGRATION_EXPORT_TO_FILE combination drives, who builds and
 publishes the table, and how a runtime that reports no KV stage is handled."""
 
 import pytest
 
 from models.demos.common.prefill.runners import migration
-from models.demos.common.prefill.runners.migration import KvCacheStage, setup_kv_chunk_table
+from models.demos.common.prefill.runners.migration import CacheStage, setup_cache_address_table
 
 STAGE_LAYOUTS = [[{"rank": 0}]]
 
@@ -18,10 +18,10 @@ class _Runtime:
         self.stages = stages
         self.built = []
 
-    def kv_migration_stages(self, kv_caches, first_layer_idx, num_my_layers):
+    def cache_stages(self, caches, first_layer_idx, num_my_layers):
         return self.stages
 
-    def build_kv_chunk_table(self, kv_caches, path, *, first_layer_idx, num_my_layers, stage_layouts):
+    def build_cache_address_table(self, caches, path, *, first_layer_idx, num_my_layers, stage_layouts):
         self.built.append((path, stage_layouts))
         return path
 
@@ -43,14 +43,14 @@ def calls(monkeypatch, tmp_path):
     monkeypatch.setattr(migration, "remove_stale_device_map_sidecars", record("remove_sidecars"))
     monkeypatch.setattr(migration, "export_device_map_file_and_gather_stage_layouts", record("export", STAGE_LAYOUTS))
     monkeypatch.setattr(migration, "deliver_device_map_and_gather_stage_layouts", record("deliver", STAGE_LAYOUTS))
-    monkeypatch.setattr(migration, "allgather_kv_stage_layouts", record("allgather", STAGE_LAYOUTS))
+    monkeypatch.setattr(migration, "allgather_cache_stage_layouts", record("allgather", STAGE_LAYOUTS))
     monkeypatch.setattr(migration, "serialize_device_map", record("serialize_json"))
     monkeypatch.setattr(migration, "publish_serialized_table_and_wait_ready", record("publish", "client"))
     return seen
 
 
 def _setup(runtime, *, rank=0, num_ranks=1):
-    return setup_kv_chunk_table(
+    return setup_cache_address_table(
         runtime, None, None, (4, 8), rank=rank, num_ranks=num_ranks, first_layer_idx=0, num_my_layers=4
     )
 
@@ -68,7 +68,7 @@ def _setup(runtime, *, rank=0, num_ranks=1):
 def test_rank0_transport_matrix(monkeypatch, calls, enable, export, transport, publishes):
     monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", enable)
     monkeypatch.setenv("PREFILL_MIGRATION_EXPORT_TO_FILE", export)
-    runtime = _Runtime([KvCacheStage(0x1000, 0, 4)])
+    runtime = _Runtime([CacheStage(0x1000, 0, 4)])
 
     endpoint = _setup(runtime)
 
@@ -81,7 +81,7 @@ def test_rank0_transport_matrix(monkeypatch, calls, enable, export, transport, p
 def test_non_first_rank_gathers_but_never_builds_or_publishes(monkeypatch, calls, enable):
     monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", "/data/shared/table.pb")
     monkeypatch.setenv("PREFILL_ENABLE_MIGRATION", enable)
-    runtime = _Runtime([KvCacheStage(0x1000, 4, 4)])
+    runtime = _Runtime([CacheStage(0x1000, 4, 4)])
 
     assert _setup(runtime, rank=1, num_ranks=2) is None
     assert "publish" not in calls
@@ -113,5 +113,5 @@ def test_no_stage_raises_when_a_table_is_required(monkeypatch, calls, expect_err
 
 
 def test_runtime_without_stage_hook_is_rejected(calls, expect_error):
-    with expect_error(RuntimeError, "kv_migration_stages"):
+    with expect_error(RuntimeError, "cache_stages"):
         _setup(object())

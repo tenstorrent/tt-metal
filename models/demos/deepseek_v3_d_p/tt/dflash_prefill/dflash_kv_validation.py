@@ -222,7 +222,7 @@ _KV_BLOCK_TOKENS = 32  # NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK: table reads go by w
 def _dflash_config_ids(table):
     """Return the drafter caches' ``(k_ids, v_ids)`` config ids (indexed by kv-head) from a published KV
     table, or None when the table carries no drafter configs; raises on a partial/malformed set."""
-    from ..runners.kv_chunk_table import dflash_config_name
+    from ..runners.cache_address_table import dflash_config_name
 
     names = [table.config_name(i) for i in range(table.num_configs())]
     present = {n for n in names if n.startswith("dflash_")}

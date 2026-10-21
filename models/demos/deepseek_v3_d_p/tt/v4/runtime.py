@@ -66,5 +66,5 @@ class TtV4Runtime(TtPrefillRuntime):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
+    def cache_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         return []
