@@ -59,6 +59,9 @@ struct ResolvedTensorParameter {
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
 
+    // Per-node allocated tensor (see TensorBindingHandle::is_per_node).
+    bool is_per_node = false;
+
     // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
     // Always present: a tensor has a dtype and a tile.
     LLKMetadata llk_metadata;
@@ -75,17 +78,20 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
 //  - The full CRTA buffer layout (named CRTAs + binding section + vararg-section start),
 //    precomputed here so consumers (headergen, runtime) don't have to re-derive section
 //    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
+//  - The per-node RTA buffer layout (named RTAs + per-node binding section + vararg-section start).
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     // Binding-only CTA payload; appended after the user CTA-vararg positional prefix.
     std::vector<uint32_t> cta_words;
     KernelCrtaLayout crta_layout;
+    KernelRtaLayout rta_layout;
 };
 
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count,
+    size_t base_named_rta_count,
     uint32_t base_cta_offset);
 
 // ----------------------------------------------------------------------------
