@@ -79,7 +79,10 @@ def _run_agmm(transpose_core_grid: bool | None, **kwargs):
         try:
             output = op(**kwargs, **{_AGMM_ORIENTATION_KWARG: transpose_core_grid})
         except TypeError as error:
-            if _agmm_orientation_supported or _AGMM_ORIENTATION_KWARG not in str(error):
+            # nanobind lists the op's signatures after "Available signatures"; the kwarg is absent there
+            # only when the op lacks it (the "Called with" echo always names it).
+            signatures = str(error).partition("Available signatures")[2]
+            if _agmm_orientation_supported or _AGMM_ORIENTATION_KWARG in signatures:
                 raise
             _agmm_orientation_supported = False
             if not transpose_core_grid:

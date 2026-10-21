@@ -26,12 +26,13 @@ from .agmm_config import agmm_block_size, agmm_pin
 DYNAMIC_RING_SDPA_CHUNKS = (256, 512)
 
 
-def norm_pin_kwargs(worker_cap: int | None) -> dict:
-    """`DistributedRMSNorm.forward` kwargs that pin the fused norm's worker count, or `{}` when the layer
-    has no such parameter yet (then the op picks workers from the row count)."""
-    if worker_cap is None or "num_workers" not in inspect.signature(DistributedRMSNorm.forward).parameters:
+def norm_capacity_kwargs(row_capacity: int | None) -> dict:
+    """`DistributedRMSNorm` constructor kwargs that size the fused norm's program, workers and stats scratch
+    for `row_capacity` per-device rows (one program for every row count up to it), or `{}` when the layer
+    has no such parameter yet (then the op keys everything on the live row count)."""
+    if row_capacity is None or "row_capacity" not in inspect.signature(DistributedRMSNorm.__init__).parameters:
         return {}
-    return {"num_workers": worker_cap}
+    return {"row_capacity": row_capacity}
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -118,17 +119,16 @@ class MiniMaxH3Attention(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
-        norm_worker_cap: int | None = None,
+        norm_row_capacity: int | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice (AGMM grid/blocking/orientation, ring SDPA
-        chunks) at construction so one program per op serves every per-device length; `norm_worker_cap` is
-        the fused norm's pinned worker count on that path."""
+        chunks) at construction so one program per op serves every per-device length; `norm_row_capacity`
+        (per-device rows) sizes the fused QK norms' program for every row count up to it on that path."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
-        self._norm_kwargs = norm_pin_kwargs(norm_worker_cap) if dynamic_length else {}
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -191,6 +191,7 @@ class MiniMaxH3Attention(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **(norm_capacity_kwargs(norm_row_capacity) if dynamic_length else {}),
         )
         self.norm_q = DistributedRMSNorm(**qk_norm_kwargs)
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
@@ -565,7 +566,6 @@ class MiniMaxH3Attention(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             trans_mat=self.rope_trans_mat if rope_cos is not None else None,
-            **self._norm_kwargs,
         )
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)

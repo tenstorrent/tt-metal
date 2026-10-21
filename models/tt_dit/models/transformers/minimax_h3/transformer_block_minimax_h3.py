@@ -19,7 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size, agmm_pin
-from .attention_minimax_h3 import MiniMaxH3Attention, norm_pin_kwargs
+from .attention_minimax_h3 import MiniMaxH3Attention, norm_capacity_kwargs
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
@@ -72,16 +72,16 @@ class MiniMaxH3TransformerBlock(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
-        norm_worker_cap: int | None = None,
+        norm_row_capacity: int | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings at construction and gathers the modulation rows
         by index (`ttnn.embedding` on ROW_MAJOR tables) instead of one-hot matmuls, so no per-block program
-        depends on the per-device length; `norm_worker_cap` pins the fused norms' worker count there."""
+        depends on the per-device length; `norm_row_capacity` (per-device rows) sizes the fused norms there."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
-        self._norm_kwargs = norm_pin_kwargs(norm_worker_cap) if dynamic_length else {}
+        norm_kwargs = norm_capacity_kwargs(norm_row_capacity) if dynamic_length else {}
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
@@ -104,6 +104,7 @@ class MiniMaxH3TransformerBlock(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **norm_kwargs,
         )
         self.attn = MiniMaxH3Attention(
             hidden_size=hidden_size,
@@ -118,7 +119,7 @@ class MiniMaxH3TransformerBlock(Module):
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             dynamic_length=dynamic_length,
-            norm_worker_cap=norm_worker_cap,
+            norm_row_capacity=norm_row_capacity,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -127,6 +128,7 @@ class MiniMaxH3TransformerBlock(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **norm_kwargs,
         )
         # The reference's SwiGLU is `up, gate = proj(x).chunk(2); up * silu(gate)`, which is the
         # `gate_is_first=False` layout `ColParallelLinear` already assumes for activation_fn="swiglu".
@@ -349,7 +351,6 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_bias=norm_modulation(_SHIFT_MSA),
             dynamic_weight_includes_static=self._fold_norm_weight,
             dynamic_tile_row_map=tile_map,
-            **self._norm_kwargs,
         )
         # The gated residual is fused into to_out's matmul epilogue, so `attn` returns
         # `residual + attn_out * gate` directly rather than the block adding it afterwards.
@@ -370,7 +371,6 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_bias=norm_modulation(_SHIFT_MLP),
             dynamic_weight_includes_static=self._fold_norm_weight,
             dynamic_tile_row_map=tile_map,
-            **self._norm_kwargs,
         )
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.

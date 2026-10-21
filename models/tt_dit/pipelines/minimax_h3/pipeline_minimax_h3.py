@@ -308,8 +308,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
         "use_persistent_ccl_buffers": False,
         "trace_audio": True,
-        # Fused-norm worker count of the dynamic-length path (the op's own pick below 448 tile rows).
-        "norm_worker_cap": 64,
     },
     # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
     # which moves the SP alignment to 32 * TILE_SIZE = 1024 and re-keys every packed length.
@@ -542,7 +540,6 @@ class MiniMaxH3Pipeline:
             raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
         bucket_denoise = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
         self.bucket_denoise = self.trace_denoise or (bucket_denoise and not self.dynamic_length)
-        self.norm_worker_cap = preset.get("norm_worker_cap") if self.dynamic_length else None
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -1405,7 +1402,6 @@ class MiniMaxH3Pipeline:
             # Bucketed rungs each pin their own K/V gather pair; size one at the longest length for all.
             kv_gather_capacity=self.kv_gather_capacity,
             dynamic_length=self.dynamic_length,
-            norm_worker_cap=self.norm_worker_cap,
         )
 
     @property

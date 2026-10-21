@@ -19,7 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
-from .attention_minimax_h3 import norm_pin_kwargs
+from .attention_minimax_h3 import norm_capacity_kwargs
 from .time_dispatch import DispatchTimer, timed_block_index
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
@@ -71,16 +71,15 @@ class MiniMaxH3AdaLayerNormOut(Module):
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
         dynamic_length: bool = False,
-        norm_worker_cap: int | None = None,
+        norm_row_capacity: int | None = None,
     ) -> None:
         super().__init__()
 
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
-        # Dynamic-length path: ROW_MAJOR gather tables (no untilize per gather) and a pinned norm worker count.
+        # Dynamic-length path: ROW_MAJOR gather tables (no untilize per gather) and a capacity-sized norm.
         self.dynamic_length = dynamic_length
-        self._norm_kwargs = norm_pin_kwargs(norm_worker_cap) if dynamic_length else {}
 
         self.norm = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -89,6 +88,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            **(norm_capacity_kwargs(norm_row_capacity) if dynamic_length else {}),
         )
         self.linear = ColParallelLinear(
             time_embed_dim,
@@ -142,7 +142,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
 
         shift, scale = gather(tables[0]), gather(tables[1])
-        return ttnn.add(ttnn.mul(self.norm(hidden, **self._norm_kwargs), ttnn.add(scale, 1.0)), shift)
+        return ttnn.add(ttnn.mul(self.norm(hidden), ttnn.add(scale, 1.0)), shift)
 
 
 class MiniMaxH3Transformer3DModel(Module):
@@ -209,11 +209,10 @@ class MiniMaxH3Transformer3DModel(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
-        norm_worker_cap: int | None = None,
     ) -> None:
-        """`dynamic_length`: every length-keyed program choice is frozen at construction (see the blocks)
-        and the per-forward state is one entry rather than one per padded length; `norm_worker_cap` pins
-        the fused norms' worker count on that path. Both default to the legacy, length-keyed behaviour."""
+        """`dynamic_length`: every length-keyed program choice is frozen at construction (see the blocks),
+        the fused norms are sized for `kv_gather_capacity / sp` rows per device, and the per-forward state is
+        one entry rather than one per padded length. Defaults to the legacy, length-keyed behaviour."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -221,6 +220,10 @@ class MiniMaxH3Transformer3DModel(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.dynamic_length = dynamic_length
+        # Per-device row capacity of the fused norms on the dynamic-length path (the K/V gather capacity / SP).
+        norm_row_capacity = None
+        if dynamic_length and kv_gather_capacity is not None:
+            norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
@@ -314,7 +317,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     kv_gather_capacity=kv_gather_capacity,
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                     dynamic_length=dynamic_length,
-                    norm_worker_cap=norm_worker_cap,
+                    norm_row_capacity=norm_row_capacity,
                 )
                 for _ in range(num_layers)
             ]
@@ -331,7 +334,7 @@ class MiniMaxH3Transformer3DModel(Module):
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
             dynamic_length=dynamic_length,
-            norm_worker_cap=norm_worker_cap,
+            norm_row_capacity=norm_row_capacity,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
