@@ -34,5 +34,5 @@ def test_the_spec_overrides_a_default_and_falls_back_to_it():
 
     assert spec({"agents": {"component_review": "all"}}).get("agents.component_review") == "all"
     assert spec({}).get("agents.component_review") == defaults.get("agents.component_review")
-    assert spec({}).threshold("layer", 0.0) == defaults.get("thresholds.layer")
+    assert spec({}).threshold("component", 0.0) == defaults.get("thresholds.component")
     assert spec({}).get("not.a.switch", 7) == 7

@@ -10,7 +10,10 @@ See models/demos/common/bringup/reference/interface.py and testing/harness.py fo
 """
 
 
-def reference(spec, layers=None, dtype=None):
+def reference(spec, layers=None, dtype=None, numerics="native"):
+    """The CPU reference. numerics (F128, owner): "native" = full precision, every activation quantize-dequantize of
+    the shipped code off (the goldens and per-step checks compare against this); "official" = the shipped code's
+    roundings (generated only to measure the margin the device is allowed)."""
     raise NotImplementedError("reference step: write models/demos/$model/reference/ and return it here")
 
 

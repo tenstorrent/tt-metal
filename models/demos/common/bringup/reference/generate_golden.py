@@ -38,7 +38,10 @@ from models.demos.common.bringup.reference.golden import (
     LOGITS_TAIL,
     TOPK,
     content_hash,
+    golden_numerics,
     load_spec,
+    official_dir,
+    reference_at,
     rung_dir,
     store_dtype,
     text_tokens,
@@ -50,7 +53,7 @@ def run_starts(selected: list[int]) -> list[int]:
     return [layer for k, layer in enumerate(selected) if k == 0 or selected[k - 1] != layer - 1]
 
 
-def reuse(spec, rung: dict, out) -> None:
+def reuse(spec, rung: dict, out, numerics: str) -> None:
     """An existing golden (this run's, e.g. made under another rung name, or a prior bring-up's: same checkpoint and
     reference): check that it is for the same rung and layers and is intact, and record the gate's metrics instead of
     regenerating it. A mismatch stops: delete it to regenerate."""
@@ -58,6 +61,8 @@ def reuse(spec, rung: dict, out) -> None:
 
     m = json.loads((out / "manifest.json").read_text())
     want = {"seq": rung["seq"], "chunk": rung["chunk"], "layers": spec.layers(), "model": spec.data["hf_id"]}
+    want["numerics"] = numerics  # F128: a golden made before F128 has none: it is the official one (move it)
+    m.setdefault("numerics", "official")
     bad = {k: (m.get(k), v) for k, v in want.items() if m.get(k) != v}
     if bad:
         raise SystemExit(
@@ -74,7 +79,24 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
     ap.add_argument("--rung", required=True)
+    ap.add_argument(
+        "--numerics", default=None, help="native (full precision, the target) | official (the margin's source); F128"
+    )
+    ap.add_argument(
+        "--set", action="store_true", help="F128: the target golden, the official one and their drift (a G task)"
+    )
     a = ap.parse_args(argv)
+    if a.set:
+        from models.demos.common.bringup.reference import drift
+
+        spec_args = ["--spec", a.spec] if a.spec else []
+        main(spec_args + ["--rung", a.rung])
+        rung = load_spec(a.spec).rung(a.rung)
+        if rung.get("golden"):
+            return
+        main(spec_args + ["--rung", a.rung, "--numerics", "official"])
+        drift.main(spec_args + ["--rung", a.rung])
+        return
     torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
     rung = spec.rung(a.rung)
@@ -82,9 +104,11 @@ def main(argv=None):
         print(f"rung {a.rung} reuses the golden of rung {rung['golden']}; nothing to generate")
         return
     seq, chunk = rung["seq"], rung["chunk"]
-    out = rung_dir(spec, rung)
+    numerics = a.numerics or golden_numerics(spec)
+    target = numerics == golden_numerics(spec)
+    out = rung_dir(spec, rung) if target else official_dir(spec, rung)
     if (out / "manifest.json").exists():  # goldens are generated once; one that matches the rung is reused (F75)
-        return reuse(spec, rung, out)
+        return reuse(spec, rung, out, numerics)
     tmp = out.with_name(out.name + ".partial")
     (tmp / "kv_cache").mkdir(parents=True, exist_ok=True)
 
@@ -92,9 +116,12 @@ def main(argv=None):
     selected = spec.layers()
     full_stack = max(selected) == spec.num_layers - 1
     run_layers = None if full_stack else list(range(max(selected) + 1))
-    ref = spec.hooks().reference(spec, layers=run_layers, dtype=torch.float32)
+    # F128: the target computes in fp32; the margin's source at the shipped code's own dtype and roundings
+    dtype = torch.float32 if numerics == "native" else getattr(torch, str(spec.get("reference.shipped_dtype")))
+    ref = reference_at(spec, numerics, layers=run_layers, dtype=dtype)
     starts = set(run_starts(selected))
-    keep_fp32 = tuple(spec.get("golden.keep_fp32", []))
+    # F128: the full-precision golden keeps fp32 (no bf16 rounding of the target); the official one is only a margin
+    keep_fp32 = True if numerics == "native" else tuple(spec.get("golden.keep_fp32", []))
     from models.demos.common.bringup.reference import prompt
 
     prompt_rec = prompt.load(spec)
@@ -225,7 +252,8 @@ def main(argv=None):
         "run_starts": sorted(starts),
         "full_dumps": bool(rung.get("full_dumps")),
         "dumped_chunks": dumped,
-        "compute_dtype": "float32",
+        "compute_dtype": str(dtype).split(".")[-1],
+        "numerics": numerics,
         "text": prompt_rec["source"],
         "prompt_wrap": prompt_rec["wrap"],
         "prompt_sha256": prompt_rec["sha256"],
