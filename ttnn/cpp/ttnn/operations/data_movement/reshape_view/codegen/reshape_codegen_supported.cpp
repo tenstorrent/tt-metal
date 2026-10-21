@@ -201,11 +201,11 @@ uint32_t min_native_piece(bool two_kernels, bool merge) {
 }
 
 // Native hands each of its two kernels half of a core's source sticks; at two sticks per core each kernel moves one,
-// while the port's reader and writer pass both through one pipeline. Up to this many pieces per stick, the second
-// stick costs the port more than its repack saves.
+// while the codegen reader and writer pass both through one pipeline. Up to this many pieces per stick, the second
+// stick costs codegen more than its repack saves.
 constexpr uint32_t kMaxPairedSplitPieces = 24;
 
-// Whether an L1 split puts exactly two source sticks on the port's busiest core. In DRAM the port still wins there.
+// Whether an L1 split puts exactly two source sticks on codegen's busiest core. In DRAM codegen still wins there.
 bool paired_l1_split_native_faster(
     uint32_t ratio, uint64_t num_old_sticks, uint32_t num_cores, const tt::tt_metal::MemoryConfig& output_mem_config) {
     return output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 && ratio <= kMaxPairedSplitPieces &&
@@ -287,7 +287,7 @@ bool native_rm_fits_l1(
 
 // Wormhole thresholds, fitted from the same forced sweeps run on Wormhole. Its DRAM reads stay transaction-bound up to
 // 2 KB pieces, its L1 merges lose to native from 1 KB, and a single-kernel split with at most one source stick per
-// core leaves the port's pipeline unfilled, so native wins from 20 B.
+// core leaves the codegen pipeline unfilled, so native wins from 20 B.
 constexpr uint32_t kWhMinDramMergePiece = 2048;
 constexpr uint32_t kWhMinL1MergePiece = 1024;
 constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
@@ -295,7 +295,7 @@ constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
 constexpr uint32_t kBhMinDramMergePiece = 256;
 
 // Whether native's kernel measures faster than the ROW_MAJOR program the gate admits. Thresholds fitted on Blackhole
-// from forced port-vs-native sweeps of same-placement copies, with the Wormhole thresholds above. Widths that do not
+// from forced codegen-vs-native sweeps of same-placement copies, with the Wormhole thresholds above. Widths that do not
 // divide are never demoted: native waits on a read barrier per input page, the slab program reads every window of a
 // batch of slabs behind one barrier. Mixed DRAM/L1 placement is not demoted either: the output's alignment is not an
 // attribute of the input, and the rule was fitted on same-placement copies only.
@@ -321,7 +321,7 @@ bool rm_native_faster(
     const bool wormhole = input.device()->arch() == tt::ARCH::WORMHOLE_B0;
     if (old_stick % alignment == 0 && new_stick % alignment == 0) {
         // Splits keep every short write in flight; native waits on each one. From 256 B a DRAM read is no longer
-        // transaction-bound and the port's single read NOC caps it.
+        // transaction-bound and codegen's single read NOC caps it.
         if (input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM) {
             return merge && piece >= (wormhole ? kWhMinDramMergePiece : kBhMinDramMergePiece);
         }
