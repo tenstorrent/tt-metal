@@ -254,7 +254,9 @@ class SpecRunner:
         self.tid = None
         # position buckets (tt/indexer.py ``set_pos_bucket``): one set of traces per bucket, replayed while every position of the block stays below it
         self.idx_views = list(idx_by_id.values())
-        self.pos_buckets = pos_buckets(self.max_pos) if self.idx_views else []
+        self.pos_buckets = (
+            pos_buckets(self.max_pos, int(os.environ.get("DSV41_SPEC_POS_FACTOR", "4"))) if self.idx_views else []
+        )
         self.tr, self.cur_bucket = {}, None
         # sampled verify (adapter): a round with sampled rows replays three traces, A (verify block -> logits) | S (the in-trace sampler draws every block row) | B (accept / commit / draft over the
         # drawn ids), instead of the single trace; the persistent buffers are allocated here, before any trace

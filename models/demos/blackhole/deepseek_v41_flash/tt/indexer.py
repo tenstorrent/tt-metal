@@ -82,17 +82,18 @@ def default_backend(n_entries: int) -> str:
 POS_BUCKETS_BASE = (512, 2048, 8192, 32768)
 
 
-def pos_buckets(max_pos):
+def pos_buckets(max_pos, factor=2):
     """Position buckets of the decode / verify traces (ascending, all below ``max_pos``; the full-slab traces are always captured too). DSV41_POS_BUCKETS='512,2048,8192,32768,65536,...' sets the list
-    (a bucket <= topk * ratio, e.g. 512, runs dense, without the indexer; '0' = none). Default: ``POS_BUCKETS_BASE`` and every power of two above it below ``max_pos``, so the scored key length of a step
-    stays within 2x of the positions up to the built context (the last bucket below ``max_pos`` is the largest power of two under it) and a long build costs like a short one.
+    (a bucket <= topk * ratio, e.g. 512, runs dense, without the indexer; '0' = none). Default: ``POS_BUCKETS_BASE`` and every ``factor``-th power above it below ``max_pos``, so the scored key length of a
+    step stays within ``factor`` x of the positions up to the built context and a long build costs like a short one. Every bucket is a set of captured traces (the speculative runner's three traces per
+    bucket do not fit the 650 MB production trace region at factor 2 on a 1M build: it uses factor 4).
     """
     raw = os.environ.get("DSV41_POS_BUCKETS")
     if raw is None:
-        vals, b = list(POS_BUCKETS_BASE), POS_BUCKETS_BASE[-1] * 2
+        vals, b = list(POS_BUCKETS_BASE), POS_BUCKETS_BASE[-1] * int(factor)
         while b < int(max_pos):
             vals.append(b)
-            b *= 2
+            b *= int(factor)
         return sorted(v for v in vals if 0 < v < int(max_pos))
     if raw.strip() in ("", "0"):
         return []

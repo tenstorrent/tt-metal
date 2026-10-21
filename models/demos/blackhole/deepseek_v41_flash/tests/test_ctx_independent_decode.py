@@ -82,3 +82,23 @@ def test_scored_length_follows_the_positions_not_the_build(pos, ratio):
 @pytest.mark.parametrize("pos", [600, 5000, 20000, 32000])
 def test_short_positions_identical_on_every_build(pos, ratio):
     assert _scored(65536, pos, ratio) == _scored(262144, pos, ratio) == _scored(1048576, pos, ratio)
+
+
+def test_factor_4_ladder_and_trace_budget():
+    """the speculative runner captures 3 traces per bucket: its default ladder (factor 4) keeps the bucket count at 1M within what fits the 650 MB production trace region (5 sets, the previous default +2;
+    the factor-2 ladder, 8 sets, overflowed it by 9.5 MB)"""
+    b = ix.pos_buckets(1048576 + 64, 4)
+    assert b == [512, 2048, 8192, 32768, 131072, 524288]
+    assert len(b) + 1 <= 7  # + the full-slab set
+    assert len(ix.pos_buckets(1048576 + 64, 2)) + 1 == 9
+    assert ix.pos_buckets(65600, 4) == [512, 2048, 8192, 32768]  # a 65k build: unchanged from before the ladder
+
+
+@pytest.mark.parametrize("ratio", RATIOS)
+@pytest.mark.parametrize("pos", [33000, 70000, 140000, 300000, 520000])
+def test_spec_ladder_scored_length_within_4x(pos, ratio):
+    n_alloc = _n_alloc(1048576, ratio)
+    buckets = ix.pos_buckets(1048576 + 64, 4)
+    P = next((b for b in buckets if pos + 1 <= b), None)
+    n = _Stub(ratio, n_alloc).set_pos_bucket(P)
+    assert n <= 4 * (pos // ratio) + 128
