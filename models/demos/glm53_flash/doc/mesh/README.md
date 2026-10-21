@@ -477,3 +477,43 @@ against the single-chip ids by emulation. Logs: `_logs/agents/slabattn/`.
 ### Multimodal on the (2,4) block (2026-10-21 03:52)
 
 45 layers bfp4, image + question (286 tokens, 256 image tokens): answer "The image contains a red circle, a blue square, a green triangle, and the word \"HELLO\"." (first token == HF); TTFT 1201 ms (tower 90 ms); decode 145 ms/step = 6.9 tok/s/user over 2 slots.
+
+## 1 M end to end on the 8x4 with the regions prefill path (2026-10-21 04:30-06:00)
+
+The MoE "regions" prefill path (`doc/mesh/prefill_profile.md`; `GLM53_PREFILL_EXPERTS=regions`, merged a052cf309d6)
+replaced the 32-token sparse_matmul blocks for the long runs. Two memory limits of the 1 M geometry surfaced on the
+first 8x4 runs, both fixed in the model (no kernels):
+
+| run | failure | fix |
+|---|---|---|
+| v14 1 M, chunk 1 | OOM: the region buffer `[T*k + 72*32, 4096]` bf16 of a 16 K chunk = 1.09 GB next to the 1 M caches (~1.5 GB free per chip) | `GLM53_REGIONS_T` row sub-chunks (50e1f58ae22; the 1 M runs use 2048; the expert weights are re-read per sub-chunk) |
+| v15 1 M, chunk 64 (the ragged last one) | OOM in `ttnn.slice`: the index scorer's score block `[QBLOCK 1024, prefix/4 pools]` bf16 = 536 MB at a 1.047 M prefix, free DRAM fragmented (largest block 59 MB per bank) | `GLM53_PREFILL_QBLOCK=512` for the 1 M runs |
+
+Chunk times of v15/v16 (45 layers, bfp8 experts, 16 K chunks, 8 rows): 7.0-7.6 s flat to 512 K, 9.2-9.4 s from
+512 K to 1 M (v15, QBLOCK 1024), 7.0-7.3 s with QBLOCK 512; the first chunk and the ragged last chunk carry the
+kernel compiles (15-31 s). The 03:00 run with the blocks path took 57-94 s per chunk over the same range.
+
+### Needle ladder (single user, needle at depth 0.5, 32 greedy tokens; regions in 2048 sub-chunks, QBLOCK 512)
+
+| ISL (tokens) | chunks | TTFT | prefill tok/s | first token | needle | vs HF CPU reference |
+|---|---|---|---|---|---|---|
+| 16359 | 1 | 41.8 s (cold) | 391 | 15209 'amber' | found | 8/8 greedy tokens identical (NEEDLE_16384) |
+| 65493 | 4 | 37.3 s | 1755 | 'amber' | found | 8/8 identical (NEEDLE_65536) |
+| 130839 | 8 | 73.0 s | 1791 | 'amber' | found | (no reference) |
+| 261813 | 16 | 174.3 s | 1502 | 'amber' | found | - |
+| 525170 | 32 | 319.7 s | 1643 | 785 'The' | MISSING | - |
+| 1047526 | 64 | 497.2 s | 2107 | 785 'The' | MISSING | - |
+
+The 512 K text is an analysis monologue that quotes the question verbatim from the end of the 525 K-token prompt
+("The user has provided a very long log of survey team activities and asks: 'What is the secret passphrase for the
+vault? Answer with the passphrase only.' Looking"); the 1 M text continues the filler ("The survey team measured the
+salt flats and logged 421 entries before noon. On day 24178 ..."). Both are coherent: the prompt tail is attended
+correctly, the retrieval of a needle 262 K+ tokens back is what fails. Between the 256 K and 512 K rungs the needle
+position crosses 2^18, the question position 2^19 and the scorer / top-k rows 65536 pools (both ops have golden tests
+at ~262 K: `tests/custom_ops/test_topk_rows.py`, `test_index_score_decode.py`). Probes in flight at 512 K: depth 0.5
+with 128 generated tokens, depth 0.98, depth 0.02 (`_logs/mesh/sched_probes.sh`).
+
+Decode in these runs goes through the regions path (its per-expert lists replace the stacked expert tensors once
+built): 4.2-4.6 tok/s per user at ISL 64 K-1 M, below the stream path (6.7 tok/s at 16 K on a block). Keeping both
+forms costs 9.5 GB per chip (does not fit beside the 1 M caches); the fix is to point the decode stream op at the
+per-expert buffers (a base-address table), queued after the retrieval work.
