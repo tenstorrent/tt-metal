@@ -426,6 +426,9 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_noc_sanitize_linked_transaction()) {
         this->defines_ += "-DWATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION ";
     }
+    if (rtoptions.get_watcher_dram_noc_mix_check()) {
+        this->defines_ += "-DWATCHER_ENABLE_DRAM_NOC_MIX_CHECK ";
+    }
     for (const auto& feature : rtoptions.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }

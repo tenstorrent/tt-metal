@@ -40,6 +40,11 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 
 void kernel_main() {
     Noc noc;
+    // This kernel reads DRAM (page table, batch_idx, valid_seq_len) and writes DRAM (the cache tiles, non-posted). On
+    // Blackhole those must not share a NOC: DRAM reads issued while non-posted DRAM writes are in flight on the same
+    // NOC can deadlock inside the DRAM path. There the program runs in dynamic NOC mode (see the program factory) and
+    // the reads go out on the other NOC, the one the reader kernel reads on.
+    const Noc read_noc = noc_mode == DM_DYNAMIC_NOC ? Noc(static_cast<uint8_t>(1 - noc.get_noc_id())) : noc;
 
     constexpr auto num_heads = get_arg(args::num_heads);
     constexpr auto num_blocks_of_work_per_head = get_arg(args::num_blocks_of_work_per_head);
@@ -103,19 +108,19 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         // Quasar: read into the scratchpad (pass the object so the NoC uses the cached L1 address),
         // then read back through its elements.
-        noc.async_read(
+        read_noc.async_read(
             batch_idx_gen, batch_idx_scratch, batch_idx_stick_size * batch_idx_num_elements, {.page_id = 0}, {});
 #else
         dfb_batch_idx.reserve_back(1);
         const uint32_t batch_idx_wr_ptr = dfb_batch_idx.get_write_ptr();
-        noc.async_read(
+        read_noc.async_read(
             batch_idx_gen,
             CoreLocalMem<uint32_t>(batch_idx_wr_ptr),
             batch_idx_stick_size * batch_idx_num_elements,
             {.page_id = 0},
             {});
 #endif
-        noc.async_read_barrier();
+        read_noc.async_read_barrier();
 #ifdef ARCH_QUASAR
         // Quasar DM: discard the stale L2 line for the just-NoC-read scratchpad before the RISC read-back
         // (invalidate_l1_cache is a no-op here; #48552). See the page_table read below.
@@ -138,13 +143,14 @@ void kernel_main() {
     {
         const auto valid_gen = TensorAccessor(tensor::valid_seq_len);
 #ifdef ARCH_QUASAR
-        noc.async_read(valid_gen, valid_seq_len_scratch, valid_seq_len_stick_size, {.page_id = 0}, {});
+        read_noc.async_read(valid_gen, valid_seq_len_scratch, valid_seq_len_stick_size, {.page_id = 0}, {});
 #else
         dfb_valid_seq_len.reserve_back(1);
         const uint32_t valid_wr_ptr = dfb_valid_seq_len.get_write_ptr();
-        noc.async_read(valid_gen, CoreLocalMem<uint32_t>(valid_wr_ptr), valid_seq_len_stick_size, {.page_id = 0}, {});
+        read_noc.async_read(
+            valid_gen, CoreLocalMem<uint32_t>(valid_wr_ptr), valid_seq_len_stick_size, {.page_id = 0}, {});
 #endif
-        noc.async_read_barrier();
+        read_noc.async_read_barrier();
 #ifdef ARCH_QUASAR
         // Quasar DM: discard the stale L2 line for the just-NoC-read scratchpad before the RISC read-back
         // (invalidate_l1_cache is a no-op here; #48552). See the page_table read below.
@@ -245,16 +251,16 @@ void kernel_main() {
         // Reload page_table row only on batch boundary.
         if (batch_idx != cached_batch) {
 #ifdef ARCH_QUASAR
-            noc.async_read(page_table_gen, page_table_scratch, page_table_stick_size, {.page_id = batch_idx}, {});
+            read_noc.async_read(page_table_gen, page_table_scratch, page_table_stick_size, {.page_id = batch_idx}, {});
 #else
-            noc.async_read(
+            read_noc.async_read(
                 page_table_gen,
                 CoreLocalMem<uint32_t>(page_table_wr_ptr),
                 page_table_stick_size,
                 {.page_id = batch_idx},
                 {});
 #endif
-            noc.async_read_barrier();
+            read_noc.async_read_barrier();
 #ifdef ARCH_QUASAR
             // invalidate_l1_cache() is a NO-OP on Quasar DM (#48552). The page_table was just NoC-read into a
             // scratchpad whose L1 slot an earlier op may have left cached in L2 as a stale line; discard that
