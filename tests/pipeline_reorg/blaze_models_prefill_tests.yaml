@@ -1382,6 +1382,42 @@
   sp_config: sc1
 
 
+# MiniMax-M3 16-stage pipeline-prefill perf matrix (new x cached tokens, tt-metal#57827), SMOKE size: one cached row
+# (0) x two new-token cells (5120 = one chunk, 32768 = seven), idle (2 iters) + loaded (2 users, 64 chunks). It proves
+# the CI launch of models/demos/minimax_m3/scripts/prefill_matrix works; the table grows through the env knobs below
+# once it does (see ci/run_matrix_ci.sh). 16 ranks of [2,4] over the 4 galaxies, placed by tt-run discovery on the
+# z-chain mesh graph. Perf is reported (job summary + artifact), not gated.
+- name: "(MiniMax-M3-428B) pipeline prefill perf matrix smoke 16-stage, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export CACHED=0
+    export NEW=5120,32768
+    export ITERS=2
+    export USERS=2
+    export TARGET_CHUNKS=64
+    exec bash models/demos/minimax_m3/scripts/prefill_matrix/ci/run_matrix_ci.sh
+  test_type: minimax_prefill_matrix
+  test_tags: [minimax_m3, runner]
+  test_group: disagg_prefill
+  artifact_subdir: m3_prefill_matrix
+  skus:
+    bh_sc4:
+      # Estimate, not yet measured: ~10-12 min bring-up (60 layers from the weka [2,4] cache) + ~3 min for the row.
+      # Calibrate after the first green runs.
+      timeout: 60
+      tier: 2
+      release_ready: false
+  owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  budget_type: demo
+  sp_config: sc4
+
+
 # ===== Mistral-Small-4-119B ============================================================================
 
 # Mistral-Small-4-119B suite: one section per test, run serially on one allocation.
