@@ -23,7 +23,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "impl/debug/debug_helpers.hpp"
 #include "distributed/mesh_device_impl.hpp"
 

@@ -24,7 +24,7 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
