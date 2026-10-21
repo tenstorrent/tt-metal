@@ -2220,6 +2220,64 @@ inline void _topk_merge_k32_macros_()
     bitonic_topk_step_macro_drain<FUSED>();
 }
 
+// Macro merges with every group a constant: K >= 32 is one block of 8 groups a quadrant at distance 32 whatever m_iter, K 16
+// has two m_iter forms. The register set of each group, the group positions and the quadrant starts are fixed, so each set's
+// group is recorded once (executing, in the first quadrant) and every later group replays it after a counter step.
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t K, std::uint32_t M, std::uint32_t Q, std::uint32_t G = 0>
+[[gnu::always_inline]] inline void topk_merge_quadrant_macros()
+{
+    using Geo                        = TopkMergeGeometry<K, M>;
+    constexpr std::uint32_t sets     = topk_merge_macro_sets<FUSED>();
+    constexpr std::uint32_t words    = FUSED ? 2 : 4;
+    if constexpr (G < Geo::groups)
+    {
+        if constexpr (G > 0)
+        {
+            topk_incr_dest_counter<Geo::pos(G) - Geo::pos(G - 1)>();
+        }
+        constexpr std::uint32_t set = (Q * Geo::groups + G) % sets;
+        if constexpr (Q == 0 && G < sets)
+        {
+            load_replay_buf<Exec>(
+                set * words,
+                words,
+                []
+                {
+                    bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, set>(top_min ? Geo::ld_dist : 0, top_min ? 0 : Geo::ld_dist);
+                });
+        }
+        else
+        {
+            lltt::replay(set * words, words);
+        }
+        topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, Q, G + 1>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t K, std::uint32_t M>
+inline void _topk_merge_macros_replay_()
+{
+    topk_uint16_clear_value_tiles_high_bits();
+    topk_validate_mode_combo<is_fp32_dest_acc_en, false, FUSED, false, TopkTieOrder::Unset>();
+    _topk_merge_macros_init_<FUSED>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 0>();
+    set_dst_write_addr(2);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 1>();
+    set_dst_write_addr(4);
+    set_dst_write_addr(16);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 2>();
+    set_dst_write_addr(18);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 3>();
+    set_dst_write_addr(20);
+    set_dst_write_addr(16);
+    bitonic_topk_step_macro_drain<FUSED>();
+    topk_replay_init = 0;
+}
+
 // k from 32 up is the run-time-k merge unchanged. Below that, a k whose later m_iter cannot walk the dest counter
 // (dist not a multiple of 8, or at most 16 group words a quadrant) addresses each group on its own.
 template <
@@ -2235,6 +2293,18 @@ template <
 inline void _bitonic_topk_merge(const int m_iter)
 {
     static_assert(K > 0, "K is the merge's run length");
+    if constexpr (K == 16 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED)
+    {
+        if (m_iter == 0)
+        {
+            _topk_merge_macros_replay_<is_fp32_dest_acc_en, top_min, FUSED, 16, 0>();
+        }
+        else
+        {
+            _topk_merge_macros_replay_<is_fp32_dest_acc_en, top_min, FUSED, 16, 1>();
+        }
+        return;
+    }
     if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED && (FUSED))
     {
         _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
