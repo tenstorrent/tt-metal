@@ -160,7 +160,8 @@ public:
         uint64_t addr,
         std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
 
-    // Access physical noc coordinates. Does write without effects of write combining
+    // Access physical noc coordinates. Does write without effects of write combining. On a remote chip a payload
+    // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     // Write to core without effects of write combining
