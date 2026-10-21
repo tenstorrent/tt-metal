@@ -587,6 +587,32 @@ def test_base_determinism(
         f"[base] q_chunk={q_chunk} rows={rows}: run-to-run max |diff| dense {d_dense:.3e}, chunk {d_chunk:.3e}; "
         f"dense max |value| {float(a.dense[:, :logical_n].abs().max()):.3g}; pcc(chunk, dense) {_pcc(a.sol, a.dense, logical_n):.6f}"
     )
+    # Where do the two dense runs differ? Max |a - b| per (shard, head, q_chunk), worst first, plus how many such
+    # cells differ at all: one cell on one device is a per-core fault, a whole shard is a per-device one.
+    S = tuple(mesh_device.shape)[sp_axis]
+    nqc = -(-rows // q_chunk)
+    cells = []
+    for sh in range(S):
+        for h in range(H):
+            for qc in range(nqc):
+                r0 = sh * rows + qc * q_chunk
+                r1 = min(r0 + q_chunk, sh * rows + rows, logical_n)
+                if r1 > r0:
+                    cells.append((float((a.dense[h, r0:r1] - b.dense[h, r0:r1]).abs().max()), sh, h, qc))
+    cells.sort(reverse=True)
+    logger.info(
+        f"[base] dense run-to-run worst cells (max|diff|, shard, head, q_chunk): "
+        + ", ".join(f"({d:.3g},{sh},{h},{qc})" for d, sh, h, qc in cells[:12])
+        + f"; cells differing: {sum(1 for c in cells if c[0] > 0)} of {len(cells)}"
+    )
+    # Is either dense run even correct? fp32 torch attention on the same inputs (exact: no pooling), per shard.
+    ref = _pooled_tail_reference(S, rows, logical_n, pool_partial=False)
+    for name, t in (("dense a", a.dense), ("dense b", b.dense), ("chunk a", a.sol)):
+        per_shard = " ".join(
+            f"{_pcc(t[:, sh * rows : min(sh * rows + rows, logical_n)], ref[:, sh * rows : min(sh * rows + rows, logical_n)]):.4f}"
+            for sh in range(S)
+        )
+        logger.info(f"[base] pcc vs fp32 reference per shard, {name}: {per_shard}")
     assert sane, "dense ring op output is not finite / sane at this geometry"
     assert d_dense == 0.0, f"dense ring op at q_chunk={q_chunk} is not deterministic: {d_dense:.3e}"
     assert d_chunk == 0.0, f"chunk mode at q_chunk={q_chunk} is not deterministic: {d_chunk:.3e}"
