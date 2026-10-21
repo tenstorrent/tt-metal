@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """F76: the dashboard shows a '>= limit' gate against the limit its run recorded, never the word 'limit'."""
 
+import pytest
+
 from models.demos.common.bringup.core.gate import state_metrics
 from models.demos.common.bringup.dashboard.export import red_passed, resolve_thresholds
 
@@ -59,3 +61,24 @@ def test_a_fixed_check_added_after_a_pass_is_a_note_not_red():
     assert red_passed([{"id": "G.s", "status": "PASS", "thresholds": out, "metrics": vals}]) == []
     out, _ = resolve_thresholds({"drift_metrics": ">= 1"}, vals, {}, "FAIL")
     assert out == {"drift_metrics": ">= 1"}  # a step not passed still shows what it misses
+
+
+def test_the_trail_carries_each_layers_limit_and_no_fixed_line():
+    """F138 / F141 (V16): each layer's gated error with the limit its run recorded (sqrt(2 (1 - pcc)) for a run that
+    recorded only PCC); the pages draw no fixed threshold line."""
+    from pathlib import Path
+
+    from models.demos.common.bringup.dashboard.export import layer_errors
+
+    m = {
+        "err_layer_L00": {"value": 0.01},
+        "err_layer_L00_limit": {"value": 0.02},
+        "err_layer_L01": {"value": 0.03},
+        "err_layer_L01_limit": {"value": 0.02},
+        "pcc_layer_L00": {"value": 0.9999},
+    }
+    assert layer_errors(m) == ([(0, 0.01), (1, 0.03)], [(0, 0.02), (1, 0.02)])
+    pts, lims = layer_errors({"pcc_layer_L03": {"value": 0.99995}})
+    assert pts == [(3, pytest.approx(0.01))] and lims == []
+    for f in ("template.html", "teletext_template.html"):
+        assert "thresholds.layer" not in (Path(__file__).parents[1] / "dashboard" / f).read_text()

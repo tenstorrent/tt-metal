@@ -104,7 +104,9 @@ goes cold instead of remounting. Pick requests whose outcome is deterministic, a
 `te.mock_prefill_pipeline` (`"mock": true` in the driver plan, host only).
 
 Pass limits come from the server's own checks where it has them (e.g. `kv_dump_compare`: exact bytes for the prefix,
-PCC for the last block); otherwise from the bring-up's spec thresholds. Never loosen a limit to make a test easier.
+PCC for the last block); otherwise calib x the reference's drift for that state (`testing/e2e_limits.state_limit`);
+a server floor is kept as the server's own rule (the stricter of the two). Never a fixed number of the bring-up's.
+Never loosen a limit to make a test easier.
 
 ### 3. `<bringup dir>/contract_tests.yaml`
 

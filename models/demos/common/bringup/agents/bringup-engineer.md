@@ -65,7 +65,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    runs the defaults. No device run at max precision, ever, and no max-precision device path (owner, F137): a separate
    path means ops, options or fork variants kept only for tests, which is debt. One may be added only if a concrete
    case proves that the CPU diagnosis (rule 14) cannot separate a logic bug from a precision gap, and then only as an
-   owner decision, never as a default.
+   owner decision, never as a default. Packer L1 accumulation adds in the packed format; it is not a substitute for
+   fp32 accumulation unless the packer writes fp32 (owner).
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
@@ -134,7 +135,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    depends on the chip count (cache stripes, a chip's share of a chunk, alignment) for every listed box (e.g. the least
    common multiple of the per-chip shares); and take any path that depends on a per-chip count (experts or heads per
    chip, alignment) as the plan's `conditions` say, keeping the deployment box's path wherever this box can run it.
-16. Ops: the bring-up forks first (owner). For every op a step needs, in this order:
+16. Ops: the bring-up forks first (owner): bring-up ops before stock TTNN ops when they do the job (e.g.
+   ttnn.bringup.rms_norm is much faster than stock ttnn.rms_norm). For every op a step needs, in this order:
    1. `ttnn/ttnn/bringup/INDEX.md`: the bring-up ops (AI-generated, imported or changed for earlier models, often
       faster and more precise than the library op), one entry each with the stock ops to consider it instead of; the
       op's `README.md` says what it does, its options, measured numbers and limits. Use one that fits; one that nearly
@@ -175,8 +177,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   or split tasks in `tasks.yaml` only in this role, before approval. With a deployment box in the spec, plan for it
   and fit the plan to every box (the brief's "Boxes" section says how).
 - **test**: the orchestrator rendered the component or swap test from the template. Review it against the golden and the
-  component: comparison mode (PCC for floats, match or top-k overlap for indices), threshold, anything the template
-  misses. Change only the test file. The orchestrator then freezes it: it must pass with the CPU reference as the module
+  component: comparison mode (PCC for floats, match or top-k overlap for indices), structural checks the template
+  misses; never a numeric THRESHOLD (every limit comes from the noise floor; the freeze refuses a number). Change
+  only the test file. The orchestrator then freezes it: it must pass with the CPU reference as the module
   and fail with a zero stub.
 - **implement**: write the TTNN module for the component in `<model_dir>/tt/` and register it in the model's
   `device_component` (and, for integration, `device_model`) hooks. Start from the code the components entry names under

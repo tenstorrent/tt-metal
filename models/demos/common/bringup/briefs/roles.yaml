@@ -32,6 +32,10 @@ reference: |
   state must give the official output within its input-nudge floor; a step whose official code rounds more inside
   than that passes only with `explained: "<why, and the evidence: e.g. the fp32 step with those roundings emulated
   reproduces the official output>"` in official_taps.yaml, which the overseer reviews).
+  The `reference` hook takes `numerics` ("native": fp32, every quantize-dequantize of the shipped code off;
+  "official": the shipped code's arithmetic at `reference.shipped_dtype` with its fp32 islands) and `dtype`, from the
+  first version. R.5 checks that "official" reproduces the tapped official code step by step. A reference that cannot
+  run at the shipped precision stops the goldens.
 plan: |
   Role: plan. Map every component to an op (the bring-up forks of ttnn/ttnn/bringup/INDEX.md first, then TTNN) and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
@@ -43,7 +47,8 @@ plan: |
   its component task then requests the op from the op code generator and the step stays on the CPU bridge.
 test: |
   Role: test. Review the rendered test $tests for $component_desc against the golden and the component, and adjust it
-  if needed (comparison mode, threshold, extra checks). It will be frozen next: it must pass with the CPU reference as
+  if needed (comparison mode, extra structural checks). Never set a numeric THRESHOLD: every limit comes from the
+  noise floor the test computes; a test that cannot compute one fails. It will be frozen next: it must pass with the CPU reference as
   the module (BRINGUP_IMPL=reference) and fail with a zero stub (BRINGUP_IMPL=stub). You can check both with
   `BRINGUP_IMPL=reference $gate_cmd` and `BRINGUP_IMPL=stub $gate_cmd`.
 implement: |
@@ -58,7 +63,7 @@ contract: |
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). You may change the prefill engine
   (`models/demos/common/prefill`) where the model's layout needs it; prefer a generic adapter hook to a name branch.
 fix: |
-  Role: fix. The scripted gate below failed. Find the component whose layer first broke the PCC trail (or the contract
+  Role: fix. The scripted gate below failed. Find the first layer (or state) whose metric is over its recorded limit (or the contract
   check that failed), fix it in its module, and re-run the gate. The log is quoted below. $details
 overseer: |
   Role: overseer fix. The steps this gate reruns pass today; the overseer asks for a change to the code they run, now,

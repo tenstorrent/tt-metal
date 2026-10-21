@@ -90,7 +90,11 @@ Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything 
 - **Precision rule** (owner): the model ships realistic precision from its first step and every device test runs it;
   there is no device run at max precision, ever (F137). Limits are calib x the reference's own distance from full
   precision (F80 per step, F128 / F134 end to end). A failing per-step test is diagnosed on the CPU at the device's
-  formats (`testing/devfmt.py`), never by a higher-precision device run.
+  formats (`testing/devfmt.py`), never by a higher-precision device run. Owner rules (skill/bringup/SKILL.md,
+  accuracy): no max-precision device path (debt); the margin is the real reference's precision; bit-identity with
+  an older device path is never a criterion; bring-up ops before stock TTNN; packer L1 accumulation is not fp32
+  accumulation unless the packer writes fp32; a deferred part of an owner rule is queued at once, never left in a
+  hand-off.
 - **Forks** (`ttnn/ttnn/bringup`): behaviour comes in as op arguments set from the model's settings; an environment
   knob only for diagnostics, marked `diagnostic` on its line.
 

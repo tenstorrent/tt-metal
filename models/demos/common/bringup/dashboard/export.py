@@ -10,7 +10,7 @@
 Reads: tasks.yaml, state.json, results/*.json (metrics, plan_memory.json, block_graphs.json, <task>_profile.json),
 components.yaml, plan.yaml (optional ``chips``, ``ccl_per_layer``, ``profile_sections``), the HF config.
 Sections: progress, gate ladder, model graph + layer strip, op coverage, chunk timing, sharding (memory
-from the plan gate), where the time goes (warm per-section, per-chip profile), PCC trail by layer; with a spec
+from the plan gate), where the time goes (warm per-section, per-chip profile), error trail by layer (each layer against its recorded limit); with a spec
 ``prior``, a vs-prior view (accuracy, chunk time and TTFT, task status next to the prior bring-up's). Steps deferred to
 op-gen (F46): a "Deferred to op-gen" section (task, block, layers, request status, evidence), a banner that the results
 include N CPU steps, and timing rows and profile sections marked when the CPU bridge ran in them. Last, "Final tests":
@@ -406,10 +406,14 @@ def build(spec) -> dict:
         m = M.load(t["id"], res)
         pts, lims = layer_errors(m)
         if pts:
+            bridged = (m.get("deferred_cpu_steps") or {}).get(
+                "value"
+            ) or 0  # F141 (V27): on the CPU bridge, provisional
             trails.append(
                 {
                     "task": t["id"],
-                    "label": f"{t['id']} {t['title'].split(':')[0]}",
+                    "label": f"{t['id']} {t['title'].split(':')[0]}"
+                    + (f" (provisional: {bridged} step(s) on the CPU bridge)" if bridged else ""),
                     "points": pts,
                     "limits": lims,
                     "device": True,
@@ -575,6 +579,7 @@ def final_tests(spec, led, state) -> dict:
                     "worst_err": worst[1],  # F138: the worst layer by the share of its limit used
                     "worst_err_layer": worst[0],
                     "worst_err_limit": lim.get(worst[0]),
+                    "provisional": v("deferred_cpu_steps") or 0,  # F141: steps deferred to op-gen ran on the CPU
                     "top1": v("top1_match"),
                     "top5": v("top5_overlap"),
                     "final_hidden": v("pcc_final_hidden"),

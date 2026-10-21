@@ -12,9 +12,9 @@ One directory per ladder rung, ``<golden_root>/s{seq}_c{chunk}/`` (the prefill s
     chunk_{c:02d}/model.safetensors       embed, final_norm, top32 ids/values per position, logits of the last 32 rows
 
 ``content_hash`` is the sha256 over the sorted (path, file sha256) list of every file except manifest.json and the
-files derived from the golden afterwards (drift.json, F128; official_floor.json, F80).
-F128: the golden is the full-precision reference (fp32, no rounding); ``<rung dir>-official`` holds the same rung at
-the shipped code's precision, used only for its drift (drift.json), the end-to-end margin.
+files derived from the golden afterwards (drift-<rung>.json, F128 / F134; official_floor.json, F80).
+F128: the golden is the full-precision reference (fp32, no rounding); the reference at the shipped code's precision is
+used only for its drift (reference/drift.py), the end-to-end margin (``<rung dir>-official``: F136's hf_official).
 Tests pin the manifest's hash in their frozen block; a regenerated or edited golden then fails the gate.
 """
 
