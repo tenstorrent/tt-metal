@@ -247,11 +247,41 @@ Going from 80 to 120 cores barely helps (758 → 733 µs).
    - planning once per row block instead of once per requester;
    - hiding the plan on the gather sub-device by debugging the hang above.
 4. **Resume fixed cost.** Skip the resume program when a layer has nothing left to send (55 µs).
-5. **Trace safety.** The push path is eager-only (`mla.py` asserts `metadata is None`); the plan cache keys on host values and per-chunk start tensors.
+5. ~~**Trace safety.**~~ Done (2026-10-20), see "Trace safety and the padded-chunk fix" below.
 6. **Upstreaming.** Fold the prototype env knobs into op arguments or remove them, and split into PRs:
    - op support (resumable window, `sparse_sdpa` core subset);
    - the plan and push ops with the fused `sparse_sdpa`;
    - the model wiring.
+
+## Trace safety and the padded-chunk fix (2026-10-20)
+
+**Trace safety.** On the metadata path (runner trace, `PREFILL_USE_TRACE=1`) nothing in the push depends on a host
+value that changes per chunk or per request:
+- `_sparse_pushed_attn` passes `metadata` to `_prepare_sparse_kv_prefix`, so the KV write lands at the live chunk start.
+- The plan op reads the chunk start from `metadata[1]` (`chunk_start_tensor`); it is no longer part of the planner cache
+  key (every full layer `invalidate()`s), and the per-value `chunk_start()` `from_torch` cache is not used.
+- The standalone push takes the slot from `metadata[0]` (`input_batch_index_tensor`, recomposed on device as
+  `user * layer_num + layer`). The fused `sparse_sdpa` push gained the same: `push_batch_index_tensor`,
+  `push_batch_slot_num_layers`, `push_batch_slot_layer_idx` (runtime args, re-patched on cache hits).
+- Planner buffers, semaphores and progress are created by the warm pass, before capture. The host planner and
+  `TT_SPARSE_PUSH_PLAN_OVERLAP` stay eager-only (asserted).
+
+`test_sparse_mla_kv_push_traced_metadata_slots` captures a full -> shared -> shared chain once and replays it for 7
+interleaved (user slot, chunk start) pairs; every replay is bitwise equal to the eager dense-gather chain. Freezing the
+push slot on the host (negative control) fails it with PCC 0.0.
+
+**Padded-chunk bug (fixed).** `sparse_push_table_reader.cpp` took the prefix/remainder split as block row
+`header[4] / N` for every owner. That holds only when the chunk start is slab aligned. A padded chunk starting mid-slab
+(e.g. 43552 = block 272 = 8.5 rows of 32) gave owners below `split % N` one prefix block too few, while the plan's
+per-owner prefix counts included it, so rows landed in the wrong compact slots. GLM L78 padded mid15k decoder PCC went
+from 0.90 to -0.04, starting at the first shared layer of the second chunk. The fix computes the owner's own count,
+`ceil((split - rank) / N)`. Only parts 1 and 3 (fused prefetch + resume) use the split, so single-layer tests never saw
+it. `test_sparse_mla_kv_push_prefetch_chain_padded` fails on the old reader (PCC 0.939 / 0.973) and is bitwise with the
+fix; L78 padded notrace/traced now give the same PCCs as the dense gather (0.864355 / 0.981146 / 0.901564).
+
+**Measured** (disaggregated-prefill runner, SC1 1M, traced, 14 kW, chunk ms / TTFT at 1020k): main 1500.7 / 199.8 s;
+push 835.4 / 136.9 s; push + PR #61387 fabric gather on the full layers 751.4 / 128.9 s (untraced 819.4 / 146.5 s).
+Below about 100k prefix PR #61387 alone is slightly faster than push + fabric gather (TTFT -4.9% vs -3.6% at 100k).
 
 ## How to run
 
