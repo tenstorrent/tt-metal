@@ -3,7 +3,7 @@
 
 """Quasar matmul."""
 
-from ...data_transfer_blocks.quasar_data_transfer import QuasarDataTransferBlocks
+from ...data_transfer_blocks import QuasarDataTransferBlocks
 from ..matmul import MatmulGolden
 from .quasar_fidelity import QUASAR_MANTISSA_SPLIT
 

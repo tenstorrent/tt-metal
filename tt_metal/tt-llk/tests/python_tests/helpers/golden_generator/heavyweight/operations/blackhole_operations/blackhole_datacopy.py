@@ -3,7 +3,7 @@
 
 """Blackhole datacopy."""
 
-from ...data_transfer_blocks.blackhole_data_transfer import BlackholeDataTransferBlocks
+from ...data_transfer_blocks import BlackholeDataTransferBlocks
 from ..datacopy import DataCopyGolden
 
 
