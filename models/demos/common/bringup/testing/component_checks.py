@@ -17,7 +17,7 @@ generically, chosen by the kind of the step's output:
                 step, fp32 accumulation inside each op) has rel L2 e vs the fp32 step; the limit is
                 component_calib x e (component_calib_low for the step kinds in ``tests.low_precision_kinds``, default
                 [moe]: bfp8 expert weights are not in the model), within [component_floor, component_rel], never
-                below component_margin x e; vs the golden it adds the fp32 step's own error vs the bf16 golden.
+                below component_margin x e; vs the golden it adds the fp32 step's own error vs the golden.
     selection   a float output with >= 75 % exact zeros (dense router weights): the same nonzero count per row, no
                 negative weight when the reference has none, mean selection overlap (>= component_select), rel L2 on
                 the rows with the same selection (<= component_select_rel), their row sums (1 +- component_rowsum).
@@ -122,7 +122,7 @@ def _ptr(t: torch.Tensor) -> int:
 
 
 def rel(a, b) -> float:
-    return ((a.float().reshape(b.shape) - b.float()).norm() / b.float().norm().clamp_min(1e-30)).item()
+    return ((a.double().reshape(b.shape) - b.double()).norm() / b.double().norm().clamp_min(1e-30)).item()
 
 
 def calib(lim, low: bool) -> float:
@@ -130,7 +130,7 @@ def calib(lim, low: bool) -> float:
 
 
 def rel_limit(lim, e, low: bool, res=None):
-    """F76: calib x the precision model's error e, never below calib x res, what one bf16 rounding of the output
+    """F76: calib x the precision model's error e, never below calib x res, what one rounding of the output to its dtype
     shows (an exact step); no fixed floor or cap (owner: limits come from the noise floor, never a fixed bar). e (and
     res) is one error (the whole output) or a tensor of them (one per column)."""
     k = calib(lim, low)
@@ -146,14 +146,14 @@ def col_errors(got, want) -> torch.Tensor | None:
     if want.dim() < 2 or got.numel() != want.numel():
         return None
     n = want.shape[-1]
-    gc, wc = got.float().reshape(-1, n), want.float().reshape(-1, n)
+    gc, wc = got.double().reshape(-1, n), want.double().reshape(-1, n)
     cn = wc.norm(dim=0)
     return (gc - wc).norm(dim=0) / cn.clamp_min(COL_FLOOR * cn.mean().item() + 1e-30)
 
 
 # ---------------------------------------------------------------- checks per kind
 def _rows(t, shape):
-    t = t.float().reshape(shape)
+    t = t.double().reshape(shape)
     return t.reshape(shape[0], -1) if len(shape) >= 2 else t.reshape(1, -1)
 
 
@@ -191,7 +191,7 @@ def float_limits(
     }
     if model and res is not None:
         # F76: every limit from the noise floor: calib (k) x the precision model's statistic, never below what one
-        # bf16 rounding of the output shows; the bias may use half the rel budget. A second input keeps its probe
+        # rounding of the output to its dtype shows; the bias may use half the rel budget. A second input keeps its probe
         # floors (they only loosen: structural probes, where a correct device drifts from the model on synthetic scales)
         dev = lambda e: max(1 - e["ratio_min"], e["ratio_max"] - 1)  # noqa: E731
         row = k * max(model["row"], res["row"])
@@ -246,8 +246,8 @@ def f_lim(overlap_lim: float, f: float) -> float:
 
 
 def selection_limits(lim, k: float, f: float, model: dict, res: dict, n: int) -> dict:
-    """F76: the selection limits from the precision model's own selection stats (model) and one bf16 rounding of
-    the output (res): overlap miss, rel L2 and row sums on matched rows, each calib (k) x f x the larger, the miss
+    """F76: the selection limits from the precision model's own selection stats (model) and one rounding of
+    the output to its dtype (res): overlap miss, rel L2 and row sums on matched rows, each calib (k) x f x the larger, the miss
     never below one of the n selected entries."""
     return {
         "overlap": 1 - f * k * max(1 - model.get("overlap", 1.0), 1 - res.get("overlap", 1.0), 1.0 / max(n, 1)),
@@ -257,7 +257,7 @@ def selection_limits(lim, k: float, f: float, model: dict, res: dict, n: int) ->
 
 
 def selection_fails(got, want, lim, f=1.0, slack: dict | None = None, L: dict | None = None) -> tuple[dict, list[str]]:
-    """slack: added to the rel and row-sum limits (vs the golden: the fp32 step's own error vs the bf16 golden).
+    """slack: added to the rel and row-sum limits (vs the golden: the fp32 step's own error vs the golden).
     L: the noise-floor limits (selection_limits); without it the fixed component_select* limits (no model)."""
     slack = slack or {}
     if got.numel() != want.numel():
@@ -478,13 +478,13 @@ class Expect:
         if self.kind == "float":
             self.golden_err = rel(self.cpu["golden"], want)
             self.golden_col_err = col_errors(self.cpu["golden"], want)
-            # vs the golden: the floor's own statistics vs the bf16 golden (its rounding included)
+            # vs the golden (full precision, F128): the floor's own statistics; one rounding to the output dtype (F133)
             fg = NF.worst_float(self.floor["golden"], want, float_errors)
             self.gold_model = NF.merge_float(self.arith.get("vs_golden"), fg)
-            self.gold_res = float_errors(MU.bf16(self.cpu["golden"]), want)
+            self.gold_res = float_errors(NF.round_to(self.cpu["golden"], self.out_dtype), want)
         if self.kind == "selection":
             gm = _worst_selection([selection_fails(o, want, self.lim)[0] for o in self.floor["golden"]])
-            gr = selection_fails(MU.bf16(self.cpu["golden"]), want, self.lim)[0]
+            gr = selection_fails(NF.round_to(self.cpu["golden"], self.out_dtype), want, self.lim)[0]
             self.golden_L = selection_limits(self.lim, self.k, 1.0, gm, gr, int((want != 0).sum().item()))
         if self.kind == "index":
             self.golden_L = self._index_limits(self.floor["golden"], want, self.cases[0].start, 1.0)
@@ -501,7 +501,7 @@ class Expect:
             if "pcc_vs_golden" in (self.arith.get("vs_golden") or {}) and gm == "pcc":
                 mv = min(mv, self.arith["vs_golden"]["pcc_vs_golden"])
             rv = (
-                gate_value(MU.bf16(self.cpu["golden"]), self.cpu["golden"], self.kind, mode)
+                gate_value(NF.round_to(self.cpu["golden"], self.out_dtype), self.cpu["golden"], self.kind, mode)
                 if want.is_floating_point()
                 else 1.0
             )
@@ -509,7 +509,7 @@ class Expect:
             self.thr_how = (
                 f"{self.k} x the noise floor's miss {1 - mv:.3g} (input nudge"
                 + (", official arithmetic" if self.arith else "")
-                + f"; bf16 resolution {1 - rv:.3g})"
+                + f"; {self.out_dtype} resolution {1 - rv:.3g})"
             )
         self.thr = thr
         # F81: the gated error vs the golden: rel L2 for float outputs (PCC is blind to a scale or an offset), the
@@ -517,7 +517,7 @@ class Expect:
         if self.kind in ("float", "selection"):
             fl = max(rel(o, want) for o in self.floor["golden"])
             ag = (self.arith.get("vs_golden") or {}).get("rel") or 0.0
-            gres = rel(MU.bf16(self.cpu["golden"]), want)
+            gres = rel(NF.round_to(self.cpu["golden"], self.out_dtype), want)
             m = max(fl, ag, gres)
             self.err_limit = self.k * m
             self.err_how = f"{self.k} x the noise floor's rel vs the golden {m:.3g}" + (

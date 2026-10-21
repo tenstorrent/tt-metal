@@ -1471,3 +1471,16 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
     official_ prefix; ledger_gen gates both).
   - Selftests: test_step_numerics.py (rewritten: native always, **kw stops, spec keys refused, AST: no `.reference(`
     call anywhere in the framework), test_e2e_limits.py.
+- F133 (overseer, 2026-10-21; audit V7, V8): every resolution floor is one rounding to the tensor's real dtype.
+  - noise_floor.round_to(t, "fp32") moves t inside its fp32 rounding cell (float64, seed 0; was the identity, a 0 floor);
+    rel / float_errors / col_errors / step_errors compute in float64 so the move survives.
+  - Per step, vs the full-precision golden (F128 stores fp32): `gres`, `gold_res`, the selection floor, the gate's
+    resolution and the swap tests' vs-golden limits round the CPU step's output to its official `out` dtype
+    (official_taps.yaml), not bf16. An `out: fp32` step (router, hc mixes, compress_partial) was 10^3-10^4 too loose
+    vs the golden (the floor F78 / F80 removed vs the CPU). The "golden is already bf16" comments are gone.
+  - End to end (reference/drift.py): a float metric's floor is one rounding to the dtype the official golden stores
+    that tensor in (bf16, fp32 for golden.keep_fp32); an overlap's is one miss among the selected entries (rows for
+    top-5). `e2e.overlap_res` (a fixed 1 %: every overlap limit <= 0.98) is gone.
+  - Selftests: test_noise_floor.py::test_an_fp32_steps_golden_limit_is_one_fp32_rounding_not_bf16,
+    test_e2e_limits.py::test_the_drift_floor_is_one_rounding_in_the_stored_dtype_and_one_miss_per_selection.
+  - Existing drift.json files keep their old floors until regenerated (`reference.drift --rung R`).
