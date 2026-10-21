@@ -303,8 +303,16 @@ ProgramDescriptor build_tile(const rcg::TilePlan& p, const Tensor& input, Tensor
     compute.kernel_source = op_kernel("compute_reshape_tile.cpp");
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = all_cores;
-    compute.compile_time_args = {
-        kCbIn, kCbMid, kCbOut, p.wt_in, p.wt_out, p.in_rows, p.out_rows, wide ? kMaxBlockCtDim32 : kMaxBlockCtDim16};
+    compute.named_compile_time_args = {
+        {"cb_in", kCbIn},
+        {"cb_mid", kCbMid},
+        {"cb_out", kCbOut},
+        {"wt_in", p.wt_in},
+        {"wt_out", p.wt_out},
+        {"in_tile_rows", p.in_rows},
+        {"out_tile_rows", p.out_rows},
+        {"max_bct", wide ? kMaxBlockCtDim32 : kMaxBlockCtDim16},
+    };
     ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = wide};
     if (wide) {
         // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST.
