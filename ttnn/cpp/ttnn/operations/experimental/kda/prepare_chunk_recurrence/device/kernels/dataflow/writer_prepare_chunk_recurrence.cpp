@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t max_items>
 TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
     DataflowBuffer control(dfb::chronology_writer);
     control.wait_front(1);
@@ -58,11 +58,23 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
             continue;
         }
         drain(v_beta, v_beta_accessor, cv, work_item * cv);
-        drain(t_inv, t_inv_accessor, cc, work_item * cc);
         drain(kd, kd_accessor, ck, work_item * ck);
         drain(intra, intra_accessor, cc, work_item * cc);
         drain(q_decay, q_decay_accessor, ck, work_item * ck);
         drain(k_decay_transposed, k_decay_transposed_accessor, kc, work_item * kc);
         drain(final_decay, final_decay_accessor, Kt, work_item * Kt);
+    }
+    // Compute inverts every item's Akk together after the per-item terms, padded to max_items.
+    uint32_t inverse_items = 0;
+    for (uint32_t index = 0; index < work_item_count; ++index) {
+        const uint32_t work_item = work_item_start + index;
+        if (work_item % num_chunks < valid_chunks) {
+            drain(t_inv, t_inv_accessor, cc, work_item * cc);
+            ++inverse_items;
+        }
+    }
+    if (inverse_items != 0 && inverse_items != max_items) {
+        t_inv.wait_front((max_items - inverse_items) * cc);
+        t_inv.pop_front((max_items - inverse_items) * cc);
     }
 }
