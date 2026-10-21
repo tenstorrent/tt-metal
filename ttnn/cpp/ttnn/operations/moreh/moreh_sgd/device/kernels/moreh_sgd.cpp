@@ -44,30 +44,30 @@ void kernel_main() {
 
 #if defined(WEIGHT_DECAY)
     constexpr auto cb_grad_tmp = cb_tmp2;
-    DataflowBuffer& dfb_grad_tmp_obj = dfb_tmp2_obj;
+    auto& dfb_grad_tmp_obj = dfb_tmp2_obj;
 #else
     constexpr auto cb_grad_tmp = cb_grad;
-    DataflowBuffer& dfb_grad_tmp_obj = dfb_grad_obj;
+    auto& dfb_grad_tmp_obj = dfb_grad_obj;
 #endif
 
 #if defined(MOMENTUM)
 #if defined(MOMENTUM_INITIALIZED)
     constexpr auto cb_momentum_tmp = cb_tmp1;
-    DataflowBuffer& dfb_momentum_tmp_obj = dfb_tmp1_obj;
+    auto& dfb_momentum_tmp_obj = dfb_tmp1_obj;
 #else
     constexpr auto cb_momentum_tmp = cb_grad_tmp;
-    DataflowBuffer& dfb_momentum_tmp_obj = dfb_grad_tmp_obj;
+    auto& dfb_momentum_tmp_obj = dfb_grad_tmp_obj;
 #endif
 #if defined(NESTEROV)
     constexpr auto cb_final_grad = cb_tmp4;
-    DataflowBuffer& dfb_final_grad_obj = dfb_tmp4_obj;
+    auto& dfb_final_grad_obj = dfb_tmp4_obj;
 #else
     constexpr auto cb_final_grad = cb_momentum_tmp;
-    DataflowBuffer& dfb_final_grad_obj = dfb_momentum_tmp_obj;
+    auto& dfb_final_grad_obj = dfb_momentum_tmp_obj;
 #endif
 #else
     constexpr auto cb_final_grad = cb_grad_tmp;
-    DataflowBuffer& dfb_final_grad_obj = dfb_grad_tmp_obj;
+    auto& dfb_final_grad_obj = dfb_grad_tmp_obj;
 #endif
 
     for (uint32_t n = 0; n < num_tiles; ++n) {

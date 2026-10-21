@@ -66,7 +66,7 @@ Classify every mismatch:
 | Name pairing | One QSR perf vs six functional names | Split wrappers |
 | Axis packaging | `formats_dest_acc` vs `formats`+`dest_acc`; tuple `binary_op_mathop_approx` vs `mathop`+`approx_mode` | Unbundle to BH names |
 | Enum alias | QSR `SfpuElwmulInt` vs BH `SfpuMulInt32` | Keep the QSR member; the domain test maps it onto the WH/BH kernel |
-| Perf-only packaging | A functional sweep shared into perf grows by the run-type count | Opt out with a perf-only override such as `_PERF_EXCLUDED_MATHOPS` |
+| Perf-only packaging | A functional sweep shared into perf grows by the run-type count | Opt out in the perf wrapper: copy the sweep and narrow the axis (e.g. filter `mathop`) |
 | Real ISA | Quasar int sweep does not include shifts; BH int SUB; BH `bcast_dim` | Keep the diff. `RSHFT` / `LSHFT` / `LOGICAL_RSHFT` exist on Quasar |
 | Family split | BH `div`/`atan2` are separate tests; QSR lumps them into `float` | Split QSR only if the kernel exists; do not invent BH families |
 
@@ -92,7 +92,7 @@ _FLOAT_PERF_SWEEP = {
 }
 ```
 
-Perf `approx_mode` is No except kernels that read it (atan2). Functional QSR DIV and atan2 still sweep Yes/No. A functional sweep dict shared into perf becomes perf cases, times the run types. A perf-only override such as `_PERF_EXCLUDED_MATHOPS` is the expected opt-out. Do not add a declared-count assertion.
+Perf `approx_mode` is No except kernels that read it (atan2). Functional QSR DIV and atan2 still sweep Yes/No. A functional sweep dict shared into perf becomes perf cases, times the run types. To keep a point functional-only, copy the sweep in the perf wrapper and narrow that axis, as above; do not edit the functional sweep. Do not add a declared-count assertion.
 
 Functional-only axes use `runtime(...)` (e.g. `tile_indices`) and stay off the perf wrapper. Expected test-vs-perf: coverage identical except those functional-only axes and ignored axes.
 

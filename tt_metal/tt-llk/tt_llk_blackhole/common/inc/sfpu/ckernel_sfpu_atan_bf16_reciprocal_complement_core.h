@@ -8,6 +8,8 @@ namespace ckernel::sfpu::ttpoly::atan
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
+// The SFPLOADIs a Held row adds for its two leading coefficients.
+constexpr unsigned reciprocal_complement_held_slots = 4u;
 
 // Below degree eight, rung J feeds coefficient K = kDegree - 2 - J: the first three
 // from LREG7/6/5, the next from LREG3 loaded in the gaps of rungs 0 and 1, a fifth
@@ -63,9 +65,13 @@ inline void reciprocal_complement_short_rung()
 
 // LoadMacro false issues what the load macro schedules (init_reciprocal_complement) as plain instructions,
 // for builds without SFPLOADMACRO.
-template <class Config, unsigned Hold, unsigned Advance, bool LoadMacro = true>
+// Held false reads the two leading coefficients from vConstFloatPrgm1/Prgm2, which the caller's init
+// programs; Held true loads them in the row (reciprocal_complement_held_slots more slots), into LREG2 and
+// LREG3, both dead between the reduction's swap and the first Horner MAD.
+template <class Config, unsigned Hold, unsigned Advance, bool LoadMacro = true, bool Held = false>
 inline void reciprocal_complement_body()
 {
+    static_assert(!Held || Config::kDegree != 8, "the degree-eight row has no free replay slot");
     TTI_SFPLOAD(0, 0, Hold, 0);
     TTI_SFPNOP;
     TTI_SFPSETSGN(0, 0, 1, 1);
@@ -77,7 +83,18 @@ inline void reciprocal_complement_body()
     TTI_SFPMAD(2, 3, ckernel::p_sfpu::LCONST_0, 3, 3);
     TTI_SFPENCC(3, 0, 0, 10);
     TTI_SFPSWAP(0, 3, 1, 1);
-    TTI_SFPMAD(13, 1, 14, 2, 0);
+    if constexpr (Held)
+    {
+        TTI_SFPLOADI(2, SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[Config::kDegree] >> 16);
+        TTI_SFPLOADI(2, SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[Config::kDegree] & 0xffffu);
+        TTI_SFPLOADI(3, SFPLOADI_MOD0_UPPER, Config::kCoefficientBits[Config::kDegree - 1] >> 16);
+        TTI_SFPLOADI(3, SFPLOADI_MOD0_LOWER, Config::kCoefficientBits[Config::kDegree - 1] & 0xffffu);
+        TTI_SFPMAD(2, 1, 3, 2, 0);
+    }
+    else
+    {
+        TTI_SFPMAD(13, 1, 14, 2, 0);
+    }
     reciprocal_complement_short_rung<Config, 0>();
     TTI_SFPSETCC(0, 0, 0, 0);
     TTI_SFPMAD(ckernel::p_sfpu::LCONST_neg1, 2, 4, 2, 0);

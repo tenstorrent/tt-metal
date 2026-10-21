@@ -43,10 +43,10 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
@@ -982,8 +982,15 @@ void ControlPlane::ingest_factory_system_descriptor() {
 
     // Past the agreement every rank derived the same usable filter, so the ingest cannot fail on one rank
     // alone.
+    //
+    // A job on TT_VISIBLE_DEVICES owns a chip subset of its hosts, so its allocation is the live chip set,
+    // not the live host set: without this the mapper is handed chips no rank opened and the absent-chip
+    // check below reports every one of them. Decided collectively so every rank maps on the same descriptor.
+    const bool device_subset = fsd_ingest::agree_job_runs_on_device_subset(distributed_context);
+    const auto allocation = device_subset ? fsd_ingest::live_allocation(*this->physical_system_descriptor_)
+                                          : std::set<tt::tt_metal::experimental::PhysicalNodeId>{};
     fsd_ingest::FilterReport report;
-    auto fsd = fsd_ingest::build_physical_descriptor_from_file(fsd_path, hosts, &report);
+    auto fsd = fsd_ingest::build_physical_descriptor_from_file(fsd_path, hosts, &report, allocation);
     log_info(
         tt::LogFabric,
         "Factory System Descriptor '{}': {} host(s), using {}. {} cable(s) left the allocation and are not "
@@ -3609,23 +3616,32 @@ void ControlPlane::generate_intermesh_connectivity() {
     // bidirectionally.
     auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
 
-    if (this->has_factory_descriptor() &&
-        num_assigned_intermesh_connections < get_num_requested_intermesh_connections()) {
-        // Pairing chose among live cables only, so a downed intermesh cable shows up here as a shortfall.
-        // The hole is in LinkHealth's intermesh set.
-        log_warning(
-            tt::LogFabric,
-            "STRICT + FSD: skipping fatal on intermesh shortfall, bound {} of {} requested connection(s). FSD "
-            "in use -- recording in experimental::LinkHealth, not fatal.",
-            num_assigned_intermesh_connections,
-            get_num_requested_intermesh_connections());
-    } else {
-        TT_FATAL(
-            num_assigned_intermesh_connections >= get_num_requested_intermesh_connections(),
-            "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
-            " Found {} intermesh connections, but {} were requested",
-            num_assigned_intermesh_connections,
-            get_num_requested_intermesh_connections());
+    // RELAXED (#56762): a connection may bind to zero links, so a shortfall only warns; STRICT needs the full count.
+    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
+    if (num_assigned_intermesh_connections < get_num_requested_intermesh_connections()) {
+        if (inter_mesh_relaxed) {
+            log_warning(
+                tt::LogFabric,
+                "Inter-mesh routing (relaxed): bound {} of {} requested inter-mesh connection(s) to physical "
+                "links; the remainder are logical-only (host interconnect). See issue #56762.",
+                num_assigned_intermesh_connections,
+                get_num_requested_intermesh_connections());
+        } else if (this->has_factory_descriptor()) {
+            // Pairing chose among live cables only, so a downed intermesh cable shows up here as a shortfall.
+            // The hole is in LinkHealth's intermesh set.
+            log_warning(
+                tt::LogFabric,
+                "STRICT + FSD: skipping fatal on intermesh shortfall, bound {} of {} requested connection(s). FSD "
+                "in use -- recording in experimental::LinkHealth, not fatal.",
+                num_assigned_intermesh_connections,
+                get_num_requested_intermesh_connections());
+        } else {
+            TT_THROW(
+                "Unable to bind the intermesh connections requested in the Mesh Graph Descriptor to physical links."
+                " Found {} intermesh connections, but {} were requested",
+                num_assigned_intermesh_connections,
+                get_num_requested_intermesh_connections());
+        }
     }
 
     // Validate (placement invariants + per-mesh-pair counts, both derived directly from intermesh_connections) first,
@@ -3924,11 +3940,24 @@ void ControlPlane::validate_requested_intermesh_connections(
             for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
                 const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
                 if (resolved == 0) {
+                    // RELAXED (#56762): a zero-router connection is logical-only; STRICT keeps the per-pair failure.
+                    if (inter_mesh_relaxed) {
+                        log_warning(
+                            tt::LogFabric,
+                            "Inter-mesh routing (relaxed): the Mesh Graph Descriptor requests a connection "
+                            "({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved during "
+                            "control plane initialization; the connection is logical-only (host interconnect)",
+                            requested_channels,
+                            src_mesh,
+                            dst_mesh);
+                        continue;
+                    }
                     TT_THROW(
-                        "Inter-mesh routing validation failed (relaxed): the Mesh Graph Descriptor requests a "
+                        "Inter-mesh routing validation failed (strict): the Mesh Graph Descriptor requests a "
                         "connection ({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved "
                         "during control plane initialization (all candidate channels were dropped, e.g. by a Z/non-Z "
-                        "direction mismatch). Every requested inter-mesh connection must resolve at least one router.",
+                        "direction mismatch). Under a STRICT inter-mesh policy every requested connection must "
+                        "resolve at least one router; zero-link tolerance (issue #56762) applies to RELAXED only.",
                         requested_channels,
                         src_mesh,
                         dst_mesh);

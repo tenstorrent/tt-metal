@@ -29,7 +29,8 @@
 // W = 200), and that rounding would already be in the tile before the SFPU
 // multiply. Offsets stay bf16. The gather and the input-tile contract live in
 // fused_msda_reader_common.hpp, compiled with FROM_OFFSETS set. REF_FP32
-// changes only the reference operand's tile width there; V1 never defines it.
+// changes only the reference operand's tile format there (float32, 4096 B); V1
+// never defines it.
 
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/fused_msda_reader_common.hpp"
 

@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
 

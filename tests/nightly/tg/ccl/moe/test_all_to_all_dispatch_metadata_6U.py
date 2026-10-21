@@ -259,6 +259,8 @@ def run_all_to_all_dispatch_metadata_test(
     dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
     use_persistent_mode=False,
     shared_expert_ids_to_devices: dict | None = None,
+    pass_cross_device_semaphore=None,
+    expected_program_cache_entries=1,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
@@ -418,6 +420,8 @@ def run_all_to_all_dispatch_metadata_test(
     # Only create 1 set of output buffers and 2 semaphores (for double-buffering) to save L1 space
     persistent_output_buffers = None
     cross_device_semaphores = []
+    if pass_cross_device_semaphore is None:
+        pass_cross_device_semaphore = use_persistent_mode
 
     if use_persistent_mode:
         logger.info("Creating persistent output buffers for persistent mode (1 buffer set, 2 semaphores)")
@@ -475,10 +479,12 @@ def run_all_to_all_dispatch_metadata_test(
         logger.info(f"scores_buffer shape: {scores_buffer.shape}")
         persistent_output_buffers = (output_tokens_buffer, metadata_buffer, scores_buffer)
 
-        # Create only 2 semaphores for double-buffering (rotate with i % 2)
-        for _ in range(2):
-            cross_device_semaphore = ttnn.create_global_semaphore(mesh_device, worker_core_range_set, 0)
-            cross_device_semaphores.append(cross_device_semaphore)
+        # Create only 2 semaphores for double-buffering (rotate with i % 2).
+        # Persistent buffers without a semaphore stay on the init-barrier program.
+        if pass_cross_device_semaphore:
+            for _ in range(2):
+                cross_device_semaphore = ttnn.create_global_semaphore(mesh_device, worker_core_range_set, 0)
+                cross_device_semaphores.append(cross_device_semaphore)
 
         logger.info(f"Created 1 persistent buffer set and {len(cross_device_semaphores)} semaphores")
         ttnn.synchronize_device(mesh_device)
@@ -498,7 +504,8 @@ def run_all_to_all_dispatch_metadata_test(
                 # Use single set of persistent buffers (reused across all iterations)
                 output_tensors_arg = persistent_output_buffers
                 # Rotate through 2 semaphores for double-buffering
-                cross_device_semaphore_arg = cross_device_semaphores[i % 2]
+                if pass_cross_device_semaphore:
+                    cross_device_semaphore_arg = cross_device_semaphores[i % 2]
 
             # Use the experimental all_to_all_dispatch_metadata op
             # Returns 3 tensors: output_tensor, indices_tensor, scores_tensor
@@ -719,7 +726,7 @@ def run_all_to_all_dispatch_metadata_test(
 
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == 1
+        mesh_device.num_program_cache_entries() == expected_program_cache_entries
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not metadata_passed:
@@ -848,6 +855,79 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
         use_persistent_mode=use_persistent_mode,
         shared_expert_ids_to_devices=shared_expert_ids_to_devices,
     )
+
+
+# Persistent outputs with and without an external semaphore must cache two programs.
+@pytest.mark.skipif(
+    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
+            "trace_region_size": 500000,
+        },
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device, cluster_axis",
+    [
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
+    ],
+    indirect=["mesh_device"],
+)
+def test_persistent_semaphore_cache_key(mesh_device, mesh_shape, cluster_axis):
+    batches_per_device = 32
+    routed_experts = 2 * mesh_shape[cluster_axis]
+    common = dict(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        batch=batches_per_device * mesh_shape[cluster_axis],
+        routed_experts=routed_experts,
+        select_experts_k=8,
+        hidden_size=7168,
+        seq_len=1,
+        num_iters=2,
+        warmup_iters=0,
+        trace_mode=False,
+        num_links=4,
+        scheme="random_sequential_experts",
+        dtype=ttnn.bfloat16,
+        cluster_axis=cluster_axis,
+        worker_mode=ttnn.WorkerMode.DIRECT,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+        use_persistent_mode=True,
+    )
+    run_all_to_all_dispatch_metadata_test(**common, pass_cross_device_semaphore=True, expected_program_cache_entries=1)
+    run_all_to_all_dispatch_metadata_test(**common, pass_cross_device_semaphore=False, expected_program_cache_entries=2)
+    # Cache hit: a new semaphore address must be patched onto the skip-init program.
+    run_all_to_all_dispatch_metadata_test(**common, pass_cross_device_semaphore=True, expected_program_cache_entries=2)
 
 
 # Correctness test on a Linear (non-wrapping) fabric. Topology is derived from the fabric config, so

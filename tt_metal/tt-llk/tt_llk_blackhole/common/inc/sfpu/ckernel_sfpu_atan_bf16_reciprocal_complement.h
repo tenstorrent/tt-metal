@@ -22,20 +22,18 @@ constexpr unsigned reciprocal_complement_body_slots(unsigned degree)
 // SFPU state this kernel overwrites on Blackhole and does not restore. A later op that reads any of it
 // must program it in its own init; one that skips its init, or relies on load-macro or replay state it
 // did not program, runs with this kernel's.
-// - init_reciprocal_complement: vConstFloatPrgm0 (2.0, sfpu_reciprocal_init), vConstFloatPrgm1 and
-//   vConstFloatPrgm2 (the two highest coefficients), ADDR_MOD_6 (DEST += 2), and the SFPLOADMACRO
+// - init_reciprocal_complement: vConstFloatPrgm0 (2.0, sfpu_reciprocal_init) and the SFPLOADMACRO
 //   configuration: the instruction templates written by the SFPSETSGN and SFP_STOCH_RND below, macro
 //   sequence 0 (kMacroSequenceBits, SFPCONFIG 4) and the load-macro misc settings (SFPCONFIG 8).
 // - calculate_reciprocal_complement, on every call: LREG4 (the complement constant), LREG5 (the NaN-row
-//   bitmap), LREG6 and LREG7 (c1 and c2), LREG0-3 as scratch, and replay slots 0..kBodySlots-1, which
-//   it records again on each call. The DEST row counter is set back to row 0 of the tile.
+//   bitmap), LREG6 and LREG7 (c1 and c2), LREG0-3 as scratch, and replay slots 0..kBodySlots+3 (the row
+//   loads its two leading coefficients too), which it records again on each call. The DEST row counter is set back to row 0 of the tile.
+// Each row loads and stores through ADDR_MOD_7, which every SFPU init holds at zero, and an INCRWC after it
+// steps DEST: ADDR_MOD_6 belongs to the FPU ops (matmul) a kernel may run between this init and its call.
 template <class Config>
 inline void init_reciprocal_complement()
 {
     sfpu_reciprocal_init<false>();
-    sfpi::vConstFloatPrgm1 = Config::kCoefficients[Config::kDegree];
-    sfpi::vConstFloatPrgm2 = Config::kCoefficients[Config::kDegree - 1];
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 #if !defined(DISABLE_SFPLOADMACRO)
     // The body's load macro: its two instruction templates, its sequence and its misc settings.
     TTI_SFPSETSGN(0, p_sfpu::LREG2, 15, 0);
@@ -82,15 +80,23 @@ inline void calculate_reciprocal_complement()
 #pragma GCC unroll 1
     for (int d = 0; d < 32; ++d)
     {
-        ttpoly::atan::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_6, false>();
+        ttpoly::atan::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_7, false, true>();
+        TTI_INCRWC(0, 2, 0, 0);
     }
 #else
-    TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    ttpoly::atan::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_6>();
+    load_replay_buf<Exec>(
+        0,
+        Config::kBodySlots + ttpoly::atan::reciprocal_complement_held_slots,
+        [&]
+        {
+            ttpoly::atan::reciprocal_complement_body<Config, ADDR_MOD_7, ADDR_MOD_7, true, true>();
+            TTI_INCRWC(0, 2, 0, 0);
+        });
 #pragma GCC unroll 8
     for (int d = 1; d < 32; ++d)
     {
-        TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        TTI_REPLAY(0, Config::kBodySlots + ttpoly::atan::reciprocal_complement_held_slots, 0, 0);
+        TTI_INCRWC(0, 2, 0, 0);
     }
     TTI_SFPNOP;
     TTI_SFPNOP;

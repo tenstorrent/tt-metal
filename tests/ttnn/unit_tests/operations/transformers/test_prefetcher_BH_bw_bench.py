@@ -48,7 +48,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     make_recv_contig_weight as _make_recv_contig_weight,

@@ -876,12 +876,6 @@ void init_atan_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
-    if constexpr (!is_fp32_dest_acc_en) {
-        if (bf16_dest_atan()) {
-            init_atan_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
@@ -889,6 +883,9 @@ void atan_init() {
     } else {
         // sfpu_atan_bf16 uses sfpu_reciprocal<false>.
         sfpu_reciprocal_init<false>();
+    }
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_atan_bf16();
     }
 }
 

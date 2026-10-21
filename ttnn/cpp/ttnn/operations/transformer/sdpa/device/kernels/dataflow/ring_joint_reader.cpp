@@ -349,10 +349,18 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+#ifdef KV_VALID_END
+    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
+#else
+    constexpr bool has_kv_valid_end = false;
+#endif
+    constexpr uint32_t kv_valid_end_args_offset =
+        has_kv_valid_end ? kv_meta_args.next_compile_time_args_offset() : kv_meta_args_offset;
+    constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
     constexpr uint32_t post_meta_args_offset =
-        kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
+        kv_pad_from_metadata ? kv_valid_end_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
     // logical_n / logical_l accessors follow the metadata accessors, appended as a pair so these offsets do
     // not depend on which one was supplied. Same VALID-fallback trick as meta_args above.
     constexpr uint32_t logical_n_args_offset =
@@ -515,6 +523,10 @@ void kernel_main() {
     // Common runtime args: metadata block first when present, then the logical-length pair.
     constexpr uint32_t logical_length_common_arg_base =
         slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0;
+    // kv_valid_end is validated incompatible with the logical_n / logical_l tensors, so its arg directly
+    // follows the metadata block.
+    static_assert(!has_kv_valid_end || !has_logical_length_tensor);
+    [[maybe_unused]] constexpr uint32_t kv_valid_end_common_arg = logical_length_common_arg_base;
 
     [[maybe_unused]] uint32_t global_n_partial_col_live = 0;
     [[maybe_unused]] uint32_t joint_l_partial_col_live = 0;
@@ -558,6 +570,12 @@ void kernel_main() {
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
                 kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            if constexpr (has_kv_valid_end) {
+                const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
+                    meta_noc, kv_valid_end_args, get_common_arg_val<uint32_t>(kv_valid_end_common_arg), meta_l1);
+                logical_nt =
+                    trace_metadata::logical_tile_rows_clamped_to_valid_end(logical_nt, kv_actual_isl, kv_valid_end);
+            }
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
@@ -828,8 +846,10 @@ void kernel_main() {
                                              qmap.q_valid_tile_count)
                                        : logical_nt;
     auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -842,7 +862,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
