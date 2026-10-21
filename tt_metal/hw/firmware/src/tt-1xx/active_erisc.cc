@@ -198,6 +198,9 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
     );
 }
 
+// Called by active_erisc-crt0 when erisc_exit() longjmps back to base FW, bypassing the return from main().
+void __attribute__((noinline)) on_erisc_exit() { set_eth_fw_stage(ETH_FW_STAGE_BASE_FW); }
+
 int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
     set_eth_fw_stage(ETH_FW_STAGE_FW_INIT);

@@ -7,6 +7,7 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
@@ -342,18 +343,41 @@ std::string eth_fw_stage_to_string(uint32_t stage) {
     return fmt::format("0x{:08x} ('{}')", stage, ascii);
 }
 
-uint32_t read_eth_fw_stage(
-    tt::tt_metal::MetalEnvImpl& env,
+std::vector<uint32_t> read_eth_fw_stages(
+    const tt_metal::Hal& hal,
+    const tt::Cluster& cluster,
     ChipId device_id,
     const tt::tt_metal::CoreCoord& virtual_core,
-    tt_metal::HalProgrammableCoreType core_type,
-    uint32_t processor_index) {
-    const auto& hal = env.get_hal();
-    const uint64_t addr =
-        hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE) + processor_index * sizeof(uint32_t);
-    uint32_t stage = 0;
-    env.get_cluster().read_core(&stage, sizeof(stage), tt_cxy_pair(device_id, virtual_core), addr);
-    return stage;
+    tt_metal::HalProgrammableCoreType core_type) {
+    // Slots past the processor count are never written (e.g. slot 1 in single-erisc mode).
+    const uint32_t num_slots = std::min<uint32_t>(
+        hal.get_dev_size(core_type, tt_metal::HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t),
+        hal.get_num_risc_processors(core_type));
+    std::vector<uint32_t> stages(num_slots, 0);
+    if (num_slots != 0) {
+        cluster.read_core(
+            stages.data(),
+            num_slots * sizeof(uint32_t),
+            tt_cxy_pair(device_id, virtual_core),
+            hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE));
+    }
+    return stages;
+}
+
+std::string format_eth_fw_stages(
+    const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, const std::vector<uint32_t>& stages) {
+    if (stages.empty()) {
+        return "n/a";
+    }
+    std::vector<std::string> entries;
+    entries.reserve(stages.size());
+    for (uint32_t processor = 0; processor < stages.size(); processor++) {
+        entries.push_back(fmt::format(
+            "{}={}",
+            hal.get_processor_class_name(core_type, processor, /*is_abbreviated=*/false),
+            eth_fw_stage_to_string(stages[processor])));
+    }
+    return fmt::format("{}", fmt::join(entries, ", "));
 }
 
 namespace internal_ {
@@ -431,10 +455,10 @@ void print_aerisc_training_status(
 
     // Always-on Metal firmware stage breadcrumbs (independent of watcher). Distinguishes whether the
     // core is in base FW, Metal application FW, or a launched kernel when it stalled.
-    const std::string fw_stage_erisc0 = eth_fw_stage_to_string(
-        read_eth_fw_stage(env, device_id, virtual_core, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 0));
-    const std::string fw_stage_erisc1 = eth_fw_stage_to_string(
-        read_eth_fw_stage(env, device_id, virtual_core, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, 1));
+    const std::string fw_stages = format_eth_fw_stages(
+        hal,
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+        read_eth_fw_stages(hal, cluster, device_id, virtual_core, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH));
 
     log_critical(
         tt::LogMetal,
@@ -442,7 +466,7 @@ void print_aerisc_training_status(
         "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}, Postcode: {:#x}, "
         "ERISC0 reset PC: {:#x}, ERISC1 reset PC: {:#x}, RISC soft reset: {:#x}, "
         "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}, "
-        "Metal FW stage (erisc0): {}, Metal FW stage (erisc1): {}",
+        "Metal FW stage: {}",
         device_id,
         virtual_core.str(),
         port_status,
@@ -458,8 +482,7 @@ void print_aerisc_training_status(
         heartbeat_start,
         heartbeat_end,
         heartbeat_start != heartbeat_end,
-        fw_stage_erisc0,
-        fw_stage_erisc1);
+        fw_stages);
 }
 
 }  // namespace

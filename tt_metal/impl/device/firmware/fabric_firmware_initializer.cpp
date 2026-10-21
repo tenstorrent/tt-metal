@@ -209,22 +209,17 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
     // Coarse always-on eth firmware stage breadcrumb, which reveals whether each router core is even
     // running the fabric kernel yet, or is still stuck in base FW / Metal application FW (in which case
     // the EDMStatus above would be UNKNOWN/stale because the kernel never started).
-    const uint32_t fw_stage_addr =
-        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FW_STAGE);
-    const uint32_t fw_stage_size =
-        hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FW_STAGE);
-    const bool fw_stage_available = fw_stage_size != 0;
     for (const auto& r : reports) {
         const bool is_laggard = min_stage && r.stage == *min_stage;
-        std::string metal_fw_stage = "n/a";
-        if (fw_stage_available) {
-            std::vector<uint32_t> fw_stage_buf{0};
-            detail::ReadFromDeviceL1(dev, r.logical_core, fw_stage_addr, 4, fw_stage_buf, CoreType::ETH);
-            metal_fw_stage = tt::llrt::eth_fw_stage_to_string(fw_stage_buf[0]);
-        }
+        const CoreCoord virtual_core =
+            dev->ethernet_core_from_logical_core(CoreCoord{r.logical_core.x, r.logical_core.y});
+        const std::string metal_fw_stage = tt::llrt::format_eth_fw_stages(
+            hal,
+            HalProgrammableCoreType::ACTIVE_ETH,
+            tt::llrt::read_eth_fw_stages(hal, cluster, dev->id(), virtual_core, HalProgrammableCoreType::ACTIVE_ETH));
         log_error(
             tt::LogMetal,
-            "  {} chan={:2d} logical={} status=0x{:08x} ({}) metal_fw_stage={}{}",
+            "  {} chan={:2d} logical={} status=0x{:08x} ({}) metal_fw_stage=[{}]{}",
             r.is_master ? "master" : "sub   ",
             r.chan,
             r.logical_core.str(),
