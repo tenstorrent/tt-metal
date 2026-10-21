@@ -10,12 +10,18 @@ targets:
     skus:
       p300x2:
         entries:
-          - status: active
+          - batch_size: 5
+            status: active
             perf: {}
             accuracy:
               # First 10/198 GPQA Diamond questions; preserve the 6/10 release gate.
               gpqa: 100
               gpqa_tolerance: 0.4
+            owner_id: U08BGTAMU1W
+            team: models
+          - status: active
+            perf: {}
+            accuracy: {}
             owner_id: U08BGTAMU1W
             team: models
   qwen-image-2.1-p150:
