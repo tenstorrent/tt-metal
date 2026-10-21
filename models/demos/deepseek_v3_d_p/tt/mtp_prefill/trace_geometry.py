@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id, rotated_row_of_position
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import mtp_generation_keep_rows, mtp_generation_select_rows
 
@@ -127,7 +128,9 @@ class MTPTraceGeometry:
         self._tensors = {}
 
     def _mapper(self):
-        return ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=self.mesh_shape, dims=(self.sp_axis, None))
+        return ttnn.ShardTensor2dMesh(
+            self.mesh_device, mesh_shape=self.mesh_shape, dims=mesh_shard_dims(0, self.sp_axis)
+        )
 
     def _host(self, actual_start: int, actual_end: int, provided_levels: int) -> dict:
         sp, k_levels, tile = self.sp_factor, self.num_levels, ttnn.TILE_SIZE
