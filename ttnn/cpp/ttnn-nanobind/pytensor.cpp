@@ -59,6 +59,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -522,7 +523,7 @@ void pytensor_module(nb::module_& mod) {
         [](distributed::MeshDevice& mesh,
            const TensorSpec& spec,
            const std::vector<SRAMTensorViewAddress>& placements) {
-            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_tensor_view(
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_buffer_view(
                 mesh,
                 tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
                 tt::tt_metal::distributed::DeviceLocalBufferConfig{

@@ -123,6 +123,37 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
         )
 
 
+def test_distinct_per_core_addresses_preserve_backing(per_core_mesh_device, expect_error):
+    """Exercise different addresses on two cores, including padding and untouched neighbors."""
+    mesh, coord = per_core_mesh_device, ttnn.MeshCoordinate(0, 0)
+    cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    owner_spec = _spec(cores, 768)
+    initial = torch.full((2, 768), 91, dtype=torch.uint8)
+    owner = ttnn.from_torch(
+        initial,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=owner_spec.memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    spec = _spec(cores, 256)
+    with expect_error(RuntimeError, "L1 view placements must cover every configured data core"):
+        _view(mesh, spec, owner, [(coord, cores[0], 0)])
+    view = _view(mesh, spec, owner, [(coord, cores[0], 0), (coord, cores[1], 256)])
+    addresses = [_address(view, coord, core) for core in cores]
+    assert addresses[0] != addresses[1]
+    values = torch.stack([torch.full((256,), value, dtype=torch.uint8) for value in (17, 29)])
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(values, dtype=ttnn.uint8), view)
+    torch.testing.assert_close(_read(view), values)
+    expected = initial.clone()
+    expected[0, :256] = 17
+    expected[1, 256:512] = 29
+    del view
+    gc.collect()
+    torch.testing.assert_close(_read(owner), expected)
+
+
 def test_view_preserves_selected_device_coverage(mesh_device):
     mesh = mesh_device
     coord, core = ttnn.MeshCoordinate(0, 1), ttnn.CoreCoord(0, 0)
