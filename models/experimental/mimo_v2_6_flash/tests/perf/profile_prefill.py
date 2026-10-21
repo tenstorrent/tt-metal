@@ -51,7 +51,7 @@ def build(mesh, max_seq_len):
     return gen.models, tokens
 
 
-def profile(models, tokens, context, chunk, layers, fill):
+def profile(models, tokens, context, chunk, layers, fill, graph_report=None):
     """``models``: the rows to profile, each running the same chunks (one user each). One row is the default: the
     device log of one 48-layer chunk on 32 devices is ~30 GB.
 
@@ -97,8 +97,12 @@ def profile(models, tokens, context, chunk, layers, fill):
     logger.info(f"cache {'filled' if fill == 'real' else 'skipped (zeros)'} for positions [0, {start})")
     warm = run(start)  # compiles the last chunk's programs (it rewrites the same K / V when run again)
     drain()
+    if graph_report:  # ttnn-visualizer memory / graph report of the profiled chunk only (ttnn.graph_report)
+        ttnn.graph.begin_graph_capture()
     with profiling.zone("profiled_chunk"):
         wall = run(start)
+    if graph_report:
+        ttnn.graph.end_graph_capture_to_file(graph_report)
     drain()
     logger.info(
         f"context {context}: chunk of {chunk} at {start}, {len(layers) if layers else 48} layers: "
@@ -124,6 +128,12 @@ def main():
     parser.add_argument("--layers", default=None, help="zones: comma-separated layer indices (default all)")
     parser.add_argument("--fill", choices=("real", "skip"), default="real", help="zones: the earlier chunks (profile)")
     parser.add_argument("--rows", type=int, default=1, help="zones: Galaxy rows to profile (1-4)")
+    parser.add_argument(
+        "--graph-report",
+        default=None,
+        help="zones: also capture the profiled chunk's graph to this JSON; then `python -m ttnn.graph_report <json> "
+        "<dir>` makes the ttnn-visualizer memory report",
+    )
     parser.add_argument("--ttft", action="store_true", help="time whole prompts instead (no profiler)")
     parser.add_argument("--contexts", default="4096,32768,131072", help="--ttft: prompt lengths")
     args = parser.parse_args()
@@ -146,7 +156,7 @@ def main():
         if args.ttft:
             ttft(models[0], tokens, contexts, args.chunk)
         else:
-            profile(models[: args.rows], tokens, args.context, args.chunk, layers, args.fill)
+            profile(models[: args.rows], tokens, args.context, args.chunk, layers, args.fill, args.graph_report)
     finally:
         # Submeshes first, as the pytest mesh_device fixture does: closing the parent with its row submeshes still
         # open hangs in the profiler read of the close.
