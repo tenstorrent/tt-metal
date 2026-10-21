@@ -6,7 +6,7 @@
 // the offset slots of each stencil chunk, so the data-movement RISCs, whose stores bound the generation, share the
 // work five ways. Each TRISC serves both data-movement RISCs: it waits for a message (fill.h's work mailbox), writes
 // its slots (DMSLOTS + t, + 3, ...) of every described run, marks the message done, and stops once both RISCs have
-// signalled the end. Common argument [0]: the launch id.
+// signalled the end. Common argument [0]: the launch's nonce (fill.h).
 #include <cstdint>
 #include "api/compute/common.h"
 #include "fill.h"
@@ -31,10 +31,13 @@ void kernel_main() {
         const bool ended = mb[MB_END] == launch && mb[MB_END + 16] == launch;
         for (uint32_t i = 0; i < 4; ++i) {
             const uint32_t seq = mb[16 * i];
-            if ((seq >> 16) != launch || seq == last[i]) {
+            if (seq == 0 || seq == last[i]) {
                 continue;
             }
             asm volatile("fence" ::: "memory");
+            if (mb[16 * i + 4] != launch) {
+                continue;  // a message slot an earlier launch left
+            }
             const uint32_t n = mb[16 * i + 1];
             uint32_t* O = (uint32_t*)mb[16 * i + 2];
             const volatile uint32_t* runs = (const volatile uint32_t*)mb[16 * i + 3];
@@ -48,6 +51,8 @@ void kernel_main() {
                 }
             }
             asm volatile("fence" ::: "memory");  // the stores are in L1 before the owner sees the message done
+            mb[MB_DONE + 16 * (4 * t + i) + 1] = launch;
+            asm volatile("fence" ::: "memory");  // this launch's mark before the number
             mb[MB_DONE + 16 * (4 * t + i)] = seq;
             last[i] = seq;
         }

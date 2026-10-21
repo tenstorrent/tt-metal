@@ -22,8 +22,8 @@
 // run of a chunk, hands slots DMSLOTS .. 26 to them, writes slots 0 .. DMSLOTS - 1 and the rest of the chunk itself,
 // and waits for them before its NoC writes read the pages.
 // Common arguments: [0] grid width [1] h [2] META address [3] META shared pages [4] META pages per core [5] jobs
-//   [6] launch id [7], [8] per core row y, a nibble: how many of every 8 chunks RISC 1 takes, then per job
-//   (10 words): kind, cores in the job, word offset of the job's META segment, V, OFF,
+//   [6] the launch's nonce (fill.h) [7], [8] per core row y, a nibble: how many of every 8 chunks RISC 1 takes,
+//   then per job (10 words): kind, cores in the job, word offset of the job's META segment, V, OFF,
 //   b, has_b, zero vectors, zero 0, zero 1.
 // META: shared pages (every level's storage-order tables, read by every core), then each core's row of segments; a
 //   core reads both into one L1 buffer, and every word offset below counts from its start.
@@ -434,15 +434,17 @@ void kernel_main() {
                         const uint32_t i = 2 * half + set;
                         uint32_t* runs = (uint32_t*)(get_write_ptr(CB_W) + 4 * (MB_RUNS + i * MAX_RUNS * RUN_WORDS));
                         const uint32_t nr = fill_chunk(g, c, q0, q1, real_end, base, xs[set], runs);
-                        const uint32_t seq = (launch << 16) | (++sent[set] & 0xFFFF);
+                        const uint32_t seq = ++sent[set];
                         mb[16 * i + 1] = nr;
                         mb[16 * i + 2] = base;
                         mb[16 * i + 3] = (uint32_t)runs;
+                        mb[16 * i + 4] = launch;
                         asm volatile("fence" ::: "memory");  // the run list and fields are in L1 before the number
                         mb[16 * i] = seq;
                         own_slots((uint32_t*)base, runs, nr);
                         for (uint32_t t = 0; t < 3; ++t) {
-                            while (mb[MB_DONE + 16 * (4 * t + i)] != seq) {
+                            const volatile uint32_t* done = mb + MB_DONE + 16 * (4 * t + i);
+                            while (done[0] != seq || done[1] != launch) {
                                 invalidate_l1_cache();
                             }
                         }

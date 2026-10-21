@@ -13,11 +13,13 @@
 // slot's neighbour (the others take their own row's offset)
 constexpr uint32_t RUN_WORDS = 4 + 3 * 27;
 constexpr uint32_t MAX_RUNS = 96;  // runs described per chunk; the owning RISC writes all slots of any more itself
-// the work mailbox (CB_W, uint32 words): message (h, s) at 16 (2 h + s): [0] sequence number [1] runs [2] L1 address
-// of the staging set's offset pages [3] L1 address of the run list; done (t, h, s) at 64 + 16 (4 t + 2 h + s): the
-// sequence number TRISC t finished; end (h) at 256 + 16 h: the launch id, once RISC h has no more messages; run
-// list (h, s) at 512 + (2 h + s) MAX_RUNS RUN_WORDS. Sequence numbers are (launch id << 16) | count, so words left
-// by an earlier launch never look like a message.
+// the work mailbox (CB_W, uint32 words): message (h, s) at 16 (2 h + s): [0] sequence number (1, 2, ...) [1] runs
+// [2] L1 address of the staging set's offset pages [3] L1 address of the run list [4] the launch's nonce; done
+// (t, h, s) at 64 + 16 (4 t + 2 h + s): [0] the sequence number TRISC t finished [1] the nonce; end (h) at
+// 256 + 16 h: the nonce, once RISC h has no more messages; run list (h, s) at 512 + (2 h + s) MAX_RUNS RUN_WORDS.
+// The nonce is a random nonzero 32-bit number per launch (a common argument), so words left in L1 by any earlier
+// launch, of this process or another, are not taken for this launch's (a counter restarted at 1 in each process, and
+// a short run's leftovers then matched the next process's first launches).
 constexpr uint32_t MB_DONE = 64, MB_END = 256, MB_RUNS = 512;
 constexpr uint32_t MB_WORDS = MB_RUNS + 4 * MAX_RUNS * RUN_WORDS;
 

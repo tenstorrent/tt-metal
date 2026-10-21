@@ -14,6 +14,8 @@ SparseRowPlan(..., transfer=..., host_tables=False)), so only a few KB of per-co
 setup; the result is bit-identical to the host tables (tests/test_hpcg.py).
 """
 
+import os
+
 import numpy as np
 import ttnn
 
@@ -26,7 +28,6 @@ CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4, CB_X0=5, CB_X1=6, CB_W=7)
 KERNEL_TRISC = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate_trisc.cpp"
 DM_SLOTS = 6  # offset slots each data-movement RISC writes itself; the three TRISCs write the other 21 (7 each)
 MB_BYTES = 4 * (512 + 4 * 96 * (4 + 3 * 27))  # the work mailbox (kernels/fill.h's MB_WORDS)
-_LAUNCH = [0]
 # of every 8 chunks, the writer RISC's (NoC 1) share. Its NoC writes stall less: on the P150 the reader RISC's (NoC 0)
 # writes from the top core rows wait on congested routes. Generation A + B (ms) for shares 4 / 5 / 6, median of 3:
 # 192^3 8.60 / 6.84 / 7.41, 288^3 24.55 / 22.40 / 25.42, 104^3 2.39 / 2.66 / 2.81 (104^3 setup waits on the host)
@@ -41,10 +42,9 @@ def _chunk_shares(rows):
 
 
 def _launch_id():
-    """A new id in 1 .. 65535 for each generation launch: the TRISCs tell this launch's messages from words an
-    earlier launch left in L1 by it (kernels/fill.h)."""
-    _LAUNCH[0] = _LAUNCH[0] % 65535 + 1
-    return _LAUNCH[0]
+    """A random nonzero 32-bit nonce for each generation launch: the TRISCs tell this launch's messages from words any
+    earlier launch, of this process or another, left in L1 (kernels/fill.h)."""
+    return int.from_bytes(os.urandom(4), "little") or 1
 XCAP = 2048  # value exceptions per staging set (generate.cpp)
 SET_PAGES = 55  # staging set per RISC: 27 offset pages, 27 value pages, one b page (generate.cpp's SET)
 JOB_ARGS = 10  # common arguments per job (generate.cpp)
