@@ -1668,6 +1668,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
         if (kv_pad_from_metadata) {
             TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
+            if (tensor_args.has_kv_valid_end()) {
+                TensorAccessorArgs(tensor_args.kv_valid_end->buffer()).append_to(reader_compile_time_args);
+            }
         }
     }
     // Appended as a pair when either is present (null accessor for the absent one) so kernel offsets do not
@@ -1816,6 +1819,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
     if (kv_pad_from_metadata) {
         TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
+        if (tensor_args.has_kv_valid_end()) {
+            TensorAccessorArgs(tensor_args.kv_valid_end->buffer()).append_to(writer_compile_time_args);
+        }
     }
     if (has_logical_n_tensor || has_logical_l_tensor) {
         TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
@@ -3023,6 +3029,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_debug(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
     }
 
+    if (tensor_args.has_kv_valid_end()) {
+        defines["KV_VALID_END"] = "1";
+    }
+
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -3085,6 +3095,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(reader_common_args);
+        if (tensor_args.has_kv_valid_end()) {
+            reader_common_args.push_back(tensor_args.kv_valid_end->buffer());
+        }
         reader_kernel.emplace_common_runtime_args(reader_common_args);
     }
 
@@ -3104,6 +3117,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             writer_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(writer_common_args);
+        if (tensor_args.has_kv_valid_end()) {
+            writer_common_args.push_back(tensor_args.kv_valid_end->buffer());
+        }
         writer_kernel.emplace_common_runtime_args(writer_common_args);
     }
 
@@ -3327,11 +3343,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
-        // Rotated Q split: one remainder_start per active ordinal.
+        // Static multicast loop count (the reader's padded slot loop); rotated groups derive theirs per ordinal.
+        uint32_t static_mcast_q_count = global_q_end - global_q_start;
+        if (enable_kv_chains && !use_rotated_q_split) {
+            if (k_uses_batch_chain && k_mcast_enabled) {
+                static_mcast_q_count = std::max(static_mcast_q_count, k_chain_max_q[i]);
+            }
+            if (gqa_grouped_kv && gqa_mcast_enabled) {
+                static_mcast_q_count = std::max(static_mcast_q_count, gqa_chain_max_q[i]);
+            }
+        }
+        compute_args.push_back(static_mcast_q_count);
+        // Rotated Q split: per active ordinal [remainder_start, group_has_remainder].
         if (use_rotated_q_split) {
             for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
                 const auto& sched = rotated_sched[i][ring_iter];
                 compute_args.push_back(sched.remainder_start);
+                compute_args.push_back(sched.group_has_remainder);
             }
         }
         if (ksplit_count > 1) {
