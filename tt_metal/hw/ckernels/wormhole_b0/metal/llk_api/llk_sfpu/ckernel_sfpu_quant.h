@@ -88,9 +88,9 @@ inline void _int8_input_unbias_() { TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 
 // so writing this slot is what the per-iteration SFPSTOREs below pick up
 // via ADDR_MOD_2. The addr-mod base is flipped on by every binary-SFPU
 // dispatch: _llk_math_eltwise_binary_sfpu_params_ (in
-// llk_math_eltwise_binary_sfpu_params.h) calls _llk_math_eltwise_sfpu_start_
-// (in llk_math_eltwise_sfpu_common.h), which in turn calls
-// math::set_addr_mod_base() before invoking the kernel body.
+// llk_math_eltwise_binary_sfpu_params.h) runs the kernel body inside a
+// calculation, and llk::sfpu::calculation_start (in sfpu/common.h) calls
+// math::set_addr_mod_base() before the body.
 //
 // The matching "no increment" slot used for the SFPLOADs (real ADDR_MOD_7,
 // addressed as ADDR_MOD_3 from the SFPU instructions) is already programmed

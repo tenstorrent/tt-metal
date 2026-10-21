@@ -12,8 +12,8 @@
 #include "ckernel_sfpu.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
+#include "sfpu/shim.h"
 
 using namespace ckernel;
 
