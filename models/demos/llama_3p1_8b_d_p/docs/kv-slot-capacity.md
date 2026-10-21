@@ -94,12 +94,21 @@ A first, cold pass looks very different -- 13.7 s chunks at 1681 slots -- but th
 per-chunk-index program build, not the slot count: the 2-slot run's cold pass has a 20.9 s chunk in
 it. Anything timing this path has to warm the program cache first.
 
-The one real cost is startup: zeroing 27.9 GiB per chip takes **157 s**, against 0.2 s for two
-slots. A serving front end pays it once, but it belongs in a boot budget.
+The one real cost is startup: zeroing 27.9 GiB per chip took **157 s**, against 0.2 s for two
+slots. A serving front end pays it once, but it belongs in a boot budget. That figure, and the
+157-167 s in the sweep above, were measured on the earlier host-staged allocation (`from_torch`);
+the device-side `ttnn.empty` plus `ttnn.fill` path described below has not been timed at full
+DRAM yet.
 
-## If the KV has to migrate, reserve the destinations
+## If KV migrates between slots on this device, reserve the destinations
 
-The shared prefill migration driver sends slot `src` to `src + dst_slot_offset` and defaults that
+This applies only to the loopback migration driver
+(`models/demos/common/prefill/runners/migration_driver.py`). Disaggregated P/D through the tt-d-gen
+KV Manager reads a prefill slot and writes into decode's slots, and a decode-to-prefill pull lands in
+an ordinary prefill slot, so prefill there needs no destination slots and should size with the
+default `slots_per_user=1`.
+
+The loopback driver sends slot `src` to `src + dst_slot_offset` and defaults that
 offset to the producer's live-user count, so a loopback migration wants a table twice the live set:
 `[0, n)` hold sequences and `[n, 2n)` receive them. MiniMax M3 and GPT-OSS both encode this as a
 4-slot runner table against a 2-user producer, and the driver rejects an out-of-range destination
@@ -209,7 +218,7 @@ than of total DRAM. The shared runner's `PREFILL_USE_TRACE=1` takes a 256 MiB tr
 `trace_region_size` at device open, before any of this runs, so it is simply absent from what
 `max_user_slots` divides. The reserve is only for what gets allocated *after* the cache.
 
-If the deployment migrates KV between slots, ask for the destinations at the same time:
+If the deployment uses the loopback migration driver, ask for the destinations at the same time:
 
 ```python
 cache = allocate_kv_cache(
@@ -224,18 +233,17 @@ live_users = cache.num_users // MIGRATION_SLOTS_PER_USER  # slots [live_users, n
 
 ### Setting the count from a deployment
 
-`DEFAULT_NUM_USERS` reads `PREFILL_NUM_USERS`, so a deployment that never calls
-`allocate_kv_cache` itself can still choose its count:
+The shared prefill runner reads `PREFILL_NUM_USERS` and passes it as `PrefillRunParams.num_users`,
+which reaches the cache allocator, the model and the runtime's cache validation, so a deployment that
+never calls `allocate_kv_cache` itself still chooses its count:
 
 ```sh
 PREFILL_NUM_USERS=16
 ```
 
-It has to be the default rather than an argument threaded through one call site. Two places build a
-geometry without being handed a count — the shared `PREFILL_LAYOUT` that the runtime compares a
-requested count against, and the geometry inside `TtPrefillRuntime` that validates an allocated
-cache — and while those held a literal 2, a correctly allocated 4-slot cache was rejected by its own
-validator: `Llama KV cache metadata must be num_users=2, ...; got (4, 32, 33792, 4)`.
+The runner does not resolve `"max"`: a deployment that wants every slot DRAM allows sizes it with
+`max_user_slots` and exports the number. The runner acceptance scenario honours the same variable,
+and `PREFILL_PRODUCER_NUM_USERS` chooses how many of the allocated slots the producer fills.
 
 Exercised end to end with a one-Galaxy prefill feeding a four-Galaxy tt-blaze decode over native KV
 migration at 33,792 positions. GSM8K (200 problems, 0-shot, flexible-extract) does not move with the

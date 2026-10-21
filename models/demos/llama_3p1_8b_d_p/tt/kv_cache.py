@@ -19,19 +19,14 @@ _OOM_MESSAGE = "out of memory"
 _BYTES_PER_ELEMENT = {ttnn.bfloat16: 2.0, ttnn.bfloat8_b: 1.0625}
 # DRAM held back from the cache so a chunk can still run in it: activations, the vocabulary logits,
 # and slack for the allocator to place two multi-GiB buffers in banks the weights have fragmented.
-# A chunk is a fixed 1024 tokens whatever the capacity, so this is a constant rather than a function
-# of max_seq_len. Measured on a 4x8 Blackhole galaxy by squeezing free DRAM with ballast until a
-# chunk stopped completing: chunks still ran with 0.45 GiB/chip free, the smallest figure probed.
-# The margin over that is for placement, which is what actually fails first -- see
-# docs/kv-slot-capacity.md.
+# A chunk is a fixed 1024 tokens whatever the capacity, so this does not depend on max_seq_len
+# (docs/kv-slot-capacity.md).
 DEFAULT_RUN_RESERVE_BYTES = 1024**3
-# Slots a migrating deployment needs per live sequence. The shared prefill migration driver sends
-# slot ``src`` to ``src + dst_slot_offset`` and defaults that offset to the producer's live-user
-# count (models/demos/common/prefill/runners/migration_driver.py), so a loopback migration wants a
-# table twice the live set: [0, n) hold sequences and [n, 2n) receive them. MiniMax M3 and GPT-OSS
-# both encode this as a 4-slot runner table against a 2-user producer. It matters here because a count taken from all
-# of DRAM puts every destination out of range, and the driver's advice at that point -- "Grow
-# PREFILL_NUM_USERS" -- is the one thing such a deployment cannot do.
+# Slots per live sequence for the loopback migration driver
+# (models/demos/common/prefill/runners/migration_driver.py), which copies slot ``src`` into
+# ``src + dst_slot_offset`` on the same device: [0, n) hold sequences and [n, 2n) receive them.
+# Disaggregated P/D through the KV Manager writes into decode's slots instead and needs no
+# destination slots on prefill, so it should size with the default of one.
 MIGRATION_SLOTS_PER_USER = 2
 
 
@@ -141,10 +136,9 @@ def max_user_slots(
     to run is not useful.
 
     ``slots_per_user`` rounds the answer down to a multiple of itself, so the caller gets a count it
-    can divide evenly. Pass :data:`MIGRATION_SLOTS_PER_USER` for a deployment that migrates: the live
-    set is then half the returned slots and the other half are their destinations. That costs exactly
-    what doubling the context would -- two slots either way -- so the migratable count at a capacity
-    is the plain count at twice it.
+    can divide evenly. Pass :data:`MIGRATION_SLOTS_PER_USER` when the loopback migration driver
+    moves KV between slots on this device: the live set is then half the returned slots and the
+    other half are their destinations.
     """
     if type(slots_per_user) is not int or slots_per_user < 1:
         raise ValueError(f"slots_per_user must be a positive int, got {slots_per_user!r}")
@@ -183,8 +177,11 @@ def allocate_kv_cache(
     front end wants when it would rather admit more sequences than choose a number by hand. The count
     is then derived from free DRAM at call time via :func:`max_user_slots`, so it must be called with
     the weights already loaded, ``reserve_bytes`` is what stays free for the chunk to run in, and
-    ``slots_per_user`` is how many slots each sequence needs -- :data:`MIGRATION_SLOTS_PER_USER` if
-    its KV has to have somewhere to migrate to.
+    ``slots_per_user`` is how many slots each sequence needs -- :data:`MIGRATION_SLOTS_PER_USER`
+    under the loopback migration driver.
+
+    ``"max"`` is resolved here only. The shared runner passes ``PREFILL_NUM_USERS`` through as an
+    int, so a serving deployment sizes with :func:`max_user_slots` and exports the result.
     """
     if slots_per_user != 1 and num_users != "max":
         raise ValueError(f'slots_per_user only applies to num_users="max", got num_users={num_users!r}')
@@ -222,13 +219,8 @@ def allocate_kv_cache(
     geometry = PrefillGeometry(max_seq_len, num_users)
 
     def allocate_one():
-        # Allocate on the device, then zero it in place. ttnn.zeros would stage the whole cache on
-        # the host first: for bfloat8_b it fills a std::vector<float> of shape.volume() and converts
-        # (ttnn/cpp/ttnn/operations/creation/creation.cpp), so the host pays 4 B/element for what the
-        # device holds at 1.0625 -- 52.5 GiB to place a 14.0 GiB buffer at 1,681 slots of 8K, and it
-        # does not shrink as capacity rises, because slots x capacity is what DRAM fixes. The host,
-        # not DRAM, would cap every auto-sized deployment. ttnn.empty costs no host bytes and the
-        # fill writes through the existing buffer, so nothing is staged and nothing is copied.
+        # Not ttnn.zeros: for bfloat8_b it stages a host std::vector<float> of shape.volume(), so the
+        # host, not DRAM, would cap an auto-sized cache (docs/kv-slot-capacity.md).
         cache = ttnn.empty(geometry.cache_shape, cache_dtype, ttnn.TILE_LAYOUT, mesh_device, memory_config)
         # ttnn.empty is uninitialised and callers are promised zeros: tests read a fresh cache, and
         # attention admits any row below the populated end, so leftover bytes would read as KV.

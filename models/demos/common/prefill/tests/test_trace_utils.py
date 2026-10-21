@@ -52,16 +52,23 @@ def test_ensure_trace_regenerates_incomplete_gqa_reference(tmp_path):
     assert (tmp_path / "kv_cache/layer_1.safetensors").is_file()
 
 
-# The acceptance scenario must keep two allocated slots while allowing one or two producer slots.
-@pytest.mark.parametrize("active_slots", [1, 2])
-def test_llama_scenario_separates_producer_slots_from_allocated_slots(monkeypatch, tmp_path, active_slots):
+# The acceptance scenario allocates the manifest's two slots unless PREFILL_NUM_USERS raises it, and the
+# producer may fill any number of the allocated slots.
+@pytest.mark.parametrize("allocated_slots, active_slots", [(None, 1), (None, 2), (4, 4), (16, 3)])
+def test_llama_scenario_separates_producer_slots_from_allocated_slots(
+    monkeypatch, tmp_path, allocated_slots, active_slots
+):
     from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario, validate_prefill_slot_traces
 
     monkeypatch.setenv("PREFILL_PRODUCER_NUM_USERS", str(active_slots))
     monkeypatch.setenv("PREFILL_MAX_SEQ_LEN", "2048")
-    monkeypatch.delenv("PREFILL_NUM_USERS", raising=False)
+    if allocated_slots is None:
+        monkeypatch.delenv("PREFILL_NUM_USERS", raising=False)
+    else:
+        monkeypatch.setenv("PREFILL_NUM_USERS", str(allocated_slots))
     scenario = prefill_runner_scenario()
-    assert scenario["users"] == 2
+    assert scenario["users"] == (allocated_slots or 2)
+    assert scenario["env"]["PREFILL_NUM_USERS"] == str(allocated_slots or 2)
     assert scenario["expected_slots"] == active_slots
     assert scenario["producer"]["PREFILL_NUM_USERS"] == str(active_slots)
     assert scenario["producer"]["PREFILL_PRODUCER_MAX_REQUESTS"] == str(active_slots)
@@ -77,3 +84,17 @@ def test_llama_scenario_separates_producer_slots_from_allocated_slots(monkeypatc
             cache / f"layer_{layer}.safetensors",
         )
     validate_prefill_slot_traces(str(tmp_path), scenario)
+
+
+@pytest.mark.parametrize(
+    "allocated_slots, active_slots, message",
+    [("2", "3", "exceeds PREFILL_NUM_USERS=2"), ("0", "1", "PREFILL_NUM_USERS"), ("four", "1", "PREFILL_NUM_USERS")],
+)
+def test_llama_scenario_rejects_unusable_slot_counts(monkeypatch, allocated_slots, active_slots, message):
+    from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario
+
+    monkeypatch.setenv("PREFILL_NUM_USERS", allocated_slots)
+    monkeypatch.setenv("PREFILL_PRODUCER_NUM_USERS", active_slots)
+    monkeypatch.setenv("PREFILL_MAX_SEQ_LEN", "2048")
+    with pytest.raises(ValueError, match=message):
+        prefill_runner_scenario()

@@ -65,8 +65,9 @@ python3 -m pytest -v --tt-arch blackhole \
   'models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc[llama31]'
 ```
 
-To exercise both allocated slots, set `PREFILL_PRODUCER_NUM_USERS=2`. One trace
-can be reused for both; use `PREFILL_PRODUCER_SLOT_TRACES=/path/A,/path/B` with
+To exercise both allocated slots, set `PREFILL_PRODUCER_NUM_USERS=2`; to allocate
+more, also set `PREFILL_NUM_USERS` (for example both to 4). One trace can be
+reused for every slot; use `PREFILL_PRODUCER_SLOT_TRACES=/path/A,/path/B` with
 different prompts to detect swapped slot identities. The synthetic table tests
 continue to check both allocated slots even when the model accuracy test uses one.
 
