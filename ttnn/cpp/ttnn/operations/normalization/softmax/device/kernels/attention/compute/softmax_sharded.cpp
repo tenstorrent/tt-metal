@@ -4,6 +4,9 @@
 
 #include <cstdint>
 
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"
