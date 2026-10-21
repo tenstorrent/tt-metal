@@ -19,9 +19,11 @@ namespace ttnn::prim {
 struct DeepseekV4PrefillIndexerSelectOperation {
     using operation_attributes_t = DeepseekV4PrefillIndexerSelectParams;
     using tensor_args_t = DeepseekV4PrefillIndexerSelectInputs;
-    // [indices [1, 1, T, 512] uint32, survivor scratch for split query tiles]
-    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    // [indices [1, 1, T, 512] uint32, survivor scratch for split query tiles, candidate blocks [1, 1, T, 2048]
+    //  uint32, candidate survivor scratch]; candidates set fills the candidate pair, otherwise the first pair, and
+    //  the other pair are placeholders.
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 4>;
+    using tensor_return_value_t = std::array<Tensor, 4>;
 
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -48,12 +50,14 @@ struct DeepseekV4PrefillIndexerSelectOperation {
 // Cores one query tile's blocks are split across: spare cores go to splitting once every query tile has a core.
 uint32_t deepseek_v4_prefill_indexer_select_num_splits(uint32_t num_q_tiles, uint32_t num_cores);
 
+// The indices, or with candidates set the candidate block ids.
 Tensor deepseek_v4_prefill_indexer_select(
     const Tensor& q,
     const Tensor& weights,
     const Tensor& idx_keys,
     const Tensor& start,
     uint32_t compress_ratio,
+    bool candidates,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 }  // namespace ttnn::prim

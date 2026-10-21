@@ -879,6 +879,40 @@ def deepseek_v4_prefill_indexer_select_golden(q, weights, idx_keys, start, *, co
     return out.view(1, 1, -1, TOPK)
 
 
+def deepseek_v4_prefill_indexer_candidate_scores(scores, block=8):
+    """Candidate-block scores [T, ceil(E / block)] from indexer scores [T, E]: a block's best entry, the block
+    holding the query's newest visible entry +inf, a block the query sees none of -inf."""
+    import torch
+
+    T, E = scores.shape
+    nb = -(-E // block)
+    padded = torch.full((T, nb * block), float("-inf"))
+    padded[:, :E] = scores
+    blocks = padded.view(T, nb, block).amax(dim=2)
+    visible = (scores > float("-inf")).sum(dim=1)
+    newest = (visible + block - 1) // block - 1
+    rows = torch.nonzero(visible > 0).flatten()
+    blocks[rows, newest[rows]] = float("inf")
+    return blocks
+
+
+def deepseek_v4_prefill_indexer_select_candidates_golden(q, weights, idx_keys, start, *, compress_ratio, **_):
+    """Torch reference for deepseek_v4_prefill_indexer_select_candidates: each query's top 2048 candidate blocks of
+    8 entries (deepseek_v4_prefill_indexer_candidate_scores).
+        ->  candidate block ids [1,1,T,2048] int64, MASKED_INDEX-padded
+    """
+    import torch
+
+    CAND_TOPK = 2048
+    scores = deepseek_v4_prefill_indexer_scores(q, weights, idx_keys, start, compress_ratio)
+    blocks = deepseek_v4_prefill_indexer_candidate_scores(scores)
+    values, ids = blocks.topk(min(CAND_TOPK, blocks.shape[1]), dim=1)
+    ids = torch.where(values == float("-inf"), torch.full_like(ids, MASKED_INDEX), ids)
+    cand = torch.full((blocks.shape[0], CAND_TOPK), MASKED_INDEX, dtype=torch.int64)
+    cand[:, : ids.shape[1]] = ids
+    return cand.view(1, 1, -1, CAND_TOPK)
+
+
 def _unpack_scaled_fp8_kv(kv, latent_dim, rope_dim):
     """Decode packed [FP8 latent | FP32 scales | BF16 RoPE] rows into logical BF16 [scaled latent || RoPE]."""
     import torch
@@ -1841,6 +1875,8 @@ __all__ = [
     "deepseek_v4_prefill_sdpa_golden",
     "deepseek_v4_prefill_indexer_scores",
     "deepseek_v4_prefill_indexer_select_golden",
+    "deepseek_v4_prefill_indexer_candidate_scores",
+    "deepseek_v4_prefill_indexer_select_candidates_golden",
     "sparse_mla",
     "sparse_sdpa_golden",
     "sparse_sdpa_msa_golden",

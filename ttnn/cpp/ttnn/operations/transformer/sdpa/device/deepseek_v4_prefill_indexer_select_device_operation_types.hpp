@@ -12,6 +12,7 @@ namespace ttnn::prim {
 // DeepSeek V4 lightning-indexer selection for a prefill chunk: scores and top-k in one pass over the visible entries.
 struct DeepseekV4PrefillIndexerSelectParams {
     uint32_t compress_ratio = 1;
+    bool candidates = false;  // also select each query's candidate blocks (the two-level select's level one)
     DeviceComputeKernelConfig compute_kernel_config;
 };
 

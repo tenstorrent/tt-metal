@@ -23,6 +23,7 @@ from ttnn.operations.transformer_golden import (
     scaled_dot_product_attention_golden,
     deepseek_v4_prefill_sdpa_golden,
     deepseek_v4_prefill_indexer_select_golden,
+    deepseek_v4_prefill_indexer_select_candidates_golden,
     sparse_sdpa_golden,
     sparse_sdpa_msa_golden,
 )
@@ -270,6 +271,10 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.transformer.deepseek_v4_prefill_indexer_select,
     golden_function=deepseek_v4_prefill_indexer_select_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.deepseek_v4_prefill_indexer_select_candidates,
+    golden_function=deepseek_v4_prefill_indexer_select_candidates_golden,
 )
 
 

@@ -514,6 +514,29 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compress_ratio"),
         nb::arg("compute_kernel_config") = nb::none());
 
+    ttnn::bind_function<"deepseek_v4_prefill_indexer_select_candidates", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        The two-level select's level one from deepseek_v4_prefill_indexer_select's scores. Entries are grouped into
+        candidate blocks of 8 (block b = entries [8b, 8b + 8)); a block scores its best visible entry, the block
+        holding the query's newest visible entry scores +inf, and each query keeps its top 2048 blocks. A query's
+        top 512 entries always lie in its candidate blocks.
+
+        Args and keyword args: as deepseek_v4_prefill_indexer_select.
+
+        Returns:
+            ttnn.Tensor: [1, 1, T, 2048] uint32 ROW_MAJOR candidate block ids, unordered; 0xFFFFFFFF fills unused
+            slots.
+        )doc",
+        &ttnn::transformer::deepseek_v4_prefill_indexer_select_candidates,
+        nb::arg("q").noconvert(),
+        nb::arg("weights").noconvert(),
+        nb::arg("idx_keys").noconvert(),
+        nb::arg("start").noconvert(),
+        nb::kw_only(),
+        nb::arg("compress_ratio"),
+        nb::arg("compute_kernel_config") = nb::none());
+
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
         R"doc(
