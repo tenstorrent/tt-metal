@@ -114,6 +114,12 @@ DFLASH_ENABLED = ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0
 
 MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
 assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
+# Decode runs this many MTP levels on ONE shared KV cache, so prefill computes only the first (MTP_LEVELS = 1)
+# and the KV table publishes the rest as aliases of its rows, acked with it.
+MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS)) if ADAPTER.supports_mtp else 0
+assert MTP_DECODE_LEVELS == MTP_LEVELS or (
+    MTP_LEVELS == 1 and MTP_DECODE_LEVELS > 1
+), f"PREFILL_MTP_DECODE_LEVELS={MTP_DECODE_LEVELS} needs PREFILL_MTP_LEVELS=1 or equal to it, got {MTP_LEVELS}"
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
@@ -630,6 +636,7 @@ def _print_config() -> None:
             f"drafter={DFLASH_MODEL or '<unset>'})",
         ),
         ("PREFILL_MTP_LEVELS", f"{MTP_LEVELS} (adapter.supports_mtp={ADAPTER.supports_mtp})"),
+        ("PREFILL_MTP_DECODE_LEVELS", str(MTP_DECODE_LEVELS)),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
@@ -672,6 +679,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
+        "mtp_decode_levels": MTP_DECODE_LEVELS,
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
@@ -743,6 +751,7 @@ def main() -> None:
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
+        mtp_decode_levels=MTP_DECODE_LEVELS,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
