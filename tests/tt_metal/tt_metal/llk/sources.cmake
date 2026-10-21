@@ -41,6 +41,7 @@ set(UNIT_TESTS_LLK_SRC
     test_transpose.cpp
     test_triangle_solve.cpp
     test_unary_broadcast.cpp
+    test_unpack_reduce_scaler_compile.cpp
     test_unpack_to_dest_bcast_dst_offset.cpp
     test_untilize_tilize.cpp
 )
