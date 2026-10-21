@@ -247,6 +247,9 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
     if (const char* u = cstr(pr.drisc_ub)) {  // (probe: blocks per DRISC unit)
         defs["SE_DRISC_UB"] = u;
     }
+    if (const char* l = cstr(pr.drisc_lean)) {  // (probe: fewer register accesses a unit, 1 safe, 2 measure-only)
+        defs["SE_DRISC_LEAN"] = l;
+    }
     if (const char* n = cstr(pr.drisc_ns_max)) {  // (probe: units in flight per job, up to 14 with one job a tile)
         defs["SE_DRISC_NS_MAX"] = n;
     }

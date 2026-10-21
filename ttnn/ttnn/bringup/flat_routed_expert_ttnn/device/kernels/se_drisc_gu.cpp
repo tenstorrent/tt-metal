@@ -77,9 +77,27 @@ inline void fast_inc(uint8_t noc, uint32_t coord) {
     noc_nonposted_atomics_acked[noc] += 1;
 }
 
+// (perf probe SE_DRISC_LEAN: fewer register accesses a unit. 1: the DMA's source-high register (always 0: bank-local
+// sources) written once a call, not per DMA; the DMA completion count re-read only when the known completions are used
+// up. 2: also no ready poll before a semaphore increment (unsafe in general: measures what those reads cost))
+#ifndef SE_DRISC_LEAN
+#define SE_DRISC_LEAN 0
+#endif
+inline void lean_dma_read(uint8_t stream, uint32_t src, uint32_t dst, uint32_t attrs) {
+    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_SOURCE_LOW_REG_OFFSET, src);
+    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_DEST_REG_OFFSET, dst);
+    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs);
+}
+inline void fast_inc_nopoll(uint8_t noc, uint32_t coord) {
+    NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
+    NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_CMD_CTRL, 0x1);
+    noc_nonposted_atomics_acked[noc] += 1;
+}
+
 struct Job {
     uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub, dmax;
     uint32_t rd, wr, fl, sn;  // units DMA'd, written, flushed (acked), sent (left this L1: SE_DRISC_FREE_SENT)
+    uint32_t dn, dattr;       // (SE_DRISC_LEAN) units known DMA'd (in-order stream), the DMA's attribute word
     uint8_t noc;
     uint8_t loads[SD_MAX_LOADS], regions[SD_MAX_LOADS];
     uint32_t cr[SE_DRISC_MAX_R];
@@ -217,7 +235,7 @@ void kernel_main() {
             J.ns = J.ns > ns_max ? ns_max : J.ns;
             J.trid0 = ns_max > 7 ? 1 : 1 + 7 * k;
             J.units = n_load * J.per_e * (J.rg / J.ub);
-            J.rd = J.wr = J.fl = J.sn = 0;
+            J.rd = J.wr = J.fl = J.sn = J.dn = 0;
             left += J.units;
             volatile uint32_t* st = word(se_drisc_state(k));
             st[0] = seen;
@@ -232,6 +250,21 @@ void kernel_main() {
                 break;
             }
         }
+#if SE_DRISC_LEAN
+#ifndef SE_DRISC_STREAM0
+#define SE_DRISC_STREAM0 0
+#endif
+        for (uint32_t k = 0; k < nj; ++k) {
+            if (jobs[k].units) {
+                const uint8_t s = (SE_DRISC_STREAM0 + k) & 1;
+                WRITE_TX_STREAM_REG(s, TX_REG_STREAM_READ_TRANSFER_SOURCE_HIGH_REG_OFFSET, 0);
+                DmaTxqTransferAttrs_u a = {.val = DmaTxqTransferAttrs_DEFAULT};
+                a.f.transfer_size_words = (jobs[k].ub * jobs[k].blk) >> 4;
+                a.f.transfer_start_read = 1;
+                jobs[k].dattr = a.val;
+            }
+        }
+#endif
         for (uint32_t k = 0; k < nj; ++k) {  // (the fast path's constant registers, per NoC)
             if (jobs[k].units && jobs[k].blk <= NOC_MAX_BURST_SIZE) {
                 fast_write_state(jobs[k].noc, jobs[k].blk);
@@ -269,8 +302,12 @@ void kernel_main() {
                     const uint32_t src = J.gddr + (J.loads[c / J.per_e] * J.per_e + c % J.per_e) * J.chunk + b * J.blk;
 #if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
                     // (no ready poll: at most NS <= 15 reads are in flight, far below the stream's queue)
+#if SE_DRISC_LEAN
+                    lean_dma_read(stream, src, J.slot0 + (J.rd % J.ns) * J.ub * J.blk, J.dattr);
+#else
                     experimental::dma_async_read<false>(
                         stream, src, J.slot0 + (J.rd % J.ns) * J.ub * J.blk, J.ub * J.blk);
+#endif
                     ++dma_total[stream];
 #else
                     (void)src;
@@ -288,7 +325,14 @@ void kernel_main() {
                 SE_DRISC_STEP(
                     J.wr < J.rd && J.wr - J.fl < 7 && J.wr < J.rd - experimental::dma_get_reads_outstanding(stream)) {
 #else
+#if SE_DRISC_LEAN
+                if (J.wr >= J.dn && J.wr < J.rd) {  // (the stream completes in order: rd - outstanding are done)
+                    J.dn = J.rd - experimental::dma_get_reads_outstanding(stream);
+                }
+                SE_DRISC_STEP(J.wr < J.dn) {
+#else
                 SE_DRISC_STEP(J.wr < J.rd && J.wr < J.rd - experimental::dma_get_reads_outstanding(stream)) {
+#endif
 #endif
                     const uint32_t upc = J.rg / J.ub, c = J.wr / upc, b = (J.wr % upc) * J.ub;
                     const uint32_t j0 = b * J.G, j1 = (b + J.ub) * J.G;  // the unit's receivers
@@ -370,7 +414,11 @@ void kernel_main() {
                     const uint32_t upc = J.rg / J.ub, b = (J.fl % upc) * J.ub;
                     for (uint32_t j = b * J.G; j < (b + J.ub) * J.G; ++j) {
                         if (J.blk <= NOC_MAX_BURST_SIZE) {
+#if SE_DRISC_LEAN >= 2
+                            fast_inc_nopoll(noc, J.coord[j]);
+#else
                             fast_inc(noc, J.coord[j]);
+#endif
                         } else {
                             noc_semaphore_inc(J.rdata[j], 1, noc);
                         }

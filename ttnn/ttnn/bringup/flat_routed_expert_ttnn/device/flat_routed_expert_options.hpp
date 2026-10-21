@@ -84,6 +84,7 @@ struct FlatProbes {
     std::optional<std::string> drisc_tiles;         // MIMO_FL_DRISC_TILES
     std::optional<std::string> drisc_ub;            // MIMO_FL_DRISC_UB
     std::optional<std::string> drisc_ns_max;        // MIMO_FL_DRISC_NS_MAX
+    std::optional<std::string> drisc_lean;          // MIMO_FL_DRISC_LEAN
     std::optional<std::string> dump_rt;             // MIMO_FL_DUMP_RT (debug output)
     std::optional<std::string> dw_rot;              // MIMO_FL_DW_ROT
     std::optional<std::string> dyn_pull;            // MIMO_FL_DYN_PULL

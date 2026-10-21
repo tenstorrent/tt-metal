@@ -1232,3 +1232,18 @@ a tile -> 17.6 GB/s a tile in the real path (16 tiles), 20.2 when it only forwar
 Next: UB 2 where the rows are few (per call, like the ALT_MAXCNT switch); fewer MMIO accesses a unit (outstanding-count
 polls only when the slots are full, one flush poll for several units, one semaphore increment of n); then the x / NOC1
 conflict, which caps what UB 2 can show with x on.
+
+### Fewer register accesses a DRISC unit (probe MIMO_FL_DRISC_LEAN, GLM-5.3, same recipe)
+Level 1: the DMA's source-high register written once a call (bank-local sources: always 0) and the attribute word
+built once a job; the DMA completion count re-read only when the known completions are used up (the stream completes
+in order). Level 2 (measure only, unsafe in general): no ready poll before the semaphore increment. y at M 128
+bit-exact against the default at both levels.
+| us, M 80 / 160 | default | LEAN 1 | LEAN 2 |
+| real path (x, y) | 1667 / 1926 (M 128: 1821) | 1685 / 1929 (1817) | 1685 / 1927 (1817) |
+| x off, no y | 1608 / 1737 | 1551 / 1734 (-3.5%) | 1536 / 1734 (-4.5%) |
+| x off, no y, UB 2 | 1412 / 1747 | 1412 / 1746 | - |
+- Where the DRISC binds (x off, M 80) one write and ~one read fewer a unit is -3.5%, one more read -1%: the reads
+  (round trips) cost, the posted writes little. M 160 is bound elsewhere; with UB 2 the DRISC is no longer the limit.
+- On the real path it buys nothing: as with UB 2 (1617 -> 1561 with x vs 1608 -> 1412 without), once the DRISC gets
+  faster the x traffic against the DRISC tiles takes over. That conflict is now what gates the real path.
+Kept as a probe (not the default: no gain where it matters; level 2 is not safe).
