@@ -223,11 +223,12 @@ struct RingStreamingMaskCtx {
     uint32_t straddle_num_padded_tiles = 0;
     uint32_t global_n_partial_col = 0;
     uint32_t joint_l_partial_col = 0;
+    // Runtime on the dynamic-length path (the per-chip length moves the local tail), else the constant.
+    uint32_t local_n_padded_tiles = LocalNPaddedTiles;
     // Compile-time-constant fields (no per-instance storage):
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
-    static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
     static constexpr uint32_t joint_l_partial_tile_idx = JointLPartialTileIdx;
     static constexpr uint32_t straddle_mask_chunk_id = StraddleMaskChunkId;
@@ -2594,11 +2595,13 @@ void sdpa_ring_v2(
     // Rows of newest slabs this pass appends (packed_kv_pass_rows).
     const uint32_t packed_newest_rows = 0,
     // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
-    const uint32_t padded_q_slots = 0) {
+    const uint32_t padded_q_slots = 0,
+    // Live per-chip KV length in tiles; the template value is a 0 placeholder on the dynamic-length path.
+    const uint32_t local_padded_Nt_rt = local_padded_Nt) {
     init_sdpa_streaming_semaphores();
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
     const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
-        {ring_joint::packed_kv_source_tiles(local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
+        {ring_joint::packed_kv_source_tiles(local_padded_Nt_rt, logical_nt, kv_region_Nt, ring_size),
          packed_sources ? packed_source_count : 1,
          Sk_chunk_t,
          kv_region_Nt},
@@ -2731,12 +2734,8 @@ void sdpa_ring_v2(
                 chunk_size_t,
                 q_local_padded_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
         }
-        return !kv_chunk_starts_before_logical_end<
-            kv_pad_rotation_enabled,
-            chunked_enabled,
-            local_padded_Nt,
-            chunk_size_t,
-            kv_region_Nt>(source_ring_id, k_chunk * Sk_chunk_t, logical_nt);
+        return !kv_chunk_starts_before_logical_end<kv_pad_rotation_enabled, chunked_enabled>(
+            source_ring_id, k_chunk * Sk_chunk_t, logical_nt, local_padded_Nt_rt, chunk_size_t, kv_region_Nt);
     };
 
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.

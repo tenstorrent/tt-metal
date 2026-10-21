@@ -39,16 +39,18 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t q_local_padded_Nt [[maybe_unused]] = get_compile_time_arg_val(5);
-    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(6);
+    // Slots 5/6/11/12/14/34 carry the per-chip length geometry. With dynamic_local_n they are 0 and the live
+    // values come from one common runtime word (see local_n below); otherwise they are the constants.
+    constexpr uint32_t q_local_padded_Nt_ct = get_compile_time_arg_val(5);
+    constexpr uint32_t kv_local_padded_Nt_ct = get_compile_time_arg_val(6);
     constexpr uint32_t logical_n_compile = get_compile_time_arg_val(7);
     constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_local_q_chunks_ct = get_compile_time_arg_val(11);
+    constexpr uint32_t num_local_k_chunks_ct = get_compile_time_arg_val(12);
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_q_chunks_ct = get_compile_time_arg_val(14);
     constexpr uint32_t ring_size = get_compile_time_arg_val(15);
     constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(16);
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(17);
@@ -69,12 +71,37 @@ void kernel_main() {
     constexpr bool is_balanced = get_compile_time_arg_val(31) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(32) == 1;
     constexpr bool chunked_enabled = get_compile_time_arg_val(33) == 1;
-    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(34);
+    constexpr uint32_t chunk_size_t_ct = get_compile_time_arg_val(34);
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
+    constexpr bool dynamic_local_n = get_named_compile_time_arg_val("dynamic_local_n") == 1;
     static_assert(
-        kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
-    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
-    static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
+        kv_stripe_split > 0 && q_local_padded_Nt_ct % kv_stripe_split == 0, "Q slab must split into whole KV regions");
+    constexpr uint32_t kv_region_Nt_ct = q_local_padded_Nt_ct / kv_stripe_split;
+    static_assert(kv_region_Nt_ct * ring_size == chunk_size_t_ct, "chunk_size_t must span one KV region per ring rank");
+    // Joint Q chunks stay compile-time; the live local counts come from the common word.
+    constexpr uint32_t num_joint_q_chunks_ct = num_q_chunks_ct - num_local_q_chunks_ct;
+    const ring_joint::LocalNGeometry local_n =
+        dynamic_local_n ? ring_joint::derive_local_n_geometry(
+                              get_common_arg_val<uint32_t>(ring_joint::kDynamicLocalNComputeCommonArg),
+                              Sq_chunk_t,
+                              Sk_chunk_t,
+                              kv_stripe_split,
+                              ring_size,
+                              num_joint_q_chunks_ct)
+                        : ring_joint::LocalNGeometry{
+                              q_local_padded_Nt_ct,
+                              kv_local_padded_Nt_ct,
+                              num_local_q_chunks_ct,
+                              num_local_k_chunks_ct,
+                              num_q_chunks_ct,
+                              kv_region_Nt_ct,
+                              chunk_size_t_ct};
+    [[maybe_unused]] const uint32_t q_local_padded_Nt = local_n.q_local_padded_Nt;
+    const uint32_t kv_local_padded_Nt = local_n.kv_local_padded_Nt;
+    const uint32_t num_local_q_chunks = local_n.num_local_q_chunks;
+    const uint32_t num_local_k_chunks = local_n.num_local_k_chunks;
+    const uint32_t num_q_chunks = local_n.num_q_chunks;
+    const uint32_t kv_region_Nt = local_n.kv_region_Nt;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(35) == 1;
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(36) == 1;
     constexpr bool use_attention_sink = get_compile_time_arg_val(37) == 1;
@@ -118,7 +145,8 @@ void kernel_main() {
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
-    constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
+    // A runtime length can end anywhere inside a K chunk, so the local tail mask path is compiled in.
+    constexpr bool local_n_has_padding = dynamic_local_n || (kv_local_padded_Nt_ct % Sk_chunk_t != 0);
     // A tensor-supplied length can land mid-chunk / mid-tile at any dispatch, so compile the mask path in
     // regardless of the placeholder. Keep in sync with the factory and the writer (which generates them).
     constexpr bool global_n_has_padding =
@@ -148,7 +176,7 @@ void kernel_main() {
         1 + edge_mask_tiles + (has_global_n_partial_tile ? 1 : 0) + (has_joint_l_partial_tile ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
-        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - chunk_size_t : 0;
+        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - chunk_size_t_ct : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -298,12 +326,14 @@ void kernel_main() {
     }
 
     // Precompute padded tile counts that are constant across ring iterations.
-    constexpr uint32_t local_n_padded_tiles =
+    constexpr uint32_t local_n_padded_tiles_ct =
+        (kv_local_padded_Nt_ct % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt_ct % Sk_chunk_t)) : 0;
+    const uint32_t local_n_padded_tiles =
         (kv_local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t)) : 0;
     // joint_n_padded_tiles is per-ring-iter (the joint tail lands in a different shard each iteration),
     // so it is resolved inside the ring loop and stamped onto lw_mask, mirroring global_n_padded_tiles.
 
-    using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
+    using Straddle = KCausalStraddleInfo<kv_local_padded_Nt_ct, Sk_chunk_t>;
     constexpr bool has_straddle = Straddle::has_straddle;
     constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
     constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
@@ -364,7 +394,7 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The K split's slices count the chunks the K loop keeps, so they follow the causal skip.
     [[maybe_unused]] const uint32_t ksplit_causal_end_nt =
-        dense_causal_skip ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
+        dense_causal_skip ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt_ct>(
                                 logical_nt,
                                 ring_index,
                                 ring_size,
@@ -458,9 +488,9 @@ void kernel_main() {
                 const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
                     kv_pad_rotation_enabled,
                     chunked_enabled,
-                    kv_local_padded_Nt,
-                    chunk_size_t,
-                    q_local_padded_Nt,
+                    kv_local_padded_Nt_ct,
+                    chunk_size_t_ct,
+                    q_local_padded_Nt_ct,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
                 if (ksplit_active) {
@@ -546,11 +576,12 @@ void kernel_main() {
         RingStreamingMaskCtx<
             neginf_tile_idx,
             causal_diag_tile_idx,
-            local_n_padded_tiles,
+            local_n_padded_tiles_ct,
             global_n_partial_tile_idx,
             joint_l_partial_tile_idx,
             straddle_chunk_id>
             lw_mask;
+        lw_mask.local_n_padded_tiles = local_n_padded_tiles;
         lw_mask.global_n_partial_col = global_n_partial_col_live;
         lw_mask.joint_l_partial_col = joint_l_partial_col_live;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
@@ -625,9 +656,9 @@ void kernel_main() {
                 is_causal,
                 is_balanced,
                 chunked_enabled,
-                kv_local_padded_Nt,
-                q_local_padded_Nt,
-                chunk_size_t,
+                kv_local_padded_Nt_ct,
+                q_local_padded_Nt_ct,
+                chunk_size_t_ct,
                 global_n_has_padding,
                 local_n_has_padding,
                 joint_has_padding,
@@ -646,7 +677,7 @@ void kernel_main() {
                 Lt_local,
                 rotated_q_split_enabled,
                 dense_causal_skip,
-                kv_region_Nt,
+                kv_region_Nt_ct,
                 (GROUPED_KV_SOURCE_COUNT > 1)>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
@@ -685,7 +716,8 @@ void kernel_main() {
                 packed_sources ? packed_source_ids : nullptr,
                 packed_sources ? source_group_size : 0,
                 packed_schedule.rows(ring_iter),
-                padded_q_slots);
+                padded_q_slots,
+                kv_local_padded_Nt);
             if constexpr (has_sliding_window && ksplit_enabled) {
                 // Sliding bands split the unit's work plan, which can be shorter than the band count near the
                 // sequence start: an empty band stages no state.
@@ -731,8 +763,8 @@ void kernel_main() {
                 scale_fp32,
                 needs_lightweight_mask,
                 chunked_enabled,
-                q_local_padded_Nt,
-                chunk_size_t>(
+                q_local_padded_Nt_ct,
+                chunk_size_t_ct>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,

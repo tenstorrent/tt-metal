@@ -13,6 +13,7 @@
 #include "ring_joint_sdpa_schedule.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
@@ -929,11 +930,523 @@ void apply_ring_joint_scalar_runtime_args(
     }
 }
 
+// The manager alternates two global-semaphore sets between calls and the hash excludes them, so the gather
+// workers' ready-semaphore address is re-applied on every hit (the standalone all-gather factory does the same).
+void apply_all_gather_semaphore_addresses(Program& program, const ttnn::prim::RingJointSDPAParams& args) {
+    if (args.has_sliding_window()) {
+        return;
+    }
+    namespace dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
+    const auto& semaphore = args.all_gather_operation_attributes.semaphore;
+    const auto patch = [&](uint32_t kernel_id, uint32_t arg_idx, uint32_t address) {
+        for (auto& col_args : GetRuntimeArgs(program, kernel_id)) {
+            for (auto& core_args : col_args) {
+                if (arg_idx < core_args.size()) {
+                    core_args[arg_idx] = address;
+                }
+            }
+        }
+    };
+    const auto forward = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
+    const auto backward = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
+    patch(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, forward);
+    patch(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, forward);
+    patch(kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, backward);
+    patch(kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, backward);
+}
+
 }  // namespace
 
 namespace ttnn::prim {
 
 namespace {
+
+// ---- Per-core Q work and K/V store-and-forward chains ----------------------------------------------------
+// Everything here is a function of one length-dependent number, num_q_chunks. The dynamic-length path rebuilds
+// it on the host whenever the per-chip length changes (apply_dynamic_local_n_runtime_args), so it lives outside
+// the descriptor builder.
+struct CoreHeadWork {
+    uint32_t head = 0;
+    uint32_t q_chunk_count = 0;
+};
+
+struct CoreWork {
+    CoreCoord physical_core;
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    std::vector<CoreHeadWork> head_work;
+};
+
+struct HeadSegmentRef {
+    uint32_t core_idx = 0;
+    uint32_t head_work_index = 0;
+};
+
+// Unified chain configuration for head-level and shared-K chains.
+struct ChainConfig {
+    // Core participation flags
+    bool participates = false;
+    bool is_injector = false;
+    bool is_sink = false;
+
+    // Chain scope: head distinguishes head-level from shared-K chains.
+    uint32_t head = 0;  // 0 for shared-K chains
+
+    // Linear chain topology
+    CoreCoord prev_physical = CoreCoord{0, 0};
+    CoreCoord next_physical = CoreCoord{0, 0};
+    uint32_t next_core_q_chunks = 0;
+
+    // Multicast configuration (1D for V, 2D for K)
+    CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
+    CoreCoord mcast_end = CoreCoord{0, 0};          // Rectangle end (physical)
+    CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's coords (for receiver sem addr in mcast)
+    uint32_t mcast_num_dests = 0;                   // Receivers count (excludes self)
+
+    // Append runtime args in canonical order
+    void append_to_args(std::vector<uint32_t>& args) const {
+        const size_t start_size = args.size();
+        args.push_back(static_cast<uint32_t>(participates));
+        args.push_back(static_cast<uint32_t>(is_injector));
+        args.push_back(static_cast<uint32_t>(is_sink));
+        args.push_back(head);
+        args.push_back(static_cast<uint32_t>(prev_physical.x));
+        args.push_back(static_cast<uint32_t>(prev_physical.y));
+        args.push_back(static_cast<uint32_t>(next_physical.x));
+        args.push_back(static_cast<uint32_t>(next_physical.y));
+        args.push_back(next_core_q_chunks);
+        args.push_back(static_cast<uint32_t>(mcast_start.x));
+        args.push_back(static_cast<uint32_t>(mcast_start.y));
+        args.push_back(static_cast<uint32_t>(mcast_end.x));
+        args.push_back(static_cast<uint32_t>(mcast_end.y));
+        args.push_back(static_cast<uint32_t>(injector_physical.x));
+        args.push_back(static_cast<uint32_t>(injector_physical.y));
+        args.push_back(mcast_num_dests);
+        TT_FATAL(
+            args.size() == start_size + kRingJointChainConfigArgCount,
+            "RingJoint ChainConfig expected to append {} runtime args, appended {}",
+            kRingJointChainConfigArgCount,
+            args.size() - start_size);
+    }
+};
+
+struct FlatQSplit {
+    uint32_t base_chunks_per_core = 0;
+    uint32_t extra_chunks_per_core = 0;
+    uint32_t cores_doing_extra_work = 0;
+};
+
+// Evenly distribute flat global q chunks (balanced pairs under zigzag) across cores.
+FlatQSplit flat_q_split(uint32_t total_q_chunks, uint32_t num_cores, bool enable_zigzag_balancing) {
+    FlatQSplit split;
+    if (enable_zigzag_balancing) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        split.cores_doing_extra_work = total_pairs % num_cores;
+        split.base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
+        split.extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
+    } else {
+        split.cores_doing_extra_work = total_q_chunks % num_cores;
+        split.base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+        split.extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
+    }
+    return split;
+}
+
+struct RingJointQWorkPlan {
+    FlatQSplit split;
+    std::vector<CoreWork> core_work;
+    std::vector<std::vector<HeadSegmentRef>> head_segments;  // per query head; empty without a head chain
+    std::vector<ChainConfig> head_chain_configs;             // per core; empty without a head chain
+    bool has_multi_core_head_chains = false;
+    bool head_mcast_eligible = false;  // every multi-core head chain is one row, gap-free, uniform q count
+    bool head_mcast_enabled = false;   // the row-wide multicast configuration was applied
+};
+
+enum class HeadMcastPolicy { IfEligible, Never, Required };
+
+// Describe a core's flat Q range for K/V chain construction.
+void append_head_work(
+    RingJointQWorkPlan& plan,
+    uint32_t core_idx,
+    uint32_t flat_chunk,
+    uint32_t remaining,
+    uint32_t NH,
+    uint32_t num_q_chunks) {
+    auto& work = plan.core_work.at(core_idx);
+    while (remaining > 0) {
+        const uint32_t head_index = num_q_chunks == 0 ? 0 : (flat_chunk / num_q_chunks);
+        const uint32_t q_chunk_idx = num_q_chunks == 0 ? 0 : (flat_chunk % num_q_chunks);
+        const uint32_t head_idx = (NH == 0) ? 0 : (head_index % NH);
+        const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
+        work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
+        if (!plan.head_segments.empty()) {
+            TT_FATAL(
+                head_idx < plan.head_segments.size(),
+                "Head-chain segment index {} is outside {} configured query heads",
+                head_idx,
+                plan.head_segments.size());
+            plan.head_segments[head_idx].push_back(HeadSegmentRef{
+                .core_idx = core_idx, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+        }
+        remaining -= take;
+        flat_chunk += take;
+    }
+}
+
+// Helper: build a linear chain from sorted (core_idx, q_chunk_count) pairs.
+// - chain_segs[i].second = q iterations the i-th core will process in this chain scope
+// - injector = first core with head_work.size() == 1 (single head segment = no straddling)
+// - no wrap-around: wrapping would inflate q_iter_local and cause deadlock
+// - injector reselection for mcast is done separately in the mcast eligibility pass
+using ChainSegment = std::pair<uint32_t, uint32_t>;  // (core_idx, q_chunk_count)
+bool build_linear_chain(
+    const std::vector<ChainSegment>& chain_segs,
+    uint32_t head,
+    std::vector<ChainConfig>& chain_configs,
+    const std::vector<CoreWork>& core_work,
+    bool require_single_head_injector = true) {
+    if (chain_segs.size() < 2) {
+        return false;
+    }
+    std::optional<size_t> injector_pos;
+    for (size_t idx = 0; idx + 1 < chain_segs.size(); ++idx) {
+        if (core_work[chain_segs[idx].first].global_q_count == 0) {
+            continue;
+        }
+        if (!require_single_head_injector || core_work[chain_segs[idx].first].head_work.size() == 1) {
+            injector_pos = idx;
+            break;
+        }
+    }
+    if (!injector_pos.has_value()) {
+        return false;
+    }
+    const size_t start = *injector_pos;
+    for (size_t idx = start; idx < chain_segs.size(); ++idx) {
+        uint32_t ci = chain_segs[idx].first;
+        auto& cfg = chain_configs[ci];
+        cfg.participates = true;
+        cfg.head = head;
+        cfg.is_injector = (idx == start);
+        cfg.is_sink = (idx == chain_segs.size() - 1);
+        if (idx > start) {
+            cfg.prev_physical = core_work[chain_segs[idx - 1].first].physical_core;
+        }
+        if (idx + 1 < chain_segs.size()) {
+            cfg.next_physical = core_work[chain_segs[idx + 1].first].physical_core;
+            cfg.next_core_q_chunks = chain_segs[idx + 1].second;
+        }
+    }
+    return true;
+}
+
+struct McastCandidate {
+    std::vector<uint32_t> core_indices;
+    uint32_t ref_q_chunks;
+};
+
+// Row-wide multicast eligibility of the query-head chains (all-or-nothing): nullopt when any multi-core chain
+// spans rows, has a non-chain core inside its rectangle, or mixes q_chunk_counts.
+std::optional<std::vector<McastCandidate>> head_chain_mcast_candidates(const RingJointQWorkPlan& plan) {
+    const auto& core_work = plan.core_work;
+    const auto& head_chain_configs = plan.head_chain_configs;
+    const uint32_t num_cores = core_work.size();
+    std::vector<McastCandidate> candidates;
+    candidates.reserve(plan.head_segments.size());
+
+    for (uint32_t head_id = 0; head_id < plan.head_segments.size(); ++head_id) {
+        const auto& segments = plan.head_segments[head_id];
+        if (segments.size() < 2) {
+            continue;
+        }
+
+        // Gather chain participants with their per-head q_chunk_count
+        std::vector<uint32_t> chain_core_indices;
+        chain_core_indices.reserve(segments.size());
+        std::vector<uint32_t> chain_q_counts;
+        chain_q_counts.reserve(segments.size());
+        for (const auto& seg : segments) {
+            if (seg.core_idx < head_chain_configs.size() && head_chain_configs[seg.core_idx].participates &&
+                head_chain_configs[seg.core_idx].head == head_id) {
+                chain_core_indices.push_back(seg.core_idx);
+                chain_q_counts.push_back(core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
+            }
+        }
+
+        if (chain_core_indices.size() < 2) {
+            continue;
+        }
+
+        // Eligibility condition 1: All physical cores share the same Y coordinate
+        const uint32_t ref_y = core_work[chain_core_indices[0]].physical_core.y;
+        bool same_row = true;
+        for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
+            if (core_work[chain_core_indices[ci]].physical_core.y != ref_y) {
+                same_row = false;
+                break;
+            }
+        }
+
+        if (!same_row) {
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
+            return std::nullopt;
+        }
+
+        // Eligibility condition 2: no non-chain worker cores inside the mcast rectangle.
+        uint32_t min_x = core_work[chain_core_indices[0]].physical_core.x;
+        uint32_t max_x = min_x;
+        for (const auto& ci : chain_core_indices) {
+            uint32_t x = core_work[ci].physical_core.x;
+            min_x = std::min(min_x, x);
+            max_x = std::max(max_x, x);
+        }
+
+        bool has_gap = false;
+        for (uint32_t ci = 0; ci < num_cores; ++ci) {
+            const auto& phys = core_work[ci].physical_core;
+            if (phys.y == ref_y && phys.x >= min_x && phys.x <= max_x) {
+                bool in_chain = false;
+                for (const auto& chain_ci : chain_core_indices) {
+                    if (chain_ci == ci) {
+                        in_chain = true;
+                        break;
+                    }
+                }
+                if (!in_chain) {
+                    has_gap = true;
+                    break;
+                }
+            }
+        }
+
+        if (has_gap) {
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - non-chain worker core inside mcast rectangle", head_id);
+            return std::nullopt;
+        }
+
+        // Eligibility condition 3: All chain cores must have the same q_chunk_count.
+        const uint32_t ref_q_chunks = chain_q_counts[0];
+        bool uniform_q_mcast = true;
+        for (size_t ci = 1; ci < chain_q_counts.size(); ++ci) {
+            if (chain_q_counts[ci] != ref_q_chunks) {
+                uniform_q_mcast = false;
+                break;
+            }
+        }
+
+        if (!uniform_q_mcast) {
+            log_debug(tt::LogOp, "Head {}: mcast ineligible - mixed q_chunk_counts", head_id);
+            return std::nullopt;
+        }
+
+        candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
+    }
+    return candidates;
+}
+
+void apply_head_chain_mcast(RingJointQWorkPlan& plan, const std::vector<McastCandidate>& candidates) {
+    auto& core_work = plan.core_work;
+    auto& head_chain_configs = plan.head_chain_configs;
+    for (uint32_t cand_idx = 0; cand_idx < candidates.size(); ++cand_idx) {
+        const auto& cand = candidates[cand_idx];
+        const uint32_t chain_size = cand.core_indices.size();
+        const uint32_t num_receivers = chain_size - 1;
+
+        // Find current injector
+        uint32_t injector_idx = cand.core_indices[0];
+        for (const auto& ci : cand.core_indices) {
+            if (head_chain_configs[ci].is_injector) {
+                injector_idx = ci;
+                break;
+            }
+        }
+
+        // Reselect injector for diagonal placement: the n-th chain
+        // picks the core at offset n within its chain, wrapping around.
+        // This places injectors on the diagonal (0,0), (1,1), (2,2)...
+        {
+            uint32_t target_offset = cand_idx % chain_size;
+            uint32_t best_idx = cand.core_indices[target_offset];
+            if (best_idx != injector_idx) {
+                // Clear old injector, set new one
+                head_chain_configs[injector_idx].is_injector = false;
+                head_chain_configs[injector_idx].is_sink = true;
+                head_chain_configs[best_idx].is_injector = true;
+                head_chain_configs[best_idx].is_sink = false;
+                injector_idx = best_idx;
+            }
+        }
+
+        uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
+        uint32_t max_x = min_x;
+        for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
+            uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
+            min_x = std::min(min_x, x);
+            max_x = std::max(max_x, x);
+        }
+        const uint32_t injector_y = core_work[injector_idx].physical_core.y;
+        const CoreCoord rect_start = CoreCoord{min_x, injector_y};
+        const CoreCoord rect_end = CoreCoord{max_x, injector_y};
+        const CoreCoord injector_phys = core_work[injector_idx].physical_core;
+
+        auto& injector_chain = head_chain_configs[injector_idx];
+        injector_chain.mcast_start = rect_start;
+        injector_chain.mcast_end = rect_end;
+        injector_chain.injector_physical = injector_phys;
+        injector_chain.mcast_num_dests = num_receivers;
+        injector_chain.next_core_q_chunks = cand.ref_q_chunks;
+
+        for (const auto& ci : cand.core_indices) {
+            if (ci == injector_idx) {
+                continue;
+            }
+            auto& receiver_chain = head_chain_configs[ci];
+            receiver_chain.mcast_start = rect_start;
+            receiver_chain.mcast_end = rect_end;
+            receiver_chain.injector_physical = injector_phys;
+            receiver_chain.next_core_q_chunks = 0;
+            receiver_chain.is_sink = true;
+        }
+
+        log_debug(
+            tt::LogOp,
+            "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect "
+            "({},{}) to ({},{})",
+            num_receivers,
+            injector_idx,
+            core_work[injector_idx].physical_core.x,
+            num_receivers,
+            rect_start.x,
+            rect_start.y,
+            rect_end.x,
+            rect_end.y);
+    }
+}
+
+// Even head-major split of the flat (batch, head, q_chunk) space over the grid, then the per-head unicast chains
+// and, by policy, their row-wide multicast upgrade. Trailing cores get no work at short lengths.
+RingJointQWorkPlan build_q_work_plan(
+    const std::vector<CoreCoord>& physical_cores,
+    uint32_t B,
+    uint32_t NH,
+    uint32_t num_q_chunks,
+    bool enable_zigzag_balancing,
+    bool enable_kv_chains,
+    bool use_head_chain,
+    bool build_kv_chains,
+    HeadMcastPolicy mcast_policy) {
+    const uint32_t num_cores = physical_cores.size();
+    RingJointQWorkPlan plan;
+    plan.core_work.resize(num_cores);
+    plan.head_segments.resize(use_head_chain ? NH : 0);
+    plan.head_chain_configs.resize(use_head_chain ? num_cores : 0);
+    const uint32_t total_q_chunks = B * NH * num_q_chunks;
+    plan.split = flat_q_split(total_q_chunks, num_cores, enable_zigzag_balancing);
+
+    uint32_t next_global_chunk = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        uint32_t chunk_count = plan.split.base_chunks_per_core +
+                               ((i < plan.split.cores_doing_extra_work) ? plan.split.extra_chunks_per_core : 0);
+        if (next_global_chunk >= total_q_chunks) {
+            chunk_count = 0;
+        } else if (chunk_count > total_q_chunks - next_global_chunk) {
+            chunk_count = total_q_chunks - next_global_chunk;
+        }
+
+        auto& work = plan.core_work[i];
+        work.physical_core = physical_cores[i];
+        work.global_q_start = next_global_chunk;
+        work.global_q_count = chunk_count;
+
+        if (enable_kv_chains) {
+            append_head_work(plan, i, next_global_chunk, chunk_count, NH, num_q_chunks);
+        }
+
+        next_global_chunk += chunk_count;
+    }
+
+    // Static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
+    if (use_head_chain && build_kv_chains) {
+        for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(plan.head_segments.size()); ++head_id) {
+            const auto& segs = plan.head_segments[head_id];
+            if (segs.size() < 2) {
+                continue;
+            }
+            std::vector<ChainSegment> chain_segs;
+            chain_segs.reserve(segs.size());
+            for (const auto& seg : segs) {
+                chain_segs.emplace_back(
+                    seg.core_idx, plan.core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
+            }
+            build_linear_chain(chain_segs, head_id, plan.head_chain_configs, plan.core_work);
+        }
+
+        const auto candidates = head_chain_mcast_candidates(plan);
+        plan.head_mcast_eligible = candidates.has_value() && !candidates->empty();
+        plan.has_multi_core_head_chains = !candidates.has_value() || !candidates->empty();
+        bool apply_mcast = false;
+        switch (mcast_policy) {
+            case HeadMcastPolicy::IfEligible: apply_mcast = plan.head_mcast_eligible; break;
+            case HeadMcastPolicy::Never: apply_mcast = false; break;
+            case HeadMcastPolicy::Required:
+                TT_FATAL(
+                    plan.head_mcast_eligible || !plan.has_multi_core_head_chains,
+                    "ring_joint head multicast was pinned on but the split at {} Q chunks per head is ineligible",
+                    num_q_chunks);
+                apply_mcast = plan.head_mcast_eligible;
+                break;
+        }
+        if (apply_mcast) {
+            apply_head_chain_mcast(plan, *candidates);
+            plan.head_mcast_enabled = true;
+        }
+        log_debug(
+            tt::LogOp,
+            "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
+            apply_mcast ? candidates->size() : 0u,
+            candidates.has_value() ? candidates->size() : 0u);
+    }
+    return plan;
+}
+
+// dynamic_local_n: the reader's multicast flag is compile-time, so one value must hold for every length the
+// program can serve. Pinned on only when the split at every chunk count up to the gather capacity is eligible.
+bool head_mcast_uniform_over_capacity(
+    const std::vector<CoreCoord>& physical_cores,
+    uint32_t B,
+    uint32_t NH,
+    uint32_t capacity_num_q_chunks,
+    bool enable_kv_chains,
+    bool use_head_chain,
+    bool build_kv_chains) {
+    bool any_chains = false;
+    for (uint32_t num_q_chunks = 1; num_q_chunks <= capacity_num_q_chunks; ++num_q_chunks) {
+        const auto plan = build_q_work_plan(
+            physical_cores,
+            B,
+            NH,
+            num_q_chunks,
+            /*enable_zigzag_balancing=*/false,
+            enable_kv_chains,
+            use_head_chain,
+            build_kv_chains,
+            HeadMcastPolicy::Never);
+        if (plan.has_multi_core_head_chains && !plan.head_mcast_eligible) {
+            return false;
+        }
+        any_chains = any_chains || plan.has_multi_core_head_chains;
+    }
+    return any_chains;
+}
+
+std::vector<CoreCoord> sdpa_physical_cores(MeshDevice* device, CoreCoord grid_size) {
+    std::vector<CoreCoord> cores;
+    cores.reserve(grid_size.x * grid_size.y);
+    for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
+        cores.push_back(device->worker_core_from_logical_core(CoreCoord{i % grid_size.x, i / grid_size.x}));
+    }
+    return cores;
+}
 
 // Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
@@ -1188,9 +1701,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
     const bool has_logical_l_tensor = tensor_args.has_logical_l_tensor();
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
-    const uint32_t compile_time_logical_n = kv_pad_rotation_enabled ? 0 : static_cast<uint32_t>(args.logical_n);
-    const uint32_t compile_time_logical_nt = kv_pad_rotation_enabled ? 0 : logical_nt;
-    const uint32_t compile_time_global_n_partial_col = kv_pad_rotation_enabled ? 0 : global_n_partial_col;
+    // The tensor path's placeholder only sizes host derivations; the kernels take the live length, so pin it to 0.
+    const bool logical_n_is_runtime = kv_pad_rotation_enabled || has_logical_n_tensor;
+    const uint32_t compile_time_logical_n = logical_n_is_runtime ? 0 : static_cast<uint32_t>(args.logical_n);
+    const uint32_t compile_time_logical_nt = logical_n_is_runtime ? 0 : logical_nt;
+    const uint32_t compile_time_global_n_partial_col = logical_n_is_runtime ? 0 : global_n_partial_col;
 
     const bool global_n_has_padding = (compile_time_logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     // Joint masking mirrors spatial's TWO independent enable flags (local_n AND global_n), not just
@@ -1225,6 +1740,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Sharded joint: per-iteration K chunk count for one shard (L_local). Replicated: full L.
     // Kernels process this many joint K chunks on every ring iteration (sharded) or just the last (replicated).
     const uint32_t num_joint_k_chunks = tt::div_up(L_local, k_chunk_size);
+
+    // dynamic_local_n: the length-derived compile-time slots are 0 and the kernels derive the live values from
+    // one common runtime word; CB sizing and the reader count use the gather capacity (the longest length served).
+    const bool dynamic_local_n = args.dynamic_local_n;
+    const uint32_t capacity_local_Nt = gathered_padded_Nt / ring_size;
+    const uint32_t capacity_num_q_chunks = tt::div_up(capacity_local_Nt, Sq_chunk_t) + num_joint_q_chunks;
+    const uint32_t sizing_num_q_chunks = dynamic_local_n ? capacity_num_q_chunks : num_q_chunks;
+    const uint32_t ct_q_local_padded_Nt = dynamic_local_n ? 0 : q_local_padded_Nt;
+    const uint32_t ct_kv_local_padded_Nt = dynamic_local_n ? 0 : kv_local_padded_Nt;
+    const uint32_t ct_num_local_q_chunks = dynamic_local_n ? 0 : num_local_q_chunks;
+    const uint32_t ct_num_local_k_chunks = dynamic_local_n ? 0 : num_local_k_chunks;
+    const uint32_t ct_num_q_chunks = dynamic_local_n ? num_joint_q_chunks : num_q_chunks;
+    const uint32_t ct_q_chunk_group_tile_count = dynamic_local_n ? 0 : q_chunk_group_tile_count;
 
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
@@ -1334,7 +1862,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
      * the total number of Q chunks across all batches and heads, evenly across the cores.
      *
      */
-    const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
+    const uint32_t all_heads_num_q_chunks = B * NH * sizing_num_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
     const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
@@ -1588,15 +2116,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        q_local_padded_Nt,
-        kv_local_padded_Nt,
+        ct_q_local_padded_Nt,
+        ct_kv_local_padded_Nt,
         Lt,
         L,
-        num_local_q_chunks,
+        ct_num_local_q_chunks,
         num_joint_q_chunks,
-        num_local_k_chunks,
+        ct_num_local_k_chunks,
         num_joint_k_chunks,
-        num_q_chunks,
+        ct_num_q_chunks,
         args.all_gather_operation_attributes.ring_size,
         qk_out_subblock_h,
         kernel_is_causal,
@@ -1605,7 +2133,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Reader chunked-prefill control.
         static_cast<uint32_t>(kernel_chunked),
         num_active_cores,
-        q_chunk_group_tile_count,
+        ct_q_chunk_group_tile_count,
         static_cast<uint32_t>(indexed_kv_cache),
         static_cast<uint32_t>(kv_pad_rotation_enabled),
         NHV,
@@ -1772,16 +2300,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        q_local_padded_Nt,
-        kv_local_padded_Nt,
+        ct_q_local_padded_Nt,
+        ct_kv_local_padded_Nt,
         compile_time_logical_n,
         Lt_local,  // slot 9: per-device joint tile count (Lt_local == Lt on replicated path)
         L,
-        num_local_q_chunks,
+        ct_num_local_q_chunks,
         num_joint_q_chunks,
-        num_local_k_chunks,
+        ct_num_local_k_chunks,
         num_joint_k_chunks,
-        num_q_chunks,
+        ct_num_q_chunks,
         packed_identity_scalar,
         scale_packed,
         args.all_gather_operation_attributes.ring_size,
@@ -1793,7 +2321,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<uint32_t>(kernel_chunked),
-        q_chunk_group_tile_count,
+        ct_q_chunk_group_tile_count,
         sliding_window_size,
         // Slot 29: trace-safe KV-pad derivation -- the writer recomputes logical_nt + masks from
         // metadata[1] on-device (it's dataflow).
@@ -1836,16 +2364,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        q_local_padded_Nt,
-        kv_local_padded_Nt,
+        ct_q_local_padded_Nt,
+        ct_kv_local_padded_Nt,
         compile_time_logical_n,
         compile_time_logical_nt,
         Lt,
         L,
-        num_local_q_chunks,
-        num_local_k_chunks,
+        ct_num_local_q_chunks,
+        ct_num_local_k_chunks,
         num_joint_k_chunks,
-        num_q_chunks,
+        ct_num_q_chunks,
         args.all_gather_operation_attributes.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
@@ -1865,7 +2393,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<uint32_t>(kernel_chunked),
-        q_chunk_group_tile_count,
+        ct_q_chunk_group_tile_count,
         static_cast<uint32_t>(kv_pad_rotation_enabled),
         static_cast<uint32_t>(v_shares_k_buffer),
         static_cast<uint32_t>(use_attention_sink),
@@ -2104,130 +2632,44 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     auto* const stats_buf = stats_output_tensor.buffer();
 
     /**
-     * Build chain selection for store-and-forward across cores per head.
+     * Per-core Q work split and the per-head store-and-forward chains (build_q_work_plan). The multicast
+     * flag the reader compiles in follows the split; with dynamic_local_n it is pinned for every length first.
      */
-    struct CoreHeadWork {
-        uint32_t head = 0;
-        uint32_t q_chunk_count = 0;
-    };
-
-    struct CoreWork {
-        CoreCoord physical_core;
-        uint32_t global_q_start = 0;
-        uint32_t global_q_count = 0;
-        std::vector<CoreHeadWork> head_work;
-    };
-
-    struct HeadSegmentRef {
-        uint32_t core_idx = 0;
-        uint32_t head_work_index = 0;
-    };
-
-    // Unified chain configuration for head-level and shared-K chains.
-    struct ChainConfig {
-        // Core participation flags
-        bool participates = false;
-        bool is_injector = false;
-        bool is_sink = false;
-
-        // Chain scope: head distinguishes head-level from shared-K chains.
-        uint32_t head = 0;  // 0 for shared-K chains
-
-        // Linear chain topology
-        CoreCoord prev_physical = CoreCoord{0, 0};
-        CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
-
-        // Multicast configuration (1D for V, 2D for K)
-        CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
-        CoreCoord mcast_end = CoreCoord{0, 0};          // Rectangle end (physical)
-        CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's coords (for receiver sem addr in mcast)
-        uint32_t mcast_num_dests = 0;                   // Receivers count (excludes self)
-
-        // Append runtime args in canonical order
-        void append_to_args(std::vector<uint32_t>& args) const {
-            const size_t start_size = args.size();
-            args.push_back(static_cast<uint32_t>(participates));
-            args.push_back(static_cast<uint32_t>(is_injector));
-            args.push_back(static_cast<uint32_t>(is_sink));
-            args.push_back(head);
-            args.push_back(static_cast<uint32_t>(prev_physical.x));
-            args.push_back(static_cast<uint32_t>(prev_physical.y));
-            args.push_back(static_cast<uint32_t>(next_physical.x));
-            args.push_back(static_cast<uint32_t>(next_physical.y));
-            args.push_back(next_core_q_chunks);
-            args.push_back(static_cast<uint32_t>(mcast_start.x));
-            args.push_back(static_cast<uint32_t>(mcast_start.y));
-            args.push_back(static_cast<uint32_t>(mcast_end.x));
-            args.push_back(static_cast<uint32_t>(mcast_end.y));
-            args.push_back(static_cast<uint32_t>(injector_physical.x));
-            args.push_back(static_cast<uint32_t>(injector_physical.y));
-            args.push_back(mcast_num_dests);
-            TT_FATAL(
-                args.size() == start_size + kRingJointChainConfigArgCount,
-                "RingJoint ChainConfig expected to append {} runtime args, appended {}",
-                kRingJointChainConfigArgCount,
-                args.size() - start_size);
-        }
-    };
-
-    std::vector<CoreWork> core_work(num_cores);
-    std::vector<ChainConfig> head_chain_configs(use_head_chain ? num_cores : 0);  // MHA K/V or separate-V V
+    const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(device, grid_size);
+    HeadMcastPolicy head_mcast_policy = HeadMcastPolicy::IfEligible;
+    if (dynamic_local_n) {
+        head_mcast_policy = head_mcast_uniform_over_capacity(
+                                physical_cores, B, NH, capacity_num_q_chunks, enable_kv_chains, use_head_chain, build_kv_chains)
+                                ? HeadMcastPolicy::Required
+                                : HeadMcastPolicy::Never;
+    }
+    const uint32_t total_q_chunks = B * NH * num_q_chunks;
+    RingJointQWorkPlan q_work_plan;
+    if (ksplit_count > 1) {
+        q_work_plan.split = flat_q_split(total_q_chunks, num_cores, enable_zigzag_balancing);
+        q_work_plan.core_work.resize(num_cores);
+        q_work_plan.head_segments.resize(use_head_chain ? NH : 0);
+        q_work_plan.head_chain_configs.resize(use_head_chain ? num_cores : 0);
+    } else {
+        q_work_plan = build_q_work_plan(
+            physical_cores,
+            B,
+            NH,
+            num_q_chunks,
+            enable_zigzag_balancing,
+            enable_kv_chains,
+            use_head_chain,
+            build_kv_chains,
+            head_mcast_policy);
+    }
+    auto& core_work = q_work_plan.core_work;
+    auto& head_chain_configs = q_work_plan.head_chain_configs;  // MHA K/V or separate-V V
+    const uint32_t base_chunks_per_core = q_work_plan.split.base_chunks_per_core;
+    const uint32_t cores_doing_extra_work = q_work_plan.split.cores_doing_extra_work;
     std::vector<ChainConfig> batch_chain_configs(
         enable_kv_chains && k_uses_batch_chain ? num_cores : 0);  // Shared K for separate-V/latent modes
     std::vector<ChainConfig> gqa_chain_configs(
         enable_kv_chains && gqa_grouped_kv ? num_cores : 0);  // Grouped K/V for GQA
-    // Sliding attention reads K/V independently on every core and does not build chains.
-    std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH : 0);
-
-    // Evenly distribute flat global q chunks across cores
-    const uint32_t total_q_chunks = B * NH * num_q_chunks;
-
-    uint32_t base_chunks_per_core = 0;
-    uint32_t extra_chunks_per_core = 0;
-    uint32_t cores_doing_extra_work = 0;
-    if (enable_zigzag_balancing) {
-        log_debug(tt::LogOp, "Enabling zigzag balancing with even num_q_chunks: {}", num_q_chunks);
-        const uint32_t total_pairs = total_q_chunks / 2;
-        cores_doing_extra_work = total_pairs % num_cores;
-        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
-        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
-    } else {
-        cores_doing_extra_work = total_q_chunks % num_cores;
-        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
-    }
-
-    uint32_t next_global_chunk = 0;
-
-    auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
-        const uint32_t head_span = num_q_chunks;
-        const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
-        const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
-        const uint32_t head = (NH == 0) ? 0 : (head_index % NH);
-        return std::pair<uint32_t, uint32_t>{head, q_chunk};
-    };
-
-    // Describe a core's flat Q range for K/V chain construction.
-    auto append_head_work = [&](uint32_t core_idx, uint32_t flat_chunk, uint32_t remaining) {
-        auto& work = core_work.at(core_idx);
-        while (remaining > 0) {
-            const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
-            work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
-            if (use_head_chain) {
-                TT_FATAL(
-                    head_idx < head_segments.size(),
-                    "Head-chain segment index {} is outside {} configured query heads",
-                    head_idx,
-                    head_segments.size());
-                head_segments[head_idx].push_back(HeadSegmentRef{
-                    .core_idx = core_idx, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-            }
-            remaining -= take;
-            flat_chunk += take;
-        }
-    };
 
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
     // of rows past the last band report band 0; they own no unit.
@@ -2245,79 +2687,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const uint32_t unit = (y % ksplit_rows_per_split) * grid_size.x + x;
         const bool owns_unit = y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
         auto& work = core_work.at(i);
-        work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y});
+        work.physical_core = physical_cores[i];
         work.global_q_start = owns_unit ? unit : total_q_chunks;
         work.global_q_count = owns_unit ? 1 : 0;
         if (owns_unit && enable_kv_chains) {
-            append_head_work(i, unit, 1);
+            append_head_work(q_work_plan, i, unit, 1, NH, num_q_chunks);
         }
     }
-    for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
-        }
-
-        auto& work = core_work.at(i);
-        work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = next_global_chunk;
-        work.global_q_count = chunk_count;
-
-        if (enable_kv_chains) {
-            append_head_work(i, next_global_chunk, chunk_count);
-        }
-
-        next_global_chunk += chunk_count;
-    }
-
-    // Helper: build a linear chain from sorted (core_idx, q_chunk_count) pairs.
-    // - chain_segs[i].second = q iterations the i-th core will process in this chain scope
-    // - injector = first core with head_work.size() == 1 (single head segment = no straddling)
-    // - no wrap-around: wrapping would inflate q_iter_local and cause deadlock
-    // - injector reselection for mcast is done separately in the mcast eligibility pass
-    using ChainSegment = std::pair<uint32_t, uint32_t>;  // (core_idx, q_chunk_count)
-    auto build_linear_chain = [](const std::vector<ChainSegment>& chain_segs,
-                                 uint32_t head,
-                                 std::vector<ChainConfig>& chain_configs,
-                                 const std::vector<CoreWork>& core_work,
-                                 bool require_single_head_injector = true) -> bool {
-        if (chain_segs.size() < 2) {
-            return false;
-        }
-        std::optional<size_t> injector_pos;
-        for (size_t idx = 0; idx + 1 < chain_segs.size(); ++idx) {
-            if (core_work[chain_segs[idx].first].global_q_count == 0) {
-                continue;
-            }
-            if (!require_single_head_injector || core_work[chain_segs[idx].first].head_work.size() == 1) {
-                injector_pos = idx;
-                break;
-            }
-        }
-        if (!injector_pos.has_value()) {
-            return false;
-        }
-        const size_t start = *injector_pos;
-        for (size_t idx = start; idx < chain_segs.size(); ++idx) {
-            uint32_t ci = chain_segs[idx].first;
-            auto& cfg = chain_configs[ci];
-            cfg.participates = true;
-            cfg.head = head;
-            cfg.is_injector = (idx == start);
-            cfg.is_sink = (idx == chain_segs.size() - 1);
-            if (idx > start) {
-                cfg.prev_physical = core_work[chain_segs[idx - 1].first].physical_core;
-            }
-            if (idx + 1 < chain_segs.size()) {
-                cfg.next_physical = core_work[chain_segs[idx + 1].first].physical_core;
-                cfg.next_core_q_chunks = chain_segs[idx + 1].second;
-            }
-        }
-        return true;
-    };
 
     struct RowWideChainMcastSelection {
         uint32_t row = 0;
@@ -2784,213 +3160,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
         reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
 
-    // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
-    if (use_head_chain && build_kv_chains) {
-        for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
-            const auto& segs = head_segments[head_id];
-            if (segs.size() < 2) {
-                continue;
-            }
-            std::vector<ChainSegment> chain_segs;
-            chain_segs.reserve(segs.size());
-            for (const auto& seg : segs) {
-                chain_segs.emplace_back(
-                    seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
-            }
-            build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
-        }
-    }
-
-    // Check query-head chain multicast eligibility and configure mcast for eligible chains.
-    uint32_t mcast_chains = 0;
-    if (use_head_chain && build_kv_chains) {
-        struct McastCandidate {
-            std::vector<uint32_t> core_indices;
-            uint32_t ref_q_chunks;
-        };
-        std::vector<McastCandidate> candidates;
-        candidates.reserve(head_segments.size());
-        bool all_eligible = true;
-
-        for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
-            const auto& segments = head_segments[head_id];
-            if (segments.size() < 2) {
-                continue;
-            }
-
-            // Gather chain participants with their per-head q_chunk_count
-            std::vector<uint32_t> chain_core_indices;
-            chain_core_indices.reserve(segments.size());
-            std::vector<uint32_t> chain_q_counts;
-            chain_q_counts.reserve(segments.size());
-            for (const auto& seg : segments) {
-                if (seg.core_idx < head_chain_configs.size() && head_chain_configs[seg.core_idx].participates &&
-                    head_chain_configs[seg.core_idx].head == head_id) {
-                    chain_core_indices.push_back(seg.core_idx);
-                    chain_q_counts.push_back(core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
-                }
-            }
-
-            if (chain_core_indices.size() < 2) {
-                continue;
-            }
-
-            // Eligibility condition 1: All physical cores share the same Y coordinate
-            const uint32_t ref_y = core_work[chain_core_indices[0]].physical_core.y;
-            bool same_row = true;
-            for (size_t ci = 1; ci < chain_core_indices.size(); ++ci) {
-                if (core_work[chain_core_indices[ci]].physical_core.y != ref_y) {
-                    same_row = false;
-                    break;
-                }
-            }
-
-            if (!same_row) {
-                all_eligible = false;
-                log_debug(tt::LogOp, "Head {}: mcast ineligible - cores span multiple rows", head_id);
-                break;
-            }
-
-            // Eligibility condition 2: no non-chain worker cores inside the mcast rectangle.
-            uint32_t min_x = core_work[chain_core_indices[0]].physical_core.x;
-            uint32_t max_x = min_x;
-            for (const auto& ci : chain_core_indices) {
-                uint32_t x = core_work[ci].physical_core.x;
-                min_x = std::min(min_x, x);
-                max_x = std::max(max_x, x);
-            }
-
-            bool has_gap = false;
-            for (uint32_t ci = 0; ci < num_cores; ++ci) {
-                const auto& phys = core_work[ci].physical_core;
-                if (phys.y == ref_y && phys.x >= min_x && phys.x <= max_x) {
-                    bool in_chain = false;
-                    for (const auto& chain_ci : chain_core_indices) {
-                        if (chain_ci == ci) {
-                            in_chain = true;
-                            break;
-                        }
-                    }
-                    if (!in_chain) {
-                        has_gap = true;
-                        break;
-                    }
-                }
-            }
-
-            if (has_gap) {
-                all_eligible = false;
-                log_debug(
-                    tt::LogOp, "Head {}: mcast ineligible - non-chain worker core inside mcast rectangle", head_id);
-                break;
-            }
-
-            // Eligibility condition 3: All chain cores must have the same q_chunk_count.
-            const uint32_t ref_q_chunks = chain_q_counts[0];
-            bool uniform_q_mcast = true;
-            for (size_t ci = 1; ci < chain_q_counts.size(); ++ci) {
-                if (chain_q_counts[ci] != ref_q_chunks) {
-                    uniform_q_mcast = false;
-                    break;
-                }
-            }
-
-            if (!uniform_q_mcast) {
-                all_eligible = false;
-                log_debug(tt::LogOp, "Head {}: mcast ineligible - mixed q_chunk_counts", head_id);
-                break;
-            }
-
-            candidates.push_back(McastCandidate{std::move(chain_core_indices), ref_q_chunks});
-        }
-
-        if (all_eligible && !candidates.empty()) {
-            mcast_chains = candidates.size();
-            for (uint32_t cand_idx = 0; cand_idx < candidates.size(); ++cand_idx) {
-                const auto& cand = candidates[cand_idx];
-                const uint32_t chain_size = cand.core_indices.size();
-                const uint32_t num_receivers = chain_size - 1;
-
-                // Find current injector
-                uint32_t injector_idx = cand.core_indices[0];
-                for (const auto& ci : cand.core_indices) {
-                    if (head_chain_configs[ci].is_injector) {
-                        injector_idx = ci;
-                        break;
-                    }
-                }
-
-                // Reselect injector for diagonal placement: the n-th chain
-                // picks the core at offset n within its chain, wrapping around.
-                // This places injectors on the diagonal (0,0), (1,1), (2,2)...
-                {
-                    uint32_t target_offset = cand_idx % chain_size;
-                    uint32_t best_idx = cand.core_indices[target_offset];
-                    if (best_idx != injector_idx) {
-                        // Clear old injector, set new one
-                        head_chain_configs[injector_idx].is_injector = false;
-                        head_chain_configs[injector_idx].is_sink = true;
-                        head_chain_configs[best_idx].is_injector = true;
-                        head_chain_configs[best_idx].is_sink = false;
-                        injector_idx = best_idx;
-                    }
-                }
-
-                uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
-                uint32_t max_x = min_x;
-                for (size_t ci = 1; ci < cand.core_indices.size(); ++ci) {
-                    uint32_t x = core_work[cand.core_indices[ci]].physical_core.x;
-                    min_x = std::min(min_x, x);
-                    max_x = std::max(max_x, x);
-                }
-                const uint32_t injector_y = core_work[injector_idx].physical_core.y;
-                const CoreCoord rect_start = CoreCoord{min_x, injector_y};
-                const CoreCoord rect_end = CoreCoord{max_x, injector_y};
-                const CoreCoord injector_phys = core_work[injector_idx].physical_core;
-
-                auto& injector_chain = head_chain_configs[injector_idx];
-                injector_chain.mcast_start = rect_start;
-                injector_chain.mcast_end = rect_end;
-                injector_chain.injector_physical = injector_phys;
-                injector_chain.mcast_num_dests = num_receivers;
-                injector_chain.next_core_q_chunks = cand.ref_q_chunks;
-
-                for (const auto& ci : cand.core_indices) {
-                    if (ci == injector_idx) {
-                        continue;
-                    }
-                    auto& receiver_chain = head_chain_configs[ci];
-                    receiver_chain.mcast_start = rect_start;
-                    receiver_chain.mcast_end = rect_end;
-                    receiver_chain.injector_physical = injector_phys;
-                    receiver_chain.next_core_q_chunks = 0;
-                    receiver_chain.is_sink = true;
-                }
-
-                log_debug(
-                    tt::LogOp,
-                    "Head: mcast enabled - {} receivers, injector core {} (phys_x={}), num_dests={} -> rect "
-                    "({},{}) to ({},{})",
-                    num_receivers,
-                    injector_idx,
-                    core_work[injector_idx].physical_core.x,
-                    num_receivers,
-                    rect_start.x,
-                    rect_start.y,
-                    rect_end.x,
-                    rect_end.y);
-            }
-        }
-
-        log_debug(
-            tt::LogOp,
-            "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
-            mcast_chains,
-            static_cast<uint32_t>(candidates.size()));
-    }
-
     // Update mcast compile-time args
-    const bool head_mcast_enabled = (mcast_chains > 0);
+    const bool head_mcast_enabled = q_work_plan.head_mcast_enabled;
 
     if (use_head_chain) {
         reader_compile_time_args[sem_args_offset + kRingJointChainMcastEnabledCompileArgOffset] =
@@ -3080,7 +3251,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
     };
-    if (slot_from_metadata || has_logical_length_tensor) {
+    if (slot_from_metadata || has_logical_length_tensor || dynamic_local_n) {
         KernelDescriptor::RTArgList reader_common_args;
         if (slot_from_metadata) {
             // Bound as buffers so a cache hit with different metadata tensors follows them; the reader takes
@@ -3098,6 +3269,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (tensor_args.has_kv_valid_end()) {
             reader_common_args.push_back(tensor_args.kv_valid_end->buffer());
         }
+        if (dynamic_local_n) {
+            reader_common_args.push_back(q_local_padded_Nt);
+        }
         reader_kernel.emplace_common_runtime_args(reader_common_args);
     }
 
@@ -3109,7 +3283,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
-    if (kv_pad_from_metadata || has_logical_length_tensor) {
+    if (kv_pad_from_metadata || has_logical_length_tensor || dynamic_local_n) {
         KernelDescriptor::RTArgList writer_common_args;
         if (kv_pad_from_metadata) {
             // Bound as a buffer so a cache hit with a different metadata tensor follows it; the writer takes
@@ -3119,6 +3293,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         append_logical_length_common_args(writer_common_args);
         if (tensor_args.has_kv_valid_end()) {
             writer_common_args.push_back(tensor_args.kv_valid_end->buffer());
+        }
+        if (dynamic_local_n) {
+            writer_common_args.push_back(q_local_padded_Nt);
         }
         writer_kernel.emplace_common_runtime_args(writer_common_args);
     }
@@ -3138,6 +3315,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
+        kernel->named_compile_time_args.emplace_back("dynamic_local_n", dynamic_local_n ? 1u : 0u);
+    }
+    if (dynamic_local_n) {
+        compute_kernel.emplace_common_runtime_args({q_local_padded_Nt});
     }
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
@@ -3681,6 +3862,127 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     return desc;
 }
 
+// dynamic_local_n cache hit: the per-core words that follow the per-chip length (Q split, head chains, the
+// gather's slab height) are rebuilt only when the length differs from the one the cached program last ran at;
+// the reader's common runtime word is that memo. head_mcast_pin is shared across the coordinates of one dispatch.
+void apply_dynamic_local_n_runtime_args(
+    Program& program,
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    std::optional<bool>& head_mcast_pin) {
+    const uint32_t n_local_tiles = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    const bool has_logical_length_tensor = tensor_args.has_logical_n_tensor() || tensor_args.has_logical_l_tensor();
+    const uint32_t reader_slot = ring_joint::dynamic_local_n_reader_common_arg(
+        tensor_args.has_metadata(), has_logical_length_tensor, tensor_args.has_kv_valid_end());
+    const uint32_t writer_slot = ring_joint::dynamic_local_n_writer_common_arg(
+        tensor_args.kv_pad_from_metadata(args.kv_stripe_split), has_logical_length_tensor, tensor_args.has_kv_valid_end());
+    auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelIndex);
+    TT_FATAL(reader_slot < reader_common.size(), "RingJoint dynamic_local_n common arg missing on the reader");
+    if (reader_common[reader_slot] == n_local_tiles) {
+        return;
+    }
+
+    const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
+    const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
+    const uint32_t B = tensor_args.input_q.logical_shape()[0];
+    const uint32_t NH = tensor_args.input_q.logical_shape()[1];
+    const uint32_t NHK = tensor_args.gathered_k.logical_shape()[1];
+    const uint32_t NHV = tensor_args.v_num_heads();
+    const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
+    const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
+    const bool enable_kv_chains = !args.has_sliding_window();
+    const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
+    const bool build_kv_chains = enable_kv_chains && B == 1;
+    const uint32_t Sq_chunk_t = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
+    const uint32_t capacity_local_Nt =
+        tensor_args.gathered_k.padded_shape()[2] / tt::constants::TILE_HEIGHT / args.ring_size;
+    const uint32_t num_q_chunks = tt::div_up(n_local_tiles, Sq_chunk_t);  // no joint chunks on this path
+    const std::vector<CoreCoord> physical_cores = sdpa_physical_cores(tensor_args.input_q.device(), layout.grid_size);
+    if (!head_mcast_pin.has_value()) {
+        head_mcast_pin = head_mcast_uniform_over_capacity(
+            physical_cores,
+            B,
+            NH,
+            tt::div_up(capacity_local_Nt, Sq_chunk_t),
+            enable_kv_chains,
+            use_head_chain,
+            build_kv_chains);
+    }
+    const RingJointQWorkPlan plan = build_q_work_plan(
+        physical_cores,
+        B,
+        NH,
+        num_q_chunks,
+        /*enable_zigzag_balancing=*/false,
+        enable_kv_chains,
+        use_head_chain,
+        build_kv_chains,
+        *head_mcast_pin ? HeadMcastPolicy::Required : HeadMcastPolicy::Never);
+
+    auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
+    auto& writer_grid_args = GetRuntimeArgs(program, kWriterKernelIndex);
+    auto& compute_grid_args = GetRuntimeArgs(program, kComputeKernelIndex);
+    const uint32_t reader_q_start = layout.reader_kv_cache_batch_idx - 2;
+    const uint32_t reader_chain_base = layout.reader_kv_cache_batch_idx + 1;
+    const uint32_t writer_q_start = kWriterBaseArgCount - 2;
+    const uint32_t compute_static_mcast_q_count = layout.compute_active_ring_iter_mask + 1;
+    std::vector<uint32_t> chain_args;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
+        const auto& work = plan.core_work[i];
+        const uint32_t global_q_end = work.global_q_start + work.global_q_count;
+
+        auto& reader_args = reader_grid_args[core.x][core.y];
+        write_runtime_arg(reader_args, reader_q_start, work.global_q_start, "reader.global_q_start");
+        write_runtime_arg(reader_args, reader_q_start + 1, global_q_end, "reader.global_q_end");
+        if (use_head_chain) {
+            chain_args.clear();
+            plan.head_chain_configs[i].append_to_args(chain_args);
+            for (uint32_t w = 0; w < chain_args.size(); ++w) {
+                write_runtime_arg(reader_args, reader_chain_base + w, chain_args[w], "reader.head_chain");
+            }
+        }
+
+        auto& writer_args = writer_grid_args[core.x][core.y];
+        write_runtime_arg(writer_args, writer_q_start, work.global_q_start, "writer.global_q_start");
+        write_runtime_arg(writer_args, writer_q_start + 1, global_q_end, "writer.global_q_end");
+
+        auto& compute_args = compute_grid_args[core.x][core.y];
+        write_runtime_arg(compute_args, 0, work.global_q_start, "compute.global_q_start");
+        write_runtime_arg(compute_args, 1, global_q_end, "compute.global_q_end");
+        write_runtime_arg(compute_args, compute_static_mcast_q_count, work.global_q_count, "compute.static_mcast_q_count");
+    }
+
+    // The gather's per-input slab height and page count: words 1 and 6 of every worker's tensor descriptor.
+    const uint32_t num_ag_inputs = tensor_args.input_v.has_value() ? 2u : 1u;
+    const std::array<const Tensor*, 2> ag_inputs = {
+        &tensor_args.input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &tensor_args.input_k};
+    const auto patch_slab_height = [&](uint32_t kernel_id, uint32_t header_count) {
+        for (auto& col_args : GetRuntimeArgs(program, kernel_id)) {
+            for (auto& core_args : col_args) {
+                for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                    const uint32_t Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
+                    const uint32_t base = header_count + in * ag_rt::kTensorDescriptorFieldCount;
+                    if (core_args.size() > base + ag_rt::kValidPagesFieldOffset) {  // skip cores without this kernel
+                        core_args[base + 1] = n_local_tiles;
+                        core_args[base + ag_rt::kValidPagesFieldOffset] = n_local_tiles * Wt;
+                    }
+                }
+            }
+        }
+    };
+    patch_slab_height(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderRuntimeArgHeaderCount);
+    patch_slab_height(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterRuntimeArgHeaderCount);
+    patch_slab_height(kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderRuntimeArgHeaderCount);
+    patch_slab_height(kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterRuntimeArgHeaderCount);
+
+    reader_common[reader_slot] = n_local_tiles;
+    auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelIndex);
+    TT_FATAL(writer_slot < writer_common.size(), "RingJoint dynamic_local_n common arg missing on the writer");
+    writer_common[writer_slot] = n_local_tiles;
+    GetCommonRuntimeArgs(program, kComputeKernelIndex)[ring_joint::kDynamicLocalNComputeCommonArg] = n_local_tiles;
+}
+
 }  // namespace
 
 // Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
@@ -3719,6 +4021,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     RingJointSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
+    std::optional<bool> head_mcast_pin;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -3727,6 +4030,10 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             coord,
             coordinate_range.end_coord());
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+        apply_all_gather_semaphore_addresses(program, args);
+        if (args.dynamic_local_n) {
+            apply_dynamic_local_n_runtime_args(program, args, tensor_args, head_mcast_pin);
+        }
     }
 }
 

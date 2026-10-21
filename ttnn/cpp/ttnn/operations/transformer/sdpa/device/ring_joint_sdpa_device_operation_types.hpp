@@ -47,6 +47,10 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
+    // The per-chip padded length N_local is a runtime quantity: the program hash ignores it, the kernels take
+    // it from one common runtime word, and a cache hit rewrites the per-core split only when it changed.
+    // Requires logical_n as a device tensor, non-causal MHA with a separate V, no joint tensors.
+    bool dynamic_local_n = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -71,7 +75,8 @@ struct RingJointSDPAParams {
         uint32_t kv_cache_layer_idx = 0,
         std::optional<uint32_t> sliding_window_size = std::nullopt,
         bool circular_kv_cache = false,
-        uint32_t kv_stripe_split = 1) :
+        uint32_t kv_stripe_split = 1,
+        bool dynamic_local_n = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -93,7 +98,8 @@ struct RingJointSDPAParams {
         kv_cache_layer_idx(kv_cache_layer_idx),
         sliding_window_size(sliding_window_size),
         circular_kv_cache(circular_kv_cache),
-        kv_stripe_split(kv_stripe_split) {}
+        kv_stripe_split(kv_stripe_split),
+        dynamic_local_n(dynamic_local_n) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -132,6 +138,7 @@ struct RingJointSDPAParams {
         "sliding_window_size",
         "circular_kv_cache",
         "kv_stripe_split",
+        "dynamic_local_n",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -154,6 +161,7 @@ struct RingJointSDPAParams {
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
+            std::cref(dynamic_local_n),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }

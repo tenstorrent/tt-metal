@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -518,6 +519,45 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !tensor_args.has_kv_valid_end() || !args.has_sliding_window(),
         "kv_valid_end_tensor is incompatible with sliding-window attention");
+    if (args.dynamic_local_n) {
+        // The kernels derive every length-dependent count from one runtime word on the non-causal, non-chunked
+        // MHA path only; everything else keeps its compile-time geometry.
+        TT_FATAL(
+            tensor_args.has_logical_n_tensor(),
+            "dynamic_local_n requires logical_n as a device tensor (the kernels derive the masks from it)");
+        TT_FATAL(
+            !args.is_causal && !args.is_balanced && !args.is_cross,
+            "dynamic_local_n supports non-causal attention only");
+        TT_FATAL(!has_joint_tensors, "dynamic_local_n does not support joint tensors");
+        TT_FATAL(
+            has_input_v && !has_latent_v && !tensor_args.attention_sink.has_value(),
+            "dynamic_local_n requires a separate V tensor and no attention sink");
+        TT_FATAL(
+            args.kv_stripe_split == 1 && !args.has_sliding_window() && !tensor_args.has_metadata() &&
+                !args.has_kv_pad_rotation() && !args.has_indexed_kv_cache() && !args.circular_kv_cache &&
+                !tensor_args.has_kv_valid_end(),
+            "dynamic_local_n is incompatible with split KV, sliding windows, the metadata path, KV-pad rotation, "
+            "indexed KV caches and kv_valid_end");
+        TT_FATAL(
+            !args.program_config.has_value() ||
+                (args.program_config->max_k_splits <= 1 && !args.program_config->segmented_accumulation),
+            "dynamic_local_n does not support K splits or segmented accumulation");
+        const auto& q_shape_dyn = input_tensor_q.logical_shape();
+        const auto& k_shape_dyn = tensor_args.input_k.logical_shape();
+        const auto& v_shape_dyn = tensor_args.input_v->logical_shape();
+        TT_FATAL(
+            q_shape_dyn[1] == k_shape_dyn[1] && k_shape_dyn[1] == v_shape_dyn[1],
+            "dynamic_local_n requires MHA (equal Q/K/V head counts). Got Q: {}, K: {}, V: {}",
+            q_shape_dyn[1],
+            k_shape_dyn[1],
+            v_shape_dyn[1]);
+        TT_FATAL(
+            input_tensor_q.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                tensor_args.input_k.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                tensor_args.input_v->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                gathered_input_tensor_k.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "dynamic_local_n requires interleaved Q/K/V and gathered buffers");
+    }
     if (tensor_args.has_logical_l_tensor()) {
         // The placeholder is the padded ring total (per-shard L * ring_size), which selects the
         // sharded-joint path; a replicated joint pins logical_l == L by shape and has nothing to vary.
@@ -1124,6 +1164,27 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     validate_metadata_tensors(tensor_args, args.kv_stripe_split);
     validate_runtime_patched_scalars(args, tensor_args);
+    if (args.dynamic_local_n) {
+        // The hash dropped the per-chip length; re-check only what it bounds.
+        const auto N_local_q = tensor_args.input_q.logical_shape()[2];
+        const auto N_local_kv = tensor_args.local_kv_seq_len();
+        const auto capacity = tensor_args.gathered_k.logical_shape()[2];
+        TT_FATAL(
+            N_local_q % tt::constants::TILE_HEIGHT == 0 && N_local_q == N_local_kv &&
+                N_local_kv == tensor_args.input_v->logical_shape()[2],
+            "dynamic_local_n: per-chip Q/K/V seq lengths must be equal multiples of {}. Got Q: {}, K: {}, V: {}",
+            tt::constants::TILE_HEIGHT,
+            N_local_q,
+            N_local_kv,
+            tensor_args.input_v->logical_shape()[2]);
+        TT_FATAL(
+            static_cast<uint64_t>(N_local_kv) * args.ring_size <= capacity &&
+                (!tensor_args.gathered_v.has_value() || tensor_args.gathered_v->logical_shape()[2] == capacity),
+            "dynamic_local_n: per-chip K/V seq {} x ring {} exceeds the gathered buffer capacity {}",
+            N_local_kv,
+            args.ring_size,
+            capacity);
+    }
 }
 
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
@@ -1173,9 +1234,44 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     // Under KV-pad rotation the kernels take the length from kv_actual_isl (host-patched or read on-device),
-    // so logical_n leaves the key and one program serves every chunk depth on both paths.
+    // and on the tensor path from logical_n_tensor, so logical_n leaves the key and one program serves every
+    // length on those paths.
     const bool kv_pad_rotation_enabled = kv_pad_rotation_active(args, tensor_args);
-    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
+    const auto cache_key_logical_n =
+        (kv_pad_rotation_enabled || tensor_args.has_logical_n_tensor()) ? 0 : args.logical_n;
+
+    if (args.dynamic_local_n) {
+        // Q/K/V enter without their row count. The gathered buffers keep their full spec: their capacity sizes
+        // the CBs and the reader count, and the K/V gather pair is persistent. The salt keeps this key family
+        // apart from every other op that hashes the same scalars.
+        using ttnn::operations::common::hash_spec_without_rows;
+        constexpr uint64_t kSalt = 0x72696e675f736470ULL;  // "ring_sdp"
+        return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
+            kSalt,
+            hash_spec_without_rows(tensor_args.input_q, kSalt),
+            hash_spec_without_rows(tensor_args.input_k, kSalt),
+            hash_spec_without_rows(tensor_args.input_v, kSalt),
+            tensor_args.gathered_k.tensor_spec(),
+            tensor_args.gathered_v.has_value() ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.gathered_v->tensor_spec())
+                                               : std::nullopt,
+            tensor_args.logical_n_tensor.has_value()
+                ? std::optional<tt::tt_metal::TensorSpec>(tensor_args.logical_n_tensor->tensor_spec())
+                : std::nullopt,
+            args.joint_strategy,
+            args.scale,
+            args.is_causal,
+            args.is_balanced,
+            args.is_cross,
+            args.logical_l,
+            args.ring_size,
+            args.kv_stripe_split,
+            args.compute_kernel_config,
+            args.program_config,
+            args.ccl_core_grid_offset,
+            args.sliding_window_size,
+            args.all_gather_operation_attributes,
+            args.dynamic_local_n);
+    }
 
     std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
     if (tensor_args.input_v.has_value()) {
@@ -1370,7 +1466,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    const bool dynamic_local_n) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1593,7 +1690,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_layer_idx,
         sliding_window_size,
         circular_kv_cache,
-        resolved_kv_stripe_split);
+        resolved_kv_stripe_split,
+        dynamic_local_n);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
