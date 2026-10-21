@@ -28,7 +28,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
-from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tests.utils import log_dram, pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.functional_decoder import FunctionalDecoder, host_streams_to_device
 from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
@@ -151,6 +151,13 @@ def test_partitioned_1m_step(mesh_device):
     logger.info(
         f"layer {LAYER} on the ({ROWS},{COLS}) mesh, 1 user per column x {N + 64} positions: built in {time.perf_counter() - t0:.0f} s"
     )
+    c = dec.cache
+    logger.info(
+        f"DSA cache per chip: prefill_mode {c.prefill_mode} slots {c.slots} (scratch {c.scratch}, dummy blocks "
+        f"{c.dummy_blocks}), {c.max_blocks} latent blocks x 32 x {c.latent_dim} bf16 = {c.max_blocks * 32 * c.latent_dim * 2 / 2**30:.2f} GiB, "
+        f"pools {c.index.max_batch} x {c.index.pools_per_user} x {c.index.D} = {c.index.max_batch * c.index.pools_per_user * c.index.D * 2 / 2**20:.0f} MiB"
+    )
+    log_dram(mesh_device, f"after the layer-{LAYER} build at {N + 64} positions")
     U = ROWS * B
     streams = mesh.upload(torch.randn(1, 1, U, 4 * cfg.hidden_size) * 0.5, ttnn.float32, rows=2)
     for pos in (4096, N):

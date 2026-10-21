@@ -395,3 +395,16 @@ per pass) would turn the gather into the true heads -> users all-to-all with no 
 Tests: `tests/test_mesh_heads2users_prefill.py` (block: exchange primitives, layer-3 R4097 and 16 K-at-64 K vs
 the non-partitioned slab path, per-user state integrity after the other users' prefills),
 `tests/test_mesh_long_context.py` with `GLM53_LONG_USERS=all` (every slot prefilled, per-user chains).
+
+Block validation (rows 0-1 (2,4) block, 2026-10-21 13:30-14:20, logs `_logs/agents/mu1m/`):
+
+| test | result |
+|---|---|
+| exchange primitives | all-gather on the heads dim, all-to-all (heads split by column, sources on dim 0) + slice, prefix gather: exact |
+| layer-3 attention, R4097, users 0-3 one after the other, [4097] / [2048, 2048, 1] / [1024, 2048, 1025] | every user 4097/4097 rows bit-exact vs the replicated-slot slab path, 2049/2049 selections identical; after the four prefills each user's latent / pools / rings on its column equal the reference (the dummy writes touch no live slot) |
+| layer-3 attention, 16384 real rows at a 64 K prefix, users 0-1, [16384] / [8192, 8192] | 16384/16384 rows bit-exact, selections identical, state equal; warm chunk-layer wall 176 ms vs 95 ms for the reference (the 64-head `sparse_sdpa` over all rows instead of a quarter: x0.54-0.61) |
+| e2e 16 K needle, 4 users per row, 45 layers bfp4 experts, chunk 8192 | every user first token 15209 'amber', 8/8 greedy tokens == NEEDLE_16384, needle found on all 8 (row, user) chains; TTFT 11.8 s warm per user (1381-1398 tok/s), decode 133 ms = 7.5 tok/s per user (60 tok/s over the 8 slots); DRAM 27.85 GiB allocated / 3.48 free per chip after the build |
+| e2e 64 K needle, 4 users per row, same config | every user first token 15209, 8/8 greedy tokens == NEEDLE_65536, needle found 8/8; TTFT 46.5 s warm per user (1408 tok/s; user 0 69.5 s with the kernel compiles), decode 150.7 ms = 6.6 tok/s per user (53 tok/s aggregate); DRAM 28.40 GiB allocated / 2.93 free per chip after the build (4 x 64 K slots per row = one per chip) |
+
+Found on the way: `PrefillSlot.allocate` uploaded a 1-element `cache_idx` with the column-sharded mapper, so every
+partitioned `GLM53MeshModel` build had failed since the traced prefill landed (fixed: one slot value per column).
