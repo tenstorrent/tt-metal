@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_WORKER_L1_SIZE
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
@@ -203,6 +204,7 @@ def _trace_wall_samples_ms(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "l1_small_size": _L1_SMALL_SIZE,
+                "worker_l1_size": KDA_WORKER_L1_SIZE,
             },
             id="fabric_1d",
         ),
@@ -307,11 +309,16 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP2xTP4-fabric-1d"),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE, worker_l1_size=KDA_WORKER_L1_SIZE),
+            id="SP2xTP4-fabric-1d",
+        ),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE, worker_l1_size=KDA_WORKER_L1_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),

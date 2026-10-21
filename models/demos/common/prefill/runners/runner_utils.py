@@ -17,7 +17,11 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
+    mesh_shape: tuple,
+    max_payload_size: int,
+    l1_small_size: int = 0,
+    trace_region_size: int = 0,
+    worker_l1_size: int = 0,
 ) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
@@ -52,7 +56,10 @@ def open_mesh_device(
         fabric_router_config,
     )
     return ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size, trace_region_size=trace_region_size
+        mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=l1_small_size,
+        trace_region_size=trace_region_size,
+        worker_l1_size=worker_l1_size,
     )
 
 

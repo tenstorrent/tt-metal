@@ -128,6 +128,8 @@ class PrefillModelAdapter(ABC):
     # L1_SMALL carve-out at mesh-open time (0 = none). Needed when an op routes
     # its semaphores to L1_SMALL (see routing_use_l1_small_for_semaphores).
     l1_small_size: int = 0
+    # Usable worker L1 at mesh-open time (0 = the HAL default). Below the default, the kernel-config ring grows.
+    worker_l1_size: int = 0
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
