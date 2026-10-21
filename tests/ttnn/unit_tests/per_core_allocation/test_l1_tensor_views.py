@@ -159,7 +159,7 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     coord, core = ttnn.MeshCoordinate(0, 1), ttnn.CoreCoord(0, 0)
     spec = _spec([core], 256)
     host = ttnn.from_torch(torch.arange(256, dtype=torch.uint8).reshape(1, 256), dtype=ttnn.uint8)
-    owner = ttnn.experimental_to_single_device(host, mesh, coord, spec.memory_config)
+    owner = ttnn._ttnn.tensor.experimental_to_single_device(host, mesh, coord, spec.memory_config)
     view = _view(mesh, spec, owner, [(coord, core, 0)])
     assert view.device_coords() == [coord]
     assert _address(view, coord, core) == _address(owner, coord, core)
