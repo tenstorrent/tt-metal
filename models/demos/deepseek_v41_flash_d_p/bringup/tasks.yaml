@@ -2661,6 +2661,13 @@ tasks:
     kind: op
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-10-21T22:14:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py: 2a49940f0b360da2ba7792ac56ae54ffe44855d17782c44b28b4ac7272ee5309
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.enc_source.05
   title: 'enc_source block with steps 1-5 on device (last: kv)'
   step: implement
