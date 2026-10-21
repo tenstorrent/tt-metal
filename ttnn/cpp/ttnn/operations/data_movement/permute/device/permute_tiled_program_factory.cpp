@@ -815,10 +815,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         writer_rta_names.push_back("end_padding_tile_idx");
     }
 
-    KernelSpec::CompilerOptions::Defines reader_defines = pad_defines;
     Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
     if (bounce_in_scratchpad) {
-        reader_defines.insert({"BOUNCE_IN_SCRATCHPAD", "1"});
         reader_scratchpad_bindings.push_back(
             KernelSpec::ScratchpadBinding{.scratchpad_spec_name = BOUNCE_SP, .accessor_name = "bounce"});
     }
@@ -827,7 +825,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         .source =
             "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
             "reader_permute_interleaved_tiled_generic.cpp",
-        .compiler_options = {.defines = reader_defines},
+        .compiler_options = {.defines = pad_defines},
         .dfb_bindings = reader_dfb,
         .scratchpad_bindings = reader_scratchpad_bindings,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
@@ -857,7 +855,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              {"needs_x_padding", needs_x_padding},
              {"rows_per_x", non_x_rows},
              {"misalignment", misalignment},
-             {"read_alignment", read_alignment}},
+             {"read_alignment", read_alignment},
+             {"bounce_in_scratchpad", bounce_in_scratchpad}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
