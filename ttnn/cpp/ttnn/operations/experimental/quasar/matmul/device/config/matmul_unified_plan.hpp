@@ -140,7 +140,7 @@ struct MatmulUnifiedPlan {
 
     // Estimated cycles (the lowest of every C slice, subblock and K chunk tried), and the busiest core's pipeline
     // alone, which breaks ties between plans that DRAM bandwidth bounds equally. See ArchCostModel.
-    std::pair<double, double> estimated_cycles{};
+    std::pair<double, double> estimated_cycles;
 };
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether

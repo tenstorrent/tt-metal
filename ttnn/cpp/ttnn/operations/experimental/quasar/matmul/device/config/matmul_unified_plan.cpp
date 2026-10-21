@@ -670,7 +670,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             (uint64_t)candidate.bias_entries * candidate.bias_entry_bytes);
         return std::nullopt;
     }
-    return std::move(*best);
+    return best;
 }
 
 std::optional<tt::tt_metal::ShardSpec> C_slice_shard_spec(

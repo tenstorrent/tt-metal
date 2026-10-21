@@ -301,7 +301,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             config.fused_activation->params,
             "ACTIVATION",
             "i",
-            operation_attributes.output_dtype.value()));
+            operation_attributes.output_dtype));
     }
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
