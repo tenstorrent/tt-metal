@@ -123,7 +123,7 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 ## CI (Blaze prefill, SC4)
 
 `ci/run_matrix_ci.sh` runs the same measurement (`matrix_producer.py`, unchanged) as a CI job on the 4-galaxy
-`bh_sc4` pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix smoke 16-stage, SC4"` in
+`bh_sc4` pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix 3x3 16-stage, SC4"` in
 `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, `test_type: minimax_prefill_matrix`. Dispatch it alone with
 
 ```bash
@@ -140,8 +140,8 @@ How it differs from `run_matrix.sh`:
 * One runner launch for all cached rows, at a KV capacity of `max(CACHED) + MAX_NEW`. With several rows, the smaller
   ones therefore run on an over-sized cache (see above), so compare their numbers with CI runs only, not with
   `run_matrix.sh`.
-* It is currently a smoke run: cached 0 x new 5120, 32768, 2 idle iterations, 2 users x 64 chunks loaded. The table
-  grows through the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
+* It currently runs a reduced 3x3 table: cached 0 / 143360 / 552960 x new 640 / 5120 / 51200, 3 idle iterations,
+  4 users x 240 chunks loaded. The full table uses the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
   the job's `cmd`.
 * Perf is reported, not gated. The tables go to the job summary. The JSONL, CSV, runner/producer/rank logs and timing
   CSVs are uploaded as the `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run

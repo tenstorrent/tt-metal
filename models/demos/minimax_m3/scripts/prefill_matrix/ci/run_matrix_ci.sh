@@ -157,8 +157,13 @@ cleanup() {
   local rc=$?
   if [ -n "${RUNNER_PID}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     if [ -n "${R0_HOST}" ]; then
-      echo "[matrix-ci] sending SHUTDOWN to the runner"
-      on_rank0 "timeout 300 env $(matrix_producer_env "${CAPACITY}") python3 $(printf '%q' "${PKG_DIR}/matrix_shutdown.py")" || true
+      # The helper opens the devices, so it prints ~100 lines of UMD bring-up chatter: keep that in a file, not the job log.
+      if on_rank0 "timeout 300 env $(matrix_producer_env "${CAPACITY}") python3 $(printf '%q' "${PKG_DIR}/matrix_shutdown.py")" \
+        > "${WORK}/shutdown.log" 2>&1; then
+        echo "[matrix-ci] SHUTDOWN sent to the runner (log: ${WORK}/shutdown.log)"
+      else
+        echo "[matrix-ci] SHUTDOWN helper failed; tail of ${WORK}/shutdown.log:"; tail -n 20 "${WORK}/shutdown.log" || true
+      fi
       timeout 240 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || true
     fi
     if kill -0 "${RUNNER_PID}" 2>/dev/null; then

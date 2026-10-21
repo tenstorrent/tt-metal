@@ -433,7 +433,7 @@ models:
     bh_galaxy: 470
     bh_sc1: 2375
     bh_sc1_high_power: 498
-    # 60 (GLM-5.3 MTP1 SC4) + 60 (MiniMax-M3 pipeline prefill perf matrix smoke, SC4; tt-metal#57827).
+    # 60 (GLM-5.3 MTP1 SC4) + 60 (MiniMax-M3 pipeline prefill perf matrix 3x3, SC4; tt-metal#57827).
     bh_sc4: 120
     wh_n150: 500
     wh_n150_civ2: 300
