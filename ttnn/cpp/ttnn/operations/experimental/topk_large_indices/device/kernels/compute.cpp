@@ -283,13 +283,18 @@ FORCE_INLINE void materialize_index_rank_order(uint32_t dst, uint32_t indices_cb
 // marked and the index tiles transposed, as mark_neginf_indices and materialize_index_rank_order leave a row.
 template <uint32_t K>
 FORCE_INLINE void reduce_split_row(
-    CircularBuffer& input, uint32_t indices_cb, uint32_t num_chunks, uint32_t tail_elements) {
+    CircularBuffer& input,
+    uint32_t indices_cb,
+    uint32_t num_chunks,
+    uint32_t tail_elements,
+    bool first_prefetched,
+    bool prefetch_next) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb = input.get_cb_id();
 #ifdef TRISC_UNPACK
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    for (uint32_t chunk = first_prefetched ? 1 : 0; chunk < num_chunks; ++chunk) {
         input.wait_front(tiles_per_sequence);
-        if (chunk == 0) {
+        if (chunk == (first_prefetched ? 1 : 0)) {
             topk_xl_copy_tile_init(input_cb);
         }
         topk_xl_copy_tile<K>(input_cb, 0, 0, chunk + 1 == num_chunks ? tail_elements : K);
@@ -299,17 +304,39 @@ FORCE_INLINE void reduce_split_row(
             llk_unpack_set_srcb_dummy_valid();
         }
     }
+    if (prefetch_next) {
+        // MATH copies the next row's first chunk before this row's index transposes, so UNPACK feeds it first.
+        input.wait_front(tiles_per_sequence);
+        topk_xl_copy_tile<K>(input_cb, 0, 0, K);
+        input.pop_front(tiles_per_sequence);
+        llk_unpack_set_srcb_dummy_valid();
+    }
 #endif
 #ifdef TRISC_MATH
     _llk_math_eltwise_unary_sfpu_init_once_();
-    topk_large_indices_split::math_row<K, false>(num_chunks, [&](uint32_t chunk, uint32_t tile) {
-        if (chunk == 0) {
-            topk_xl_copy_tile_init(input_cb);
-        }
-        topk_xl_copy_tile<K>(input_cb, tile, 0, chunk + 1 == num_chunks ? tail_elements : K);
-    });
+    if (first_prefetched) {
+        // PACK may take the SFPU over only after this init.
+        topk_large_indices_split::post_token();
+    }
+    // The previous row's index transposes reprogram MATH after a prefetched first chunk, so the first copy made here
+    // inits it.
+    bool init_copy = true;
+    topk_large_indices_split::math_row<K, false>(
+        num_chunks,
+        [&](uint32_t chunk, uint32_t tile) {
+            if (init_copy) {
+                topk_xl_copy_tile_init(input_cb);
+                init_copy = false;
+            }
+            topk_xl_copy_tile<K>(input_cb, tile, 0, chunk + 1 == num_chunks ? tail_elements : K);
+        },
+        first_prefetched,
+        prefetch_next);
 #endif
 #ifdef TRISC_PACK
+    if (first_prefetched) {
+        topk_large_indices_split::take_math_token();
+    }
     topk_large_indices_split::pack_row<K, false>(
         num_chunks,
         [] {},
@@ -552,16 +579,21 @@ void kernel_main() {
             (num_chunks <= max_fused_chunks || split_segments)) {
             MATH((topk_large_indices_split::start()));
             PACK((topk_large_indices_split::wait_start()));
+            const bool prefetch =
+                num_chunks <= max_fused_chunks && topk_large_indices_split::can_prefetch<K>(num_chunks);
             for (uint32_t row = 0; row < num_whole_rows; ++row) {
+                const bool prefetch_next = prefetch && row + 1 < num_whole_rows;
                 tile_regs_acquire();
                 if constexpr (split_segments) {
                     if (num_chunks > max_fused_chunks) {
                         reduce_split_segmented_row<K>(input, acc_cb, indices_cb, num_chunks, tail_elements);
                     } else {
-                        reduce_split_row<K>(input, indices_cb, num_chunks, tail_elements);
+                        reduce_split_row<K>(
+                            input, indices_cb, num_chunks, tail_elements, prefetch && row > 0, prefetch_next);
                     }
                 } else {
-                    reduce_split_row<K>(input, indices_cb, num_chunks, tail_elements);
+                    reduce_split_row<K>(
+                        input, indices_cb, num_chunks, tail_elements, prefetch && row > 0, prefetch_next);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -573,7 +605,11 @@ void kernel_main() {
                     indices_cb, 1, 0, final_survivor + tiles_per_sequence);
                 indices.push_back(1);
 
-                tile_regs_release();
+                if (prefetch_next) {
+                    PACK((topk_large_indices_split::release_dest_bank0<DST_ACCUM_MODE>()));
+                } else {
+                    tile_regs_release();
+                }
             }
             if (!has_split) {
                 return;

@@ -35,6 +35,8 @@ CASES = [
     (512, 4, 512, 1, "positive", False, 32 * 512),
     (512, 32, 512, 1, "positive", False, 0),
     (512, 32, 100, 2, "planted:512", False, 0),
+    (512, 4, 512, 3, "random", False, 0),
+    (512, 6, 300, 4, "signed", False, 0),
     (1024, 2, 1024, 1, "positive", False, 0),
     (1024, 3, 1024, 1, "positive", False, 0),
     (1024, 4, 700, 1, "positive", False, 0),
@@ -46,6 +48,9 @@ CASES = [
     (1024, 4, 1024, 1, "positive", False, 32 * 1024),
     (1024, 32, 1024, 1, "planted:1024", False, 0),
     (1024, 32, 300, 2, "planted:1024", False, 0),
+    (1024, 2, 1024, 3, "random", False, 0),
+    (1024, 4, 700, 3, "signed", False, 0),
+    (1024, 6, 1024, 4, "random", True, 0),
     (2048, 2, 2048, 1, "positive", False, 0),
     (2048, 3, 2048, 1, "positive", False, 0),
     (2048, 4, 1500, 1, "positive", False, 0),
@@ -56,6 +61,11 @@ CASES = [
     (2048, 4, 2048, 1, "positive", True, 0),
     (2048, 25, 2048, 1, "planted:2048", False, 0),
     (2048, 32, 700, 2, "planted:2048", False, 0),
+    (2048, 2, 2048, 3, "random", False, 0),
+    (2048, 2, 1500, 4, "signed", False, 0),
+    (2048, 4, 2048, 3, "random", False, 0),
+    (2048, 6, 1000, 4, "random", True, 0),
+    (2048, 24, 2048, 3, "planted:2048", False, 0),
 ]
 CASE_IDS = [
     f"k{k}-chunks{c}-tail{t}-rows{r}-{m.replace(':', '')}-{'fp32' if f else 'bf16'}-seg{s}"
