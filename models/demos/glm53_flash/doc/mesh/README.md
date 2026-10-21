@@ -380,3 +380,96 @@ build 1026 s with the 1 M caches; decode capture at position 0 passed; prefill c
 | seconds | 136 (compiles) | 71 | 58 | 66 | 58 | 62 | 72 | 84 | 94 |
 
 ~52 s of prefix-independent work per chunk (~315 tok/s on 32 chips, ~0.3% of the compute roofline) plus ~10-12 s per 131 K of prefix (the whole-prefix latent copy per DSA layer). Projected 1 M TTFT ~98 min; the user stopped the run at chunk 32/64 to optimize first (prefix copy, slab-local attention, reference-path swaps, traced prefill).
+
+## Slab-local sequence-parallel DSA prefill (2026-10-21, `arg/glm53_slabattn`)
+
+v1 above gathered the whole chunk's hidden over the rows and ran `TtDSA.prefill_forward` on every row over all
+T queries (the attention, the scorer / top-k and the per-chunk prefix copy 8x on 8 rows for 1x useful work), then
+reduce-scattered identical copies. Now (`GLM53_SP_ATTN=slab`, the default; `v1` keeps the old path as the A/B
+reference) every row attends only its own slab's T/rows queries against the full prefix (`TtDSA._prefill_slab`):
+
+* stems on the local slab (q_a / q_b, kv_a, the indexer's k / gate); only the chunk's latent `c` [1,1,T,512] and
+  the index stems k / g [1,1,T,128] are all-gathered over the rows (bf16, instead of the hidden [1,1,T,4096]),
+  so the replicated latent cache and pooled-key index still receive the whole chunk exactly as before;
+* SPMD: every row runs the same ops with the same shapes; what differs per row lives in row-sharded constant
+  tensors built from the chunk geometry (host ints, cached): the dense SDPA's Q offset (the op's
+  `windowed_q_token_offset_tensor`, start + r*T_loc: bit-equal to the plain causal kernel on every row), the
+  scorer's causal bounds and tail ids, and the dense/sparse row select of a mixed chunk;
+* sparse rows through the shared `indexer_score_dsa` (the merged prefill_1m_cost.md path): its per-row offset is
+  chunk_start + r*Sq with Sq = the SUB-BLOCK rows, not the slab stride, so for contiguous slabs the chunk start
+  is max_r(row_starts[r] - r*Sq) (a superset for every row, exact on the last) and the exact per-row bounds go
+  into `_topk_bounded` row-sharded (`TtDSAIndexer.select(row_starts=...)`); then sparse_sdpa and o_proj on the
+  slab only, output = the slab directly (no reduce-scatter, no 1/rows);
+* row classes by absolute position: an all-dense or all-sparse chunk runs only that path per slab. A mixed chunk
+  (start < 2048 < start + T) runs a uniform superset: the dense SDPA over the first n_d = min(T_loc, split) slab
+  rows on every row (an all-sparse row is pointed at the last dense block, so its throw-away rows cost one dense
+  block, never the whole prefix) and the sparse path over all T_loc slab rows (dense-position rows score at the
+  clamped position 2048, a valid full prefix), then a row-sharded [n_d, 1] mask keeps the dense result below
+  2048 (`ttnn.where`). Only the first chunk of a prompt is mixed;
+* `_sparse_attention` (both prefill paths, `GLM53_SPARSE_A2A=1` default): the d_p `_sparse_mla` exchange
+  instead of padding the 16 local heads to 32 for sparse_sdpa -- one all-to-all over the columns hands column c
+  every head of sequence quarter c, the index rows are `mesh_partition`-ed alike, the attention runs 64 heads
+  on a quarter of the rows, and the inverse exchange restores the head shard (sub-blocks with
+  n % (32 * cols) != 0 keep the padded form);
+* `GLM53_PREFILL_STEMS=fixed` (default): q_a, kv_a, q_b and the indexer's q projection go through
+  `prefill_linear` (fixed K blocking in row blocks) like the k / gate stems already did, so a row's stems are the
+  same whatever the chunk or slab length (the default dispatch picks its blocking per M: one-ulp differences
+  between a 4096- and an 8192-row call flipped near-tie top-k selections on 2 of 14336 rows and 2 latent
+  elements at 16 K; `default` keeps the old dispatch);
+* the traced prefill (`slot`) stays on v1 (all-dense, <= 2048 rows; the slab path's first-use constants are
+  not validated under trace capture); the KDA layers are untouched.
+
+Tests: `tests/test_mesh_slab_prefill.py` on the (2,4) block (`_logs/agents/slabattn/`):
+
+| test (slab slot 1 vs v1 slot 0, same rows) | result |
+|---|---|
+| `test_slab_primitives` | windowed SDPA with the row-sharded offset tensor bit-equal to the plain causal kernel on both rows; `where` with a row-sharded [n,1] mask exact; narrow gathers exact (`01_primitives.log`) |
+| `test_dsa_attention_slab_r4097` (layer-3 attention, R4097, chunkings [4097] (a mixed slab: 2048 dense + 32 sparse rows), [1024 x4, 1], [2048, 2048, 1], [1024, 2048, 1025]) | 4097/4097 rows bit-exact in every chunking, 2049/2049 sparse selections identical, latent / pools / ring equal on all 8 chips (`05_attn_r4097_merged.log`) |
+| `test_dsa_layer_slab_r4097` (whole layer 3 through FunctionalDecoder, [4097] and [2048, 2048, 1]) | pcc vs HF 0.999937 for both paths, 4097/4097 rows bit-exact; decode at 4097 / 4098 on both slots of both rows 0.999974 / 0.999967 vs HF, slot 0 vs 1 = 1.000000 (`03_layer_r4097.log`) |
+| `test_dsa_attention_slab_long[16384]` (16384 real rows of R16385, [16384] and [8192, 8192]) | 16384/16384 rows bit-exact, 14336/14336 selections identical, state equal (`06_long_16k_fixedstems.log`; with the default stems 16380 / 15733 bit-exact rows and 2 selection flips, the known M-dependence) |
+| `test_dsa_attention_slab_long[65536|131072]` (the same 16384 rows at the end of a synthetically seeded 64 K / 131 K prefix) | 16384/16384 rows bit-exact, selections identical, state equal in both chunkings, with and without the sparse a2a (`08_long_64k_131k.log`) |
+
+Timing (`07_long_16k_64k_131k.log`, `08_long_64k_131k.log`: layer-3 attention, (2,4) block, warm wall per chunk with
+no index recorder and no stage timer; v1 = the merged gathered-chunk path with the same shared scorer and a2a):
+
+| prefix / chunk | class | v1 warm | slab-local warm | speedup | sparse a2a off: v1 / slab |
+|---|---|---|---|---|---|
+| 16 K: [0, 16384) one chunk | mixed (2048 dense rows) | 159 ms | 101 ms | x1.58 | 204 / 127 ms |
+| 16 K: [0, 8192) | mixed | 80 ms | 58 ms | x1.38 | 101 / 71 ms |
+| 16 K: [8192, 16384) | sparse | 91 ms | 43 ms | x2.11 | 109 / 57 ms |
+| 64 K: [49152, 65536) one chunk | sparse | 219 ms | 136 ms | x1.61 | 234 / 147 ms |
+| 64 K: two 8192 chunks | sparse | 94 / 92 ms | 48 / 49 ms | x1.95 / x1.87 | 128 / 61, 118 / 66 ms |
+| 131 K: [114688, 131072) one chunk | sparse | 207 ms | 110 ms | x1.88 | 272 / 153 ms |
+| 131 K: two 8192 chunks | sparse | 107 / 117 ms | 71 / 57 ms | x1.50 / x2.03 | 139 / 69, 138 / 72 ms |
+
+The 16 K chunk at a 131 K prefix, one DSA layer: 0.11 s on the block against the merged single-chip baseline of
+0.59 s (prefill_1m_cost.md, chip 0: scorer 207 ms, top-k 58 ms, sparse_sdpa 106 ms) and 0.21 s for v1 on the same
+block. Two rows give the expected ~2x on all-sparse chunks (the per-row work is the slab's); the mixed first chunk
+pays the uniform superset (one dense block on both rows, the sparse path over the whole slab: x1.4-1.6). The
+stage-synchronized breakdown of the slab pass at 131 K (sums above the wall because of the per-stage syncs):
+top-k group 85 ms (the [2048, 32 K-pool] score untilize + bounded top-k + id expansion per sub-block, 4 sub-blocks
+per row), sparse_out 30, index queries 24, scorer 22, absorb 20, the two a2a legs 19 + 16, sparse_sdpa 17, o_proj 10,
+cache fill + index 8, stems 7, slab gathers 3. The sparse a2a cuts sparse_sdpa from 45 / 23 ms to 13 / 6 ms per
+8192 / 4096-row slab at 16 K (64 heads on a quarter of the rows instead of 32 padded heads on all rows) for
+~5 ms of exchange per sub-block. The next terms are the scorer + top-k group (replicated over the columns: the
+same heads-to-sequence split would divide it by 4) and the per-sub-block fixed costs (constants, zeros, slices).
+
+All-dense chunks, the TTFT shapes (`test_dsa_attention_slab_dense`, `11_dense_short.log`: layer-3 attention, one chunk
+of S tokens = S/2 rows per slab, warm minimum of 3, bit-exact in both cases):
+
+| S | v1 warm | slab-local warm | slab stages (stage-synchronized) |
+|---|---|---|---|
+| 128 | 3.0 ms | 2.7 ms | stems 0.61, cache fill + index 0.92, dense SDPA 0.97, o_proj 0.35, the three gathers 0.40 |
+| 1024 | 6.9 ms | 5.7 ms | stems 2.98, cache fill + index 5.84, dense SDPA 3.64, o_proj 2.23, gathers 2.91 |
+
+TTFT, resident model layers 0-21 on the (2,4) block, 128-token prompt (`test_mesh_model.py -k ttft`, S=128): first
+greedy token 21097 == the host head on the HF rows with both paths, chain pcc vs HF rows 0.964823 identical; warm
+TTFT 365 ms slab-local (`12_ttft_22L_slab_warmcache.log`, cold 1.6 s) against 399 ms v1
+(`10_ttft_22L_v1.log`, cold 7.1 s), both on the warm (2,4) weight cache.
+
+Not done / next: the scorer + top-k group is still replicated over the columns (the heads-to-sequence split would
+divide it by 4); the mixed first chunk's uniform superset costs one dense block per row plus the sparse path over
+the dense rows (a caller splitting the first chunk at 2048 avoids it); the traced prefill keeps v1; the
+single-chip `tests/test_select_rows.py` check (a mesh row's selections == the single-chip ids) was not re-run here
+(no single-chip grant): the block tests compare the slab rows with the merged v1 rows, which that test validated
+against the single-chip ids by emulation. Logs: `_logs/agents/slabattn/`.

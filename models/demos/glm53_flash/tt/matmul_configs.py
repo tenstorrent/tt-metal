@@ -131,7 +131,8 @@ def prefill_linear_config(M: int, K: int, N: int, grid, in0_block_w: int = 4):
     pcn = 1
     while math.ceil(Nt / pcn) > gx:
         pcn += 1
-    assert Nt % pcn == 0, (N, pcn)  # narrow stems only (no ragged column block)
+    while Nt % pcn:  # no ragged column block: the next divisor of Nt (4096 wide: 16 tiles per core on 8 columns)
+        pcn += 1
     cx = Nt // pcn
     cy = min(gy, Mt)
     pcm = math.ceil(Mt / cy)
