@@ -101,6 +101,7 @@ void kernel_main() {
                         cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice),
                     next_chunk_slot(),
                     num_pages * page_bytes);
+                // the input run entry (chunk_walk.hpp): where the run goes and whether it ends a conversion block
                 cb_reserve_back(input_run_cb, 1);
                 auto* input_run = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(input_run_cb));
                 input_run[0] = outer_slice * geometry.valid_pages_per_outer_slice + page_in_slice;  // flat_page
