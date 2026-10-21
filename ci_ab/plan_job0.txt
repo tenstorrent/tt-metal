@@ -1,0 +1,13 @@
+# job 0: bits, then ABBA block 1 M H H2 M, block 2 H2 M M H (datacopy and eltwise binary perf modules, L1_TO_L1)
+bits M ids/bits_dc.txt
+bits H ids/bits_dc.txt
+bits M ids/bits_eb.txt
+bits H ids/bits_eb.txt
+b1 M ids/job0.txt L1_TO_L1
+b1 H ids/job0.txt L1_TO_L1
+b1 H2 ids/job0.txt L1_TO_L1
+b1 M ids/job0.txt L1_TO_L1
+b2 H2 ids/job0.txt L1_TO_L1
+b2 M ids/job0.txt L1_TO_L1
+b2 M ids/job0.txt L1_TO_L1
+b2 H ids/job0.txt L1_TO_L1
