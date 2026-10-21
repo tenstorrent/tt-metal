@@ -1,0 +1,28 @@
+# reshuffle_rows with the fixed RESHUFFLE_ROWS_FUSER_MASK (the fuser cannot pass an L1 mask).
+# Half-integer stimuli keep every sum exact, hence atol/rtol 0.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include: [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0]
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+    atol: 0.0  # every partial sum is exact, so any lost, doubled or misplaced row must fail
+    rtol: 0.0
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuReshuffleRows]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 1}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 1, out: 0}}
