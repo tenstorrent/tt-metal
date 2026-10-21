@@ -160,6 +160,9 @@ RUN mkdir -p /work/tt_metal/third_party/umd \
 ENV PYTHONPATH=/home/user/tt-metal
 ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
 ENV TT_METAL_HOME=/home/user/tt-metal
+# The installed ttnn wheel otherwise roots the runtime at its own package directory, which
+# has no runtime/sfpi, so the JIT kernel build would not find the compiler.
+ENV TT_METAL_RUNTIME_ROOT=/home/user/tt-metal
 
 USER user
 WORKDIR /home/user/tt-metal
@@ -179,7 +182,7 @@ RUN for bin in \
         build/test/tt_metal/unit_tests_dispatch \
         build/test/tt_metal/tt_fabric/test_physical_discovery \
         build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric; do \
-        ldd "$bin" > /tmp/ldd.txt; \
+        ldd "$bin" > /tmp/ldd.txt || { echo "ERROR: ldd failed on $bin" >&2; exit 1; }; \
         if grep "not found" /tmp/ldd.txt; then echo "ERROR: $bin has unresolved libraries" >&2; exit 1; fi; \
     done \
     && for elf in $(find runtime/sfpi -type f -perm -u+x); do \
@@ -188,7 +191,7 @@ RUN for bin in \
     done \
     && rm -f /tmp/ldd.txt \
     && echo 'int main() { return 0; }' \
-        | runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -mcpu=tt-bh -O2 -x c++ -c - -o /tmp/sfpi-smoke.o \
+        | "$TT_METAL_RUNTIME_ROOT/runtime/sfpi/compiler/bin/riscv-tt-elf-g++" -mcpu=tt-bh -O2 -x c++ -c - -o /tmp/sfpi-smoke.o \
     && rm -f /tmp/sfpi-smoke.o \
     && for tool in lspci modinfo ipmitool gh curl sudo ssh sshd mpirun setpriv; do \
         command -v "$tool" > /dev/null || { echo "ERROR: $tool not found" >&2; exit 1; }; \
