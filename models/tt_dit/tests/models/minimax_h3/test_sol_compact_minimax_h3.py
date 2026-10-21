@@ -30,7 +30,7 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor, from_torch
 from .common import GALAXY_RING
 
-MODES = ["gather", "chunk", "compact"]
+MODES = ["gather", "chunk", "compact", "resident"]  # resident: chunk semantics, K/V-once loop order (M1)
 
 
 def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
@@ -295,8 +295,8 @@ def test_density_falls_as_tau_rises(
     ]
     logger.info(f"[tau] {mode}: densities {d}")
     assert d[0] >= d[1] >= d[2] - 1e-9, f"densities {d} increase with tau"
-    if mode != "chunk":
-        # Chunk mode is exempt by construction, as the docstring above says: its density is CHUNK occupancy,
+    if mode not in ("chunk", "resident"):
+        # Chunk mode (and resident, which shares its chunk-form mask) is exempt by construction, as the docstring above says: its density is CHUNK occupancy,
         # and a chunk survives if any of its 8 blocks does, so it pins at 0.8086 across the whole tau range.
         # Only the block-form modes expose the knob. Asserting otherwise here was my error, not the kernel's.
         assert d[0] > d[2], f"tau has no effect between 0.5 and 4.0 in {mode} mode: {d}"
@@ -367,8 +367,8 @@ def _check_partial_tail(r: Result, mode, S, rows, logical_n):
     logger.info(
         f"[tail] mode={mode} rows={rows} logical_n={logical_n}: pcc vs pooled-tail ref {pcc_ref:.5f}, vs dense {pcc_dense:.5f}"
     )
-    if mode == "chunk":
-        assert pcc_dense > 0.999, f"chunk mode computes the tail chunk exactly; pcc vs dense {pcc_dense:.5f}"
+    if mode in ("chunk", "resident"):
+        assert pcc_dense > 0.999, f"{mode} mode computes the tail chunk exactly; pcc vs dense {pcc_dense:.5f}"
     else:
         assert pcc_ref > 0.98, f"{mode}: pcc vs pooled-tail reference {pcc_ref:.5f}"
 
@@ -468,6 +468,20 @@ def test_resident_matches_chunk(mesh_device, sp_axis, tp_axis, num_links, topolo
     assert res.modes_logged == {"resident"}, f"factory compiled {sorted(res.modes_logged)}"
     assert base.density == res.density, "the mask must be the chunk-mode one"
     assert p_chunk > 0.999, p_chunk
+
+
+@GALAXY_RING
+def test_resident_dense_equivalence_q64(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd
+):
+    """tau = -1e4 keeps every chunk, so with ~2 resident chunks per core every piece steps every chunk and no state
+    is ever rotated: isolates the FIFO step path (read front, write back) from the rotation path. Must match dense
+    as closely as chunk mode does (test_dense_equivalence gates at 0.9995)."""
+    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", tau=-1e4, q_chunk=Q1_CHUNK)
+    p = _pcc(r.dense, r.sol, LOGICAL_N)
+    logger.info(f"[resident] q_chunk=64 tau=-1e4 density {r.density:.4f}; pcc(resident, dense) {p:.6f}")
+    assert r.density > 0.99, r.density
+    assert p > 0.9995, p
 
 
 @GALAXY_RING
