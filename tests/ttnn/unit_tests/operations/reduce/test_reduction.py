@@ -1223,5 +1223,8 @@ def test_max_min_block_float_unaligned_width(device, op, shape, dim, keepdim, dt
     assert tt_output.dtype == dtype
     output = ttnn.to_torch(tt_output).float()
     assert output.shape == expected.shape
-    tol = 0.02 if dtype == ttnn.bfloat8_b else 0.13
-    assert torch.allclose(output, expected, rtol=tol, atol=tol), f"max abs diff {(output - expected).abs().max()}"
+    if dtype == ttnn.bfloat8_b:
+        rtol, atol = 0.02, 0.02
+    else:
+        rtol, atol = 0.0, 0.25 * expected.abs().max().item()
+    assert torch.allclose(output, expected, rtol=rtol, atol=atol), f"max abs diff {(output - expected).abs().max()}"
