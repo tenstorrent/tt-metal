@@ -4599,24 +4599,30 @@
  },
  "G.s55296": {
   "attempts": 0,
-  "duration_s": 13.3,
+  "duration_s": 5198.8,
   "history": [
    {
     "s": 13.3,
     "status": "PASS",
     "t": "2026-10-15T22:26:39"
+   },
+   {
+    "s": 5198.8,
+    "status": "PASS",
+    "t": "2026-10-21T20:04:34"
    }
   ],
-  "last_run": "2026-10-15T22:26:39",
+  "last_run": "2026-10-21T20:04:34",
   "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/G.s55296.log",
   "metrics": {
+   "drift_metrics": 62,
    "golden_chunks": 27,
    "golden_hash_ok": 1,
    "golden_layers": 8
   },
   "rc": 0,
   "reason": [],
-  "started": "2026-10-15T22:26:25",
+  "started": "2026-10-21T18:37:54",
   "status": "PASS"
  },
  "K.1": {
