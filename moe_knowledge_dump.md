@@ -559,3 +559,44 @@ would only save launch gaps (a few us each traced). On the way: ~8 programs (rou
 shared expert, latent down, dispatch + experts + combine, tail, add). Order: fused shared-expert op (then merged into
 the head / dispatch), experts during the dispatch, router + routing gather + planner merged, combine landing width
 slices (non-latent tail gone). Artifact: Galaxy MoE Block, section "North star".
+
+## 16. Link axes, width slices and the dispatch's senders (2026-10-21, block model, uniform routing, chunk 5120)
+
+Scripts: the Galaxy MoE Block artifact's model.js; roots.js / roots_l.js / wslice.js / lb_ts.js (session scratch, not
+in the tree). Mean link-hops = one row copy over one link; every chip has as many SP as TP directed links, so the
+larger axis binds.
+
+- **Which axis binds.** The combine is a unicast per row and follows the axis's average distance: SP on 8x4 (ring of 8,
+  2 hops on average, vs a TP ring of 4, 1 hop; TP / SP 0.6) and on 4x4 (SP a line of 4, 0.75); TP on the LoudBox (TP a
+  4-chip line, SP a 2-chip one; 2x). The dispatch is a drop-off tree per token (one SP trunk, TP branches per
+  destination row), so it leans TP with many destinations: 8x4 K3 (top-16) TP 1.64x (1.34x ties split), K2.7 / GLM-5.3
+  (top-8) TP 1.06-1.10x but SP once ties are split, M3 (top-4) SP 0.77x; 4x4 TP for every model; LoudBox TP 2.1x.
+  Dispatch + combine (experts during the dispatch): SP on every Galaxy stage, TP has 25-45% headroom - why the shared
+  expert's reduce-scatter / folded rows / width slices ride TP for free there (M3 excepted: few routed rows).
+- **Combine landing width slices** (non-latent): same bytes (busiest links 1-7% lower), and the all-to-all back to the
+  width split disappears from the tail: 8x4 K2.7 576 -> 528 us, GLM-5.3 505 -> 460, M3 266 -> 223; 4x4 saves 77-107;
+  LoudBox GLM-Flash 1275 -> 1140. Slices are 3-3.5 KB packets (2 KB GLM-Flash) vs 6-7 KB pieces today: unmeasured
+  efficiency, an 8% loss cancels the 8x4 gain - measure with the wire benchmark first. Not for K3 (owners hold latent
+  sums; the up projection needs full latent rows on every TP chip).
+- **SP-only dispatch from the x all-gather's copies** (each chip sends its row's tokens to its own column's experts; a
+  sparse all-gather on SP, no replicated buffer): worse on the Galaxy. The gather spreads the token over its own row,
+  but the experts sit in 5.3 of 8 rows (GLM-5.3), so every copy still crosses SP: 11.1 SP hops per token (one ring per
+  destination column, 3.6 of them) vs the 2D tree's 5.4 SP + 6.6 TP. GLM-5.3 8x4: dispatch 336 vs 215 us (ties split
+  336 vs 178), with the combine 922 vs 759 (813 vs 621); 4x4 1429 vs 1137. Freeing TP buys nothing on the Galaxy (the
+  shared expert's reduce-scatter fits in the head; K3's beside the combine is still under SP).
+- **Proposed: pick the dispatch's sender among the row-mates.** After the x all-gather any row-mate holds the token:
+  start the trunk at the row-mate that makes the TP branches shortest, and skip destinations in the source row (they
+  hold it already). SP cannot go below one trunk. 8x4 hops SP / TP: GLM-5.3 and K2.7 5.4 / 6.6 -> 5.4 / 4.2 (best split
+  over several senders 5.4 / 3.7), M3 4.3 / 3.7 -> 4.3 / 1.9, K3 6.3 / 10.9 -> 6.3 / 7.9 (several senders 6.6 / 6.8).
+  Dispatch alone: K3 -27..-37% on its binding axis (~217 -> 140-160 us), GLM-5.3 / K2.7 -18% (mostly what ties
+  splitting gives), M3 0. Experts during the dispatch: the Galaxy window stays SP-bound (combine alone 16 SP vs 8 TP
+  hops per token for GLM-5.3) but TP frees up (14.6 -> 11.7 vs 21.4 SP). Build: the planner already has every token's
+  routing; it picks the sender(s) per token and writes the tables; the owner sends only the tokens it roots, which
+  spreads the sending over the row.
+- **LoudBox GLM-Flash, standard [S/SP, H/TP] residual vs token-split, both at the north star:** the standard layout
+  costs 14-20% on the MoE block (2209-2329 vs 1944 us at 5120; 1431-1480 vs 1410 at 2048; 6838-7224 vs 5990 at 16K),
+  because TP binds there and the layout adds the shared expert's TP all-gather (241 us, mostly hidden) and
+  reduce-scatter (283, exposed) and the all-to-all back (121, gone with width slices). Fixes: an SP-only dispatch (the
+  free sender choice picks it once the combine is counted: links 1532 -> 1139 us), and the shared expert's down
+  projection split by columns with its activation all-gathered (I_s 2048 < H 4096: 121 vs 283 us). Attention / mHC
+  side not compared.
