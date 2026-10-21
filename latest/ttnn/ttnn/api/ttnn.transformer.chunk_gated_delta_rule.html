@@ -365,13 +365,15 @@
 <li><p><span class="tt-api-param-name"><strong>q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16; see Input layouts)</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16)</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV, V]  or flat [B, T, HV*V]  (cast to bf16)</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>g</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]   log-space decay        (cast to fp32)</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>beta</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]                          (cast to fp32)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>g</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]   log-space decay        (fp32 or bf16, read as is)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>beta</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]                          (fp32 or bf16, read as is)</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>them</strong> (<em>All of</em>)</span><span class="tt-api-param-desc">the</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>below</strong> (<em>and every optional tensor</em>)</span><span class="tt-api-param-desc">the</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>layout</strong> (<em>must be device tensors in TILE</em>)</span><span class="tt-api-param-desc">the</span></p></li>
 <li><p><strong>relayouts</strong> (<em>op casts dtypes but never</em>) – </p></li>
 <li><p><strong>validation.</strong> (<em>and a ROW_MAJOR input fails the device op's</em>) – </p></li>
+<li><p><span class="tt-api-param-name"><strong>host</strong> (<em>g and beta are never touched on the</em>)</span><span class="tt-api-param-desc">the kernels read each head’s column out of the</span></p></li>
+<li><p><strong>tiles</strong> (<em>token-major</em>) – </p></li>
 </ul>
 </dd>
 </dl>
