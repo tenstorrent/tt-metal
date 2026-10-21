@@ -120,8 +120,10 @@ def test_tiers_hand_values() -> None:
     call = got["tier1"]["state_window"]
     assert (call["worst"], call["worst_at"]) == (pytest.approx(0.1), 1024)
     assert got["tier2"]["output_gain"] == pytest.approx(0.9)
-    assert got["tier2"]["state_gain_h6"] == pytest.approx(0.8)
-    assert got["tier2"]["state_gain_furthest"] == {"gain": pytest.approx(0.8), "head": 6}
+    assert got["tier2"]["state_gain_final"] == pytest.approx((95 + 0.8) / HEADS)
+    gain = got["tier2"]["state_head_gain_final"]  # |1 - gain|: 95 x 0, 0.2; p99 sits 5% of the way to 0.2
+    assert (gain["p50"], gain["p95"], gain["p99"]) == pytest.approx((0.0, 0.0, 0.01))
+    assert (gain["worst"], gain["worst_at"], gain["worst_gain"]) == (pytest.approx(0.2), 6, pytest.approx(0.8))
     per_head = got["tier2"]["state_head_window"]  # 94 x 0, 96 x 0.1, 0.3, 0.5
     assert per_head["p50"] == pytest.approx(0.1)
     assert (per_head["worst"], per_head["worst_at"]) == (pytest.approx(0.5), [2048, 6])
