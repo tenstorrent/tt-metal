@@ -1280,7 +1280,6 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto orig_stride = stride;
-    const bool is_conv1d = is_1d_conv(kernel_size[0], input_height);
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_memory_config,
         input_layout,
@@ -1309,8 +1308,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     auto conv_execution_path =
         determine_conv2d_execution_path(input_memory_config.buffer_type() == BufferType::L1, dram_slice_config_);
-    // Conv1D doesn't support DRAM
-    bool is_dram_conv = (conv_execution_path == Conv2dExecutionPath::DRAM) && !is_conv1d;
+    bool is_dram_conv = conv_execution_path == Conv2dExecutionPath::DRAM;
 
     if (is_dram_conv && !mm_conv /*DRAM with Matmul doesn't need slicing*/) {
         Tensor dummy_weight_tensor = ttnn::create_device_tensor(
