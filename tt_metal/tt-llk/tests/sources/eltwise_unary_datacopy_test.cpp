@@ -303,13 +303,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #if DATACOPY_PACK_BLOCK && defined(ARCH_BLACKHOLE)
 template <typename Res>
-inline void pack_dest_block(const std::uint32_t pack_dst, const std::uint32_t dst_index, const Res& buffer_Res, const std::uint32_t first, const std::uint32_t num_tiles)
+inline void pack_dest_block(
+    const std::uint32_t pack_dst,
+    const std::uint32_t dst_index,
+    const Res& buffer_Res,
+    const std::uint32_t first,
+    const std::uint32_t num_tiles,
+    const std::uint32_t num_faces)
 {
-    // Block-float outputs close every tile
-    if (IS_BFP_FORMAT(pack_dst))
+    // Block-float outputs and tiles of fewer than four faces close every tile
+    if (IS_BFP_FORMAT(pack_dst) || num_faces != 4)
     {
         _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
-            dst_index, L1_ADDRESS(buffer_Res[first]), num_tiles, (L1_ADDRESS(buffer_Res[first + 1]) - L1_ADDRESS(buffer_Res[first])) << 4);
+            dst_index, L1_ADDRESS(buffer_Res[first]), num_tiles, (L1_ADDRESS(buffer_Res[first + 1]) - L1_ADDRESS(buffer_Res[first])) << 4, num_faces);
     }
     else
     {
@@ -351,7 +357,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
 #if DATACOPY_PACK_BLOCK && defined(ARCH_BLACKHOLE)
-                    pack_dest_block(formats.pack_dst, DST_INDEX, buffer_Res, block_num * NUM_TILES_IN_BLOCK, NUM_TILES_IN_BLOCK);
+                    pack_dest_block(formats.pack_dst, DST_INDEX, buffer_Res, block_num * NUM_TILES_IN_BLOCK, NUM_TILES_IN_BLOCK, num_faces);
 #else
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {
@@ -373,7 +379,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_packer_wait_for_math_done_();
 #if DATACOPY_PACK_BLOCK && defined(ARCH_BLACKHOLE)
-                    pack_dest_block(formats.pack_dst, DST_INDEX, buffer_Res, block_num * NUM_TILES_IN_BLOCK, NUM_TILES_IN_BLOCK);
+                    pack_dest_block(formats.pack_dst, DST_INDEX, buffer_Res, block_num * NUM_TILES_IN_BLOCK, NUM_TILES_IN_BLOCK, num_faces);
 #else
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {

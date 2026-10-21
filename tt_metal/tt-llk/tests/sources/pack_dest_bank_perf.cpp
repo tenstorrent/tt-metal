@@ -215,9 +215,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             false /* partial_face */,
             false /* narrow_tile */,
             NUM_TILES_IN_BLOCK /* num_tiles */);
-        reconfigure_packer_l1_acc(L1_ACC);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_packer_wait_for_math_done_();
+        reconfigure_packer_l1_acc(L1_ACC);
         PROFILER_SYNC();
     }
     {

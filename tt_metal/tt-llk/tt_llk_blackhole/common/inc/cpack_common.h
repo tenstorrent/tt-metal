@@ -297,6 +297,10 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
+// Channel-1 W stride the closed block pack last wrote; set_packer_strides zeroes the register.
+// Internal linkage lets a kernel without a closed block drop the store.
+static std::uint32_t pack_ch1_w_stride = 0;
+
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
@@ -320,6 +324,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    pack_ch1_w_stride = 0;
     TTI_NOP;
     TTI_NOP;
 }
