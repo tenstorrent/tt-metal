@@ -264,8 +264,8 @@ stages { id: "s7" label: "LMHead" shape { dims: [ 4, 4 ] } }   # 2 slices of 4x2
 
 #### A fork example
 
-A router with a fabric-return target branch and a host-MPI-return draft branch, mirroring
-`build_gpt_oss_dflash_router_pipeline_graph`:
+A router with a target branch that returns over fabric and a draft branch whose return may
+go over host MPI, mirroring `build_gpt_oss_dflash_router_pipeline_graph`:
 
 ```textproto
 pipeline_descriptors {
@@ -280,7 +280,7 @@ pipeline_descriptors {
   edges { src: "target37" dst: "router" }
   edges { src: "router"   dst: "draft0" }
   # ... draft chain ...
-  edges { src: "draft10"  dst: "router" transport: HOST }   # returns over host MPI
+  edges { src: "draft10"  dst: "router" policy: RELAXED }   # may return over host MPI
 }
 ```
 
@@ -293,17 +293,11 @@ message PipelineDescriptor {
   string name = 1;                    // non-empty, unique across descriptors
   repeated PipelineStage stages = 2;  // >= 1
   repeated PipelineEdge edges = 3;
-  PipelinePlacement placement = 4;    // default STRICT
 }
 
-enum PipelinePlacement {
-  STRICT = 0;     // every non-HOST edge must ride fabric
-  FLEXIBLE = 1;   // the builder may move edges onto host MPI where the fabric ends
-}
-
-enum EdgeTransport {
-  FABRIC = 0;
-  HOST = 1;       // D2H -> MPI -> H2D; needs no fabric link
+enum EdgePolicy {
+  STRICT = 0;     // must ride a fabric link
+  RELAXED = 1;    // fabric if the placement allows; otherwise host MPI (D2H -> MPI -> H2D)
 }
 
 message PipelineStage {
@@ -315,22 +309,69 @@ message PipelineStage {
 message PipelineEdge {
   string src = 1;            // resolves to a stage id
   string dst = 2;            // resolves to a stage id
-  EdgeTransport transport = 3;  // default FABRIC
+  EdgePolicy policy = 3;     // default STRICT (1.4)
 }
 ```
 
-`shape` is rank 2 because the resolver models a chip as `(row, col)`. `transport` mirrors
-the builder's `Edge.transport` (`"fabric"` or `"host"`), which replaced `host_mpi_return` in
-tt-blaze #4917: the resolver drops HOST edges, the graph splits into fabric chains that are
-resolved one at a time, and a fork branch with a HOST return is placed as an open path.
-`placement` mirrors `build_topology(placement="strict" | "flexible")` (tt-blaze #4513, CLI
-`--pipeline-builder`), which decides how much the mapper may assume the builder can route
-over host (2.3, 3.4). Edges carry no loopback marking and no channel count (2.1).
+`shape` is rank 2 because the resolver models a chip as `(row, col)`. `policy` says whether
+an edge must ride the fabric (1.4). Edges carry no loopback marking and no channel count
+(2.1).
 
 None of the comments above are enforced by protobuf. They are obligations on
 `validate_pipeline_descriptors`.
 
-### 1.4 Merging MGDs
+### 1.4 Edge policy: STRICT or RELAXED, per edge
+
+Each edge says whether it must ride the fabric. The words match `channels { policy }`:
+STRICT is a requirement, RELAXED a preference.
+
+| Policy | Meaning | What the mapper requires |
+|---|---|---|
+| `STRICT` (default) | carried over a fabric link | a fabric link between the two stages' submeshes. If they are on different meshes, the edge rides a declared connection and counts against its channels |
+| `RELAXED` | carried over fabric where the placement allows, otherwise over host MPI | nothing: the edge never needs a link |
+
+```textproto
+edges { src: "s0" dst: "s1" }                    # STRICT
+edges { src: "s1" dst: "s2" }                    # STRICT
+edges { src: "s2" dst: "s3" }                    # STRICT
+edges { src: "s3" dst: "s0" policy: RELAXED }    # the loopback may go over host
+```
+
+- **There is no HOST value.** An edge the builder always sends over host needs no link, so
+  to the mapper it is RELAXED. Whether a RELAXED edge ends up on fabric or host is decided
+  when the placement is built, not in the descriptor.
+- **The two whole-pipeline modes are special cases.** Blaze picks one mode per run today:
+  `build_pipeline(placement="strict" | "flexible")`, set by `--pipeline-builder`. Every edge
+  STRICT is `"strict"`. Every edge RELAXED is `"flexible"`, which may cut any edge except
+  the two below. A mix is what neither mode can say: for example a STRICT ring whose only
+  RELAXED edge is the loopback.
+- **The builder reads the same policy.** Each blaze `Edge` carries its policy, and the
+  host-cut planner may cut only RELAXED edges. `--pipeline-builder flexible` stays as a
+  shortcut that marks every edge RELAXED. The MGD and the runtime graph then agree on which
+  edges may go over host, so Tier C checks what the builder will build.
+- **Two edges the builder always keeps on fabric.** They may be declared RELAXED, and every
+  tier then treats them as STRICT:
+  - *stage 0's outgoing edge* in a ring. Blaze's host-cut planner never cuts it
+    (`_group_walk` in `host_edge_planner.py` skips any alignment with `0 in cuts`);
+  - *the router's edge into each branch* of a fork. The router sends to a branch through its
+    `d2d_exchange`, and a host hop out of the router has no wiring: `_find_branches`
+    (`pipeline_builder/fork.py`) asserts "a branch head must be a fabric neighbour of the
+    router". A branch's *return* to the router may be RELAXED.
+
+What each step does with the policy:
+
+| Step | STRICT edge | RELAXED edge |
+|---|---|---|
+| Tier A (2.1) | - | - |
+| Tier B crossing rules (2.2) | a crossing must ride a declared connection and fit its channels | left out |
+| Plan 1 `k_AB` (5.1) | counted | not counted |
+| Tier C (2.3, 3.4) | must be a fabric link in the layout | the host-cut planner may cut it; each fabric chain is then resolved on its own |
+| Fork router degree (2.2, 3.2) | a STRICT return needs a cycle through the router: 2 router neighbours | a RELAXED return or a dead end needs an open path: 1 router neighbour |
+
+A pipeline whose edges are all STRICT takes the carve paths of 3.4 unchanged. One with a
+RELAXED edge also gets the host-cut path (3.4, "Host cuts on RELAXED edges").
+
+### 1.5 Merging MGDs
 
 The topology mapper never reads a part MGD directly. `MultiMeshSolutionEnumerator::init_from_parts`
 (`topology_mapper_utils.cpp`) always calls `MeshGraphDescriptor::merge` on its parts and builds
@@ -364,21 +405,28 @@ for (const auto& pipeline : part.pipeline_descriptors()) {
   spans the parts is the reason to merge (for example, per-galaxy MGDs merged into one
   supercluster).
 
-**Rule for more than one part declaring a pipeline: reject.** `merge` fails if two or more
-parts carry `pipeline_descriptors`, and names both parts:
+**Several pipelines: checked together, as one graph.** An MGD may declare more than one
+pipeline, and merging parts that each declare one gives several. The parts' pipelines are
+disconnected from each other, because no part can name another part's stages. Rather than
+check them one at a time, the mapper combines them into **one pipeline graph whose
+components are the pipelines**, and sets every constraint on that graph in one go:
 
-```
-MeshGraphDescriptor::merge: pipeline_descriptors declared in descriptor 0 ('p_ring') and
-descriptor 2 ('p_ring'); declare the pipeline in exactly one part.
-```
+- **Names.** Pipeline names must be unique across the merged MGD; a clash is a merge error
+  that names both parts. In the combined graph a stage is `<pipeline>/<stage id>`, so stage
+  ids only need to be unique within their pipeline.
+- **Tier A** checks each pipeline on its own: each is linear or one fork, with its own
+  stage 0 or router (2.1).
+- **Tier B** counts capacity over all pipelines together, and a projection places every
+  stage of every pipeline at once. The pipelines compete for the same slices, so two that
+  each fit alone can fail together (2.2).
+- **Plan 1** takes `k_AB` over the combined projections, so it sums the STRICT crossings of
+  every pipeline (5.1).
+- **Tier C** places all components on disjoint slices of one seating, and resolves each
+  component as its own graph (3.4, "Several pipelines").
 
-- One pipeline is active per run (2.1). Since every pipeline binds across the whole merged
-  fabric, two parts' pipelines would compete for the same slices, and nothing says which
-  one runtime builds.
-- Byte-identical copies (the same file in two parts) are rejected as well. Being exact keeps
-  the rule simple; relax it only if a real setup needs it.
-- Uniting several parts' pipelines into one graph needs edges between parts, and no part
-  can name another part's stages. That is out of scope.
+A part's pipeline still binds across the whole merged fabric, not just to that part's
+meshes. Byte-identical copies of one pipeline (the same file in two parts) clash on the name
+and are rejected; relax that only if a real setup needs it.
 
 **Validation order.** Tier A runs as each part is parsed, so a bad pipeline is reported
 against its own file. The merged MGD re-runs the validators when constructed, which also
@@ -387,7 +435,9 @@ merged MGD only.
 
 **Tests.**
 - Two parts, a pipeline in one: present after merge, unchanged, and Tier C runs.
-- Pipelines in two parts: merge fails with the message above.
+- Pipelines with different names in two parts: both present after merge, and Tier C checks
+  them together.
+- Pipelines with the same name in two parts: merge fails, naming both parts.
 - One part: unchanged, as today.
 - No pipeline anywhere: the merged proto is byte-identical to today's.
 
@@ -443,7 +493,7 @@ top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
 
 # 2 meshes x 4 slices = 8 slices; the ring below needs 1 + 2 + 2 + 1 = 6
 pipeline_descriptors {
-  name: "mixed4"  placement: STRICT
+  name: "mixed4"
   stages { id: "s0" shape { dims: [ 4, 2 ] } }   # 1 slice
   stages { id: "s1" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
   stages { id: "s2" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
@@ -500,9 +550,10 @@ validate_pinnings(proto, all_errors);
 validate_pipeline_descriptors(proto, all_errors);   // <-- Tier A
 ```
 
-**Field-level obligations** are the schema comments in 1.3. Exactly one descriptor is
-active, so capacity (2.2) is evaluated for it alone. Every stage is passed to the resolver as
-an explicit node, so a stage no edge mentions is kept, not silently dropped.
+**Field-level obligations** are the schema comments in 1.3. Each pipeline is checked on its
+own here; when an MGD declares several, the later tiers check them together as one graph
+(1.5). Every stage is passed to the resolver as an explicit node, so a stage no edge
+mentions is kept, not silently dropped.
 
 **Stage shapes are in logical mesh orientation.** A stage's `shape` is `(rows, cols)` in the
 mesh's logical coordinates. Neither blaze's carve planner nor Tier C tries the transpose, so
@@ -526,19 +577,18 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   - the router splits into two branches (one entry, two exits), and branches that return join
     back at the router (up to two entries, one exit). No other stage splits or joins;
   - each branch is a chain;
-  - the router's edge into each branch is FABRIC;
-  - a branch may return to the router, over FABRIC or HOST, or it may **dead-end**: its last
-    stage has no out-edge.
+  - a branch may return to the router (STRICT or RELAXED, 1.4), or it may **dead-end**: its
+    last stage has no out-edge.
 
-  For the branch count and the router's edges, this is the stricter of blaze's two checks:
-  `fork_structure` (carve planner, 3.2) accepts any number of branches, but the runtime fork
-  builder `_find_branches` (`pipeline_builder/fork.py`) asserts exactly two and requires the
-  router-to-branch edges over fabric. Tier A follows the runtime there.
+  For the branch count, this is the stricter of blaze's two checks: `fork_structure` (carve
+  planner, 3.2) accepts any number of branches, but the runtime fork builder
+  `_find_branches` (`pipeline_builder/fork.py`) asserts exactly two. Tier A follows the
+  runtime there.
 
   Dead ends go the other way: Tier A allows them although blaze rejects them today, in both
   `fork_structure` ("branch ending at X has no loopback edge back to the router") and
   `_find_branches` ("Branch tail must have exactly one loopback edge to router"). Later
-  steps treat a dead-end branch like a HOST-return branch, which already has no fabric return:
+  steps treat a dead-end branch like a branch whose return goes over host:
   - Tier B and the carve planner place it as an open path that starts next to the router,
     and it needs 1 router neighbour, not 2;
   - Tier C's port of `fork_structure` and `plan_fork_carve` (3.2) accepts a branch with no
@@ -552,12 +602,11 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   > branches (`_find_branches` asserts `len(succ[router]) == 2`, and branch roles are fixed
   > by index: 0 is target, 1 is draft). Then the rule becomes "one router, any number of
   > chain branches", which is what `fork_structure` already accepts. Tier B's router degree
-  > check (2 neighbours per fabric-return branch plus 1 per host-return or dead-end branch)
-  > needs no change.
-- **HOST transport on any edge.** Blaze supports host hops anywhere in a ring or branch
-  (host input, host output and host hops on both sides of a stage), not just on a branch's
-  return. Under FLEXIBLE placement no edge may be declared HOST up front, because blaze only
-  plans host cuts when the graph declares none (`_resolve_topology`).
+  > check (2 neighbours per STRICT return plus 1 per RELAXED return or dead end) needs no
+  > change.
+- **Any edge may be RELAXED** (1.4). Stage 0's outgoing edge and a router's edges into its
+  branches are accepted as RELAXED but treated as STRICT, because the builder cannot carry
+  them over host.
 
 #### Examples
 
@@ -567,14 +616,16 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
 | `pod8` | pass | a ring of 8; the loopback is `s7 -> s0` |
 | `mixed4` plus `edges { src: "s1" dst: "s1" }` | reject | self-edge |
 | `mixed4` with `s0 -> s1` repeated | pass | two channels on that hop; the builder reads one link per edge, which is a builder limit |
-| dflash: `router -> target0 .. target37 -> router`, `router -> draft0 .. draft10 -> router` (draft return HOST) | pass | one router, two chain branches, both return to it |
+| dflash: `router -> target0 .. target37 -> router`, `router -> draft0 .. draft10 -> router` (draft return RELAXED) | pass | one router, two chain branches, both return to it |
 | edges `s0 -> s1`, `s0 -> s2`, `s1 -> s0`; `s2` has no out-edge | pass | a fork whose branch `s2` dead-ends, which is allowed. Blaze rejects it today in `fork_structure` (TODO above) |
 | a router with three branches | reject | more than two branches; blaze's fork runtime builds exactly two (TODO above) |
 | a branch stage with out-degree 2 (a fork inside a branch) | reject | only the router may split; each branch must be a chain |
 | two stages with in-degree 0 | reject | two routers; a fork has exactly one |
-| `router -> draft0` declared `transport: HOST` | reject | the router's edge into a branch must be FABRIC; only a branch's return may be HOST |
-| `mixed4` as FLEXIBLE with `s3 -> s0` declared `transport: HOST` | reject | FLEXIBLE plans its own host cuts and only does so when none are declared |
-| `mixed4` as STRICT with `s3 -> s0` declared `transport: HOST` | pass | a host hop anywhere in a ring is allowed |
+| `mixed4` with `s3 -> s0` RELAXED | pass | any edge may be RELAXED |
+| `mixed4` with `s0 -> s1` RELAXED | pass | accepted, and treated as STRICT: the builder cannot carry stage 0's outgoing edge over host |
+| dflash with `router -> draft0` RELAXED | pass | accepted, and treated as STRICT: the router sends to a branch over fabric only |
+| `mixed4` plus a copy named `mixed4_b` | pass here | each is checked on its own; Tier B checks them together and rejects on capacity (1.5) |
+| `mixed4` plus a copy also named `mixed4` | reject | pipeline names must be unique (1.5) |
 | a stage declared `[2, 4]` where every mesh has 4x2 slices | pass here | shapes are logical and never transposed, so Tier B finds no mesh it binds to |
 
 ### 2.2 Tier B - descriptor plus the declared fabric
@@ -639,17 +690,17 @@ llama_8b_pod
 Check that at least one assignment of stages to meshes (a *projection*: each stage from its
 binding set, respecting capacity) satisfies:
 
-- **Every crossing rides a declared connection.** For each FABRIC pipeline edge whose stages
-  land on different meshes A and B, the MGD declares a connection between A and B.
-- **Crossings fit the channels.** The number of FABRIC pipeline edges crossing A–B is at most
-  that connection's channel count.
+- **Every STRICT crossing rides a declared connection.** For each STRICT pipeline edge whose
+  stages land on different meshes A and B, the MGD declares a connection between A and B.
+- **STRICT crossings fit the channels.** The number of STRICT pipeline edges crossing A–B is
+  at most that connection's channel count.
 
 Extra connections the pipeline does not use are fine. Tier C tightens "declared" to
 "actually bound by the control plane" (2.3).
 
-**Under FLEXIBLE placement these two rules do not apply.** The builder may turn any crossing
-except stage 0's outgoing edge into a host hop, so a missing or too-small connection is not
-a reason to reject. Tier B then checks only binding sets and capacity.
+**RELAXED crossings are left out of both rules** (1.4). The builder may carry them over
+host, so a missing or too-small connection is not a reason to reject them. A pipeline whose
+edges are all RELAXED is checked only on binding sets and capacity.
 
 Zero projections is a reject. Otherwise Tier B only reports that the pipeline is possible;
 it does not hand a chosen projection to Tier C. Rotations and reflections of a uniform ring
@@ -676,8 +727,8 @@ than a straight port.
 Slice adjacency comes from `device_topology` dims and RING wraps. Crossing endpoints are left
 open, because which slice a crossing touches is not known until seating. This checks that
 the stages assigned to the mesh can be cut into whole-slice rectangles along a path or cycle,
-including joint stages and, for a fork, the router's degree: 2 neighbours per fabric-return
-branch plus 1 per host-return or dead-end branch.
+including joint stages and, for a fork, the router's degree: 2 neighbours per STRICT return
+plus 1 per RELAXED return or dead end.
 
 #### Examples
 
@@ -720,8 +771,11 @@ crosses a cut an even number of times, so Plan 1 (5.1) gets `k(M0, M1) = 2`.
 | `mixed4` with a fifth stage `[4, 4]` | pass | 8 of 8 slices: s0, s3 and one 4x4 stage on one mesh, the other two 4x4 stages on the other; every slice is used |
 | `mixed4` with one stage `[4, 10]` | reject | wider than either mesh: empty binding set |
 | `pod8` with M1 as 4x8, `host_topology [1, 4]` (4x2 slices), still 1x2 stages | reject | 1x2 is not a whole slice. Blaze's per-rank tiling could build it (3.4, "a tile smaller than a host slice"), so this rule is stricter than runtime |
-| `mixed4` with the MGD connection removed | reject | every projection crosses, and no connection is declared |
-| the same, but `placement: FLEXIBLE` | pass | crossings may become host hops, so only binding sets and capacity apply |
+| `mixed4` with the MGD connection removed | reject | every projection crosses on a STRICT edge, and no connection is declared |
+| the same, with `s1 -> s2` and `s3 -> s0` RELAXED | pass | the projection `s0, s1 -> M0`, `s2, s3 -> M1` crosses only on those two edges, and RELAXED crossings need no connection |
+| the same, with only `s3 -> s0` RELAXED | reject | every projection still crosses on a STRICT edge (`s1 -> s2` or `s2 -> s3`) |
+| `mixed4` plus a copy named `mixed4_b` | reject | together they need 6 + 6 = 12 slices and the MGD has 8, although each fits alone (1.5) |
+| two copies of `ring4` (four 4x2 stages each) | pass | 4 + 4 = 8 slices, every slice used; a projection places all eight stages at once |
 
 ### 2.3 Tier C - inside the topology mapper
 
@@ -822,7 +876,7 @@ Section 4 traces each one step by step.
 |---|---|---|---|---|
 | `mixed4` | (P, Q) | A0–B0, A3–B3 | reject | the slices form one loop of 8 and the ring needs a loop of exactly 6; every tiling fails in the resolver |
 | `mixed4` | (P, R) | A0–B0, A2–B2 | accept | a 6-slice loop exists and the stages align onto it |
-| `mixed4`, FLEXIBLE | (P, Q) | A0–B0, A3–B3 | accept | one fabric path covers 6 slices and the loopback goes over host (3.4) |
+| `mixed4` with `s3 -> s0` RELAXED | (P, Q) | A0–B0, A3–B3 | accept | one fabric path covers 6 slices and the RELAXED loopback goes over host (3.4) |
 | `pod8` | (P, U) | A3–T0, A0–T3 | reject | right count, both on M0's end slices, but on opposite corners of M1, so no path through M1's four tiles joins them |
 | `pod8` | (P, V) | A3–T1, A0–T0 | accept | the cables land on neighbouring tiles of M1 |
 
@@ -935,7 +989,7 @@ plane (since [#55313](https://github.com/tenstorrent/tt-metal/pull/55313)):
 Tier C calls `resolve_graph_layout_with_connections` with `DirectLinks` built from the
 candidate mapping and the bound links (3.3). It is the same function Tier D calls through
 `resolve_graph_layout`, so the two cannot drift. It handles fork graphs today: edges form a
-DAG after dropping loopbacks, HOST edges are left out, and per-node core capacity
+DAG after dropping loopbacks, edges carried over host are left out, and per-node core capacity
 covers the router's endpoint budget.
 
 The one change: the resolver throws with a message string on failure. Tier C needs to know
@@ -1024,8 +1078,8 @@ next to the resolver:
 | `fork_structure` | `detail::fork_structure` |
 | `validate_carve_plan` | `detail::validate_carve_plan` |
 | `CarvePlanError` (phase + reason) | structured result with the same phase names |
-| `plan_ring_placement`, `plan_fork_placement` (`host_edge_planner.py`, FLEXIBLE only) | `detail::plan_ring_placement`, `detail::plan_fork_placement` |
-| `HostEdgePlanError`, `ForkShapeUnsupported` | structured result: reject vs fall back to STRICT |
+| `plan_ring_placement`, `plan_fork_placement` (`host_edge_planner.py`) | `detail::plan_ring_placement`, `detail::plan_fork_placement`, taking the set of edges they may cut: the RELAXED edges (1.4) |
+| `HostEdgePlanError`, `ForkShapeUnsupported` | structured result: reject vs fall back to the all-fabric paths |
 
 - **Two copies.** The Python planner stays in tt-blaze and keeps running at runtime. Nothing
   in blaze moves or changes.
@@ -1340,13 +1394,14 @@ A2–B2 cable's:
 Tier C and the control plane call the same two functions, so the cables Tier C checks are
 the cables that get bound.
 
-### 3.4 Carve paths: planned carve, per-rank tiling and flexible placement, as the pipeline builder does them
+### 3.4 Carve paths: planned carve, per-rank tiling and host cuts, as the pipeline builder does them
 
 Blaze has two ways to turn a mesh into submeshes, and Tier C needs both (2.3). Both end in
 the same code, so Tier C shares one path from "slots" to the resolver and the two carve
-paths differ only in how they produce slots. On top of them, FLEXIBLE placement (tt-blaze
-#4513, #4693, #4917) first plans which edges go over host, then reuses the same two carve
-paths, then resolves each fabric chain on its own (see "Flexible placement" below).
+paths differ only in how they produce slots. For a pipeline with RELAXED edges (1.4), a
+host-cut planner (tt-blaze #4513, #4693, #4917) first picks which of them go over host,
+then reuses the same two carve paths, then resolves each fabric chain on its own (see
+"Host cuts on RELAXED edges" below).
 
 This section reads tt-blaze `origin/main` (34e783a631). An older checkout (45d3be26c4, before
 #4513) has neither `Edge.transport` nor `placement="flexible"`.
@@ -1400,14 +1455,14 @@ Per seating, after intra-mesh completion (section 4):
 Which paths Tier C may use is what blaze has for that MGD, so an accepted mapping is one
 blaze could build some way:
 
-| MGD | STRICT | FLEXIBLE |
+| MGD | every edge STRICT | some edge RELAXED |
 |---|---|---|
 | one mesh, every stage on one rank | single-mesh tiling | single-mesh tiling |
-| one mesh with a joint stage, or several meshes | planned carve or per-rank tiling | flexible placement; if a fork raises `ForkShapeUnsupported`, the STRICT paths |
+| one mesh with a joint stage, or several meshes | planned carve or per-rank tiling | host cuts on the RELAXED edges, then the plan's carve or tiling; if a fork raises `ForkShapeUnsupported`, the all-STRICT paths |
 
-A mapping is accepted if any allowed path succeeds. A FLEXIBLE ring whose planner fails
-(for example non-uniform host slices) is rejected, because blaze raises there rather than
-falling back.
+A mapping is accepted if any allowed path succeeds. A ring with RELAXED edges whose
+host-cut planner fails on its inputs (for example non-uniform host slices) is rejected,
+because the builder raises there rather than falling back.
 
 **Tile shape per mesh (per-rank tiling).** Blaze gets it from the caller; Tier C enumerates
 it. For each mesh, the candidates are the distinct stage shapes that divide the mesh, plus
@@ -1446,10 +1501,12 @@ M1. Each tile is exactly one rank's slice, so every rank keeps its own and nothi
 collapses: A0..A3 with 8 chips each, T0..T3 with 2 chips each. The resolver then decides by
 where the cables land (3.1).
 
-#### Flexible placement
+#### Host cuts on RELAXED edges
 
-**What blaze does.** `PipelineGraph._resolve_topology` (`graph.py`) with
-`placement="flexible"`, when the graph declares no HOST edge and has a loopback:
+**What the builder does** for a pipeline with RELAXED edges (1.4), when it has a loopback.
+These are the steps of blaze's flexible placement (`PipelineGraph._resolve_topology` in
+`graph.py`), with one change: the planner may cut only the RELAXED edges, where blaze today
+may cut every edge but stage 0's outgoing one.
 
 1. **Plan the host cuts** (`pipeline_builder/host_edge_planner.py`):
    - *ring:* `plan_host_edges` → `plan_ring_placement(slices, adjacency, stage_shapes,
@@ -1457,56 +1514,54 @@ where the cables land (3.1).
      the same search as `plan_ring_carve`. If none exists, it covers the ring's slices with
      `k` vertex-disjoint fabric chains, trying the fewest chains first up to one chain per
      stage. Stages are grouped along each chain, and consecutive chains are joined over host.
-     A cut falls only between stages (never inside a wide stage) and never on stage 0's
-     outgoing edge. Ties go to the smallest host-hop page sizes, then to cutting the loopback.
-     Inputs follow the carve planner's rules: uniform slices, whole-slice stage shapes,
-     stage 0 on one slice. Breaking them raises `HostEdgePlanError`, which is not caught.
+     A cut falls only between stages (never inside a wide stage), only on a RELAXED edge, and
+     never on stage 0's outgoing edge. Ties go to the smallest host-hop page sizes, then to
+     cutting the loopback. Inputs follow the carve planner's rules: uniform slices,
+     whole-slice stage shapes, stage 0 on one slice. Breaking them raises
+     `HostEdgePlanError`, which is not caught.
    - *fork:* `plan_fork_host_edges` → `plan_fork_placement`. It tries `plan_fork_carve`
      first (all fabric). Failing that, it walks each branch from a distinct router neighbour
-     and cuts to host where a branch runs out of fabric. Non-uniform slices or a router
-     wider than one slice raise `ForkShapeUnsupported`; the caller then resolves the fork as
-     declared, which is STRICT behaviour.
-2. **Apply the plan.** The chosen edges are marked `transport="host"`.
+     and cuts to host where a branch runs out of fabric, only on a RELAXED edge and never on
+     the router's edge into the branch. Non-uniform slices or a router wider than one slice
+     raise `ForkShapeUnsupported`; the caller then resolves the fork with every edge on
+     fabric.
+2. **Apply the plan.** The cut edges are carried over host; every other edge stays on fabric.
 3. **Carve.** If the plan has a carve (some stage spans several slices), its slots are used,
-   as in the planned carve. Otherwise, if every stage has the same shape, blaze sets
+   as in the planned carve. Otherwise, if every stage has the same shape, the builder sets
    `submesh_shape` to that shape and uses **per-rank tiling**. This is the planner and
    per-rank tiling working together: the planner picks the cuts, and tiling makes the
    submeshes. A ring that is already all fabric on single-slice stages produces no plan,
-   and placement goes to the resolver as in STRICT.
-4. **Resolve each chain.** HOST edges are dropped from the resolver's edges, and the fabric
+   and placement goes to the resolver as for an all-STRICT pipeline.
+4. **Resolve each chain.** Cut edges are dropped from the resolver's edges, and the fabric
    graph splits into chains. `_resolve_chains_separately` calls the resolver once per chain.
    A chain's pool is the planner's chip sets for its stages when the plan fixed them,
    otherwise the submeshes not yet claimed by earlier chains. That second pool is greedy: an
    earlier chain may take submeshes a later one needed.
 
-`host_hop_page_size_bytes`, required on every node under FLEXIBLE, only breaks ties, so it
-does not affect whether a placement exists. It stays out of MGD.
+`host_hop_page_size_bytes`, required on the source of every edge the planner may cut, only
+breaks ties, so it does not affect whether a placement exists. It stays out of MGD.
 
-**What Tier C does** for a FLEXIBLE descriptor, per seating:
+**What Tier C does** for a pipeline with a RELAXED edge, per seating:
 
 1. Run the C++ `plan_ring_placement` / `plan_fork_placement` (3.2) on the slices and slice
-   adjacency (section 4, steps 3–4).
-2. Mark the planned edges HOST.
-3. Produce slots as blaze does in step 3: the plan's carve, or per-rank tiling by the
+   adjacency (section 4, steps 3–4), with the RELAXED edges as the edges it may cut.
+2. Drop the cut edges from the graph the resolver sees.
+3. Produce slots as the builder does in step 3: the plan's carve, or per-rank tiling by the
    uniform stage shape (steps 1–3 of "What Tier C does" above). With a fixed tile shape
    there is no tile-shape enumeration.
 4. Build `DirectLinks` once, then call `resolve_graph_layout_with_connections` per fabric
-   chain with blaze's pool rule, including the greedy order. Matching that order keeps the
-   verdict the same as blaze's.
+   chain with the builder's pool rule, including the greedy order. Matching that order keeps
+   the verdict the same as the builder's.
 5. Accept if the plan and every chain resolve. On `ForkShapeUnsupported`, fall back to the
-   STRICT paths.
+   all-STRICT paths.
 
-**What FLEXIBLE changes upstream of Tier C.** Under FLEXIBLE, most mappings that STRICT
-rejects for missing fabric become buildable. Tier B drops the crossing rules (2.2), and
-Plan 1 prunes nothing (5.1). Rejections that remain come from shapes, capacity, stage 0's
-outgoing edge, and what the planner cannot cover.
+**What RELAXED changes upstream of Tier C.** A RELAXED crossing drops out of Tier B's
+crossing rules (2.2) and of `k_AB` (5.1), so mappings that lack fabric for it are not
+rejected early. Rejections that remain come from shapes, capacity, STRICT crossings, and
+what the planner cannot cover.
 
-**Staging.** FLEXIBLE support can land after STRICT. Until it does, Tier C must accept
-FLEXIBLE descriptors without checking them. A STRICT check on a FLEXIBLE descriptor would
-reject placements blaze can build.
-
-**Example: `mixed4` as FLEXIBLE on (P, Q).** STRICT rejects this seating (3.2, example B).
-`plan_ring_placement` runs:
+**Example: `mixed4` with `s3 -> s0` RELAXED, on (P, Q).** With every edge STRICT this
+seating is rejected (3.2, example B). `plan_ring_placement` runs:
 
 ```
    A0 ── A1 ── A2 ── A3
@@ -1519,24 +1574,55 @@ phase 1   no 6-cycle (only the 8-cycle). Census note: spare = 2 and 6 + 2 is an
 phase 3   one component of 8 >= 6, so k starts at 1. _cover_with_chains(1) starts at
           the smallest slice and extends to the smallest free neighbour:
             1. A0 A1 A2 A3 B3 B2    2. A0 B0 B1 B2 B3 A3    3. A1 A0 B0 B1 B2 B3    ...
-phase 4   _group_walk per cover; joints only between stages, never cut 0:
-            cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1 -> s2   key (1, 1, (1,))
+phase 4   _group_walk per cover; cuts only between stages and only on RELAXED edges:
+            cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1 -> s2   skipped: STRICT
             cover 2 best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0   cut s3 -> s0   key (1, 0, (3,))
           key = (cut page sizes, 0 if the loopback is cut else 1, cut indices)
-result    cover 2 wins: one cut, and it is the loopback. s3 -> s0 becomes HOST.
+result    cover 2: its one cut is the RELAXED loopback. s3 -> s0 goes over host.
           carve M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0); A1, A2 idle
           _resolve_chains_separately: one fabric chain s0 -> s1 -> s2 -> s3
 ```
 
-**FLEXIBLE edge cases.**
+With every edge RELAXED, cover 1's cut would be allowed too, and cover 2 would still win on
+the key, because it cuts the loopback.
+
+**Edge cases.**
 
 | Case | Result |
 |---|---|
-| a cover whose only alignment cuts `s0 -> s1` | skipped: stage 0's outgoing edge stays on fabric |
+| a cover whose only alignment cuts a STRICT edge | skipped |
+| a cover whose only alignment cuts `s0 -> s1` | skipped, even when `s0 -> s1` is declared RELAXED: stage 0's outgoing edge stays on fabric |
 | a joint between chains inside a 4x4 stage | skipped: a wide stage cannot be split by a host hop |
-| `pod8` as FLEXIBLE | `HostEdgePlanError: host slices are not uniform`, not caught; Tier C rejects, because blaze raises rather than falling back |
-| a fork with a two-slice router | `ForkShapeUnsupported`; blaze resolves the fork as declared, so Tier C uses the STRICT paths |
-| a FLEXIBLE ring that is already all fabric on single-slice stages | no plan; placement goes to the resolver as in STRICT |
+| `pod8` with a RELAXED edge | `HostEdgePlanError: host slices are not uniform`, not caught; Tier C rejects, because the builder raises rather than falling back |
+| a fork with a two-slice router | `ForkShapeUnsupported`; the fork is resolved with every edge on fabric, so Tier C uses the all-STRICT paths |
+| a ring with RELAXED edges that is already all fabric on single-slice stages | no plan; placement goes to the resolver as for an all-STRICT pipeline |
+
+#### Several pipelines
+
+When the MGD declares more than one pipeline (1.5), Tier C checks them together on each
+seating:
+
+1. **Place the components.** Plan each pipeline on the slices the earlier ones left free,
+   in declaration order. Each pipeline has its own stage 0 or router, so each owns its own
+   host input and output. If one does not fit, retry with the next order of the pipelines;
+   there are few, so trying every order is cheap. Unused slices become filler slots, once,
+   after the last pipeline.
+2. **Resolve each component as its own graph.** Pipelines share no edge, so the resolver
+   runs once per pipeline, over that pipeline's slots, as `_resolve_chains_separately` does
+   for chains.
+3. **Accept** only if every pipeline is placed and resolves on this seating. Feedback to SAT
+   (5.2) is about the seating, as for one pipeline.
+
+**Example: two copies of `ring4`** (a ring of four 4x2 stages, needing a 4-cycle of slices)
+on the `mixed4` meshes, 8 slices in all:
+
+- **Cables A0–B0, A2–B2, A3–B3** (carver example C's fabric). `ring4_a` takes the only
+  4-cycle, A2 A3 B3 B2. The free slices A0, A1, B0, B1 form the path A1–A0–B0–B1, with no
+  cycle, so `ring4_b` fails. The other order fails the same way. The seating is rejected,
+  although each pipeline fits on it alone.
+- **Add a cable A1–B1.** Now there are three 4-cycles. `ring4_a` takes the first,
+  A0 A1 B1 B0, and `ring4_b` takes A2 A3 B3 B2 from what is left. The seating is accepted,
+  with every slice used.
 
 #### Reuse or rebuild
 
@@ -1547,7 +1633,7 @@ result    cover 2 wins: one cut, and it is the loopback. s3 -> s0 becomes HOST.
 | host-rank chip ranges, chip ids | `MeshGraph::get_coord_range`, `coordinate_to_chip` (C++) | **use directly** |
 | row-major tiling | `MeshDeviceImpl::create_submeshes` (C++, needs a live `MeshDevice`) | **rebuild**, a few lines of offset arithmetic with the same divisibility rule. Factor it into a shared helper both call so the order cannot drift |
 | planned slots | `plan_ring_carve`, `plan_fork_carve` (Python) | **port** (3.2) |
-| host-cut planning | `plan_ring_placement`, `plan_fork_placement` (Python, `host_edge_planner.py`) | **port** (3.2), FLEXIBLE only; built on the carve planner's internals, so it mostly extends that port |
+| host-cut planning | `plan_ring_placement`, `plan_fork_placement` (Python, `host_edge_planner.py`) | **port** (3.2), used only for pipelines with a RELAXED edge, taking the RELAXED edges as the ones it may cut; built on the carve planner's internals, so it mostly extends that port |
 | per-chain resolution, chain split | `_resolve_chains_separately`, fabric component split (Python) | **rebuild**: a loop over the existing resolver, with the same pool rule and order |
 | pick a rank's slot, collapse joint stages | `_collect_submeshes` (Python) | **rebuild** in C++, small and pure; add to the parity tests (3.2) |
 | default core counts | `_pipeline_core_defaults` (Python) | **rebuild** (open question 7) |
@@ -1613,13 +1699,14 @@ loop:
 
   cands  = gather_intermesh_candidates(psd, full)  (3.3) + routed intra-mesh links
   slices = host slices of every mesh, through full.fabric_node_to_asic
-  for each carve path allowed for this MGD and placement mode                 (3.4)
-      STRICT:   planned carve, per-rank tiling, single-mesh tiling
-      FLEXIBLE: host-cut plan, then its carve or uniform-shape tiling
+  for each carve path allowed for this MGD and its edge policies             (3.4)
+      every edge STRICT: planned carve, per-rank tiling, single-mesh tiling
+      some edge RELAXED: host cuts on RELAXED edges, then its carve or tiling
+      (several pipelines: each placed on the slices still free, then resolved alone)
     slots  = that path's slots over slices and cands                          (3.2, 3.4)
     subs   = pick each rank's slot, collapse joint stages                     (3.4)
     layout = detail::resolve_graph_layout_with_connections(subs, cands)       (3.1)
-             (once per fabric chain when HOST edges split the graph)
+             (once per fabric chain when host cuts split the graph)
     stop at the first path that succeeds
   R      = crossing links the layout uses
   bound  = bind_intermesh_connections(cands, mgd, required_links = R)  (3.3; 5.3, steps 2-4)
@@ -1671,24 +1758,24 @@ two declared M0–M1 connections.
      planner rejects up front: host slices of different shapes across meshes
      (`llama_8b_pod`), and graphs with no loopback (open chains).
    - *Single-mesh tiling* (one mesh, no joint stage): every tile of the one stage shape.
-   - *Flexible placement* (FLEXIBLE descriptors): `plan_ring_placement` (or
-     `plan_fork_placement`) picks host cuts, then the plan's carve or tiling by the uniform
-     stage shape, then one resolve per fabric chain (3.4).
+   - *Host cuts* (a pipeline with a RELAXED edge): `plan_ring_placement` (or
+     `plan_fork_placement`) picks which RELAXED edges go over host, then the plan's carve or
+     tiling by the uniform stage shape, then one resolve per fabric chain (3.4).
 
    Steps 6 and 7 run per path; a mapping is rejected only when every path fails. In Case B
-   (both crossings on one slice pair) under STRICT, the planned carve fails with
+   (both crossings on one slice pair) with every edge STRICT, the planned carve fails with
    `no-cycle-of-length-4` and the per-rank tiling layout fails in the resolver, so the
-   mapping is rejected. Under FLEXIBLE, the same Case B is accepted: with both cables
-   between slices `M0a` and `M1a`, the slices still form one fabric path
+   mapping is rejected. With `s3 → s0` RELAXED, the same Case B is accepted: with both
+   cables between slices `M0a` and `M1a`, the slices still form one fabric path
    `M0b → M0a → M1a → M1b`. The planner lays `s0..s3` along it and cuts only the loopback
-   `s3 → s0` to host, which is allowed because it is not stage 0's outgoing edge.
+   `s3 → s0` to host, which is allowed because it is RELAXED and not stage 0's outgoing edge.
 6. **Layout.** Feed the resolver what blaze feeds it:
-   - stages as nodes; edges with one loopback per cycle; HOST edges dropped, and the
-     remaining fabric chains resolved one at a time when HOST edges split the graph
+   - stages as nodes; edges with one loopback per cycle; edges cut to host dropped, and the
+     remaining fabric chains resolved one at a time when cuts split the graph
      (`_resolve_chains_separately`);
    - each slot's chips as `submesh_chips`, with `node_chip_counts = rows * cols`;
    - blaze's default core counts (`_pipeline_core_defaults`: router `2 + 2 * branches`; a
-     HOST-return tail 2 on a fused router's small submesh; ring head 4 with
+     host-return tail 2 on a fused router's small submesh; ring head 4 with
      `co_locate_ring_host_io`; chain head and tail 2);
    - the step-3 links between slots as `direct_links`.
 
@@ -1758,8 +1845,8 @@ is the solved layout, not the seat, that tells Tier C which slice each cable tou
 - **The swap matters in general.** Iteration 2 fails here only because the layout is the
   same. With `unique_shapes` on, it would never be offered; that is harmless in this example,
   but wrong when the two meshes' pins or rank bindings differ (5.2).
-- **FLEXIBLE accepts iteration 1.** As FLEXIBLE, `mixed4` on (P, Q) passes with the loopback
-  over host (3.4), so the loop would stop there.
+- **A RELAXED loopback accepts iteration 1.** With `s3 -> s0` RELAXED, `mixed4` on (P, Q)
+  passes with the loopback over host (3.4), so the loop would stop there.
 - **`pod8`** takes two iterations: (P, U) fails in the resolver because the cables land on
   opposite corners of M1, and (P, V) passes (3.1).
 
@@ -1813,17 +1900,19 @@ so it is left to the exact check (5.2).
 
 From the surviving projections, take only what they all agree on:
 
-- for each mesh pair A–B, `k_AB` = the **minimum** number of crossings over all projections
-  (0 if any projection does not cross A–B);
+- for each mesh pair A–B, `k_AB` = the **minimum** number of STRICT crossings over all
+  projections (0 if any projection has none on A–B). RELAXED crossings may go over host, so
+  they never count (1.4). With several pipelines, a projection places all of them, so its
+  count is the sum over pipelines (1.5);
 - for each mesh, the boundary slices are the **union** over projections of the slices that
   may hold a boundary stage.
 
 When exactly one projection survives (for example, every stage's binding set is a single
 mesh), these are just that projection's values.
 
-**Under FLEXIBLE placement**, any crossing may become a host hop, so the minimum `k_AB` is 0
-for every mesh pair and the seat-pair and single-seat constraints below do not apply. Plan 1
-then prunes nothing, and all pipeline checking falls to the exact check (5.2).
+**When every edge is RELAXED**, `k_AB` is 0 for every mesh pair and the seat-pair and
+single-seat constraints below do not apply. Plan 1 then prunes nothing, and all pipeline
+checking falls to the exact check (5.2).
 
 **Seat-pair constraint - usable links, not raw links.** In `build_sat_placement_seat_graph`,
 for a mesh pair with `k_AB > 0`, drop the seat-graph edge between two seats when they cannot
@@ -1845,8 +1934,8 @@ allowed set only when it fails under every projection and layout:
 - the footprint has no bound link toward a neighbour mesh that every projection crosses
   to; or
 - for a router whose binding set is this mesh alone, and only with a hard-pinned layout: no
-  slice reaches the router's required degree (2 per fabric-return branch plus 1 per
-  host-return or dead-end branch). Otherwise the exact check catches it.
+  slice reaches the router's required degree (2 per STRICT return plus 1 per RELAXED
+  return or dead end). Otherwise the exact check catches it.
 
 **Caveats.**
 
@@ -1886,8 +1975,11 @@ projection `s0, s1 -> M0` has boundary stages s0 and s1 on M0, while `s0, s1, s3
 s1 and s3. Pruning by either one's slices would drop seats the other could use. The minimum
 `k` and the union of boundary slices hold for both.
 
-**Under FLEXIBLE** `k = 0` for every pair, and Plan 1 prunes nothing: `mixed4` as FLEXIBLE
-can use (Q, R) with its one link by sending one crossing over host.
+**With `s3 -> s0` RELAXED**, `k(M0, M1) = 1`. The projection `s0, s1 -> M0`,
+`s2, s3 -> M1` crosses on `s1 -> s2` (STRICT) and `s3 -> s0` (RELAXED), so it has one STRICT
+crossing, and no projection has fewer. The Q–R edge, with its one link, now stays: `mixed4`
+can use (Q, R) by sending the loopback over host. **With every edge RELAXED**, `k = 0` and
+Plan 1 prunes nothing.
 
 ### 5.2 Plan 2 - check each candidate and teach the solver (backstop)
 
@@ -1952,7 +2044,7 @@ So the runtime path, which is where Tier C runs, has it **on** today and needs t
 `MultiMeshSolutionEnumerator` constructor, so the change is at the callers that pass `true`:
 
 1. `map_multi_mesh_to_physical`, both overloads (`topology_mapper_utils.cpp`): pass
-   `unique_shapes = !mgd_has_pipeline_descriptors`, read from the merged MGD (1.4). These
+   `unique_shapes = !mgd_has_pipeline_descriptors`, read from the merged MGD (1.5). These
    two are the runtime path.
 2. `generate_rank_bindings --all-solutions` (`tools/scaleout/src/generate_rank_bindings.cpp`):
    the same gate, so the offline sweep enumerates the seatings runtime would consider.
@@ -2177,14 +2269,9 @@ are exactly the pinned ones. If the pins give A0–B0 and A3–B3, Tier C reject
 6. **Planned key name** for the rank-binding `env_overrides` entry (4.1).
 7. **Per-stage core counts.** Harnesses can override pipeline-core pools, which the MGD does
    not carry. Add an optional core count to `PipelineStage`, or accept the gap (4, step 6).
-8. **STRICT or FLEXIBLE per descriptor** (1.3, 3.4). Blaze picks the placement mode at
-   runtime (`--pipeline-builder`), not in the graph. If one MGD is run both ways, the
-   descriptor must say FLEXIBLE, or Tier C will reject placements the flexible run could
-   build. Decide whether the MGD carries the mode, or Tier C always checks the most
-   permissive mode the deployment uses.
-9. **Blaze's first-plan commitment** (3.2). Tier C accepts if any cycle resolves, but blaze
+8. **Blaze's first-plan commitment** (3.2). Tier C accepts if any cycle resolves, but blaze
    uses only its first. Either teach blaze's planner to try the next cycle when the resolver
    fails, or have Tier C check only blaze's first cycle once the mapper's output is consumed
    (4.1).
-10. **Spread fill for the binding** (5.3, step 4). Turn it on only with a pipeline descriptor,
-    or everywhere once the goldens are regenerated.
+9. **Spread fill for the binding** (5.3, step 4). Turn it on only with a pipeline descriptor,
+   or everywhere once the goldens are regenerated.

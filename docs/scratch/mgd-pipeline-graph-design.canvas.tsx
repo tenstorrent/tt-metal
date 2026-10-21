@@ -529,11 +529,11 @@ function TwoMesh(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Worked example: cases A/B/C under STRICT and FLEXIBLE
+// Worked example: cases A/B/C with every edge STRICT, and with s3 > s0 RELAXED
 // ---------------------------------------------------------------------------
 
 type CaseId = "A" | "B" | "C";
-type Mode = "STRICT" | "FLEXIBLE";
+type Mode = "all STRICT" | "s3 > s0 RELAXED";
 
 const CASES: Record<
   CaseId,
@@ -541,7 +541,7 @@ const CASES: Record<
     title: string;
     cables: Cable[];
     strict: { ok: boolean; why: string };
-    flexible: { ok: boolean; why: string; labels: { a0: string; a1: string; b0: string; b1: string }; host?: boolean };
+    relaxed: { ok: boolean; why: string; labels: { a0: string; a1: string; b0: string; b1: string }; host?: boolean };
   }
 > = {
   A: {
@@ -551,9 +551,9 @@ const CASES: Record<
       { side: "right", f: 0.5, kind: "bound", label: "a1-b1" },
     ],
     strict: { ok: true, why: "Slices form the cycle a0 > a1 > b1 > b0 > a0. plan_ring_carve finds it and the resolver lays the ring on it." },
-    flexible: {
+    relaxed: {
       ok: true,
-      why: "Same as STRICT: an all-fabric cycle exists, so the planner cuts nothing to host.",
+      why: "Same as all STRICT: an all-fabric cycle exists, so the planner cuts nothing to host.",
       labels: { a0: "s0", a1: "s1", b0: "s3", b1: "s2" },
     },
   },
@@ -567,9 +567,9 @@ const CASES: Record<
       ok: false,
       why: "Adjacency is a1-a0, a0-b0, b0-b1: a path, not a cycle. Planned carve fails with no-cycle-of-length-4; per-rank tiling fails in the resolver (s3 > s0 has no link).",
     },
-    flexible: {
+    relaxed: {
       ok: true,
-      why: "plan_ring_placement lays s0..s3 along the fabric path a1 > a0 > b0 > b1 and moves only the loopback s3 > s0 onto host. Allowed: it is not stage 0's outgoing edge.",
+      why: "plan_ring_placement lays s0..s3 along the fabric path a1 > a0 > b0 > b1 and moves only the loopback s3 > s0 onto host. Allowed: it is RELAXED and not stage 0's outgoing edge.",
       labels: { a0: "s1", a1: "s0", b0: "s2", b1: "s3" },
       host: true,
     },
@@ -578,7 +578,7 @@ const CASES: Record<
     title: "1 link",
     cables: [{ side: "left", f: 0.5, kind: "bound", label: "a0-b0" }],
     strict: { ok: false, why: "Same adjacency as Case B: no 4-slice cycle. Rejected as a ring; an open chain (no loopback) would be accepted." },
-    flexible: {
+    relaxed: {
       ok: true,
       why: "Same plan as Case B: one fabric chain a1 > a0 > b0 > b1, loopback over host.",
       labels: { a0: "s1", a1: "s0", b0: "s2", b1: "s3" },
@@ -590,17 +590,17 @@ const CASES: Record<
 function CaseExplorer() {
   const t = useHostTheme();
   const [caseId, setCaseId] = useCanvasState<CaseId>("case", "B");
-  const [mode, setMode] = useCanvasState<Mode>("mode", "STRICT");
+  const [mode, setMode] = useCanvasState<Mode>("mode", "all STRICT");
   const c = CASES[caseId];
-  const verdict = mode === "STRICT" ? c.strict : c.flexible;
-  const labels = mode === "STRICT" ? { a0: "s0", a1: "s1", b0: "s3", b1: "s2" } : c.flexible.labels;
+  const verdict = mode === "all STRICT" ? c.strict : c.relaxed;
+  const labels = mode === "all STRICT" ? { a0: "s0", a1: "s1", b0: "s3", b1: "s2" } : c.relaxed.labels;
   return (
     <Grid columns={fit(360)} gap={24} align="start">
       <Stack gap={8}>
         <TwoMesh
           labels={labels}
           cables={c.cables}
-          hostEdge={mode === "FLEXIBLE" && c.flexible.host ? { from: "b1", to: "a1", label: "s3 > s0 over host" } : undefined}
+          hostEdge={mode === "s3 > s0 RELAXED" && c.relaxed.host ? { from: "b1", to: "a1", label: "s3 > s0 over host" } : undefined}
         />
         <Text size="small" tone="tertiary">
           mesh4x4_stage4x2 from the blaze sweep: two 4x4 meshes, host_topology [1, 2], 4-stage ring of 4x2 stages.
@@ -616,7 +616,7 @@ function CaseExplorer() {
             </span>
           ))}
           <div style={{ width: 12 }} />
-          {(["STRICT", "FLEXIBLE"] as Mode[]).map((m) => (
+          {(["all STRICT", "s3 > s0 RELAXED"] as Mode[]).map((m) => (
             <span key={m}>
               <Pill active={m === mode} onClick={() => setMode(m)}>
                 {m}
@@ -665,7 +665,7 @@ function LoopFlow() {
     { title: "2. intra-mesh completion", sub: "complete_intra_mesh_for_placement", kind: "existing" },
     { title: "3. candidate links", sub: "gather_intermesh_candidates + routed intra-mesh links  [P7]", kind: "reuse" },
     { title: "4. host slices + slice adjacency", sub: "get_coord_range per rank  [P8]", kind: "new" },
-    { title: "5. carve paths -> slots -> submeshes", sub: "planned carve | per-rank tiling | single mesh | flexible  [P5 P6 P11]", kind: "new" },
+    { title: "5. carve paths -> slots -> submeshes", sub: "planned carve | per-rank tiling | single mesh | host cuts  [P5 P6 P11]", kind: "new" },
     { title: "6. resolve layout", sub: "resolve_graph_layout_with_connections (as-is)  [P4]", kind: "reuse" },
     { title: "7. bind the layout's crossing links first", sub: "bind_intermesh_connections(cands, mgd, R)  [P9]", kind: "new" },
     { title: "8. rerun 5-6 over the bound links", sub: "same links runtime will see  [P9]", kind: "new" },
@@ -831,7 +831,7 @@ function CarvePaths() {
         </CardBody>
       </Card>
       <Card>
-        <CardHeader trailing={<Text size="small" tone="tertiary">placement="flexible"</Text>}>Flexible placement</CardHeader>
+        <CardHeader trailing={<Text size="small" tone="tertiary">policy: RELAXED</Text>}>Host cuts on RELAXED edges</CardHeader>
         <CardBody>
           <Stack gap={10}>
             <svg width="100%" viewBox="0 0 260 96" style={{ maxWidth: 260 }}>
@@ -857,8 +857,9 @@ function CarvePaths() {
               </text>
             </svg>
             <Text size="small" tone="secondary">
-              First try an all-fabric cycle. Otherwise cover the ring with the fewest fabric chains and join them over host. Then
-              carve from the plan, or tile by the uniform stage shape, and resolve each chain on its own.
+              For a pipeline with RELAXED edges. First try an all-fabric cycle. Otherwise cover the ring with the fewest fabric
+              chains and join them over host, cutting only RELAXED edges. Then carve from the plan, or tile by the uniform stage
+              shape, and resolve each chain on its own.
             </Text>
             <Text size="small" tone="tertiary">
               host_edge_planner.plan_ring_placement (tt-blaze #4513)
@@ -1010,9 +1011,9 @@ function MergeDiagram() {
       <svg width="100%" viewBox="0 0 700 150" style={{ maxWidth: 700, minWidth: 0.8 * (700) }}>
         <ArrowDefs id="mg-arrow" color={t.stroke.primary} />
         <SvgBox x={10} y={14} w={180} h={50} title="part 0 MGD" sub="M0, M1 + pipeline_descriptors" kind="new" />
-        <SvgBox x={10} y={84} w={180} h={50} title="part 1 MGD" sub="M0, M1" />
+        <SvgBox x={10} y={84} w={180} h={50} title="part 1 MGD" sub="M0, M1 + pipeline_descriptors" kind="new" />
         <SvgBox x={260} y={44} w={180} h={60} title="MeshGraphDescriptor::merge" sub="prefix + remap mesh ids" kind="reuse" />
-        <SvgBox x={510} y={44} w={180} h={60} title="merged MGD" sub="M0..M3 + one pipeline" kind="new" />
+        <SvgBox x={510} y={44} w={180} h={60} title="merged MGD" sub="M0..M3 + both pipelines" kind="new" />
         <line x1={190} y1={39} x2={260} y2={64} stroke={t.stroke.primary} markerEnd="url(#mg-arrow)" />
         <line x1={190} y1={109} x2={260} y2={84} stroke={t.stroke.primary} markerEnd="url(#mg-arrow)" />
         <line x1={440} y1={74} x2={510} y2={74} stroke={t.stroke.primary} markerEnd="url(#mg-arrow)" />
@@ -1031,7 +1032,7 @@ function MergeDiagram() {
 type Pr = {
   id: string;
   title: string;
-  milestone: "M1 Format" | "M2 Shared code" | "M3 Tier C (STRICT)" | "M4 Pruning + FLEXIBLE";
+  milestone: "M1 Format" | "M2 Shared code" | "M3 Tier C (STRICT)" | "M4 Pruning + RELAXED";
   size: "S" | "M" | "L";
   deps: string[];
   goal: string;
@@ -1056,9 +1057,9 @@ const PRS: Pr[] = [
       "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
     ],
     steps: [
-      "Add messages PipelineDescriptor, PipelineStage, PipelineEdge and enums EdgeTransport, PipelinePlacement; field 6 on MeshGraphDescriptor.",
+      "Add messages PipelineDescriptor, PipelineStage, PipelineEdge and enum EdgePolicy (STRICT default, RELAXED); field 6 on MeshGraphDescriptor.",
       "Add validate_pipeline_descriptors to static_validate, after validate_pinnings.",
-      "Add accessors has_pipeline_descriptor() and pipeline_descriptor().",
+      "Add accessors has_pipeline_descriptors() and pipeline_descriptors().",
     ],
     code: [
       {
@@ -1070,25 +1071,19 @@ const PRS: Pr[] = [
      // Maps logical fabric nodes to physical ASIC positions for pinning constraints.
      repeated AsicPinning pinnings = 5;
 +
-+    // Pipeline stage graph the topology mapper must be able to place. At most one per run.
++    // Pipeline stage graphs the topology mapper must be able to place, all at once.
 +    repeated PipelineDescriptor pipeline_descriptors = 6;
  }
 +
 +message PipelineDescriptor {
-+    string name = 1;
++    string name = 1;                   // unique across the (merged) MGD
 +    repeated PipelineStage stages = 2;
 +    repeated PipelineEdge edges = 3;
-+    PipelinePlacement placement = 4;   // mirrors blaze build_topology(placement=...)
 +}
 +
-+enum PipelinePlacement {
-+    STRICT = 0;     // every FABRIC edge must ride fabric
-+    FLEXIBLE = 1;   // the builder may move edges onto host MPI where fabric ends
-+}
-+
-+enum EdgeTransport {
-+    FABRIC = 0;
-+    HOST = 1;       // D2H -> MPI -> H2D, needs no fabric link
++enum EdgePolicy {
++    STRICT = 0;     // must ride a fabric link
++    RELAXED = 1;    // fabric if the placement allows; otherwise host MPI (D2H -> MPI -> H2D)
 +}
 +
 +message PipelineStage {
@@ -1100,7 +1095,7 @@ const PRS: Pr[] = [
 +message PipelineEdge {
 +    string src = 1;
 +    string dst = 2;
-+    EdgeTransport transport = 3;
++    EdgePolicy policy = 3;   // stage 0's outgoing edge and router -> branch edges stay on fabric
 +}`,
       },
       {
@@ -1118,10 +1113,11 @@ const PRS: Pr[] = [
         language: "cpp",
         src: `
 void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
-    if (proto.pipeline_descriptors_size() > 1) {
-        errors.push_back("pipeline_descriptors: at most one pipeline per MGD");
-    }
+    std::unordered_set<std::string> names;
     for (const auto& p : proto.pipeline_descriptors()) {
+        if (p.name().empty() || !names.insert(p.name()).second) {
+            errors.push_back(fmt::format("pipeline name '{}' is empty or repeated", p.name()));
+        }
         std::unordered_set<std::string> ids;
         for (const auto& s : p.stages()) {
             if (s.id().empty() || !ids.insert(s.id()).second) {
@@ -1132,7 +1128,6 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
                 errors.push_back(fmt::format("pipeline '{}': stage '{}' shape must be rank 2, dims > 0", p.name(), s.id()));
             }
         }
-        bool any_host = false;
         for (const auto& e : p.edges()) {
             if (!ids.contains(e.src()) || !ids.contains(e.dst())) {
                 errors.push_back(fmt::format("pipeline '{}': edge {} -> {} names an unknown stage", p.name(), e.src(), e.dst()));
@@ -1140,10 +1135,6 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
             if (e.src() == e.dst()) {
                 errors.push_back(fmt::format("pipeline '{}': self-edge on '{}'", p.name(), e.src()));
             }
-            any_host |= e.transport() == proto::EdgeTransport::HOST;
-        }
-        if (p.placement() == proto::PipelinePlacement::FLEXIBLE && any_host) {
-            errors.push_back(fmt::format("pipeline '{}': FLEXIBLE plans host edges itself; declare none", p.name()));
         }
         // Linear (out-degree <= 1) or one fork of exactly two branches, matching blaze's
         // _find_branches; shared with the carve-planner port (P5).
@@ -1156,8 +1147,8 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
       },
     ],
     tests: [
-      "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with a HOST return.",
-      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two routers, three branches, a branch that splits, a HOST edge out of the router, FLEXIBLE + HOST). A dead-end branch parses.",
+      "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with a RELAXED return, mixed4 with s3 -> s0 RELAXED, two pipelines in one MGD.",
+      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two routers, three branches, a branch that splits, two pipelines with one name). A dead-end branch parses; so do RELAXED on s0 -> s1 and on router -> branch (treated as STRICT).",
       "Every existing MGD in tt_metal/fabric/mesh_graph_descriptors still parses unchanged.",
     ],
     behaviour: "No behaviour change without the new section.",
@@ -1168,11 +1159,11 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     milestone: "M1 Format",
     size: "S",
     deps: ["P1"],
-    goal: "MeshGraphDescriptor::merge copies pipeline_descriptors and rejects two parts that both declare one.",
+    goal: "MeshGraphDescriptor::merge copies every part's pipeline_descriptors and rejects a name declared twice.",
     files: ["tt_metal/fabric/mesh_graph_descriptor.cpp"],
     steps: [
       "Single part: already copied whole, nothing to do.",
-      "Several parts: copy the section in the per-part loop; TT_FATAL if a second part declares one.",
+      "Several parts: copy each part's pipelines in the per-part loop; TT_FATAL if a name is already taken, naming both parts.",
       "No remap: stages bind by shape, not by mesh id or name.",
     ],
     code: [
@@ -1186,30 +1177,29 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
      fabric->set_name("G0");
      fabric->set_type("FABRIC");
      std::optional<proto::Policy> shared_connection_policy;
-+    std::optional<std::size_t> pipeline_part;
++    std::unordered_map<std::string, std::size_t> pipeline_part;   // name -> part that declared it
 
      for (std::size_t i = 0; i < descriptors.size(); ++i) {
          ...
          for (const auto& pin : part.pinnings()) {
              *merged->add_pinnings() = pin;
          }
-+        if (part.pipeline_descriptors_size() > 0) {
++        for (const auto& pipeline : part.pipeline_descriptors()) {
++            const auto [it, inserted] = pipeline_part.emplace(pipeline.name(), i);
 +            TT_FATAL(
-+                !pipeline_part.has_value(),
-+                "MeshGraphDescriptor::merge: pipeline_descriptors declared in descriptor {} and descriptor {}; "
-+                "declare the pipeline in exactly one part.",
-+                *pipeline_part,
++                inserted,
++                "MeshGraphDescriptor::merge: pipeline '{}' declared in descriptor {} and descriptor {}",
++                pipeline.name(),
++                it->second,
 +                i);
-+            pipeline_part = i;
-+            for (const auto& pipeline : part.pipeline_descriptors()) {
-+                *merged->add_pipeline_descriptors() = pipeline;
-+            }
++            *merged->add_pipeline_descriptors() = pipeline;
 +        }`,
       },
     ],
     tests: [
       "Two parts, pipeline in one: present after merge, byte-identical to the source.",
-      "Pipelines in two parts: merge fails and names both part indexes.",
+      "Pipelines with different names in two parts: both present after merge.",
+      "The same pipeline name in two parts: merge fails and names both part indexes.",
       "No pipeline anywhere: merged proto is byte-identical to today's.",
     ],
     behaviour: "None without a pipeline.",
@@ -1229,8 +1219,8 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     steps: [
       "Binding set per stage: meshes whose slice tiles the stage shape exactly and that fit it. Stage 0 and a fork router must be one slice.",
       "Capacity in slices, per mesh class.",
-      "Projection exists: backtracking stage -> mesh with capacity; under STRICT every FABRIC crossing rides a declared connection within its channel count. FLEXIBLE skips the crossing rules.",
-      "Keep facts for Plan 1: min crossings k_AB over all surviving projections, union of boundary slices.",
+      "Projection exists: backtracking stage -> mesh with capacity, over every pipeline at once; every STRICT crossing rides a declared connection within its channel count. RELAXED crossings are left out.",
+      "Keep facts for Plan 1: min STRICT crossings k_AB over all surviving projections (summed over pipelines), union of boundary slices.",
       "Run once, right after merge in init_from_parts, so runtime and generate_rank_bindings both get it.",
     ],
     code: [
@@ -1242,9 +1232,9 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
      MeshGraphDescriptor merged =
          MeshGraphDescriptor::merge(mesh_graph_descriptors, &per_part_local_to_global_mesh_ids_);
      logical_ = build_logical_multi_mesh_adjacency_graph(merged);
-+    if (const auto* pipeline = merged.pipeline_descriptor(); pipeline != nullptr) {
-+        // Tier B: throws with every reason when no stage-to-mesh projection exists.
-+        pipeline_ = std::make_unique<PipelineFeasibility>(merged, *pipeline);
++    if (merged.has_pipeline_descriptors()) {
++        // Tier B over every pipeline as one graph: throws with every reason when no projection exists.
++        pipeline_ = std::make_unique<PipelineFeasibility>(merged, merged.pipeline_descriptors());
 +    }`,
       },
       {
@@ -1254,12 +1244,12 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
         src: `
 class PipelineFeasibility {
 public:
-    PipelineFeasibility(const MeshGraphDescriptor& merged, const proto::PipelineDescriptor& pipeline);
+    PipelineFeasibility(const MeshGraphDescriptor& merged, std::span<const proto::PipelineDescriptor> pipelines);
 
     // Tier B facts that hold for every surviving projection (Plan 1 reads only these).
-    std::size_t min_crossings(MeshId a, MeshId b) const;            // k_AB, 0 if some projection avoids A-B
+    std::size_t min_crossings(MeshId a, MeshId b) const;            // k_AB over STRICT edges only
     const std::set<SliceKey>& boundary_slices(MeshId mesh) const;  // union over projections
-    bool flexible() const;
+    bool has_relaxed_edge() const;   // after forcing s0's outgoing and router -> branch edges to STRICT
 
     // Tier C exact check, filled in by P8.
     PipelineCheck check(const AssignedMeshes& seating, const TopologyMappingResult& full,
@@ -1276,7 +1266,7 @@ private:
       "subtorus_4x4_pipeline_8stage: ring 0..7..0 accepted; drop the 7-0 connection and it is rejected.",
       "llama_8b_pod: 8 x 4x2 + 32 x 1x2 accepted; 9 x 4x2 rejected on M0 capacity.",
       "mesh4x4_stage4x2: accepted, k(M0, M1) = 2 (interleaved splits cross 4 times; min is 2).",
-      "Same MGDs with placement FLEXIBLE: no crossing-based rejects.",
+      "mesh4x4_stage4x2 with s3 -> s0 RELAXED: k(M0, M1) = 1. Every edge RELAXED: no crossing-based rejects.", "mixed4 + mixed4_b: rejected on capacity (12 > 8); two copies of ring4: accepted (8 of 8).",
     ],
     behaviour: "MGDs with an impossible pipeline now fail at load instead of at blaze build.",
   },
@@ -1515,7 +1505,8 @@ std::expected<AnnotatedIntermeshConnections, BindFailure> bind_intermesh_connect
       "Hook into MultiMeshSolutionEnumerator::next() after intra-mesh success; on reject call exclude_mapping(seating) (seat set), never add_forbidden_constraint.",
       "Turn unique_shapes off when a pipeline is present (runtime overloads and --all-solutions).",
       "failure_stage pipeline_carve / pipeline_layout; cap rejections per run and report the last reason.",
-      "FLEXIBLE descriptors: accept without checking until P11.",
+      "Several pipelines: place each on the slices the earlier ones left free, trying every order of the pipelines; resolve each as its own graph; accept only if all fit.",
+      "A pipeline with a RELAXED edge (after forcing stage 0's outgoing and router -> branch edges to STRICT): accept without checking until P11.",
     ],
     code: [
       {
@@ -1527,7 +1518,7 @@ std::expected<AnnotatedIntermeshConnections, BindFailure> bind_intermesh_connect
              apply_placement_stats(full.stats, *placement_stats_);
          }
          if (full.success) {
-+            if (pipeline_ != nullptr && !pipeline_->flexible()) {
++            if (pipeline_ != nullptr && !pipeline_->has_relaxed_edge()) {   // RELAXED checked from P11
 +                PipelineCheck check = pipeline_->check(seating, full, *physical_system_descriptor_);
 +                if (!check.accepted) {
 +                    full.success = false;
@@ -1580,7 +1571,7 @@ PipelineCheck PipelineFeasibility::check(
          config,
 -        /*unique_shapes=*/true,  // Unique shapes commit fewer orientations than necessary, shrinking the SAT sweep
 +        // Swapping meshes between the same seats can change the pipeline answer, so keep every permutation.
-+        /*unique_shapes=*/!mesh_graph_descriptor.has_pipeline_descriptor(),
++        /*unique_shapes=*/!mesh_graph_descriptor.has_pipeline_descriptors(),
          pinnings,`,
       },
       {
@@ -1591,7 +1582,7 @@ PipelineCheck PipelineFeasibility::check(
                  // Solver-level unique_shapes dedup is ALWAYS ON (collapses automorphic physical footprints);
                  // only the hidden --allow-shape-permutations turns it off.
 -                const bool unique_shapes = !args.allow_shape_permutations;
-+                const bool unique_shapes = !args.allow_shape_permutations && !any_has_pipeline_descriptor(mgds);`,
++                const bool unique_shapes = !args.allow_shape_permutations && !any_has_pipeline_descriptors(mgds);`,
         note: "run_topology_mapping already passes false; seat-pool enumeration must stay false; the three enumerate_flat_grouping_embeddings calls keep their default.",
       },
     ],
@@ -1600,6 +1591,7 @@ PipelineCheck PipelineFeasibility::check(
       "GPT-OSS single galaxy, llama_8b_pod, subtorus 8-stage: accepted, and blaze builds on the emitted mapping (hardware CI).",
       "A seating that fails only when swapped (unique_shapes regression test).",
       "Single galaxy, host_topology [1, 8], ring 4x1, 4x2, 4x2, 4x2, 4x1: takes the planned carve, not single-mesh tiling, and is accepted; the same with a LINE column axis is rejected.",
+      "Two copies of ring4 on the mixed4 meshes: rejected with cables A0-B0, A2-B2, A3-B3 (only one 4-cycle), accepted once A1-B1 is added.",
       "No pipeline: every existing topology-mapper golden unchanged.",
     ],
     behaviour: "The mapper skips seatings the pipeline cannot be built on. --all-solutions only emits buildable ones.",
@@ -1668,7 +1660,7 @@ PipelineCheck PipelineFeasibility::check(
   {
     id: "P10",
     title: "Plan 1 pruning",
-    milestone: "M4 Pruning + FLEXIBLE",
+    milestone: "M4 Pruning + RELAXED",
     size: "M",
     deps: ["P3", "P8"],
     goal: "Drop seat pairs before the solve when they cannot carry the pipeline under any split or layout.",
@@ -1678,7 +1670,7 @@ PipelineCheck PipelineFeasibility::check(
       "Slice-level form (bipartite matching on distinct boundary slices) only where hard pinnings fix the layout.",
       "Single seat: remove only when it fails under every projection and layout.",
       "Shared seat pairs with different k: fall back to the exact check for those pairs.",
-      "FLEXIBLE: k_AB = 0 everywhere, so nothing is pruned.",
+      "k_AB counts STRICT crossings only (P3); every edge RELAXED gives k_AB = 0, so nothing is pruned."
     ],
     code: [
       {
@@ -1703,27 +1695,33 @@ if (pipeline != nullptr) {
   },
   {
     id: "P11",
-    title: "FLEXIBLE placement",
-    milestone: "M4 Pruning + FLEXIBLE",
+    title: "RELAXED edges: host cuts (later)",
+    milestone: "M4 Pruning + RELAXED",
     size: "L",
     deps: ["P5", "P8"],
-    goal: "Mirror blaze placement=flexible: host cuts, then carve or uniform-shape tiling, then one resolve per fabric chain.",
-    files: ["tt_metal/fabric/carve_planner.cpp", "tt_metal/fabric/pipeline_feasibility.cpp"],
+    goal: "Lands after M3. Until then the format accepts RELAXED and Tier B/Plan 1 leave RELAXED crossings out, but Tier C accepts a pipeline with a RELAXED edge without checking it. Here: plan host cuts on the RELAXED edges, then carve or uniform-shape tiling, then one resolve per fabric chain.",
+    files: [
+      "tt_metal/fabric/carve_planner.cpp",
+      "tt_metal/fabric/pipeline_feasibility.cpp",
+      "tt-blaze: pipeline_builder/graph.py, host_edge_planner.py, blaze/models/cli_options.py",
+    ],
     steps: [
-      "Port plan_ring_placement and plan_fork_placement (host_edge_planner.py); ForkShapeUnsupported falls back to STRICT paths.",
-      "Mark planned cuts HOST; carve from the plan or tile by the uniform stage shape.",
+      "Port plan_ring_placement and plan_fork_placement (host_edge_planner.py), taking the set of edges they may cut = the RELAXED edges; ForkShapeUnsupported falls back to the all-STRICT paths.",
+      "Carry the planned cuts over host; carve from the plan or tile by the uniform stage shape.",
       "Resolve each fabric chain separately, with blaze's pool rule and greedy order.",
-      "Remove the 'accept FLEXIBLE unchecked' stub from P8.",
+      "Remove the 'accept RELAXED unchecked' stub from P8.",
+      "tt-blaze, same change: Edge gets a policy (STRICT | RELAXED); _group_walk skips alignments that cut a STRICT edge instead of only '0 in cuts'; the fork planner cuts only RELAXED returns; --pipeline-builder flexible becomes a shortcut that marks every edge RELAXED.",
     ],
     code: [
       {
-        path: "tt_metal/fabric/pipeline_feasibility.cpp  (try_path, FLEXIBLE)",
+        path: "tt_metal/fabric/pipeline_feasibility.cpp  (try_path, host cuts)",
         mode: "new",
         language: "cpp",
         src: `
-case CarvePath::Flexible: {
-    auto plan = pipeline_->is_fork() ? detail::plan_fork_placement(slices, adjacency, ...)
-                                      : detail::plan_ring_placement(slices, adjacency, stage_shapes);
+case CarvePath::HostCuts: {
+    const auto cuttable = pipeline_->relaxed_edges();   // never s0's outgoing or router -> branch edges
+    auto plan = pipeline_->is_fork() ? detail::plan_fork_placement(slices, adjacency, cuttable, ...)
+                                      : detail::plan_ring_placement(slices, adjacency, stage_shapes, cuttable);
     if (plan.fork_shape_unsupported) { return try_strict_paths(slices, links); }   // blaze resolves as declared
     if (!plan.ok) { return PipelineCheck::reject("pipeline_carve", plan.reason); }  // ring: blaze raises too
     auto subs = plan.carve ? submeshes_from_slots(*plan.carve)
@@ -1733,10 +1731,11 @@ case CarvePath::Flexible: {
       },
     ],
     tests: [
-      "Case B and Case C accepted under FLEXIBLE with the loopback on host.",
+      "Case B and Case C accepted with s3 -> s0 RELAXED, loopback on host; still rejected with every edge STRICT.",
+      "mixed4 on (P, Q) with s3 -> s0 RELAXED: cover 1 skipped (it cuts STRICT s1 -> s2), cover 2 accepted.",
       "Golden parity against host_edge_planner for rings and forks.",
     ],
-    behaviour: "FLEXIBLE descriptors get checked.",
+    behaviour: "Pipelines with RELAXED edges get checked instead of accepted unchecked.",
   },
   {
     id: "P12",
@@ -1770,7 +1769,7 @@ rank_bindings:
   {
     id: "P13",
     title: "Later: seat-pair nogoods + spread fill",
-    milestone: "M4 Pruning + FLEXIBLE",
+    milestone: "M4 Pruning + RELAXED",
     size: "M",
     deps: ["P8", "P9"],
     goal: "Stronger feedback to SAT, and spare bound links that add slice adjacency.",
@@ -1790,7 +1789,7 @@ const MILESTONES: Array<{ id: Pr["milestone"]; text: string }> = [
   { id: "M1 Format", text: "The MGD can carry a pipeline, survives merge, and impossible pipelines fail at load." },
   { id: "M2 Shared code", text: "Libraries Tier C needs, each landing with no behaviour change." },
   { id: "M3 Tier C (STRICT)", text: "The mapper only emits seatings the pipeline builds on, and binds the cables it relied on." },
-  { id: "M4 Pruning + FLEXIBLE", text: "Speed-ups and FLEXIBLE placement. Not needed for correctness." },
+  { id: "M4 Pruning + RELAXED", text: "Speed-ups, and Tier C checking of RELAXED edges (until then accepted unchecked). Not needed for correctness of all-STRICT pipelines." },
 ];
 
 // ---------------------------------------------------------------------------
@@ -2334,7 +2333,7 @@ top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
 
 # 2 meshes x 4 slices = 8 slices; the ring below needs 1 + 2 + 2 + 1 = 6
 pipeline_descriptors {
-  name: "mixed4"  placement: STRICT
+  name: "mixed4"
   stages { id: "s0" shape { dims: [ 4, 2 ] } }   # 1 slice
   stages { id: "s1" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
   stages { id: "s2" shape { dims: [ 4, 4 ] } }   # 2 slices, two ranks
@@ -2401,19 +2400,21 @@ function DescriptorExamples() {
           ["pod8", "pass", "a ring of 8; loopback s7 > s0"],
           ["mixed4 + edge s1 > s1", "reject", "self-edge"],
           ["mixed4 with s0 > s1 repeated", "pass", "two channels on that hop; the builder reads one link per edge"],
-          ["dflash: router > target0..37 > router, router > draft0..10 > router (HOST)", "pass", "one router, two chain branches, both return to it"],
+          ["dflash: router > target0..37 > router, router > draft0..10 > router (draft return RELAXED)", "pass", "one router, two chain branches, both return to it"],
           ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a fork whose branch s2 dead-ends, which is allowed; blaze rejects it today (TODO)"],
           ["a router with three branches", "reject", "more than two branches; blaze's fork runtime builds exactly two (TODO)"],
           ["a branch stage with out-degree 2", "reject", "only the router may split; each branch is a chain"],
           ["two stages with in-degree 0", "reject", "two routers; a fork has exactly one"],
-          ["router > draft0 as HOST", "reject", "the router's edge into a branch must be FABRIC"],
-          ["mixed4 FLEXIBLE with s3 > s0 as HOST", "reject", "FLEXIBLE plans its own host cuts, only when none are declared"],
-          ["mixed4 STRICT with s3 > s0 as HOST", "pass", "a host hop anywhere in a ring is allowed"],
+          ["mixed4 with s3 > s0 RELAXED", "pass", "any edge may be RELAXED"],
+          ["mixed4 with s0 > s1 RELAXED", "pass", "treated as STRICT: the builder cannot carry stage 0's outgoing edge over host"],
+          ["dflash with router > draft0 RELAXED", "pass", "treated as STRICT: the router sends to a branch over fabric only"],
+          ["mixed4 plus a copy named mixed4_b", "pass here", "each is checked on its own; Tier B checks them together"],
+          ["mixed4 plus a copy also named mixed4", "reject", "pipeline names must be unique"],
           ["a stage [2, 4] where every slice is 4x2", "pass here", "no transpose, so Tier B finds no mesh it binds to"],
         ]}
         rowTone={[
-          "success", "success", "danger", "success", "success", "warning", "danger", "danger", "danger", "danger", "danger",
-          "success", "warning",
+          "success", "success", "danger", "success", "success", "warning", "danger", "danger", "danger", "success", "warning",
+          "warning", "warning", "danger", "warning",
         ]}
       />
 
@@ -2445,10 +2446,13 @@ function DescriptorExamples() {
           ["mixed4 + a fifth stage [4, 4]", "pass", "8 of 8: s0, s3 and one 4x4 on one mesh, two 4x4 on the other"],
           ["mixed4 with a stage [4, 10]", "reject", "wider than either mesh"],
           ["pod8 with M1 4x8, host [1, 4], still 1x2 stages", "reject", "1x2 is not a whole slice; stricter than blaze's per-rank tiling"],
-          ["mixed4 with no MGD connection", "reject", "every projection crosses"],
-          ["the same, FLEXIBLE", "pass", "crossings may become host hops"],
+          ["mixed4 with no MGD connection", "reject", "every projection crosses on a STRICT edge"],
+          ["the same, s1 > s2 and s3 > s0 RELAXED", "pass", "s0, s1 > M0; s2, s3 > M1 crosses only on RELAXED edges, which need no connection"],
+          ["the same, only s3 > s0 RELAXED", "reject", "every projection still crosses on a STRICT edge"],
+          ["mixed4 plus a copy named mixed4_b", "reject", "6 + 6 = 12 slices needed, 8 declared, although each fits alone"],
+          ["two copies of ring4 (four 4x2 stages each)", "pass", "4 + 4 = 8 of 8; a projection places all eight stages at once"],
         ]}
-        rowTone={["danger", "danger", "success", "danger", "warning", "danger", "success"]}
+        rowTone={["danger", "danger", "success", "danger", "warning", "danger", "success", "danger", "danger", "success"]}
       />
     </Stack>
   );
@@ -2585,17 +2589,17 @@ seat V   A3 -> (0,3) in T1, A0 -> (0,0) in T0     neighbours
          s0 A0  s1 A1  s2 A2  s3 A3  s4 T1  s5 T3  s6 T2  s7 T0
          mirror: s0 A3 .. s3 A0, s4 T0  s5 T2  s6 T3  s7 T1`;
 
-const FLEX_TRACE = `
+const HOSTCUT_TRACE = `
 phase 1   no 6-cycle (only the 8-cycle)
           census: spare = 2 and 6 + 2 is achievable -> passthrough_ring = 2
 phase 3   one fabric component of 8 >= 6, so k starts at 1
           _cover_with_chains(1): smallest slice first, smallest free neighbour next
             1. A0 A1 A2 A3 B3 B2     2. A0 B0 B1 B2 B3 A3     3. A1 A0 B0 B1 B2 B3 ...
-phase 4   _group_walk per cover; joints only between stages, never cut 0
-          cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1->s2  key (1,1,(1,))
+phase 4   _group_walk per cover; cuts only between stages, only on RELAXED edges
+          cover 1 best: s0 A3, s1 B3+B2, s2 A0+A1, s3 A2   cut s1->s2  skipped: STRICT
           cover 2 best: s0 A3, s1 B3+B2, s2 B1+B0, s3 A0   cut s3->s0  key (1,0,(3,))
           key = (cut page sizes, 0 if the loopback is cut else 1, cuts)
-result    cover 2 wins: s3 -> s0 becomes HOST; carve
+result    cover 2: its one cut is the RELAXED loopback; s3 -> s0 goes over host; carve
           M0 4x2@(0,6), M1 4x4@(0,4), M1 4x4@(0,0), M0 4x2@(0,0); A1, A2 idle
           _resolve_chains_separately: one fabric chain s0 -> s1 -> s2 -> s3`;
 
@@ -2626,7 +2630,7 @@ function MapperExamples() {
         rows={[
           ["mixed4", "(P, Q)", "A0-B0, A3-B3", "reject", "one loop of 8 slices, the ring needs exactly 6; every tiling fails"],
           ["mixed4", "(P, R)", "A0-B0, A2-B2", "accept", "a 6-slice loop exists and the stages align onto it"],
-          ["mixed4, FLEXIBLE", "(P, Q)", "A0-B0, A3-B3", "accept", "one fabric path covers 6 slices; the loopback goes over host"],
+          ["mixed4 with s3 > s0 RELAXED", "(P, Q)", "A0-B0, A3-B3", "accept", "one fabric path covers 6 slices; the RELAXED loopback goes over host"],
           ["pod8", "(P, U)", "A3-T0, A0-T3", "reject", "opposite corners of M1: no path through M1's tiles joins them"],
           ["pod8", "(P, V)", "A3-T1, A0-T0", "accept", "neighbouring tiles"],
         ]}
@@ -2886,7 +2890,7 @@ function MapperExamples() {
           />
         </Stack>
       </Grid>
-      <H3>Flexible placement: mixed4 as FLEXIBLE on (P, Q)</H3>
+      <H3>Host cuts on RELAXED edges: mixed4 with s3 &gt; s0 RELAXED, on (P, Q)</H3>
       <Grid columns={fit(380)} gap={20} align="start">
         <SliceMap
           stages={[
@@ -2901,19 +2905,39 @@ function MapperExamples() {
             { a: 3, b: 3, kind: "required" },
           ]}
           host={{ from: [0, 0], to: [0, 3], label: "s3 > s0 over host" }}
-          verdict={{ ok: true, text: "FLEXIBLE: accepted" }}
+          verdict={{ ok: true, text: "s3 > s0 RELAXED: accepted" }}
         />
-        <CodeCard path="plan_ring_placement" mode="plain" language="text" src={FLEX_TRACE} />
+        <CodeCard path="plan_ring_placement" mode="plain" language="text" src={HOSTCUT_TRACE} />
       </Grid>
       <Table
-        headers={["FLEXIBLE edge case", "Result"]}
+        headers={["Host-cut edge case", "Result"]}
         rows={[
-          ["a cover whose only alignment cuts s0 > s1", "skipped: stage 0's outgoing edge stays on fabric"],
+          ["a cover whose only alignment cuts a STRICT edge", "skipped"],
+          ["a cover whose only alignment cuts s0 > s1", "skipped, even if s0 > s1 is declared RELAXED: stage 0's outgoing edge stays on fabric"],
           ["a joint between chains inside a 4x4 stage", "skipped: a wide stage cannot be split by a host hop"],
-          ["pod8 as FLEXIBLE", "HostEdgePlanError (slices not uniform), not caught: reject"],
-          ["a fork with a two-slice router", "ForkShapeUnsupported: use the STRICT paths"],
-          ["all fabric already, single-slice stages", "no plan; the resolver places it as in STRICT"],
+          ["pod8 with a RELAXED edge", "HostEdgePlanError (slices not uniform), not caught: reject"],
+          ["a fork with a two-slice router", "ForkShapeUnsupported: use the all-STRICT paths"],
+          ["all fabric already, single-slice stages", "no plan; the resolver places it as for an all-STRICT pipeline"],
+          ["every edge RELAXED", "cover 1's cut is allowed too; cover 2 still wins, because it cuts the loopback"],
         ]}
+      />
+      <H3>Several pipelines: two copies of ring4 on the mixed4 meshes</H3>
+      <Text tone="secondary">
+        The pipelines form one graph whose components are the pipelines. Per seating, place each on the slices the earlier ones
+        left free, trying every order of the pipelines; unused slices become filler once, at the end. Pipelines share no edge,
+        so each is resolved as its own graph. Accept only if every pipeline is placed and resolves.
+      </Text>
+      <Table
+        headers={["Cables", "Placement", "Tier C"]}
+        rows={[
+          [
+            "A0-B0, A2-B2, A3-B3",
+            "ring4_a takes the only 4-cycle, A2 A3 B3 B2; A0, A1, B0, B1 form a path with no cycle, so ring4_b fails; the other order fails the same way",
+            "reject, although each fits alone",
+          ],
+          ["add A1-B1", "ring4_a takes A0 A1 B1 B0, ring4_b takes A2 A3 B3 B2", "accept, every slice used"],
+        ]}
+        rowTone={["danger", "success"]}
       />
       <H3>Tile smaller than a host slice</H3>
       <Text tone="secondary">
@@ -3042,9 +3066,10 @@ function SatExamples() {
           ["mixed4, seat pair P-Q", "kept, fails later", "2 links on distinct slice pairs; it fails on loop length, which no link count sees"],
           ["pod8, seat pairs P-U and P-V", "both kept", "2 links each; with hard pins both touch {A0, A3}; U fails on M1's corners, which is about the path, not the boundary"],
           ["using one projection's boundary slices", "not allowed", "mixed4's survivors disagree (s0, s1 vs s1, s3 on M0); only the union is sound"],
-          ["mixed4 as FLEXIBLE", "nothing pruned", "k = 0; Q-R works with one crossing over host"],
+          ["mixed4 with s3 > s0 RELAXED, seat pair Q-R", "kept", "k = 1 (only s1 > s2 is a STRICT crossing); Q-R works with the loopback over host"],
+          ["mixed4 with every edge RELAXED", "nothing pruned", "k = 0"],
         ]}
-        rowTone={["success", "warning", "warning", "danger", undefined]}
+        rowTone={["success", "warning", "warning", "danger", "success", undefined]}
       />
       <H2>Examples: feedback</H2>
       <Table
@@ -3222,7 +3247,7 @@ stages { id: "s7" label: "LMHead"
          shape { dims: [ 4, 4 ] } }`}
         />
         <CodeCard
-          path="fork with a host return"
+          path="fork with a RELAXED return"
           mode="plain"
           language="protobuf"
           src={`
@@ -3230,7 +3255,7 @@ edges { src: "router"   dst: "target0" }
 edges { src: "target37" dst: "router" }
 edges { src: "router"   dst: "draft0" }
 edges { src: "draft10"  dst: "router"
-        transport: HOST }`}
+        policy: RELAXED }   # may return over host`}
         />
         <CodeCard
           path="heterogeneous (llama_8b_pod)"
@@ -3269,6 +3294,48 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
       </Stack>
 
       <Stack gap={8}>
+        <H2>Edge policy: STRICT or RELAXED, per edge</H2>
+        <Text tone="secondary">
+          Each edge says whether it must ride the fabric; the words match channels policy. Every edge STRICT is blaze's
+          placement="strict" and every edge RELAXED is placement="flexible"; a mix, such as a STRICT ring whose only RELAXED edge
+          is the loopback, is what neither mode can say. There is no HOST value: an edge that always goes over host needs no
+          link, so to the mapper it is RELAXED. Blaze's Edge carries the same policy, so the MGD and the runtime graph agree.
+        </Text>
+        <Grid columns={fit(340)} gap={16} align="start">
+          <CodeCard
+            path="mixed4 with a RELAXED loopback"
+            mode="plain"
+            language="protobuf"
+            src={`
+enum EdgePolicy {
+  STRICT = 0;    // must ride a fabric link (default)
+  RELAXED = 1;   // fabric if the placement allows, else host MPI
+}
+
+edges { src: "s0" dst: "s1" }                    # STRICT
+edges { src: "s1" dst: "s2" }                    # STRICT
+edges { src: "s2" dst: "s3" }                    # STRICT
+edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
+          />
+          <Table
+            headers={["Step", "STRICT edge", "RELAXED edge"]}
+            rows={[
+              ["Tier B crossing rules", "rides a declared connection, within its channels", "left out"],
+              ["Plan 1 k_AB", "counted", "not counted"],
+              ["Tier C", "a fabric link in the layout", "the host-cut planner may cut it; each fabric chain resolved alone"],
+              ["Fork router degree", "STRICT return: 2 router neighbours", "RELAXED return or dead end: 1"],
+            ]}
+          />
+        </Grid>
+        <Callout tone="neutral" title="Two edges always stay on fabric">
+          Stage 0's outgoing edge in a ring: the host-cut planner never cuts it (_group_walk skips any alignment with 0 in
+          cuts). The router's edge into each branch: the router sends to a branch through its d2d_exchange, and _find_branches
+          asserts the branch head is a fabric neighbour of the router. Both may be declared RELAXED; every tier treats them as
+          STRICT. A branch's return to the router may be RELAXED.
+        </Callout>
+      </Stack>
+
+      <Stack gap={8}>
         <H2>Tier A rules (parse time)</H2>
         <Table
           headers={["Rule", "Rejected example"]}
@@ -3276,15 +3343,17 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
             ["Stage ids unique and non-empty; edges name real stages", 'edges { src: "s0" dst: "s9" } with no s9'],
             ["No self-edges", 'edges { src: "s0" dst: "s0" }'],
             ["Shapes rank 2, dims > 0", "shape { dims: [ 4, 2, 1 ] }"],
-            ["Linear (out-degree <= 1), or one fork (dflash)", "two routers, or a branch stage that also splits"],
-            ["A fork has at most 2 branches: the router splits 1 into 2; branches that return join back (up to 2 into 1)", "a router with three branches"],
-            ["The router's edge into a branch is FABRIC", 'router -> draft0 with transport: HOST'],
-            ["FLEXIBLE declares no HOST edges (blaze plans them)", "placement: FLEXIBLE + transport: HOST"],
-            ["At most one pipeline per MGD", "two pipeline_descriptors entries"],
+            [
+              "Linear (out-degree <= 1), or one fork (dflash) of at most 2 branches: the router splits 1 into 2; branches that return join back (up to 2 into 1)",
+              "two routers, a branch stage that also splits, or a router with three branches",
+            ],
+            ["Pipeline names unique and non-empty; each pipeline is checked on its own", "two pipelines both named mixed4"],
           ]}
         />
         <Text size="small" tone="tertiary">
           Repeating an edge declares a second channel on that hop. The ring needs no loopback marker: s3 to s0 is the loopback.
+          Any edge may be RELAXED; stage 0's outgoing edge and a router's edges into its branches are then treated as STRICT,
+          because the builder cannot carry them over host.
         </Text>
         <Callout tone="warning" title="TODO: more than two branches">
           Branches are supported for dflash: a router feeds a target branch and a draft branch, and both return to it. The
@@ -3304,7 +3373,10 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
         <H2>Merging MGDs</H2>
         <Text tone="secondary">
           The mapper always merges its MGD parts. With two or more parts, merge rebuilds the proto field by field and would drop
-          the pipeline. P2 copies it, and rejects a second part that also declares one.
+          the pipelines. P2 copies every part's pipelines and rejects a name declared twice. The parts' pipelines share no
+          stage, so the mapper treats them as one graph whose components are the pipelines and sets every constraint on it in
+          one go: Tier B counts capacity and STRICT crossings over all of them, Plan 1 sums their crossings into k_AB, and Tier C
+          places them on disjoint slices and resolves each on its own.
         </Text>
         <MergeDiagram />
       </Stack>
@@ -3330,16 +3402,16 @@ function MapperTab() {
         <H2>Worked example: where the links land matters</H2>
         <Text tone="secondary">
           A 4-stage ring split two stages per mesh crosses M0 to M1 twice. Every case below declares two channels, so the
-          descriptor-only checks cannot tell them apart. Pick a case and a placement mode.
+          descriptor-only checks cannot tell them apart. Pick a case, and whether the loopback s3 &gt; s0 is RELAXED.
         </Text>
         <CaseExplorer />
         <Table
-          headers={["Case", "Bound links", "STRICT", "FLEXIBLE"]}
+          headers={["Case", "Bound links", "every edge STRICT", "s3 > s0 RELAXED"]}
           rows={(["A", "B", "C"] as CaseId[]).map((id) => [
             `Case ${id}`,
             CASES[id].title,
             CASES[id].strict.ok ? "accept: all-fabric ring" : "reject: no 4-slice cycle",
-            CASES[id].flexible.host ? "accept: fabric chain + host loopback" : "accept: all-fabric ring",
+            CASES[id].relaxed.host ? "accept: fabric chain + host loopback" : "accept: all-fabric ring",
           ])}
           rowTone={[undefined, "warning", "warning"]}
         />
@@ -3353,13 +3425,13 @@ function MapperTab() {
         </Text>
         <CarvePaths />
         <Table
-          headers={["MGD", "STRICT", "FLEXIBLE"]}
+          headers={["MGD", "every edge STRICT", "some edge RELAXED"]}
           rows={[
             ["one mesh, every stage on one rank", "single-mesh tiling", "single-mesh tiling"],
             [
               "one mesh with a joint stage, or several meshes",
               "planned carve, then per-rank tiling",
-              "flexible placement; a fork it cannot handle falls back to STRICT",
+              "host cuts on the RELAXED edges, then the plan's carve or tiling; a fork the planner cannot handle falls back to the all-STRICT paths",
             ],
           ]}
         />
@@ -3380,7 +3452,7 @@ function MapperTab() {
             ["Row-major tiling", "MeshDeviceImpl::create_submeshes (needs a device)", "shared pure helper", "P6"],
             ["Carve planner", "carve_planner.py", "C++ port, golden parity", "P5"],
             ["Slot pick + joint collapse", "_collect_submeshes (Python)", "rebuild, small", "P6"],
-            ["Host-cut planner", "host_edge_planner.py", "C++ port, FLEXIBLE only", "P11"],
+            ["Host-cut planner", "host_edge_planner.py", "C++ port; cuts only RELAXED edges", "P11"],
             ["Per-chain resolve", "_resolve_chains_separately (Python)", "loop over the resolver", "P11"],
             ["Inter-mesh binding", "pair_logical_intermesh_ports (control plane)", "pure helpers, shared", "P7"],
           ]}
@@ -3392,7 +3464,7 @@ function MapperTab() {
         <Table
           headers={["Behaviour in blaze", "Tier C does"]}
           rows={[
-            ["Returns the first aligned cycle; never retries if the resolver then fails", "tries further cycles until one resolves (existence). Gap noted, open question 9"],
+            ["Returns the first aligned cycle; never retries if the resolver then fails", "tries further cycles until one resolves (existence). Gap noted, open question 8"],
             ["budget-exhausted after 200,000 expansions", "treats it as unknown: accept and let blaze decide"],
             ["Adjacency: one confirmed link makes two slices adjacent", "same; the resolver gives the exact answer"],
             ["Stage rectangle must equal the declared (rows, cols)", "same, no transpose"],
@@ -3426,7 +3498,7 @@ function SatTab() {
               ["Seat pair has fewer candidate links than k_AB", "always (k_AB is the min over projections)", "drop the seat-graph edge"],
               ["Seat pair cannot hit k_AB distinct boundary slices", "hard-pinned layouts only", "drop the edge (rejects Case B early)"],
               ["Seat has no link toward a mesh every projection crosses to", "always", "remove the seat"],
-              ["FLEXIBLE", "-", "k_AB = 0, nothing pruned"],
+              ["RELAXED edges", "always", "left out of k_AB; every edge RELAXED gives k_AB = 0, nothing pruned"],
             ]}
           />
         </Stack>
@@ -3527,7 +3599,7 @@ function QuestionsTab() {
           headers={["Gap", "Effect", "Handling"]}
           rows={[
             ["Harness core-count overrides are not in MGD", "Tier C could accept a layout runtime rejects", "parked for now"],
-            ["Blaze uses only its first carve plan", "Tier C may accept where blaze's first cycle fails", "rerun over bound links narrows it; question 9"],
+            ["Blaze uses only its first carve plan", "Tier C may accept where blaze's first cycle fails", "rerun over bound links narrows it; question 8"],
             ["Offline link state", "offline answer can be optimistic", "runtime mapper re-checks"],
             ["Tile smaller than a host slice", "binding rule is stricter than per-rank tiling", "relax the binding rule for the tiling path if runtime supports it"],
             ["Witness placement differs from blaze's", "TT_PIPELINE_STAGE is not what blaze builds", "not consumed; align before it is"],
@@ -3546,9 +3618,8 @@ function QuestionsTab() {
             ["5", "Cost of unique_shapes off on large symmetric machines."],
             ["6", "Key name for the rank-binding env override (TT_PIPELINE_STAGE?)."],
             ["7", "Per-stage core counts in PipelineStage, or accept the gap."],
-            ["8", "Does the MGD carry STRICT / FLEXIBLE, or does Tier C always check the most permissive mode used?"],
-            ["9", "Teach blaze to retry the next cycle, or have Tier C check only blaze's first cycle once the plan is consumed?"],
-            ["10", "Spread fill only with a pipeline, or everywhere after goldens are regenerated?"],
+            ["8", "Teach blaze to retry the next cycle, or have Tier C check only blaze's first cycle once the plan is consumed?"],
+            ["9", "Spread fill only with a pipeline, or everywhere after goldens are regenerated?"],
           ]}
         />
       </Stack>
