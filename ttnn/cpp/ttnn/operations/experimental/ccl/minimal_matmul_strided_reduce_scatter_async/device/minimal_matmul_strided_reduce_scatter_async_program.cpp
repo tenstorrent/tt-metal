@@ -447,7 +447,8 @@ tt::tt_metal::WorkloadDescriptor MinimalMatmulStridedReduceScatterAsyncProgramFa
             }
             workload.buffers.push_back(tt::tt_metal::WorkloadBuffer{
                 .owner = mesh_buffer,
-                .buffer = mesh_buffer->get_device_buffer(mesh_coordinate),
+                // Same reference buffer the ring builder bound, including on a remote coordinate.
+                .buffer = mesh_buffer->get_reference_buffer(),
             });
         };
         park(built.rs_artifacts.mm_progress_counters_buffer);

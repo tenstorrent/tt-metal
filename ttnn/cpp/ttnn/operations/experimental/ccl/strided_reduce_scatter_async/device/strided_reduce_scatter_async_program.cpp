@@ -537,8 +537,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                  .sharding_args = tt::tt_metal::BufferShardingArgs(
                      counter_shard_spec, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)},
                 mesh_device);
-            mm_fused_op_signaler->mm_progress_counters_buffer =
-                mm_progress_counters_buffer->get_device_buffer(sender_device_coord);
+            // Replicated scratch: the local reference buffer holds the lockstep address on every coordinate.
+            mm_fused_op_signaler->mm_progress_counters_buffer = mm_progress_counters_buffer->get_reference_buffer();
             mm_fused_op_signaler->mm_progress_counters_addr =
                 static_cast<uint32_t>(mm_fused_op_signaler->mm_progress_counters_buffer->address());
         }
@@ -612,8 +612,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                  .sharding_args = tt::tt_metal::BufferShardingArgs(
                      credit_shard_spec, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED)},
                 mesh_device);
-            mm_fused_op_signaler->rs_credit_counters_buffer =
-                rs_credit_counters_buffer->get_device_buffer(sender_device_coord);
+            // Same replicated-scratch lookup as the progress counters above.
+            mm_fused_op_signaler->rs_credit_counters_buffer = rs_credit_counters_buffer->get_reference_buffer();
             rs_credit_counters_addr = static_cast<uint32_t>(mm_fused_op_signaler->rs_credit_counters_buffer->address());
         }
 
