@@ -537,6 +537,37 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compress_ratio"),
         nb::arg("compute_kernel_config") = nb::none());
 
+    ttnn::bind_function<"deepseek_v4_prefill_indexer_select_from_candidates", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        The two-level select's level two: deepseek_v4_prefill_indexer_select restricted to the entries of each
+        query's candidate blocks (at most 2048 * 8 entries per query), so the cost follows that pool rather than the
+        entries the query can see. H must be 32.
+
+        Args:
+            q, weights, idx_keys, start: as deepseek_v4_prefill_indexer_select.
+            candidates (ttnn.Tensor): [1, 1, T, 2048] uint32 ROW_MAJOR DRAM candidate block ids
+                (deepseek_v4_prefill_indexer_select_candidates of a layer with the same compress_ratio at the same
+                chunk); blocks a query cannot see are ignored.
+
+        Keyword args:
+            compress_ratio (int): as deepseek_v4_prefill_indexer_select.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+
+        Returns:
+            ttnn.Tensor: [1, 1, T, 512] uint32 ROW_MAJOR entry indices, unordered; 0xFFFFFFFF fills the slots of a
+            query whose pool holds fewer than 512 entries.
+        )doc",
+        &ttnn::transformer::deepseek_v4_prefill_indexer_select_from_candidates,
+        nb::arg("q").noconvert(),
+        nb::arg("weights").noconvert(),
+        nb::arg("idx_keys").noconvert(),
+        nb::arg("start").noconvert(),
+        nb::arg("candidates").noconvert(),
+        nb::kw_only(),
+        nb::arg("compress_ratio"),
+        nb::arg("compute_kernel_config") = nb::none());
+
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
         R"doc(
