@@ -19,16 +19,20 @@ result = QuasarDataCopyGolden().run(stimuli, in_format, out_format)
 
 ## Contents
 
+The machinery sits at the top level; the operations themselves are in
+`pipelines/`, because they are the content and everything else is the engine
+that runs them.
+
 | File | What is in it |
 |---|---|
 | `chain.py` | `Chain`, `Step`, `Registers`, `StageRecord` — the execution engine. No hardware. |
 | `golden.py` | `Golden`, `OpConfig` — turns blocks into chainable steps, and runs them. |
-| `datacopy.py` | `DataCopyGolden` |
-| `matmul.py` | `MatmulGolden` |
 | `fidelity.py` | Phase tables, `split_mantissa`, the pre-carry flush — shared by eltwise and matmul |
-| `eltwise.py` | `EltwiseBinaryGolden` |
-| `reuse_dest.py` | `EltwiseBinaryReuseDestGolden` |
 | `arch.py` | `ArchProfile`, the three architectures, and the per-architecture factories |
+| `pipelines/datacopy.py` | `DataCopyGolden` |
+| `pipelines/matmul.py` | `MatmulGolden` |
+| `pipelines/eltwise.py` | `EltwiseBinaryGolden` |
+| `pipelines/reuse_dest.py` | `EltwiseBinaryReuseDestGolden` |
 
 Layering, each knowing strictly less about the hardware than the one below:
 
@@ -381,7 +385,7 @@ the block scale enough to fail the block-aware compare.
 
 # The operations
 
-## `DataCopyGolden` — `datacopy.py`
+## `DataCopyGolden` — `pipelines/datacopy.py`
 
 ```python
 Chain([
@@ -395,7 +399,7 @@ The dataflow with nothing in the middle. Worth more than it looks: because
 `dest_to_l1` really packs, a format-converting copy is **requantized onto the
 output lattice**, which a golden that only casts dtypes is not.
 
-## `MatmulGolden` — `matmul.py`
+## `MatmulGolden` — `pipelines/matmul.py`
 
 ```python
 MatmulGolden(math_fidelity=MathFidelity.HiFi4, blocks=None)
@@ -414,7 +418,7 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 | `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. |
 | `K_FACES` | How many MVMULs cover one tile's inner dimension — 2, since SrcA's face is 16×16. One Dest write each. |
 
-`TILE_DIM` (32) is a module constant in `matmul.py`, not a class member — it
+`TILE_DIM` (32) is a module constant in `pipelines/matmul.py`, not a class member — it
 is the tile edge every op assumes, not something an architecture overrides.
 
 ### Accumulation: exact within one MVMUL, rounded at every Dest write
@@ -503,7 +507,7 @@ lightweight golden's HiFi4 differs from its HiFi3. Hardware gave HiFi3 == HiFi4
 which favours this one, but it has not been checked for matmul. A matmul run at
 HiFi3 and HiFi4 settles it.
 
-## `EltwiseBinaryGolden` — `eltwise.py`
+## `EltwiseBinaryGolden` — `pipelines/eltwise.py`
 
 ```python
 EltwiseBinaryGolden(operation=MathOperation.Elwadd,
@@ -541,7 +545,7 @@ the first and turns fidelity into a silent no-op.
 Unlike matmul, each product here **is** an FP lane result written to Dest, so
 the flush applies.
 
-## `EltwiseBinaryReuseDestGolden` — `reuse_dest.py`
+## `EltwiseBinaryReuseDestGolden` — `pipelines/reuse_dest.py`
 
 ```python
 EltwiseBinaryReuseDestGolden(operation=MathOperation.Elwadd,

@@ -3,6 +3,9 @@
 
 """Operations, each declaring a chain of data-transfer blocks.
 
+The operations live in :mod:`.pipelines`; everything here is the machinery
+that builds and runs them.
+
 Use an architecture's golden -- ``QuasarMatmulGolden``,
 ``WormholeEltwiseBinaryGolden`` and so on, all exported from here. Each is the
 architecture-independent pipeline bound to an ``ArchProfile`` from
@@ -26,11 +29,11 @@ from .arch import (
     WormholeMatmulGolden,
 )
 from .chain import Chain, Registers, StageRecord, Step
-from .datacopy import DataCopyGolden
-from .eltwise import EltwiseBinaryGolden
 from .golden import Golden, OpConfig
-from .matmul import MatmulGolden
-from .reuse_dest import EltwiseBinaryReuseDestGolden
+from .pipelines.datacopy import DataCopyGolden
+from .pipelines.eltwise import EltwiseBinaryGolden
+from .pipelines.matmul import MatmulGolden
+from .pipelines.reuse_dest import EltwiseBinaryReuseDestGolden
 
 __all__ = [
     "BLACKHOLE",
