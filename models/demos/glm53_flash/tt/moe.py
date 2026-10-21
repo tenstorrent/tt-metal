@@ -868,9 +868,11 @@ class TtEPExperts(LightweightModule):
         )
         self.ops = {}
         self._pad = {}
+        self._zero_slots = {}
         self.act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
-        # GLM53_EP_KSUM=fast: the K-slot sum as one fast_reduce_nc kernel; sum: the generic ttnn.sum (3 ops)
-        self.ksum_fast = os.environ.get("GLM53_EP_KSUM", "sum") == "fast"
+        # GLM53_EP_KSUM=fast (default): the K-slot sum as one fast_reduce_nc kernel (+ a slice below 32 rows); sum:
+        # the generic ttnn.sum (permute + reduce + permute). Equal results (PCC 1.000000 / 0.999999 at 4 / 32 users)
+        self.ksum_fast = os.environ.get("GLM53_EP_KSUM", "fast") == "fast"
         # the DeepSeek-V3 decode call pattern (models/demos/deepseek_v3/tt/moe.py, its decode config): dispatch and
         # combine along the mesh rows, L1 outputs, the links chosen by the op. The topology is derived from the
         # active fabric by the op (``topology=None``: FABRIC_1D -> Linear, FABRIC_2D -> Mesh, the torus -> Ring on a
@@ -884,9 +886,10 @@ class TtEPExperts(LightweightModule):
             "torus": ttnn.Topology.Torus,
             "": None,
         }[os.environ.get("GLM53_A2A_TOPOLOGY", "").lower()]
-        # links per axis: 1 is the Blackhole CI configuration of these ops (the control plane reports 2 on a block);
-        # GLM53_A2A_LINKS overrides (0 = the op's own choice)
-        links = int(os.environ.get("GLM53_A2A_LINKS", "1")) or None
+        # links per axis: GLM53_A2A_LINKS, default 0 = the op's own choice (the control plane's maximum: 2 on a (2,4)
+        # block, where it cut the combine from 494 to 310 us at 32 users/row with identical results; 1 is the
+        # Blackhole CI configuration of these ops)
+        links = int(os.environ.get("GLM53_A2A_LINKS", "0")) or None
         self.a2a_kwargs = dict(cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG, num_links=links, topology=topo)
         # GLM53_EP_FORCE_A2A=1: run the dispatch / combine even on one chip (D = 1: the identity) to exercise the
         # mesh plumbing before a block is available
@@ -998,9 +1001,13 @@ class TtEPExperts(LightweightModule):
         l1 = ttnn.L1_MEMORY_CONFIG
         Td = out.shape[-2]
         out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (1, Td, 1, H))
-        slots = ttnn.zeros(
-            (K, T, 1, H), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, memory_config=l1
-        )
+        # the zeroed slot tensor as a device copy of a persistent zero constant (ttnn.zeros is a host write: not
+        # allowed inside a trace); the constant is made on the first (eager) call for this T
+        if (K, T) not in self._zero_slots:
+            self._zero_slots[(K, T)] = ttnn.zeros(
+                (K, T, 1, H), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, memory_config=l1
+            )
+        slots = ttnn.clone(self._zero_slots[(K, T)], memory_config=l1)
         y = ttnn.all_to_all_combine(
             out_rm, meta, self.mapping, local_reduce=True, output_tensor=slots, **self.a2a_kwargs
         )  # [K, T, 1, H]
@@ -1009,6 +1016,8 @@ class TtEPExperts(LightweightModule):
         ttnn.deallocate(y)
         if self.ksum_fast:  # one kernel over dim 0 (ttnn.sum over dim 0 is permute + reduce + permute)
             y_sum = ttnn.experimental.fast_reduce_nc(y_t, dims=[0], output=None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if y_sum.shape[-2] != T:  # the kernel reports the tile-padded row count (a view cannot shrink it)
+                y_sum = ttnn.slice(y_sum, [0, 0, 0, 0], [1, 1, T, H])
         else:
             y_sum = ttnn.sum(y_t, dim=0, keepdim=True)  # [1,1,T,H]
         ttnn.deallocate(y_t)

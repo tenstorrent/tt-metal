@@ -211,7 +211,9 @@ def test_dispatch_combine_golden(mesh_device, T):
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    kw = dict(cluster_axis=0, num_links=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+    links = int(os.environ.get("GLM53_A2A_LINKS", "1")) or None  # 0 = the op's own choice (the control plane's max)
+    kw = dict(cluster_axis=0, num_links=links, memory_config=ttnn.L1_MEMORY_CONFIG)
+    logger.info(f"dispatch / combine with num_links={links}")
     for it in range(2):  # twice: the second call exercises the program cache / semaphore reuse
         t0 = time.perf_counter()
         out, meta = ttnn.all_to_all_dispatch(tok_dev, idx_dev, map_dev, **kw)
@@ -279,7 +281,12 @@ def _time_stage(mesh_device, fn, reps=20):
     ttnn.synchronize_device(mesh_device)
     _dealloc(out)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = fn()
+    try:
+        out = fn()
+    except BaseException:
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)  # an open capture hangs the device teardown
+        ttnn.release_trace(mesh_device, tid)
+        raise
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
     ttnn.synchronize_device(mesh_device)
@@ -334,9 +341,20 @@ def test_moe_decode_components(mesh_device, weights, T):
         mesh_device, lambda: moe_ep.experts.dispatch_rows(x, w16, idx)
     )
     out, res["ep experts (2 ops)"] = _time_stage(mesh_device, lambda: moe_ep.experts.run_experts(tok, meta))
-    y_ep, res["ep combine + K-sum (+4 ops)"] = _time_stage(
+    moe_ep.experts.ksum_fast = False
+    y_ep, res["ep combine + K-sum (ttnn.sum, +6 ops)"] = _time_stage(
         mesh_device, lambda: moe_ep.experts.combine_rows(out, meta, T)
     )
+    moe_ep.experts.ksum_fast = True
+    y_ep_fast, res["ep combine + K-sum (fast_reduce_nc, +4 ops)"] = _time_stage(
+        mesh_device, lambda: moe_ep.experts.combine_rows(out, meta, T)
+    )
+    ksum_same = min(
+        pcc(ttnn.to_torch(a).float(), ttnn.to_torch(b).float())
+        for a, b in zip(mesh.device_tensors(y_ep), mesh.device_tensors(y_ep_fast))
+    )
+    logger.info(f"T={T}/row: K-sum fast_reduce_nc vs ttnn.sum: worst pcc {ksum_same:.6f}")
+    moe_ep.experts.ksum_fast = ksum_same > 0.9999  # the whole-forward timing takes the one-kernel sum when it matches
     rows_dev = [
         int((ttnn.to_torch(d).reshape(-1, meta.shape[-1]).to(torch.int64) // moe_ep.experts.E_local == i).any(-1).sum())
         for i, d in enumerate(mesh.device_tensors(meta))
@@ -370,7 +388,14 @@ def test_moe_decode_components(mesh_device, weights, T):
     for k, v in res.items():
         logger.info(f"| {k} | {v:.0f} |")
     ep_sum = (
-        res["ep router"] + res["ep dispatch (+6 ops)"] + res["ep experts (2 ops)"] + res["ep combine + K-sum (+4 ops)"]
+        res["ep router"]
+        + res["ep dispatch (+6 ops)"]
+        + res["ep experts (2 ops)"]
+        + res[
+            "ep combine + K-sum (fast_reduce_nc, +4 ops)"
+            if moe_ep.experts.ksum_fast
+            else "ep combine + K-sum (ttnn.sum, +6 ops)"
+        ]
     )
     h_sum = (
         res["hybrid router (dense)"]
@@ -382,3 +407,90 @@ def test_moe_decode_components(mesh_device, weights, T):
         f"SUMMARY T={T}/row: EP stages {ep_sum:.0f} us (forward {res['EP forward total']:.0f}); hybrid stages {h_sum:.0f} us (forward {res['hybrid forward total']:.0f})"
     )
     assert worst_ep > 0.995 and worst_h > 0.995, (worst_ep, worst_h)
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=200_000_000)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+@pytest.mark.parametrize("T", [4, 32])
+def test_ep_combine_breakdown(mesh_device, weights, T):
+    """The EP combine stage op by op (traced replay): out -> ROW_MAJOR, the zero-slot clone, all_to_all_combine
+    alone, the tilize of the [K, 1, T, H] slots, the K-sum (ttnn.sum / fast_reduce_nc); plus the dispatch stage op by
+    op (the two to_layouts, the concat, the typecast + to_layout of the ids, all_to_all_dispatch alone) and the
+    dispatch / combine with num_links 1 vs the control plane's maximum."""
+    rows, cols = MESH
+    snapshot, text, raw, hf, sd = weights
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    mlp = {k[len("mlp.") :]: v for k, v in raw.items() if "experts." not in k or "shared_experts" in k}
+    mlp["experts.gate_up_proj"] = sd["experts.gate_up_proj"]
+    mlp["experts.down_proj"] = sd["experts.down_proj"]
+    mesh = GLMMesh.from_device(mesh_device)
+    moe = TtMoE(mesh_device, cfg, mlp, mesh=mesh, layout="ep")
+    ex = moe.experts
+    x_all = realistic_mlp_input(snapshot, text, raw, rows * 32).reshape(1, 1, rows * 32, -1)
+    xs = torch.cat([x_all[:, :, 32 * r : 32 * r + T] for r in range(rows)], dim=2)
+    x = mesh.upload(xs.bfloat16(), ttnn.bfloat16, rows=2)
+    K_, H_ = cfg.num_experts_per_tok, cfg.hidden_size
+    l1 = ttnn.L1_MEMORY_CONFIG
+    res = {}
+    (w16, idx, _), res["router (ep_rows)"] = _time_stage(mesh_device, lambda: moe.router(x, ep_rows=True))
+    # dispatch stage, op by op
+    x_rm, res["x to_layout RM"] = _time_stage(
+        mesh_device, lambda: ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)
+    )
+    w_rm, res["w to_layout RM"] = _time_stage(
+        mesh_device, lambda: ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)
+    )
+    xw, res["concat [x|w]"] = _time_stage(mesh_device, lambda: ttnn.concat([x_rm, w_rm], dim=-1, memory_config=l1))
+    xw = ttnn.reshape(xw, (T, 1, 1, H_ + K_))
+    idx16, res["idx typecast u16"] = _time_stage(mesh_device, lambda: ttnn.typecast(idx, ttnn.uint16))
+    idx_rm, res["idx to_layout RM"] = _time_stage(
+        mesh_device, lambda: ttnn.to_layout(idx16, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)
+    )
+    idx_rm = ttnn.reshape(idx_rm, (T, 1, 1, K_))
+    kw1 = dict(ex.a2a_kwargs)
+    (tok, meta), res["all_to_all_dispatch (links 1)"] = _time_stage(
+        mesh_device, lambda: ttnn.all_to_all_dispatch(xw, idx_rm, ex.mapping, **kw1)
+    )
+    links_max = ttnn.get_num_links(mesh_device, 0)
+    if links_max != kw1["num_links"]:
+        kw2 = dict(kw1, num_links=links_max)
+        _, res[f"all_to_all_dispatch (links {links_max})"] = _time_stage(
+            mesh_device, lambda: ttnn.all_to_all_dispatch(xw, idx_rm, ex.mapping, **kw2)
+        )
+    out, res["expert ops"] = _time_stage(mesh_device, lambda: ex.run_experts(tok, meta))
+    # combine stage, op by op
+    Td = out.shape[-2]
+    out_rm, res["out to_layout RM"] = _time_stage(
+        mesh_device, lambda: ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)
+    )
+    out_rm = ttnn.reshape(out_rm, (1, Td, 1, H_))
+    zero = ttnn.zeros(
+        (K_, T, 1, H_), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=l1
+    )
+    slots, res["zero slots clone"] = _time_stage(mesh_device, lambda: ttnn.clone(zero, memory_config=l1))
+    y, res["all_to_all_combine (links 1)"] = _time_stage(
+        mesh_device,
+        lambda: ttnn.all_to_all_combine(
+            out_rm, meta, ex.mapping, local_reduce=True, output_tensor=ttnn.clone(zero, memory_config=l1), **kw1
+        ),
+    )
+    if links_max != kw1["num_links"]:
+        _, res[f"all_to_all_combine (links {links_max})"] = _time_stage(
+            mesh_device,
+            lambda: ttnn.all_to_all_combine(
+                out_rm, meta, ex.mapping, local_reduce=True, output_tensor=ttnn.clone(zero, memory_config=l1), **kw2
+            ),
+        )
+    y4 = ttnn.reshape(y, (K_, 1, T, H_))
+    y_t, res["slots to_layout TILE"] = _time_stage(mesh_device, lambda: ttnn.to_layout(y4, ttnn.TILE_LAYOUT))
+    _, res["K-sum ttnn.sum"] = _time_stage(mesh_device, lambda: ttnn.sum(y_t, dim=0, keepdim=True))
+    _, res["K-sum fast_reduce_nc"] = _time_stage(
+        mesh_device,
+        lambda: ttnn.experimental.fast_reduce_nc(y_t, dims=[0], output=None, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+    )
+    logger.info(f"| EP op (T={T}/row, {rows}x{cols} block, layer {LAYER}) | us per step |")
+    logger.info("|---|---|")
+    for k, v in res.items():
+        logger.info(f"| {k} | {v:.0f} |")
+    logger.info(f"BREAKDOWN T={T}/row: " + ", ".join(f"{k}={v:.0f}" for k, v in res.items()))
