@@ -26,7 +26,6 @@ struct ScatterCodegenParams {
     const uint32_t output_logical_w;
     const uint32_t idx_valid_h_last;
     const uint32_t idx_valid_w_last;
-    const uint32_t Ht_per_batch_input;
     const uint32_t Ht_per_batch_src;
     // ROW_MAJOR-only geometry (rm/bf16_reduce_rm factories).
     const uint32_t num_sticks;
@@ -35,7 +34,6 @@ struct ScatterCodegenParams {
     // Shared across every factory.
     const std::array<uint32_t, 17> page_map;
     const uint32_t reduction_mode;
-    const uint32_t value_kind;
     const tt::tt_metal::MemoryConfig output_mem_config;
     // Execution control: every program factory threads it into its own work split, so it is honoured
     // rather than dropped. Still participates in the default whole-struct hash like every other field

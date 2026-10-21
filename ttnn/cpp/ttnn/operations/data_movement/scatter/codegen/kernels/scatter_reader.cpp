@@ -52,16 +52,13 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(6);
     constexpr uint32_t src_valid_h_last = get_compile_time_arg_val(7);
     constexpr uint32_t src_valid_w_last = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht_per_batch_input = get_compile_time_arg_val(9);
-    constexpr uint32_t Ht_per_batch_src = get_compile_time_arg_val(10);
-    constexpr uint32_t output_logical_w = get_compile_time_arg_val(11);
-    constexpr auto index_ta_args = TensorAccessorArgs<12>();
+    constexpr uint32_t Ht_per_batch_src = get_compile_time_arg_val(9);
+    constexpr uint32_t output_logical_w = get_compile_time_arg_val(10);
+    constexpr auto index_ta_args = TensorAccessorArgs<11>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
+    // This reader overwrites; every reduce the gate admits is served by scatter_reader_bf16_reduce_rm.cpp.
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
-    constexpr uint32_t value_kind = get_named_compile_time_arg_val("value_kind");
-    // scatter_reduce_value has no bfloat16 (kind 5) arm; a bf16 reduce belongs to
-    // scatter_reader_bf16_reduce_rm.cpp, and here it would drop every update.
-    static_assert(reduction_mode == 0 || value_kind != 5, "bfloat16 reduction is not served by this reader");
+    static_assert(reduction_mode == 0, "this reader does not reduce");
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
@@ -96,10 +93,8 @@ void kernel_main() {
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const uint32_t h = core_loop * num_cores + core_id;
 
-        // Map this full-input tile row into the compact index/source prefix.
-        // This handles clipping in any leading dimension (N/C/H or a mixture),
-        // unlike the old batch/H-only arithmetic which collapsed clipped outer
-        // dimensions and addressed the wrong page.
+        // Map this full-input tile row into the compact index/source prefix; the map handles
+        // clipping in any leading dimension (N/C/H or a mixture).
         uint32_t h_src = 0;
         const bool has_src_data = map_scatter_input_page<4>(h, h_src);
 
@@ -111,7 +106,7 @@ void kernel_main() {
         in_cb.wait_front(Wt_output);
         out_cb.reserve_back(Wt_output);
 
-        // L1-to-L1 copy via NOC: much faster than volatile byte loop
+        // Copy input to output with one NOC L1-to-L1 read rather than an element loop.
         const uint32_t input_l1 = in_cb.get_read_ptr();
         uint32_t output_l1 = out_cb.get_write_ptr();
         const uint32_t copy_bytes = Wt_output * output_tile_bytes;
@@ -195,12 +190,7 @@ void kernel_main() {
                             const uint32_t local_index = tile_idx * (tile_width * tile_height) +
                                                          which_row * (face_size * face_size) + row_base + which_col;
 
-                            const uint32_t output_value = scatter_reduce_value(
-                                get_value_from_tile(output_l1, local_index, output_df_size),
-                                src_value,
-                                reduction_mode,
-                                value_kind);
-                            write_value_to_tile(output_l1, local_index, output_df_size, output_value);
+                            write_value_to_tile(output_l1, local_index, output_df_size, src_value);
                             count++;
                         }
                     }
