@@ -71,7 +71,6 @@ TT_KERNEL void writer(uint32_t first_batch, uint32_t num_batches, uint32_t first
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
             for (uint32_t compute_thread = thread; compute_thread < num_compute_threads;
                  compute_thread += num_writer_threads) {
-                C_slice.wait_front(C_entries_per_thread);
                 // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
                 // the C slice; entry_tile is where this compute thread's next subblock sits in its entries.
                 uint32_t subblock = 0;
@@ -83,6 +82,7 @@ TT_KERNEL void writer(uint32_t first_batch, uint32_t num_batches, uint32_t first
                             continue;
                         }
                         const uint32_t C_n_tile = C_slice_first_N_tile + n_tile;  // subblock's first column in C
+                        C_slice.wait_front(entry_tile + subblock_tiles);          // the compute pushes each subblock
                         for (uint32_t subblock_m_tile = 0;
                              subblock_m_tile < subblock_M_tiles && m_tile + subblock_m_tile < C_slice_M_tiles &&
                              C_m_tile + subblock_m_tile < M_tiles;
@@ -106,6 +106,7 @@ TT_KERNEL void writer(uint32_t first_batch, uint32_t num_batches, uint32_t first
                         entry_tile += subblock_tiles;
                     }
                 }
+                C_slice.wait_front(C_entries_per_thread);
                 noc.async_write_barrier();
                 C_slice.pop_front(C_entries_per_thread);
             }
