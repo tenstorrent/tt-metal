@@ -21,6 +21,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -303,6 +304,26 @@ bool codegen_can_serve(
            scatter_ns::supported_by_codegen(input_tensor, dim, index_tensor, source_tensor, reduction_mode);
 }
 
+// The live-L1 half of routing, asked last and on the same original tensors: whether the ROW_MAJOR
+// plan fits the L1 free right now. Kept apart from codegen_can_serve() because the forced entry
+// and the prim's validate consult the static scope only.
+bool codegen_plan_fits_live_l1(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::string>& opt_reduction_string) {
+    const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
+    return scatter_ns::codegen_plan_fits_live_l1(
+        input_tensor,
+        dim,
+        index_tensor,
+        source_tensor,
+        scatter_reduction_mode(opt_reduction_string),
+        output_mem_config);
+}
+
 // The existing native implementation, unconditionally. Callers that have already been routed here
 // enter this rather than re-entering ttnn::scatter, so a call routed to native cannot be routed a
 // second time and land on codegen.
@@ -534,10 +555,14 @@ Tensor scatter(
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
+    // Three gates, in order: static scope and output placement, perf demotion, and the L1 that is
+    // free right now.
     const bool use_codegen =
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
-        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config);
+        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config) &&
+        detail::codegen_plan_fits_live_l1(
+            input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string);
 
     return use_codegen ? detail::scatter_codegen_dispatch(
                              input_tensor,
