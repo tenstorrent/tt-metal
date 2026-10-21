@@ -57,6 +57,13 @@ from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
+# heads2users prefill (user-partitioned caches without a scratch slot): spare latent blocks at the end of the paged
+# cache that the non-owner columns of a prefill write their (discarded) chunk latent into
+DUMMY_BLOCKS = 64
+# how a user-partitioned cache serves a prefill: "scratch" (every column fills a full-length scratch slot and
+# attends over it with its 16 heads) | "heads2users" (no scratch slot: the owner column attends with all 64 heads
+# gathered over the columns, the other columns write dummies; doc/mesh/sparse_1m.md section 7)
+PREFILL_PARTITION_MODES = ("scratch", "heads2users")
 # decode block: "fused" (GLM53_DSA_FUSED=1: stem matmul -> ONE dsa_decode_state program -> folded q_b.W1 matmul ->
 # flash-MLA decode -> folded W2.o_proj matmul, 7 ops) | "composite" (default)
 DSA_FUSED_DEFAULT = "fused" if os.environ.get("GLM53_DSA_FUSED", "0") == "1" else "composite"
@@ -295,26 +302,41 @@ class TtLatentCache:
         dtype=ttnn.bfloat16,
         mesh: GLMMesh | None = None,
         partition_users: bool = False,
+        prefill_partition: str | None = None,
     ):
         """``max_batch`` user slots (per mesh row). ``partition_users`` on a multi-column mesh = the user-partitioned
         layout (doc/mesh/sparse_1m.md section 3): column chip c owns users ``[c*B/cols, (c+1)*B/cols)`` of its
-        row, so the chip allocates ``users_per_chip + 1`` slots (the last one the prefill scratch slot) instead
-        of ``max_batch``; decode addresses the local slots, prefill fills the scratch slot on every column and
-        the user's slot on its owner (one prompt in flight per chip, chunks back to back)."""
+        row. ``prefill_partition`` (default: the ``GLM53_PREFILL_PARTITION`` knob, ``scratch``) says how a
+        prefill is served: ``scratch`` allocates ``users_per_chip + 1`` slots (the last one the prefill scratch
+        slot every column fills and attends over with its 16 heads); ``heads2users`` allocates the
+        ``users_per_chip`` slots only (plus ``DUMMY_BLOCKS`` spare blocks): the owner column attends the chunk
+        with all 64 heads (gathered over the columns, ``TtDSA._sparse_attention(owner=...)``) over its own slot,
+        the other columns write the chunk into the dummies (section 7). Decode addresses the local slots either
+        way (one prompt in flight per chip, chunks back to back)."""
         self.device = device
         self.mesh = mesh
         self.block_size = block_size
         self.max_batch = max_batch
         self.partition = bool(partition_users) and mesh is not None and mesh.cols > 1
+        mode = prefill_partition or os.environ.get("GLM53_PREFILL_PARTITION", "scratch")
+        if mode not in PREFILL_PARTITION_MODES:
+            raise ValueError(f"GLM53_PREFILL_PARTITION={mode!r}: expected one of {PREFILL_PARTITION_MODES}")
+        self.prefill_mode: str | None = mode if self.partition else None
         if self.partition:
             assert max_batch % mesh.cols == 0, (max_batch, mesh.cols)
             self.users_per_chip = max_batch // mesh.cols
-            self.scratch: int | None = self.users_per_chip
-            self.slots = self.users_per_chip + 1
+            if mode == "scratch":
+                self.scratch: int | None = self.users_per_chip
+                self.slots = self.users_per_chip + 1
+            else:
+                self.scratch = None
+                self.slots = self.users_per_chip
         else:
             self.users_per_chip, self.scratch, self.slots = max_batch, None, max_batch
         self.blocks_per_seq = -(-max_seq_len // block_size)
-        self.max_blocks = self.blocks_per_seq * self.slots
+        self.data_blocks = self.blocks_per_seq * self.slots
+        self.dummy_blocks = DUMMY_BLOCKS if self.prefill_mode == "heads2users" else 0
+        self.max_blocks = self.data_blocks + self.dummy_blocks
         self.dtype = dtype
         self.latent_dim = cfg.kv_lora_rank
         self.cache = ttnn.zeros(
@@ -325,7 +347,7 @@ class TtLatentCache:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # identity page table [slots, blocks_per_seq]: slot b owns blocks [b*bps, (b+1)*bps)
-        pt = torch.arange(self.max_blocks, dtype=torch.int32).reshape(self.slots, self.blocks_per_seq)
+        pt = torch.arange(self.data_blocks, dtype=torch.int32).reshape(self.slots, self.blocks_per_seq)
         self.set_page_table(pt)
         self.rows_per_user = self.blocks_per_seq * block_size
         # pooled-key index (its own identity table; a slot's pools are contiguous regardless of the latent table)
@@ -337,18 +359,24 @@ class TtLatentCache:
             mesh=mesh,
             users_per_chip=self.users_per_chip if self.partition else None,
             scratch=self.scratch,
+            dummy=self.dummy_blocks > 0,
         )
 
     def set_page_table(self, page_table: torch.Tensor):
         """Any [slots, blocks_per_seq] mapping (vLLM-style); every block id must be unique. ``page_table`` is
         the decode table (the first ``users_per_chip`` rows when partitioned: the paged ops pair batch entry
-        b with row b) and ``page_table_full`` the whole table."""
+        b with row b) and ``page_table_full`` the whole table (plus, with dummy blocks, one extra row
+        ``users_per_chip`` that maps every block onto the dummies: the row a non-owner column's traced prefill
+        fill names)."""
         assert tuple(page_table.shape) == (self.slots, self.blocks_per_seq), page_table.shape
         assert page_table.unique().numel() == page_table.numel(), "page table blocks must be unique"
-        self.page_table_host = page_table.to(torch.int32).contiguous()
-        self.page_table_full = ttnn.from_torch(
-            self.page_table_host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
+        assert int(page_table.max()) < self.data_blocks, "page table blocks must lie below the dummy region"
+        host = page_table.to(torch.int32).contiguous()
+        if self.dummy_blocks:
+            dummy = self.data_blocks + torch.arange(self.blocks_per_seq, dtype=torch.int32) % self.dummy_blocks
+            host = torch.cat([host, dummy.reshape(1, -1)])
+        self.page_table_host = host
+        self.page_table_full = ttnn.from_torch(host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         self.page_table = (
             ttnn.slice(self.page_table_full, [0, 0], [self.users_per_chip, self.blocks_per_seq])
             if self.partition
@@ -356,13 +384,27 @@ class TtLatentCache:
         )
         self._prefill_views: dict = {}
 
+    @property
+    def dummy_row(self) -> int | None:
+        """The page-table row of the dummy blocks (heads2users), else None."""
+        return self.slots if self.dummy_blocks else None
+
     def prefill_slot(self, user: int) -> int:
-        """The slot every chip reads during the prefill of ``user`` (the scratch slot when partitioned)."""
-        return self.scratch if self.partition else user
+        """The slot every chip reads during the prefill of ``user``: the scratch slot (scratch layout), the user's
+        local slot (heads2users: real on the owner column, the column's own data elsewhere), or the user."""
+        if not self.partition:
+            return user
+        return self.scratch if self.scratch is not None else user % self.users_per_chip
+
+    def owner_of(self, user: int) -> int | None:
+        """The column that attends the prefill of ``user`` with all heads over its own slot (heads2users), else
+        None (every column attends its own heads over a replicated / scratch cache)."""
+        return user // self.users_per_chip if self.prefill_mode == "heads2users" else None
 
     def _prefill_views_for(self, user: int) -> list[ttnn.Tensor]:
         """[1, blocks_per_seq] page-table views a prefill of ``user`` fills (batch_idx 0): partitioned = the per-chip
-        owner/scratch row (the user's slot on its owner column, the scratch slot elsewhere) and the scratch row."""
+        owner row (the user's slot on its owner column, the scratch slot or the dummy row elsewhere) and, with a
+        scratch slot, the replicated scratch row."""
         key = ("fill", user)
         if key not in self._prefill_views:
             if not self.partition:
@@ -371,15 +413,20 @@ class TtLatentCache:
                 ]
             else:
                 owner, slot = user // self.users_per_chip, user % self.users_per_chip
+                other = self.scratch if self.scratch is not None else self.dummy_row
                 rows = torch.stack(
-                    [self.page_table_host[slot if c == owner else self.scratch] for c in range(self.mesh.cols)]
+                    [self.page_table_host[slot if c == owner else other] for c in range(self.mesh.cols)]
                 )  # [cols, bps]
-                self._prefill_views[key] = [
-                    self.mesh.upload(rows, ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT),
-                    self.mesh.upload(
-                        self.page_table_host[self.scratch : self.scratch + 1], ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-                    ),
-                ]
+                views = [self.mesh.upload(rows, ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT)]
+                if self.scratch is not None:
+                    views.append(
+                        self.mesh.upload(
+                            self.page_table_host[self.scratch : self.scratch + 1],
+                            ttnn.int32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                        )
+                    )
+                self._prefill_views[key] = views
         return self._prefill_views[key]
 
     def fill(self, latent: ttnn.Tensor, user: int, start: int = 0, slot=None):
@@ -394,7 +441,7 @@ class TtLatentCache:
                 raise ValueError("a device-slot fill starts a new prompt (start == 0)")
             pt = self.page_table_full
             ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.cache_idx)
-            if self.partition:
+            if self.scratch is not None:
                 ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.scratch_idx)
             return
         if start == 0 and not self.partition:
@@ -828,7 +875,7 @@ class TtDSA(LightweightModule):
         self._mark("cache_fill")
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start, slot=slot, ring_sel=ring_sel)
         self._mark("index_maintain")
-        prefix = cache.user_rows(user, start) if start and split else None  # [1,1,start,L]
+        prefix = self._prefix_rows(cache, user, start) if start and split else None  # [1,1,start,L]
         if split == T:
             ttnn.deallocate(q_resid)
             o = self._dense_attention(q, c, prefix, start)
@@ -892,7 +939,9 @@ class TtDSA(LightweightModule):
                 self.on_indices(start + q0, indices)
             q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
             self._mark("absorb_q")
-            o_lat = self._sparse_attention(q_lat, kv_rm, indices)  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
+            o_lat = self._sparse_attention(
+                q_lat, kv_rm, indices, owner=cache.owner_of(user)
+            )  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
             o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
             ttnn.deallocate(o_lat)
             self._mark("sparse_out")
@@ -973,7 +1022,7 @@ class TtDSA(LightweightModule):
             # superset) rows need; the per-row Q offset tensor locates the slab's rows among them. An all-sparse
             # row of a mixed chunk is pointed at the last dense block (its rows are discarded by the select).
             S_c = min(T, split + n_d)
-            prefix = cache.user_rows(user, start) if start else None
+            prefix = self._prefix_rows(cache, user, start) if start else None
             offsets = tuple(start + (r * T_loc if dense[r] else split - n_d) for r in range(rows))
             q_d = q if n_d == T_loc else ttnn.slice(q, [0, 0, 0, 0], [1, 1, n_d, self.H * self.Dq])
             c_k = c if S_c == T else ttnn.slice(c, [0, 0, 0, 0], [1, 1, S_c, self.L])
@@ -1028,7 +1077,9 @@ class TtDSA(LightweightModule):
                 self.on_indices(row_starts, indices)
             q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
             self._mark("absorb_q")
-            o_lat = self._sparse_attention(q_lat, kv_rm, indices)  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
+            o_lat = self._sparse_attention(
+                q_lat, kv_rm, indices, owner=cache.owner_of(user)
+            )  # [1,H,q1-q0,L] TILE (consumes q_lat, indices)
             o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
             ttnn.deallocate(o_lat)
             self._mark("sparse_out")
@@ -1053,7 +1104,24 @@ class TtDSA(LightweightModule):
         self._mark("out_proj")
         return y
 
-    def _sparse_attention(self, q_lat: ttnn.Tensor, kv_rm: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+    def _prefix_rows(self, cache: TtLatentCache, user: int, start: int) -> ttnn.Tensor:
+        """The cached latent rows [0, start) of ``user`` as a fresh TILE [1,1,start,L] tensor on every column (the
+        dense rows' K/V prefix). With the heads2users layout only the owner column holds them: its rows are
+        all-gathered over the columns on dim 0 ([cols,1,start,L]) and the owner's entry sliced out (start < 2048
+        rows: a chunk with dense rows starts below the sparse boundary)."""
+        rows = cache.user_rows(user, start)
+        owner = cache.owner_of(user)
+        if owner is None:
+            return rows
+        g = self.mesh.all_gather_cols(rows, dim=0)  # [cols,1,start,L]: entry c = column c's slot rows
+        ttnn.deallocate(rows)
+        prefix = ttnn.slice(g, [owner, 0, 0, 0], [owner + 1, 1, start, self.L])
+        ttnn.deallocate(g)
+        return prefix
+
+    def _sparse_attention(
+        self, q_lat: ttnn.Tensor, kv_rm: ttnn.Tensor, indices: ttnn.Tensor, *, owner: int | None = None
+    ) -> ttnn.Tensor:
         """``sparse_sdpa`` of the absorbed queries ``q_lat`` [1,H,n,L] TILE (H = this chip's heads) over the
         ROW_MAJOR prefix copy ``kv_rm`` with the index rows ``indices`` [1,1,n,W] (replicated over the columns):
         returns o_lat [1,H,n,L] TILE; ``q_lat`` and ``indices`` are consumed. The op wants H % 32 == 0; a
@@ -1063,9 +1131,42 @@ class TtDSA(LightweightModule):
         are partitioned alike (a per-device slice, no traffic), the attention runs on full heads over a quarter
         of the rows, and the inverse exchange restores the head shard for the per-head output projection.
         Needs n % (32 * cols) == 0 (tile-aligned quarters); other sub-blocks, single columns and tile-aligned
-        head shards keep the direct form. ``GLM53_SPARSE_A2A=0`` keeps the padded form everywhere (A/B)."""
+        head shards keep the direct form. ``GLM53_SPARSE_A2A=0`` keeps the padded form everywhere (A/B).
+
+        ``owner`` (the heads2users prefill of a user-partitioned cache, doc/mesh/sparse_1m.md section 7): only
+        column ``owner`` holds the user's cache (``kv_rm`` and ``indices`` are that column's own slot's; the other
+        columns pass their own slot's, same shapes). The heads are all-gathered over the columns ([1,H_total,n,L]
+        on every column), every column attends all 64 heads over its own rows (the owner's result is the real
+        one), and the inverse all-to-all splits the heads back by column and stacks the sources on dim 0
+        ([cols,H,n,L]); entry ``owner`` is the owner's output for this column's head shard."""
         H, n = q_lat.shape[1], q_lat.shape[2]
         cols = self.mesh.cols
+        if owner is not None and cols > 1:
+            q_full = self.mesh.all_gather_cols(q_lat, dim=1)  # [1,H_total,n,L]
+            ttnn.deallocate(q_lat)
+            q_rm = ttnn.to_layout(q_full, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(q_full)
+            self._mark("gather_heads")
+            o_rm = ttnn.transformer.sparse_sdpa(
+                q_rm,
+                kv_rm,
+                indices,
+                v_dim=self.L,
+                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                scale=self.scale,
+                k_chunk_size=128,
+            )  # [1,H_total,n,L] row-major
+            self._mark("sparse_sdpa")
+            ttnn.deallocate(q_rm)
+            ttnn.deallocate(indices)
+            o = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(o_rm)
+            o_x = self.mesh.all_to_all_cols(o, in_dim=1, out_dim=0)  # [cols,H,n,L]: entry s = column s's result
+            ttnn.deallocate(o)
+            o_lat = ttnn.slice(o_x, [owner, 0, 0, 0], [owner + 1, H, n, self.L])  # the owner's, my head shard
+            ttnn.deallocate(o_x)
+            self._mark("a2a_owner_to_heads")
+            return o_lat
         a2a = cols > 1 and H % TILE != 0 and n % (TILE * cols) == 0 and os.environ.get("GLM53_SPARSE_A2A", "1") == "1"
         if a2a:
             q_x = self.mesh.all_to_all_cols(q_lat, in_dim=2, out_dim=1)  # [1,H*cols,n/cols,L]

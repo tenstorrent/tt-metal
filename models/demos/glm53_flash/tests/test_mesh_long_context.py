@@ -8,10 +8,16 @@ retrieved (``GLM53_LONG_ASSERT=1`` makes a missing needle a failure).
 
     GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=16384 pytest models/demos/glm53_flash/tests/test_mesh_long_context.py -s
     GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=1048576 GLM53_PARTITION_USERS=0 GLM53_LONG_B=1 pytest ... -s   # the full context, one slot per chip
+    GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=1048576 GLM53_PREFILL_PARTITION=heads2users GLM53_LONG_USERS=all pytest ... -s
+        # 4 users per row at the full context: one slot per chip, every user prefilled (sparse_1m.md section 7)
 Knobs shared with the e2e test / demo: GLM53_MODEL_LAYERS (default 0-44), GLM53_MODEL_EXPERT_DTYPE /
 GLM53_MODEL_EXPERT_DOWN_DTYPE (bfp8), GLM53_MESH_CACHE (tensorbin weight cache), GLM53_MODEL_TRACE_MB.
 The DSA cache is user-partitioned over the columns (GLM53_PARTITION_USERS=1 is set here unless overridden) so a 1 M
-user costs 1/4 of its latent + index per column chip.
+user costs 1/4 of its latent + index per column chip. ``GLM53_LONG_USERS`` (default 1): how many user slots per row
+are prefilled, one after the other, with the same prompt (``all`` = every slot: one per column with the partitioned
+cache); the decode then runs every slot on its own greedy chain and the needle / first token are checked per
+(row, user). The JSON keeps user 0's chain in ``generated`` / ``text`` (what ``reference/compare_to_tt.py`` grades)
+and every chain under ``users``. The allocator's DRAM view is logged after the build and after the prefills.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+from models.demos.glm53_flash.tests.utils import log_dram
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
@@ -41,6 +48,8 @@ CHUNK = int(
 GEN = int(os.environ.get("GLM53_LONG_GEN", "32"))
 DEPTH = float(os.environ.get("GLM53_LONG_NEEDLE_DEPTH", "0.5"))  # needle position as a fraction of the filler
 B = int(os.environ.get("GLM53_LONG_B", "4"))  # user slots per row (one per column with the partitioned cache)
+_users_env = os.environ.get("GLM53_LONG_USERS", "1")
+N_USERS = B if _users_env == "all" else min(B, int(_users_env))  # slots per row prefilled (sequentially)
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
@@ -160,53 +169,87 @@ def test_mesh_long_context(mesh_device):
     )
     U = model.total_users
     logger.info(f"model built in {time.perf_counter() - t0:.0f} s ({len(layers)} layers, {U} slots)")
+    dsa = [d for d in model.layers if d.cache is not None]
+    if dsa:
+        c = dsa[0].cache
+        logger.info(
+            f"DSA cache per chip: partition {c.partition} prefill_mode {c.prefill_mode} slots {c.slots} "
+            f"(users_per_chip {c.users_per_chip}, scratch {c.scratch}, dummy blocks {c.dummy_blocks}), "
+            f"{c.blocks_per_seq} blocks x 32 x {c.latent_dim} per slot; pools per user {c.index.pools_per_user}"
+        )
+    log_dram(mesh_device, "after build")
     # decode trace first (compile + capture at position 0 on dummy ids; the prefill below overwrites the state)
     trace_id, (_, _, ids_tr) = model.capture(torch.zeros(U, dtype=torch.long), [0] * U)
     model.reset_kda_states()
-    # chunked prefill of user 0 (SP prefill v1: every row holds the prompt in its slot 0)
-    chunk_log: list[tuple[int, int, float]] = []
+    # chunked prefill of users 0 .. N_USERS-1, one after the other (the SP prefill writes slot ``user`` of every
+    # row: the rows hold the same prompts; with the heads2users partitioned cache column u of a row holds user u)
+    chunk_log: list[tuple[int, int, int, float]] = []
+    user_in_flight = [0]
 
     def on_chunk(s0: int, e: int, sec: float):
-        chunk_log.append((s0, e, sec))
-        logger.info(f"prefill chunk [{s0}, {e}) {e - s0} tokens: {sec:.2f} s ({(e - s0) / sec:.0f} tok/s)")
+        chunk_log.append((user_in_flight[0], s0, e, sec))
+        logger.info(
+            f"user {user_in_flight[0]} prefill chunk [{s0}, {e}) {e - s0} tokens: {sec:.2f} s ({(e - s0) / sec:.0f} tok/s)"
+        )
 
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    _, logits_last, owner_row = model.prefill_chunked(
-        torch.tensor(ids, dtype=torch.long), user=0, chunk=CHUNK, on_chunk=on_chunk
-    )
-    first = model.first_token(logits_last, owner_row)
-    ttft_s = time.perf_counter() - t0
-    logger.info(
-        f"TTFT {ttft_s:.1f} s for {S} tokens ({S / ttft_s:.0f} tok/s prefill); first token {first} {tok.decode([first])!r}"
-    )
-    # greedy decode: every slot runs (only slot 0 of each row carries the prompt; the others are ignored)
-    gen = [first]
+    firsts, ttfts = [], []
+    for u in range(N_USERS):
+        user_in_flight[0] = u
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        _, logits_last, owner_row = model.prefill_chunked(
+            torch.tensor(ids, dtype=torch.long), user=u, chunk=CHUNK, on_chunk=on_chunk
+        )
+        firsts.append(model.first_token(logits_last, owner_row))
+        ttfts.append(time.perf_counter() - t0)
+        logger.info(
+            f"user {u}: TTFT {ttfts[-1]:.1f} s for {S} tokens ({S / ttfts[-1]:.0f} tok/s prefill); first token "
+            f"{firsts[-1]} {tok.decode([firsts[-1]])!r}"
+        )
+    log_dram(mesh_device, "after prefill")
+    first, ttft_s = firsts[0], ttfts[0]
+    # greedy decode: every slot runs its own chain (slot u of every row carries prompt u for u < N_USERS; the other
+    # slots are ignored); a chain stops at EOS, the step stops when every prefilled chain has
+    live = [(r, u) for r in range(rows) for u in range(N_USERS)]
+    gens = {(r, u): [firsts[u]] for r, u in live}
+    done = {k: False for k in live}
     positions = [S] * U
     step_s = []
     for _ in range(GEN - 1):
-        model.load_ids(torch.tensor([gen[-1]] * U, dtype=torch.long))
+        feed = torch.tensor([gens[(r, u)][-1] if (r, u) in gens else firsts[0] for r in range(rows) for u in range(B)])
+        model.load_ids(feed)
         model.set_positions(positions)
         t0 = time.perf_counter()
         model.replay(trace_id)
         nxt = model.ids_to_host(ids_tr)
         step_s.append(time.perf_counter() - t0)
-        tid = int(nxt[0])
-        gen.append(tid)
+        for r, u in live:
+            if done[(r, u)]:
+                continue
+            tid = int(nxt[r * B + u])
+            gens[(r, u)].append(tid)
+            done[(r, u)] = tid in stop
         positions = [p + 1 for p in positions]
-        if tid in stop:
+        if all(done.values()):
             break
-    out_text = tok.decode([t for t in gen if t not in stop], skip_special_tokens=True)
-    found = NEEDLE_KEY in out_text
+    texts = {k: tok.decode([t for t in g if t not in stop], skip_special_tokens=True) for k, g in gens.items()}
+    founds = {k: NEEDLE_KEY in t for k, t in texts.items()}
+    gen, out_text, found = gens[(0, 0)], texts[(0, 0)], founds[(0, 0)]
     steady = step_s[2:] or step_s
     step_ms = 1000 * sum(steady) / len(steady) if steady else float("nan")
+    for r, u in live:
+        logger.info(
+            f"=== OUTPUT row {r} user {u} ({len(gens[(r, u)])} tokens, first {gens[(r, u)][0]}): {texts[(r, u)]!r}\n"
+            f"needle {'FOUND' if founds[(r, u)] else 'MISSING'} ({NEEDLE_KEY})"
+        )
+    chains_equal = all(gens[(r, u)] == gens[(0, u)] for r, u in live)
+    users_equal = all(gens[(0, u)] == gens[(0, 0)] for u in range(N_USERS))
     logger.info(
-        f"=== OUTPUT ({len(gen)} tokens): {out_text!r}\nneedle {'FOUND' if found else 'MISSING'} ({NEEDLE_KEY})"
-    )
-    logger.info(
-        f"PERF-LONG mesh {MESH} layers {len(layers)} ISL {S} chunk {CHUNK}: prefill {ttft_s:.1f} s "
-        f"({S / ttft_s:.0f} tok/s), decode step {step_ms:.1f} ms = {1000 / step_ms:.1f} tok/s per user at position {S}; "
-        f"needle {'found' if found else 'missing'}"
+        f"PERF-LONG mesh {MESH} layers {len(layers)} ISL {S} chunk {CHUNK} users/row {N_USERS}: prefill "
+        f"{ttft_s:.1f} s ({S / ttft_s:.0f} tok/s) [per user {[f'{t:.1f}' for t in ttfts]}], decode step {step_ms:.1f} ms = "
+        f"{1000 / step_ms:.1f} tok/s per user at position {S} ({U} slots: {U * 1000 / step_ms:.1f} tok/s aggregate); "
+        f"needle {'found' if found else 'missing'}; needles found {sum(founds.values())}/{len(founds)}; "
+        f"rows agree {chains_equal}; users agree {users_equal}"
     )
     out_dir = Path("generated/glm53_flash_long_context")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -217,15 +260,24 @@ def test_mesh_long_context(mesh_device):
                 "layers": len(layers),
                 "isl": S,
                 "chunk": CHUNK,
+                "users_per_row": N_USERS,
+                "partition": os.environ.get("GLM53_PARTITION_USERS"),
+                "prefill_partition": os.environ.get("GLM53_PREFILL_PARTITION", "scratch"),
                 "ttft_s": ttft_s,
+                "ttft_s_per_user": ttfts,
+                "first_tokens": firsts,
                 "chunks": chunk_log,
                 "decode_step_ms": step_ms,
                 "generated": gen,
                 "text": out_text,
                 "needle_found": found,
+                "users": {
+                    f"r{r}u{u}": {"generated": gens[(r, u)], "text": texts[(r, u)], "needle_found": founds[(r, u)]}
+                    for r, u in live
+                },
             },
             indent=1,
         )
     )
     if os.environ.get("GLM53_LONG_ASSERT", "0") == "1":
-        assert found, out_text
+        assert all(founds.values()), texts
