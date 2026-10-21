@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -268,6 +269,45 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     if (output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(output_buffer_type == BufferType::L1, "We don't support DRAM block sharding");
     }
+}
+
+// Only the row-dependent invariants: the row count is not in the interleaved multi-core hash.
+void UntilizeDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
+    const auto& input_tensor_a = tensor_args.input;
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
+    TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+    if (operation_attributes.sub_core_grids.has_value()) {
+        TT_FATAL(
+            tensor_height == 0 || tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
+            "sub_core_grid untilize only supports tensors one tile row tall, got height {} with tile height {}",
+            tensor_height,
+            input_tensor_a.tensor_spec().tile().get_tile_shape()[0]);
+    }
+}
+
+ttsl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    constexpr uint64_t kSalt = 0x756e74696c697a65ULL;  // "untilize"
+    const auto factory = select_program_factory(operation_attributes, tensor_args);
+    const bool row_free =
+        std::holds_alternative<UntilizeMultiCoreProgramFactory>(factory) && !tensor_args.input.is_sharded();
+    const auto input_hash = row_free
+                                ? ttnn::operations::common::hash_spec_without_rows(tensor_args.input, kSalt)
+                                : ttsl::hash::hash_objects_with_default_seed(kSalt, tensor_args.input.tensor_spec());
+    return tt::tt_metal::operation::hash_operation<UntilizeDeviceOperation>(
+        operation_attributes.output_mem_config,
+        operation_attributes.use_multicore,
+        operation_attributes.fp32_dest_acc_en,
+        operation_attributes.sub_core_grids,
+        operation_attributes.enough_space_height,
+        operation_attributes.pf_type,
+        factory.index(),
+        row_free,
+        input_hash);
 }
 
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(

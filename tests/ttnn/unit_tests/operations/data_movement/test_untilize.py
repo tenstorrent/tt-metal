@@ -3477,3 +3477,52 @@ def test_untilize_block_per_node_cb_size(device, tensor_shape, dtype):
             ), "untilize must reuse the cached program on a cache hit"
 
     device.disable_and_clear_program_cache()
+
+
+def _h3_untilize_rows():
+    # Full packed sequence lengths of the MiniMax-H3 DiT on 4x8 (8 chips x 74..470 tile rows), 148 as the warm point.
+    return [rows * 32 * 8 for rows in (148, 74, 287, 427, 470)]
+
+
+@pytest.mark.parametrize("width", [96, 32])
+def test_untilize_multi_core_dynamic_rows_flat_cache(device, width):
+    """The H3 output select untilizes [pad_to, 96] / [pad_to, 32] tables: one program over every served length."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(rows):
+        torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = ttnn.untilize(tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, _h3_untilize_rows())
+    assert device.num_program_cache_entries() == 1
+
+
+def test_untilize_multi_core_width_or_dtype_change_misses(device):
+    """Only the row count is runtime: a new width, dtype or memory config needs its own program."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(variant):
+        rows, width, dtype, out_mem = variant
+        torch_input = torch.randn((2, rows, width), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = ttnn.untilize(tt_input, memory_config=out_mem, use_multicore=True)
+        assert_quality(ttnn.to_torch(tt_input), ttnn.to_torch(tt_output), dtype)
+
+    variants = [
+        (256, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (32, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (4096, 128, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (256, 256, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),  # width: new program
+        (256, 128, ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG),  # dtype: new program
+        (256, 128, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),  # output memory config: new program
+    ]
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, variants, miss_indices=(3, 4, 5))
