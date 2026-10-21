@@ -164,7 +164,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, tiles_per_section);
                             for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                             {
-                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(IS_REDUCE_TO_ONE ? 0 : block_tile, tensor_shape_A);
+                                const std::uint32_t dst_tile_idx = IS_REDUCE_TO_ONE ? 0 : block_tile;
+                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(dst_tile_idx, tensor_shape_A);
                             }
                             if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                             {
@@ -183,7 +184,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, tiles_per_section);
                         for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                         {
-                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(IS_REDUCE_TO_ONE ? 0 : block_tile, tensor_shape_A);
+                            const std::uint32_t dst_tile_idx = IS_REDUCE_TO_ONE ? 0 : block_tile;
+                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(dst_tile_idx, tensor_shape_A);
                         }
                         if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                         {

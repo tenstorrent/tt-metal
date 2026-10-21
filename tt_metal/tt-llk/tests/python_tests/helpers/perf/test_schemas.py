@@ -605,7 +605,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
     },
     "perf_reduce": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -625,6 +625,7 @@ PERF_TEST_SCHEMAS = {
             "marker",
             "math_fidelity",
             "mathop",
+            "measure_reconfig",
             "num_faces_c_dim_A",
             "num_faces_c_dim_B",
             "num_faces_r_dim_A",

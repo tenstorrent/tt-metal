@@ -48,18 +48,20 @@ from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+RECONFIG_MARKER = "RECONFIG"
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     """
     Return zone names for mapping counter zones to profiler markers.
 
-    Zone 0 = INIT, Zone 1 = TILE_LOOP. This matches the order in which
-    MEASURE_PERF_COUNTERS is called in all perf test source files
-    (get_zone_id allocates sequential IDs on first encounter).
+    Zone 0 = INIT, Zone 1 = TILE_LOOP, Zone 2 = RECONFIG. get_zone_id allocates
+    sequential IDs on first encounter, and every perf source opens INIT then
+    TILE_LOOP. RECONFIG is the only third counter zone: reduce_test.cpp opens it
+    after TILE_LOOP when MEASURE_RECONFIG is set.
     """
     _ = elf_dir
-    return [INIT_MARKER, TILE_LOOP_MARKER]  # zone 0 = INIT, zone 1 = TILE_LOOP
+    return [INIT_MARKER, TILE_LOOP_MARKER, RECONFIG_MARKER]
 
 
 # All perf run types in canonical order. Tests that exercise the full pipeline

@@ -186,7 +186,7 @@ def test_reduce_quasar(
     output_tile_cnt = 1 if is_reduce_to_one else tile_cnt
 
     if not is_perf:
-        if pool_type == ReducePool.Max or is_reduce_to_one:
+        if pool_type == ReducePool.Max:
             generate_golden = get_golden_generator(ReduceGolden)
             golden_tensor = generate_golden(
                 src_A,
@@ -211,6 +211,14 @@ def test_reduce_quasar(
                 input_format=formats.input_format,
                 dest_acc=dest_acc,
             )
+            if is_reduce_to_one:
+                # Sum the fidelity-masked per-tile results so the golden still tracks fidelity.
+                golden_tensor = (
+                    golden_tensor.to(torch.float32)
+                    .view(tile_cnt, -1)
+                    .sum(dim=0)
+                    .to(format_dict[formats.output_format])
+                )
 
     mathop = mathop_mapping[reduce_dim]
 
@@ -276,14 +284,15 @@ def test_reduce_quasar(
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    # Reduce-to-one accumulates every tile, so the error budget grows with the tile count.
+    # Reduce-to-one Sum accumulates every tile, so its error budget grows with the tile count.
+    # Max selects exactly, so it keeps the default check.
     accumulation_tolerance = (
         dict(
             custom_pcc_threshold=0.90,
             custom_atol=tolerances[formats.output_format].atol * tile_cnt,
             custom_rtol=tolerances[formats.output_format].rtol * tile_cnt,
         )
-        if is_reduce_to_one
+        if is_reduce_to_one and pool_type == ReducePool.Sum
         else {}
     )
     assert passed_test(

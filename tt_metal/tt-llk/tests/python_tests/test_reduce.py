@@ -30,6 +30,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
+    MEASURE_RECONFIG,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
@@ -165,6 +166,7 @@ def _run_reduce_test(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    measure_reconfig=False,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
     if input_dimensions is None:
@@ -200,6 +202,7 @@ def _run_reduce_test(
         "templates": [
             MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
+            MEASURE_RECONFIG(measure_reconfig),
         ],
         "runtimes": [
             IN_FACE_DIMS(
