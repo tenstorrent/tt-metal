@@ -26,9 +26,7 @@ from .tile_shape import construct_tile_shape
 from .ulp import (
     FLUSH_SUBNORMAL_OUTPUTS,
     has_ulp_gate,
-)
-from .ulp import mantissa_bits as float_mantissa_bits
-from .ulp import (
+    mantissa_bits,
     max_meaningful_ulp,
     selected_lanes,
     ulp_distance,
@@ -784,7 +782,7 @@ def passed_test(
                 max_meaningful_ulp(gate_dtype),
             )
         gate_tolerance = tolerances[output_data_format]
-        displaced = gate_tolerance.rtol * (1 << float_mantissa_bits(gate_dtype))
+        displaced = gate_tolerance.rtol * (1 << mantissa_bits(gate_dtype))
         if max_ulp > displaced:
             logger.warning(
                 "max_ulp={} is looser than the rtol={} tolerance it replaces (~{:.1f} "
@@ -907,7 +905,7 @@ def passed_test(
         # count fallback; per-format lattice parameters live in
         # _MXFP_COMPARE_PARAMS.
         (
-            mantissa_bits,
+            element_bits,
             max_steps,
             element_max_normal,
             element_min_subnormal,
@@ -915,7 +913,7 @@ def passed_test(
         is_valid = _mxfp_block_aware_compare(
             golden_tensor,
             res_tensor,
-            mantissa_bits=mantissa_bits,
+            mantissa_bits=element_bits,
             max_steps=max_steps,
             element_max_normal=element_max_normal,
             element_min_subnormal=element_min_subnormal,
