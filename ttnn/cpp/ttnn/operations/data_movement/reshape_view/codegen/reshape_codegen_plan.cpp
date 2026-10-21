@@ -121,7 +121,7 @@ std::optional<TileChoice> live_tile_choice(
         }
     }
     if (auto mapped = fit_tile_mapped(input, logical_output_shape, grid_cores, free_l1)) {
-        return TileChoice{std::move(*mapped)};
+        return TileChoice{*mapped};
     }
     return std::nullopt;
 }
