@@ -23,7 +23,18 @@ import torch
 
 import ttnn
 
-from .batched import TILE, U32, _all_reduce, _Argmax, _even_lm_head, _mm_config_256, _replicate, _ResNorm, _TPAllReduce
+from .batched import (
+    TILE,
+    U32,
+    _all_reduce,
+    _Argmax,
+    _even_lm_head,
+    _matmul_config,
+    _mm_config_256,
+    _replicate,
+    _ResNorm,
+    _TPAllReduce,
+)
 
 
 def verify_moe_weights(model):
@@ -222,7 +233,9 @@ class BigPlain:
         res.deallocate(True)
         normed8 = ttnn.typecast(xin, ttnn.bfloat8_b)
         xin.deallocate(True)
-        logits8 = ttnn.matmul(normed8, self.lm_head, dtype=ttnn.bfloat8_b)
+        logits8 = ttnn.matmul(
+            normed8, self.lm_head, dtype=ttnn.bfloat8_b, program_config=_matmul_config(normed8, self.lm_head, True)
+        )
         normed8.deallocate(True)
         out = self.argmax.device(logits8)
         logits8.deallocate(True)

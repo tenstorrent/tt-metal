@@ -329,6 +329,78 @@ def _mm_config_256(k, n, rows=256):
     )  # fmt: skip
 
 
+_SUBBLOCKS = [
+    (4, 2),
+    (2, 4),
+    (8, 1),
+    (1, 8),
+    (7, 1),
+    (1, 7),
+    (3, 2),
+    (2, 3),
+    (6, 1),
+    (1, 6),
+    (5, 1),
+    (1, 5),
+    (2, 2),
+    (4, 1),
+    (1, 4),
+    (3, 1),
+    (1, 3),
+    (2, 1),
+    (1, 2),
+    (1, 1),
+]
+
+
+def _subblock(m, n, fp32):
+    return next(((h, w) for h, w in _SUBBLOCKS if (not fp32 or h * w <= 4) and m % h == 0 and n % w == 0), (1, 1))
+
+
+def _matmul_config(x, w, out_dram, fp32=False, grid=(11, 10)):
+    """The program config ttnn.matmul picks for interleaved [M, K] x [K, N] when L1 is free (matmul_program_config.cpp
+    create_simple_matmul_program_config with every CB size fitting). ttnn sizes its blocks to the L1 free at the call, so
+    the auto config, and with it the K blocking and the rounding, changed with whatever else was in L1 (DFlash lanes in
+    lockstep); a fixed config keeps every call's result independent of the L1 state."""
+    M, K, N = x.shape[-2], x.shape[-1], w.shape[-1]
+    Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    in0_bw = 2
+    pcM, pcN = min(16, Mt), min(16, Nt)
+    nby, nbx = -(-Mt // pcM), -(-Nt // pcN)
+    if (nby > 1 or nbx > 1) and Kt % in0_bw:
+        in0_bw = 1
+    dram = lambda t: t.memory_config().buffer_type == ttnn.BufferType.DRAM
+    all_dram = dram(x) and dram(w) and out_dram
+    narrow = max(M, N) // min(M, N) > 8 or (all_dram and min(M, N) <= TILE)
+    wide, tall = narrow and N > M, narrow and N <= M
+    gx, gy = grid
+    assert all_dram or (nbx * nby <= gx * gy and Kt % in0_bw == 0), "config outside the mirrored cases"
+    cr = (nbx, nby) if not (nby == 1 and nbx == 1) and nby <= gy and nbx <= gx else (0, 0)
+    if (cr[1] == 1 and not all_dram) or wide:
+        pm, pn = Mt, -(-(-(-N // (gx * gy))) // TILE)
+        sh, sw = _subblock(pm, pn, fp32)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), in0_block_w=2 if Kt % 2 == 0 else 1,
+            out_subblock_h=sh, out_subblock_w=sw, out_block_h=pm, out_block_w=pn, per_core_M=pm, per_core_N=pn,
+            fuse_batch=False, fused_activation=None, mcast_in0=True,
+        )  # fmt: skip
+    assert not ((cr[0] == 1 and not all_dram) or tall), "config outside the mirrored cases"
+    if all_dram:
+        in0_bw = Kt // gx if Kt % gx == 0 else 1
+        pcM, pcN = -(-Mt // gy), -(-Nt // gx)
+        sh, sw = _subblock(pcM, pcN, fp32)
+    else:
+        sh, sw = _subblock(pcM, pcN, fp32)
+        if sh != 1 and sw != pcN:
+            sh, sw = next(((h, w) for h, w in _SUBBLOCKS if not (fp32 and h * w > 4) and (h == 1 or w == pcN)
+                           and pcM % h == 0 and pcN % w == 0), (1, 1))  # fmt: skip
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), in0_block_w=in0_bw, out_subblock_h=sh,
+        out_subblock_w=sw, out_block_h=pcM, out_block_w=pcN, per_core_M=pcM, per_core_N=pcN, transpose_mcast=False,
+        fused_activation=None,
+    )  # fmt: skip
+
+
 def _even_lm_head(model):
     """The target's LM head [hidden, vocab] BF8, sharded evenly over the mesh columns (vocab / D columns per device). The
     model's copy pads the vocabulary to 65536 columns per device before sharding (ttnn.topk's power-of-two path), so
@@ -897,6 +969,8 @@ class BatchedDraft:
         pc = _mm_config_256(w.shape[-2], w.shape[-1]) if x.shape[-2] == self.rows else None
         # (a pass's 256-row activations in L1; the prompt context's chunks in DRAM)
         mc = self.act_mc if x.shape[-2] == self.rows else ttnn.DRAM_MEMORY_CONFIG
+        if pc is None:  # (the auto config, fixed: _matmul_config)
+            pc = _matmul_config(x, w, mc.buffer_type == ttnn.BufferType.DRAM, fp32=True)
         return ttnn.linear(
             x,
             w,
@@ -1096,7 +1170,9 @@ class BatchedDraft:
         # rows 0 .. 31 (each user's last token, i = 0) draft nothing: the LM head on rows 32 .. 255 only
         x8r = ttnn.slice(x8, [0, 0, U32, 0], [1, 1, self.rows, self.hidden])
         x8.deallocate(True)
-        logits = ttnn.matmul(x8r, self.lm_head, dtype=self.logits_dt)
+        logits = ttnn.matmul(
+            x8r, self.lm_head, dtype=self.logits_dt, program_config=_matmul_config(x8r, self.lm_head, True)
+        )
         x8r.deallocate(True)
         out = self.argmax.device(logits, self.rows)
         logits.deallocate(True)
@@ -1360,7 +1436,9 @@ class BatchedVerify:
         res.deallocate(True)
         normed8 = ttnn.typecast(xin, ttnn.bfloat8_b)
         xin.deallocate(True)
-        logits8 = ttnn.matmul(normed8, self.lm_head, dtype=ttnn.bfloat8_b)  # as the batched decode's LM head
+        logits8 = ttnn.matmul(  # as the batched decode's LM head
+            normed8, self.lm_head, dtype=ttnn.bfloat8_b, program_config=_matmul_config(normed8, self.lm_head, True)
+        )
         normed8.deallocate(True)
         out = self.argmax.device(logits8)  # (reads the BFP8 logits as stored)
         logits8.deallocate(True)
@@ -1475,9 +1553,10 @@ class BatchedDFlashRunner:
         self.draft.page_table = lane.draft_page_table
         self.lane = lane
 
-    def prefill(self, prompts):
+    def prefill(self, prompts, u0=0):
+        """prompts: users u0, u0 + 1, ...; returns their first tokens."""
         firsts = []
-        for u, p in enumerate(prompts):
+        for u, p in enumerate(prompts, start=u0):
             logits = self.generator.prefill_forward_text(
                 torch.tensor([p]),
                 # the generator takes the page table rows of the prompts it is given (row 0 for a one-prompt call):
