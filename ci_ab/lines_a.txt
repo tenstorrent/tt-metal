@@ -1,0 +1,2 @@
+perf_eltwise_unary_datacopy X L1_TO_L1
+perf_pack X L1_TO_L1
