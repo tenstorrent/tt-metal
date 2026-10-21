@@ -187,22 +187,27 @@ class TtTimestral:
             self._token_layouts[key] = (upload(self.device, keep), upload(self.device, add))
         return self._token_layouts[key]
 
-    def forward_device(self, inputs: TtTimestralDeviceInputs):
-        """Device inputs -> device head output ``(1, 1, R * h, patch_size * Q)`` in normalized space."""
+    def embed(self, inputs: TtTimestralDeviceInputs):
+        """Patch tokens -> flat hidden states ``(1, 1, R * S_pad, D)``; decoder slots hold the forecast query."""
+        import ttnn
+
+        att = inputs.attention
+        r, sp, d = att.rows, att.padded_seq, self.config.d_model
+        embedded = ttnn.reshape(self._patch_proj(inputs.tokens), (r, sp, d))
+        keep, add = self._token_layout(inputs.num_context_patches, inputs.horizon_patches, sp)
+        kept = ttnn.mul(embedded, keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(embedded)
+        x = ttnn.add(kept, add, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(kept)
+        return ttnn.reshape(x, (1, 1, r * sp, d))
+
+    def head(self, x, inputs: TtTimestralDeviceInputs):
+        """Final hidden states -> head output ``(1, 1, R * h, patch_size * Q)`` for the decoder slots; consumes ``x``."""
         import ttnn
 
         att = inputs.attention
         r, sp, d = att.rows, att.padded_seq, self.config.d_model
         ll, h = inputs.num_context_patches, inputs.horizon_patches
-        embedded = ttnn.reshape(self._patch_proj(inputs.tokens), (r, sp, d))
-        keep, add = self._token_layout(ll, h, sp)
-        kept = ttnn.mul(embedded, keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(embedded)
-        x = ttnn.add(kept, add, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(kept)
-        x = ttnn.reshape(x, (1, 1, r * sp, d))
-        for layer in self._layers:
-            x = layer(x, att)
         dec = ttnn.slice(ttnn.reshape(x, (r, sp, d)), (0, ll, 0), (r, ll + h, d))
         ttnn.deallocate(x)
         dec = ttnn.reshape(dec, (1, 1, r * h, d))
@@ -211,6 +216,13 @@ class TtTimestral:
         out = self._head(normed)
         ttnn.deallocate(normed)
         return out
+
+    def forward_device(self, inputs: TtTimestralDeviceInputs):
+        """Device inputs -> device head output ``(1, 1, R * h, patch_size * Q)`` in normalized space."""
+        x = self.embed(inputs)
+        for layer in self._layers:
+            x = layer(x, inputs.attention)
+        return self.head(x, inputs)
 
     def postprocess(self, output_device, prepared: TimestralHostInputs) -> Tensor:
         """Download the head output -> raw-space quantiles ``(R, h * patch_size, Q)``."""

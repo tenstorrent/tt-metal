@@ -1,3 +1,8 @@
-# Downloaded checkpoints (mistralai/Timestral-*)
+# Downloaded checkpoints (mistralai/Timestral-*) and cached CPU reference outputs
 weights/
 *.safetensors
+
+# Raw profiler output from tests/perf/perf_iteration.sh (the compact reports are kept)
+doc/optimize/**/tracy/
+doc/optimize/**/ops_perf_results.csv
+doc/optimize/**/*.log

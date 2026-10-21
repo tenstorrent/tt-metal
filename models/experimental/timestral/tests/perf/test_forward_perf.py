@@ -11,20 +11,29 @@ Shapes (one decode block = one ``predict_block`` call):
 ``test_forecast_perf`` times the user-facing ``forecast`` call, which adds symmetric averaging
 (two passes) and block-autoregressive decode on top of ``predict_block``.
 Timings are wall clock with the program cache warm; the CPU reference uses every host thread.
+
+``TIMESTRAL_PERF_JSON=<path>`` appends one record per test to a JSON list. CPU reference
+outputs are cached under ``weights/.cpu_reference`` (keyed by shape and reference commit), so
+repeated runs only time the device; delete the directory to re-time the CPU.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import pytest
 import torch
 
+from models.experimental.timestral.common.timestral_src import REFERENCE_COMMIT, WEIGHTS_DIR
 from models.experimental.timestral.tests.golden_helpers import load_checkpoint, series
 
-STEADY_ITERS = 3
+STEADY_ITERS = 5
+CPU_CACHE_DIR = WEIGHTS_DIR / ".cpu_reference"
 _CPU_CACHE: dict[str, tuple[float, torch.Tensor]] = {}
 
 
@@ -67,15 +76,39 @@ def _sync_time(device, fn):
     return out, time.perf_counter() - start
 
 
+def _cached(key: str, compute) -> tuple[float, torch.Tensor]:
+    """``(cpu_seconds, output)`` from memory, then disk, else ``compute()`` timed and stored."""
+    if key not in _CPU_CACHE:
+        path = CPU_CACHE_DIR / f"{key}-{REFERENCE_COMMIT[:12]}.pt"
+        if path.is_file():
+            saved = torch.load(path)
+            _CPU_CACHE[key] = (saved["cpu_s"], saved["output"])
+        else:
+            with torch.no_grad():
+                start = time.perf_counter()
+                out = compute()
+                cpu_s = time.perf_counter() - start
+            path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save({"cpu_s": cpu_s, "output": out}, path)
+            _CPU_CACHE[key] = (cpu_s, out)
+    return _CPU_CACHE[key]
+
+
 def _cpu_reference(model, shape: Shape) -> tuple[float, torch.Tensor]:
-    """One CPU ``predict_block``, cached per shape so both precisions share it."""
-    if shape.name not in _CPU_CACHE:
-        context, observed, group_ids = _inputs(shape)
-        with torch.no_grad():
-            start = time.perf_counter()
-            out = model.predict_block(context, observed, group_ids, shape.horizon_patches)
-            _CPU_CACHE[shape.name] = (time.perf_counter() - start, out)
-    return _CPU_CACHE[shape.name]
+    """One CPU ``predict_block`` per shape, shared by both precisions and across runs."""
+    context, observed, group_ids = _inputs(shape)
+    key = f"predict_block-{shape.name}-{shape.rows}x{shape.context}-h{shape.horizon_patches}"
+    return _cached(key, lambda: model.predict_block(context, observed, group_ids, shape.horizon_patches))
+
+
+def _record(entry: dict) -> None:
+    path = os.environ.get("TIMESTRAL_PERF_JSON")
+    if not path:
+        return
+    out = Path(path)
+    records = json.loads(out.read_text()) if out.is_file() else []
+    records.append(entry)
+    out.write_text(json.dumps(records, indent=2) + "\n")
 
 
 def _pcc(expected: torch.Tensor, got: torch.Tensor) -> float:
@@ -150,6 +183,27 @@ def test_predict_block_perf(mesh_device, shape_name, precision_name):
         f"\n  split:        prepare {prepare_s:.3f}  upload {upload_s:.3f}  device {device_s:.3f}"
         f"  postprocess {postprocess_s:.3f}"
     )
+    _record(
+        {
+            "test": "predict_block",
+            "precision": precision_name,
+            **asdict(shape),
+            "seq_len": prepared.seq_len,
+            "padded_seq": padded_seq,
+            "cold_s": cold_s,
+            "steady_s": steady_s,
+            "steady_runs": steady,
+            "series_per_s": shape.batch / steady_s,
+            "cpu_s": cpu_s,
+            "speedup": cpu_s / steady_s,
+            "pcc_normalized": pcc_norm,
+            "pcc_raw": pcc_raw,
+            "prepare_s": prepare_s,
+            "upload_s": upload_s,
+            "device_s": device_s,
+            "postprocess_s": postprocess_s,
+        }
+    )
     assert pcc_norm >= 0.98, f"{shape.name}/{precision_name}: normalized PCC {pcc_norm}"
 
 
@@ -173,11 +227,12 @@ def test_forecast_perf(mesh_device, batch, context_len, prediction_length):
     got, steady_s = _sync_time(
         mesh_device, lambda: tt_forecaster.forecast(context, prediction_length=prediction_length)
     )
-    start = time.perf_counter()
-    expected = TimestralForecaster(model).forecast(context, prediction_length=prediction_length)
-    cpu_s = time.perf_counter() - start
+    cpu_s, expected_median = _cached(
+        f"forecast-{batch}x{context_len}-p{prediction_length}",
+        lambda: TimestralForecaster(model).forecast(context, prediction_length=prediction_length).median,
+    )
 
-    pcc = _pcc(expected.median, got.median)
+    pcc = _pcc(expected_median, got.median)
     print(
         f"\n[PERF] forecast {batch} x {context_len} -> {prediction_length}"
         f"\n  cold_s:       {cold_s:.3f}"
@@ -186,5 +241,20 @@ def test_forecast_perf(mesh_device, batch, context_len, prediction_length):
         f"\n  cpu_s:        {cpu_s:.3f}  ({torch.get_num_threads()} threads)"
         f"\n  speedup:      {cpu_s / steady_s:.1f}x vs CPU"
         f"\n  median pcc:   {pcc:.5f}"
+    )
+    _record(
+        {
+            "test": "forecast",
+            "precision": "accuracy",
+            "batch": batch,
+            "context": context_len,
+            "prediction_length": prediction_length,
+            "cold_s": cold_s,
+            "steady_s": steady_s,
+            "series_per_s": batch / steady_s,
+            "cpu_s": cpu_s,
+            "speedup": cpu_s / steady_s,
+            "pcc_median": pcc,
+        }
     )
     assert pcc >= 0.98, f"forecast median PCC {pcc}"
