@@ -332,8 +332,7 @@ def run_all_gather_impl(
 
         # Output TensorTopologies: the whole-mesh all_gather of {N}, [Shard(dim)] is {N}, [Replicate]; the matmul of
         # that by the {N}, [Shard(dim)] weight (and bias) takes the union-default label {N}, [Shard(dim)], which
-        # ConcatMeshToTensor(dim=3) composes below. Before the fused op had a compute_output_topologies both outputs
-        # kept the union default over the PRE-gather input, {N}, [Shard(dim)] -- wrong for the all_gather output.
+        # ConcatMeshToTensor(dim=3) composes below.
         assert [repr(p) for p in tt_all_gather_out_tensor_list[i].tensor_topology().placements()] == [
             "PlacementReplicate()"
         ]

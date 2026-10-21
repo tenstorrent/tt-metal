@@ -118,11 +118,10 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
 std::vector<tt::tt_metal::TensorTopology> AllGatherMatmulAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
-    // {all_gather output, matmul output}. The all_gather label is delegated to AllGatherAsyncDeviceOperation over
-    // the attributes and inputs it is created from: exactly one label, the input's when it has no honest all_gather
-    // label (already reported), so the fallback is a function of the inputs alone. The matmul of the gathered
-    // activation by the weight takes the union-default label of {gathered activation, weight, bias} (what launch()
-    // gives a plain matmul).
+    // {all_gather output, matmul output}. The all_gather label is AllGatherAsyncDeviceOperation's over the attributes
+    // and inputs it is created from (the input's own label when there is no honest gather label). The matmul of the
+    // gathered activation by the weight takes the union label of {gathered activation, weight, bias}, as launch()
+    // would give a plain matmul.
     const auto gathered = AllGatherAsyncDeviceOperation::compute_output_topologies(
         operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
     std::vector<std::reference_wrapper<const TensorTopology>> operands{

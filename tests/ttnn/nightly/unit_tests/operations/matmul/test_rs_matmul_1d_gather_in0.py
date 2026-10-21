@@ -532,8 +532,7 @@ def run_multi_core_matmul_1d(
     # Output TensorTopologies. The reduce_scatter input (rs_tensor) is ShardTensor2dMesh dims=(0, 1); summing along
     # the columns and keeping each device's `dim` slice gives Shard(0) on the rows and Shard(dim) on the columns --
     # the layout the golden's chunk-and-concat along `dim` assumes. The matmul operands are replicated (no mesh
-    # mapper), so the matmul output is fully replicated too. Before the fused op had a compute_output_topologies both
-    # outputs kept the union default of every operand, Shard(0) / Shard(1) from rs_tensor.
+    # mapper), so the matmul output is fully replicated too.
     assert [repr(p) for p in rs_out_val.tensor_topology().placements()] == [
         "PlacementShard(0)",
         f"PlacementShard({dim})",

@@ -183,13 +183,11 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
 std::vector<tt::tt_metal::TensorTopology> DeepseekMoEReduceScatterDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // kNumIntermediateSlices intermediates then the output (create_output_tensors). The inputs are the
-    // per-destination `dim` slices of each device's local reduction (deepseek_moe_fast_reduce_nc); ring position d
-    // sums slice d from every device and keeps it, so the output is a reduce_scatter result -- Shard{dim} along
-    // `cluster_axis` (or over the whole mesh), the other axes as input[0] had them -- which
-    // test_deepseek_moe_reduce_scatter composes with ConcatMeshToTensor(dim). The intermediates are device-local
-    // scratch and keep input[0]'s label. No honest label (nullopt, already reported): the output keeps input[0]'s
-    // label too (returning {} would hand the framework the union over every input). The hook runs before
-    // validation, so an empty input list (rejected right after) returns {}: there is no input label to fall back on.
+    // per-destination `dim` slices of each device's local reduction; ring position d sums slice d from every device
+    // and keeps it, so the output is a reduce_scatter result: Shard{dim} along `cluster_axis` (or over the whole
+    // mesh), the other axes as input[0] had them. The intermediates are device-local scratch and keep input[0]'s
+    // label, as does the output with no honest label (nullopt, already reported). The hook runs before validation,
+    // so an empty input list (rejected right after) returns {}.
     if (tensor_args.input_tensors.empty()) {
         return {};
     }

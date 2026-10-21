@@ -350,24 +350,17 @@ MinimalMatmulStridedReduceScatterAsync::create_output_tensors(
 std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync::compute_output_topologies(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
-    // {mm, rs_intermediate, rs_output}. The matmul output takes the union-default label of its operands (input,
-    // weight, bias and the optional second in0 source). The reduce_scatter consumes the matmul output: its
-    // intermediate is scratch over that tensor and keeps its label (reduce_scatter_minimal_async convention); its
-    // output is the reduce_scatter of the matmul LABEL along `cluster_axis` for `dim`. Without a cluster_axis the
-    // program ranks the whole-mesh ring by `input_tensor`'s device-storage coordinates
-    // (get_linearized_index_from_physical_coord), so that label is spelled over those coordinates
-    // (over_storage_ring_order, as the helper's Tensor overload does for a plain reduce_scatter) rather than over the
-    // matmul label's. Caller-supplied persistent buffers are those tensors and take the same labels. The fused
-    // addcmul, addcmul_input_tensor1 + scalar * rs + addcmul_input_tensor2, is applied at the reduce_scatter's final
-    // write, so the rs_output is also a function of those two operands: its label is the union of the reduce_scatter
-    // label (first, so its Shard{dim} on the scattered axis wins and its rank is the result's: a collapsed
-    // whole-mesh {N},[Shard{dim}] is not dropped against N-D addcmul operands, see union_topology) and theirs, what
-    // launch() gives an elementwise op over the three; a ternary operand sharded on a mesh axis the reduce_scatter
-    // result replicates makes the result Shard there, and validation does not constrain the ternary tensors' labels.
-    // No honest label (nullopt, already reported): the rs_output keeps the matmul label -- the label of the tensor it
-    // scatters -- before the addcmul union, so the fallback is a function of the inputs alone (returning {} would hand
-    // the framework the union over every tensor argument, the caller's persistent buffers and their stale labels
-    // included).
+    // {mm, rs_intermediate, rs_output}. The matmul output takes the union label of its operands (input, weight, bias
+    // and the optional second in0 source). The reduce_scatter consumes the matmul output: its intermediate is scratch
+    // over that tensor and keeps its label, its output is the reduce_scatter of the matmul label along `cluster_axis`
+    // for `dim`, spelled over `input_tensor`'s device-storage coordinates when there is no cluster_axis because the
+    // program ranks the whole-mesh ring by them (over_storage_ring_order). Caller-supplied persistent buffers are
+    // those tensors and take the same labels. The fused addcmul, addcmul_input_tensor1 + scalar * rs +
+    // addcmul_input_tensor2, is applied at the reduce_scatter's final write, so rs_output takes the union of the
+    // reduce_scatter label (first, so its Shard{dim} and its rank win, see union_topology) with the two operands, as
+    // launch() would give an elementwise op over the three; a ternary operand sharded on an axis the reduce_scatter
+    // result replicates makes the result Shard there. With no honest label (nullopt, already reported) rs_output
+    // keeps the matmul label, the label of the tensor it scatters, before the addcmul union.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight_tensor.tensor_topology())};

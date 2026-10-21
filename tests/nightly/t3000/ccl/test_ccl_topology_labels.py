@@ -14,24 +14,8 @@ runs one collective, and asserts two things about the result:
   Replicate axis) gives the tensor the collective semantically produced. A label that over-claims Replicate fails the
   identical-bytes check; one that mislabels the Shard dim or order fails the equality with the reference.
 
-Before this change every op edited the input's placements by mesh-axis index, so a collapsed label was edited at index
-0 whatever ``cluster_axis`` was (or not at all for ``cluster_axis=1``); each test's docstring names the label the same
-call produced then. All tests run with ``ttnn.CONFIG.strict_ccl_topology`` on, so any label the helper refuses is an
-error rather than a warning; the negative controls assert that error.
-
 Meshes: 1x2 (N300), 1x8 (T3K line), 2x4 (T3K / galaxy submesh), 8x4 (galaxy; the mesh_device fixture skips it on a
-smaller box). Cases that need two non-trivial mesh axes skip on the lines; whole-mesh (cluster_axis=None) cases run on
-the lines only, except ``ttnn.reduce_scatter``'s, whose host wrapper runs one reduce_scatter per mesh axis on a 2-D
-mesh (test_reduce_scatter_prim_whole_mesh). Fabric: 1D, Linear topology (the axis-wise collectives on a 2-D mesh run
-per row / column), except strided_all_gather_async, the whole-mesh all_to_all_async and the two direct / strided
-reduce_scatters, which run on a wrapping axis (1D ring fabric, Ring topology -- the combination their nightlies
-exercise) and skip when ``ttnn.get_usable_topology`` says the axis does not wrap. The two strided_all_gather_async
-cases that run the op are Wormhole-only (``skip_for_blackhole``, like the op's own nightly): on a Blackhole 1x8 the op
-hung in both the Linear and the Ring topology during bench.
-
-The ``ttnn.reduce_scatter`` (prim ccl/reduce_scatter path) and ``ttnn.broadcast`` sections cover two ops that had no
-``compute_output_topologies`` at all: their pre-change label was always the union default, i.e. the input's label,
-whatever the collective did to the bytes.
+smaller box).
 """
 
 import math
@@ -217,9 +201,7 @@ ALL_GATHER_IDS = ["all_gather_async", "all_gather"]
 def test_all_gather_collapsed_shard_inner_axis(mesh_device, all_gather, strict_ccl_topology):
     """ShardTensorToMesh(dim=3) gives {N}, [Shard(3)] in row-major device order; gathering dim 3 along the innermost
     mesh axis puts each row's chunk back together: [Shard(3), Replicate] on a 2-D mesh, {N}, [Replicate] on a line,
-    and the composed tensor is the original. Negative control: before this change the label stayed {N}, [Shard(3)]
-    on a 2-D mesh (cluster_axis=1 was out of range of the single placement), so composing it concatenated eight
-    copies of the row chunks."""
+    and the composed tensor is the original."""
     torch.manual_seed(0)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -269,9 +251,7 @@ def test_all_gather_nd_input_replicates_only_the_gathered_axis(
 def test_all_gather_keeps_a_same_dim_shard_on_the_other_axis(mesh_device, all_gather, strict_ccl_topology):
     """all_gather_output_topology replicates only the gathered axis. ShardTensor2dMesh dims=(3, None) shards dim 3
     across rows and replicates across columns. Gathering dim 3 along the columns concatenates four identical copies
-    of the row's chunk; the rows still hold distinct chunks, so the label stays [Shard(3), Replicate]. Negative
-    control: prim all_gather used to replicate every axis whose Shard dim equalled the gather dim, giving
-    [Replicate, Replicate]; composing that fails the identical-bytes check because row 0 and row 1 differ."""
+    of the row's chunk; the rows still hold distinct chunks, so the label stays [Shard(3), Replicate]."""
     torch.manual_seed(2)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * rows])
@@ -291,11 +271,9 @@ def test_all_gather_keeps_a_same_dim_shard_on_the_other_axis(mesh_device, all_ga
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 @pytest.mark.parametrize("all_gather", ALL_GATHERS, ids=ALL_GATHER_IDS)
 def test_all_gather_collapsed_shard_outer_axis_is_refused(mesh_device, all_gather, strict_ccl_topology, expect_error):
-    """Negative control for all_gather_output_topology's interleave refusal (require_contiguous_gather). {8},
+    """all_gather_output_topology's interleave refusal (require_contiguous_gather): {8},
     [Shard(3)] puts piece 4r+c on device (r, c); gathering dim 3 along the rows gives device (r, c) the pieces c and
-    C+c side by side, which is no slice of any tensor: no label describes it. Before this change the label was
-    {N}, [Replicate] (the edit landed on index 0), which claims every device holds the same bytes; the serialiser
-    would have kept one column."""
+    C+c side by side, which is no slice of any tensor: no label describes it."""
     torch.manual_seed(3)
     _, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -330,7 +308,7 @@ def test_all_gather_collapsed_shard_outer_axis_other_dim(mesh_device, all_gather
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_all_gather_collapsed_shard_outer_axis_warn_only_keeps_input_label(mesh_device, warn_only_ccl_topology):
     """The default (warn-only) mode: the refused gather still runs, logs a warning, and the output keeps the input's
-    label -- {N}, [Shard(3)] -- instead of the old {N}, [Replicate] over-claim."""
+    label -- {N}, [Shard(3)]."""
     torch.manual_seed(5)
     _, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -354,8 +332,7 @@ def test_all_gather_collapsed_shard_outer_axis_warn_only_keeps_input_label(mesh_
 def test_all_broadcast_collapsed_shard(mesh_device, cluster_axis, strict_ccl_topology):
     """Output k of all_broadcast along an axis holds device k's shard on every device of that axis: Replicate on
     the axis, the input's placement elsewhere. Nothing is concatenated, so both axes of a collapsed Shard are honest
-    (no contiguity requirement). Negative control: before this change cluster_axis=1 left {N}, [Shard(3)] in place,
-    claiming eight distinct pieces where each output holds only `rows` distinct ones."""
+    (no contiguity requirement)."""
     torch.manual_seed(6)
     rows, cols, num_devices = _mesh(mesh_device)
     if tuple(mesh_device.shape)[cluster_axis] == 1:
@@ -391,8 +368,7 @@ def test_all_broadcast_collapsed_shard(mesh_device, cluster_axis, strict_ccl_top
 def test_reduce_scatter_collapsed_replicate(mesh_device, strict_ccl_topology):
     """ReplicateTensorToMesh gives {N}, [Replicate]. Reduce-scattering dim -1 along the innermost axis leaves each
     device with its slice of `cols` * T: [Replicate, Shard(3)] on a 2-D mesh, {N}, [Shard(3)] on a line (the helper
-    writes the normalised dim, not -1). Negative control: before this change the label stayed {N}, [Replicate] on a
-    2-D mesh; composing it asserts identical columns."""
+    writes the normalised dim, not -1)."""
     torch.manual_seed(7)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * cols])
@@ -451,9 +427,7 @@ def test_reduce_scatter_nd_other_dim_keeps_other_axis(mesh_device, strict_ccl_to
 def test_reduce_scatter_nd_same_dim_inner_axis_collapses(mesh_device, strict_ccl_topology):
     """reduce_scatter_output_topology collapses a same-dim scatter along the inner axis. ShardTensor2dMesh
     dims=(3, None) holds chunk r of dim 3 on row r; reduce-scattering dim 3 along the columns splits each row's
-    (summed) chunk into C -- device (r, c) holds piece Cr+c of C * T: the collapsed {N}, [Shard(3)]. Negative control:
-    before this change the op replicated the other axis that shared the dim and labelled [Replicate, Shard(3)],
-    claiming both rows identical; the serialiser would have kept row 0 only."""
+    (summed) chunk into C -- device (r, c) holds piece Cr+c of C * T: the collapsed {N}, [Shard(3)]."""
     torch.manual_seed(10)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -471,10 +445,9 @@ def test_reduce_scatter_nd_same_dim_inner_axis_collapses(mesh_device, strict_ccl
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_reduce_scatter_nd_same_dim_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
-    """Negative control: reduce_scatter_output_topology refuses a same-dim scatter along the outer axis.
+    """reduce_scatter_output_topology refuses a same-dim scatter along the outer axis.
     ShardTensor2dMesh dims=(None, 3) holds chunk c on column c; reduce-scattering dim 3 along the rows gives device
-    (r, c) part r of chunk c -- piece Rc+r, column-major, which no row-major label describes. Before this change the
-    op emitted [Shard(3), Replicate], claiming identical columns."""
+    (r, c) part r of chunk c -- piece Rc+r, column-major, which no row-major label describes."""
     torch.manual_seed(11)
     rows, cols, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -924,12 +897,10 @@ def test_all_reduce_async_collapsed_shard(mesh_device, cluster_axis, rs_ag_branc
     """all_reduce of {N}, [Shard(3)] along either axis: the reduced axis becomes Replicate, the other keeps Shard(3).
     The height selects the branch (see _all_reduce_height): the composite all_gather of the unsqueezed tensor + local
     sum + reshape, or reduce_scatter + all_gather. The label is the same on both -- the returned tensor is relabelled
-    from the original input -- so the branch is not observable here beyond the height that forces it. Negative
-    control: before this change the composite branch returned {N}, [Replicate] for either axis (the inner
-    all_broadcast edited index 0, the local sum kept it) -- along the columns that claims the two rows identical, and
-    the same over-claim is what tt-train's force_replicate_axes papered over. Along the rows the gather itself would
-    now be refused as interleaving; all_reduce runs its intermediates inside the helper's SilenceIntermediateRefusals because
-    it sums the gathered pieces rather than keeping them and labels the result itself."""
+    from the original input -- so the branch is not observable here beyond the height that forces it. Along the rows
+    the gather itself would be refused as interleaving; all_reduce runs its intermediates inside the helper's
+    SilenceIntermediateRefusals because it sums the gathered pieces rather than keeping them and labels the result
+    itself."""
     torch.manual_seed(12)
     rows, cols, num_devices = _mesh(mesh_device)
     if tuple(mesh_device.shape)[cluster_axis] == 1:
@@ -960,8 +931,7 @@ def test_all_reduce_async_collapsed_shard_scattered_on_the_sharded_dim(mesh_devi
     tiles per device along dim 3 the reduce_scatter + all_gather branch scatters the sharded dim. The intermediates
     have no honest label -- the reduce_scatter leaves device (r, c) with piece c * R + r (column-major) and the
     all_gather of it interleaves -- but the result is labelled from the input: [Replicate, Shard(3)], one column sum
-    per column. Negative control: before SilenceIntermediateRefusals the prim all_gather hook refused the intermediate
-    ("would interleave") and this call failed under strict mode although the label it returns is right."""
+    per column."""
     torch.manual_seed(15)
     rows, cols, num_devices = _mesh(mesh_device)
     if rows == 1:
@@ -1049,10 +1019,8 @@ def _reduce_scatter(tensor, mesh_device, dim, cluster_axis):
 def test_reduce_scatter_prim_collapsed_replicate(mesh_device, strict_ccl_topology):
     """ReplicateTensorToMesh gives {N}, [Replicate]. ttnn.reduce_scatter of dim -1 along the innermost axis leaves
     each device with its slice of `cols` * T: [Replicate, Shard(3)] on a 2-D mesh, {N}, [Shard(3)] on a line (the
-    normalised dim is written). Negative control: ccl/reduce_scatter had no compute_output_topologies, so before
-    this change the output kept the union default -- the input's {N}, [Replicate] -- on every mesh; composing that
-    asserts identical bytes on devices that now hold distinct slices. The second call is a program-cache hit (no new
-    entry) and is labelled the same: the label does not depend on the cache."""
+    normalised dim is written). The second call is a program-cache hit (no new entry) and is labelled the same: the
+    label does not depend on the cache."""
     torch.manual_seed(20)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * cols])
@@ -1079,8 +1047,7 @@ def test_reduce_scatter_composite_collapsed_replicate(mesh_device, strict_ccl_to
     per-device output along dim 3 is not a tile multiple -- 16 wide here): split, pad, concat, prim reduce_scatter,
     slice. The prim call is labelled exactly as on the prim path and the slice / typecast tail passes its label
     through, so the composite result is labelled with no edit of its own: [Replicate, Shard(3)] on a 2-D mesh,
-    {N}, [Shard(3)] on a line, bytes `cols` * T. Negative control: before this change the output kept the input's
-    {N}, [Replicate]."""
+    {N}, [Shard(3)] on a line, bytes `cols` * T."""
     torch.manual_seed(29)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 16 * cols])
@@ -1099,10 +1066,8 @@ def test_reduce_scatter_composite_collapsed_replicate(mesh_device, strict_ccl_to
 def test_reduce_scatter_prim_collapsed_shard_same_dim_inner_axis(mesh_device, strict_ccl_topology):
     """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: row r sums its `cols` pieces and splits
     the sum back across the row -- row-major hierarchical sharding, i.e. the collapsed label again
-    (reduce_scatter_output_topology's same-dim inner-axis collapse), with the bytes to match. The pre-change label
-    (the input's, by fallback) happened to spell the same, so this is not a negative control on its own: it pins that
-    under strict mode the helper's collapse rule produces the label (a refusal would raise) and the bytes it
-    describes; the N-D form of the same case below is the negative control."""
+    (reduce_scatter_output_topology's same-dim inner-axis collapse), with the bytes to match. Under strict mode a
+    refusal would raise, so this pins that the collapse rule produces the label and the bytes it describes."""
     torch.manual_seed(21)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices * cols])
@@ -1122,9 +1087,7 @@ def test_reduce_scatter_prim_collapsed_shard_same_dim_inner_axis(mesh_device, st
 def test_reduce_scatter_prim_nd_same_dim_inner_axis_collapses(mesh_device, strict_ccl_topology):
     """reduce_scatter_output_topology collapses a same-dim scatter along the inner axis. ShardTensor2dMesh
     dims=(3, None) holds chunk r of dim 3 on row r; reduce-scattering dim 3 along the columns splits each row's
-    (summed) chunk into C -- device (r, c) holds piece Cr+c of C * T: the collapsed {N}, [Shard(3)]. Negative
-    control: before this change the output kept the input's [Shard(3), Replicate], which claims the columns
-    identical; composing it fails the identical-bytes check (the serialiser would have kept column 0 only)."""
+    (summed) chunk into C -- device (r, c) holds piece Cr+c of C * T: the collapsed {N}, [Shard(3)]."""
     torch.manual_seed(22)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -1145,10 +1108,7 @@ def test_reduce_scatter_prim_nd_same_dim_inner_axis_collapses(mesh_device, stric
 def test_reduce_scatter_prim_nd_other_dim_keeps_other_axis(mesh_device, cluster_axis, strict_ccl_topology):
     """An N-D input sharded on one dim along one axis, reduce-scattered on a different dim along the other axis:
     the scattered axis takes Shard(scattered dim), the other axis keeps its Shard -- [Shard(2), Shard(3)] both ways
-    (dims=(2, None) scattered on 3 along the columns; dims=(None, 3) scattered on 2 along the rows). Negative
-    control: before this change the scattered axis kept the input's Replicate ([Shard(2), Replicate] /
-    [Replicate, Shard(3)]), claiming identical lines where each device now holds its own slice; composing that
-    fails the identical-bytes check."""
+    (dims=(2, None) scattered on 3 along the columns; dims=(None, 3) scattered on 2 along the rows)."""
     torch.manual_seed(23)
     rows, cols, _ = _mesh(mesh_device)
     axis_size = (rows, cols)[cluster_axis]
@@ -1167,10 +1127,10 @@ def test_reduce_scatter_prim_nd_other_dim_keeps_other_axis(mesh_device, cluster_
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_reduce_scatter_prim_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
-    """Negative control: reduce_scatter_output_topology refuses a same-dim scatter along the outer axis. {N},
+    """reduce_scatter_output_topology refuses a same-dim scatter along the outer axis. {N},
     [Shard(3)] puts piece Cr+c on device (r, c); reduce-scattering dim 3 along the rows leaves device (r, c) with
     part r of its column's summed piece -- column-major, which no row-major label describes, so strict mode refuses
-    before any device work. Before this change the output silently kept the input's {N}, [Shard(3)]."""
+    before any device work."""
     torch.manual_seed(24)
     rows, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -1215,9 +1175,7 @@ def test_reduce_scatter_prim_whole_mesh(mesh_device, strict_ccl_topology):
     """cluster_axis=None. On a line the wrapper hands the prim the whole mesh: every device ends up with a distinct
     piece in coordinate order, the collapsed {N}, [Shard(3)]. On a 2-D mesh the wrapper runs one reduce_scatter per
     axis (cluster_axis 0, then 1): the first gives [Shard(3), Replicate], the second scatters dim 3 again along the
-    inner axis and the helper collapses it to {N}, [Shard(3)] -- device (r, c) holds piece Cr+c of N * T. Negative
-    control: before this change both paths returned the input's {N}, [Replicate]; composing it asserts identical
-    bytes everywhere."""
+    inner axis and the helper collapses it to {N}, [Shard(3)] -- device (r, c) holds piece Cr+c of N * T."""
     torch.manual_seed(26)
     _, _, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -1237,9 +1195,7 @@ def test_reduce_scatter_prim_preallocated_output_is_relabelled(mesh_device, stri
     returns that tensor itself, so the hook's label lands on the caller's object through the shared tensor
     attributes -- after the op it *is* the reduce_scatter result. {N}, [Replicate] in, a {N}, [Replicate] output
     buffer, dim 3 along the inner axis: the returned tensor and the caller's handle both read [Replicate, Shard(3)]
-    ({N}, [Shard(3)] on a line) and compose to `cols` * T. Negative control: a hook returning {} would hand the
-    framework the union over the input and the preallocated output (two Replicates), so the result would keep
-    [Replicate] and composing it fails the identical-bytes check."""
+    ({N}, [Shard(3)] on a line) and compose to `cols` * T."""
     torch.manual_seed(30)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * cols])
@@ -1282,9 +1238,7 @@ def test_broadcast_collapsed_shard_on_a_line(mesh_device, cluster_axis, strict_c
     """ttnn.broadcast copies the sender's shard to every other device of its line. {N}, [Shard(3)] in, with the last
     device as the sender: every device now holds piece N-1, so the label is {N}, [Replicate] -- along cluster_axis 1
     (the collapsed axis is the broadcast axis) and for the whole-mesh call alike (every placement Replicate,
-    distribution shape kept). Negative control: ccl/broadcast had no compute_output_topologies, so before this
-    change the output kept the input's {N}, [Shard(3)], claiming N distinct pieces; composing that concatenates N
-    copies of the sender's piece."""
+    distribution shape kept)."""
     torch.manual_seed(27)
     _, _, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -1306,9 +1260,7 @@ def test_broadcast_nd_along_one_axis_keeps_the_other(mesh_device, cluster_axis, 
     line: a (1, C) or (R, 1) sub-range (the nightly test_broadcast_2d pattern). ShardTensor2dMesh over it, sharding
     dim 3 along the broadcast axis and dim 2 on the trivial other axis; broadcasting from the last device makes the
     broadcast axis Replicate and keeps the other axis's placement verbatim: [Shard(2), Replicate] along the columns,
-    [Replicate, Shard(2)] along the rows, with the sender's piece on every device. Negative control: before this
-    change the output kept the input's [Shard(2), Shard(3)] / [Shard(3), Shard(2)], claiming a distinct dim-3
-    piece per device; composing that concatenates copies of the sender's piece."""
+    [Replicate, Shard(2)] along the rows, with the sender's piece on every device."""
     torch.manual_seed(28)
     rows, cols, _ = _mesh(mesh_device)
     axis_size = (rows, cols)[cluster_axis]
@@ -1333,8 +1285,7 @@ def test_broadcast_misaligned_nd_label_is_refused(mesh_device, strict_ccl_topolo
     does not fit, so the mapper lays the C chunks out row-major over row 0 -- physically the (1, C) row the previous
     test broadcasts along, but labelled (C, 1), [Shard(3), Replicate]. A per-axis edit of that label keeps the Shard,
     claiming C distinct pieces where every device holds the sender's; the helper refuses it instead ("does not align
-    with the axes"), an error under strict mode before any device work. Negative control: the hook used to edit the
-    placements by index and returned this label unchanged."""
+    with the axes"), an error under strict mode before any device work."""
     rows, cols, _ = _mesh(mesh_device)
     if cols <= rows:
         pytest.skip("needs more columns than rows so that a (cols, 1) mapper does not fit the mesh")
@@ -1367,15 +1318,6 @@ def test_broadcast_misaligned_nd_label_warn_only_keeps_input_label(mesh_device, 
     sender_piece = _pieces(full, cols)[cols - 1]
     for shard in _shards(tt_output):
         assert torch.equal(shard, sender_piece)
-
-
-# ---------------------------------------------------------------------------------------------------------------------
-# experimental/ccl ops that had no compute_output_topologies until now (strided_all_gather_async,
-# all_to_all_async_generic, reduce_scatter_minimal_direct, strided_reduce_scatter_async). Before this change every one
-# of them took launch()'s union default -- the INPUT's label -- so the negative control for each test below is the
-# same: composing the output by the input's label (Shard where the collective produced Replicate, or the input's dim
-# where the collective produced another) either fails the identical-bytes check or reassembles the wrong tensor.
-# ---------------------------------------------------------------------------------------------------------------------
 
 
 def _skip_unless_ring(tensor, cluster_axis):
@@ -1464,9 +1406,7 @@ def _strided_reduce_scatter_async(tensor, mesh_device, dim, cluster_axis, persis
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_strided_all_gather_async_collapsed_shard_inner_axis(mesh_device, strict_ccl_topology):
     """{N}, [Shard(3)] gathered on dim 3 along the innermost axis: [Shard(3), Replicate] on a 2-D mesh, {N},
-    [Replicate] on a line, composing to the original. Negative control: the union default kept {N}, [Shard(3)], so
-    composing concatenated N copies of the gathered row. Wormhole-only: the op's own nightly is skip_for_blackhole;
-    on a Blackhole 1x8 the op hung in both Linear and Ring topologies during bench."""
+    [Replicate] on a line, composing to the original."""
     torch.manual_seed(20)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -1508,10 +1448,9 @@ def test_strided_all_gather_async_nd_input_replicates_only_the_gathered_axis(mes
 @pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_strided_all_gather_async_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
-    """Negative control for all_gather's interleave refusal (require_contiguous_gather): gathering dim 3 of
+    """all_gather's interleave refusal (require_contiguous_gather): gathering dim 3 of
     {N}, [Shard(3)] along the rows interleaves pieces c and C+c; the hook refuses before the op runs (so no ring is
-    needed, nothing is skipped, and this runs on Blackhole too). Before this change the output silently kept
-    {N}, [Shard(3)]."""
+    needed, nothing is skipped, and this runs on Blackhole too)."""
     torch.manual_seed(22)
     _, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -1533,8 +1472,7 @@ def test_all_to_all_async_generic_collapsed_shard_inner_axis(mesh_device, strict
     """all_to_all is an all_gather of in_dim followed by each device keeping its ring-index piece of out_dim, and so is
     its label. {N}, [Shard(2)] exchanged along the innermost axis with in_dim=2, out_dim=3: on a line every device
     ends up with all rows and its own column block, {N}, [Shard(3)]; on a 2-D mesh each row keeps its (contiguous)
-    row block and splits the columns, [Shard(2), Shard(3)]. Either way composing by the label gives the original.
-    Negative control: the union default kept {N}, [Shard(2)], which stacks the column blocks along the rows."""
+    row block and splits the columns, [Shard(2), Shard(3)]. Either way composing by the label gives the original."""
     torch.manual_seed(23)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32 * num_devices, 32 * cols])
@@ -1557,8 +1495,7 @@ def test_all_to_all_async_generic_nd_transposes_the_exchanged_axis(mesh_device, 
     """The nightly test's 2-D layout: ShardTensor2dMesh dims=(3, 2) holds column block r and row block c on device
     (r, c). Exchanging along the columns with in_dim=2, out_dim=3 gathers the rows and leaves device (r, c) with
     column sub-block Cr+c -- row-major hierarchical sharding of dim 3, the collapsed {N}, [Shard(3)] the nightly
-    composes with ConcatMeshToTensor(dim=3). Negative control: the union default kept [Shard(3), Shard(2)], whose
-    composition concatenates full-height blocks along dim 2 and reads the wrong tensor."""
+    composes with ConcatMeshToTensor(dim=3)."""
     torch.manual_seed(24)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32 * cols, 32 * num_devices])
@@ -1574,10 +1511,9 @@ def test_all_to_all_async_generic_nd_transposes_the_exchanged_axis(mesh_device, 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_all_to_all_async_generic_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
-    """Negative control: {N}, [Shard(2)] exchanged along the rows with in_dim=2 gathers row pieces c and C+c side by
-    side -- the all_gather half of the label refuses as interleaving, "would interleave" (gather family: a warning in
-    warn-only mode), before the op runs. Routing the input label through the reduce_scatter-shaped alias alone would
-    have labelled this [Shard(3), Shard(2)], a permuted tensor. This is a different refusal from the nightly's
+    """{N}, [Shard(2)] exchanged along the rows with in_dim=2 gathers row pieces c and C+c side by side -- the
+    all_gather half of the label refuses as interleaving, "would interleave" (gather family: a warning in warn-only
+    mode), before the op runs. This is a different refusal from the nightly's
     cluster_axis=0 cases: those exchange an N-D [Shard(in), Shard(out)], whose gather half succeeds
     ([Replicate, Shard(out)]) and whose scatter half then refuses -- out_dim already sharded on the inner
     axis while the new Shard axis is the outer one, "no TensorTopology can express" (scatter family: logged at error
@@ -1603,8 +1539,7 @@ def test_all_to_all_async_whole_mesh(mesh_device, strict_ccl_topology, expect_er
     """The whole-mesh all_to_all of {N}, [Shard(2)] with in_dim=2, out_dim=3 leaves device k with every row and
     column block k. Its program factory numbers the ring by MeshDeviceView::get_ring_devices() -- the walk around the
     mesh boundary -- which is the coordinate order only on a line, so: on 1x2 / 1x8 the label is {N}, [Shard(3)] and
-    composing by it gives the original (negative control: the union default kept {N}, [Shard(2)], which stacks the
-    column blocks along the rows); on a 2-D mesh the hook refuses -- an error under strict mode, and in the default
+    composing by it gives the original; on a 2-D mesh the hook refuses -- an error under strict mode, and in the default
     mode (next test) the input's {N}, [Shard(2)] kept -- because {N}, [Shard(3)] over row-major coordinates would put
     device (1, 0)'s piece 7 where piece 4 belongs, and no label can carry the boundary order. The caller's persistent output buffer (replicated
     zeros before the call) is the tensor relabelled either way. Shape: each device's input is 4 x 4N tiles so every
@@ -1636,7 +1571,7 @@ def test_all_to_all_async_whole_mesh_2d_warn_only_keeps_input_label(mesh_device,
     error level: a scatter-family fallback) and the output -- the caller's persistent output buffer -- keeps the
     input's {N}, [Shard(2)]: the hook's explicit fallback, not the framework's union over the buffers' stale labels.
     That label under-claims (every device does hold a distinct piece, in boundary order), so nothing is composed by
-    it. Before this change the hook returned this label silently in every mode."""
+    it."""
     torch.manual_seed(30)
     _, _, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 128 * num_devices, 128 * num_devices])
@@ -1658,9 +1593,8 @@ def test_all_to_all_async_whole_mesh_2d_warn_only_keeps_input_label(mesh_device,
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_reduce_scatter_minimal_direct_collapsed_replicate(mesh_device, strict_ccl_topology):
     """{N}, [Replicate] reduce-scattered on dim 3 along the innermost axis: [Replicate, Shard(3)] on a 2-D mesh,
-    {N}, [Shard(3)] on a line, composing to `cols` * T. Negative control: the union default kept {N}, [Replicate],
-    whose composition asserts identical columns. The staging buffer (return index 1, not surfaced here) keeps the
-    input's label."""
+    {N}, [Shard(3)] on a line, composing to `cols` * T. The staging buffer (return index 1, not surfaced here) keeps
+    the input's label."""
     torch.manual_seed(26)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * cols])
@@ -1708,8 +1642,8 @@ def test_reduce_scatter_minimal_direct_collapsed_shard_same_dim_inner_axis(mesh_
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_strided_reduce_scatter_async_collapsed_replicate(mesh_device, strict_ccl_topology):
     """{N}, [Replicate] reduce-scattered on dim 3 along the innermost axis: [Replicate, Shard(3)] on a 2-D mesh,
-    {N}, [Shard(3)] on a line, composing to `cols` * T. Negative control: the union default kept {N}, [Replicate].
-    The ring intermediate (return index 0, not surfaced here) keeps the input's label."""
+    {N}, [Shard(3)] on a line, composing to `cols` * T. The ring intermediate (return index 0, not surfaced here) keeps
+    the input's label."""
     torch.manual_seed(28)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 64, 64 * cols])
@@ -1753,11 +1687,9 @@ def test_strided_reduce_scatter_async_refused_label_falls_back_to_the_input_not_
     mesh_device, warn_only_ccl_topology
 ):
     """A refused label falls back to the INPUT's label, whatever the caller's persistent buffers carry (the convention
-    ccl_topology_utils.hpp documents). The hooks this PR adds used to return {} on a refusal, which handed launch()
-    the union over every tensor argument -- the persistent buffers included -- so the fallback depended on the
-    buffers' history: before this change the output here read (2, 8), [Shard(3), Shard(2)], the input's label unioned
-    with the stale (1, 8), [Replicate, Shard(2)] the buffers' mapper left on them; now the result and the caller's
-    output handle (the same tensor) both read the input's (2, 4), [Shard(3), Replicate].
+    ccl_topology_utils.hpp documents): the result and the caller's output handle (the same tensor) both read the
+    input's (2, 4), [Shard(3), Replicate], not a union with the (1, 8), [Replicate, Shard(2)] the buffers' mapper left
+    on them.
 
     The refusal: the input is mapped with a (2, 4) mesh_shape override on the 1x8, a label whose axes are not the
     mesh's (the mapper distributes it row-major over the line: devices 0-3 hold the first half of dim 3, 4-7 the

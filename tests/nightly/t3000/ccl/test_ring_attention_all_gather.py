@@ -217,8 +217,7 @@ def run_ring_attention_all_gather_impl(
         for j in range(ag_num_inputs):
             # Output TensorTopology: each input is ShardTensor2dMesh dims=input_dims on the (ring, ulysses) submesh;
             # gathering the sequence along the ring axis makes that axis Replicate and leaves the other axis's
-            # placement alone -- the layout ConcatMesh2dToTensor dims=output_dims composes below. Before the op had a
-            # compute_output_topologies the outputs kept the inputs' Shard(sequence) on the ring axis.
+            # placement alone -- the layout ConcatMesh2dToTensor dims=output_dims composes below.
             expected_placements = [
                 (
                     "PlacementReplicate()"

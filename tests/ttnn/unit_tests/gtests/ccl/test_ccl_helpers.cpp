@@ -1077,11 +1077,9 @@ TEST(CclTopologyUtils, AllGatherOfACollapsedShardAlongAnOuterAxisIsRefusedUnless
 }
 
 TEST(CclTopologyUtils, AllGatherOfAnNDLabelThatShardsTheGatheredDimTwiceFollowsTheCollapsedRules) {
-    // No mapper builds [Shard{d}, Shard{d}] (chunk_ndim requires unique dims), but update_tensor_topology accepts it
-    // and the whole-mesh reduce_scatter_minimal_async label used to be exactly that. The helper reads it the way
-    // `finalise` does -- row-major hierarchical sharding, like a collapsed Shard{d} -- so gathering d along the inner
-    // axis is honest and along the outer axis interleaves. Before this check the outer gather returned
-    // [Replicate, Shard{3}], claiming identical rows.
+    // No mapper builds [Shard{d}, Shard{d}] (chunk_ndim requires unique dims), but update_tensor_topology accepts it.
+    // The helper reads it the way `finalise` does -- row-major hierarchical sharding, like a collapsed Shard{d} -- so
+    // gathering d along the inner axis is honest and along the outer axis interleaves.
     const MeshShape mesh(2, 4);
     const auto twice = nd_label(mesh, {TopoShard{3}, TopoShard{3}});
     StrictCclTopologyScope strict(true);
@@ -1846,9 +1844,8 @@ TEST(TopologyUnion, UnionTopologyKeepsTheRankOfAShardedFirstOperand) {
         EXPECT_EQ(placements_of(result), (UnionPlacements{TopoShard{3}}));
         EXPECT_EQ(result.mesh_coords(), coords);
     }
-    // Uncollapsing the reduce_scatter label instead would not help: [Shard{3}, Shard{3}] unions to
-    // [Shard{3}, Replicate] (a dim claimed on one axis reads Replicate on the next), the same over-claim on the
-    // other axis. Pinned so the alternative is not re-proposed.
+    // An uncollapsed [Shard{3}, Shard{3}] first operand unions to [Shard{3}, Replicate]: a dim claimed on one axis
+    // reads Replicate on the next, so only the collapsed form carries "a distinct piece on every device".
     {
         const auto [placements, shape] =
             union_of({nd_label(mesh, {TopoShard{3}, TopoShard{3}}), nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});

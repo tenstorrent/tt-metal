@@ -84,17 +84,13 @@ AllGatherConcatDeviceOperation::tensor_return_value_t AllGatherConcatDeviceOpera
 std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
-    // The input is [seq, users, heads (padded), head_dim]; the users are gathered along `dim` on `cluster_axis` and
-    // every head's head_dim block is concatenated into the width: output [seq, 1, users (padded to 32),
-    // num_heads * head_dim] (compute_output_specs; the llama3_70b_galaxy attention calls this with dim=1,
-    // cluster_axis=1 on an input that is also sharded along the other mesh axis). So the output carries the
-    // all_gather label (Replicate on the cluster axis, the input's placements elsewhere) renumbered to the output
-    // layout: Shard{0} stays Shard{0}, Shard{1} (users) becomes Shard{2}, Shard{2} (heads) becomes Shard{3} -- a
-    // device's heads are one contiguous block of the width -- and Replicate stays. A Shard of dim 3 (head_dim) would
-    // interleave within every head, which no output dim describes: refused like a helper refusal (reported, an error
-    // under strict mode) and the output keeps the input's label, as it does when the helper has no honest gather
-    // label (nullopt, already reported). Returning {} would instead hand the framework the union over every tensor
-    // argument, `buffer_tensor` (caller-owned scratch outside the return value) and its stale label included.
+    // Output [seq, 1, users (padded to 32), num_heads * head_dim]: the users gathered along `dim` on `cluster_axis`,
+    // every head's head_dim block concatenated into the width. The label is the all_gather label (Replicate on the
+    // cluster axis, the input's placements elsewhere) renumbered to that layout: Shard{0} stays, Shard{1} (users)
+    // becomes Shard{2}, Shard{2} (heads) becomes Shard{3} (a device's heads are one contiguous block of the width),
+    // Replicate stays. A Shard of dim 3 (head_dim) would interleave within every head, which no output dim
+    // describes: reported like a helper refusal (an error under strict mode) and the output keeps the input's label,
+    // as it does when the helper has no honest gather label.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
         tensor_args.input_tensor, args.cluster_axis, static_cast<int32_t>(args.dim));

@@ -90,8 +90,7 @@ def run_deepseek_moe_reduce_scatter_impl(
         # Output TensorTopology: the inputs carry [Replicate, Shard(rs_dim)] on (1, N) through
         # deepseek_moe_fast_reduce_nc; ring position d keeps the reduced slice d, so the output is the reduce_scatter
         # label -- the collapsed {N}, [Shard(rs_dim)] for a whole-mesh ring, Shard(rs_dim) on the cluster axis
-        # otherwise -- which ConcatMeshToTensor(dim=rs_dim) composes below. Before the op had a
-        # compute_output_topologies the output kept the union default of its 8 inputs.
+        # otherwise -- which ConcatMeshToTensor(dim=rs_dim) composes below.
         if rs_cluster_axis is None:
             expected_placements = [f"PlacementShard({rs_dim})"]
             expected_shape = (num_devices,)

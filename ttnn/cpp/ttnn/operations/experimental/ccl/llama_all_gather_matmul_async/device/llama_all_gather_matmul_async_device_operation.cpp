@@ -121,13 +121,11 @@ LlamaAllGatherMatmulAsyncDeviceOperation::create_output_tensors(
 std::vector<tt::tt_metal::TensorTopology> LlamaAllGatherMatmulAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
-    // {mm, aggregated}. `aggregated` holds input0 gathered along `dim` on `cluster_axis` (laid out for the matmul's
-    // multicast cores): Replicate on the cluster axis, input0's placements elsewhere. The matmul of the gathered
-    // activation by input1 takes the union-default label of {aggregated, input1} (what launch() gives a plain
-    // matmul). `intermediate` is caller-owned scratch outside the return value. No honest gather label (nullopt,
-    // already reported): `aggregated` keeps input0's label and the matmul takes the union over that, so the fallback
-    // is a function of the inputs alone (returning {} would hand the framework the union over every tensor argument,
-    // `intermediate` and its stale label included).
+    // {mm, aggregated}. `aggregated` holds input0 gathered along `dim` on `cluster_axis`, laid out for the matmul's
+    // multicast cores: Replicate on the cluster axis, input0's placements elsewhere. The matmul of the gathered
+    // activation by input1 takes the union label of {aggregated, input1}, as launch() would give a plain matmul.
+    // `intermediate` is caller-owned scratch outside the return value. With no honest gather label (nullopt, already
+    // reported) `aggregated` keeps input0's label and the matmul takes the union over that.
     const TensorTopology aggregated_topology =
         ttnn::operations::ccl::common::all_gather_output_topology(
             tensor_args.input0, args.cluster_axis, static_cast<int32_t>(args.dim))

@@ -271,8 +271,6 @@ def run_reduce_scatter_test(
             # Output TensorTopology: the reduce_scatter sums along the columns and scatters the ROWS, which become
             # output dim 1 (batch); input dim 0 stays dim 0. So q, k and v are Shard(0) on the rows and Shard(1) on
             # the columns -- the layout ConcatMesh2dToTensor dims=(0, 1) below composes against the row-sliced golden.
-            # Before the op had a compute_output_topologies the outputs kept the input's Shard(1) on the columns,
-            # which happens to be the same spelling for a different reason (input dim 1 is summed away).
             for tt_out in (tt_out_tensor_q, tt_out_tensor_k, tt_out_tensor_v):
                 assert [repr(p) for p in tt_out.tensor_topology().placements()] == [
                     "PlacementShard(0)",

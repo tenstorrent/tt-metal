@@ -157,10 +157,9 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> RingAttentionAllGatherAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // One output per input (validation requires one persistent buffer per input when buffers are given, so they are
-    // those outputs), each input gathered along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's
-    // placements elsewhere, a collapsed 1-D label expanded per mesh axis first. No honest label for an input (nullopt,
-    // already reported): that output keeps its input's label.
+    // One output per input (a caller's persistent buffers are those outputs, one per input), each input gathered
+    // along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's placements elsewhere. With no honest
+    // label for an input (nullopt, already reported) that output keeps its input's label.
     const auto& inputs = tensor_args.input_tensor;
     std::vector<tt::tt_metal::TensorTopology> topologies;
     topologies.reserve(inputs.size());

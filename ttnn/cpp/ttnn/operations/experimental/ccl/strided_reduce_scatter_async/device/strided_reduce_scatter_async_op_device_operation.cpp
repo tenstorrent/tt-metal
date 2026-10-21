@@ -160,11 +160,8 @@ tensor_return_value_t StridedReduceScatterAsyncDeviceOperation::create_output_te
 std::vector<tt::tt_metal::TensorTopology> StridedReduceScatterAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // [0] intermediate: ring scratch over the input, keeps the input's label; [1] output: `dim` sharded along
-    // `cluster_axis`, the other axes as the input had them (the reduce_scatter_minimal_async convention; the helper
-    // expands a collapsed 1-D label to one placement per mesh axis first). Caller-supplied persistent buffers are
-    // those two tensors and take the same labels. No honest label (nullopt, already reported): the output keeps the
-    // input's label too (returning {} would hand the framework the union over every tensor argument, the caller's
-    // persistent buffers and their stale labels included).
+    // `cluster_axis`, the other axes as the input had them. Caller-supplied persistent buffers are those two tensors
+    // and take the same labels. With no honest label (nullopt, already reported) the output keeps the input's label.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
         tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim));

@@ -435,20 +435,15 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
 std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute_output_topologies(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
-    // Slot layout follows compute_output_specs: [0] the activation gather buffer (the caller's persistent buffer when
-    // given), [1] with FSDP the gathered weight buffer, then one matmul chunk per remaining spec. The activation is
-    // gathered along its last dim on `cluster_axis`, the FSDP weight along its second-to-last (K) dim on
-    // `fsdp_cluster_axis`: Replicate on that axis, the tensor's placements elsewhere. Every chunk is a column slice of
-    // the matmul of the gathered activation by the (gathered) weight, so each takes the union-default label of
-    // {gathered activation, (gathered) weight, bias, and the fused addcmul's two ternary operands when present} (what
-    // launch() gives a plain matmul over those operands). The addcmul, fused_ternary_input_a + scalar * matmul *
-    // fused_ternary_input_b, is elementwise on the matmul result, so a ternary operand sharded on a mesh axis the
-    // matmul result replicates makes the result Shard there -- validation does not constrain the ternary tensors'
-    // labels, so they have to be in the union; SwiGLU acts on the result alone and adds nothing. No honest gather
-    // label (nullopt, already reported): that slot keeps the label of the tensor it gathers (the activation's, the
-    // weight's) and the chunks take the union over those, so the fallback is a function of the inputs alone.
-    // Returning {} would instead hand the framework the union over every tensor argument, the caller's persistent
-    // output buffer and its stale label included.
+    // Slots follow compute_output_specs: [0] the activation gather buffer (the caller's persistent buffer when given),
+    // [1] with FSDP the gathered weight buffer, then one matmul chunk per remaining spec. A gather buffer carries its
+    // tensor's label with Replicate on the gather axis (`cluster_axis` for the activation's last dim,
+    // `fsdp_cluster_axis` for the weight's K dim). Every chunk is a column slice of the matmul of the gathered
+    // activation by the (gathered) weight, so it takes the union label of {gathered activation, (gathered) weight,
+    // bias, the fused addcmul's two ternary operands when present}, as launch() would give a plain matmul: the addcmul
+    // is elementwise on the result, so a ternary operand sharded on an axis the result replicates makes the chunk
+    // Shard there; SwiGLU acts on the result alone and adds nothing. With no honest gather label (nullopt, already
+    // reported) a gather slot keeps its tensor's label and the chunks take the union over those.
     const TensorTopology activation_topology =
         ttnn::operations::ccl::common::all_gather_output_topology(
             tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1)

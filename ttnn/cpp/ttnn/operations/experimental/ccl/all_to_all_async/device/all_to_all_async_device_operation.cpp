@@ -188,26 +188,14 @@ std::vector<tt::tt_metal::TensorTopology> AllToAllAsyncDeviceOperation::compute_
     // all_to_all over the whole mesh is an all_gather of `in_dim` followed by each device keeping its own ring-index
     // piece of `out_dim`, so the label is composed the same way: the all_gather label for in_dim (every placement
     // Replicate; a gather that would interleave a 1-D-mapped tensor's shards is refused), then Shard{out_dim} in
-    // coordinate order through the reduce_scatter-shaped alias. Routing the INPUT label through the alias alone
-    // would accept the interleaving case, which no label describes (the all_to_all caveat on the 2026-10-01
-    // mesh_partition amendment). The caller's persistent output buffer IS the result.
-    //
-    // The ring index this op's program factory uses comes from MeshDeviceView::get_ring_devices(): the walk around
-    // the mesh BOUNDARY (top row left to right, right column down, bottom row right to left, left column up), not the
-    // coordinate (row-major) order a label's coordinates follow. The two agree only on a line (one axis of size > 1):
-    // on a 2x4, device (1, 0) holds piece 7 where {8}, [Shard{out_dim}] over row-major coordinates says piece 4. A
-    // label cannot carry the ring order (consumers iterate the storage order), so on a mesh with two non-trivial axes
-    // the hook refuses -- reported like a helper refusal, an error under strict mode -- and the output keeps the
-    // input's label until the factory indexes the ring by coordinate or the label can express the walk. No honest
-    // label from the helper (nullopt, already reported): the input's label as well. Returning {} would instead hand
-    // the framework the union over every tensor argument, the caller's persistent intermediate and output buffers and
-    // their stale labels included.
-    //
-    // On a line the label is spelled over the ring coordinates themselves (get_ring_coordinates(), the list the
-    // factory indexes; defined for a 2-D view only, as the factory requires) rather than over the input label's: the
-    // helper's whole-mesh rule keeps a collapsed label's coordinates without checking their order, and a label built
-    // from an explicit coordinate list (from_host_shards, combine_device_tensors) need not walk the line in order. A
-    // label that does not cover exactly the ring's devices is refused the same way and keeps the input's label.
+    // coordinate order through the reduce_scatter-shaped alias. The caller's persistent output buffer is the result.
+    // The program factory ranks the ring by the walk around the mesh boundary (MeshDeviceView::get_ring_devices),
+    // which matches a label's row-major coordinate order only on a line, so a mesh with two non-trivial axes is
+    // refused (reported like a helper refusal, an error under strict mode). On a line the label is spelled over
+    // get_ring_coordinates(), the list the factory indexes, since the input label's coordinates need not walk the
+    // line in order (an explicit coordinate list, or a collapsed label whose coordinates the helper keeps unchecked);
+    // a label that does not cover exactly the ring's devices is refused the same way. Every refusal, and no honest
+    // helper label (nullopt, already reported), leaves the output with the input's label.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto& mesh_shape = mesh_device->shape();

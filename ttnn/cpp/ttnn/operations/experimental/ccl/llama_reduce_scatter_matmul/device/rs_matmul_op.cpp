@@ -118,14 +118,12 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
 std::vector<tt::tt_metal::TensorTopology> Matmul_RS::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
-    // Return order follows create_output_tensors: {mm[, mm2], rs}. Each matmul output takes the union-default label
-    // of its operands (what launch() gives a plain matmul): input x weight, and input x second_weight. The
-    // reduce_scatter input is either the caller's rs_tensor (delegate to LlamaReduceScatterDeviceOperation) or, with
-    // a second weight, the first matmul's output -- a fresh tensor that carries no meaningful label yet, so its
-    // reduce_scatter label is derived from the union label computed here. No honest reduce_scatter label (nullopt,
-    // already reported): the rs output keeps the label of the tensor it scatters -- the delegate returns rs_tensor's
-    // label, the second-weight path the first matmul's -- so the fallback is a function of the inputs alone
-    // (returning {} would hand the framework the union over every tensor argument, rs_tensor included).
+    // Return order follows create_output_tensors: {mm[, mm2], rs}. Each matmul output takes the union label of its
+    // operands (input x weight, input x second_weight), as launch() would give a plain matmul. The reduce_scatter
+    // input is the caller's rs_tensor (LlamaReduceScatterDeviceOperation's hook labels it) or, with a second weight,
+    // the first matmul's output, a fresh tensor whose label is the union computed here, so its reduce_scatter label is
+    // derived from that. With no honest reduce_scatter label (nullopt, already reported) the rs output keeps the label
+    // of the tensor it scatters.
     const auto& input_topology = tensor_args.matmul.input_tensor.tensor_topology();
     const auto& mesh_coords = input_topology.mesh_coords();
     const auto union_with = [&](const TensorTopology& weight_topology) {

@@ -71,8 +71,7 @@ def run_reduce_scatter_impl(
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
     # The reduce-scatter stages every batch into its own region of the intermediate and keeps all
-    # batches in flight within one ring step, so the intermediate must be input-shaped. (It used to be
-    # sized to a single batch, which the earlier shared-region layout accepted.)
+    # batches in flight within one ring step, so the intermediate must be input-shaped.
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(rs_input_shape),
@@ -280,8 +279,7 @@ def run_reduce_scatter_impl(
         # [Replicate, Shard(3)] on (1, N) and the weight's collapsed {N}, [Shard(2)] has the lower distribution rank,
         # so the matmul reads [Replicate, Shard(3)] (the K-split partial sums are stacked by the composer below). The
         # reduce_scatter of that matmul over the whole mesh is the collapsed {N}, [Shard(rs_scatter_dim)] that
-        # ConcatMeshToTensor(dim=3) composes. Before the fused op had a compute_output_topologies the
-        # reduce_scatter output kept the union default, [Replicate, Shard(3)] on (1, N).
+        # ConcatMeshToTensor(dim=3) composes.
         assert [repr(p) for p in tt_mm_out_tensor.tensor_topology().placements()] == [
             "PlacementReplicate()",
             "PlacementShard(3)",

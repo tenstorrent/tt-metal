@@ -129,16 +129,13 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
 std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_topologies(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
-    // Along `cluster_axis` the op sums the partial QKV projections and scatters the ROWS: device c keeps rows
-    // [c * slice_size, (c + 1) * slice_size) of input dim 2 as output dim 1 (batch); input dim 0 stays dim 0; the
-    // fused QKV width (input dim 3) is reshaped into heads (dims 2-3) and split across the q/k/v outputs
-    // (test_llama_reduce_scatter_create_heads_async_TG composes q/k/v with ConcatMesh2dToTensor dims=(0, 1) against
-    // the row-sliced reduction). So every output carries the reduce_scatter label for scatter dim 2, renumbered to the
-    // output layout: Shard{2} -> Shard{1}, Shard{0} stays, Replicate stays. A Shard of dim 1 (summed away) or dim 3
-    // (reshaped into heads) on a non-cluster axis has no output dim this hook can vouch for: refused like a helper
-    // refusal (reported, an error under strict mode) and every output keeps the input's label, as when the helper has
-    // no honest label (nullopt, already reported). Returning {} would instead hand the framework the union over every
-    // tensor argument.
+    // Along `cluster_axis` the op sums the partial QKV projections and scatters the rows: device c keeps rows
+    // [c * slice_size, (c + 1) * slice_size) of input dim 2 as output dim 1 (batch), input dim 0 stays dim 0, and the
+    // fused QKV width (input dim 3) is reshaped into heads (dims 2-3) and split across the q/k/v outputs. Every
+    // output carries the reduce_scatter label for scatter dim 2 renumbered to that layout: Shard{2} becomes Shard{1},
+    // Shard{0} and Replicate stay. A Shard of dim 1 (summed away) or dim 3 (reshaped into heads) on a non-cluster
+    // axis has no output dim to go to: refused like a helper refusal (an error under strict mode) and every output
+    // keeps the input's label, as with no honest label (nullopt, already reported).
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto rs_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
         tensor_args.input_tensor, attributes.cluster_axis, /*scatter_dim=*/2);

@@ -231,8 +231,7 @@ def run_reduce_scatter_test(
             )
             # Output TensorTopology: the input is ShardTensor2dMesh dims=(0, 1); the reduce_scatter sums along the
             # columns and leaves each device its `dim` slice, so the label is Shard(0) on the rows and Shard(dim) on
-            # the columns -- the layout ConcatMesh2dToTensor dims=(0, 1) below composes. Before the op had a
-            # compute_output_topologies the output kept the input's Shard(1) on the columns.
+            # the columns -- the layout ConcatMesh2dToTensor dims=(0, 1) below composes.
             assert [repr(p) for p in tt_out_tensor.tensor_topology().placements()] == [
                 "PlacementShard(0)",
                 f"PlacementShard({dim})",

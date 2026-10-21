@@ -84,18 +84,14 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
 std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
-    // {mm, reduce_scatter}. The matmul output takes the union-default label of input, weight and bias (what launch()
-    // gives a plain matmul). The reduce_scatter consumes that matmul output, so its label is the reduce_scatter of
-    // the matmul LABEL -- not of any tensor in tensor_args -- along reduce_scatter_params.cluster_axis (nullopt: the
-    // whole mesh) for reduce_scatter_params.dim; the caller's persistent output buffer IS that result and takes the
-    // label. Not delegated to ReduceScatterMinimalAsyncDeviceOperation, whose hook labels its own 2-3 tensors from
-    // its own input. The host prim always passes cluster_axis = nullopt, and the program factory ranks that
-    // whole-mesh ring by `tensor_args.input`'s device-storage coordinates (get_linearized_index_from_physical_coord),
-    // so the label is spelled over those coordinates (over_storage_ring_order, as the helper's Tensor overload does
-    // for a plain reduce_scatter) rather than over the matmul label's. No honest label (nullopt, already reported):
-    // the reduce_scatter output keeps the matmul label -- the label of the tensor it scatters -- so the fallback is a
-    // function of the inputs alone (returning {} would hand the framework the union over every tensor argument, the
-    // caller's persistent output buffer and its stale label included).
+    // {mm, reduce_scatter}. The matmul output takes the union label of input, weight and bias, as launch() would give
+    // a plain matmul. The reduce_scatter consumes that matmul output, so its label is the reduce_scatter of the matmul
+    // label (not of any tensor in tensor_args) along reduce_scatter_params.cluster_axis for reduce_scatter_params.dim;
+    // the caller's persistent output buffer is that result. The host prim always passes cluster_axis = nullopt and the
+    // program factory ranks that whole-mesh ring by `tensor_args.input`'s device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so the label is spelled over them (over_storage_ring_order). With
+    // no honest label (nullopt, already reported) the reduce_scatter output keeps the matmul label, the label of the
+    // tensor it scatters.
     const auto& input_topology = tensor_args.input.tensor_topology();
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(input_topology), std::cref(tensor_args.weight.tensor_topology())};

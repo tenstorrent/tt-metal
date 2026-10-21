@@ -203,12 +203,9 @@ ReduceScatterMinimalDirectDeviceOperation::create_output_tensors(
 std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalDirectDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // [0] is the reduce_scatter result: `dim` sharded along `cluster_axis` (or over the whole mesh), the other axes
-    // as the input had them; a caller-supplied persistent output buffer IS that result and takes the same label. [1]
-    // is device-local staging for the incoming contributions with no distribution semantics of its own, so it keeps
-    // the input's label (the reduce_scatter_minimal_async intermediate convention). The helper expands a collapsed
-    // 1-D label to one placement per mesh axis first. No honest label (nullopt, already reported): the output keeps
-    // the input's label too (returning {} would hand the framework the union over every tensor argument, the caller's
-    // persistent buffers and their stale labels included).
+    // as the input had them; a caller-supplied persistent output buffer is that result and takes the same label.
+    // [1] is device-local staging for the incoming contributions and keeps the input's label, as does [0] with no
+    // honest label (nullopt, already reported).
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
     const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
         tensor_args.input_tensor, args.cluster_axis, args.dim);

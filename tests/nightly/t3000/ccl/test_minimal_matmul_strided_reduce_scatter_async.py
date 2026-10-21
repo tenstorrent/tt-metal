@@ -458,8 +458,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         # replicated, so the matmul output takes the union-default label Shard(0) on the cluster axis, Replicate on
         # the other (the composer below stacks the per-device results along dim 0). The reduce_scatter of that matmul
         # along the cluster axis is Shard(dim) there, Replicate on the other axis -- the layout the RS composer below
-        # uses. Before the fused op had a compute_output_topologies the reduce_scatter output kept the union default
-        # of the fused op's operands (the weight's Shard(0) on the cluster axis).
+        # uses.
         expected_mm = ["PlacementReplicate()", "PlacementReplicate()"]
         expected_mm[cluster_axis] = "PlacementShard(0)"
         expected_rs = ["PlacementReplicate()", "PlacementReplicate()"]

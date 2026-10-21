@@ -119,12 +119,9 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
 
 std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterDeviceOperation::compute_output_topologies(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // The output holds this device's `dim` slice of the sum along `cluster_axis`
-    // (test_llama_reduce_scatter_async_TG composes it with ConcatMesh2dToTensor dims=(0, dim)): Shard{dim} on the
-    // cluster axis, the input's placement on the other axis. The intermediate packet buffer is caller-owned scratch
-    // outside the return value. No honest label (nullopt, already reported): the output keeps the input's label
-    // (returning {} would hand the framework the union over every tensor argument, the packet buffer's stale label
-    // included).
+    // The output holds this device's `dim` slice of the sum along `cluster_axis`: Shard{dim} on the cluster axis, the
+    // input's placement on the other axis. The intermediate packet buffer is caller-owned scratch outside the return
+    // value. With no honest label (nullopt, already reported) the output keeps the input's label.
     const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
         tensor_args.input_tensor, attributes.cluster_axis, static_cast<int32_t>(attributes.dim));
     return {output_topology.value_or(tensor_args.input_tensor.tensor_topology())};
