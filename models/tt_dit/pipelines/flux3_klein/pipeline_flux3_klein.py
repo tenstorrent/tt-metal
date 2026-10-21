@@ -182,6 +182,10 @@ class Flux3KleinRequest:
     image_cond_override: CondPair | None = None
     prompt_upsampling: bool = True
     boxes: tuple | None = None
+    return_final_tokens: bool = True
+    """Read the final latent state back to the host (``Flux3KleinResult.final_tokens``; the tests and the sweep's
+    replay check need it). A serving request does not: at 4096x4096 that read is ~1.5 s of the ``to_host`` stage
+    (sweep 2026-10-21: to_host 1.94 s, of which the uint8 image is ~0.3 s). ``False`` leaves ``final_tokens`` None."""
 
     def resolve(self) -> Flux3KleinResolved:
         """``generate.py:36-42``: ``steps = steps or defaults``; ``guidance = defaults if None``; a flow-map model
@@ -313,7 +317,7 @@ def resolve_caption(resolved: Flux3KleinResolved, upsampler) -> tuple[str, bool]
 class Flux3KleinResult:
     image: object
     """PIL image ``(width, height)`` RGB."""
-    final_tokens: torch.Tensor
+    final_tokens: torch.Tensor | None
     """fp32 ``[h*w, 128]``, the state after the last step (host read after the decode)."""
     timings: dict[str, float | bool]
     layout_key: tuple
@@ -764,7 +768,7 @@ class Flux3KleinPipeline:
             image = to_pil(img)
         if resolved.crop is not None:
             image = image.crop(resolved.crop)  # generate.py:76-77
-        final_tokens = denoiser.read_state(prepared)
+        final_tokens = denoiser.read_state(prepared) if request.return_final_tokens else None
         to_host_s = time.time() - t0
 
         timings = {

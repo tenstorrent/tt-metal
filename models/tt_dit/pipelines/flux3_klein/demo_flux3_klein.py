@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         # already a caption (or passed through); the pipeline appends the box table itself when not upsampled
         prompt_upsampling=False,
         boxes=None if caption is not None else (tuple(boxes) if boxes else None),
+        return_final_tokens=False,  # a serving-style request: the latent read is not part of the image time
     )
     print(
         f"model {model} seed {request.seed if request.seed is not None else 'sha256(caption)'} "
