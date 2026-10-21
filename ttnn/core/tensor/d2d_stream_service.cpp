@@ -166,11 +166,13 @@ std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
     const std::optional<CoreCoord>& metadata_worker) {
     using distributed::SocketEndpoint;
     std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(service_cores.size());
     for (const auto& [coord, core] : service_cores) {
         coords.push_back(coord);
     }
     const auto backing_addrs = collect_backing_addrs(backing, coords);
     std::vector<D2DReceiverCoordDescriptor> out;
+    out.reserve(service_cores.size());
     for (const auto& [coord, core] : service_cores) {
         const auto gate = stage_gate_addrs.find(coord);
         out.push_back(D2DReceiverCoordDescriptor{
@@ -2244,7 +2246,7 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
             }
         }
         if (rank != *root) {
-            payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
+            payload = D2DPipelineDescriptor{.ranks = {local}}.serialize();
         } else {
             // Drop a file left by an earlier run so a reader can't pick it up while the gather runs.
             path = d2d_pipeline_descriptor_path(service_id);

@@ -6,6 +6,8 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 
@@ -123,6 +125,7 @@ std::vector<uint8_t> D2DPipelineDescriptor::serialize() const {
         std::vector<flatbuffers::Offset<fb::D2DBoundary>> boundaries;
         for (const auto& b : r.boundaries) {
             std::vector<flatbuffers::Offset<fb::D2DReceiver>> receivers;
+            receivers.reserve(b.receivers.size());
             for (const auto& rx : b.receivers) {
                 receivers.push_back(to_flatbuffer(builder, rx));
             }
@@ -176,6 +179,14 @@ D2DPipelineDescriptor D2DPipelineDescriptor::wait_and_read(const std::string& pa
 }
 
 std::string d2d_pipeline_descriptor_path(const std::string& service_id) {
+    // The id goes into a file name that gets written and removed, so keep it to one plain name.
+    const bool plain = !service_id.empty() && std::all_of(service_id.begin(), service_id.end(), [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '.';
+    });
+    TT_FATAL(
+        plain && service_id.find("..") == std::string::npos,
+        "d2d_pipeline_descriptor_path: service_id '{}' must be letters, digits, '_', '-' or '.', with no '..'",
+        service_id);
     return fmt::format("/dev/shm/tt_d2d_pipeline_{}.bin", service_id);
 }
 
