@@ -374,3 +374,39 @@
   budget_type: e2e
   sp_config: sc4
   release_ready: false
+
+# Per-mesh heterogeneous fabric_config on the multihost SC4 cluster. The
+# llama8b-audio 4-mesh line MGD declares a different fabric_config per mesh
+# (4x8 meshes -> FABRIC_2D_TORUS_Y, 4x2 meshes -> FABRIC_2D). HW counterpart of
+# the CPU-only ControlPlaneFixture.TestLlamaLinePerMeshFabricConfig unit test,
+# and the SC4 analog of galaxy-fabric-per-mesh-torus-yx.
+- name: "Fabric per-mesh heterogeneous-config sanity (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_mesh_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter topology.Torus
+  skus:
+    bh_sc4:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
+  sp_config: sc4
+  release_ready: false
