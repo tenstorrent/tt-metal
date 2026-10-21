@@ -107,6 +107,8 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
+    // Each page is read from src into the scratch CB and written from it to dst, so its CB slot must keep the
+    // same alignment as the src/dst pages (64 B for DRAM on Blackhole), not just the L1 alignment.
     const uint32_t page_alignment =
         std::max({tt::tt_metal::hal::get_l1_alignment(), input.buffer()->alignment(), output.buffer()->alignment()});
 

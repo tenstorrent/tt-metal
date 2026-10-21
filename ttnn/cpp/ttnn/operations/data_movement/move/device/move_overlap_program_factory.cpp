@@ -91,6 +91,8 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
+    // Each page is read from src into the CB and written from the CB to dst, so its CB slot must keep the
+    // same alignment as the src/dst pages (64 B for DRAM on Blackhole), not just the L1 alignment.
     const uint32_t page_alignment =
         std::max({tt::tt_metal::hal::get_l1_alignment(), src_buffer->alignment(), dst_buffer->alignment()});
 
@@ -102,7 +104,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     const uint32_t cb_index = 0;
-    // Same as size_per_l1_bank above.
+    // Must round the same way as size_per_l1_bank above, or a 16-mod-32 page_size overruns the CB.
     const uint32_t aligned_page_size = tt::align(page_size, page_alignment);
     desc.cbs.push_back(CBDescriptor{
         .total_size = size_per_l1_bank,
