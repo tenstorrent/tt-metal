@@ -11,8 +11,9 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
-// The codegen kernels' reduction_mode numbering (kernels/scatter_common.hpp, scatter_reduce_value),
-// restricted to the modes the codegen factories serve. scatter.cpp's scatter_reduction_mode() maps
+// The codegen kernels' reduction_mode numbering (kernels/scatter_reader_bf16_reduce_rm.cpp's
+// reduce_fp32; the other readers static_assert kReductionNone), restricted to the modes the codegen
+// factories serve. scatter.cpp's scatter_reduction_mode() maps
 // the public reduce string onto these and throws on anything else, so max/min never reach the prim.
 constexpr uint32_t kReductionNone = 0;
 constexpr uint32_t kReductionAdd = 1;
