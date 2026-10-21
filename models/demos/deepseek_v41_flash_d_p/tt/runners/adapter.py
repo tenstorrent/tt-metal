@@ -48,14 +48,29 @@ SPEC_PATH = Path(__file__).resolve().parents[2] / "bringup" / "spec.yaml"
 PAD_ID = 0xFFFFFFFF
 
 
-class DS41Config:
-    """Static model-dimension constants (the prefill engine's ``model_config``)."""
+class _FabricPayload(type):
+    """``DS41Config.FABRIC_PAYLOAD_SIZE``, read when the runner opens its mesh (runner_utils.open_mesh_device; K-79):
+    the payload bringup/hooks.py:device_params gives every bring-up mesh, so the runner's fabric matches the tests':
+    EXPERTS_COMBINE=weighted (the default since P.8) sends one expert row + trailer per packet (weighted_combine.
+    FABRIC_PAYLOAD, 10880 B), else the fabric default 4352 B (one fp32 tile). FIX.8, DS41-94: a fixed 4352 hung the
+    runner in FlatWithProgramDeviceOperation. Lazy, so importing the adapter stays light."""
+
+    @property
+    def FABRIC_PAYLOAD_SIZE(cls) -> int:
+        from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+        if settings.get("EXPERTS_COMBINE") != "weighted":
+            return 4352
+        from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import FABRIC_PAYLOAD
+
+        return int(FABRIC_PAYLOAD)
+
+
+class DS41Config(metaclass=_FabricPayload):
+    """Static model-dimension constants (the prefill engine's ``model_config``; FABRIC_PAYLOAD_SIZE: _FabricPayload)."""
 
     NUM_LAYERS = 40
     EMB_SIZE = 5120
-    # The runner opens the fabric with this packet payload (runner_utils.open_mesh_device; K-79): the fabric default
-    # every bring-up test ran with (tt_metal/fabric/erisc_datamover_builder.hpp), one fp32 tile per packet.
-    FABRIC_PAYLOAD_SIZE = 4352
     HEAD_DIM = 512
     INDEX_HEAD_DIM = 128
     HC_MULT = 4
@@ -342,25 +357,39 @@ class DS41PrefillAdapter(PrefillModelAdapter):
 def contract_state_pcc(spec, runtime, kv, slot, length, golden) -> dict:
     """Bring-up contract hook (testing/contract.py; bringup/hooks.py re-exports it): the slot's fixed-size state
     (spec state.fixed: the window ring, the compressor's partial group, the engram tail) after a request of
-    ``length`` tokens vs the golden snapshot at ``length``; {name: min PCC over the served layers} (the engram tail,
-    integer ids, scores 1.0 when equal, else 0.0)."""
+    ``length`` tokens vs the golden snapshot at ``length``; {name: min PCC over the served layers} for the float
+    states, which testing/contract.py gates on calib x their drift. An integer state (the engram tail: the last token
+    ids, no rounding anywhere) has no drift entry (reference/drift.py keeps only float states, F134) and no margin:
+    it must equal the golden exactly; any difference fails here (FIX.8, DS41-93), the result recorded as
+    ``contract_state_exact_<name>`` (1 = equal on every served layer)."""
     import torch
     from loguru import logger
 
+    from models.demos.common.bringup.core import metrics
     from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import _pcc
 
     st = runtime.state(kv, slot)
-    out = {}
+    out, exact, bad = {}, {}, []
     for layer in runtime.layer_ids:
         gold = golden.state(layer, at=length)
         dev = st.to_torch(layer, length)
         for name in spec.state_fixed:
             if name not in gold or name not in dev:
                 continue
-            if name == "engram_tail":
-                p = float(torch.equal(dev[name].long(), gold[name].long()))
-            else:
-                p = _pcc(dev[name].float(), gold[name].float().reshape(dev[name].shape))
+            if not gold[name].is_floating_point():
+                eq = torch.equal(dev[name].long().flatten(), gold[name].long().flatten())
+                exact[name] = exact.get(name, True) and eq
+                if not eq:
+                    bad.append(
+                        f"layer {layer} {name} at {length}: {dev[name].flatten().tolist()} != golden "
+                        f"{gold[name].flatten().tolist()}"
+                    )
+                logger.info(f"  layer {layer:>2} {name} at {length}: {'equal' if eq else 'DIFFERS'}")
+                continue
+            p = _pcc(dev[name].float(), gold[name].float().reshape(dev[name].shape))
             out[name] = min(out.get(name, 1.0), p)
             logger.info(f"  layer {layer:>2} {name} at {length}: {p:.6f}")
+    for name, eq in exact.items():
+        metrics.record(f"contract_state_exact_{name}", int(eq))
+    assert not bad, "integer fixed state differs from the golden (must be exact):\n" + "\n".join(bad)
     return out

@@ -19,6 +19,14 @@ SP_AXIS = 0  # mesh rows: sequence
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
+def cast(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """x in ``dtype``: a typecast, or x itself when it already is ``dtype``. What a matmul input (or a cache row) gets
+    where the released code quantize-dequantizes to fp8 / fp4: the device keeps bf16 / fp32 there, so it computes in
+    that format and adds no rounding to another (agent rule 17; FIX.8 deleted the parity-only quantizers of
+    tt/quant.py). Does not consume x; the caller frees the result only when it is not x."""
+    return x if x.dtype == dtype else ttnn.typecast(x, dtype, memory_config=DRAM)
+
+
 def fp32_acc(needed: bool = True) -> bool:
     """Whether a program accumulates in fp32 DEST (setting FP32_ACC): all = every program (the bring-up precision,
     max precision); needed = only the sites that pass ``needed=True``: fp32 data paths (SFPU fp32 sums / Sinkhorn /

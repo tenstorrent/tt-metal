@@ -543,7 +543,11 @@ class TtDS41Block:
         assert rows == self.model.chunk, f"chunk of {rows} rows; the model was built for {self.model.chunk}"
         end = start + rows if end is None else int(end)
         ctx = Ctx(self.layer, start, rows, state, extra={"end": end})
-        protect = {id(t) for t in h.tensors()}  # the caller's input (an engram layer's x shares its pre)
+        # the caller's input (an engram layer's x shares its pre). ``held`` keeps those wrappers alive until the call
+        # returns: attn_hc takes the stats row out of h (take_stats) and frees it, and once its wrapper died CPython
+        # could hand its id to a new tensor, which _free would then skip (a deallocate fewer, at random: FIX.5)
+        held = h.tensors()
+        protect = {id(t) for t in held}
 
         def wrap(step, fn):
             dead = self.dead[step.name]
@@ -564,6 +568,7 @@ class TtDS41Block:
             raise AssertionError(f"layer {self.layer}: step {name} has no device module (all-device model)")
 
         out = run_block(self.steps, no_cpu, ctx, h, overrides=overrides)
+        del held  # protect's ids were valid for the whole block
         if state.memo is not None:  # INDEXER_GLUE=on (P.16): slots whose last reader of the chunk was this layer
             for slot in self.model.memo_last.get(self.layer, ()):
                 state.memo.drop(slot)
@@ -681,10 +686,15 @@ class TtDS41Model:
 
     def begin_chunk(self, tokens: torch.Tensor, start: int) -> None:
         """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
-        active slot's tail, look the rows up (memory-mapped) and send them to the device once."""
+        active slot's tail, look the rows up (memory-mapped) and send them to the device once. Also empties the
+        active slot's ChunkMemo (INDEXER_GLUE=on, P.16; FIX.5): every run of a chunk builds its shared tensors
+        itself, even when a slot's last reader layer is not loaded or not run (a re-run of the same start would hit
+        it otherwise, and the unread slot would hold its device memory)."""
+        st = self.state
+        if st is not None and st.memo is not None:
+            st.memo.clear()
         if not self.engram:
             return
-        st = self.state
         for i, rows in self.engram.items():
             if start == 0 or st is None:
                 tail = rows.new_tail()

@@ -98,7 +98,7 @@ out = ttnn.bringup.unified_routed_expert_moe(
 - hy4_preview_d_p, glm53_flash_d_p (`tt/experts.py`, ClampedSiluGlu + high_precision)
 - xing40_a4b_d_p (`tt/experts.py`, Silu + high_precision)
 - deepseek_v41_flash_d_p (`tt/experts.py` `_unified`, EXPERTS_KERNEL=unified, P.2: ClampedSiluGlu + high_precision +
-  routing_weights + fp8_act_quant + weights_transposed, bfp8 / bfp4 [N, K])
+  routing_weights + weights_transposed, bfp8 / bfp4 [N, K]; fp8_act_quant until FIX.8, the deleted official numerics)
 
 ## History
 `CHANGELOG.md`.

@@ -367,12 +367,11 @@ def _host(mesh, t) -> torch.Tensor:
 @pytest.mark.parametrize("combines", ["separate,weighted", "weighted"], ids=["ab", "w"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_weighted_vs_separate(mesh_device, combines, prof):
-    """EXPERTS_COMBINE A/B (P.8) on the same random inputs (layer LAYER, the run's chunk, the current NUMERICS /
+    """EXPERTS_COMBINE A/B (P.8) on the same random inputs (layer LAYER, the run's chunk, the current
     FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): the mean wall time of a whole experts call (q(x) ..
     reduce over the row, synchronized: the device time of one layer's experts per chunk), weighted vs separate rel
     error / PCC / worst row, and the determinism check (weighted twice on the same inputs: elements that differ).
-    With NUMERICS=official separate rounds q(r h) to fp8 before w2 and weighted cannot (the weight moves to the
-    combine), so the rel error there includes that rounding; with NUMERICS=native both run the same math.
+    Both run the same math (no fp8 emulation since FIX.8).
     prof (ids "ops"; run with the device profiler env, testing/profiler.py PROFILER_ENV): one more call per path in the
     profiler's op mode, the device time per op printed (EXPERTS_COMBINE_OPS)."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
@@ -387,7 +386,7 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
     dense = torch.zeros(chunk, cfg.n_experts)
     dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    tag = " ".join(f"{k}={settings.get(k)}" for k in ("NUMERICS", "FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
+    tag = " ".join(f"{k}={settings.get(k)}" for k in ("FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
     outs, again = {}, None
     for combine in combines.split(","):  # (separate first: its programs are built before weighted's)
         t0 = time.time()
@@ -438,17 +437,9 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
         mod.free()
         del mod
     # float64 reference on N_REF tokens: y = sum_k w_k w2(silu(min(w1 q, 10)) clamp(w3 q, +-10)), q = x as the device
-    # reads it (bf16 cast natively, fp8 q-dq officially), no rounding of h (the exact math both paths approximate)
+    # reads it (its bf16 cast), no rounding of h (the exact math both paths approximate)
     sel = torch.arange(0, chunk, chunk // N_REF)
-    xq = x[sel].double()
-    if xdt == ttnn.bfloat16:
-        xq = xq.to(torch.bfloat16).double()
-    if settings.get("NUMERICS") == "official":
-        from models.demos.deepseek_v41_flash_d_p.reference.kernels import act_quant_dequant
-
-        xq = act_quant_dequant(xq.float(), 32).double()
-    else:
-        xq = xq.to(torch.bfloat16).double()
+    xq = x[sel].double().to(torch.bfloat16).double()
     ref = torch.zeros(len(sel), cfg.dim, dtype=torch.float64)
     ds = dense[sel].double()
     lim = float(cfg.swiglu_limit)
@@ -613,19 +604,11 @@ def test_weighted_combine_routes_bf16(mesh_device, route, S):
     print(f"WC_ROUTES_BF16 route={route} S={S} out {tuple(o.shape)} finite {bool(torch.isfinite(o).all())}")
 
 
-def _ref64(ck, cfg, layer, x, dense, sel, xdt, numerics, wround=None):
+def _ref64(ck, cfg, layer, x, dense, sel, xdt, wround=None):
     """float64 y = sum_k w_k w2(silu(min(w1 q, lim)) clamp(w3 q, +-lim)) on the rows ``sel``, q = x as the device reads it
-    (bf16 cast natively, fp8 q-dq officially), no rounding of h. wround: the stored [N, K] weights as the device holds
-    them (None: the checkpoint's exact fp4 values; E._bfp4_round: bfloat4_b's)."""
-    xq = x[sel].double()
-    if xdt == ttnn.bfloat16:
-        xq = xq.to(torch.bfloat16).double()
-    if numerics == "official":
-        from models.demos.deepseek_v41_flash_d_p.reference.kernels import act_quant_dequant
-
-        xq = act_quant_dequant(xq.float(), 32).double()
-    else:
-        xq = xq.to(torch.bfloat16).double()
+    (its bf16 cast), no rounding of h. wround: the stored [N, K] weights as the device holds them (None: the
+    checkpoint's exact fp4 values; E._bfp4_round: bfloat4_b's)."""
+    xq = x[sel].double().to(torch.bfloat16).double()
     ref = torch.zeros(len(sel), cfg.dim, dtype=torch.float64)
     ds = dense[sel].double()
     lim = float(cfg.swiglu_limit)
@@ -653,7 +636,7 @@ def _cmp(a, b):
 @pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_combine_acc(mesh_device, layer, prof):
-    """COMBINE_ACC A/B (P.9) on the same random inputs (EXPERTS_COMBINE=weighted, the current NUMERICS /
+    """COMBINE_ACC A/B (P.9) on the same random inputs (EXPERTS_COMBINE=weighted, the current
     FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): fp32 sums in passes vs bf16 sums in one pass. Per side the
     pass count, the mean wall time of a whole experts call (q(x) .. the weighted combine's partial, synchronized: the
     device time of one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of testing/profiler.py),
@@ -671,7 +654,7 @@ def test_combine_acc(mesh_device, layer, prof):
     dense = torch.zeros(chunk, cfg.n_experts)
     dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    tag = " ".join(f"{k}={settings.get(k)}" for k in ("NUMERICS", "FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
+    tag = " ".join(f"{k}={settings.get(k)}" for k in ("FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
     outs, again = {}, None
     for acc in ("fp32", "bf16"):
         t0 = time.time()
@@ -726,7 +709,7 @@ def test_combine_acc(mesh_device, layer, prof):
         mod.free()
         del mod
     sel = torch.arange(0, chunk, chunk // N_REF)
-    ref = _ref64(ck, cfg, layer, x, dense, sel, xdt, settings.get("NUMERICS"))
+    ref = _ref64(ck, cfg, layer, x, dense, sel, xdt)
     for acc, o in outs.items():
         rel, bias, row = _cmp(o[sel], ref)
         print(
@@ -793,7 +776,7 @@ def test_weighted_refuses_small_arena(mesh_device):
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_weights_bfp4(mesh_device, layer, prof):
     """EXPERTS_IMPL A/B (P.10) on the same random inputs, the current default path otherwise (EXPERTS_KERNEL /
-    EXPERTS_COMBINE / COMBINE_ACC / EXPERTS_PRECISION / NUMERICS / FFN_NORM_DTYPE / CCL_IMPL settings): the routed
+    EXPERTS_COMBINE / COMBINE_ACC / EXPERTS_PRECISION / FFN_NORM_DTYPE / CCL_IMPL settings): the routed
     experts' weights bfp8 (exact) vs bfp4 (the checkpoint's fp4 width, rule 7 / F117). Per side the flat plan and the
     weighted combine's passes (logged: the plan may change with the smaller weights), the mean wall time of a whole
     synchronized experts call (one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of
@@ -811,7 +794,7 @@ def test_weights_bfp4(mesh_device, layer, prof):
     dense = torch.zeros(chunk, cfg.n_experts)
     dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    keys = ("EXPERTS_KERNEL", "EXPERTS_COMBINE", "COMBINE_ACC", "EXPERTS_PRECISION", "NUMERICS", "FFN_NORM_DTYPE")
+    keys = ("EXPERTS_KERNEL", "EXPERTS_COMBINE", "COMBINE_ACC", "EXPERTS_PRECISION", "FFN_NORM_DTYPE")
     tag = " ".join(f"{k}={settings.get(k)}" for k in keys + ("CCL_IMPL",))
     outs, again = {}, None
     for impl in ("bfp8", "bfp4"):
@@ -868,7 +851,7 @@ def test_weights_bfp4(mesh_device, layer, prof):
         mod.free()
         del mod
     sel = torch.arange(0, chunk, chunk // N_REF)
-    ref = _ref64(ck, cfg, layer, x, dense, sel, xdt, settings.get("NUMERICS"))
+    ref = _ref64(ck, cfg, layer, x, dense, sel, xdt)
     for impl, o in outs.items():
         rel, bias, row = _cmp(o[sel], ref)
         print(
@@ -877,7 +860,7 @@ def test_weights_bfp4(mesh_device, layer, prof):
         )
     # bfp4 against what its weights hold (the same float64 math with bfloat4_b-rounded weights): the device error of
     # the bfp4 path alone, comparable with bfp8 vs the exact weights
-    ref4 = _ref64(ck, cfg, layer, x, dense, sel, xdt, settings.get("NUMERICS"), wround=E._bfp4_round)
+    ref4 = _ref64(ck, cfg, layer, x, dense, sel, xdt, wround=E._bfp4_round)
     rel, bias, row = _cmp(outs["bfp4"][sel], ref4)
     print(
         f"BFP4_REF L{layer:02d} bfp4 vs float64 with bfp4-rounded weights ({len(sel)} tokens): rel {rel:.6f} "
@@ -903,7 +886,7 @@ def test_weights_bfp4(mesh_device, layer, prof):
 @pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
 def test_combine_planner(mesh_device, layer, prof):
     """COMBINE_PLANNER A/B (P.11) on the same random inputs, the current default path otherwise (EXPERTS_COMBINE=
-    weighted, COMBINE_ACC / EXPERTS_IMPL / EXPERTS_PRECISION / NUMERICS / FFN_NORM_DTYPE / CCL_IMPL settings): the
+    weighted, COMBINE_ACC / EXPERTS_IMPL / EXPERTS_PRECISION / FFN_NORM_DTYPE / CCL_IMPL settings): the
     weighted combine's planner on one core vs the column multi-core planner. Per side the mean wall time of a whole
     synchronized experts call (one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of
     testing/profiler.py), the device time per op of one more call (the planner is the generic op on the gathered
@@ -921,7 +904,7 @@ def test_combine_planner(mesh_device, layer, prof):
     dense = torch.zeros(chunk, cfg.n_experts)
     dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    keys = ("EXPERTS_IMPL", "COMBINE_ACC", "EXPERTS_PRECISION", "NUMERICS", "FFN_NORM_DTYPE", "CCL_IMPL")
+    keys = ("EXPERTS_IMPL", "COMBINE_ACC", "EXPERTS_PRECISION", "FFN_NORM_DTYPE", "CCL_IMPL")
     tag = " ".join(f"{k}={settings.get(k)}" for k in keys)
     outs = {}
     for planner in ("one", "multi"):

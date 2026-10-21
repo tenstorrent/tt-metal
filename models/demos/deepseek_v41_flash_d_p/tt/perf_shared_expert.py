@@ -5,7 +5,7 @@
 slices, bfp8 weights), on one layer at the run's chunk with the layer's real weights and random inputs.
 
 Not a gate: a measurement for BREADCRUMBS / the SHARED_EXPERT_IMPL description. Per side, with the current settings
-otherwise (NUMERICS, EXPERTS_PRECISION, FFN_NORM_DTYPE, CCL_IMPL, EXPERTS_COMBINE ...):
+otherwise (EXPERTS_PRECISION, FFN_NORM_DTYPE, CCL_IMPL, EXPERTS_COMBINE ...):
   shared   the mean wall time of N_CALLS synchronized shared-expert partials (the model's shared_expert step: the
            forward has no host sync, so this is its device time per layer per chunk); flat: with its own row-major
            conversion of x ("own") and reading the routed experts' gathered q(x) by token index ("rows", the model's
@@ -45,18 +45,11 @@ def _bfp8_roundtrip(t: torch.Tensor) -> torch.Tensor:
     return ttnn.to_torch(ttnn.from_torch(t.float(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
 
 
-def _ref64(x, w1, w3, w2, lim, numerics):
-    """float64 shared_out = w2 q(silu(min(w1 q(x), lim)) clamp(w3 q(x), +-lim)); q = the device's input cast (bf16)
-    natively, the fp8 act quant-dequant officially (then also of h)."""
-    from models.demos.deepseek_v41_flash_d_p.reference.kernels import act_quant_dequant
-
+def _ref64(x, w1, w3, w2, lim):
+    """float64 shared_out = w2 (silu(min(w1 q(x), lim)) clamp(w3 q(x), +-lim)); q = the device's input cast (bf16)."""
     xq = x.to(torch.bfloat16).double()
-    if numerics == "official":
-        xq = act_quant_dequant(xq.float(), 32).double()
     g, u = xq @ w1.double().T, xq @ w3.double().T
     h = torch.nn.functional.silu(g.clamp(max=lim)) * u.clamp(-lim, lim)
-    if numerics == "official":
-        h = act_quant_dequant(h.float(), 32).double()
     return h @ w2.double().T
 
 
@@ -95,9 +88,8 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
     chunk = hooks._chunk(S)
     mesh = mesh_device
     R = mesh.shape[0]
-    numerics = settings.get("NUMERICS")
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
-    keys = ("NUMERICS", "EXPERTS_PRECISION", "MATMUL_FIDELITY", "FFN_NORM_DTYPE", "CCL_IMPL", "EXPERTS_COMBINE")
+    keys = ("EXPERTS_PRECISION", "MATMUL_FIDELITY", "FFN_NORM_DTYPE", "CCL_IMPL", "EXPERTS_COMBINE")
     tag = " ".join(f"{k}={settings.get(k)}" for k in keys)
     g = torch.Generator().manual_seed(layer)
     x = torch.randn(chunk, cfg.dim, generator=g)
@@ -105,7 +97,7 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
     w = {n: ck.weight(p + n + ".weight", torch.float32) for n in ("w1", "w3", "w2")}
     lim = float(cfg.swiglu_limit)
     sel = torch.cat([torch.arange(N_REF // 2), chunk // 2 + torch.arange(N_REF // 2)])
-    ref = _ref64(x[sel], w["w1"], w["w3"], w["w2"], lim, numerics)
+    ref = _ref64(x[sel], w["w1"], w["w3"], w["w2"], lim)
     wq = {n: _bfp8_roundtrip(t) for n, t in w.items()}
     for n in ("w1", "w3", "w2"):
         d = wq[n] - w[n]
@@ -113,7 +105,7 @@ def test_shared_flat_vs_linear(mesh_device, layer, prof):
             f"SHARED_BFP8 L{layer:02d} {n} {tuple(w[n].shape)} values changed {(d != 0).float().mean().item():.4%} "
             f"||dW||/||W|| {(d.norm() / w[n].norm()).item():.4g}"
         )
-    ref8 = _ref64(x[sel], wq["w1"], wq["w3"], wq["w2"], lim, numerics)
+    ref8 = _ref64(x[sel], wq["w1"], wq["w3"], wq["w2"], lim)
     print(f"SHARED_REF L{layer:02d} float64 bfp8-rounded weights vs exact: {_err(ref8, ref)}")
 
     xd = row_split_to_device(mesh, x, dtype=xdt)
@@ -247,7 +239,6 @@ def test_flat_variants(mesh_device, layer):
     ck, cfg = hooks._checkpoint(S), hooks._config(S)
     chunk = hooks._chunk(S)
     mesh = mesh_device
-    numerics = settings.get("NUMERICS")
     xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
     g = torch.Generator().manual_seed(layer)
     x = torch.randn(chunk, cfg.dim, generator=g)
@@ -255,9 +246,9 @@ def test_flat_variants(mesh_device, layer):
     w = {n: ck.weight(p + n + ".weight", torch.float32) for n in ("w1", "w3", "w2")}
     lim = float(cfg.swiglu_limit)
     sel = torch.cat([torch.arange(N_REF // 2), chunk // 2 + torch.arange(N_REF // 2)])
-    ref = _ref64(x[sel], w["w1"], w["w3"], w["w2"], lim, numerics)
+    ref = _ref64(x[sel], w["w1"], w["w3"], w["w2"], lim)
     wq = {n: _bfp8_roundtrip(t) for n, t in w.items()}
-    ref8 = _ref64(x[sel], wq["w1"], wq["w3"], wq["w2"], lim, numerics)
+    ref8 = _ref64(x[sel], wq["w1"], wq["w3"], wq["w2"], lim)
     xd = row_split_to_device(mesh, x, dtype=xdt)
     for name, opts in VARIANTS.items():
         se = SE.build_shared_expert(mesh, ck, cfg, layer, chunk=chunk, impl="flat", flat_opts=opts)

@@ -7,6 +7,8 @@ cache writes"; plan.md "Attention and cache writes").
 
     attn_out [S, H] = fp8_linear(grouped_wo_a(fp8_qdq(unrope(softmax_sink(q . window) window))), wo_b)
     q = rope(fp8_linear(q_resid, wq_b)) [S, 64 heads x 512]; window of position p = KV rows [p - 127, p]
+    (the released code's fp8 act quant-dequant of the matmul inputs is not emulated: the device casts them to the
+    bf16 its matmuls read, agent rule 17; FIX.8)
 
 Layout per chip (r, c) (mesh axis 0 = SP rows, axis 1 = TP columns, both read from mesh.shape): the inputs are
 row-split, TP-replicated (q_resid [1, 1, S/SP, 1280] fp32, kv [1, 1, S/SP, 512] bf16; row r = positions
@@ -23,31 +25,22 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    chip, gathered over the mesh, the owner's block kept (one or two pieces; zeros before position 0)
     table          [carry 128 | chunk S] rows x 512, ROW_MAJOR, replicated; the RoPE tail de-interleaved ([even |
                    odd], as q's)
-    q              tt/quant.fp8_qdq -> ttnn.linear wq_b (the chip's heads, bf16 weights with each head's rope rows
-                   de-interleaved, HiFi4 + fp32 acc, fp32 out) -> heads [1, H/TP, S/SP, 512] -> RoPE (fp32 SFPU,
+    q              bf16 cast -> ttnn.linear wq_b (the chip's heads, each head's rope rows de-interleaved,
+                   ATTN_FIDELITY + fp32 acc, fp32 out) -> heads [1, H/TP, S/SP, 512] -> RoPE (fp32 SFPU,
                    tt/rope.rope_heads) -> x 512^-0.5 (the softmax scale folded into q: the op's scale is then 1, exact;
-                   K-27) -> bf16 (the reference kernel's q; fp32 rounded to TF32 only with the comparison setting
-                   WINDOW_SDPA_PROBS=fp32, DS41-31) -> all_to_all head -> seq over
-                   axis 1 (sparse_sdpa needs H % 32 == 0: 16 heads per chip on 4x4; done whenever TP > 1, one path
-                   everywhere) -> [1, 64, S/(SP TP), 512]
-    attention      settings WINDOW_SDPA = "high_precision" (default, owner 2026-10-15): the sparse_sdpa path below.
-                   "exact" (comparison only; DS41-19): tt/window_exact.ExactWindow on the chip's own heads
-                   and rows (no reshard): q [1, H/TP, S/SP, 512] fp32 -> blocks of 32 queries x their 160 table rows,
-                   q and the probabilities as bf16 pieces, lane-masked keys / values (exact products), fp32 SFPU
-                   softmax with the fp32 sink, fp32 output. "high_precision" / "source": the q -> all_to_all ->
-                   ttnn.bringup / ttnn.transformer sparse_sdpa(attention_sink = sink / 1, scale 1) path: per query the
-                   128 window rows (load-time index list: row d + 1 + j of the table, a sentinel tail for positions
-                   < 0); high_precision at the reference kernel's dtypes (inference/kernel.py sparse_attn; FIX.2):
-                   Float32 scores (TF32-nearest in DEST), Float32 running max and row-sum, the probabilities rounded
-                   to bf16 before P.V (bf16_probs), fp32 accumulation, a bf16 output (WINDOW_SDPA_SCORES / _PROBS /
-                   _OUT) -> all_to_all back -> fp32
-    output         inverse RoPE + re-interleave -> fp8_qdq -> heads concatenated per group ->
-                   grouped wo_a (the chip's whole groups, one batched matmul) -> fp8_qdq -> wo_b (K-split: the chip's
-                   groups) -> exact sum over TP (all_gather + SFPU add, K-30) -> the chip's hidden slice
+                   K-27) -> bf16 -> all_to_all head -> seq over axis 1 (sparse_sdpa needs H % 32 == 0: 16 heads per
+                   chip on 4x4; done whenever TP > 1, one path everywhere) -> [1, 64, S/(SP TP), 512]
+    attention      stock ttnn.transformer.sparse_sdpa(attention_sink = sink / 1, scale 1) at its normal settings
+                   (bf16 running state; fp32 DEST per FP32_ACC; P.13, F137): per query the 128 window rows
+                   (load-time index list: row d + 1 + j of the table, a sentinel tail for positions < 0), bf16 output
+                   -> all_to_all back
+    output         inverse RoPE + re-interleave -> bf16 -> heads concatenated per group ->
+                   grouped wo_a (the chip's whole groups, one batched matmul) -> bf16 -> wo_b (K-split: the chip's
+                   groups) -> the sum over TP (tt/ccl.py:sum_cols, CCL_IMPL) -> the chip's hidden slice
     ATTN_GLUE=on   (P.15) q: nlp_create_q_heads_split -> RoPE on the 64-column tail -> x scale writing bf16 -> tail
                    interleaved by a PairPerm matmul (tt/rope.py): window layers too read the table as stored
                    (INTERLEAVED); output: bf16 nope kept, the tail de-interleaved by PairPerm (fp32 out), inverse RoPE
-                   writing bf16 [re | ro] (native; wo_a's input rows permuted at load), nlp_concat_heads after wo_a,
+                   writing bf16 [re | ro] (wo_a's input rows permuted at load), nlp_concat_heads after wo_a,
                    the bf16 reduce-scatter result returned as is (tt/residual.py casts where it needs fp32)
 
 The served cache (TtWindowCache): position g on mesh row (g / W) % SP, column ((g mod W) / (W / TP)), local row
@@ -63,12 +56,10 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, compute_config, dense_dtype, sum_cols
-from .quant import act_q, native, tf32_q
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, sum_cols
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
-from .window_exact import ExactWindow
 
 WINDOW = 128  # sliding window (cfg.window); the table's carry region
 SENTINEL = -1  # uploaded as int32 -1, read through uint32: 0xFFFFFFFF, sparse_sdpa's "no key"
@@ -154,7 +145,6 @@ class WindowTables:
             mesh, torch.arange(chunk, dtype=torch.float32).view(1, 1, chunk, 1), ttnn.float32, ttnn.TILE_LAYOUT
         )
         self.zero_carry = _upload(mesh, torch.zeros(1, 1, WINDOW, 512), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-        self._exact = {}
         self._scalars = {}
 
     def scalars(self, step: int, n: int) -> DeviceScalars:
@@ -162,16 +152,6 @@ class WindowTables:
         if (step, n) not in self._scalars:
             self._scalars[(step, n)] = DeviceScalars(self.mesh, [step * k for k in range(n)])
         return self._scalars[(step, n)]
-
-    def exact(self, heads_per_chip: int, width: int, pieces: int, compute_config) -> ExactWindow:
-        """The exact window attention's load-time tables (tt/window_exact.py), one per head count / pieces, shared
-        by every window layer."""
-        key = (heads_per_chip, width, pieces)
-        if key not in self._exact:
-            self._exact[key] = ExactWindow(
-                self.mesh, self.geo.chunk, heads_per_chip, width, WINDOW, pieces, compute_config
-            )
-        return self._exact[key]
 
 
 class TtWindowCache:
@@ -349,32 +329,16 @@ class TtWindowAttention:
         self.hpg = self.heads // self.groups  # heads per wo_a group
         self.ckc = attn_compute_config(mesh)  # wq_b, sparse_sdpa, wo_a, wo_b: ATTN_FIDELITY (P.7)
         self.scale = self.d**-0.5
-        self.sdpa = settings.get("WINDOW_SDPA")
-        self.high_precision = self.sdpa == "high_precision"
-        self.fp32_out = self.high_precision and settings.get("WINDOW_SDPA_OUT") == "fp32"
-        # Float32 scores in the op (DS41-31); with bf16_probs the reference kernel's softmax (Float32 max and row-sum,
-        # bf16 probabilities, bf16 q; FIX.2), else DS41-31's comparison variant (TF32 q and probabilities)
-        self.fp32_scores = self.high_precision and settings.get("WINDOW_SDPA_SCORES") == "fp32"
-        self.bf16_probs = self.fp32_scores and settings.get("WINDOW_SDPA_PROBS") == "bf16"
-        self.fp32_q = self.fp32_scores and not self.bf16_probs
-        assert self.fp32_out or not self.fp32_q, "WINDOW_SDPA_PROBS=fp32 (a float32 q) needs WINDOW_SDPA_OUT=fp32"
-        if self.sdpa != "exact":
-            assert (
-                self.heads % 32 == 0
-            ), f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
+        assert self.heads % 32 == 0, f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
         self.o_sum = settings.get("ATTN_O_SUM")
-        # ATTN_GLUE=on (P.15; not for the exact window comparison path): q through nlp_create_q_heads_split, its tail
-        # interleaved by a PairPerm matmul after the bf16 cast, so the window layers too read the table in its stored
-        # (interleaved) order; the output de-interleaved by PairPerm on the bf16 sdpa output, kept bf16 (native: the
-        # inverse rope writes bf16 = act_q, wo_a's input rows permuted at load to [nope | re | ro]: no re-interleave),
-        # nlp_concat_heads after wo_a
-        self.glue = glue() and self.sdpa != "exact"
-        self.glue_q = self.glue and not self.fp32_q
-        self.glue_out = self.glue and native() and not self.fp32_out
+        # ATTN_GLUE=on (P.15): q through nlp_create_q_heads_split, its tail interleaved by a PairPerm matmul after the
+        # bf16 cast, so the window layers too read the table in its stored (interleaved) order; the output
+        # de-interleaved by PairPerm on the bf16 sdpa output, kept bf16 (the inverse rope writes bf16, wo_a's input
+        # rows permuted at load to [nope | re | ro]: no re-interleave), nlp_concat_heads after wo_a
+        self.glue = glue()
         if self.glue:
             assert rope.pairs is not None, "ATTN_GLUE=on: the RopeTable was built without its PairPerm"
             self.pairs = rope.pairs
-        if self.glue_q:
             self.INTERLEAVED = True  # the table as stored (no per-chunk transform of the window rows)
         perm = deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
@@ -387,7 +351,7 @@ class TtWindowAttention:
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
         wo_a = w["wo_a"].float().view(self.groups, self.rank, -1)
         assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
-        if self.glue_out:  # each head's input columns in the order the bf16 output path writes: [nope | re | ro]
+        if self.glue:  # each head's input columns in the order the bf16 output path writes: [nope | re | ro]
             wo_a = wo_a.view(self.groups, self.rank, self.hpg, self.d)[..., perm].reshape(self.groups, self.rank, -1)
         wo_a_t = wo_a.transpose(1, 2).unsqueeze(0).contiguous()
         self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, (None, 1))
@@ -399,20 +363,7 @@ class TtWindowAttention:
         self.hidden = wo_b.shape[0]
         # the sink in sparse_sdpa's units (it multiplies by the op's scale, 1 here): every head on every chip
         sink = w["attn_sink"].float().reshape(1, 1, 1, self.heads)
-        if self.sdpa == "exact":
-            # fp32 sink per (head, block row) [1, H/TP, 32, 1], heads split over TP like wq_b's columns
-            col = w["attn_sink"].float().view(1, self.heads, 1, 1).expand(1, self.heads, 32, 1)
-            self.sink_col = ttnn.from_torch(
-                col.contiguous(),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                memory_config=DRAM,
-                mesh_mapper=_mapper(mesh, (None, 1)),
-            )
-            self.window = tables.exact(self.h_l, self.d, int(settings.get("WINDOW_PIECES")), compute_config(mesh))
-        else:
-            self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
     # ------------------------------------------------------------------ parts
     def _reshard(self, t, in_dim, out_dim):
@@ -460,7 +411,7 @@ class TtWindowAttention:
     def _q_heads(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd])."""
         rows = q_resid.shape[-2]
-        xq = act_q(q_resid, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
+        xq = cast(q_resid, ttnn.bfloat16)
         qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         if xq is not q_resid:
             ttnn.deallocate(xq)
@@ -477,7 +428,7 @@ class TtWindowAttention:
         interleaved (the table's stored order). The values of ``_q_heads`` + the bf16 cast, bit for bit: the heads
         split by nlp_create_q_heads_split (a data move), RoPE on the [.., 64] tail only, the scale's multiply writing
         bf16 (= ttnn.typecast's RNE), the interleave a PairPerm matmul on the bf16 tail."""
-        xq = act_q(q_resid, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
+        xq = cast(q_resid, ttnn.bfloat16)
         qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         if xq is not q_resid:
             ttnn.deallocate(xq)
@@ -499,9 +450,8 @@ class TtWindowAttention:
         return q
 
     def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] ROW_MAJOR (after the reshard): bf16 (the
-        reference kernel's q), fp32 only with WINDOW_SDPA_PROBS=fp32."""
-        if self.glue_q:
+        """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] bf16 ROW_MAJOR (after the reshard)."""
+        if self.glue:
             qb = self._q_glue(q_resid, cos, sin)
             qa = self._reshard(qb, in_dim=1, out_dim=2)
             if qa is not qb:
@@ -510,13 +460,8 @@ class TtWindowAttention:
             ttnn.deallocate(qa)
             return q_rm
         qs = self._q_heads(q_resid, cos, sin)
-        if self.fp32_q:
-            qb = tf32_q(qs)  # the op's FPU reads q at TF32: rounded to nearest here (native: as is)
-            if qb is not qs:
-                ttnn.deallocate(qs)
-        else:
-            qb = ttnn.typecast(qs, ttnn.bfloat16, memory_config=DRAM)
-            ttnn.deallocate(qs)
+        qb = ttnn.typecast(qs, ttnn.bfloat16, memory_config=DRAM)
+        ttnn.deallocate(qs)
         qa = self._reshard(qb, in_dim=1, out_dim=2)
         if qa is not qb:
             ttnn.deallocate(qb)
@@ -525,22 +470,6 @@ class TtWindowAttention:
         return q_rm
 
     def _sdpa(self, q_rm, table, index):
-        if self.high_precision:
-            return ttnn.bringup.sparse_sdpa(
-                q_rm,
-                table,
-                index,
-                self.d,
-                kv_format=ttnn.bringup.SparseKVFormat.BF16,
-                scale=1.0,
-                k_chunk_size=SDPA_K_CHUNK,
-                compute_kernel_config=self.ckc,
-                attention_sink=self.sink,
-                high_precision=True,
-                fp32_output=self.fp32_out,
-                fp32_scores=self.fp32_scores,
-                bf16_probs=self.bf16_probs,
-            )
         return ttnn.transformer.sparse_sdpa(
             q_rm,
             table,
@@ -554,14 +483,12 @@ class TtWindowAttention:
         )
 
     def _out(self, o_rm: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """sparse_sdpa output [1, H, S/(SP TP), 512] ROW_MAJOR (bf16, the reference kernel's; fp32 with the comparison
-        setting WINDOW_SDPA_OUT=fp32) -> attn_out [1, 1, S/SP, H/TP] fp32."""
+        """sparse_sdpa output [1, H, S/(SP TP), 512] bf16 ROW_MAJOR -> attn_out [1, 1, S/SP, H/TP] (fp32; bf16 under
+        ATTN_GLUE=on with CCL_IMPL=fabric_bf16)."""
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
         if oh is not ot:
             ttnn.deallocate(ot)
-        if oh.dtype == ttnn.float32:
-            return self._out_heads(oh, cos, sin)
         if self.glue:
             return self._out_glue(oh, cos, sin)
         of = ttnn.typecast(oh, ttnn.float32, memory_config=DRAM)
@@ -571,8 +498,7 @@ class TtWindowAttention:
     def _out_glue(self, oh: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """ATTN_GLUE=on: the bf16 attention output of the chip's heads [1, H/TP, S/SP, 512] (consumed) -> attn_out.
         Only the [.., 64] rope tail leaves bf16: de-interleaved by a PairPerm matmul writing fp32 (exact), inverse
-        RoPE in fp32; native: its last ops write bf16 (= act_q's cast) in [re | ro] order, which wo_a's permuted rows
-        read; official: re-interleaved in fp32 and quantized with the nope columns as before."""
+        RoPE in fp32 whose last ops write bf16 in [re | ro] order, which wo_a's permuted rows read."""
         b, h, rows, width = oh.shape
         r0 = width - self.rd
         nope = ttnn.slice(oh, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
@@ -583,22 +509,11 @@ class TtWindowAttention:
         else:
             tf = ttnn.typecast(tail, ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(tail)
-        if self.glue_out:
-            tr = rope_heads(tf, cos, sin, inverse=True, dtype=ttnn.bfloat16)
-            ttnn.deallocate(tf)
-            oq = ttnn.concat([nope, tr], dim=-1, memory_config=DRAM)
-            ttnn.deallocate(nope)
-            ttnn.deallocate(tr)
-        else:
-            tr = rope_heads(tf, cos, sin, inverse=True, interleave=True)
-            ttnn.deallocate(tf)
-            nf = ttnn.typecast(nope, ttnn.float32, memory_config=DRAM)
-            ttnn.deallocate(nope)
-            ou = ttnn.concat([nf, tr], dim=-1, memory_config=DRAM)
-            ttnn.deallocate(nf)
-            ttnn.deallocate(tr)
-            oq = act_q(ou, dtype=ttnn.bfloat16)
-            ttnn.deallocate(ou)
+        tr = rope_heads(tf, cos, sin, inverse=True, dtype=ttnn.bfloat16)
+        ttnn.deallocate(tf)
+        oq = ttnn.concat([nope, tr], dim=-1, memory_config=DRAM)
+        ttnn.deallocate(nope)
+        ttnn.deallocate(tr)
         return self._out_proj(oq, rows)
 
     def _out_heads(self, of: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -611,12 +526,12 @@ class TtWindowAttention:
             of = od
         ou = rope_heads(of, cos, sin, inverse=True, interleave=True)  # the reference's order again
         ttnn.deallocate(of)
-        oq = act_q(ou, dtype=ttnn.bfloat16)  # groups of 32 inside each head (512 % 32 == 0)
+        oq = cast(ou, ttnn.bfloat16)
         ttnn.deallocate(ou)
         return self._out_proj(oq, rows)
 
     def _out_proj(self, oq: ttnn.Tensor, rows: int) -> ttnn.Tensor:
-        """The bf16 (act_q'd) output heads [1, H/TP, S/SP, 512] (consumed) -> grouped wo_a -> act_q -> wo_b -> the
+        """The bf16 output heads [1, H/TP, S/SP, 512] (consumed) -> grouped wo_a -> bf16 -> wo_b -> the
         sum over TP: attn_out [1, 1, S/SP, H/TP] (fp32; bf16 under ATTN_GLUE=on with CCL_IMPL=fabric_bf16)."""
         # heads of one wo_a group side by side: [G/TP, hpg, S/SP, 512] -> [1, G/TP, S/SP, hpg * 512]
         og = ttnn.experimental.nlp_concat_heads(
@@ -628,19 +543,12 @@ class TtWindowAttention:
         ttnn.deallocate(og)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:
-            # ATTN_GLUE=on: nlp_concat_heads (a data move) in place of G/TP slices + concat; native: on the bf16 cast
-            # (act_q is element-wise there; official: its fp8 blocks of 32 never cross a group's rank columns either)
-            if native():
-                yb = act_q(y, dtype=ttnn.bfloat16)
-                if yb is not y:
-                    ttnn.deallocate(y)
-                yq = ttnn.experimental.nlp_concat_heads(yb, memory_config=DRAM)
-                ttnn.deallocate(yb)
-            else:
-                yt = ttnn.experimental.nlp_concat_heads(y, memory_config=DRAM)
+            # ATTN_GLUE=on: nlp_concat_heads (a data move) in place of G/TP slices + concat, on the bf16 cast
+            yb = cast(y, ttnn.bfloat16)
+            if yb is not y:
                 ttnn.deallocate(y)
-                yq = act_q(yt, dtype=ttnn.bfloat16)
-                ttnn.deallocate(yt)
+            yq = ttnn.experimental.nlp_concat_heads(yb, memory_config=DRAM)
+            ttnn.deallocate(yb)
         else:
             parts = [
                 ttnn.slice(y, [0, k, 0, 0], [1, k + 1, rows, self.rank], memory_config=DRAM) for k in range(self.g_l)
@@ -650,7 +558,7 @@ class TtWindowAttention:
             if len(parts) > 1:
                 for t in parts:
                     ttnn.deallocate(t)
-            yq = act_q(yt, dtype=ttnn.bfloat16)
+            yq = cast(yt, ttnn.bfloat16)
             ttnn.deallocate(yt)
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
@@ -673,14 +581,6 @@ class TtWindowAttention:
         end = start + s if end is None else int(end)
         cos, sin = self.rope.rows(start, s)
         table = self._table(kv, start, end, cache)
-        if self.sdpa == "exact":
-            qs = self._q_heads(q_resid, cos, sin)
-            o = self.window(qs, table, start, self.sink_col)
-            ttnn.deallocate(qs)
-            ttnn.deallocate(table)
-            out = self._out_heads(o, cos, sin)
-            self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
-            return out
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])
         ttnn.deallocate(q_rm)

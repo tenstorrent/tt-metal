@@ -344,8 +344,18 @@ def record_name(slot: int, layer: int, pos: int) -> str:
     return f"s{slot}_l{layer}_p{pos}.bin"
 
 
-def state_threshold() -> float:
-    """KV vs golden floor: the stricter of the server's prefill-golden PCC and the spec's state threshold."""
-    from models.demos.common.bringup.testing.harness import threshold
+STATE_OF_KIND = {"window": "window_kv", "compress": "compress_kv", "index": "index_k"}  # cache config kind -> state
 
-    return max(PREFILL_GOLDEN_PCC, threshold(_spec(), "state"))
+
+def state_threshold():
+    """KV vs golden limit per (config, layer): the stricter of the server's prefill-golden PCC (its own rule) and
+    calib x the reference's drift for that state and layer on the s4096 rung (F128, testing/e2e_limits.py)."""
+    from models.demos.common.bringup.reference.golden import Golden
+    from models.demos.common.bringup.testing import e2e_limits as E
+
+    drift = E.load(Golden.for_rung(_spec(), GOLDEN_RUNG).dir, GOLDEN_RUNG)
+
+    def limit(cfg: dict, layer: int) -> float:
+        return max(PREFILL_GOLDEN_PCC, E.pcc_limit(drift, f"state_{STATE_OF_KIND[cfg['kind']]}_L{layer:02d}"))
+
+    return limit
