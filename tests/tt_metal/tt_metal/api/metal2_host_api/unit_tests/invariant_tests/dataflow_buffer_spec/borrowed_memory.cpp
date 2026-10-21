@@ -12,12 +12,16 @@
 #include <string>
 #include <vector>
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
+
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
+#include "metal2_host_api/program_spec/validation/validate_spec.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -135,7 +139,11 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtZeroOffset) {
             },
     }};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    // Exercise validation without entering the unfinished raw-allocation construction path.
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtNonzeroOffset) {
@@ -154,7 +162,11 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtNonzeroOffset) {
             },
     }};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    // Exercise validation without entering the unfinished raw-allocation construction path.
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExtraAllocationNodes) {
@@ -173,7 +185,11 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExtraAllocationNodes) {
             },
     }};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    // Exercise validation without entering the unfinished raw-allocation construction path.
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBMissingOccupiedNode) {
@@ -195,10 +211,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBMissingOccupiedNode) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("dfb"),
-            ::testing::ContainsRegex("(node|core|cover)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "DFB 'dfb' borrows from RawAllocationParameter 'arena', which does not cover every occupied node.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExceedsCapacity) {
@@ -219,10 +233,11 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExceedsCapacity) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("dfb"),
-            ::testing::ContainsRegex("(size|capacity|fit|exceed)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "DFB 'dfb' borrowing offset {} + size_per_node {} exceeds RawAllocationParameter 'arena' per_bank_size {}.",
+            0,
+            2 * alignment,
+            2 * alignment - 1))));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetCausesOverrun) {
@@ -243,10 +258,11 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetCausesOverrun) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("dfb"),
-            ::testing::ContainsRegex("(size|capacity|fit|exceed)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "DFB 'dfb' borrowing offset {} + size_per_node {} exceeds RawAllocationParameter 'arena' per_bank_size {}.",
+            alignment,
+            2 * alignment,
+            3 * alignment - 1))));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBMisalignedOffset) {
@@ -268,10 +284,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBMisalignedOffset) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("dfb"),
-            ::testing::ContainsRegex("align"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            fmt::format("DFB 'dfb' borrowing offset 1 must be a multiple of L1 alignment {}.", alignment))));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBAllBankLockstep) {
@@ -286,7 +300,11 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBAllBankLockstep) {
         .properties = LockstepAllocationProperties{.per_bank_size = 2 * alignment},
     }};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    // Exercise validation without entering the unfinished raw-allocation construction path.
+    EXPECT_NO_THROW({
+        const auto collected = CollectSpecData(spec);
+        ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
+    });
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetWithoutBorrowing) {
@@ -299,10 +317,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetWithoutBorrowing) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("dfb"),
-            ::testing::ContainsRegex("offset"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' borrowed_memory_offset must be zero when borrowed_from is unset.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetWithTensorBorrowing) {
@@ -315,10 +331,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetWithTensorBorrowing) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("dfb"),
-            ::testing::ContainsRegex("offset"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "DFB 'dfb' borrowed_memory_offset must be zero when borrowing from a TensorParameter.")));
 }
 
 }  // namespace

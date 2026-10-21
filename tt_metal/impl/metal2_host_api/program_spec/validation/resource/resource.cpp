@@ -21,11 +21,14 @@ void ValidateResourceSpecs(
     const NumBanksFromBufferType& num_banks_from_buffer_type) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
+    for (const auto& parameter : spec.advanced_options.raw_allocation_parameters) {
+        ValidateRawAllocationParameter(parameter);
+    }
     for (const auto& dfb : spec.dataflow_buffers) {
         ValidateDFBSpec(dfb, collected, l1_alignment, arch, num_banks_from_buffer_type);
     }
     for (const auto& scratchpad : spec.scratchpads) {
-        ValidateScratchpadSpec(scratchpad, arch);
+        ValidateScratchpadSpec(scratchpad, collected, l1_alignment, arch);
     }
     for (const auto& sem : spec.semaphores) {
         ValidateSemaphoreSpec(sem, arch);

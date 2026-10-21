@@ -39,10 +39,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBUndeclaredName) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("missing"),
-            ::testing::ContainsRegex("(unknown|undeclared|not.*declared|no such)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' borrows memory from unknown RawAllocationParameter 'missing'.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadUndeclaredName) {
@@ -65,10 +63,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadUndeclaredName) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("missing"),
-            ::testing::ContainsRegex("(unknown|undeclared|not.*declared|no such)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "ScratchpadSpec 'scratch' borrows memory from unknown RawAllocationParameter 'missing'.")));
 }
 
 }  // namespace
