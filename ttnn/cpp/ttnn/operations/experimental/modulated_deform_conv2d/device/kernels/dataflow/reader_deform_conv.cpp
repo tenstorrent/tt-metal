@@ -9,8 +9,9 @@
 // position's slice of the weight serves all of the core's blocks before the next slice replaces it.
 // An input wider than a chunk of channels takes one pass per chunk at each position, with that
 // chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this kernel
-// run per core, one on each data-movement RISC-V and NoC: the first takes the core's even blocks
-// and loads the weight slices and the bias, the second the odd blocks. Each copy stages the
+// run per core, one on each data-movement RISC-V and NoC: the first takes the core's even blocks,
+// the second the odd ones, and the one with fewer blocks on the busiest cores also loads the
+// weight slices and the bias. Each copy stages the
 // geometry inputs of its own blocks; compute returns each block's geometry, every sample's top-left
 // corner page within its image and its four weights, to the same copy, which keeps it for all
 // kernel positions.
@@ -68,11 +69,9 @@ constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(19);
 constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(20);
 constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(21);
 constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(22);
-// This copy's role: the parity of the blocks it takes. The first copy (even blocks) loads the
-// weight and the bias, the second writes the kernel offset tiles.
+// This copy's role: the parity of the blocks it takes. The copy of WEIGHT_PARITY loads the weight
+// and the bias, the other writes the kernel offset tiles.
 constexpr uint32_t BLOCK_PARITY = get_compile_time_arg_val(23);
-constexpr bool WRITES_KERNEL_TILES = BLOCK_PARITY == 1;
-constexpr bool LOADS_WEIGHT = BLOCK_PARITY == 0;
 constexpr uint32_t output_cb_index = get_compile_time_arg_val(24);
 constexpr uint32_t tile_nbytes = get_compile_time_arg_val(25);
 // The two halves of the core's input band: the first copy fills the first, the second the other.
@@ -93,7 +92,10 @@ constexpr uint32_t CHUNK_TILES = get_compile_time_arg_val(36);  // input channel
 // neighbour's shard. Its pages per shard, 0 for an interleaved input.
 constexpr uint32_t INPUT_SHARD_PAGES = get_compile_time_arg_val(37);
 constexpr bool INPUT_SHARDED = INPUT_SHARD_PAGES != 0;
-constexpr auto input_args = TensorAccessorArgs<38>();
+constexpr uint32_t WEIGHT_PARITY = get_compile_time_arg_val(38);
+constexpr bool LOADS_WEIGHT = BLOCK_PARITY == WEIGHT_PARITY;
+constexpr bool WRITES_KERNEL_TILES = !LOADS_WEIGHT;
+constexpr auto input_args = TensorAccessorArgs<39>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
