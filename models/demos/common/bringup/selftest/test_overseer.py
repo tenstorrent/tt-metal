@@ -252,3 +252,12 @@ def test_a_fix_gated_on_an_unpassed_task_runs_before_it(orch):  # noqa: F811
     assert order.index("FIX.1") < order.index("C.2"), order
     assert o.led.task("FIX.1")["deps"] == ["C.1"] and "FIX.1" in o.led.task("C.2")["deps"]
     assert o.led.state()["FIX.1"]["status"] == "PASS" and o.led.state()["C.2"]["status"] == "PASS"
+
+
+def test_a_fix_may_write_the_paths_it_names_even_when_its_gate_tasks_own_none(tmp_path):
+    """F127: DeepSeek-V4.1 FIX.5 was gated on X.3 (a scripted task, no paths), so its agent could not edit tt/."""
+    tasks = {"X.3": {"id": "X.3", "gate": {"cmd": "pytest x", "metrics": {}}, "deps": []}}
+    job = OV.queue_fix(tmp_path, "Clear the memo per chunk.", ["X.3"], tasks=tasks, paths=["models/demos/m/tt"])
+    assert OV.fix_task(job, tasks)["paths"] == ["models/demos/m/tt"]
+    plain = OV.queue_fix(tmp_path, "Another.", ["X.3"], tasks=tasks)
+    assert OV.fix_task(plain, tasks)["paths"] == [] and "paths" not in plain
