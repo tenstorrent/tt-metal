@@ -406,3 +406,15 @@ def test_distributed_fused_rmsnorm_fp32_rope(
         use_rope,
         rope_dtype,
     )
+
+
+@pytest.mark.parametrize("hidden_dim, num_heads", [(5120, 64), (2048, 128)], ids=["head_dim80", "head_dim16"])
+def test_fused_rmsnorm_post_allgather_rejects_unaligned_head_dim(device, hidden_dim, num_heads, expect_error):
+    """Each head must span a whole number of tiles."""
+    inp_shape = (1, 1, 32, hidden_dim)
+    tt_inp = ttnn.from_torch(torch.randn(inp_shape), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(tt_inp, dtype=ttnn.bfloat16)
+    with expect_error(RuntimeError, "must be divisible by number of heads \\* TILE_WIDTH"):
+        ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+            tt_inp, tt_stats, epsilon=1e-5, num_heads_per_device=num_heads
+        )

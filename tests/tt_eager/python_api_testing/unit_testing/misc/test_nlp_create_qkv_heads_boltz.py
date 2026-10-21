@@ -109,3 +109,27 @@ def test_nlp_create_qkv_heads_boltz_program_cache(device):
 
     # Two shapes -> exactly two program-cache entries; the hit path must not grow the cache.
     assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.timeout(120)
+def test_nlp_create_qkv_heads_boltz_transpose_k_float32(device):
+    """The K transpose of a FLOAT32 input must keep more than bfloat16 precision."""
+    torch.manual_seed(1234)
+    seq_len, n_heads, head_dim = 64, 4, 32
+    qkvg = torch.randn([1, seq_len, seq_len, n_heads * head_dim * 3])
+    ref_k = qkvg[:, :, :, n_heads * head_dim : 2 * n_heads * head_dim]
+    ref_k = torch.reshape(ref_k, [seq_len, seq_len, n_heads, head_dim]).permute(2, 0, 1, 3).transpose(-2, -1)
+
+    qkvg_ttnn = ttnn.from_torch(qkvg, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    _, k_ttnn, _ = ttnn.experimental.nlp_create_qkv_heads_boltz(
+        qkvg_ttnn,
+        num_heads=n_heads,
+        num_kv_heads=n_heads,
+        transpose_k_heads=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    k = ttnn.to_torch(k_ttnn)
+    ref_k = ref_k.reshape(k.shape)
+
+    # The transpose passes through Dst: Tf32 keeps relative error within 2**-10, Float16_b would reach 2**-8.
+    torch.testing.assert_close(k, ref_k, rtol=2**-9, atol=0)
