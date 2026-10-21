@@ -5,6 +5,7 @@
 #pragma once
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/sdpa_fw/sdpa_fw_program_config.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::sdpa_fw::device {
@@ -14,6 +15,9 @@ struct SDPAForwardParams {
     AttentionMaskType mask_type{AttentionMaskType::Causal};
     float dropout_probability{0.0F};
     bool has_gate{false};
+    // Flattened SDPAForwardProgramConfig (0 = auto). Part of the program-cache hash.
+    uint32_t q_chunk_size{0};
+    uint32_t k_chunk_size{0};
 };
 
 struct SDPAForwardInputs {

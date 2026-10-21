@@ -16,7 +16,8 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const std::optional<ttnn::Tensor>& mask,
     const float dropout_probability,
     const bool return_intermediates,
-    const std::optional<ttnn::Tensor>& gate) {
+    const std::optional<ttnn::Tensor>& gate,
+    const SDPAForwardProgramConfig& program_config) {
     auto result = ttnn::prim::ttml_sdpa_fw(
         query,
         key,
@@ -27,7 +28,8 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
         return_intermediates,
         /*preallocated_intermediate=*/std::nullopt,
         /*preallocated_output=*/std::nullopt,
-        gate);
+        gate,
+        program_config);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};
