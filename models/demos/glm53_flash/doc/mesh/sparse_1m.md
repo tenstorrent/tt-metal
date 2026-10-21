@@ -356,3 +356,19 @@ selection (`select(row=)`) keeps the shared op and its single-row guard.
    mesh step; then the 8x4 run.
 4. Prefill at long ISL still reads the whole prefix for `sparse_sdpa` (the untilize); the same compact-gather
    design applies to the prefill sparse rows (gather per 32-row query block).
+
+## 7. Memory of the user-partitioned cache at 1 M and the prefill scratch slot (2026-10-21)
+
+`TtLatentCache(partition_users=True)` allocates `users_per_chip + 1` full-length slots per chip: the owner's
+slot(s) plus a prefill scratch slot, because the sequence-parallel prefill (v1) runs every column's 16 heads
+over the whole prefix and therefore needs the full prompt cache on every column while prefilling. At 1 M
+positions that is 2 x 11 layers x 1.07 GB of latent (+ 1.5 GB of pooled keys) = ~25 GB per chip, which with
+12.4 GB of weights does not fit the 32 GB chip. The 1 M single-user run therefore runs without partition (one
+slot per chip, replicated over the row's columns; each column attends its own 16 heads).
+
+Fix for multi-user 1 M (not implemented): do the prefill like the decode, with the heads -> users exchange
+(`GLMMesh.all_to_all_cols`) before the attention of a chunk: column c receives all 64 heads of its own users'
+rows and attends over its own cache only; the inverse exchange returns the attention output head-split for
+`o_proj`. The scratch slot disappears (one slot per user per chip, 11.4 GB at 1 M), and the per-chunk
+whole-prefix copy and the scorer run once per owner instead of on every column. For one user the attention
+of a chunk runs on one column; the MLP / KDA / mHC parts stay sequence-parallel over the rows as today.
