@@ -38,7 +38,7 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 | Batch | Hardware | ISL (tokens) | TTFT | T/S/U | Target T/S/U | T/S | Notes |
 |---|---|---|---|---|---|---|---|
 | 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 ms | 14.3 | 33 | 458 | decode step 69.8 ms |
-| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) | - | 8.2 | 19 | 2106 | dense expert pass; decode step 121.6 ms (2026-10-20 run, re-measure with today's defaults pending) |
+| 256 | Galaxy 8x4 (Blackhole) | 16 (decode) | - | 8.7 | 19 | 2226 | dense expert pass; decode step 115.0 ms (traced, greedy id == host head for every user) |
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31.8 s | 9.8 | 60 | 79 | one prompt, replicated to the 8 rows; 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
 | 32  | Galaxy 8x4 (Blackhole) | 65 493 | 36.2 s | 10.1 | 33 | 323 | 1811 tok/s prefill; decode step 99.0 ms; one prompt per row prefilled (8 of 32 slots), the other slots decode at the same position over an unfilled cache (same work, output not checked) |
 | 8   | Galaxy 8x4 (Blackhole) | 1 047 526 | 458 s | 4.6 | 33 | 37 | one prompt, replicated to the 8 rows; 2288 tok/s prefill; decode step 219 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
