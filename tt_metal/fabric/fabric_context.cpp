@@ -21,7 +21,6 @@
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
-#include "hostdevcommon/fabric_common.h"  // Fabric2DAxis
 
 namespace tt::tt_fabric {
 
@@ -360,17 +359,24 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
         // Express routing is a compile-time choice on the device. When any locally bound mesh uses
         // express routing, compile every local kernel for it: FABRIC_EXPRESS_ENABLED gates express
         // support (e.g. worker connection-manager capacity), and FABRIC_EXPRESS_AXIS names the axis the
-        // chords run along (Fabric2DAxis::Y = N/S, Fabric2DAxis::X = E/W) for Fabric2DRoutingConfig.
-        // The defines serve the whole configuration, so the local meshes must agree on the axis; exact
-        // mesh shape remains per-device runtime metadata in routing_l1_info_t.
-        std::optional<Fabric2DAxis> express_axis;
+        // chords run along (RoutingDimension::Y = N/S, RoutingDimension::X = E/W) for
+        // Fabric2DRoutingConfig. The defines serve the whole configuration, so the local meshes must
+        // agree on the axis; exact mesh shape remains per-device runtime metadata in
+        // routing_l1_info_t.
+        std::optional<RoutingDimension> express_axis;
         for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
             if (!control_plane.express_routing_enabled(mesh_id)) {
                 continue;
             }
             const auto* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
             TT_FATAL(express_rings != nullptr, "Mesh {} reports express routing but has no express rings", *mesh_id);
-            const auto mesh_axis = static_cast<Fabric2DAxis>(express_rings->axis_dim);
+            // axis_dim numbers the axes Y = 0, X = 1.
+            TT_FATAL(
+                express_rings->axis_dim == 0 || express_rings->axis_dim == 1,
+                "Mesh {} express rings have axis_dim {}, expected 0 (Y) or 1 (X)",
+                *mesh_id,
+                express_rings->axis_dim);
+            const auto mesh_axis = express_rings->axis_dim == 0 ? RoutingDimension::Y : RoutingDimension::X;
             if (express_axis.has_value() && *express_axis != mesh_axis) {
                 TT_FATAL(
                     false,
@@ -384,7 +390,7 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
         }
         if (express_axis.has_value()) {
             defines["FABRIC_EXPRESS_ENABLED"] = "1";
-            defines["FABRIC_EXPRESS_AXIS"] = std::to_string(enchantum::to_underlying(*express_axis));
+            defines["FABRIC_EXPRESS_AXIS"] = *express_axis == RoutingDimension::Y ? "0" : "1";
         }
     } else {
         // 1D routing: inject extension words
