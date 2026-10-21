@@ -276,8 +276,9 @@ ttnn::Tensor repeat_interleave_force_codegen(
     TT_FATAL(
         repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config),
         "repeat_interleave_force_codegen invoked for a case the codegen path does not support "
-        "(requires a device-resident, unsharded rank-2..4 bfloat16/float32/int32 input, an "
-        "interleaved output, repeats > 1, and a repeated dim outside the pages the layout "
+        "(requires a device-resident, unsharded rank-2..4 input of bfloat16/float32/int32, or of "
+        "bfloat8_b in TILE layout, an interleaved output, repeats > 1, and a repeated dim outside "
+        "the pages the layout "
         "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile, "
         "ROW_MAJOR defers the within-stick last dim and needs a stick narrow enough for two CB "
         "slots in one core's L1). This entry never "

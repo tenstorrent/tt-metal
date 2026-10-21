@@ -93,9 +93,18 @@ bool supported_by_codegen(
         return false;
     }
 
-    // The dtypes the port is swept and certified against.
+    // bfloat16/float32/int32 are swept against the generator; bfloat8_b is admitted for TILE outer
+    // dims on the strength of the dedicated exactness test. bfloat4_b is not admitted: it has not
+    // been exercised on this path.
     const DataType dtype = input.dtype();
-    if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32) {
+    if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32 &&
+        dtype != DataType::BFLOAT8_B) {
+        return false;
+    }
+    // A bfloat8_b tile carries its shared exponents inside the page, so only whole-page replication
+    // is a lossless copy. Block floats exist only in TILE; this guards the ROW_MAJOR branch, which
+    // sizes sticks by element_size().
+    if (dtype == DataType::BFLOAT8_B && input.layout() != Layout::TILE) {
         return false;
     }
 
@@ -113,7 +122,8 @@ bool supported_by_codegen(
             return false;
         }
         // The last two dims subdivide a 32x32 tile, and the reader replicates whole tile pages:
-        // page replication is not torch's element-level interleave along H or W.
+        // page replication is not torch's element-level interleave along H or W. bfloat8_b relies on
+        // this exclusion: an element-level interleave would re-block its shared exponents.
         return nd < ndim - 2;
     }
 
