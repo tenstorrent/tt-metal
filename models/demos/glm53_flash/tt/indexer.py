@@ -207,13 +207,17 @@ class TtIndexCache:
         """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
         return ttnn.reshape(self.pool_cache, [self.max_batch, 1, self.pools_per_user, self.D])
 
-    def write_pools(self, pooled: ttnn.Tensor, user: int, start_pool: int = 0):
+    def write_pools(self, pooled: ttnn.Tensor, user: int, start_pool: int = 0, slot=None):
         """pooled [1,1,n,D] bf16 -> pools [start_pool, start_pool + n) of ``user``. The write is
         tile-granular (paged_fill_cache copies whole 32-pool tiles from the block ``start_pool // 32``
         on), so a start inside a tile first re-reads that tile's earlier pools from the cache and the
-        rows past ``n`` are zero-padded (they are pools not yet complete, never selectable)."""
+        rows past ``n`` are zero-padded (they are pools not yet complete, never selectable).
+        ``slot`` (``trace_prefill.PrefillSlot``, start_pool == 0): the slot index comes from its device
+        tensors (trace-replayable for any user)."""
         n = pooled.shape[-2]
         b0, r0 = start_pool // TILE, start_pool % TILE
+        if slot is not None and start_pool:
+            raise ValueError("a device-slot pool write starts at pool 0")
         if r0:
             blk = (
                 self.prefill_slot(user) * self.pool_blocks + b0
@@ -231,7 +235,15 @@ class TtIndexCache:
             pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n), (0, 0)], value=0.0)
         if pooled.dtype != self.pool_dtype:  # paged_fill_cache wants the cache dtype (paged_update_cache casts itself)
             pooled = ttnn.typecast(pooled, self.pool_dtype)
-        if b0 == 0 and not self.partition:
+        if slot is not None:
+            ttnn.experimental.paged_fill_cache(
+                self.pool_cache, pooled, self.page_table, batch_idx_tensor=slot.cache_idx
+            )
+            if self.partition:
+                ttnn.experimental.paged_fill_cache(
+                    self.pool_cache, pooled, self.page_table, batch_idx_tensor=slot.scratch_idx
+                )
+        elif b0 == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
         else:
             # page-table view(s) of the target slot's blocks from b0 on (device slices: no host upload in the pass)
@@ -259,6 +271,15 @@ class TtIndexCache:
             sh = height_shard_rows(self.device, rows)
             ttnn.experimental.paged_update_cache(ring, sh, update_idxs_tensor=slots, page_table=pt)
             ttnn.deallocate(sh)
+
+    def write_ring_block(self, k_tile: ttnn.Tensor, g_tile: ttnn.Tensor, slot):
+        """k_tile / g_tile [1,1,32,D] bf16 (row j = the ring row of slot j, rows >= P unused) -> the whole
+        ring block of the slot ``slot`` names on device (the traced prefill's tail write: one tile copy
+        per ring instead of one row write per tail position)."""
+        for ring, tile in ((self.ring_k, k_tile), (self.ring_g, g_tile)):
+            ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.cache_idx)
+            if self.partition:
+                ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.scratch_idx)
 
     def rings(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Rows 0..P-1 of every decode user's rings: ([B,1,P,D], [B,1,P,D]), B = the local users."""
@@ -348,7 +369,16 @@ class TtDSAIndexer(LightweightModule):
         return q, w
 
     # ------------------------------------------------------- maintenance
-    def maintain_prefill(self, x: ttnn.Tensor, cache: TtIndexCache, user: int, seq_len: int, start: int = 0):
+    def maintain_prefill(
+        self,
+        x: ttnn.Tensor,
+        cache: TtIndexCache,
+        user: int,
+        seq_len: int,
+        start: int = 0,
+        slot=None,
+        ring_sel: ttnn.Tensor | None = None,
+    ):
         """Maintain the index for a prefill chunk holding positions ``[start, start + seq_len)`` of
         ``user`` (x row i = position start + i; rows past ``seq_len`` are padding): write every pool
         that becomes complete and leave the rows of the still-incomplete last pool in the ring.
@@ -356,9 +386,30 @@ class TtDSAIndexer(LightweightModule):
         The chunk boundary may fall inside a pool (``start % P != 0``): that pool's earlier rows are in
         the ring (written as the previous chunk's tail), so it is completed from the ring rows plus
         this chunk's first ``P - start % P`` rows; a chunk that ends inside it only extends the ring.
-        With ``start == 0`` this is the single-shot maintenance (pools from 0, tail rows to slots 0..)."""
+        With ``start == 0`` this is the single-shot maintenance (pools from 0, tail rows to slots 0..).
+
+        ``slot`` + ``ring_sel`` (the traced fixed-length prefill, tt/trace_prefill.py; start == 0): the
+        prompt length is not a host value, so EVERY pool of the padded chunk is written (the pools past
+        the prompt are rewritten from the ring by decode before they become selectable: pool p is
+        selectable only once position 4p+3 was decoded) and the ring block gets the rows ``ring_sel``
+        selects (the last prompt position of each ``% P`` class, chosen on the host as a one-hot
+        ``[1,1,32,T_pad]`` selector and applied with an exact HiFi4 matmul); the slot index comes from
+        ``slot``'s device tensors."""
         P, D = self.P, self.D
         k_idx, g_idx = self.keys_and_gates(x)  # [1,1,T_pad,D]
+        if slot is not None:
+            T = x.shape[-2]
+            if start or T % (TILE * P):
+                raise ValueError(f"traced index maintenance: start == 0 and T_pad % {TILE * P} == 0 (got {start}, {T})")
+            pooled = self.pool(k_idx, g_idx)  # [1,1,T_pad/P,D]: every pool of the padded chunk
+            cache.write_pools(pooled, user, start_pool=0, slot=slot)
+            ttnn.deallocate(pooled)
+            k_tile = ttnn.matmul(ring_sel, k_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)  # [1,1,32,D]
+            g_tile = ttnn.matmul(ring_sel, g_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+            cache.write_ring_block(k_tile, g_tile, slot)
+            for t in (k_idx, g_idx, k_tile, g_tile):
+                ttnn.deallocate(t)
+            return
         end = start + seq_len
         r = start % P  # rows of pool start // P already in the ring
         lead = min((P - r) % P, seq_len)  # this chunk's rows of that straddling pool
