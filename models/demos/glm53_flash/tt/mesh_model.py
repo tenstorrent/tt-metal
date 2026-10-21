@@ -155,6 +155,14 @@ class GLM53MeshModel:
             ids_dev = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         streams = self.embedding(ids_dev)  # [1,1,T_pad/rows,16384] per row (its slab)
         ttnn.deallocate(ids_dev)
+        return self.prefill_streams(streams, S, user=user, start=start)
+
+    def prefill_streams(self, streams: ttnn.Tensor, seq_len: int, user: int = 0, start: int = 0):
+        """``prefill`` from ready-made input streams (this row's slab ``[1,1,T_pad/rows,16384]`` fp32 of
+        a ``T_pad = ceil(seq_len / (32 * rows)) * 32 * rows`` chunk; consumed): the multimodal path
+        (``tt/multimodal.py``). Same return as ``prefill``."""
+        S = seq_len
+        T_pad = streams.shape[-2] * self.mesh.rows
         for dec in self.layers:
             out = dec.prefill_forward(streams, user=user, seq_len=S, start=start)
             ttnn.deallocate(streams)
