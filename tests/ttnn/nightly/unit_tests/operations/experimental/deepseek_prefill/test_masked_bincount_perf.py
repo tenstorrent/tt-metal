@@ -33,14 +33,19 @@ _VERBOSE = False
 
 # The op is short, so fixed launch and tree-reduction overhead is a large share of it.
 _MARGIN = 0.10
+# margin=1.0 zeroes the floor and leaves only a ceiling at 2x: for a case without a P150 baseline yet,
+# so the gate still catches a large regression without failing on an uncalibrated number.
+_CEILING_ONLY = 1.0
 
-# Device duration in ns per (tokens, topk, n_routed_experts). Recalibrate on the perf runner (DDR-speed
-# dependent): each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
-_EXPECTED_NS: dict[tuple[int, int, int], int] = {
-    (640, 4, 128): 14_000,
-    (640, 8, 384): 14_000,
-    (2560, 8, 256): 25_000,
-    (4096, 8, 256): 33_600,
+# (device duration in ns, margin) per (tokens, topk, n_routed_experts) on a BH P150 (viommu runner).
+# Recalibrate on the perf runner (DDR-speed dependent): each case logs an "RT-CAL" line in this dict's
+# format, so one run regenerates the table. (640, 4, 128) is the median of 5 from L2 run 39531468154;
+# the others are estimates, ceiling-only until a P150 run measures them.
+_EXPECTED_NS: dict[tuple[int, int, int], tuple[int, float]] = {
+    (640, 4, 128): (16_033, _MARGIN),
+    (640, 8, 384): (16_000, _CEILING_ONLY),
+    (2560, 8, 256): (28_600, _CEILING_ONLY),
+    (4096, 8, 256): (38_500, _CEILING_ONLY),
 }
 
 
@@ -62,6 +67,7 @@ def _golden(indices, mask, n_routed_experts, num_experts_per_token):
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_masked_bincount_perf(device, tokens: int, topk: int, n_routed_experts: int):
     require_realtime_profiler("masked_bincount perf checks")
+    expected_ns, margin = _EXPECTED_NS[(tokens, topk, n_routed_experts)]
 
     torch.manual_seed(0)
     indices = torch.randint(0, n_routed_experts, (tokens, topk), dtype=torch.int64)
@@ -82,8 +88,8 @@ def test_masked_bincount_perf(device, tokens: int, topk: int, n_routed_experts: 
         device,
         run,
         _OP_KERNEL_DIR,
-        expected_ns=_EXPECTED_NS[(tokens, topk, n_routed_experts)],
-        margin=_MARGIN,
+        expected_ns=expected_ns,
+        margin=margin,
         label=f"({tokens}, {topk}, {n_routed_experts})",
         iters=_ITERS,
         verbose=_VERBOSE,
