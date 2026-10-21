@@ -109,8 +109,8 @@ struct DataflowBufferSpec {
     // The user-managed device memory object is declared at ProgramSpec scope and bound here.
     // The actual memory address is supplied at runtime via ProgramRunArgs.
     //
-    // The bound memory object must have SRAM-based storage, and its allocation on each node
-    // must be large enough to hold the DFB (entry_size * num_entries).
+    // The bound memory object must have SRAM-based storage on the nodes the dfb instanced to,
+    // and its allocation on each node must be large enough to hold the DFB (entry_size * num_entries).
     std::optional<std::variant<TensorParamName, RawAllocationParamName>> borrowed_from = std::nullopt;
 
     //////////////////////////////
