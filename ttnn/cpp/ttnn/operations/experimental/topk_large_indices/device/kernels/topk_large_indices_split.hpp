@@ -5,7 +5,8 @@
 #pragma once
 
 // A row of two or more K = 512, 1024 or 2048 chunks on Blackhole: copies and face transposes on MATH, SFPU work on
-// PACK. Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
+// PACK. Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other; a row of two or
+// more K 1024 or 2048 chunks opens with chunks 0 and 1 side by side (see paired_head), so no chunk starts alone.
 
 #include <cstdint>
 
@@ -84,6 +85,16 @@ constexpr bool can_prefetch(const std::uint32_t num_chunks) {
     return (num_chunks & 1) == 0 && !(K == 512 && num_chunks == 2);
 }
 
+// K 1024 and 2048 rows of two or more chunks run chunk 0 on even steps and chunk 1 on odd steps up to their stage 6
+// (HEAD_STEPS), then slot 2 on: chunk 2's stages 0 to 4 with chunk 1's stages 7 and 8 two steps early (chunk 1's stages
+// 5 and 6 are done), and every later slot as decode_step. K 512 and Classic rows keep decode_step's order.
+constexpr std::uint32_t HEAD_STEPS = 14;
+
+template <std::uint32_t K, bool classic>
+constexpr bool paired_head(const std::uint32_t num_chunks) {
+    return !classic && K != 512 && num_chunks >= 2;
+}
+
 #ifdef TRISC_MATH
 
 inline void take_pack_token() {
@@ -116,17 +127,39 @@ inline void math_row(
     std::uint32_t posted = 0, taken = 0, half_release_step = 0;
     bool prev_step_busy = false, cfg_open = false, half_release_due = false;
 
+    const bool paired = paired_head<K, classic>(num_chunks);
+    // Slot 2 of a paired row starts at step HEAD_STEPS: chunk 1's stages 5 and 6 are done, so its stages 7 and 8 come
+    // two steps early.
+    const std::uint32_t slot_step0 = paired ? HEAD_STEPS - 2 * STEPS_PER_CHUNK : 0;
+
     for (std::uint32_t c1 = 0; c1 <= num_chunks; c1++) {
-        for (std::uint32_t r = 0; r < STEPS_PER_CHUNK; r++) {
+        if (paired && c1 == 1) {
+            continue;
+        }
+        const bool head = paired && c1 == 0;
+        for (std::uint32_t r = 0, steps = head ? HEAD_STEPS : STEPS_PER_CHUNK; r < steps; r++) {
             std::uint32_t chunk, stage;
-            if (!decode_step(c1, r, num_chunks, chunk, stage)) {
-                prev_step_busy = false;
-                continue;
+            if (head) {
+                chunk = r & 1;
+                stage = r >> 1;
+            } else {
+                if (!decode_step(c1, r, num_chunks, chunk, stage)) {
+                    prev_step_busy = false;
+                    continue;
+                }
+                if (paired && c1 == 2 && (r & 1)) {
+                    stage += 2;
+                    if (stage >= STAGES_MERGING_CHUNK) {
+                        prev_step_busy = false;
+                        continue;
+                    }
+                }
             }
-            const std::uint32_t step = c1 * STEPS_PER_CHUNK + r;
+            const std::uint32_t step = head ? r : c1 * STEPS_PER_CHUNK + r + slot_step0;
             // Wait for every SFPU part at least two steps back: that covers this chunk's previous stage, the survivor
-            // rebuild before a merge and the merge that frees a tile before its next copy.
-            const std::uint32_t need = posted - (prev_step_busy ? 1 : 0);
+            // rebuild before a merge and the merge that frees a tile before its next copy. Chunk 1's copy follows
+            // chunk 0's first step only once the SFPU has finished it.
+            const std::uint32_t need = (paired && step == 1) ? posted : posted - (prev_step_busy ? 1 : 0);
             for (; taken < need; taken++) {
                 take_pack_token();
             }
@@ -297,24 +330,41 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
     }
 }
 
+// One SFPU part of the row. K 1024 and 2048 take it as a call, so that each stage body exists once whatever the
+// schedule (their pack code fills TRISC2); K 512 keeps every step inline in the straight-line slot.
 template <std::uint32_t K, bool classic, bool mirror_last, std::uint32_t stage>
-inline __attribute__((always_inline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t num_chunks) {
-    take_math_token();
+inline __attribute__((always_inline)) void sfpu_step_inline(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool take) {
+    if (take) {
+        take_math_token();
+    }
     sfpu_stage_body<K, classic>(chunk, stage, num_chunks, mirror_last && chunk + 1 == num_chunks);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
-// PACK's steps of chunk slot c1 in decode_step's order, straight-line: chunk c1's stages 0 to 4 between chunk c1 - 1's
-// stages 5 to 8 (7 and 8 only for a merged chunk). pack_row takes slot 0's first token.
+template <std::uint32_t K, bool classic, bool mirror_last, std::uint32_t stage>
+inline __attribute__((noinline, noclone)) void sfpu_step_call(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool take) {
+    sfpu_step_inline<K, classic, mirror_last, stage>(chunk, num_chunks, take);
+}
+
+template <std::uint32_t K, bool classic, bool mirror_last, std::uint32_t stage>
+inline __attribute__((always_inline)) void sfpu_step(
+    const std::uint32_t chunk, const std::uint32_t num_chunks, const bool take = true) {
+    if constexpr (K == 512) {
+        sfpu_step_inline<K, classic, mirror_last, stage>(chunk, num_chunks, take);
+    } else {
+        sfpu_step_call<K, classic, mirror_last, stage>(chunk, num_chunks, take);
+    }
+}
+
+// PACK's steps of chunk slot c1 in decode_step's order: chunk c1's stages 0 to 4 between chunk c1 - 1's stages 5 to 8
+// (7 and 8 only for a merged chunk). pack_row takes slot 0's first token.
 template <std::uint32_t K, bool classic, bool mirror_last>
 inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const std::uint32_t num_chunks) {
     const bool cur = c1 < num_chunks, prev = c1 > 0, prev_merged = c1 > 1;
     if (cur) {
-        if (c1 > 0) {
-            take_math_token();
-        }
-        sfpu_stage_body<K, classic>(c1, 0, num_chunks, mirror_last && c1 + 1 == num_chunks);
-        ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
+        sfpu_step<K, classic, mirror_last, 0>(c1, num_chunks, c1 > 0);
     }
     if (prev) {
         sfpu_step<K, classic, mirror_last, 5>(c1 - 1, num_chunks);
@@ -342,6 +392,39 @@ inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const st
     }
 }
 
+// The paired head's steps (see paired_head) and slot 2.
+template <std::uint32_t K, bool classic, bool mirror_last>
+inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks) {
+    sfpu_step<K, classic, mirror_last, 0>(0, num_chunks, false);
+    sfpu_step<K, classic, mirror_last, 0>(1, num_chunks);
+    sfpu_step<K, classic, mirror_last, 1>(0, num_chunks);
+    sfpu_step<K, classic, mirror_last, 1>(1, num_chunks);
+    sfpu_step<K, classic, mirror_last, 2>(0, num_chunks);
+    sfpu_step<K, classic, mirror_last, 2>(1, num_chunks);
+    sfpu_step<K, classic, mirror_last, 3>(0, num_chunks);
+    sfpu_step<K, classic, mirror_last, 3>(1, num_chunks);
+    sfpu_step<K, classic, mirror_last, 4>(0, num_chunks);
+    sfpu_step<K, classic, mirror_last, 4>(1, num_chunks);
+    sfpu_step<K, classic, mirror_last, 5>(0, num_chunks);
+    sfpu_step<K, classic, mirror_last, 5>(1, num_chunks);
+    sfpu_step<K, classic, mirror_last, 6>(0, num_chunks);
+    sfpu_step<K, classic, mirror_last, 6>(1, num_chunks);
+    const bool cur = num_chunks > 2;
+    if (cur) {
+        sfpu_step<K, classic, mirror_last, 0>(2, num_chunks);
+    }
+    sfpu_step<K, classic, mirror_last, 7>(1, num_chunks);
+    if (cur) {
+        sfpu_step<K, classic, mirror_last, 1>(2, num_chunks);
+    }
+    sfpu_step<K, classic, mirror_last, 8>(1, num_chunks);
+    if (cur) {
+        sfpu_step<K, classic, mirror_last, 2>(2, num_chunks);
+        sfpu_step<K, classic, mirror_last, 3>(2, num_chunks);
+        sfpu_step<K, classic, mirror_last, 4>(2, num_chunks);
+    }
+}
+
 // Every SFPU part of one row, survivor left in tile 0 (ascending if mirror_last), then epilogue(). PACK takes the SFPU
 // over (its state and row_init()) after its first token, once MATH's last SFPU instruction has run.
 template <std::uint32_t K, bool classic, bool mirror_last = false, typename RowInit, typename Epilogue>
@@ -352,7 +435,12 @@ inline void pack_row(const std::uint32_t num_chunks, RowInit&& row_init, Epilogu
     ckernel::sfpu::_topk_xl_split_sfpu_init_<K, !classic>();
     row_init();
     TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
-    for (std::uint32_t c1 = 0; c1 <= num_chunks; c1++) {
+    std::uint32_t c1 = 0;
+    if (paired_head<K, classic>(num_chunks)) {
+        pack_head<K, classic, mirror_last>(num_chunks);
+        c1 = 3;
+    }
+    for (; c1 <= num_chunks; c1++) {
         pack_slot<K, classic, mirror_last>(c1, num_chunks);
     }
     epilogue();

@@ -39,6 +39,16 @@ inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std
     return chunk < num_chunks && stage < (chunk == 0 ? STAGES_FIRST_CHUNK : STAGES_MERGING_CHUNK);
 }
 
+// K 1024 and 2048 rows of two or more chunks open with chunks 0 and 1 side by side (chunk 0 on even steps, chunk 1 on odd steps
+// up to their stage 6 merge), so no chunk starts alone; K 512 rows keep the straight-line order.
+constexpr std::uint32_t HEAD_STEPS = 14;
+
+template <std::uint32_t K>
+constexpr bool paired_head(const std::uint32_t num_chunks)
+{
+    return K != 512 && num_chunks >= 2;
+}
+
 template <std::uint32_t K>
 constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
 
@@ -119,20 +129,46 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk, con
     std::uint32_t posted = 0, taken = 0, half_release_step = 0;
     bool prev_step_busy = false, cfg_open = false, half_release_due = false;
 
+    const bool paired = paired_head<K>(num_chunks);
+    // Slot 2 of a paired row starts at step HEAD_STEPS: chunk 1's stages 5 and 6 are done, so its stages 7 and 8 come two steps early.
+    const std::uint32_t slot_step0 = paired ? HEAD_STEPS - 2 * STEPS_PER_CHUNK : 0;
+
     for (std::uint32_t c1 = 0; c1 <= num_chunks; c1++)
     {
-        for (std::uint32_t r = 0; r < STEPS_PER_CHUNK; r++)
+        if (paired && c1 == 1)
+        {
+            continue;
+        }
+        const bool head = paired && c1 == 0;
+        for (std::uint32_t r = 0, steps = head ? HEAD_STEPS : STEPS_PER_CHUNK; r < steps; r++)
         {
             std::uint32_t chunk, stage;
-            if (!decode_step(c1, r, num_chunks, chunk, stage))
+            if (head)
             {
-                prev_step_busy = false;
-                continue;
+                chunk = r & 1;
+                stage = r >> 1;
             }
-            const std::uint32_t step = c1 * STEPS_PER_CHUNK + r;
+            else
+            {
+                if (!decode_step(c1, r, num_chunks, chunk, stage))
+                {
+                    prev_step_busy = false;
+                    continue;
+                }
+                if (paired && c1 == 2 && (r & 1))
+                {
+                    stage += 2;
+                    if (stage >= STAGES_MERGING_CHUNK)
+                    {
+                        prev_step_busy = false;
+                        continue;
+                    }
+                }
+            }
+            const std::uint32_t step = head ? r : c1 * STEPS_PER_CHUNK + r + slot_step0;
             // Wait for every SFPU part at least two steps back: that covers this chunk's previous stage, the survivor
             // rebuild before a merge and the merge that frees a tile before its next copy.
-            const std::uint32_t need = posted - (prev_step_busy ? 1 : 0);
+            const std::uint32_t need = (paired && step == 1) ? posted : posted - (prev_step_busy ? 1 : 0);
             for (; taken < need; taken++)
             {
                 take_pack_token();
@@ -299,16 +335,37 @@ inline __attribute__((always_inline)) void sfpu_stage(const std::uint32_t chunk,
     }
 }
 
+// One SFPU part. K 1024 and 2048 take it as a call so that each stage body exists once whatever the schedule (their pack code
+// fills TRISC2); K 512 keeps every step inline in the straight-line slot.
 template <std::uint32_t K, std::uint32_t stage>
-inline __attribute__((always_inline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t num_chunks)
+inline __attribute__((always_inline)) void sfpu_step_inline(const std::uint32_t chunk, const std::uint32_t num_chunks)
 {
     take_math_token();
     sfpu_stage<K, stage>(chunk, num_chunks);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }
 
-// PACK's steps of chunk slot c1 in decode_step's order, straight-line: chunk c1's stages 0 to 4 between chunk c1 - 1's
-// stages 5 to 8 (7 and 8 only for a merged chunk).
+template <std::uint32_t K, std::uint32_t stage>
+inline __attribute__((noinline, noclone)) void sfpu_step_call(const std::uint32_t chunk, const std::uint32_t num_chunks)
+{
+    sfpu_step_inline<K, stage>(chunk, num_chunks);
+}
+
+template <std::uint32_t K, std::uint32_t stage>
+inline __attribute__((always_inline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t num_chunks)
+{
+    if constexpr (K == 512)
+    {
+        sfpu_step_inline<K, stage>(chunk, num_chunks);
+    }
+    else
+    {
+        sfpu_step_call<K, stage>(chunk, num_chunks);
+    }
+}
+
+// PACK's steps of chunk slot c1 in decode_step's order: chunk c1's stages 0 to 4 between chunk c1 - 1's stages 5 to 8
+// (7 and 8 only for a merged chunk).
 template <std::uint32_t K>
 inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const std::uint32_t num_chunks)
 {
@@ -351,12 +408,55 @@ inline __attribute__((noinline)) void pack_slot(const std::uint32_t c1, const st
     }
 }
 
-// Every SFPU part of one Dst section, survivor left fused in sequence 0.
+// Paired head: chunks 0 and 1 stages 0 to 6 side by side, then slot 2 with chunk 1's stages 7 and 8 two steps early.
+template <std::uint32_t K>
+inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks)
+{
+    sfpu_step<K, 0>(0, num_chunks);
+    sfpu_step<K, 0>(1, num_chunks);
+    sfpu_step<K, 1>(0, num_chunks);
+    sfpu_step<K, 1>(1, num_chunks);
+    sfpu_step<K, 2>(0, num_chunks);
+    sfpu_step<K, 2>(1, num_chunks);
+    sfpu_step<K, 3>(0, num_chunks);
+    sfpu_step<K, 3>(1, num_chunks);
+    sfpu_step<K, 4>(0, num_chunks);
+    sfpu_step<K, 4>(1, num_chunks);
+    sfpu_step<K, 5>(0, num_chunks);
+    sfpu_step<K, 5>(1, num_chunks);
+    sfpu_step<K, 6>(0, num_chunks);
+    sfpu_step<K, 6>(1, num_chunks);
+    const bool cur = num_chunks > 2;
+    if (cur)
+    {
+        sfpu_step<K, 0>(2, num_chunks);
+    }
+    sfpu_step<K, 7>(1, num_chunks);
+    if (cur)
+    {
+        sfpu_step<K, 1>(2, num_chunks);
+    }
+    sfpu_step<K, 8>(1, num_chunks);
+    if (cur)
+    {
+        sfpu_step<K, 2>(2, num_chunks);
+        sfpu_step<K, 3>(2, num_chunks);
+        sfpu_step<K, 4>(2, num_chunks);
+    }
+}
+
+// Every SFPU part of one Dst section in MATH's step order, survivor left fused in sequence 0.
 template <std::uint32_t K>
 inline void pack_row(const std::uint32_t num_chunks)
 {
     TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
-    for (std::uint32_t c1 = 0; c1 <= num_chunks; c1++)
+    std::uint32_t c1 = 0;
+    if (paired_head<K>(num_chunks))
+    {
+        pack_head<K>(num_chunks);
+        c1 = 3;
+    }
+    for (; c1 <= num_chunks; c1++)
     {
         pack_slot<K>(c1, num_chunks);
     }
@@ -391,4 +491,4 @@ inline void split_indices(const std::uint32_t seg_base)
 
 #endif // LLK_TRISC_PACK
 
-}
+} // namespace topk_xl_split
