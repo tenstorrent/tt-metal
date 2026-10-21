@@ -87,3 +87,8 @@ tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_reduce.h
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_untilize.h
+tt_metal/tt-llk/tests/helpers/include/llk_tilize_bfp_per_tile.h
+tt_metal/tt-llk/tests/helpers/include/llk_tilize_dest_runs.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_compressed_custom_mm.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_unpack_A_rmsnorm.h

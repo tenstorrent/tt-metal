@@ -15,7 +15,46 @@ CASES = {
     "int32_512x1024": (ttnn.int32, (1, 1, 512, 1024)),
     "fp32_512x1024": (ttnn.float32, (1, 1, 512, 1024)),
     "bf16_4096x32": (ttnn.bfloat16, (1, 1, 4096, 32)),
+    "bf16_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
+    "bf16_to_bfp8_2048x64": (ttnn.bfloat16, (1, 1, 2048, 64)),
+    "bf16_to_bfp8_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
+    "bf16_to_bfp8_512x96": (ttnn.bfloat16, (1, 1, 512, 96)),
+    "conv2d_rn50_l2_3x3": None,
+    "conv2d_rn50_l3_1x1": None,
+    "matmul_2k2k2k_bf16_hifi2": None,
+    "matmul_2k2k4k_bfp8_lofi": None,
 }
+_CW = {}
+
+
+def _ckc(device, fid):
+    return ttnn.WormholeComputeKernelConfig(math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=False,
+                                            packer_l1_acc=True, dst_full_sync_en=False)
+
+
+def _conv2d(device, case):
+    b, cin, cout, h, w, kh, p = (8, 128, 128, 28, 28, 3, 1) if "3x3" in case else (8, 256, 1024, 14, 14, 1, 0)
+    g = torch.Generator().manual_seed(7)
+    x = ttnn.from_torch(torch.randn(1, 1, b * h * w, cin, generator=g), dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if case not in _CW:
+        _CW[case] = ttnn.from_torch(torch.randn(cout, cin, kh, kh, generator=g), dtype=ttnn.bfloat16)
+    o, [_CW[case], _] = ttnn.conv2d(
+        input_tensor=x, weight_tensor=_CW[case], bias_tensor=None, return_weights_and_bias=True, in_channels=cin,
+        out_channels=cout, batch_size=b, input_height=h, input_width=w, kernel_size=(kh, kh), stride=(1, 1),
+        padding=(p, p), dilation=(1, 1), groups=1, device=device, conv_config=ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat8_b),
+        compute_config=_ckc(device, ttnn.MathFidelity.LoFi), dtype=ttnn.bfloat16)
+    return ttnn.to_torch(o)
+
+
+def _matmul(device, case):
+    n, wdt, fid = (2048, ttnn.bfloat16, ttnn.MathFidelity.HiFi2) if "bf16" in case else (4096, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi)
+    g = torch.Generator().manual_seed(7)
+    a = ttnn.from_torch(torch.randn(1, 1, 2048, 2048, generator=g), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    w = ttnn.from_torch(torch.randn(1, 1, 2048, n, generator=g), dtype=wdt, layout=ttnn.TILE_LAYOUT, device=device)
+    gr = device.compute_with_storage_grid_size()
+    o = ttnn.matmul(a, w, compute_kernel_config=_ckc(device, fid), core_grid=ttnn.CoreGrid(y=gr.y, x=gr.x))
+    return ttnn.to_torch(o)
 
 
 def _record(case, out):
@@ -50,6 +89,12 @@ def _conv3d(device):
 
 @pytest.mark.parametrize("case", list(CASES))
 def test_tz(device, case):
+    if case.startswith("conv2d"):
+        _record(case, _conv2d(device, case))
+        return
+    if case.startswith("matmul"):
+        _record(case, _matmul(device, case))
+        return
     dt, shape = CASES[case]
     if case.startswith("c3d"):
         _record(case, _conv3d(device))
@@ -81,7 +126,9 @@ def test_tz(device, case):
     x = ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     if case.startswith("bf16_to_bfp8"):
         y = ttnn.tilize(x, dtype=ttnn.bfloat8_b, use_multicore=True)
-        assert torch.allclose(ttnn.to_torch(y).float(), t.float(), rtol=0.05, atol=0.05)
+        yt = ttnn.to_torch(y).float()
+        assert torch.allclose(yt, t.float(), rtol=0.05, atol=0.05)
+        _record(case, yt)
         return
     out = ttnn.to_torch(ttnn.tilize(x, use_multicore=True))
     assert torch.equal(out.to(t.dtype), t)
