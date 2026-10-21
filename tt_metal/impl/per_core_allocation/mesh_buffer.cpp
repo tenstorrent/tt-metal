@@ -9,29 +9,11 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/allocator/allocator.hpp"
 #include <algorithm>
 #include <limits>
 #include <unordered_set>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
-
-namespace {
-// Return the cores carrying this tensor's data.
-std::vector<CoreCoord> tensor_cores(const BufferShardingArgs& args) {
-    if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
-        return distribution->cores_with_data();
-    }
-    TT_FATAL(args.shard_spec().has_value(), "L1 tensor view requires a shard specification");
-    const auto& shard = args.shard_spec()->tensor_shard_spec;
-    return corerange_to_cores(shard.grid, std::nullopt, shard.orientation == ShardOrientation::ROW_MAJOR);
-}
-}  // namespace
-
-uint32_t l1_tensor_allocation_alignment(const IDevice& device) {
-    const auto& config = device.allocator_impl()->get_config();
-    return config.allocator_mode == AllocatorMode::HYBRID ? config.dram_alignment : config.l1_alignment;
-}
 
 std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice& mesh,
@@ -40,8 +22,7 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     const std::vector<SRAMTensorViewAddress>& placements) {
     TT_FATAL(local_config.buffer_type == BufferType::L1, "L1 view requires L1 memory");
     TT_FATAL(is_sharded(local_config.sharding_args.buffer_layout()), "L1 view requires sharded memory");
-    const auto cores = tensor_cores(local_config.sharding_args);
-    TT_FATAL(!cores.empty(), "L1 view shard grid is empty");
+    TT_FATAL(!placements.empty(), "L1 view requires addresses");
     std::vector<distributed::MeshCoordinate> coords;
     std::unordered_set<distributed::MeshCoordinate> seen;
     for (const auto& [location, address] : placements) {
@@ -50,9 +31,6 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
             coords.push_back(location.device_coord);
         }
     }
-    TT_FATAL(
-        !coords.empty() && placements.size() == coords.size() * cores.size(),
-        "L1 view requires complete shard coverage");
     const auto* replicated = std::get_if<distributed::ReplicatedBufferConfig>(&mesh_config);
     TT_FATAL(replicated != nullptr, "L1 view requires replicated mesh buffer configuration");
     const bool per_core = is_per_core_allocation(local_config.sharding_args);
@@ -67,13 +45,12 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
             }
             TT_FATAL(addresses.emplace(location.core_coord, address).second, "Duplicate L1 view placement");
         }
-        TT_FATAL(addresses.size() == cores.size(), "L1 view requires complete shard coverage");
-        for (const auto& core : cores) {
-            TT_FATAL(addresses.contains(core), "L1 view is missing shard core {}", core.str());
-        }
+        const auto first = std::find_if(placements.begin(), placements.end(), [&](const auto& placement) {
+            return placement.first.device_coord == coord;
+        });
         auto local = BufferImpl::create(
             mesh.impl().get_device(coord),
-            addresses.at(cores.front()),
+            first->second,
             replicated->size,
             local_config.page_size,
             BufferType::L1,

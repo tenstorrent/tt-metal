@@ -76,7 +76,7 @@ def test_caller_owned_views_preserve_neighbor_bytes(per_core_mesh_device, per_co
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
 
-@pytest.mark.parametrize("bad", ["core", "alignment", "duplicate", "missing"])
+@pytest.mark.parametrize("bad", ["alignment", "duplicate", "missing"])
 def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error):
     mesh = per_core_mesh_device
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
@@ -84,9 +84,7 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
     spec = _spec([core], 256)
     address = _address(owner, coord, core)
     placement = (ttnn.MeshCoreCoord(coord, core), address)
-    if bad == "core":
-        placement = (ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(1, 0)), address)
-    elif bad == "alignment":
+    if bad == "alignment":
         placement = (ttnn.MeshCoreCoord(coord, core), address + 1)
     placements = [] if bad == "missing" else [placement]
     if bad == "duplicate":
