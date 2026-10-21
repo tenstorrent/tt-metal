@@ -631,3 +631,28 @@ The dense expert matmuls at 32 users per row run at ~20 % of the bfp8 peak (14.5
 ~750 us). Budget to the targets (0.67 ms per layer at 32 users, 1.17 ms at 256): fused pre-block (A/B below), fused
 router op (agent `routerop`), the dense-matmul program config, then the CCL pairs (RS+AG per all-reduce) and the DSA
 decode composite.
+
+## The serving envelope: users x context from the DRAM headroom (2026-10-21, `tt/memory_plan.py`)
+
+The user count is not a fixed target: after the weights, the per-chip DRAM left is the budget for
+`users x (ISL x cache_per_token + fixed_per_user)` plus a prefill working set. `tt/memory_plan.py` computes it from the
+config (host side, `MemoryPlan.estimate`) or from the allocator after the weights are built (`MemoryPlan.from_device`);
+`tests/test_memory_plan.py` pins it to the observed outcomes (the 1 M single-slot run fits, the stacked expert copy at
+1 M does not, the partitioned cache at 1 M fits only without the SP-prefill scratch slot). 8x4, bfp8 experts:
+weights 11.7 GiB per chip, cache 11.69 KiB per user per token (11 DSA layers x 512 bf16 latent + pooled index keys),
+35 MiB of KDA state per user, headroom at 1 M 17.1 GiB (trace region 512 MB, regions buffers, score block, the
+per-chunk whole-prefix latent copy of ISL x 576 bf16).
+
+| ISL | replicated cache (today's long runs): users per row / on the mesh | partitioned + scratch slot (today) | partitioned, no scratch slot (heads -> users prefill, `mu1m`) | replicated + keep_stacked (stream decode) |
+|---|---|---|---|---|
+| 16384 | 84 / 672 | 332 / 2656 | 336 / 2688 | 41 / 328 |
+| 65536 | 23 / 184 | 88 / 704 | 92 / 736 | 11 / 88 |
+| 131072 | 12 / 96 | 44 / 352 | 48 / 384 | 5 / 40 |
+| 262144 | 6 / 48 | 20 / 160 | 24 / 192 | 2 / 16 |
+| 524288 | 3 / 24 | 8 / 64 | 12 / 96 | 1 / 8 |
+| 1048576 | 1 / 8 | 0 | 4 / 32 | 0 |
+
+Reading: the partitioned cache without the scratch slot is the envelope (32 users at 1 M, 96 at 512 K, 192 at 256 K);
+the stacked-expert decode copy is a 9.5 GiB trade against it (fine up to ~512 K at one user per row, or 11 users per
+row at 64 K). The decode-speed work therefore has two regimes: few users at very long context (the sparse DSA decode
+and the per-layer fixed costs: mHC, router, CCL) and many users at short context (expert compute: EP32 dispatch).
