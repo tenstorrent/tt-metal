@@ -5,27 +5,26 @@
 
     kv [S, 512] = act_quant_dequant(rope(kv_norm(fp8_linear(attn_norm, wkv)), positions start ..), 32)
 
-on the SP x TP mesh. Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TILE:
+on the SP x TP mesh, without the released code's fp8 quant-dequant steps (the device keeps bf16 there and computes
+in it: agent rule 17; FIX.8 deleted the emulation). Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TILE:
 
-    tt/quant.fp8_qdq + tt/q_a.TtAttnInProj   q(attn_norm) @ the chip's K rows of wkv^T, HiFi4 + fp32 accumulation
-                                  (ExactMatmul by default: the FPU's ~TF32 in-tile partials would flip ~0.8 % of
-                                  the output's fp8 values, DS41-16), exact all_gather + SFPU add over TP (the q_a exchange: in the assembled model the
-                                  kv step slices its columns of the projection q_a already made, ``from_proj``)
+    bf16 cast + tt/q_a.TtAttnInProj   attn_norm @ the chip's K rows of wkv^T, ATTN_FIDELITY + fp32 accumulation, the
+                                  sum over TP (the q_a exchange: in the assembled model the kv step slices its
+                                  columns of the projection q_a already made, ``from_proj``)
     slice kv [S/SP, 512] -> tt/norm.TtDistributedRmsNorm(split=False) kv_norm (fp32, eps 1e-20, replicated weight)
     tt/rope.rope_deinterleaved    the last 64 dims at absolute positions (theta 10000 for ratio-0 layers, 160000 +
                                   YaRN for ratio 1 / 2; cos / sin sliced from the load-time table, tt/rope.RopeTable),
                                   exact fp32 on the SFPU; the wkv rows (and kv_norm weight) of the rope dims are
                                   permuted at load to [even | odd] so the pairs are tile-aligned blocks
-    tt/quant.fp8_qdq              e4m3 RNE per 32 with ue8m0 scales, bf16 out (exact)
+    bf16 cast                     (ATTN_GLUE=on: the rope's last ops write bf16, re-interleaved by a PairPerm matmul)
 
 Output: window KV [1, 1, S/SP, 512] bf16 TILE, rows split over axis 0 (mesh row r = positions [start + r S/SP, ...)),
 replicated over axis 1. The served-cache write (all_gather over axis 0, the owner chip's slice_write of
 [actual_start, actual_end), pad-row zeroing before the ack) belongs to the device state, which the attention step
 brings (BREADCRUMBS C.swa.kv). No host work in __call__ / from_proj.
 
-Component deviation (components.yaml named rotary_embedding_llama): that op multiplies on the FPU, which reads fp32
-at about TF32 (K-30), and the fp8 rounding after it turns such last-bit errors into whole e4m3 steps (DS41-1); the
-SFPU composition is exact and keeps the reference's arithmetic.
+Component deviation (components.yaml named rotary_embedding_llama): the SFPU composition (tt/rope.py) predates F128;
+replacing it with the stock op is the precision-debt report's pick J3.
 """
 
 from __future__ import annotations
@@ -34,10 +33,9 @@ import torch
 
 import ttnn
 
-from .common import DRAM
+from .common import DRAM, cast
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
-from .quant import act_q, native
 from .rope import RopeTable, deinterleave_perm, rope_deinterleaved, rope_deinterleaved_bf16
 
 
@@ -71,8 +69,8 @@ class TtWindowKv:
         kn = self.norm(kv)
         ttnn.deallocate(kv)
         cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
-        if self.rope.pairs is not None and native():
-            # ATTN_GLUE=on (P.15): rope + cast to bf16 + re-interleave as a PairPerm matmul (act_q == the cast)
+        if self.rope.pairs is not None:
+            # ATTN_GLUE=on (P.15): rope + cast to bf16 + re-interleave as a PairPerm matmul
             out = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
             ttnn.deallocate(kn)
             self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
@@ -80,13 +78,13 @@ class TtWindowKv:
         kr = rope_deinterleaved(kn, cos, sin)
         ttnn.deallocate(kn)
         self.rope.free(cos, sin)
-        out = act_q(kr, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
+        out = cast(kr, ttnn.bfloat16)
         if out is not kr:
             ttnn.deallocate(kr)
         return out
 
     def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
-        xq = act_q(x, dtype=ttnn.bfloat16)
+        xq = cast(x, ttnn.bfloat16)
         p = self.proj(xq)
         if xq is not x:
             ttnn.deallocate(xq)

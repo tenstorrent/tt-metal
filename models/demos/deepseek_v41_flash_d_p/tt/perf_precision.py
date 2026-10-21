@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""P.13 measurements for the realistic defaults (FP32_ACC=needed, DENSE_WEIGHTS=bfp8, WINDOW_SDPA=source). Not a gate.
+"""P.13 measurements for the realistic defaults (FP32_ACC=needed, DENSE_WEIGHTS=bfp8, stock window sparse_sdpa). Not a
+gate.
 
 test_fp32_acc_matmuls  every dense projection of the model at its per-chip shape on the run's mesh (the layer's real
                        weights in the format DENSE_WEIGHTS picks, random inputs at the model's input dtype, the
@@ -11,9 +12,9 @@ test_fp32_acc_matmuls  every dense projection of the model at its per-chip shape
                        bf16 rounding of the float64 result alone (what a bf16 output costs anyway); ``bfp8`` = what
                        the bfp8 weights move the float64 result (DENSE_WEIGHTS' own error).
 test_window_sdpa       the window attention's sparse_sdpa (the model's start-class-128 index lists, layer 0's sink,
-                       random q / table with score spread x1 and x4) as ttnn.bringup.sparse_sdpa(high_precision) at the
-                       reference kernel's dtypes (today), and stock ttnn.transformer.sparse_sdpa with fp32 DEST on and
-                       off: time and error vs float64.
+                       random q / table with score spread x1 and x4) as stock ttnn.transformer.sparse_sdpa with fp32
+                       DEST on and off: time and error vs float64 (the fork's high_precision variant P.13 measured is no
+                       longer used by the model, FIX.8).
 
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tt/perf_precision.py
@@ -206,22 +207,7 @@ def test_window_sdpa(mesh_device, spread):
     idx = torch.where(idx == 0xFFFFFFFF, -1, idx) if idx.max() > 2**31 else idx
     ref = _sdpa_ref(q[0].float(), table[0, 0].float(), idx, sink.reshape(-1).bfloat16().float())
     fid = settings.get("ATTN_FIDELITY")
-    variants = {
-        "fork high_precision (today)": lambda: ttnn.bringup.sparse_sdpa(
-            qd,
-            td,
-            index,
-            D,
-            kv_format=ttnn.bringup.SparseKVFormat.BF16,
-            scale=1.0,
-            k_chunk_size=SDPA_K_CHUNK,
-            compute_kernel_config=_cfg(mesh, fid, True),
-            attention_sink=sd,
-            high_precision=True,
-            fp32_scores=True,
-            bf16_probs=True,
-        ),
-    }
+    variants = {}
     for fp32 in (True, False):
         variants[f"stock fp32_dest={fp32}"] = lambda c=_cfg(mesh, fid, fp32): ttnn.transformer.sparse_sdpa(
             qd,
@@ -240,6 +226,6 @@ def test_window_sdpa(mesh_device, spread):
         ttnn.deallocate(o)
         e = _err(got, ref)
         print(
-            f"WINDOW_SDPA spread x{spread:g} {name:28s} {fid}: {_timed(mesh, fn):.3f} ms rel {e[0]:.5f} "
+            f"window sparse_sdpa spread x{spread:g} {name:28s} {fid}: {_timed(mesh, fn):.3f} ms rel {e[0]:.5f} "
             f"bias {e[1]:+.5f} row {e[2]:.4f}"
         )

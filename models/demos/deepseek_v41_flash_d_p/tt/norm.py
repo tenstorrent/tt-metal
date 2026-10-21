@@ -19,13 +19,13 @@ stats tile on an fp32 input):
     x (1/H) + eps -> ttnn.rsqrt           [S/SP, 1]
     x * rstd ([S/SP, 1] column broadcast) * w ([1, H/TP] row broadcast; the chip's slice of w, fp32, built at load)
 
-The fp8 act quant of the output (blocks of 32) belongs to the fp8 linears that read it (q_a / kv: reference
-fp8_linear quantizes its input); the compressor and the indexer's weights_proj read this fp32 output as is.
+The fp8 linears that read the output (q_a / kv) cast it to bf16 (the released fp8_linear's act quant is not
+emulated, agent rule 17); the compressor and the indexer's weights_proj read this fp32 output as is.
 
 ffn_norm (``gather=True``) adds one ttnn.all_gather (dim 3, cluster_axis 1; a data move, exact) of the fp32 output
 -> [1, 1, S/SP, H] fp32 per chip, replicated over the mesh row: the router reads these whole rows unquantized, and
-``quant(y)`` (tt/quant.py:fp8_qdq, blocks of 32 along H, bf16 exact) gives q(x), which the shared and the routed
-experts both read (reference _swiglu act_quant's the same ffn_norm output), computed once per layer.
+``quant(y)`` (y in the experts' input dtype, a cast at most) gives the x the shared and the routed experts both
+read, computed once per layer.
 No host work in __call__.
 """
 
@@ -36,8 +36,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, tp_sum
-from .quant import act_q
+from .common import DRAM, TP_AXIS, cast, tp_sum
 from .settings import settings
 
 PACK_N = 1  # mhc_pre_xing_pack with one "stream": the sum of squares lands in column n (n + 2) = 3
@@ -112,8 +111,8 @@ class TtDistributedRmsNorm:
 
     @staticmethod
     def quant(y: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-        """q(y): the fp8 act quant-dequant (blocks of 32, ue8m0, e4m3 RNE) the experts read; bit-exact (DS41-13)."""
-        return act_q(y, dtype=dtype)  # NUMERICS=native: a cast (y itself when already dtype)
+        """y in the experts' input dtype (a cast, or y itself when already ``dtype``; FIX.8: no fp8 emulation)."""
+        return cast(y, dtype)
 
 
 # norm steps -> checkpoint weight under layers.<i>.

@@ -81,7 +81,7 @@ Realistic (use by default):
   acc_dtype (default None = ttnn.float32, the original program) = ttnn.bfloat16: the running sums in bf16 (W x 2 B a
   token; the packer's L1 accumulation adds each weighted fp32 DEST row onto the bf16 sum, one round-to-nearest per
   added row; same kernels, same order, only CB_ACC's format / size change). bf16 sums are rule 7's cross-chip-sum precision
-  (deepseek_v41_flash_d_p ships COMBINE_ACC=bf16, `tt/settings.py`); fp32, the default, is that setting's max_precision value.
+  (deepseek_v41_flash_d_p ships COMBINE_ACC=bf16, `tt/settings.py`); fp32, the default, is that setting's other value.
   `accumulator_bytes(N, A, W, S, depth=1, out_dtype=None, local_slots=2, acc_dtype=None)`: an accumulator's L1 for S
   home tokens (a caller sizes passes / the arena with it); `acc_page(acc_dtype)`: bytes of one sum tile.
 - `sparse_combine_l1_prepare(mesh_device, S, W, rows_by_chip, *, num_links=2, torus=(False, False), n_acc=16, qc=64,
@@ -210,7 +210,8 @@ test_weighted_combine_routes (deepseek_v41_flash_d_p).
 - `ttnn.bringup.flat_routed_expert_with_program` (../flat_routed_expert_ttnn) is the C++ side built for
   sparse_combine_rf; lin2d imports `flat_expert._bank_sharded`.
 - deepseek_v41_flash_d_p P.8: tt/weighted_combine.py (EXPERTS_COMBINE=weighted): sparse_combine_rf (axis=0, L1 hand-off,
-  device plan, deterministic, ports_per_direction, out_dtype fp32 / bf16, out_row0, acc_unpack_fp32, zero_unseen; P.9:
+  device plan, deterministic, ports_per_direction, out_dtype fp32 / bf16, out_row0, zero_unseen (acc_unpack_fp32
+  until FIX.8, a no-op with its bf16 sums); P.9:
   acc_dtype under the model's setting COMBINE_ACC),
   combine_planner_prepare (axis=0, id_offset, tokens, token_base, ids_uint32, tile_in, det; P.11: cores = the column
   multi-core planner under the model's setting COMBINE_PLANNER=multi), l1_zero.

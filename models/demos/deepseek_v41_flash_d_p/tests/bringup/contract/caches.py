@@ -172,8 +172,10 @@ def valid_and_pad(records: dict, cfg: dict, layer: int, lo_tok: int, hi_tok: int
     return rows[a - base : b - base], rows[b - base :]
 
 
-def pcc_failures(kvc, cfg: dict, got: np.ndarray, want: np.ndarray, layer: int, thr: float, what: str) -> list[str]:
-    """kv_dump_compare.tensor_pcc (nope / pe channels scored separately) -> failure strings."""
+def pcc_failures(kvc, cfg: dict, got: np.ndarray, want: np.ndarray, layer: int, thr, what: str) -> list[str]:
+    """kv_dump_compare.tensor_pcc (nope / pe channels scored separately) -> failure strings. ``thr``: a number (the
+    server's own rule) or R.state_threshold()'s per (config, layer) limit."""
+    thr = thr(cfg, layer) if callable(thr) else thr
     if got.shape != want.shape:
         return [f"{what}: {cfg['name']} layer {layer}: shape {got.shape} vs golden {want.shape}"]
     if not got.size:

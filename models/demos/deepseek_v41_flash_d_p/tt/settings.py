@@ -18,14 +18,14 @@ TABLE = {
         "the device steps swapped in, host in / host out around each step (bringup/hooks.py:HybridDeviceModel; "
         "debugging only)",
     ),
-    # ---- precision (agent rule 7 / F123, owner 2026-10-20: realistic from the start; max precision for the per-step tests)
+    # ---- precision (agent rule 7 / F123 / F137, owner: realistic from the start; every test runs the defaults)
     "MATMUL_FIDELITY": Setting(
         "HiFi2",
         ("HiFi4", "HiFi3", "HiFi2"),
         "the fidelity of the matmuls ATTN_FIDELITY and EXPERTS_PRECISION do not set (mHC hc_fn projection, router "
         "gate, engram wkv, the shared expert's linear path, the experts' selector matmuls; tt/common.py:compute_config). "
         "HiFi2 (P.13, owner rule F123: GLM-5.3's production fidelity) is the default; HiFi4 = the bring-up precision "
-        "(max precision). P.13, 2x2, chunk 53248-55296, plain profile, HiFi2 alone: device total 220.79 -> 219.52 ms a "
+        "(a comparison value). P.13, 2x2, chunk 53248-55296, plain profile, HiFi2 alone: device total 220.79 -> 219.52 ms a "
         "chunk (engram_kv 6.02 -> 4.87; mHC hc_fn, router: unchanged); the engram wkv matmul at bfp8 [1024, 6144] x "
         "[6144, 12800]: 2.48 ms HiFi2 (rel 0.0041 vs float64, bias -0.28 %, K-25)",
     ),
@@ -33,7 +33,7 @@ TABLE = {
         "needed",
         ("all", "needed"),
         "fp32 accumulation (fp32 DEST) of the model's programs (tt/common.py:fp32_acc; P.13, replaces the boolean "
-        "FP32_DEST_ACC): all = every program (the bring-up precision, max precision); needed = only the sites that pass "
+        "FP32_DEST_ACC): all = every program (the bring-up precision, a comparison value); needed = only the sites that pass "
         "needed=True to tt/common.py:compute_config / attn_compute_config / fp32_acc. Measured P.13 (tt/perf_precision.py, "
         "2x2, per-chip shapes, real weights, bfp8 + HiFi2, random inputs, vs float64): with a 16-bit DEST every dense "
         "projection loses its accuracy, the matmul's reloaded partials biased high (DS41-78): q_a [wq_a | wkv] K 2560 "
@@ -55,7 +55,7 @@ TABLE = {
         "dense_dtype): attention wq_a | wkv (tt/q_a.py), wq_b / wo_a / wo_b (tt/attention.py), the indexer's wq_b "
         "(tt/indexer.py), the engram wkv (tt/engram_kv.py), the shared expert's linear path (tt/shared_expert.py; its "
         "flat path is bfp8 since P.12). The compressor's wkv / wgate / wk and the indexer's weights_proj are bf16 in "
-        "the checkpoint and stay bf16 (rule 7). bf16 = the dequantized values exactly (max precision); bfp8 (P.13, "
+        "the checkpoint and stay bf16 (rule 7). bf16 = the dequantized values exactly; bfp8 (P.13, "
         "owner rule F123: the checkpoint's own 8-bit width; DeepSeek multiplies them with fp8 kernels) = bfloat8_b, "
         "which keeps 7 magnitude bits under one exponent per 16 values, so an fp8 value more than 3 binades under its "
         "group's largest loses bits: 10-22 % of the values change, ||dW|| / ||W|| 0.0034-0.0051 per matrix (logged at "
@@ -72,18 +72,7 @@ TABLE = {
         "wq_b, the window / compressed sparse_sdpa programs, wo_a, wo_b (tt/attention.py), the indexer's weights_proj / "
         "wq_b and ring score (tt/indexer.py), the compressor's [wkv | wgate] and wk (tt/compressor.py). mHC, norms, "
         "router, experts, shared expert keep MATMUL_FIDELITY; fp32 DEST per FP32_ACC. HiFi4 = the "
-        "bring-up precision (default, max precision); HiFi2 = GLM-5.3's (HiFi2 matmuls read ~0.28 % low, K-25), "
-        "judged end to end only",
-    ),
-    "ATTN_IN_MM": Setting(
-        "fpu",
-        ("fpu", "exact"),
-        "the fp8 attention-input projection q(attn_norm) @ [wq_a | wkv] (tt/q_a.py:TtAttnInProj): fpu = one "
-        "ttnn.linear (HiFi4, fp32 accumulation), whose in-tile partial sums round to ~TF32 (rel 1.8e-4: ~0.8 % fp8 "
-        "flips in the window KV, DS41-16); exact = 32 masked copies in one batched matmul + SFPU fp32 adds "
-        "(tt/exact_mm.py; ~8 ms vs 0.4 ms per layer at [1024, 2560] x [2560, 1792]). Owner decision 2026-10-15 "
-        "(spec rule 'Accuracy is judged against the noise floor', OV-3): fpu is the default and the max-precision "
-        "value; exact stays selectable for comparison only",
+        "bring-up precision; HiFi2 (the default, P.7) = GLM-5.3's (HiFi2 matmuls read ~0.28 % low, K-25)",
     ),
     "FP32_WEIGHT_ROUND": Setting(
         "srca",
@@ -99,68 +88,7 @@ TABLE = {
         "4.1e-4). Either rounding leaves a fixed per-column error (host alone: worst column bias tf32 9e-5..1.7e-3, "
         "srca 1.9e-4..1.8e-3 of rms) that only an exact fp32 weight (a split matmul, owner: no) removes",
     ),
-    "ENGRAM_KV_QDQ": Setting(
-        "qdq",
-        ("qdq", "skip"),
-        "the fp8 act quant of the engram rows before wkv (tt/engram_kv.py): qdq = tt/quant.fp8_qdq (bit-exact with the "
-        "reference for any input); skip = none, the identity on real table rows (e4m3 x 2^k: 0 values changed on the "
-        "layer-1 golden) except groups with amax < 1e-4 (a perf pick for the owner)",
-    ),
-    # ---- compressor (tt/compressor.py)
-    "COMPRESSOR_X": Setting(
-        "round_tf32",
-        ("round_tf32", "truncate"),
-        "the fp32 matmul inputs of the compressor (attn_norm into [wkv | wgate], the latent into wk; and attn_norm into "
-        "the indexer's weights_proj, tt/indexer.py, which the plan fuses into the compressor's projection; matmul in0, which "
-        "the FPU reads at TF32 by truncation, K-30): round_tf32 = rounded to TF32 to nearest even first "
-        "(tt/quant.round_tf32, DS41-31: an unbiased read, same bits); truncate = the FPU's own truncation",
-    ),
     # ---- attention (tt/attention.py)
-    "WINDOW_SDPA": Setting(
-        "source",
-        ("high_precision", "exact", "source"),
-        "the window attention: high_precision = ttnn.bringup.sparse_sdpa(high_precision=True, attention_sink=...) "
-        "at the dtypes WINDOW_SDPA_SCORES / _PROBS / _OUT pick (defaults: the reference kernel's, FIX.2); exact = tt/window_exact.py "
-        "(q and the probabilities as fp32 bf16-piece sums, every in-tile dot one exact product by lane masks on the "
-        "keys / values, fp32 SFPU softmax and sink, fp32 output; 32x the matmul work, 64 ms per layer on 2x2; "
-        "DS41-19); source = ttnn.transformer.sparse_sdpa (bf16 running state, approximate exp; fp32 DEST, FP32_ACC). "
-        "P.13 (owner rule F123: the stock op at its normal settings; the fork's options existed to beat the parity fp8 "
-        "quantizers, gone since P.8): source is the default, high_precision the max-precision value; exact stays "
-        "selectable for comparison only. P.13, 2x2: the op alone (layer 0's sink, random q / table, window lists of "
-        "start class 128, HiFi2) 0.355 -> 0.334 ms a call, rel vs float64 0.0073 -> 0.024 (bias -0.45 % -> -1.1 %, "
-        "worst row 0.019 -> 0.044); x4 score spread 0.0086 -> 0.019 (row 0.032 -> 0.065); plain profile, source alone: "
-        "device total 220.79 -> 220.30 ms (attention 114.93 -> 114.39); quick A/B, source alone: worst layer L03 "
-        "0.99519 -> 0.99487 (all of P.13's drop)",
-    ),
-    "WINDOW_SDPA_OUT": Setting(
-        "bf16",
-        ("bf16", "fp32"),
-        "the output of the high_precision sparse_sdpa: bf16 = the normalized fp32 DEST value rounded to bf16 by the "
-        "packer, the reference kernel's output dtype (inference/kernel.py sparse_attn: o bf16; FIX.2); fp32 = "
-        "ttnn.bringup.sparse_sdpa(fp32_output=True), untilized exactly (DS41-29), above the reference: comparison only",
-    ),
-    "WINDOW_SDPA_SCORES": Setting(
-        "fp32",
-        ("fp32", "bf16"),
-        "the scores of the high_precision sparse_sdpa: fp32 = ttnn.bringup.sparse_sdpa(fp32_scores=True), Float32 "
-        "scores rounded to TF32 to nearest in DEST (the FPU reads them at TF32; the reference kernel keeps them fp32); "
-        "bf16 = the scores rounded to bf16 (the fork's earlier program, below the reference: a perf pick). DS41-31",
-    ),
-    "WINDOW_SDPA_PROBS": Setting(
-        "bf16",
-        ("bf16", "fp32"),
-        "WINDOW_SDPA_SCORES=fp32 only: the softmax probabilities and q. bf16 = the reference kernel's: bf16 q, "
-        "ttnn.bringup.sparse_sdpa(bf16_probs=True): the running max Float32, the row-sum from the TF32 probabilities, "
-        "then the probabilities rounded to bf16 (nearest) before P.V (FIX.2); fp32 = DS41-31's variant: q rounded to "
-        "TF32 (tt/quant.round_tf32) and kept fp32 through the head -> seq reshard, Float32 (TF32) probabilities, the "
-        "running max bf16; above the reference, comparison only (needs WINDOW_SDPA_OUT=fp32)",
-    ),
-    "WINDOW_PIECES": Setting(
-        3,
-        (3, 2),
-        "exact window attention: bf16 pieces per fp32 operand (q, probabilities); 3 = every fp32 bit, 2 = 16 bits "
-        "(2/3 of the matmul work)",
-    ),
     "ATTN_O_SUM": Setting(
         "gather_add",
         ("gather_add", "reduce_scatter"),
@@ -179,13 +107,12 @@ TABLE = {
         "(attention, indexer); (6) the attention output kept in bf16 (no bf16 -> fp32 -> bf16 of the 448 nope "
         "columns), nlp_concat_heads after wo_a, and the reduce-scatter's bf16 result handed to mhc_post where it takes "
         "bf16 (the residual casts only for MHC_FUSED's stats pass, which needs fp32). Exact (bit-identical up to the "
-        "summation order of permuted dot products) under NUMERICS=native; under official the rope tails ahead of an fp8 "
-        "/ fp4 block keep the old fp32 interleave. off = the P.14 path. Not a precision switch. Measured P.15 (2x2, "
+        "summation order of permuted dot products). off = the P.14 path. Not a precision switch. Measured P.15 (2x2, "
         "chunk 53248-55296, plain profile, off -> on): attention 114.36 -> 43.01 ms a chunk, indexer 34.97 -> 25.15, kv "
         "2.11 -> 1.24, compressor 2.38 -> 1.90, attn_residual 2.93 -> 3.29 (the A12 cast moved there), device sum "
         "202.19 -> 119.82 ms; programs 9772 -> 8892 (attention 3296 -> 2648); quick A/B on: chunk wall 201.8 ms (P.14: "
         "213.7; host-bound now), worst layer L03 0.99489 (P.14: 0.99488). Window attention L0 out path vs float64: "
-        "rel 0.00736 off and on (max precision 0.00136 both)",
+        "rel 0.00736 off and on (HiFi4 + the fork high_precision sdpa 0.00136 both)",
     ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
@@ -228,9 +155,8 @@ TABLE = {
         "changes 16.4-16.6 % of the fp4 values per layer, worst matrix ||dW|| / ||W|| 0.118-0.124), 0.5625 B per "
         "value: 0.44 GiB per layer per chip (17.8 GiB at 40 layers on 4x4, 8.9 on 8x4; bfp8 33.6 / 16.8); "
         "stats logged at load. P.1, 2x2, chunk 53248-55296, plain profile: experts 312.7 vs 315.3 ms per layer "
-        "(no speed gain, DS41-56); ladder last worst layer L03 0.9954 vs 0.9967. Component and swap tests stay at "
-        "bfp8 (max precision). P.10 (owner, 2026-10-20; agent rule 7 / F117: the shipped default stores a weight in "
-        "the checkpoint's own width, fp4 -> bfp4; bfp8 = the exact max_precision value): bfp4 is the DEFAULT. On the "
+        "(no speed gain, DS41-56); ladder last worst layer L03 0.9954 vs 0.9967. P.10 (owner, 2026-10-20; agent rule 7 / F117: the shipped default stores a weight in "
+        "the checkpoint's own width, fp4 -> bfp4; bfp8 = the exact fp4 values): bfp4 is the DEFAULT. On the "
         "default path (flat + weighted combine, bf16 sums, glm precision) the flat plan keeps its cores (48 gate/up, "
         "32 down, 10 free cells, 9 accumulators, one pass) with mt 1 -> 2 and a 1156 -> 948 KB flat arena; synced "
         "experts call, 2x2, chunk 2048, random inputs (tt/perf_experts.py::test_weights_bfp4): 4.47 -> 3.47 ms at layers "
@@ -242,19 +168,17 @@ TABLE = {
         "flat",
         ("loop", "unified", "flat"),
         "how the routed experts run on the dispatched buffer (tt/experts.py; EXPERTS_IMPL bfp8 or bfp4): loop = per "
-        "local expert extract -> ttnn.linear w1 | w3 -> SFPU SwiGLU x r -> tt/quant.fp8_qdq -> ttnn.linear w2 -> "
+        "local expert extract -> ttnn.linear w1 | w3 -> SFPU SwiGLU x r -> bf16 -> ttnn.linear w2 -> "
         "insert (24 experts x ~10 ops at the whole-chunk cap; 2522 of 3025 ms device per chunk on 2x2, X.1); "
         "unified = ONE ttnn.bringup.unified_routed_expert_moe program over every local expert (counts on the "
         "device, only the routed rows computed): ClampedSiluGlu, HiFi4 + fp32 dest, high_precision, the fork's "
         "routing_weights (each dispatched row's fp32 weight from its routing pieces, one selector matmul per chunk) "
-        "+ fp8_act_quant (q(r h) per 32, ue8m0, bit-exact with tt/quant.fp8_qdq, fork tests/unit) + "
-        "weights_transposed (the [N, K] block-float weights as stored: bfp8 exact, DS41-35). flat (the default: P.3, "
+        "+ weights_transposed (the [N, K] block-float weights as stored: bfp8 exact, DS41-35). flat (the default: P.3, "
         "Marko Staletovic's flat expert, accepted by the owner 2026-10-18 and made the default via F104; experts "
         "149.3 vs unified 176.8 ms per chunk) = ONE ttnn.bringup.flat_routed_expert program (spatially pipelined: the DRAM bank readers stream "
         "every local expert's weights once, x relays tilize and multicast the dispatched rows, the down cores write y at each expert's region), clamped_silu, fidelity "
-        "MATMUL_FIDELITY, fp32 DEST (gate/up and down), bf16 x / h / y, the fork's routing_weights + "
-        "fp8_act_quant (q(r h) per 32 in the gate/up cores' fp32 DEST, bit-exact with tt/quant.fp8_qdq on exact "
-        "inputs; a 16-column-unit plan's split h tiles are quantized whole on one core) + weights_nk (the stored "
+        "MATMUL_FIDELITY, fp32 DEST (gate/up and down), bf16 x / h / y, the fork's routing_weights "
+        "(the fork's fp8_act_quant is off since FIX.8) + weights_nk (the stored "
         "[N, K] matrices laid out tile-transposed: bfp8 exact, asserted at load); the dispatched row's first H values "
         "read in place (hidden=H, no x copy)",
     ),
@@ -278,7 +202,7 @@ TABLE = {
         ("separate", "weighted"),
         "EXPERTS_KERNEL=flat only (P.8, owner comparison 2026-10-19): separate = today's chain (q(x) | routing-weight "
         "pieces in the dispatched row, ttnn.bringup.dispatch along axis 0, the flat expert with routing_weights + "
-        "fp8_act_quant (q(r h) before w2), ttnn.bringup.combine, the K-slot permute / slices / fp32 adds); weighted = "
+        "(until FIX.8) fp8_act_quant (q(r h) before w2), ttnn.bringup.combine, the K-slot permute / slices / fp32 adds); weighted = "
         "the flat expert and combine_rf's router-forwarded weighted combine (sparse_combine_rf) in ONE program per chip "
         "(ttnn.bringup.flat_routed_expert_with_program, Marko Staletovic's wiring), the model's layout kept: q(x) "
         "gathered along the mesh column (axis 0; the flat expert reads its rows by token index: the column's "
@@ -319,25 +243,12 @@ TABLE = {
         "outputs bit-identical to the one-core planner's (fork tests/unit/test_column_planner_mc.py), so the model's "
         "numbers do not change. Not a precision switch",
     ),
-    "NUMERICS": Setting(
-        "native",
-        ("official", "native"),
-        "P.8 (owner comparison 2026-10-19, agent rule 17): official = the released code's arithmetic, bit-exact: the fp8 "
-        "act quant-dequant of every fp8 linear's input (q_a, kv, attention wq_b / wo_a / wo_b, indexer wq_b, shared and "
-        "routed experts x and h, engram wkv), the fp8 q-dq of the window KV, the fp4 q-dq of the compressed KV, the "
-        "index key and the index query, the TF32 rounding of the compressor's / indexer gates' fp32 matmul inputs "
-        "(COMPRESSOR_X) and of q (WINDOW_SDPA_PROBS=fp32); native = none of them (tt/quant.py:act_q / fp4_q / tf32_q): "
-        "a matmul input is cast to the dtype the matmul reads (bf16), a cache row written in bf16 is cast, the expert "
-        "op runs without fp8_act_quant; ENGRAM_KV_QDQ and COMPRESSOR_X are ignored. Component and swap tests stay on the "
-        "official arithmetic (MAX_PRECISION; the reference hook has no numerics switch for this model)",
-    ),
     "FFN_NORM_DTYPE": Setting(
         "bf16",
         ("fp32", "bf16"),
         "P.8 (owner comparison 2026-10-19): the dtype ffn_norm writes (tt/norm.py, gather=True): fp32 = today's; bf16 = "
         "the normalized row rounded once to bf16 by the last multiply's packer, so the row all-gather moves half the "
-        "bytes; the router (bf16 x @ bf16 gate) and the experts / shared expert read it as is (no conversion op; "
-        "NUMERICS=official casts it to fp32 for the fp8 q-dq)",
+        "bytes; the router (bf16 x @ bf16 gate) and the experts / shared expert read it as is (no conversion op)",
     ),
     "EXPERTS_DECODE": Setting(
         "gather",
@@ -351,15 +262,14 @@ TABLE = {
         ("linear", "flat"),
         "the shared expert (tt/shared_expert.py; TP by the intermediate over the mesh row, 2304 / TP columns a chip): "
         "linear = today's ttnn.linear chain (bf16 weights, exact fp8 values: [W1 | W3] column-parallel at "
-        "MATMUL_FIDELITY + fp32 accumulation, SFPU clamped SwiGLU, q(h), W2 row-parallel, fp32 partial); flat (P.12, "
+        "MATMUL_FIDELITY + fp32 accumulation, SFPU clamped SwiGLU, bf16 h, W2 row-parallel, fp32 partial); flat (P.12, "
         "owner comparison 2026-10-20, Marko Staletovic's K3_SE=flat) = the chip's slice run by the flat routed expert "
         "(ttnn.bringup.flat_routed_expert) as SE_PARTS always-on experts every own token goes to, weights bfloat8_b "
         "(the checkpoint's fp8 width, agent rule 7) laid out once at load from the stored [N, K] matrices, the routed "
         "experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h tiles, full = MATMUL_FIDELITY + bf16 tiles), "
         "fp32 DEST, bf16 y = the partial moe_add sums with the routed experts' before their one reduce-scatter. Under "
-        "EXPERTS_COMBINE=weighted + NUMERICS=native its x is the routed experts' row-major gathered q(x), read by token "
-        "index (no layout conversion of its own); NUMERICS=official: own q(x) rows, the op's fp8_act_quant (q(h)) with "
-        "unit routing weights. max precision: linear (exact weights). Not hidden: folding into the routed experts' program "
+        "EXPERTS_COMBINE=weighted its x is the routed experts' row-major gathered x, read by token "
+        "index (no layout conversion of its own). Not hidden: folding into the routed experts' program "
         "needs one weight dtype for both (routed bfp4, shared bfp8), overlapping the dispatch needs sub-devices; its x "
         "costs nothing. P.12, 2x2, chunk 2048, plain profile (8 layers): shared_expert 11.41 -> 2.01 ms a chunk (1.43 -> "
         "0.25 ms a layer, 288 -> 32 programs), moe_add 1.78 -> 1.58, MoE block (router + experts + shared + moe_add) "
@@ -424,7 +334,7 @@ TABLE = {
         "GLM-5.3 choice, GLM_SCATTER_OP=fabric_bf16) = fabric, but the reduce-scattered TP partial sums (sum_cols: "
         "ATTN_O_SUM / EXPERTS_SUM; tp_sum: HC_TP_SUM's tile-aligned ones) typecast to bf16, reduced by "
         "fabric_reduce_scatter's default FPU add, tp_sum's row gather in bf16, then typecast back to fp32: lossy, a "
-        "precision switch (max precision: fabric); the norm / engram-gate sums the fork does not take stay exact fp32. "
+        "precision switch (exact: fabric); the norm / engram-gate sums the fork does not take stay exact fp32. "
         "The producers of the big partials (attention wo_b, moe_add, q_a; tt/ccl.py:partial_dtype) write them in bf16 "
         "directly: a separate fp32 -> bf16 typecast ([1024, 5120] 0.071 ms) costs more than the bf16 RS saves "
         "(DS41-67). P.6, 2x2, chunk 53248-55296, plain profile: device total 639.62 vs fabric 641.23 (P.5; the "
@@ -438,35 +348,7 @@ TABLE = {
     ),
 }
 
-# Component and swap tests run at these values (framework rule); the shipped defaults above are judged end to end.
-MAX_PRECISION = {
-    "MATMUL_FIDELITY": "HiFi4",
-    "FP32_ACC": "all",  # P.13: needed (fp32 DEST only where measured to matter) is judged end to end only
-    "DENSE_WEIGHTS": "bf16",  # P.13: the exact fp8 values; bfp8 (the checkpoint's width, rule 7) is the default
-    "ATTN_FIDELITY": "HiFi4",  # P.7: HiFi2 (GLM-5.3's attention fidelity) is judged end to end only
-    "HC_TP_SUM": "gather_add",
-    "HC_SINKHORN": "sfpu_fp32",  # FIX.4: the official kernel computes the Sinkhorn in fp32
-    "ENGRAM_KV_QDQ": "qdq",
-    "FP32_WEIGHT_ROUND": "srca",  # FIX.4: what HiFi4 multiplies of in1 (DS41-42)
-    "COMPRESSOR_X": "round_tf32",  # unbiased TF32 read of the fp32 matmul inputs (DS41-31)
-    "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
-    "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
-    "WINDOW_SDPA_OUT": "bf16",  # FIX.2: the reference kernel's dtypes (owner rule: never above the reference)
-    "WINDOW_SDPA_SCORES": "fp32",
-    "WINDOW_SDPA_PROBS": "bf16",
-    "WINDOW_PIECES": 3,
-    "ATTN_O_SUM": "gather_add",
-    "EXPERTS_SUM": "gather_add",
-    "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 (the checkpoint's width, rule 7) is the default (P.10)
-    "CCL_IMPL": "fabric",  # exact fp32 sums (P.5); fabric_bf16 (P.6) is judged end to end only
-    "EXPERTS_PRECISION": "full",  # P.4: glm (LoFi, bfp8 x / h / y) is judged end to end only
-    "NUMERICS": "official",  # P.8: the component / swap tests check the official arithmetic (rule 17's native: end to end)
-    "FFN_NORM_DTYPE": "fp32",  # P.8: bf16 is judged end to end only
-    # P.8: weighted cannot run the official arithmetic (q(r h) needs the weight before w2; it moves to the combine)
-    # and multiplies by bf16 routing weights (the planner's / combine's format), so the max-precision path is separate
-    "EXPERTS_COMBINE": "separate",
-    "COMBINE_ACC": "fp32",  # P.9: bf16 running sums (one pass) are judged end to end only
-    "SHARED_EXPERT_IMPL": "linear",  # P.12: the exact bf16 weights; flat (bfp8 weights) is judged end to end only
-}
-
-settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)
+# F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
+# deleted the parity-only switches (NUMERICS, COMPRESSOR_X, ENGRAM_KV_QDQ, ATTN_IN_MM, WINDOW_SDPA and its _OUT /
+# _SCORES / _PROBS / WINDOW_PIECES) with their code (tt/quant.py, tt/exact_mm.py, tt/window_exact.py).
+settings = Settings("DS41_", TABLE)

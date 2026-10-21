@@ -1,0 +1,141 @@
+{
+ "overseer": [
+  {
+   "id": "FIX.8",
+   "answer": "done",
+   "evidence": "(1) tt/settings.py: MAX_PRECISION / max_precision= gone, settings_lint 0 violations; (2) tt/quant.py, exact_mm.py, window_exact.py, perf_attention.py deleted, NUMERICS / COMPRESSOR_X / ENGRAM_KV_QDQ / ATTN_IN_MM / WINDOW_SDPA(+_OUT/_SCORES/_PROBS) / WINDOW_PIECES deleted with every official branch, acc_unpack_fp32 dropped; (3) server_rules.state_threshold / caches.pcc_failures per (config, layer) from drift-s4096. Gate: M.1, L.last, K.1 (5 parts) pass; device 104.31 vs 104.28 ms a chunk, 7800 programs both. Two pre-existing K.1 failures fixed in tt/runners/adapter.py (DS41-93, DS41-94)."
+  }
+ ],
+ "used": [
+  {
+   "id": "K-1",
+   "how": "tt/common.cast returns x itself when x already has the dtype; every new call site frees the result only when it is not its input (compressor ckv / k, indexer q)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "M.1 and the K.1 parts with --no-precompile as the gate says; L.last (no flag) runs its body twice: 11.6 min, so it ran past one 10-minute call",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH pinned to the checkout for every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run metrics from generated/bringup_adhoc/<task>.json",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-79",
+   "how": "the runner's fabric payload must cover the largest packet the model sends: DS41Config.FABRIC_PAYLOAD_SIZE now follows EXPERTS_COMBINE (10880 B weighted), DS41-94",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-89",
+   "how": "its cause (MAX_PRECISION NUMERICS=official vs native per-step references) removed: NUMERICS and MAX_PRECISION deleted",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-87",
+   "how": "one device run per call, never two in one call",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-8",
+   "how": "test_runner_smoke's skip is expected in this partial run",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-13",
+   "evidence": "tt/quant.py deleted in FIX.8 (rule 17); entry marked",
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "evidence": "tt/exact_mm.py and ATTN_IN_MM deleted in FIX.8; entry marked",
+   "cited": false
+  },
+  {
+   "id": "DS41-19",
+   "evidence": "tt/window_exact.py deleted in FIX.8; entry marked",
+   "cited": false
+  },
+  {
+   "id": "DS41-48",
+   "evidence": "tt/quant.py:fp4_qdq deleted in FIX.8; entry marked",
+   "cited": false
+  },
+  {
+   "id": "K-79",
+   "evidence": "DS41Config.FABRIC_PAYLOAD_SIZE = 4352 (written at K.1 citing K-79) was too small once P.8 made the weighted combine (10880 B packets) the default: runner TIMEOUT in FlatWithProgramDeviceOperation; K-79 should say the payload must cover the model's largest fabric packet, not only the fp32 tile",
+   "cited": false
+  }
+ ],
+ "missing": [
+  "reference/drift.py writes contract_state_* only for float states (drift.py:214); an integer fixed state (engram_tail) makes testing/contract.py KeyError (DS41-93)",
+  "an all-zero golden state (compress_partial at whole-group chunk ends) gets rel_res 9e255 / pcc_res 0, so its ladder limit is 1.8e256 and its contract PCC limit -3.0: no check (DS41-92)",
+  "a runner-only path (prefill_runner's own mesh open) is not covered by the harness tests: a model setting that changes the fabric packet size needs the runner payload changed with it"
+ ],
+ "cited_only": [
+  "DS41-92",
+  "DS41-93",
+  "DS41-94",
+  "K-80"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.8",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-21T21:28:51",
+  "head": "79bd03a4a2f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.8.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/server_rules.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/exact_mm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_precision.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/quant.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_exact.py",
+   "ttnn/ttnn/bringup/combine_rf/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/README.md"
+  ]
+ }
+}

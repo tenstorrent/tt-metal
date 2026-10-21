@@ -4313,6 +4313,13 @@
     "s": 6.1,
     "status": "FAIL",
     "t": "2026-10-21T18:27:18"
+   },
+   {
+    "attempt": 4,
+    "from": "RUNNING",
+    "role": "overseer",
+    "status": "RESUMED",
+    "t": "2026-10-21T20:14:49"
    }
   ],
   "last_run": "2026-10-21T18:27:18",
@@ -4329,7 +4336,7 @@
   ],
   "role": "overseer",
   "started": "2026-10-21T18:27:11",
-  "status": "RUNNING",
+  "status": "TODO",
   "waiting": null
  },
  "FIX.6": {
@@ -4566,6 +4573,154 @@
   "reason": [],
   "role": "overseer",
   "started": "2026-10-21T17:45:36",
+  "status": "PASS",
+  "waiting": null
+ },
+ "FIX.8": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "89b184661fa85720fee477db0a51f0e4472fcc0f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "490be1a8-8553-4a81-a5c2-1dc9dea3c8fe"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/FIX.8.overseer.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "89b184661fa85720fee477db0a51f0e4472fcc0f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "9aa0c43f16e3c2980c9865ffbd60ef24b7748a7a",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [
+     "DS41-13",
+     "DS41-16",
+     "DS41-19",
+     "DS41-48",
+     "K-79"
+    ],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/FIX.8.overseer.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "overseer",
+    "seconds": 4404.5,
+    "session_id": "490be1a8-8553-4a81-a5c2-1dc9dea3c8fe",
+    "t": "2026-10-21T21:28:52"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 1972.7,
+  "history": [
+   {
+    "s": 1972.7,
+    "status": "PASS",
+    "t": "2026-10-21T22:01:51"
+   }
+  ],
+  "last_run": "2026-10-21T22:01:51",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/FIX.8.log",
+  "metrics": {
+   "acks_early": 0,
+   "contract_checks_failed": 0,
+   "err_layer_L00": 0.02647562809954643,
+   "err_layer_L00_limit": 0.057040304657989094,
+   "err_layer_L01": 0.034640443307405115,
+   "err_layer_L01_limit": 0.07198198537842104,
+   "err_layer_L02": 0.05229100414218302,
+   "err_layer_L02_limit": 0.10765007060443406,
+   "err_layer_L03": 0.08181924965610106,
+   "err_layer_L03_limit": 0.15874685018338183,
+   "err_layer_L14": 0.061826353108444615,
+   "err_layer_L14_limit": 0.13803127960006578,
+   "err_layer_L20": 0.0306340420438633,
+   "err_layer_L20_limit": 0.0507189886421758,
+   "err_layer_L21": 0.052119111346583355,
+   "err_layer_L21_limit": 0.13115337487015624,
+   "err_layer_L24": 0.028077371265861656,
+   "err_layer_L24_limit": 0.04181175884968598,
+   "err_state_candidates_L20": 0.004418849945068359,
+   "err_state_candidates_L20_limit": 0.12970542907714844,
+   "err_state_compress_kv_L02": 0.040197709878565656,
+   "err_state_compress_kv_L02_limit": 0.20946498203278574,
+   "err_state_compress_kv_L14": 0.003591497778716743,
+   "err_state_compress_kv_L14_limit": 0.19156450105768943,
+   "err_state_compress_kv_L20": 0.0035391880686949082,
+   "err_state_compress_kv_L20_limit": 0.19104702291578074,
+   "err_state_compress_partial_L02": 0.0,
+   "err_state_compress_partial_L02_limit": 1.828984673004184e+256,
+   "err_state_compress_partial_L14": 0.0,
+   "err_state_compress_partial_L14_limit": 1.828984673004184e+256,
+   "err_state_engram_tail_L01": 0.0,
+   "err_state_engram_tail_L01_limit": 0.6666666666666665,
+   "err_state_engram_tail_L14": 0.0,
+   "err_state_engram_tail_L14_limit": 0.6666666666666665,
+   "err_state_index_k_L02": 0.021530503040715042,
+   "err_state_index_k_L02_limit": 0.2404183945595354,
+   "err_state_index_k_L14": 0.003624686587844036,
+   "err_state_index_k_L14_limit": 0.23974809313331105,
+   "err_state_index_k_L20": 0.0035711426222596403,
+   "err_state_index_k_L20_limit": 0.23472722669010793,
+   "err_state_topk_idx_L02": 0.02147197723388672,
+   "err_state_topk_idx_L02_limit": 0.2099456787109375,
+   "err_state_topk_idx_L14": 0.006163597106933594,
+   "err_state_topk_idx_L14_limit": 0.16502761840820312,
+   "err_state_topk_idx_L20": 0.0068721771240234375,
+   "err_state_topk_idx_L20_limit": 0.23809242248535156,
+   "err_state_topk_idx_L24": 0.024659156799316406,
+   "err_state_topk_idx_L24_limit": 0.39916229248046875,
+   "err_state_window_kv_L00": 0.0033796796190607953,
+   "err_state_window_kv_L00_limit": 0.05848548497358636,
+   "err_state_window_kv_L01": 0.025462564474534394,
+   "err_state_window_kv_L01_limit": 0.08392080123365658,
+   "err_state_window_kv_L02": 0.036766176769119294,
+   "err_state_window_kv_L02_limit": 0.09536937867958058,
+   "err_state_window_kv_L03": 0.054151284562157335,
+   "err_state_window_kv_L03_limit": 0.13138609577569618,
+   "err_state_window_kv_L14": 0.004404958448905283,
+   "err_state_window_kv_L14_limit": 0.06525365549926526,
+   "err_state_window_kv_L20": 0.004410224824324624,
+   "err_state_window_kv_L20_limit": 0.06461323383111396,
+   "err_state_window_kv_L21": 0.046964306385439296,
+   "err_state_window_kv_L21_limit": 0.11176215617472073,
+   "err_state_window_kv_L24": 0.005883309594646362,
+   "err_state_window_kv_L24_limit": 0.0768790614800899,
+   "host_transfers_per_layer": 0,
+   "pcc_producer_kv_compress_kv": 0.99923329474929,
+   "pcc_producer_kv_compress_kv_limit": 0.9782705031894441,
+   "pcc_producer_kv_index_k": 0.9997736697668659,
+   "pcc_producer_kv_index_k_limit": 0.9708791223806443,
+   "pcc_producer_kv_window_kv": 0.9983961420836766,
+   "pcc_producer_kv_window_kv_limit": 0.9916431317445906
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "overseer",
+  "started": "2026-10-21T21:28:57",
   "status": "PASS",
   "waiting": null
  },

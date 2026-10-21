@@ -9,10 +9,9 @@ compressed rows of its KV source, in ONE sparse_sdpa per chunk.
                          (natural group ids t < (p + 1) // r, -1 = none); MQA: keys = values, 512 wide
     attn_out = fp8_linear(grouped_wo_a(fp8_qdq(unrope(softmax_sink(q . keys) keys))), wo_b)
 
-Everything but the table and the index list is TtWindowAttention's chain (q: fp8_qdq -> wq_b (heads over TP) ->
-RoPE -> x 512^-0.5 -> bf16 -> head -> seq all_to_all; ttnn.bringup.sparse_sdpa(high_precision, attention_sink,
-fp32_scores, bf16_probs: the reference kernel's dtypes, DS41-18); back, unrope, fp8, grouped wo_a, fp8, wo_b,
-exact TP sum). Difference: q and the table keep the rope tail in the reference's interleaved order (``INTERLEAVED``):
+Everything but the table and the index list is TtWindowAttention's chain (q: bf16 cast -> wq_b (heads over TP) ->
+RoPE -> x 512^-0.5 -> bf16 -> head -> seq all_to_all; stock ttnn.transformer.sparse_sdpa(attention_sink); back,
+unrope, bf16, grouped wo_a, bf16, wo_b, TP sum; the released code's fp8 quant-dequant steps are not emulated, FIX.8). Difference: q and the table keep the rope tail in the reference's interleaved order (``INTERLEAVED``):
 the compressed rows are stored that way, so no per-chunk transform of the (up to 1 GiB) compressed table is needed;
 q is re-interleaved after its fp32 RoPE and the output de-interleaved before the inverse RoPE (data movement only,
 exact). The scores are the same dot products (summed in another order).
@@ -66,7 +65,8 @@ class ChunkMemo:
     Each entry carries the key it was made for (the chunk start, the source cache's write version, its identity);
     a lookup with another key misses, and a new entry frees the slot's old one. tt/model.py drops a slot after its
     last reader layer of the chunk (``TtDS41Model.memo_last``) and the top-k store drops the "index" slot of a layer
-    whose top-k is replaced; nothing is reused across chunks in the forward pass. Per slot (per DS41DeviceState)."""
+    whose top-k is replaced; ``TtDS41Model.begin_chunk`` empties it at every chunk start (FIX.5), so nothing is
+    reused across chunks or across re-runs of one chunk. Per slot (per DS41DeviceState)."""
 
     def __init__(self):
         self._d: dict = {}
@@ -124,9 +124,6 @@ class TtSparseAttention(TtWindowAttention):
 
     def __init__(self, mesh, cfg, w: dict, rope: RopeTable, tables: WindowTables, sparse: SparseIndexTables):
         super().__init__(mesh, cfg, w, rope, tables)
-        assert (
-            self.sdpa != "exact"
-        ), "WINDOW_SDPA=exact covers the window-only layers; compressed layers use sparse_sdpa"
         self.sparse = sparse
 
     # ------------------------------------------------------------------ parts
