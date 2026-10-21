@@ -97,6 +97,8 @@ void kernel_main() {
             dram_bank_base[bank] = output.get_noc_addr(bank);
         }
         for (uint32_t pages_converted = 0; pages_converted < pages_to_convert;) {
+            // The reader's input run entry (chunk_walk.hpp) for the next run in the chunk CB: [0] the run's flat page
+            // in the own shard, [1] its page count (bits 0..30) and whether it ends a conversion block (bit 31).
             cb_wait_front(input_run_cb, 1);
             auto* input_run = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(input_run_cb));
             const uint32_t flat_page = input_run[0], num_pages = input_run[1] & 0x7FFFFFFFu;
