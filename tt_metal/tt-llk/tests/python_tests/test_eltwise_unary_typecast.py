@@ -275,10 +275,8 @@ def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
 def _run_typecast_on_bit_patterns(
     formats, dest_acc, input_dimensions, bits, golden, result_mask
 ):
-    """Run the typecast kernel on an operand whose elements are the fp32 bit patterns
-    `bits` (one per element, sign bit included) and return (src_bits, mismatches), with
-    mismatches = [(input bits, expected, got)]. `golden(src_A, src_bits)` returns the
-    expected integers; `result_mask` keeps the output width of the kernel result."""
+    """Typecast the fp32 bit patterns `bits` (one per element) and return
+    (src_bits, mismatches), where mismatches = [(input bits, expected, got)]."""
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
