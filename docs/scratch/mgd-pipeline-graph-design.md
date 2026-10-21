@@ -394,18 +394,27 @@ drawn as vertical bars:
    B0 ── B1 ── B2 ── B3        M1      (here: cables A0-B0 and A2-B2)
 ```
 
-**`mixed4`: stages that span two ranks.** Two such meshes, joined with 2 channels. The ring
-has two 4x4 stages, which need two neighbouring slices each:
+**`mixed4`: stages that span two ranks.** Two meshes of type `M`, M0 and M1, joined with 2
+channels: 8 slices in all. The ring has two 4x4 stages, which need two neighbouring slices
+each, so it needs 6 of the 8 and leaves two ranks idle:
 
 ```protobuf
 mesh_descriptors {
   name: "M"  arch: BLACKHOLE
   device_topology { dims: [ 4, 8 ] }
-  host_topology   { dims: [ 1, 4 ] }
+  host_topology   { dims: [ 1, 4 ] }   # 4 ranks per mesh, each a 4x2 slice
   channels { count: 2 policy: RELAXED }
 }
-# graph: M0 <-> M1, channels { count: 2 policy: RELAXED }
 
+graph_descriptors {
+  name: "G"  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M" mesh_id: 0 } }   # M0: slices A0..A3, ranks 0-3
+  instances { mesh { mesh_descriptor: "M" mesh_id: 1 } }   # M1: slices B0..B3, ranks 4-7
+  graph_topology { layout_type: ALL_TO_ALL channels { count: 2 policy: RELAXED } }
+}
+top_level_instance { graph { graph_descriptor: "G" graph_id: 0 } }
+
+# 2 meshes x 4 slices = 8 slices; the ring below needs 1 + 2 + 2 + 1 = 6
 pipeline_descriptors {
   name: "mixed4"  placement: STRICT
   stages { id: "s0" shape { dims: [ 4, 2 ] } }   # 1 slice
