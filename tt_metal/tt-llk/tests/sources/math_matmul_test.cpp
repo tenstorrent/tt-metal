@@ -22,6 +22,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_LE_8)
+constexpr std::uint32_t matmul_max_row_tiles = 8;
+#elif defined(ARCH_BLACKHOLE)
+constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+#endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE)
@@ -66,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
-    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS

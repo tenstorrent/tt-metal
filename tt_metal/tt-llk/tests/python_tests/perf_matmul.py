@@ -161,9 +161,12 @@ def test_perf_matmul(
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim
+                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+                math_fidelity=math_fidelity,
             ),
-            *MATMUL_FORM_KEYS.for_block(formats, dims.kt_dim),
+            *MATMUL_FORM_KEYS.for_block(
+                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim
+            ),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),

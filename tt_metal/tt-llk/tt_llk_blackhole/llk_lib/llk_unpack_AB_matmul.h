@@ -85,15 +85,21 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
  * @param dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles); only
  *                        a full-sync 16-bit DEST (16 tiles) takes the 8-bit body, since at half sync it costs about two
  *                        cycles per DEST section wherever the math thread bounds the matmul.
+ * @param unpB_face_r_dim: Face rows of in0; a tile of 4 rows or fewer with fewer than 8 tiles in a row runs the math thread
+ *                         at its floor on the default body, which the 8-bit body only delays, and a tile of 8 rows keeps the
+ *                         default body, which streams it faster.
+ * @param hifi4: A single tile at HiFi4 is bound by the math thread, which the 8-bit body only delays.
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
-    const std::uint32_t dest_max_tiles)
+    const std::uint32_t dest_max_tiles,
+    const std::uint32_t unpB_face_r_dim = 16,
+    const bool hifi4                    = false)
 {
-    return dest_max_tiles > 8 &&
+    return dest_max_tiles > 8 && (unpB_face_r_dim > 8 || (unpB_face_r_dim <= 4 && ct_dim >= 8)) && !(hifi4 && ct_dim == 1 && rt_dim == 1) &&
            ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 
@@ -518,6 +524,7 @@ constexpr bool unpack_AB_matmul_hoist_rows()
  * @tparam dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles), which
  *                         bounds the tiles of a row.
  * @tparam hoist_rows: Compute the row invariants once per call on the poll path; see @ref unpack_AB_matmul_hoist_rows.
+ * @tparam max_row_tiles: The most tiles a row of the call can have; 8 or fewer needs only the low byte of the context 1 zmask.
  * @param base_address_a: L1 base address of operand A's tile buffer.
  * @param base_address_b: L1 base address of operand B's tile buffer.
  * @param tile_index_a: Starting tile index into operand A.
@@ -538,7 +545,8 @@ template <
     std::uint32_t kernel_broadcast_b = 0,
     bool auto_ttsync                 = false,
     std::uint32_t dest_max_tiles     = 16,
-    bool hoist_rows                  = true>
+    bool hoist_rows                  = true,
+    std::uint32_t max_row_tiles      = dest_max_tiles>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -561,8 +569,8 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
     LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");
-    // the context 1 zmask needs a bit per tile of the row only when a row can be longer than 8 tiles
-    constexpr std::uint32_t context_1_zmask = (dest_max_tiles > 8) ? 0xffff : 0xff;
+    // a bit per tile of the row, which the 0xff form of main's code covers up to 8 tiles
+    constexpr std::uint32_t context_1_zmask = (max_row_tiles > 8) ? 0xffff : 0xff;
 
     if (!reuse_a)
     {
