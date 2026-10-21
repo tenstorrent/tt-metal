@@ -1,0 +1,60 @@
+name: "LLK smoke balance trial"
+# Trial only (not for main): Blackhole LLK smoke shards, today's equal-count split against
+# the module-cost split (smoke_split_costs.json), same commit and same run.
+
+on:
+  push:
+    branches: [nstojictt/smoke-balance-trial]
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  smoke:
+    needs: build-images
+    strategy:
+      fail-fast: false
+      matrix:
+        s:
+          - { arm: today3, group: 1, splits: 3, split: "--splits 3 --group 1" }
+          - { arm: today3, group: 2, splits: 3, split: "--splits 3 --group 2" }
+          - { arm: today3, group: 3, splits: 3, split: "--splits 3 --group 3" }
+          - { arm: balanced3, group: 1, splits: 3, split: "--perf-splits 3 --perf-group 1 --split-cost-table smoke_split_costs.json" }
+          - { arm: balanced3, group: 2, splits: 3, split: "--perf-splits 3 --perf-group 2 --split-cost-table smoke_split_costs.json" }
+          - { arm: balanced3, group: 3, splits: 3, split: "--perf-splits 3 --perf-group 3 --split-cost-table smoke_split_costs.json" }
+          - { arm: balanced2, group: 1, splits: 2, split: "--perf-splits 2 --perf-group 1 --split-cost-table smoke_split_costs.json" }
+          - { arm: balanced2, group: 2, splits: 2, split: "--perf-splits 2 --perf-group 2 --split-cost-table smoke_split_costs.json" }
+    name: "${{ matrix.s.arm }} blackhole ${{ matrix.s.group }}/${{ matrix.s.splits }}"
+    runs-on: tt-ubuntu-2204-P150b-viommu-stable
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    env:
+      CHIP_ARCH: blackhole
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: tt_metal/tt-llk/tests
+        run: ./setup_testing_env.sh
+      - name: Run tests
+        shell: bash
+        working-directory: tt_metal/tt-llk/tests/python_tests
+        run: |
+          pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal \
+            -m "not perf and not nightly and not quasar and not accuracy" \
+            ${{ matrix.s.split }} --timeout=60 \
+            --junitxml=pytest-report-${{ matrix.s.arm }}-${{ matrix.s.group }}.xml .
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: junit-${{ matrix.s.arm }}-${{ matrix.s.group }}
+          path: tt_metal/tt-llk/tests/python_tests/pytest-report-*.xml

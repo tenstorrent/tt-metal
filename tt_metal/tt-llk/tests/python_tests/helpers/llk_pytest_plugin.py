@@ -344,6 +344,11 @@ def pytest_addoption(parser):
         default=None,
         help="1-based perf shard to run.",
     )
+    parser.addoption(
+        "--split-cost-table",
+        default=None,
+        help="Module cost table in tests/ for --perf-splits (default: the perf table).",
+    )
 
     parser.addoption(
         "--test-order-file",
@@ -751,7 +756,7 @@ def _split_by_cost(config, items):
         )
 
     arch = TestConfig.CHIP_ARCH.value
-    costs_file = (
+    costs_file = config.getoption("--split-cost-table") or (
         "perf_split_costs_sol.json"
         if TestConfig.SPEED_OF_LIGHT
         else "perf_split_costs.json"
