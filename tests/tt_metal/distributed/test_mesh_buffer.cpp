@@ -42,6 +42,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -67,6 +70,7 @@ static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTest1x2 = MeshDevice1x2Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+using MeshBufferViewTest = MeshDevice1x1Fixture;
 
 class MeshBufferTest1x2MultiCQ : public MeshDeviceFixtureBase {
 protected:
@@ -142,6 +146,79 @@ std::vector<uint32_t> expected_shard_host_layout_after_filtered_write(
         std::fill(expected.begin() + base, expected.begin() + base + words_per_page, v);
     }
     return expected;
+}
+
+// Reject incomplete, inconsistent and invalid addresses through the Metal API itself.
+TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 1}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+    const DeviceLocalBufferConfig local{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    const ReplicatedBufferConfig replicated{.size = config.num_pages() * config.page_size()};
+    auto owner = MeshBuffer::create(replicated, local, mesh_device_.get());
+    const DeviceAddr address = owner->address();
+    const MeshCoordinate coord(0, 0);
+    const std::vector<SRAMTensorViewAddress> valid{
+        {MeshCoreCoord{coord, CoreCoord(0, 0)}, address}, {MeshCoreCoord{coord, CoreCoord(1, 0)}, address}};
+    EXPECT_EQ(create_l1_buffer_view(*mesh_device_, replicated, local, valid)->address(), address);
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, {}), std::exception);
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, {valid.front()}), std::exception);
+    auto invalid = valid;
+    invalid.push_back(valid.front());
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    invalid = valid;
+    invalid.back().first.core_coord = CoreCoord(2, 0);
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    invalid = valid;
+    invalid.back().second += 1;
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    invalid.back().second = address + 256;
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    invalid = valid;
+    invalid.front().first.device_coord = MeshCoordinate(0, 1);
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    invalid = valid;
+    for (auto& [location, value] : invalid) {
+        value = mesh_device_->get_device(coord)->l1_size_per_core();
+    }
+    EXPECT_THROW(create_l1_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+}
+
+// Different per-core addresses must survive transfers and view destruction without touching neighbors.
+TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 3}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+    DeviceLocalBufferConfig local{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    auto owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = config.num_pages() * config.page_size()}, local, mesh_device_.get());
+    const MeshCoordinate coord(0, 0);
+    std::vector<uint32_t> expected(384, 91);
+    WriteShard(mesh_device_->mesh_command_queue(), owner, expected, coord, true);
+    config.num_pages_per_core = {1, 1};
+    local.sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config);
+    set_per_core_allocation(local.sharding_args, true);
+    auto view = create_l1_buffer_view(
+        *mesh_device_, ReplicatedBufferConfig{.size = 512}, local,
+        {{MeshCoreCoord{coord, CoreCoord(0, 0)}, owner->address()},
+         {MeshCoreCoord{coord, CoreCoord(1, 0)}, owner->address() + 256}});
+    std::vector<uint32_t> values(128, 17);
+    std::fill(values.begin() + 64, values.end(), 29);
+    WriteShard(mesh_device_->mesh_command_queue(), view, values, coord, true);
+    std::vector<uint32_t> readback;
+    ReadShard(mesh_device_->mesh_command_queue(), readback, view, coord);
+    EXPECT_EQ(readback, values);
+    std::fill(expected.begin(), expected.begin() + 64, 17);
+    std::fill(expected.begin() + 256, expected.begin() + 320, 29);
+    view.reset();
+    ReadShard(mesh_device_->mesh_command_queue(), readback, owner, coord);
+    EXPECT_EQ(readback, expected);
 }
 
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
