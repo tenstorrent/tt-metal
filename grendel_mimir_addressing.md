@@ -15,39 +15,29 @@ The two current chippy paths, emulation and JTAG, already diverge from each othe
 
 ## What differs today
 
-### 1. Each UMD device class owns both a transport and an address map
+### 1. Transport and address space are separate
 
-`EmuTTDevice` and `GrendelJtagTTDevice` both build `GrendelNocAddressResolver` from `mimir_local_address_windows()`, then send the resulting flat address through `MimirChippyMemoryMap`. That map turns it back into a chiplet-local address on a per-Mimir chippy transport.
+Done in step 4. `GrendelTTDevice` is the device. It is built from a protocol (`TTDeviceModel`), a `GrendelNocAddressResolver` from `address_windows_for`, and a `FlatAddressTransport` chosen by the descriptor's address space. `MimirChippyMemoryMap` is the `mimir_local` implementation: it folds the flat address back to a chiplet-local AXI address on that Mimir's transport. The `full_package` implementation is one transport, and the flat address is the SPA. `EmuTTDevice` and `GrendelJtagTTDevice` only open the protocol. Their sockets are still chiplet-local, so they still require `address_space: mimir_local`. PCIe, and the FPGA equivalent, add a protocol rather than a device class.
 
-`RtlSimulationTTDevice` installs `GrendelNocAddressResolver` with the default package windows (the qsr.s1 ATT) instead.
-
-There is no PCIe Grendel device. `TTDevice::create` only handles Wormhole and Blackhole.
-
-Addressing is chosen by which class is constructed, not by the descriptor. A future FPGA build that looks like PCIe but uses ATT addressing has nowhere to go.
+`RtlSimulationTTDevice` still installs its own resolver and is not this device. `TTDevice::create` still has no Grendel PCIe case (step 9).
 
 ### 2. CCE control is one implementation on the Mimir-local path
 
-Done in step 2. Reset vector, PF_CTRL and DMRISC remap offsets are relative to one CCE (`0x02000000`, `0x02200000`, `0x02202000`). The DRAM-core coordinate selects the CCE. `GrendelNocAddressResolver::cce_control_address` produces the flat config address, and `MimirChippyMemoryMap` turns that into the chiplet-local AXI address. Emulation and JTAG share that path. The package ATT does not use this mapping. `program_cce_dmrisc_remap` still hardcodes the MMK SPA constants (step 5).
+Done in step 2. Reset vector, PF_CTRL and DMRISC remap offsets are relative to one CCE (`0x02000000`, `0x02200000`, `0x02202000`). The DRAM-core coordinate selects the CCE. `GrendelNocAddressResolver::cce_control_address` produces the flat config address, and the flat-address transport turns that into the access. On the Mimir-local path that is `MimirChippyMemoryMap`. Emulation and JTAG share that path.
 
 ### 3. The descriptor selects the address space
 
 Done in step 3. `address_space: mimir_local` selects the chiplet-local windows, including the `0x2000000000` CCE SRAM tag. `address_space: full_package`, and a descriptor that omits the key, selects the qsr.s1 ATT. That table now has CCE SRAM at `0x1280000000` (4 MiB per CCE), Mimir config at `0x1300000000` (128 MiB per Mimir, lane 0), and CCE control as a per-CCE offset in that window. In package mode the HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. The `0x2000000000` tag stays on the Mimir-local path. Emulation and JTAG still require `mimir_local`.
 
-### 4. The Mimir topology is assumed, not described
+### 4. The descriptor records the Mimir topology
 
-UMD assumes DRAM channel `n` is Mimir instance `n`, chippy chiplet `"m{n}"`, and SPA instance `n`. That shows up in `EmuTTDevice::Impl` (the select name) and in `program_cce_dmrisc_remap` (`mimir = cce_index / locations_per_channel`).
+Done in step 5. Each DRAM channel lists its SPA instance, its chippy chiplet id, and the D2D port that reaches each peer. `mimir_1x1.yaml` is channel 0, instance 0, chiplet `m0`. `mimir_2x_package.yaml` is the MMK wire: M0 D2D1 to M1, M1 D2D0 to M0. Emulation selects that chiplet id. `program_cce_dmrisc_remap` takes the SPA bounds from the package windows and the instance from the channel entry. A descriptor that omits `mimir_channels` (the Quasar simulation descriptors) still numbers the instance by DRAM channel. JTAG opens one transport per entry. One attached chiplet still uses `TT_METAL_GRENDEL_JTAG_CHIPLET` as its TAP. A second entry opens the TAP in its chiplet id.
 
-`program_cce_dmrisc_remap` hardcodes the MMK SPA layout: config `0x1300000000`, SRAM `0x1280000000`, GDDR `0x1000000000000`.
+### 5. Bring-up owns the uncore and the remap
 
-`GrendelJtagTTDevice` refuses to attach unless the descriptor has exactly one Mimir.
+Done in step 6. Chippy brings up clocks, cold reset, GDDR, D2D, firewalls and the remaps. SMC firmware owns uncore release and the DMRISC and MLA remaps on full Grendel. Chippy fills that role on the Mimir-local path.
 
-### 5. Bring-up ownership is split across chippy, UMD and Metal
-
-Chippy brings up clocks, cold reset, GDDR, D2D, firewalls and the remaps.
-
-Metal still asserts `RiscType::ALL` on a CCE, which holds the uncore, and then calls `release_cce_uncore_for_firmware_load`. That reprograms DMRISC from the constants above. See the DRAM branch of `initialize_firmware` in `tt_metal/impl/device/firmware/risc_firmware_initializer.cpp`.
-
-SMC firmware owns uncore release and the DMRISC and MLA remaps on full Grendel. Chippy owns them on the Mimir-local path. Metal only resets harts, so the `release_cce_uncore_for_firmware_load` step has to leave the Metal firmware-load path.
+Metal's DRAM firmware load asserts and deasserts `RiscType::ALL_NEO_DMS`. That is the eight CCE harts. It does not hold the uncore, and it does not call `release_cce_uncore_for_firmware_load`, so it does not rewrite the remap. Teardown still resets harts with `RiscType::ALL_DATA_MOVEMENT` and leaves the uncore running.
 
 ### 6. Device-side addressing is wired for MMK
 
@@ -59,7 +49,7 @@ Kernels keep calling `cce_gddr_*` and `cce_sram_*`. The bases move from these co
 
 `tt_metal/llrt/tt_cluster.cpp` special-cases `TargetDevice::EmuAxi` and `TargetDevice::GrendelJtag` (skip the global reset, skip cluster-descriptor discovery, and build the matching `ClusterOptions`). `rtoptions` turns those targets on from `TT_METAL_EMU_*` and `TT_METAL_GRENDEL_JTAG_*`.
 
-The Quasar choices in `risc_firmware_initializer.cpp` (reset all harts, release the uncore before the firmware image, tear down with the uncore left released) are keyed on the architecture, which is right. They also assume a Mimir-only package: no Tensix, no allocator, slow dispatch only. Full Grendel has workers, an allocator and fast dispatch.
+The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave the uncore and the remap to bring-up, tear down with the uncore left released) are keyed on the architecture, which is right. They also assume a Mimir-only package: no Tensix, no allocator, slow dispatch only. Full Grendel has workers, an allocator and fast dispatch.
 
 `Cluster::is_mock_or_emulated()` is Mock and Emule only. EmuAxi and GrendelJtag take the silicon firmware path, with `emu_skip_init` so chippy's bring-up is kept.
 
@@ -74,9 +64,10 @@ The Quasar choices in `risc_firmware_initializer.cpp` (reset all harts, release 
 | What | Address space |
 | --- | --- |
 | Per-CCE offsets plus `cce_control_address` | CCE register plane relative to one CCE. Reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM core selects the CCE. |
-| `program_cce_dmrisc_remap` constants | Package SPA, per Mimir. Config `0x1300000000`, SRAM `0x1280000000`, GDDR `0x1000000000000`. |
+| `program_cce_dmrisc_remap` | Package windows for the channel's SPA instance. Config, both CCE SRAMs, then that Mimir's GDDR. |
 | Default `GrendelAddressWindows` | Package ATT flat addresses for qsr.s1. NEO L1, Quasar config, GDDR, CCE SRAM `0x1280000000`, Mimir config `0x1300000000`. |
-| `mimir_local_address_windows` plus `MimirChippyMemoryMap` | Chiplet-local AXI. Config at 0, CCE SRAM at `0x40000000`, GDDR at `0x800000000`, CCE SRAM tag `0x2000000000`. |
+| `mimir_local` `FlatAddressTransport` (`MimirChippyMemoryMap`) | Chiplet-local AXI. Config at 0, CCE SRAM at `0x40000000`, GDDR at `0x800000000`, CCE SRAM tag `0x2000000000`. |
+| `full_package` `FlatAddressTransport` | One transport. The flat address is the SPA. |
 
 | Who is looking | CCE SRAM | GDDR |
 | --- | --- | --- |
@@ -113,7 +104,7 @@ Check: same pass and fail as the baseline. This suite is the yardstick for every
 
 ### Step 2. One CCE control plane
 
-Done. `GrendelNocAddressResolver::cce_control_address` takes a DRAM core and a per-CCE offset. `EmuTTDevice` and `GrendelJtagTTDevice` both write that flat address through `MimirChippyMemoryMap`. The chippy register-accessor overrides and `cce_control_addr` are gone. `program_cce_dmrisc_remap` still uses the hardcoded MMK SPA constants; step 5 removes those.
+Done. `GrendelNocAddressResolver::cce_control_address` takes a DRAM core and a per-CCE offset. `EmuTTDevice` and `GrendelJtagTTDevice` both write that flat address through `MimirChippyMemoryMap`. The chippy register-accessor overrides and `cce_control_addr` are gone.
 
 Check: UMD reset tests on the mock and on SiVal, the Metal suite, and JTAG. Host-side, `GrendelNocAddressResolver.CceControlOffsetIsRelativeToOneCce` covers the address math.
 
@@ -127,21 +118,21 @@ Check: `GrendelNocAddressResolver.PackageCceSramMatchesGoldenAddressMap` and `Pa
 
 ### Step 4. Separate the transport from the address space in UMD
 
-Make `MimirChippyMemoryMap` one implementation of a "flat address to transport" interface. The package implementation is a single transport where the flat address is the SPA. Build one Grendel device out of a protocol, a resolver and an address space, instead of a device class per backend. PCIe, and the FPGA equivalent, then only add a protocol.
+Done. `FlatAddressTransport` is the interface. `MimirChippyMemoryMap` is the `mimir_local` implementation. The `full_package` implementation is one transport and the flat address is the SPA. `GrendelTTDevice` holds the protocol, the resolver, and that transport. `EmuTTDevice` and `GrendelJtagTTDevice` open the protocol and still reject `full_package`, because those sockets are chiplet-local. A PCIe or FPGA protocol is another factory for the same device.
 
-Check: everything from step 0.
+Check: `GrendelFlatAddress.MimirLocalTranslatesToChipletAxi` and `GrendelFlatAddress.FullPackagePassesTheSpaThrough`. Behaviour on current Mimir hardware does not change, so the step 0 targets stay the regression.
 
 ### Step 5. Put the topology in the descriptor
 
-Per DRAM channel, record the Mimir instance and the chippy chiplet id, and record the D2D route from each Mimir to each peer. Remove the assumption that the channel number is the instance number, and remove the MMK constants from `program_cce_dmrisc_remap`. Drop the one-Mimir limit in `GrendelJtagTTDevice` when a second chiplet is actually attached.
+Done. `mimir_channels` records, per DRAM channel, the SPA instance, the chippy chiplet id, and the D2D route to each peer. Emulation selects that id. The remap uses the package windows and that instance. JTAG no longer refuses a second Mimir: the second entry is a second TAP. A swapped `m0` / `m1` in this list is what MMK shows.
 
-Check: the single-Mimir descriptors, the two-Mimir descriptors, and MMK. MMK is where a swapped `m0` / `m1` shows up.
+Check: `SocArchDescriptor.Mimir1x1RecordsOneChiplet`, `SocArchDescriptor.Mimir2xRecordsMmKRoutes`, and `GrendelNocAddressResolver.CceDmriscRemapUsesPackageWindows`. On MMK, the two-Mimir descriptor with the chiplets reversed would program the wrong die.
 
 ### Step 6. Metal only resets harts
 
-SMC firmware owns uncore release and the DMRISC and MLA remaps on full Grendel. Chippy owns them on the Mimir-local path. Remove `release_cce_uncore_for_firmware_load` and the remap programming from Metal's firmware load. Metal asserts and deasserts hart reset only, and it leaves the uncore as bring-up set it.
+Done. DRAM firmware load asserts and deasserts `RiscType::ALL_NEO_DMS` and no longer calls `release_cce_uncore_for_firmware_load`. The uncore and the DMRISC remap stay as bring-up set them. `RiscType::ALL` on a CCE still holds the uncore, and deasserting it still reprograms the remap; Metal's load does not use that mask.
 
-Check: two Metal runs in a row on each target, including teardown.
+Check: two Metal runs in a row on each target, including teardown. The second run catches a teardown that left the uncore held.
 
 ### Step 7. Device-side addresses come from the host
 
@@ -178,6 +169,7 @@ Use this when moving a Mimir test onto the current tree. The contract tests and 
 - Register a new `.cpp` in `tests/tt_metal/tt_metal/context/sources.cmake`, inside the `TT_UMD_BUILD_GRENDEL_JTAG` list. The binary is `./build/test/tt_metal/unit_tests_context`.
 - Coordinate math, the GDDR sweep, and the SRAM helper live in `tests/tt_metal/tt_metal/context/mimir_contract.hpp`, namespace `tt::tt_metal::mimir_contract`. Call them. Do not reimplement CCE-to-Mimir indexing in the test.
 - A Mimir soc descriptor must set `address_space: mimir_local`. Omitting it selects `full_package`. Emulation and JTAG then refuse to attach, and a FullPackage HAL uses `0x1280000000` as the DRAM-core NOC offset instead of `0x2000000000`. Do not put a FullPackage address in a Mimir-local test.
+- A Mimir soc descriptor must list `mimir_channels`, one entry per DRAM channel: `channel`, `instance`, `chiplet` (`m0`), and `routes` (`peer`, `d2d`) for each other Mimir. The chiplet id is what emulation selects. The instance is the SPA number used for the DMRISC remap. Do not assume channel 0 is `m0`.
 
 ### When the test runs
 
@@ -205,7 +197,8 @@ Size the case from the descriptor:
 
 - Do not send INIT from a test. INIT wipes chippy bring-up.
 - Do not release CCE harts onto a reset vector that is not real code. Do not assert `RiscType::ALL` and then keep using CCE SRAM. `RiscType::ALL` holds the uncore. A store to CCE SRAM while the uncore is held stalls the emulator AXI master (`WR_STALL`, for CCE0 this is `0x40000800`). The stall survives a new client. Restart the SiVal server and run the chippy bring-up script again.
-- UMD sends `SELECT_CHIPLET m{n}` only when `GET_CHIPLET` returns a chiplet id (`k0`, `m0`, `m1`, `q0`). The single-chiplet SiVal server replies `GET_CHIPLET called in single-chiplet model.` and UMD does not send `SELECT_CHIPLET` in that case. An empty payload is the same. Do not treat any non-empty reply as multi-chiplet, and do not send `SELECT_CHIPLET` from test code. A one-Mimir descriptor on MMK still selects `m0`, because the server's default chiplet is Keraunos and `GET_CHIPLET` there returns an id. Bring-up of that one Mimir uses chippy package `mk_bringup`, not `mimir`.
+- `CreateDevice` resets the eight CCE harts and leaves the uncore and the DMRISC remap as chippy bring-up set them. A test that needs a different remap has to get it from bring-up. Do not call `release_cce_uncore_for_firmware_load` from a contract test.
+- UMD sends `SELECT_CHIPLET` with that channel's `mimir_channels` chiplet id only when `GET_CHIPLET` returns a chiplet id (`k0`, `m0`, `m1`, `q0`). The single-chiplet SiVal server replies `GET_CHIPLET called in single-chiplet model.` and UMD does not send `SELECT_CHIPLET` in that case. An empty payload is the same. Do not treat any non-empty reply as multi-chiplet, and do not send `SELECT_CHIPLET` from test code. A one-Mimir descriptor on MMK still selects `m0`, because the server's default chiplet is Keraunos and `GET_CHIPLET` there returns an id. Bring-up of that one Mimir uses chippy package `mk_bringup`, not `mimir`.
 
 ### UMD tests
 
