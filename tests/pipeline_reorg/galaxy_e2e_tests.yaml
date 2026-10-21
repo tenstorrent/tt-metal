@@ -129,6 +129,26 @@
   team: scaleout
   budget_type: e2e
 
+# EXPERIMENTAL Wormhole counterpart of galaxy-fabric-per-mesh-torus-yx. Runs ONE WH MGD
+# (wh_galaxy_per_mesh_config_combo) that declares all four 2D per-mesh fabric configs together
+# (TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D), against the full multi_mesh_sanity_common.yaml (no
+# topology filter). Probes whether WH galaxy routes heterogeneous per-mesh 2D-torus multi-mesh;
+# unlike Blackhole the inter-mesh path uses VC1 rather than VC2, so this is a feasibility check.
+- id: galaxy-fabric-per-mesh-wh-combo
+  name: Galaxy Fabric per-mesh heterogeneous-config sanity (WH config-combo, experimental)
+  cmd: |
+    set -e
+    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+    MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto
+    echo "=== WH per-mesh config-combo scenario: $MGD ==="
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML
+  skus:
+    wh_galaxy:
+      timeout: 20
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
+
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
   cmd: |

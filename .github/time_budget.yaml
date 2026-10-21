@@ -231,7 +231,7 @@ scaleout:
     bh_quietbox_2: 45
   e2e:
     wh_llmbox: 185
-    wh_galaxy: 100
+    wh_galaxy: 120
     bh_galaxy: 195
     bh_sc1: 20
     bh_sc4: 175
