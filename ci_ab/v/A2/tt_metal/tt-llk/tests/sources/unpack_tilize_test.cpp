@@ -245,6 +245,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             continue;
         }
+        // A block-float output closes every tile
+        if (tiles_in_block > 1 && num_faces == 4 && IS_BFP_FORMAT(formats.pack_dst) && !is_8bit_format)
+        {
+            const std::uint32_t first = block * tiles_in_block;
+            _llk_pack_tilize_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                0,
+                L1_ADDRESS(params.buffer_Res[first]),
+                tiles_in_block,
+                (L1_ADDRESS(params.buffer_Res[first + 1]) - L1_ADDRESS(params.buffer_Res[first])) << 4);
+            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            continue;
+        }
 #endif
         for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
         {
