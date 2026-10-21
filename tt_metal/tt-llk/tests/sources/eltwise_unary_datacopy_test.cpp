@@ -3,6 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define LLK_PACK_ADDR_RMW 1
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
