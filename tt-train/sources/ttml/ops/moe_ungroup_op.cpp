@@ -61,28 +61,32 @@ autograd::TensorPtr moe_ungroup_op(
         // Pad-row values in d(expert_out) are not meaningful (the moe_group
         // kernel doesn't zero pad rows of `grouped`, and downstream consumers
         // never read pad rows) — by-design.
-        auto gs_tile = ttnn::to_layout(grouped_scores->get_value(), ttnn::Layout::TILE);
-        auto gs_col_tile = ttnn::transpose(gs_tile, -2, -1);
-        auto d_expert_out = ttnn::multiply(grad_grouped, gs_col_tile);
-        expert_out->add_grad(d_expert_out);
+        if (expert_out->get_requires_grad()) {
+            auto gs_tile = ttnn::to_layout(grouped_scores->get_value(), ttnn::Layout::TILE);
+            auto gs_col_tile = ttnn::transpose(gs_tile, -2, -1);
+            auto d_expert_out = ttnn::multiply(grad_grouped, gs_col_tile);
+            expert_out->add_grad(d_expert_out);
+        }
 
-        // Step C — dot[i] = Σ_h expert_out[i, h] · grad_grouped[i, h].
-        const auto& y_grouped_val = expert_out->get_value();  // [1,1,T_cap,H] TILE bf16
-        auto prod = ttnn::multiply(y_grouped_val, grad_grouped);
-        auto dot = ttnn::sum(
-            prod,
-            /*dim_arg=*/ttsl::SmallVector<int>{-1},
-            /*keep_dim=*/true,
-            /*output_mem_config=*/std::nullopt,
-            /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
-        // dot is [1, 1, T_cap, 1] TILE bf16. Need [1, 1, 1, T_cap] ROW_MAJOR
-        // to match grouped_scores' layout. Transpose-then-untilize avoids the
-        // expensive RM→RM reshape across bank stripes.
-        dot = ttnn::transpose(dot, -2, -1);
-        dot = ttnn::to_layout(dot, ttnn::Layout::ROW_MAJOR);
+        if (grouped_scores->get_requires_grad()) {
+            // Step C — dot[i] = Σ_h expert_out[i, h] · grad_grouped[i, h].
+            const auto& y_grouped_val = expert_out->get_value();  // [1,1,T_cap,H] TILE bf16
+            auto prod = ttnn::multiply(y_grouped_val, grad_grouped);
+            auto dot = ttnn::sum(
+                prod,
+                /*dim_arg=*/ttsl::SmallVector<int>{-1},
+                /*keep_dim=*/true,
+                /*output_mem_config=*/std::nullopt,
+                /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+            // dot is [1, 1, T_cap, 1] TILE bf16. Need [1, 1, 1, T_cap] ROW_MAJOR
+            // to match grouped_scores' layout. Transpose-then-untilize avoids the
+            // expensive RM→RM reshape across bank stripes.
+            dot = ttnn::transpose(dot, -2, -1);
+            dot = ttnn::to_layout(dot, ttnn::Layout::ROW_MAJOR);
 
-        // Step D — feed dot back as d(grouped_scores).
-        grouped_scores->add_grad(dot);
+            // Step D — feed dot back as d(grouped_scores).
+            grouped_scores->add_grad(dot);
+        }
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, expert_out, grouped_scores));

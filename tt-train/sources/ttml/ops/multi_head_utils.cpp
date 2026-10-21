@@ -163,16 +163,17 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
     auto out_v = autograd::create_tensor(v);
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
-        auto grad_q = out_q->get_grad();
-        auto grad_k = out_k->get_grad();
-        auto grad_v = out_v->get_grad();
         // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
-        grad_q = ttnn::experimental::nlp_concat_heads(grad_q);
-        grad_k = ttnn::experimental::nlp_concat_heads(grad_k);
-        grad_v = ttnn::experimental::nlp_concat_heads(grad_v);
-        qs->add_grad(grad_q);
-        auto kvs_grad = ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3);
-        kvs->add_grad(kvs_grad);
+        if (qs->get_requires_grad()) {
+            auto grad_q = ttnn::experimental::nlp_concat_heads(out_q->get_grad());
+            qs->add_grad(grad_q);
+        }
+        if (kvs->get_requires_grad()) {
+            auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
+            auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
+            auto kvs_grad = ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3);
+            kvs->add_grad(kvs_grad);
+        }
     };
 
     // grad_q function depends on gradients of q, k and v
