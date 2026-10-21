@@ -20,7 +20,7 @@ from pathlib import Path
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
 TEST_GLOB = "test_*.py"
 # Every TTNOP sweep runs on this fixed number of shards.
-SHARDS = 15
+SHARDS = 16  # TEMP verification: force the missing-junit path
 
 logger = logging.getLogger(__name__)
 
