@@ -369,4 +369,77 @@ TEST(MimirKernelLoad, SameBinaryAllCcesUnicast) {
     }
 }
 
+// Combined unique + common runtime-arg ceiling on a DRAM core, as Kernel::validate_runtime_args_size computes it: the
+// kernel-config area less the two watcher count words it reserves.
+uint32_t dram_runtime_args_ceiling() {
+    constexpr uint32_t watcher_reserved_count_words = 2;
+    return MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG) /
+               sizeof(uint32_t) -
+           watcher_reserved_count_words;
+}
+
+// MM-8 runtime-arg host validation on a CCE kernel (MM3 analogues of api/test_runtime_args.cpp
+// TensixIllegalTooManyRuntimeArgs and TensixIllegallyModifyRTArgs).
+class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {};
+
+// Unique and common runtime args up to the DRAM-core kernel-config area are accepted; one word more throws from both
+// the unique and the common API. The kernel is never launched.
+TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
+    MIMIR_SKIP_UNLESS_EMU();
+    const uint32_t cce_index = GetParam();
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ScopedDevice device_closer(device);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    constexpr uint32_t hart = 0;
+    constexpr uint32_t first_set_count = 100;
+    const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const uint32_t ceiling = dram_runtime_args_ceiling();
+    ASSERT_GT(ceiling, first_set_count);
+    const auto unique_then_common = [&logical_core](uint32_t common_count) {
+        Program program = CreateProgram();
+        const KernelHandle kernel = create_echo_kernel(program, logical_core, hart, kEchoCtMarkerBase);
+        SetRuntimeArgs(program, kernel, logical_core, std::vector<uint32_t>(first_set_count));
+        SetCommonRuntimeArgs(program, kernel, std::vector<uint32_t>(common_count));
+    };
+    const auto common_then_unique = [&logical_core](uint32_t unique_count) {
+        Program program = CreateProgram();
+        const KernelHandle kernel = create_echo_kernel(program, logical_core, hart, kEchoCtMarkerBase);
+        SetCommonRuntimeArgs(program, kernel, std::vector<uint32_t>(first_set_count));
+        SetRuntimeArgs(program, kernel, logical_core, std::vector<uint32_t>(unique_count));
+    };
+
+    EXPECT_NO_THROW(unique_then_common(ceiling - first_set_count));
+    EXPECT_ANY_THROW(unique_then_common(ceiling - first_set_count + 1));
+    EXPECT_NO_THROW(common_then_unique(ceiling - first_set_count));
+    EXPECT_ANY_THROW(common_then_unique(ceiling - first_set_count + 1));
+}
+
+// After a launch, changing the count of unique runtime args, or setting common runtime args a second time, throws.
+TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
+    MIMIR_SKIP_UNLESS_EMU();
+    const uint32_t cce_index = GetParam();
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ScopedDevice device_closer(device);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    constexpr uint32_t hart = 0;
+    const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
+    const EchoArguments arguments = make_echo_arguments(cce_index, kEchoCtMarkerBase + cce_index);
+    Program program = CreateProgram();
+    const KernelHandle kernel = create_echo_kernel(program, logical_core, hart, arguments.ct_marker);
+    set_echo_arguments(program, kernel, logical_core, arguments);
+    poison_echo_slots(device, cce_index);
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    EXPECT_TRUE(check_echo_slot(hart, read_echo_slots(device, cce_index), arguments));
+
+    EXPECT_ANY_THROW(
+        SetRuntimeArgs(program, kernel, logical_core, std::vector<uint32_t>(kEchoRuntimeArgCount + 1, 0x5050)));
+    EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, kernel, std::vector<uint32_t>(kEchoCommonArgCount + 2, 0x6060)));
+}
+
+INSTANTIATE_TEST_SUITE_P(MM8, MimirDmRuntimeArgs, ::testing::Values(0u), cce_param_name);
+
 }  // namespace tt::tt_metal::mimir_test::kernel_load
