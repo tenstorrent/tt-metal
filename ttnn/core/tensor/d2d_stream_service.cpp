@@ -153,8 +153,10 @@ SegmentAddrs collect_backing_addrs(
 struct SegmentPlan {
     uint32_t page_size;
     uint32_t num_pages;
-    // Handshake-only: equal page geometry with a different dtype or layout would
-    // otherwise pass the fingerprint and be silently reinterpreted by the peer.
+    // Handshake-only: equal page geometry with a different payload width, dtype or
+    // layout would otherwise pass the fingerprint and be silently reinterpreted by the
+    // peer. Alignment can round different payload widths to the same page_size.
+    uint32_t payload_size;
     uint32_t dtype;
     uint32_t layout;
 };
@@ -203,7 +205,7 @@ std::vector<uint32_t> swap_words(
 // identical SocketConnection list and the sender can target the receiver's DRAM
 // tensors directly. The segment count goes first, alone, because it sizes the main
 // payload: [socket_page_size, num_socket_pages, metadata_size_bytes,
-// share_fabric_links, (page_size, num_pages, dtype, layout) per segment, then per
+// share_fabric_links, (page_size, num_pages, payload_size, dtype, layout) per segment, then per
 // coord in `coords` order x, y, addr per segment]. The fingerprint fields catch a peer
 // whose socket config or per-segment page geometry / dtype / layout differs before
 // the fabric hangs or the data is silently reinterpreted.
@@ -229,7 +231,7 @@ ExchangedEndpoint exchange_service_cores(
         peer_num_segments);
 
     constexpr uint32_t kNumFixedFields = 4;
-    constexpr uint32_t kWordsPerSegment = 4;
+    constexpr uint32_t kWordsPerSegment = 5;
     const uint32_t num_fingerprint_words = kNumFixedFields + (kWordsPerSegment * num_segments);
     const uint32_t words_per_coord = 2 + num_segments;
     std::vector<uint32_t> out;
@@ -241,6 +243,7 @@ ExchangedEndpoint exchange_service_cores(
     for (const auto& seg : segments) {
         out.push_back(seg.page_size);
         out.push_back(seg.num_pages);
+        out.push_back(seg.payload_size);
         out.push_back(seg.dtype);
         out.push_back(seg.layout);
     }
@@ -412,6 +415,7 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const std::vector<Tens
             SegmentPlan{
                 .page_size = static_cast<uint32_t>(buf->aligned_page_size()),
                 .num_pages = static_cast<uint32_t>(buf->num_pages()),
+                .payload_size = static_cast<uint32_t>(buf->page_size()),
                 .dtype = static_cast<uint32_t>(backings[i].dtype()),
                 .layout = static_cast<uint32_t>(backings[i].layout())});
     }

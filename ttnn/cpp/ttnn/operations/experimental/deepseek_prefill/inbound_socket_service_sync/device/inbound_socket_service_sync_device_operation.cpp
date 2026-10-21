@@ -125,6 +125,24 @@ InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncO
     return specs;
 }
 
+InboundSocketServiceSyncOperation::topology_return_value_t InboundSocketServiceSyncOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Empty keeps the default (the backing's topology on every output). Extra segments can
+    // carry a different mapper, so each extra output keeps its own backing's topology.
+    if (tensor_args.extra_backings.empty()) {
+        return {};
+    }
+    const auto& backing_topology = tensor_args.backing.tensor_topology();
+    topology_return_value_t topologies(args.overhang_size_bytes > 0 ? 2 : 1, backing_topology);
+    for (const auto& extra_backing : tensor_args.extra_backings) {
+        topologies.push_back(extra_backing.tensor_topology());
+    }
+    if (args.metadata_size_bytes > 0) {
+        topologies.push_back(backing_topology);
+    }
+    return topologies;
+}
+
 InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyncOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(args, tensor_args);

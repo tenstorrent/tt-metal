@@ -57,6 +57,12 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             extra_input.tensor_spec() == extra_backing.tensor_spec(),
             "outbound_socket_service_sync: input tensor {} spec must match the sender backing per-shard spec",
             i + 1);
+        // The writer runs on the backing's mesh and reads the input by address, so an input on
+        // another mesh would read unrelated memory.
+        TT_FATAL(
+            extra_input.device() == backing.device(),
+            "outbound_socket_service_sync: input tensor {} must be on the sender backing's mesh device",
+            i + 1);
         const auto* extra_buffer = extra_backing.buffer();
         TT_FATAL(
             extra_buffer != nullptr && extra_buffer->is_dram() &&
@@ -96,6 +102,16 @@ OutboundSocketServiceSyncOperation::spec_return_value_t OutboundSocketServiceSyn
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // The op fills the service-owned backing in place; its spec is the output spec.
     return tensor_args.backing.tensor_spec();
+}
+
+OutboundSocketServiceSyncOperation::topology_return_value_t OutboundSocketServiceSyncOperation::compute_output_topologies(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    // Empty keeps the default. With extra inputs the default would merge their placements into
+    // the output, which aliases the backing, so pin it to the backing's own topology.
+    if (tensor_args.extra_inputs.empty()) {
+        return {};
+    }
+    return {tensor_args.backing.tensor_topology()};
 }
 
 OutboundSocketServiceSyncOperation::tensor_return_value_t OutboundSocketServiceSyncOperation::create_output_tensors(
