@@ -1,0 +1,3 @@
+ci_ab/cons/test_reduce_scalar_max_reload.py
+ci_ab/cons/test_min_hw.py
+tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
