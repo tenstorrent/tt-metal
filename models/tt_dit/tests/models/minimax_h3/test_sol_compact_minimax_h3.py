@@ -169,7 +169,11 @@ def _run(
     )
     empty_joint = bf16_tensor(torch.zeros((1, H, 0, D)), device=mesh_device)
 
+    gathered = {}  # filled by launch(): the K persistent buffer after the op, per device, for the AG slot check
+
     def launch(**sol_kwargs):
+        pk = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
+        pv = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
         out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tq,
             tk,
@@ -177,8 +181,8 @@ def _run(
             empty_joint,
             empty_joint,
             empty_joint,
-            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16),
-            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16),
+            persistent_output_buffer_k=pk,
+            persistent_output_buffer_v=pv,
             joint_strategy="rear",
             logical_n=logical_length_tensor(mesh_device, logical_n),
             program_config=program_config,
@@ -201,9 +205,32 @@ def _run(
                 mesh_device, dims=[1, 2] if sp_axis == 1 else [2, 1], mesh_shape=tuple(mesh_device.shape)
             ),
         )
+        # Device d on dim 0, its TP heads on dim 1: gathered[d, :H, slot s rows, :] should hold K shard s.
+        gathered["k"] = ttnn.to_torch(
+            pk,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=[1, 0] if sp_axis == 1 else [0, 1], mesh_shape=tuple(mesh_device.shape)
+            ),
+        )[:, :H].float()
         return host[0, :H].float()
 
     dense = launch() if want_dense else None
+    if want_dense:
+        # All-gather slot check on the dense launch: which torch K shard does each device's slot hold? The
+        # local slot (s == d) is never written by the fused all-gather and shows whatever was there.
+        gk = gathered["k"]  # [S, H, S*rows, D]
+        lines = []
+        for d in range(S):
+            best = []
+            for sl in range(S):
+                blk = gk[d, :, sl * rows : (sl + 1) * rows]
+                pccs = [_pcc(blk, k[s]) for s in range(S)]
+                m = max(range(S), key=lambda i: pccs[i])
+                best.append(f"{m if pccs[m] > 0.99 else '?'}")
+            lines.append(f"d{d}:[{','.join(best)}]")
+        logger.info(
+            "[ag] gathered-K slot -> torch shard per device (expect slot s = shard s, '?' at s = d): " + " ".join(lines)
+        )
     capfd.readouterr()  # discard dense-run output so the mode log below is only the sparse launch
     sol_kw = dict(
         sol_block_mask=sol["block_mask"],
