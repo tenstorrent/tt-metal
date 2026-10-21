@@ -1037,19 +1037,22 @@ def test_bench_traced_prefetch_and_linear(device, k, n, requests):
 
     with _tensor_prefetcher_session(device):
         if requests == "queued_ahead":
-            # The correctness run's request and every traced matmul's, in the identity ring rotation
-            # prefetch_and_linear gives a streaming gather.
+            # The correctness run's request, in the identity ring rotation prefetch_and_linear gives a
+            # streaming gather. The traced matmuls' requests are queued once it passes: a request no matmul
+            # consumes leaves its sender waiting for pipe space, where stop cannot reach it.
             block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
                 program_config, tt_weight, prefetcher_pipes=pipes
             )
-            ttnn.experimental.queue_tensor_prefetcher_request(
-                device,
-                [(tt_weight, block_count, list(range(block_count)))] * (1 + trace_repeats),
-                prefetcher_pipes=pipes,
-            )
+            weight_request = (tt_weight, block_count, list(range(block_count)))
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [weight_request], prefetcher_pipes=pipes)
 
         passing, pcc_message = comp_pcc(pt_act.float() @ pt_weight.float(), ttnn.to_torch(single_linear()), 0.99)
         assert passing, f"[traced_prefetch_and_linear] requests={requests}: {pcc_message}"
+
+        if requests == "queued_ahead":
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device, [weight_request] * trace_repeats, prefetcher_pipes=pipes
+            )
 
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
         for _ in range(trace_repeats):
