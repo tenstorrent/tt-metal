@@ -97,7 +97,12 @@ def _kernel_sources(repo: Path, changed: str, arch: str) -> set[Path]:
 
 def _pytest_files(repo: Path) -> list[Path]:
     root = repo / "tt_metal/tt-llk/tests/python_tests"
-    return [path for path in root.rglob(TEST_GLOB) if "quasar" not in path.parts]
+    # helpers/ files match TEST_GLOB but define no tests.
+    return [
+        path
+        for path in root.rglob(TEST_GLOB)
+        if "quasar" not in path.parts and "helpers" not in path.parts
+    ]
 
 
 def _source_tests(repo: Path, source: Path, pytest_files: list[Path]) -> set[str]:
@@ -125,6 +130,7 @@ def select(repo: Path, arch: str, changed_paths: list[str]) -> dict:
         if (
             changed.startswith("tt_metal/tt-llk/tests/python_tests/")
             and changed_path.match(TEST_GLOB)
+            and "helpers" not in changed_path.parts
             and changed_path.is_file()
         ):
             reasons[changed].add(f"{changed} changed")
