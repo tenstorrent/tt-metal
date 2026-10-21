@@ -46,6 +46,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
+#endif
+
 using namespace tt::tt_fabric;
 
 // Type alias for the 1D low-latency hop fields.
@@ -2282,6 +2286,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+            link_sync::RouterHook::step(fabric_heartbeat_counter);
+#endif
         }
 
         speedy_state_copy_out<super_speedy_mode, 0>(
