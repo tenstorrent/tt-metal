@@ -407,6 +407,25 @@ void kernel_main() {
     const uint32_t band_a_l1 = band_a_cb.get_read_ptr();
     const uint32_t band_b_l1 = band_b_cb.get_read_ptr();
 
+    // A sharded input's own shard and its two neighbours hold nearly every corner. Their pages lie
+    // back to back from a base the accessor resolves once here, so a corner in them costs an add
+    // rather than an accessor lookup. Corners in the previous shard go over NoC 0, in the next over
+    // NoC 1: on a single NoC per reader, the reads toward one neighbour are up to 60% slower than
+    // toward the other.
+    const uint32_t shard_first = start_block * TILE_ROWS;
+    const uint32_t prev_first = shard_first - INPUT_SHARD_PAGES;
+    const uint32_t next_first = shard_first + INPUT_SHARD_PAGES;
+    uint64_t own_base = 0, prev_base = 0, next_base = 0;
+    if constexpr (INPUT_SHARDED) {
+        own_base = get_noc_addr(input_addr);
+        if (start_block != 0) {
+            prev_base = input_acc.get_noc_addr(prev_first, 0, 0);
+        }
+        if (next_first < num_rows) {
+            next_base = input_acc.get_noc_addr(next_first, 0, 1);
+        }
+    }
+
     const uint32_t index_tile_nbytes = get_tile_size(geom_index_cb_index);
     const uint32_t corner_weight_slot_nbytes = CORNERS * get_tile_size(geom_weight_cb_index);
     uint32_t image_page[TILE_ROWS];  // first page of each row's image
@@ -478,19 +497,26 @@ void kernel_main() {
                                                             : band_b_l1 + (in_band - band_half) * input_page_nbytes);
                     noc_async_read(get_noc_addr(src_l1), dst_l1, nbytes);
                 } else if constexpr (INPUT_SHARDED) {
-                    // Corners in the previous shard go over NoC 0, in the next over NoC 1: on a
-                    // single NoC per reader, the reads toward one neighbour are up to 60% slower
-                    // than toward the other.
-                    const uint32_t shard_first = start_block * TILE_ROWS;
-                    const uint32_t shard_end = (start_block + num_blocks) * TILE_ROWS;
-                    const uint8_t read_noc = page_id < shard_first ? 0 : page_id >= shard_end ? 1 : noc_index;
-                    CoreLocalMem<uint32_t> dst(dst_l1);
-                    Noc(read_noc).async_read(
-                        input_acc,
-                        dst,
-                        nbytes,
-                        {.page_id = page_id, .offset_bytes = chunk_offset},
-                        {.offset_bytes = 0});
+                    // Unsigned, so a page before a shard also falls outside it.
+                    const uint32_t in_own = page_id - shard_first;
+                    const uint32_t in_prev = page_id - prev_first;
+                    const uint32_t in_next = page_id - next_first;
+                    if (in_own < INPUT_SHARD_PAGES) {
+                        noc_async_read(own_base + in_own * input_page_nbytes + chunk_offset, dst_l1, nbytes);
+                    } else if (prev_base != 0 && in_prev < INPUT_SHARD_PAGES) {
+                        noc_async_read(prev_base + in_prev * input_page_nbytes + chunk_offset, dst_l1, nbytes, 0);
+                    } else if (next_base != 0 && in_next < INPUT_SHARD_PAGES) {
+                        noc_async_read(next_base + in_next * input_page_nbytes + chunk_offset, dst_l1, nbytes, 1);
+                    } else {
+                        CoreLocalMem<uint32_t> dst(dst_l1);
+                        Noc(page_id < shard_first ? 0 : 1)
+                            .async_read(
+                                input_acc,
+                                dst,
+                                nbytes,
+                                {.page_id = page_id, .offset_bytes = chunk_offset},
+                                {.offset_bytes = 0});
+                    }
                 } else {
                     CoreLocalMem<uint32_t> dst(dst_l1);
                     noc.async_read(
