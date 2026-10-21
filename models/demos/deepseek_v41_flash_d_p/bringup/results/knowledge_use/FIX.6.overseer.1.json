@@ -1,0 +1,52 @@
+{
+ "used": [
+  {
+   "id": "DS41-1",
+   "how": "the switch is only at ds41_ref.py's call sites (_q8 / _q4); the tiled GEMMs and kernels.py are untouched, so official stays bit-exact with the oracle (R.2 maxabs 0 on every layer)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-72",
+   "how": "its CPU native vs official q_a (0.01164) cross-checks the new switch (L0 q_resid 0.0115) and sets the test's tight L0 bound",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "Once hooks.reference takes `numerics`, step_reference (interface.py:123-131) with defaults.yaml tests.step_numerics: native moves every component / swap test to the native reference, while tt/settings.py MAX_PRECISION keeps the device at NUMERICS=official (written as DS41-89)",
+  "The size of native vs official on this model: 0.03-0.2 per layer at 4096, not 1e-2 (written as DS41-90)",
+  "run_safe_pytest.sh's up-front collect pass changes a CPU reference test's numbers (scaled L24 0.334 vs 0.198): use --no-precompile for CPU-only tests"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.6",
+   "answer": "done",
+   "evidence": "hooks.reference(spec, layers, dtype, numerics='official') -> DS41Reference(numerics=); gate: R.2 every layer maxabs 0 / logits pcc 1.0, R.3 pcc 1.000000000 / replay 0. reference/test_numerics.py passes on both checkpoints: native forward with every kernels.py quantizer raising; official makes 3472 fp8 + 10 fp4 calls at 512 tokens. On the expected size: rel per layer at 4096 is 0.028-0.141 (real) / 0.028-0.198 (scaled), final_norm 0.289 / 0.214, not ~1e-2. Layer 0 with identical inputs: one fp8 q-dq = 0.0115 (matches DS41-72), so the gap is the rounding itself plus routing / top-k flips (L20 router row median 0.51, top-k overlap 0.85), not a bug. The test bounds follow these measurements. No TF32 or bf16-intermediate rounding exists in DS41Reference to remove (it computes in fp32; kernels.attend's bf16 P only applies to the oracle's bf16 inputs)."
+  }
+ ],
+ "cited_only": [
+  "DS41-89",
+  "DS41-90"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.6",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-21T11:02:04",
+  "head": "11227c02e71",
+  "touched": [
+   "models/demos/common/bringup/skill/bringup/SKILL.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.6.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/reference/ds41_ref.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/test_numerics.py"
+  ]
+ }
+}

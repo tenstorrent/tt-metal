@@ -82,6 +82,18 @@ State per layer (spec state.by_block_type; "fixed" ones are the current value, t
     engram_tail [3] int64          compressed token ids of the 3 positions before `length` (-1 = none)
 Readers (hooks.state_sources) keep only window_kv and read their sources' rows as of the end of the chunk.
 
+Numerics (F112 / F128, reference/interface.py; one switch for the whole model, ``DS41Reference(numerics=)``):
+    official   (default) the released code's arithmetic as above, bit for bit: the goldens and R.2 / R.3.
+    native     full precision: every activation quantize-dequantize that only emulates the GPU's formats is the
+               identity: the fp8 act q-dq of every fp8 linear's input (q_a, kv, wq_b, wo_b, indexer wq_b, engram wkv,
+               shared / routed experts x and h), the fp8 q-dq of the window KV and of the attention output before wo_a,
+               the fp4 q-dq of the compressed KV, the index key and the index query. Everything stays fp32. The
+               checkpoint's weights keep their exact dequantized values (they are the model). This reference has no
+               TF32 rounding and no bf16 cast of an intermediate to remove (it computes in fp32; kernels.attend's bf16
+               P only applies to bf16 inputs, which only the oracle passes). kernels.py itself stays the faithful port
+               the oracle (hf_oracle.py) runs; the switch is at the call sites here (``_q8`` / ``_q4``), so a native
+               forward never calls a kernels.py quantizer (reference/test_numerics.py).
+
 Determinism: every GEMM runs in the fixed tiles of kernels.py ("GEMM tiling": 256-row dense tiles, expert groups
 padded to 32-row multiples (K-24), 64-query x 512-key index-score tiles), as the oracle's do, so a row's result never
 depends on the chunk and the reference matches the oracle to the bit; top-k ties break toward the lowest position.
@@ -101,6 +113,7 @@ from models.demos.deepseek_v41_flash_d_p.reference import kernels as K
 from models.demos.deepseek_v41_flash_d_p.reference.weights import Checkpoint, EngramTable, ExpertPrefetcher
 
 Q_BLOCK = 64  # queries per attention block (== kernels.INDEX_Q_BLOCK == kernels.SPARSE_Q_BLOCK)
+NUMERICS = ("official", "native")  # the reference's arithmetic (module docstring "Numerics")
 PACK_PRE = 4  # pre weights packed after the streams
 
 
@@ -500,8 +513,18 @@ class DS41Reference:
     """Implements models/demos/common/bringup/reference/interface.py; keeps the requested layers' dense weights
     resident (fp32) and reads each routed expert from the checkpoint when it runs."""
 
-    def __init__(self, model_path: str, layers=None, dtype=torch.float32, lm_head: bool = True, tokenizer=None):
+    def __init__(
+        self,
+        model_path: str,
+        layers=None,
+        dtype=torch.float32,
+        lm_head: bool = True,
+        tokenizer=None,
+        numerics: str = "official",
+    ):
         assert dtype in (None, torch.float32), "the reference computes in fp32"
+        assert numerics in NUMERICS, f"numerics {numerics!r} not in {NUMERICS}"
+        self.numerics = numerics
         self.cfg = cfg = Config.from_dir(model_path)
         self.ck = Checkpoint(model_path)
         self.dtype = torch.float32
@@ -527,6 +550,32 @@ class DS41Reference:
                 cfg.rope_dim, r["compress_theta"], r["original"], r["factor"], r["beta_fast"], r["beta_slow"]
             ),
         }
+
+    # ---------------------------------------------------------------- numerics
+    @property
+    def native(self) -> bool:
+        return self.numerics == "native"
+
+    def with_numerics(self, numerics: str) -> "DS41Reference":
+        """The same reference (weights, tables, hasher shared, not copied) with the other arithmetic."""
+        import copy
+
+        assert numerics in NUMERICS, f"numerics {numerics!r} not in {NUMERICS}"
+        other = copy.copy(self)
+        other.numerics = numerics
+        return other
+
+    def _q8(self, x: torch.Tensor) -> torch.Tensor:
+        """The fp8 act quant-dequant (per 32, ue8m0) an fp8 GEMM input / the window KV gets; native: x in fp32."""
+        return x.float() if self.native else K.act_quant_dequant(x, 32)
+
+    def _q4(self, x: torch.Tensor, block: int, e4m3_scale: bool = False) -> torch.Tensor:
+        """The fp4 quant-dequant of the compressed KV / index key / index query; native: x in fp32."""
+        return x.float() if self.native else K.fp4_quant_dequant(x, block, e4m3_scale=e4m3_scale)
+
+    def _fp8_linear(self, x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        """fp8_linear (official) or the plain fp32 GEMM of x (native)."""
+        return mm(self._q8(x), w)
 
     # ---------------------------------------------------------------- interface
     def new_state(self, max_seq: int) -> State:
@@ -605,12 +654,14 @@ class DS41Reference:
 
         table = {
             "engram_rows": lambda ctx: self._engram_rows(layer, ctx),
-            "engram_kv": lambda ctx, rows: fp8_linear(rows, w["engram.wkv.weight"]),
+            "engram_kv": lambda ctx, rows: self._fp8_linear(rows, w["engram.wkv.weight"]),
             "engram_add": lambda ctx, x, kv: self._engram_add(layer, x, kv),
             "attn_hc": attn_hc,
             "attn_collapse": attn_collapse,
             "attn_norm": lambda ctx, x: rms_norm(x, w["attn_norm.weight"], cfg.eps),
-            "q_a": lambda ctx, x: rms_norm(fp8_linear(x, w["attn.wq_a.weight"]), w["attn.q_norm.weight"], cfg.eps),
+            "q_a": lambda ctx, x: rms_norm(
+                self._fp8_linear(x, w["attn.wq_a.weight"]), w["attn.q_norm.weight"], cfg.eps
+            ),
             "kv": lambda ctx, x: self._window_kv(layer, ctx, x),
             "compressor": lambda ctx, x: self._compressor(layer, ctx, x),
             "indexer": lambda ctx, x, qr, *c: self._indexer(layer, ctx, x, qr, *c),
@@ -655,9 +706,9 @@ class DS41Reference:
 
     def _window_kv(self, layer: int, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
         cfg, w = self.cfg, self.w[layer]
-        kv = rms_norm(fp8_linear(x, w["attn.wkv.weight"]), w["attn.kv_norm.weight"], cfg.eps)
+        kv = rms_norm(self._fp8_linear(x, w["attn.wkv.weight"]), w["attn.kv_norm.weight"], cfg.eps)
         kv = rope(kv, self._rot(layer, torch.arange(ctx.start, ctx.start + x.shape[0])))
-        return K.act_quant_dequant(kv, 32)
+        return self._q8(kv)
 
     def _compressor(self, layer: int, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
         cfg, w, st = self.cfg, self.w[layer], ctx.state
@@ -683,8 +734,8 @@ class DS41Reference:
         n = latent.shape[0]
         rot = self._rot(layer, (g0 + torch.arange(n)) * r)  # a group sits at its first token's position
         k = rms_norm(mm(latent, w["attn.indexer.wk.weight"]), w["attn.indexer.k_norm.weight"], cfg.eps)
-        k = K.fp4_quant_dequant(rope(k, rot), 32)
-        ckv = K.fp4_quant_dequant(rope(latent, rot), 16, e4m3_scale=True)
+        k = self._q4(rope(k, rot), 32)
+        ckv = self._q4(rope(latent, rot), 16, e4m3_scale=True)
         st.ckv[layer][g0 : g0 + n] = ckv
         st.index_k[layer][g0 : g0 + n] = k
         return torch.cat([ckv, k], dim=-1)
@@ -700,8 +751,8 @@ class DS41Reference:
             keys = st.index_k[cfg.kv_source_of(layer)][:n_keys]
         assert keys.shape[0] == n_keys
         pos = torch.arange(s0, end)
-        q = fp8_linear(qr, w["attn.indexer.wq_b.weight"]).view(s, nh, hd)
-        q = K.fp4_quant_dequant(rope(q, self._rot(layer, pos)), 32)
+        q = self._fp8_linear(qr, w["attn.indexer.wq_b.weight"]).view(s, nh, hd)
+        q = self._q4(rope(q, self._rot(layer, pos)), 32)
         wts = mm(x.float(), w["attn.indexer.weights_proj.weight"]) * (hd**-0.5 * nh**-0.5)
         topk = min(cfg.index_topk, n_keys)
         out = torch.full((s, cfg.index_topk), -1, dtype=torch.int32)
@@ -737,7 +788,7 @@ class DS41Reference:
             st.window[layer].zero_()
         pos = torch.arange(s0, s0 + s)
         rot = self._rot(layer, pos)
-        q = fp8_linear(qr, w["attn.wq_b.weight"]).view(s, cfg.n_heads, d)
+        q = self._fp8_linear(qr, w["attn.wq_b.weight"]).view(s, cfg.n_heads, d)
         q = rope(q, rot)
         # window keys: ext holds positions s0 - win .. s0 + s - 1 (the previous chunk's tail from the ring)
         prev_pos = torch.arange(s0 - win, s0)
@@ -769,9 +820,9 @@ class DS41Reference:
         tail = min(s, win)
         st.window[layer][pos[-tail:].remainder(win)] = kv[-tail:].float()
         o = rope(o, rot, inverse=True).view(s, cfg.o_groups, -1)
-        o = K.act_quant_dequant(o, 32)
+        o = self._q8(o)
         y = K.grouped_out(o, w["attn.wo_a.weight"])  # wo_a [groups, o_lora_rank, heads_per_group * d]
-        return fp8_linear(y.flatten(1), w["attn.wo_b.weight"])
+        return self._fp8_linear(y.flatten(1), w["attn.wo_b.weight"])
 
     # ---------------------------------------------------------------- MoE
     def _route(self, layer: int, x: torch.Tensor) -> torch.Tensor:
@@ -785,7 +836,7 @@ class DS41Reference:
     def _swiglu(self, x, w1, w3, w2, weights, lin=K.expert_linear) -> torch.Tensor:
         """inference Expert.forward: w2(r * silu(min(w1 x, lim)) * clamp(w3 x, +-lim)), fp8-quantized GEMM inputs.
         ``lin``: the routed-expert GEMM (one token group) or mm (the shared expert, fixed row tiles)."""
-        xq = K.act_quant_dequant(x, 32)
+        xq = self._q8(x)
         lim = self.cfg.swiglu_limit
         gate, up = lin(xq, w1), lin(xq, w3)
         if lim > 0:
@@ -794,7 +845,7 @@ class DS41Reference:
         h = F.silu(gate) * up
         if weights is not None:
             h = weights * h
-        return lin(K.act_quant_dequant(h, 32), w2)
+        return lin(self._q8(h), w2)
 
     def _experts(self, layer: int, x: torch.Tensor, routing: torch.Tensor) -> torch.Tensor:
         """sum over the selected experts of routing[t, e] * expert_e(x[t]), in expert-id order (the inference MoE
