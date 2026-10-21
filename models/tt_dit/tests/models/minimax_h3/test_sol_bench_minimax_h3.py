@@ -132,15 +132,27 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             # SOL_BENCH_MODE: gather | chunk | compact | pack (pack = compact + Q2 packing; pair it with
             # SOL_BENCH_CHUNKS=64xK, the 64-row Q chunk Q1 needs and the only size whose L1 fits the staging).
             tt_model.sol_mode = os.environ.get("SOL_BENCH_MODE", "compact")
-            # SOL_BENCH_DENSE_PREFIX=0 switches off the rule that makes the prefix (text + condition) query rows
-            # attend every block. Profiled 2026-10-21: that rule puts fully dense query chunks on ~15 cores of each
-            # shard-0 chip, and the chain lockstep drags every core on those 4 chips to dense pace (26.6 ms at 10 s)
-            # while the other 28 chips finish in ~9 ms. Read with the module time next to the op time.
+            # SOL_BENCH_PREFIX: how the prefix (text + condition) query rows get their exact attention.
+            #   separate (default): the sparse op treats them like any row; a separate dense op recomputes them
+            #                       (MiniMaxH3Attention._sol_prefix_dense_rows). Its cost is in the module time
+            #                       and in the "op" time below (which wraps the ring op + that recompute).
+            #   fused:              the pre-pass marks them dense inside the sparse op. Profiled 2026-10-21: fully
+            #                       dense query chunks on a few cores of each shard-0 chip, and the chain lockstep
+            #                       drags those 4 chips to dense pace (26.6 ms at 10 s; the other 28 chips: 9 ms).
+            #   off:                no exact recompute (the floor: the sparse op alone).
+            # SOL_BENCH_DENSE_PREFIX=0 is the old spelling of "off".
+            prefix = os.environ.get("SOL_BENCH_PREFIX", "separate")
             if os.environ.get("SOL_BENCH_DENSE_PREFIX", "1") == "0":
-                tt_model.sol_dense_prefix = False
+                prefix = "off"
+            tt_model.sol_prefix_mode = prefix
 
         op_times = []
         orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
+
+        # The "op" time wraps the ring op and, in prefix mode "separate", the prefix recompute that follows it
+        # (both are the attention proper; everything else in the module is projections and norms).
+        orig_prefix = MiniMaxH3Attention._sol_prefix_dense_rows
+        prefix_times = []
 
         def timed_ring(*args, **kwargs):
             ttnn.synchronize_device(mesh_device)
@@ -148,6 +160,16 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             out = orig_ring(*args, **kwargs)
             ttnn.synchronize_device(mesh_device)
             op_times.append((time.perf_counter() - t0) * 1e3)
+            return out
+
+        def timed_prefix(self, *args, **kwargs):
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            out = orig_prefix(self, *args, **kwargs)
+            ttnn.synchronize_device(mesh_device)
+            ms = (time.perf_counter() - t0) * 1e3
+            prefix_times.append(ms)
+            op_times[-1] += ms
             return out
 
         def module_call():
@@ -176,9 +198,11 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
                 )
 
         ttnn.transformer.ring_joint_scaled_dot_product_attention = timed_ring
+        MiniMaxH3Attention._sol_prefix_dense_rows = timed_prefix
         try:
             compile_ms, _ = _timed(module_call, mesh_device, 1)
             op_times.clear()
+            prefix_times.clear()
             # density comes from the compile run; the host readback must not be inside the timed reps
             density = getattr(tt_model, "sol_last_density", None)
             tt_model.sol_report_density = False
@@ -193,6 +217,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
                 ttnn.ReadDeviceProfiler(mesh_device)
         finally:
             ttnn.transformer.ring_joint_scaled_dot_product_attention = orig_ring
+            MiniMaxH3Attention._sol_prefix_dense_rows = orig_prefix
 
         rec = {
             "mode": mode,
@@ -203,14 +228,19 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             "compile_ms": compile_ms,
             "module_ms": module_ms,
             "op_ms": op_times,
+            "prefix_ms": prefix_times,
+            "prefix_mode": tt_model.sol_prefix_mode if mode == "sol" else None,
             "chunk_density": density,
         }
         results.append(rec)
+        prefix_note = (
+            f" (incl. prefix recompute {' / '.join(f'{m:.2f}' for m in prefix_times)} ms)" if prefix_times else ""
+        )
         logger.info(
-            f"[{WORKING_POINTS[seq_local]}] {mode}{'/' + tt_model.sol_mode if mode == 'sol' else ''} "
+            f"[{WORKING_POINTS[seq_local]}] {mode}{'/' + tt_model.sol_mode + '/prefix=' + tt_model.sol_prefix_mode if mode == 'sol' else ''} "
             f"chunks={chunks_env or 'measured'} tau={tau}: compile {compile_ms:.0f} ms; "
-            f"module {' / '.join(f'{m:.2f}' for m in module_ms)} ms; op {' / '.join(f'{m:.2f}' for m in op_times)} ms; "
-            f"density {density}"
+            f"module {' / '.join(f'{m:.2f}' for m in module_ms)} ms; op {' / '.join(f'{m:.2f}' for m in op_times)} ms"
+            f"{prefix_note}; density {density}"
         )
         del tt_model
 

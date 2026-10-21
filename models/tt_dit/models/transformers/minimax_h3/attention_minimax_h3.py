@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -20,6 +21,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
+from .sol_prepass import BLOCK as SOL_BLOCK
 from .sol_prepass import SolGeometry, SolPrepass
 from .sol_prepass_fused import SolPrepassFused
 
@@ -121,7 +123,8 @@ class MiniMaxH3Attention(Module):
         sol_tau: float = 1.0,
         sol_thresh_type: str = "diag",
         sol_band: int = 1,
-        sol_dense_prefix: bool = True,
+        sol_prefix_mode: str = "separate",
+        sol_dense_prefix: bool | None = None,
         sol_mode: str = "gather",
         sol_fused: bool = False,
     ) -> None:
@@ -135,7 +138,23 @@ class MiniMaxH3Attention(Module):
         self.sol_tau = sol_tau
         self.sol_thresh_type = sol_thresh_type
         self.sol_band = sol_band
-        self.sol_dense_prefix = sol_dense_prefix  # prefix (text+cond) query rows attend densely (NVlabs)
+        # How the prefix (text + condition) QUERY rows -- the 64-token blocks whose first token lies before
+        # `sol_sink_tokens` -- get their exact (dense) attention, as the NVlabs reference recomputes them:
+        #   "separate": the sparse op treats them like every other row and `_sol_prefix_dense_rows` recomputes
+        #               them exactly afterwards, spread over the ring (default; see that method).
+        #   "fused":    the pre-pass marks them dense inside the sparse op. Measured 2026-10-21: that puts fully
+        #               dense query chunks on a few cores of the ring's first chip, and the chain lockstep drags
+        #               every core of that chip to dense pace (26.6 ms of the 27 ms op at 10 s while the other
+        #               28 chips finish in 9 ms).
+        #   "off":      no exact recompute; the prefix rows get the ordinary kept/pooled treatment.
+        assert sol_prefix_mode in ("separate", "fused", "off"), sol_prefix_mode
+        self.sol_prefix_mode = sol_prefix_mode
+        if sol_dense_prefix is not None:  # back-compat: the old boolean (True = fused rule, False = off)
+            self.sol_dense_prefix = sol_dense_prefix
+        # Use ttnn.experimental.broadcast_ring (when the build has it) to hand the prefix queries around the
+        # ring, instead of an all-gather; SOL_PREFIX_BROADCAST=0 forces the all-gather for an A/B.
+        self.sol_prefix_broadcast = os.environ.get("SOL_PREFIX_BROADCAST", "1") != "0"
+        self._sol_prefix_cache: dict = {}
         self.sol_mode = sol_mode  # "gather" (block gathering, chains off) or "chunk" (compute skip, chains on)
         self.sol_fused = (
             sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
@@ -514,7 +533,7 @@ class MiniMaxH3Attention(Module):
                 tau=self.sol_tau,
                 thresh_type=self.sol_thresh_type,
                 band=self.sol_band,
-                dense_prefix_queries=self.sol_dense_prefix,
+                dense_prefix_queries=self.sol_prefix_mode == "fused",
                 mode=self.sol_mode,
                 # compaction generates the pooled-column bias on device, so the fused producer skips the ~87 MB bias write
                 **({"emit_bias": not self._sol_compact_family} if self.sol_fused else {}),
@@ -544,6 +563,176 @@ class MiniMaxH3Attention(Module):
                 )
             kwargs["sol_mode"] = self.sol_mode
         return kwargs
+
+    @property
+    def sol_dense_prefix(self) -> bool:
+        """Back-compat view of `sol_prefix_mode`: True is the fused mask rule, False switches the recompute off."""
+        return self.sol_prefix_mode == "fused"
+
+    @sol_dense_prefix.setter
+    def sol_dense_prefix(self, value: bool) -> None:
+        self.sol_prefix_mode = "fused" if value else "off"
+
+    # Spare channel block appended to Q/K/V for the prefix recompute: channel `head_dim` carries the marker.
+    _SOL_PREFIX_EXTRA = 32
+    # Q's marker value; a pad key's marker is -1, so its logit is -_SOL_PREFIX_MARK * scale (-362 at head_dim
+    # 128): exp() of that is exactly 0 next to the probe key's logit of 0. Exact in bf16.
+    _SOL_PREFIX_MARK = 4096.0
+
+    def _sol_prefix_rows(self, rows: int) -> int:
+        """Query rows the prefix covers: whole 64-token blocks whose first token lies before `sol_sink_tokens`."""
+        n_pre = -(-self.sol_sink_tokens // SOL_BLOCK) * SOL_BLOCK
+        assert n_pre <= rows, f"prefix of {n_pre} rows does not fit the {rows}-row shard"
+        assert n_pre % ttnn.TILE_SIZE == 0, n_pre
+        return n_pre
+
+    def _sol_prefix_consts(self, rows: int, n_pre: int) -> dict:
+        """Per-request constants for `_sol_prefix_dense_rows`, rebuilt only when the geometry changes."""
+        key = (rows, n_pre, self.sol_logical_n)
+        if self._sol_prefix_cache.get("key") == key:
+            return self._sol_prefix_cache
+        sp = self.parallel_config.sequence_parallel.factor
+        D, X = self.head_dim, self._SOL_PREFIX_EXTRA
+        R = rows + X  # 32 extra key rows: padding, with the probe key in the last one
+        # marker[s]: -1 in the marker channel of every key row chip s must not attend -- rows past its valid
+        # length (the logical_n tail; the whole shard when it lies entirely in the tail) and the 31 pad rows.
+        marker = torch.zeros(sp, 1, R, D + X)
+        for s in range(sp):
+            valid = max(0, min(rows, self.sol_logical_n - s * rows))
+            marker[s, 0, valid:, D] = -1.0
+            marker[s, 0, R - 1, D] = 0.0  # the probe key: K = 0, so its logit is 0 for every query
+        probe = torch.zeros(1, 1, R, D + X)
+        probe[0, 0, R - 1, D] = 1.0  # the probe key's V: a unit vector in the marker channel
+        qmark = torch.zeros(1, 1, 1, D + X)
+        qmark[..., D] = self._SOL_PREFIX_MARK
+        colfix = torch.ones(1, 1, 1, X)  # 0 in the marker column, 1 elsewhere: keeps 1/x finite off-column
+        colfix[..., 0] = 0.0
+        onehot = 1.0 - colfix
+        flag = torch.zeros(sp, 1, 1, 1)  # 1 on the ring's first chip, whose rows are the real prefix
+        flag[0] = 1.0
+        dev, sp_axis = self.mesh_device, self.sp_mesh_axis
+        self._sol_prefix_cache = dict(
+            key=key,
+            marker=bf16_tensor(marker, device=dev, mesh_axis=sp_axis, shard_dim=0),
+            probe=bf16_tensor(probe, device=dev),
+            qmark=bf16_tensor(qmark, device=dev),
+            colfix=bf16_tensor(colfix, device=dev),
+            onehot=bf16_tensor(onehot, device=dev),
+            flag=bf16_tensor(flag, device=dev, mesh_axis=sp_axis, shard_dim=0),
+            # Plain SDPA over the full grid (no CCL column to reserve). 128-row Q chunks keep the 160-wide
+            # CBs well inside L1 and give 10 x n_local_heads work items.
+            cfg=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(self.full_grid.x, self.full_grid.y),
+                q_chunk_size=128,
+                k_chunk_size=512,
+                exp_approx_mode=False,
+            ),
+        )
+        return self._sol_prefix_cache
+
+    def _sol_prefix_dense_rows(
+        self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, out_BHNE: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """Exact attention for the prefix query rows, as a separate op after the sparse ring op.
+
+        The prefix rows live on the ring's first chip. Every chip gets a copy of them (one all-gather), runs
+        a plain dense SDPA of those rows against its OWN K/V shard, and the eight partial results are merged
+        the way ring attention merges them -- which needs each chip's softmax normalizer Z_r. The plain SDPA
+        does not output it, so the inputs carry a marker: 32 spare channels are appended to Q/K/V; one probe
+        key (K = 0, V = unit vector in the spare channel) is appended to each shard, so the spare channel of
+        the output is exactly 1 / (Z_r + 1); pad keys get a -1 in the spare channel of K against a +4096 in
+        Q, which masks them (logit -362) without an attn_mask tensor. One all-reduce then sums the
+        renormalized numerators and the Z_r, and the first chip's rows are overwritten with the quotient.
+
+        Cost at 10 s (estimate): 0.6 ms of SDPA (every chip attends only its 9184 keys, 140 work items over
+        130 cores) plus the three CCLs on a 4.6 MB tensor; the data prep (pads and adds) is ~250 MB of DRAM
+        traffic. Against the fused rule's 17 ms straggler.
+        """
+        rows, H, D, X = q_BHNE.shape[2], self.n_local_heads, self.head_dim, self._SOL_PREFIX_EXTRA
+        n_pre = self._sol_prefix_rows(rows)
+        if n_pre == 0:
+            return out_BHNE
+        c = self._sol_prefix_consts(rows, n_pre)
+        ccl, sp_axis = self.ccl_manager, self.sp_mesh_axis
+
+        # 1. the prefix queries, from the ring's first chip to every chip. The one-sender ring broadcast
+        # (branch sosborne/bcast_ring; per ring line, so the TP-sharded heads are fine) moves the 4.6 MB
+        # once around the ring; without it, an all-gather moves eight copies and we keep the first.
+        q_pre = ttnn.slice(q_BHNE, [0, 0, 0, 0], [1, H, n_pre, D])
+        if self.sol_prefix_broadcast and hasattr(ttnn.experimental, "broadcast_ring"):
+            q_bc = ttnn.experimental.broadcast_ring(
+                q_pre,
+                sender_ring_index=0,
+                cluster_axis=sp_axis,
+                num_links=ccl.num_links,
+                topology=ccl.topology,
+                subdevice_id=ccl.ccl_sub_device_id,
+            )
+            ttnn.deallocate(q_pre)
+        else:
+            q_all = ccl.all_gather(q_pre, dim=0, mesh_axis=sp_axis, use_hyperparams=False)  # [sp, H, n_pre, D]
+            ttnn.deallocate(q_pre)
+            q_bc = ttnn.slice(q_all, [0, 0, 0, 0], [1, H, n_pre, D])
+            ttnn.deallocate(q_all)
+
+        # 2. marked inputs with the spare channel block (and, for K/V, the probe row)
+        qx = ttnn.add(ttnn.pad(q_bc, [(0, 0), (0, 0), (0, 0), (0, X)], 0.0), c["qmark"])
+        ttnn.deallocate(q_bc)
+        kx = ttnn.add(ttnn.pad(k_BHNE, [(0, 0), (0, 0), (0, X), (0, X)], 0.0), c["marker"])
+        vx = ttnn.add(ttnn.pad(v_BHNE, [(0, 0), (0, 0), (0, X), (0, X)], 0.0), c["probe"])
+
+        # 3. dense attention of the prefix rows against this chip's shard
+        ox = ttnn.transformer.scaled_dot_product_attention(
+            qx,
+            kx,
+            vx,
+            is_causal=False,
+            scale=D**-0.5,  # the real head_dim's scale, not the padded width's
+            program_config=c["cfg"],
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
+        for t in (qx, kx, vx):
+            ttnn.deallocate(t)
+        o_part = ttnn.slice(ox, [0, 0, 0, 0], [1, H, n_pre, D])  # N_r / (Z_r + 1)
+        p = ttnn.slice(ox, [0, 0, 0, D], [1, H, n_pre, D + X])  # column 0: 1 / (Z_r + 1)
+        ttnn.deallocate(ox)
+
+        # 4. per-chip normalizer and renormalized numerator: A_r = Z_r + 1, N_r = o_part * A_r
+        a = ttnn.reciprocal(ttnn.add(p, c["colfix"]))  # column 0: A_r; other columns: 1
+        ttnn.deallocate(p)
+        a0 = ttnn.sum(ttnn.multiply(a, c["onehot"]), dim=3, keepdim=True)  # [1, H, n_pre, 1]
+        num = ttnn.multiply(o_part, a0)
+        ttnn.deallocate(o_part)
+        z = ttnn.subtract(a, 1.0)  # column 0: Z_r; other columns: 0
+        ttnn.deallocate(a)
+        packed = ttnn.concat([num, z], dim=3)  # [1, H, n_pre, D + X]
+        ttnn.deallocate(num)
+        ttnn.deallocate(z)
+
+        # 5. one all-reduce over the ring: sum of N_r next to sum of Z_r
+        total = ccl.all_gather(
+            ccl.reduce_scatter(packed, dim=2, mesh_axis=sp_axis), dim=2, mesh_axis=sp_axis, use_hyperparams=False
+        )
+        ttnn.deallocate(packed)
+        n_sum = ttnn.slice(total, [0, 0, 0, 0], [1, H, n_pre, D])
+        z_cols = ttnn.slice(total, [0, 0, 0, D], [1, H, n_pre, D + X])
+        ttnn.deallocate(total)
+        z_sum = ttnn.sum(ttnn.multiply(z_cols, c["onehot"]), dim=3, keepdim=True)  # [1, H, n_pre, 1]
+        ttnn.deallocate(z_cols)
+        merged = ttnn.multiply(n_sum, ttnn.reciprocal(z_sum))
+        ttnn.deallocate(n_sum)
+
+        # 6. overwrite the prefix rows on the ring's first chip only (its `flag` is 1, the others' 0)
+        out_pre = ttnn.slice(out_BHNE, [0, 0, 0, 0], [1, H, n_pre, D])
+        out_rest = ttnn.slice(out_BHNE, [0, 0, n_pre, 0], [1, H, rows, D])
+        sel = ttnn.add(out_pre, ttnn.multiply(ttnn.subtract(merged, out_pre), c["flag"]))
+        ttnn.deallocate(merged)
+        ttnn.deallocate(out_pre)
+        new_out = ttnn.concat([sel, out_rest], dim=2)
+        ttnn.deallocate(sel)
+        ttnn.deallocate(out_rest)
+        ttnn.deallocate(out_BHNE)
+        return new_out
 
     @property
     def _sol_compact_family(self) -> bool:
@@ -701,6 +890,8 @@ class MiniMaxH3Attention(Module):
                 use_column_major_ccl=True,
                 **sol_kwargs,
             )
+            if sol_kwargs and self.sol_prefix_mode == "separate":
+                spatial_BHNE = self._sol_prefix_dense_rows(q_BHNE, k_BHNE, v_BHNE, spatial_BHNE)
         else:
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                 q_BHNE,
