@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from models.experimental.timestral.tt.common import TtTimestralPrecision, linear, rms_norm, upload_linear
+from models.experimental.timestral.tt.common import TILE, TtTimestralPrecision, linear, rms_norm, upload_linear
 from models.experimental.timestral.tt.weights import AttentionWeights
 
 _MAX_SDPA_CHUNK = 256
@@ -153,6 +153,9 @@ class TtAttention:
         slot_major = ttnn.permute(qkv, (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(qkv)
         blocks = ttnn.reshape(slot_major, (s * r // g, g, 3 * d))
+        if inputs.variate_mask is not None and g % TILE:
+            # The reshape leaves stale rows in the tile padding; with a user mask SDPA reads those key rows.
+            blocks = ttnn.fill_implicit_tile_padding(blocks, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = self._split_heads(blocks)
         merged = self._sdpa(q, k, v, mask=inputs.variate_mask, is_causal=False)
         merged = ttnn.reshape(merged, (s, r, d))
