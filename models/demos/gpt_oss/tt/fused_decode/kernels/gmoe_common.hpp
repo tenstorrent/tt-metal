@@ -3,10 +3,10 @@
 
 // Grouped (sparse) MoE of the batch-32 DFlash verify (dflash/grouped_moe.py): the shared slot plan.
 //
-// Every row is routed to K_SEL (on a BF16 tie K_SEL + 1) of the E experts (gmoe_plan.cpp). Expert e's routed rows (in
+// Every row is routed to K_SEL (on a BF16 tie K_SEL + 1) of the E experts (gmoe_route.cpp). Expert e's routed rows (in
 // row order) fill tiles[e] = ceil(count / 32) consecutive 32-row slots starting at slot base[e] (slots in expert
 // order, at most ROWS * (K_SEL + 1) / 32 + E = 72). Every op of the grouped MoE
-// gets this plan from the plan op's table (gmoe_plan.cpp; recomputing it from the ids takes ~13 us on a RISC).
+// gets this plan from the route op's table (gmoe_route.cpp; recomputing it from the ids takes ~13 us on a RISC).
 //
 // Work units: unit u = e * NU + j (expert e, column tile j of NU); a unit of an expert with slots costs wc + slots * cc
 // (weight read + per-slot compute), others 0. Core c of NC takes the units whose start cost lies in
@@ -30,7 +30,7 @@ struct Plan {
     uint32_t base[E];
 };
 
-// the plan table (gmoe_plan.cpp: [tiles[E], base[E]] words) at l1 -> p
+// the plan table (gmoe_route.cpp: [tiles[E], base[E]] words) at l1 -> p
 inline void read_table(uint32_t l1, Plan& p) {
     const uint32_t* t = reinterpret_cast<const uint32_t*>(l1);
     for (uint32_t e = 0; e < E; ++e) {

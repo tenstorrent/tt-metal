@@ -2,26 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Grouped MoE routing + plan in one program (dflash/grouped_moe.py GroupedMoE.route): from the router logits [ROWS, E]
-// (BF16 tiles, the router matmul's output) to the dense routing weights W [ROWS, E] (the down bias's) and the plan's
-// gather / combine matrices and slot table (as gmoe_plan.cpp). Cores: a RW x RH rectangle, core s = y RW + x.
+// (BF16 tiles) to the dense routing weights W [ROWS, E] and the plan's gather / combine matrices and slot table. Cores:
+// a RW x RH rectangle, core s = y RW + x.
 //   phase 1 (cores s < ROWS / 4, 4 rows each): each row's routed experts exactly as TopKRouter.dense_decode selects
 //     them (every logit >= the 4th largest, so a tie at the 4th routes more; at most K_IDS kept: logit order, then
 //     index), their softmax weights in integer fixed point (the RISC-V cores have no FPU: exp(d) = 2^(d log2 e), a
-//     Q30 polynomial; one 64-bit reciprocal per row), rounded to BF16; the row of W written, each routed expert
-//     counted at the hub (atomic increments of its count semaphores, 3 x 10 bits per word), the row's (ids,
-//     weights) sent to the hub (core 0), which multicasts all rows and the counts to every core once all have arrived
-//     (semaphores ARRIVE / GO; one core making every slot's entries serially was slower: 96 vs 66 us);
+//     Q30 polynomial; one 64-bit reciprocal per row), rounded to BF16; the row of W written (into Pw's bias slot), each
+//     routed expert counted at the hub (atomic increments of its count semaphores, 3 x 10 bits per word), the row's
+//     (ids, weights) sent to the hub (core 0), which multicasts all rows and the counts to every core once all have
+//     arrived (semaphores ARRIVE / GO; one core making every slot's entries serially was slower: 96 vs 66 us);
 //   phase 2 (every core = slot s): the plan from the counts (counting the 256 rows' masks on every core took ~10 us:
 //     RISC-V L1 loads, a software ctz), slot s's stripes of P1T (one-hot rows) and Pw (the routing weights), core 0
 //     the slot table.
-// GMOE_BIAS_COPY (= hidden tiles; common args 11, 12: [down bias rows, Y_g]): the cores without phase-1 rows copy the
-//   layer's down bias rows into that slot of a shared Y_g.
-// GMOE_BIAS_SLOT (the last slot: never a routed one, at most (ROWS K_IDS + 31 E) / 32 = 71 slots are): phase 1 writes
-//   the rows of W into Pw's columns of that slot instead of W, and its core leaves them; Y_g's rows of that slot hold
-//   the experts' down biases, so the combine (Pw Y_g) adds each row's routing-weighted down bias.
+// The down bias through the combine: the last slot (never a routed one) is the bias slot; phase 1 writes the rows of W
+//   into Pw's columns of that slot (its core leaves them), and the cores without phase-1 rows copy the layer's down
+//   bias rows into that slot of the shared Y_g, so the combine (Pw Y_g) adds each row's routing-weighted down bias.
 //
-// common runtime args: [logits, w, p1t, pw, table, hub_x, hub_y, mc_x0, mc_y0, mc_x1, mc_y1]
-// compile-time args: [cb_scr, RW, MAX_SLOTS, NCORES, SEM_ARRIVE, SEM_GO, accessors (logits, w, p1t, pw, table)]
+// common runtime args: [logits, p1t, pw, table, hub_x, hub_y, mc_x0, mc_y0, mc_x1, mc_y1, down bias rows, Y_g]
+// compile-time args: [cb_scr, RW, MAX_SLOTS, NCORES, SEM_ARRIVE, SEM_GO, accessors (logits, p1t, pw, table, down bias
+// rows, Y_g)]; GMOE_KTH: hidden tiles
 
 #include <stdint.h>
 
@@ -41,13 +40,12 @@ inline uint32_t off(uint32_t row, uint32_t col) {
 
 void kernel_main() {
     const uint32_t logits_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t p1t_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t pw_addr = get_common_arg_val<uint32_t>(3);
-    const uint32_t table_addr = get_common_arg_val<uint32_t>(4);
-    const uint32_t hub_x = get_common_arg_val<uint32_t>(5), hub_y = get_common_arg_val<uint32_t>(6);
-    const uint32_t mx0 = get_common_arg_val<uint32_t>(7), my0 = get_common_arg_val<uint32_t>(8);
-    const uint32_t mx1 = get_common_arg_val<uint32_t>(9), my1 = get_common_arg_val<uint32_t>(10);
+    const uint32_t p1t_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t pw_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t table_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t hub_x = get_common_arg_val<uint32_t>(4), hub_y = get_common_arg_val<uint32_t>(5);
+    const uint32_t mx0 = get_common_arg_val<uint32_t>(6), my0 = get_common_arg_val<uint32_t>(7);
+    const uint32_t mx1 = get_common_arg_val<uint32_t>(8), my1 = get_common_arg_val<uint32_t>(9);
     constexpr uint32_t cb_scr = get_compile_time_arg_val(0);
     constexpr uint32_t RW = get_compile_time_arg_val(1);
     constexpr uint32_t MAX_SLOTS = get_compile_time_arg_val(2);
@@ -55,15 +53,13 @@ void kernel_main() {
     constexpr uint32_t SEM_ARRIVE = get_compile_time_arg_val(4);
     constexpr uint32_t SEM_GO = get_compile_time_arg_val(5);
     constexpr auto l_args = TensorAccessorArgs<6>();
-    constexpr auto w_args = TensorAccessorArgs<l_args.next_compile_time_args_offset()>();
-    constexpr auto p1t_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto p1t_args = TensorAccessorArgs<l_args.next_compile_time_args_offset()>();
     constexpr auto pw_args = TensorAccessorArgs<p1t_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<pw_args.next_compile_time_args_offset()>();
-#ifdef GMOE_BIAS_COPY
     constexpr auto b_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto yg_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-    constexpr uint32_t KTH = GMOE_BIAS_COPY;  // hidden tiles
-#endif
+    constexpr uint32_t KTH = GMOE_KTH;             // hidden tiles
+    constexpr uint32_t BIAS_SLOT = MAX_SLOTS - 1;  // never a routed one: at most (ROWS K_IDS + 31 E) / 32 = 71 are
     constexpr uint32_t tile = 2048;
     constexpr uint32_t E = gmoe::E;
     constexpr uint32_t ROWS = gmoe::ROWS;
@@ -76,7 +72,6 @@ void kernel_main() {
 
     const uint32_t s = static_cast<uint32_t>(get_absolute_logical_y()) * RW + get_absolute_logical_x();
     const auto s_l = TensorAccessor(l_args, logits_addr, tile);
-    const auto s_w = TensorAccessor(w_args, w_addr, tile);
     const auto s_p1t = TensorAccessor(p1t_args, p1t_addr, tile);
     const auto s_pw = TensorAccessor(pw_args, pw_addr, tile);
     const auto s_table = TensorAccessor(table_args, table_addr, 8 * E);
@@ -145,12 +140,8 @@ void kernel_main() {
                 }
                 rw[k] = wb;
             }
-            // W row rr of tile t: its two face rows (GMOE_BIAS_SLOT: into Pw's bias slot columns instead)
-#ifdef GMOE_BIAS_SLOT
-            const uint64_t w_dst = s_pw.get_noc_addr(t * MAX_SLOTS + GMOE_BIAS_SLOT);
-#else
-            const uint64_t w_dst = s_w.get_noc_addr(t);
-#endif
+            // W row rr of tile t: its two face rows into Pw's columns of the bias slot
+            const uint64_t w_dst = s_pw.get_noc_addr(t * MAX_SLOTS + BIAS_SLOT);
             for (uint32_t f = 0; f < 2; ++f) {
                 noc_async_write(wrow_l1 + i * 64 + f * 32, w_dst + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32, 32);
             }
@@ -162,13 +153,12 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(hub_x, hub_y, get_semaphore(SEM_ARRIVE)), 1);
         noc_async_atomic_barrier();
     }
-#ifdef GMOE_BIAS_COPY
     // the cores without phase-1 rows: the layer's down bias rows [E, hidden] (BFP8 tiles) into the bias slot of the
     // shared Y_g (in L1: the combine reads it there)
     if (s >= N1) {
         constexpr uint32_t bt = 1088;
-        const auto s_b = TensorAccessor(b_args, get_common_arg_val<uint32_t>(11), bt);
-        const auto s_yg = TensorAccessor(yg_args, get_common_arg_val<uint32_t>(12), bt);
+        const auto s_b = TensorAccessor(b_args, get_common_arg_val<uint32_t>(10), bt);
+        const auto s_yg = TensorAccessor(yg_args, get_common_arg_val<uint32_t>(11), bt);
         const uint32_t bl1 = table_l1 + 8 * E;
         uint32_t n = 0;
         for (uint32_t c = s - N1; c < KTH; c += NCORES - N1) {
@@ -177,10 +167,9 @@ void kernel_main() {
         noc_async_read_barrier();
         n = 0;
         for (uint32_t c = s - N1; c < KTH; c += NCORES - N1) {
-            noc_async_write(bl1 + n++ * bt, s_yg.get_noc_addr((MAX_SLOTS - 1) * KTH + c), bt);
+            noc_async_write(bl1 + n++ * bt, s_yg.get_noc_addr(BIAS_SLOT * KTH + c), bt);
         }
     }
-#endif
     volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GO));
     if (s == 0) {  // the hub: every row to every core, then GO
         volatile tt_l1_ptr uint32_t* arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_ARRIVE));
@@ -247,11 +236,9 @@ void kernel_main() {
     }
     for (uint32_t t = 0; t < RT; ++t) {
         noc_async_write(p1t_l1 + t * tile, s_p1t.get_noc_addr(s * RT + t), tile);
-#ifdef GMOE_BIAS_SLOT
-        if (s == GMOE_BIAS_SLOT) {
+        if (s == BIAS_SLOT) {
             continue;  // (phase 1 wrote the W rows there)
         }
-#endif
         noc_async_write(pw_l1 + t * tile, s_pw.get_noc_addr(t * MAX_SLOTS + s), tile);
     }
     noc_async_write_barrier();

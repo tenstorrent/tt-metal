@@ -43,11 +43,7 @@ void kernel_main() {
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s_table = TensorAccessor(table_args, table_addr, 8 * gmoe::E);
     const auto s_a = TensorAccessor(ag_args, ag_addr, a_tile);
-#ifdef GMOE_PAGE_A
-    const auto s_d = TensorAccessor(d_args, down_addr, GMOE_PAGE_A);  // (pages padded to a 256-byte multiple)
-#else
     const auto s_d = TensorAccessor(d_args, down_addr, KD * w_tile);
-#endif
 
     cb_reserve_back(cb_scr, 1);
     const uint32_t table_l1 = get_write_ptr(cb_scr);
@@ -84,15 +80,8 @@ void kernel_main() {
             // one slot's KD tiles per transaction-id wait (an id counts at most 255 outstanding requests)
             noc_async_read_set_trid(A_TRID, 0);
             for (uint32_t i = 0; i < m; ++i) {
-#ifdef GMOE_AG_SHARDED
                 // A_g height sharded one slot per core: the slot's KD tiles contiguous, one read
                 noc_async_read(s_a.get_noc_addr((p.base[e] + i) * KD, 0, 0), l1 + i * KD * a_tile, KD * a_tile, 0);
-#else
-                for (uint32_t k = 0; k < KD; ++k) {
-                    noc_async_read(
-                        s_a.get_noc_addr((p.base[e] + i) * KD + k, 0, 0), l1 + (i * KD + k) * a_tile, a_tile, 0);
-                }
-#endif
                 noc_async_read_barrier_with_trid(A_TRID, 0);
             }
             noc_async_read_set_trid(0, 0);
@@ -110,11 +99,7 @@ void kernel_main() {
         const uint32_t slot = issued % DEPTH;
         cb_reserve_back(cb_w, (issued - pushed + 1) * KD);
         const uint32_t wl1 = wbase + slot * KD * w_tile;
-#ifdef GMOE_PAGE_A
-        constexpr uint32_t half = (KD * w_tile / 2) & ~255u;
-#else
         constexpr uint32_t half = (KD * w_tile / 2) & ~63u;
-#endif
         noc_async_read_set_trid(1 + slot, 0);
         noc_async_read_set_trid(1 + slot, NOC_B);
         // the unit's K tiles (one page of the relaid weights), half on each NOC

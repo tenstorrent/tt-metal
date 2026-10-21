@@ -23,8 +23,8 @@
 // per block row (2 per word))]
 // BA_USER_ARG (batch-32 verify, dflash/batched.py): the block of user u = common arg BA_USER_ARG + core index / (cores
 // per user: the program's users side by side, user-major core list): its positions are
-// pos[M u .. M u + M - 1], its page table row u, its Q rows (rows layout, BA_Q_ROWS) row r = q row r BA_Q_RSTRIDE + u.
-// BA_Q_HEADS (with BA_USER_ARG): Q in the heads layout [1, heads, rows, 64] (BA_Q_HEADS row tiles per head) instead.
+// pos[M u .. M u + M - 1], its page table row u, its Q rows in the heads layout [1, heads, rows, 64] (BA_Q_HEADS row
+// tiles per head) row r BA_Q_RSTRIDE + u.
 // BA_UNIFORM: every row attends [0, pos[M - 1]] (the drafter's block; [pos[M - 1] + 1 - BA_WINDOW, ..] with a window),
 // no sinks.
 // BA_SWIN: row r attends the sliding window [pos[r] + 1 - BA_SWIN, pos[r]] (and the sinks): 2 more mask tiles in cb_aux
@@ -344,11 +344,7 @@ void kernel_main() {
         // rows 8 i .. 8 i + 7 = row 4 t + i's heads 8 g .. 8 g + 7 (256-byte segments per 16-column half f)
         for (uint32_t d = 0; d < 2; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {
-#ifdef BA_Q_RSTRIDE
-                const uint64_t src = s_q.get_noc_addr(2 * ((4 * t + i) * BA_Q_RSTRIDE + user) + d);
-#else
                 const uint64_t src = s_q.get_noc_addr(2 * (4 * t + i) + d);
-#endif
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_read(src + rows8(g, f), ql1 + d * tile + rows8(i, f), 256);
                 }

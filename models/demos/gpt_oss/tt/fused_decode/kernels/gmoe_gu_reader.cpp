@@ -4,11 +4,12 @@
 // Grouped MoE gate|up + SwiGLU, reader (BRISC) (dflash/grouped_moe.py GroupedMoE.gate_up). Units (gmoe_common.hpp):
 // (expert e, local column tile j of 23); per unit the expert's slot rows of X_g (all K tiles, once per expert while
 // they fit 4 slots, else per 4-slot group per unit), the gate and up column tiles of global column g0(e) + j
-// interleaved [k][gate, up] (one page of the relaid weights, gmoe_relayout.cpp: one large read), and the two column
-// tiles of the 32-row gate / up bias; up to GMOE_DEPTH units' reads in flight on both NOCs (dynamic NOC mode). A
-// unit's weights are GMOE_SPLIT pages (consecutive pages sit in consecutive DRAM banks, not one 103 KB page in one).
+// interleaved [k][gate, up] (the relaid weights, gmoe_relayout.cpp: GMOE_SPLIT consecutive pages in consecutive DRAM
+// banks, alternating NOCs), and the two column tiles of the 32-row gate / up bias; GMOE_DEPTH units buffered, their
+// reads in flight together (dynamic NOC mode).
 //
-// common runtime args: [plan table, xg, gate_up (relaid), gate_bias, up_bias]
+// common runtime args: [plan table, xg, gate_up (relaid), gate_bias, up_bias, (GMOE_XG_ARG:) X_g's grid NOC x per
+// column, NOC y per row]
 // compile-time args: [cb_scr, cb_meta_c, cb_meta_w, cb_x, cb_w, cb_b, NC, GX, KT, NT, NU, WC, CC,
 //                     accessors (table, xg, gate_up, gate_bias, up_bias)]
 
@@ -44,26 +45,16 @@ void kernel_main() {
     constexpr uint32_t x_tile = 1088;       // BFP8_b
     constexpr uint32_t w_tile = 576;        // BFP4_b
     constexpr uint32_t b_tile = 2048;       // BF16
-    constexpr uint32_t GROUP = GMOE_GROUP;  // slots per in0 load
-    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units buffered (cb_w)
-#ifdef GMOE_INFLIGHT
-    constexpr uint32_t INFLIGHT = GMOE_INFLIGHT;  // units whose reads are outstanding at once (<= DEPTH)
-#else
-    constexpr uint32_t INFLIGHT = DEPTH;
-#endif
-    constexpr uint8_t NOC_B = 1;            // the second half of each weight page (dynamic NOC mode)
+    constexpr uint32_t GROUP = 4;           // slots per in0 load
+    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units in flight
+    constexpr uint8_t NOC_B = 1;            // the odd pages of each unit (dynamic NOC mode)
 
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s_table = TensorAccessor(table_args, table_addr, 8 * gmoe::E);
-    const auto s_x = TensorAccessor(xg_args, xg_addr, x_tile);
     constexpr uint32_t SPLIT = GMOE_SPLIT;            // pages per unit (gmoe_relayout.cpp GMOE_RELAYOUT_SPLIT)
     constexpr uint32_t sp = 2 * KT * w_tile / SPLIT;  // bytes per page
     static_assert(2 * KT % SPLIT == 0 && sp % 64 == 0);
-#ifdef GMOE_PAGE_A
-    const auto s_gu = TensorAccessor(gu_args, gu_addr, GMOE_PAGE_A);  // (pages padded to a 256-byte multiple)
-#else
     const auto s_gu = TensorAccessor(gu_args, gu_addr, sp);
-#endif
     const auto s_gb = TensorAccessor(gb_args, gb_addr, b_tile);
     const auto s_ub = TensorAccessor(ub_args, ub_addr, b_tile);
 
@@ -91,19 +82,16 @@ void kernel_main() {
         // bits); 4 slots' 360 reads under one id wrapped it, and the wait returned before every tile had landed
         noc_async_read_set_trid(X_TRID, 0);
         noc_async_read_set_trid(X_TRID, 1);
-#if defined(GMOE_PROBE_NOX)
-        (void)l1;
-#elif defined(GMOE_XG_SHARDED)
         // X_g block sharded over a GMOE_XG_SX x GMOE_XG_SY core grid (the gather matmul's own output): slot s's row
         // tile is row s % RS of the shards of core row s / RS, its KT tiles KT / SX contiguous tiles in each core of
-        // that row (common args GMOE_XG_SHARDED..: the grid's NOC x per column, then NOC y per row): SX reads per slot,
+        // that row (common args GMOE_XG_ARG..: the grid's NOC x per column, then NOC y per row): SX reads per slot,
         // half on each NOC
         constexpr uint32_t SX = GMOE_XG_SX, CS = KT / SX, RS = GMOE_XG_RS;
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t s = s0 + i;
-            const uint32_t ny = get_common_arg_val<uint32_t>(GMOE_XG_SHARDED + SX + s / RS);
+            const uint32_t ny = get_common_arg_val<uint32_t>(GMOE_XG_ARG + SX + s / RS);
             for (uint32_t j = 0; j < SX; ++j) {
-                const uint32_t nx = get_common_arg_val<uint32_t>(GMOE_XG_SHARDED + j);
+                const uint32_t nx = get_common_arg_val<uint32_t>(GMOE_XG_ARG + j);
                 const uint8_t nn = j % 2;
                 noc_async_read(
                     get_noc_addr(nx, ny, xg_addr + (s % RS) * CS * x_tile, nn),
@@ -114,14 +102,6 @@ void kernel_main() {
         }
         noc_async_read_barrier_with_trid(X_TRID, 0);
         noc_async_read_barrier_with_trid(X_TRID, 1);
-#else
-        for (uint32_t i = 0; i < n; ++i) {
-            for (uint32_t k = 0; k < KT; ++k) {
-                noc_async_read(s_x.get_noc_addr((s0 + i) * KT + k, 0, 0), l1 + (i * KT + k) * x_tile, x_tile, 0);
-            }
-            noc_async_read_barrier_with_trid(X_TRID, 0);
-        }
-#endif
         noc_async_read_set_trid(0, 0);
         noc_async_read_set_trid(0, 1);
         cb_push_back(cb_x, GROUP * KT);
@@ -160,7 +140,7 @@ void kernel_main() {
         if (p.tiles[e] == 0) {
             continue;
         }
-        if (issued - pushed == INFLIGHT) {
+        if (issued - pushed == DEPTH) {
             push_one();
         }
         const uint32_t slot = issued % DEPTH, inflight = issued - pushed + 1;
@@ -172,31 +152,9 @@ void kernel_main() {
         noc_async_read_set_trid(1 + slot, NOC_B);
         // the unit's [k][gate, up] tiles (SPLIT consecutive pages of the relaid weights: consecutive DRAM banks),
         // alternating NOCs
-#ifdef GMOE_PROBE_NOW
-        if constexpr (false) {
-#else
-        if constexpr (SPLIT == 1) {  // (one page: half on each NOC)
-#endif
-            constexpr uint32_t half = (KT * w_tile) & ~63u;
-            noc_async_read(s_gu.get_noc_addr(u, 0, 0), wl1, half, 0);
-            noc_async_read(s_gu.get_noc_addr(u, half, NOC_B), wl1 + half, PW * w_tile - half, NOC_B);
-        } else {
-#ifndef GMOE_PROBE_NOW
-            for (uint32_t q0 = 0; q0 < SPLIT; ++q0) {
-#ifdef GMOE_ROT
-                const uint32_t q = (q0 + c) % SPLIT;  // (cores start on different banks)
-#else
-                const uint32_t q = q0;
-#endif
-#ifdef GMOE_NOC_ALT
-                // (q + u) % 2: with an even SPLIT, q % 2 alone sent every page of a bank over the same NOC
-                const uint8_t nn = (q + u) % 2 ? NOC_B : 0;
-#else
-                const uint8_t nn = q % 2 ? NOC_B : 0;
-#endif
-                noc_async_read(s_gu.get_noc_addr(u * SPLIT + q, 0, nn), wl1 + q * sp, sp, nn);
-            }
-#endif
+        for (uint32_t q = 0; q < SPLIT; ++q) {
+            const uint8_t nn = q % 2 ? NOC_B : 0;
+            noc_async_read(s_gu.get_noc_addr(u * SPLIT + q, 0, nn), wl1 + q * sp, sp, nn);
         }
         noc_async_read(s_gb.get_noc_addr(n, 0, 0), bl1, b_tile, 0);
         noc_async_read(s_ub.get_noc_addr(n, 0, NOC_B), bl1 + b_tile, b_tile, NOC_B);

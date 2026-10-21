@@ -9,9 +9,8 @@
 //
 // common runtime args: [out_addr, core index table (BA_NIDX words), noc (x << 8 | y) per core (2 per word),
 // (BA_OUT_NOTIFY_N: the consumer cores' noc (x << 8 | y), 2 per word), (BA_USER_ARG_W: the user)]
-// BA_OUT_ROWS (batch-32 verify): the root writes its packed tile's 4 rows into the rows layout [1, rows, heads, 64]
-// instead (block row r of user u = out row r BA_Q_RSTRIDE + u, kv head g's 8 heads = tile rows 8 g .. 8 g + 7).
-// BA_OUT_CONCAT: into the concatenated-heads layout [1, 1, rows, heads * 64] (BA_OUT_CONCAT column tiles) instead.
+// BA_OUT_CONCAT (batch-32, with BA_USER_ARG_W): the root writes its packed tile's rows into the concatenated-heads
+// layout [1, 1, rows, heads * 64] (BA_OUT_CONCAT column tiles; block row r of user u = row r BA_Q_RSTRIDE + u) instead.
 
 #include <stdint.h>
 
@@ -19,10 +18,6 @@
 #include "ba_common.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
-
-namespace {
-constexpr uint32_t rows8(uint32_t i, uint32_t f) { return ((i >> 1) * 2 + f) * 512 + (i & 1) * 256; }
-}  // namespace
 
 void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
@@ -150,16 +145,6 @@ void kernel_main() {
                             dst + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
                             32);
                     }
-                }
-            }
-        }
-#elif defined(BA_OUT_ROWS)
-        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W) + grp / (BA_TQ * BA_NKV);
-        for (uint32_t d = 0; d < 2; ++d) {
-            for (uint32_t i = 0; i < 4; ++i) {
-                const uint64_t dst = s_out.get_noc_addr(2 * ((4 * t + i) * BA_Q_RSTRIDE + user) + d);
-                for (uint32_t f = 0; f < 2; ++f) {
-                    noc_async_write(src + d * tile + rows8(i, f), dst + rows8(g, f), 256);
                 }
             }
         }

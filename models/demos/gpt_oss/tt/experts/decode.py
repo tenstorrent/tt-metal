@@ -3,8 +3,6 @@
 
 """Decode forward pass for experts (seq_len=1)."""
 
-import os
-
 import ttnn
 from models.demos.gpt_oss.config import Mode
 
@@ -267,10 +265,6 @@ class DenseDecodePlan:
         )
 
 
-_FUSED_SWIGLU = os.environ.get("GPT_OSS_DENSE_FUSED_SWIGLU", "1") == "1"
-_SWIGLU_FP32 = os.environ.get("GPT_OSS_DENSE_SWIGLU_FP32", "1") == "1"
-
-
 def _dense_swiglu(gate, up, w, weights, plan):
     """act = SwiGLU(gate + gate_bias, up + up_bias) * (w @ expand) on gate / up's own width shards
     (fused_decode/kernels/dense_swiglu_*.cpp): the act shards land where the down matmul reads them."""
@@ -312,7 +306,7 @@ def _dense_swiglu(gate, up, w, weights, plan):
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "dense_swiglu_compute.cpp"), core_ranges=cores,
             compile_time_args=[cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, cb_act, NT], runtime_args=[],
-            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=_SWIGLU_FP32,
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
                                                 math_approx_mode=False),
         ),
     ]  # fmt: skip
@@ -334,9 +328,6 @@ def _dense_swiglu(gate, up, w, weights, plan):
     io = [gate, up, w, weights.gate_bias, weights.up_bias, act]
     ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
     return act
-
-
-_GU_STREAM = os.environ.get("GPT_OSS_DENSE_GU_STREAM", "1") == "1"
 
 
 def _dense_gate_up_stream(hidden_states, w, weights, plan, relaid):
@@ -365,7 +356,8 @@ def _dense_gate_up_stream(hidden_states, w, weights, plan, relaid):
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "dense_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
-            runtime_args=[], common_runtime_args=[t.buffer_address() for t in io], defines=[("GMOE_SPLIT", str(split))],
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in io],
+            defines=[("GMOE_SPLIT", str(split))],
             config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
         ),
         ttnn.KernelDescriptor(
@@ -387,7 +379,7 @@ def _dense_gate_up_stream(hidden_states, w, weights, plan, relaid):
                                  format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype,
                                                                              page_size=page)])  # fmt: skip
 
-    depth = int(os.environ.get("GPT_OSS_DENSE_GU_DEPTH", "2"))  # units buffered (one unit's reads outstanding)
+    depth = 2  # units buffered (one unit's reads outstanding; 1 / 2 / 3 buffered: the same time)
     cbs = [
         cb(cb_x, ttnn.bfloat8_b, 1088, kt),
         cb(cb_w, ttnn.bfloat4_b, 576, depth * 2 * kt),
@@ -421,7 +413,7 @@ def decode_forward_dense(
     UWP, U = ttnn.UnaryWithParam, ttnn.UnaryOpType
     limit, alpha = config.swiglu_limit, config.alpha
     ck = plan.compute_kernel_config
-    if relaid is not None and fused_swiglu and _GU_STREAM and abs(limit - 7.0) < 1e-6 and abs(alpha - 1.702) < 1e-6:
+    if relaid is not None and fused_swiglu and abs(limit - 7.0) < 1e-6 and abs(alpha - 1.702) < 1e-6:
         # gate|up + biases + SwiGLU + routing weights in one DRAM-streaming program (_dense_gate_up_stream)
         w = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         w = ttnn.reshape(w, (1, 1, w.shape[-2], w.shape[-1]))
@@ -445,7 +437,7 @@ def decode_forward_dense(
         compute_kernel_config=ck,
     )
     x.deallocate(True)
-    if fused_swiglu and _FUSED_SWIGLU and abs(limit - 7.0) < 1e-6 and abs(alpha - 1.702) < 1e-6:
+    if fused_swiglu and abs(limit - 7.0) < 1e-6 and abs(alpha - 1.702) < 1e-6:
         # biases, SwiGLU and the routing weights in one program on the gate / up shards (_dense_swiglu): 7 ops
         # (2 reshards, 2 bias adds, the expand matmul, 2 multiplies, a reshard back) in one
         w = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)

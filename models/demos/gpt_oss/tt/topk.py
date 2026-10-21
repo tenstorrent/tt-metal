@@ -10,8 +10,6 @@ transformation followed by top-k selection to assign tokens to experts.
 
 """
 
-import os
-
 import torch
 
 import ttnn
@@ -50,9 +48,6 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
         return expert_indices, expert_weights
     else:
         return expert_indices, ttnn.scatter(dense_zeros, dim=1, index=expert_indices, src=expert_weights)
-
-
-_DENSE_ROUTE = os.environ.get("GPT_OSS_DENSE_ROUTE", "1") == "1"
 
 
 class TopKRouter:
@@ -246,7 +241,7 @@ class TopKRouter:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
-        if tokens == ttnn.TILE_SIZE and self.num_experts == ttnn.TILE_SIZE and _DENSE_ROUTE:
+        if tokens == ttnn.TILE_SIZE and self.num_experts == ttnn.TILE_SIZE:
             # one program, one core per token (fused_decode/kernels/dense_route.cpp): the same selection, the softmax
             # in fixed point on the RISC-V cores (as the DFlash verify's route program)
             weights = self._dense_route(logits)

@@ -2,18 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Grouped MoE gate|up + SwiGLU, compute (dflash/grouped_moe.py GroupedMoE.gate_up). Per unit (expert e, column tile
-// j; gmoe_gu_reader.cpp): for each pair of the expert's slots, gate and up [2 slots x 1 column] accumulated over the
-// K tiles in DST (FP32), plus the 32-row bias tiles (through a BF16 CB), then GPT-OSS SwiGLU (gmoe_swiglu.hpp) into the
-// gate tile, packed one tile per slot.
+// j; gmoe_gu_reader.cpp): for each pair of the expert's slots, gate and up [2 slots x 1 column] = the 32-row bias
+// tiles + the sums over the K tiles, in DST (FP32), then GPT-OSS SwiGLU (gmoe_swiglu.hpp) into the gate tile, packed
+// one tile per slot.
 //
-// compile-time args: [cb_meta_c, cb_x, cb_w, cb_b, cb_out, KT, NU, cb_mm]
+// compile-time args: [cb_meta_c, cb_x, cb_w, cb_b, cb_out, KT, NU]
 
 #include <cstdint>
 
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -28,9 +27,8 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(4);
     constexpr uint32_t KT = get_compile_time_arg_val(5);
     constexpr uint32_t NU = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_mm = get_compile_time_arg_val(7);  // BF16 gate / up sums (the bias add input)
     constexpr uint32_t E = 32;
-    constexpr uint32_t GROUP = GMOE_GROUP;
+    constexpr uint32_t GROUP = 4;  // slots per in0 block (gmoe_gu_reader.cpp)
 
     cb_wait_front(cb_meta, 1);
     volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_meta, 0));
@@ -63,24 +61,8 @@ void kernel_main() {
             }
             for (uint32_t p = 0; p < gm; p += 2) {
                 const uint32_t rt = gm - p < 2 ? gm - p : 2;
-#ifdef GMOE_PROBE_NOMM
-                tile_regs_acquire();
-                tile_regs_commit();
-                pack_reconfig_data_format(cb_out);
-                tile_regs_wait();
-                for (uint32_t r = 0; r < rt; ++r) {
-                    cb_reserve_back(cb_out, 1);
-                    pack_tile(0, cb_out);
-                    cb_push_back(cb_out, 1);
-                }
-                tile_regs_release();
-                continue;
-#endif
-                // DST (r, c) = slot p + r's gate (c = 0) / up (c = 1)
-                // (the inits do not switch unpacker formats: state_configure is a no-op outside the sentinel build)
-#ifdef GMOE_BIAS_DST
-                // the 32-row bias tiles copied into DST first, the matmul accumulates onto them (FP32), SwiGLU in
-                // place: no BF16 round trip of the sums through cb_mm and no add pass
+                // DST (r, c) = slot p + r's gate (c = 0) / up (c = 1): the 32-row bias tiles copied in first, the
+                // matmul accumulates onto them (FP32), SwiGLU in place (no BF16 round trip of the sums and add pass)
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_b);
                 copy_init(cb_b);
@@ -88,64 +70,12 @@ void kernel_main() {
                     copy_tile(cb_b, 0, 2 * r);
                     copy_tile(cb_b, 1, 2 * r + 1);
                 }
-                reconfig_data_format(cb_w, cb_x);
-                matmul_block_init(cb_x, cb_w, 0, 2, rt, KT);
-                for (uint32_t k = 0; k < KT; ++k) {
-                    matmul_block(cb_x, cb_w, p * KT + k, 2 * k, 0, false, 2, rt, KT);
-                }
-                MATH((ckernel::gmoe_swiglu_init()));
-                for (uint32_t r = 0; r < rt; ++r) {
-                    MATH((ckernel::gmoe_swiglu<DST_ACCUM_MODE>(2 * r, 2 * r + 1, 2 * r)));
-                }
-                tile_regs_commit();
-                pack_reconfig_data_format(cb_out);
-                tile_regs_wait();
-                for (uint32_t r = 0; r < rt; ++r) {
-                    cb_reserve_back(cb_out, 1);
-                    pack_tile(2 * r, cb_out);
-                    cb_push_back(cb_out, 1);
-                }
-                tile_regs_release();
-                continue;
-#endif
+                // (the inits do not switch unpacker formats: state_configure is a no-op outside the sentinel build)
                 reconfig_data_format(cb_w, cb_x);  // matmul: SrcA <- in1 (BFP4 weights), SrcB <- in0 (BFP8 rows)
                 matmul_block_init(cb_x, cb_w, 0, 2, rt, KT);
-                tile_regs_acquire();
                 for (uint32_t k = 0; k < KT; ++k) {
                     matmul_block(cb_x, cb_w, p * KT + k, 2 * k, 0, false, 2, rt, KT);
                 }
-                // + bias: the sums through a BF16 CB (as the dense path's BF16 gate / up outputs), then added to the
-                // 32-row bias tiles into DST (as ttnn's matmul bias; a DST-reuse add gave inf)
-#ifdef GMOE_PROBE_NOSW
-                tile_regs_commit();
-                pack_reconfig_data_format(cb_out);
-                tile_regs_wait();
-                for (uint32_t r = 0; r < rt; ++r) {
-                    cb_reserve_back(cb_out, 1);
-                    pack_tile(2 * r, cb_out);
-                    cb_push_back(cb_out, 1);
-                }
-                tile_regs_release();
-                continue;
-#endif
-                tile_regs_commit();
-                cb_reserve_back(cb_mm, 2 * rt);
-                pack_reconfig_data_format(cb_mm);
-                tile_regs_wait();
-                for (uint32_t i = 0; i < 2 * rt; ++i) {
-                    pack_tile(i, cb_mm);
-                }
-                tile_regs_release();
-                cb_push_back(cb_mm, 2 * rt);
-                cb_wait_front(cb_mm, 2 * rt);
-                reconfig_data_format(cb_mm, cb_b);
-                add_init(cb_mm, cb_b);
-                tile_regs_acquire();
-                for (uint32_t r = 0; r < rt; ++r) {
-                    add_tiles(cb_mm, cb_b, 2 * r, 0, 2 * r);
-                    add_tiles(cb_mm, cb_b, 2 * r + 1, 1, 2 * r + 1);
-                }
-                cb_pop_front(cb_mm, 2 * rt);
                 MATH((ckernel::gmoe_swiglu_init()));
                 for (uint32_t r = 0; r < rt; ++r) {
                     MATH((ckernel::gmoe_swiglu<DST_ACCUM_MODE>(2 * r, 2 * r + 1, 2 * r)));
