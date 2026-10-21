@@ -428,7 +428,12 @@ jobs:
           root: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
 
       - name: Install pytest-xdist (sim parallel execution)
-        if: ${{ startsWith(matrix.leg.sku, 'sim_') && !matrix.leg.gate_packages }}
+        # The LLK image already installs this via --system; a venv-less uv install fails there.
+        if: >-
+          ${{ startsWith(matrix.leg.sku, 'sim_')
+              && !matrix.leg.gate_packages
+              && matrix.leg.gate_workdir != 'tt_metal/tt-llk'
+              && !startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/') }}
         run: uv pip install pytest-xdist
 
       - name: Apply ttsim wormhole workaround patches
@@ -500,8 +505,11 @@ jobs:
             # gate_pytest_deselect carries the --deselect args for this leg's arch,
             # resolved from tests/pipeline_reorg/ttsim-skip-list.yaml: the tests that
             # do not yet work under the simulator. Without them a sim leg fails on a
-            # test its own pipeline knowingly skips.
-            if [[ '${{ matrix.leg.gate_packages }}' != 'true' ]]; then
+            # test its own pipeline knowingly skips. Skipped for LLK-workdir legs,
+            # whose own script already owns -n and --timeout.
+            if [[ '${{ matrix.leg.gate_packages }}' != 'true' \
+                && '${{ matrix.leg.gate_workdir }}' != 'tt_metal/tt-llk' \
+                && '${{ matrix.leg.gate_workdir }}' != tt_metal/tt-llk/* ]]; then
               export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ matrix.leg.gate_pytest_deselect }} ${PYTEST_ADDOPTS:-}"
             fi
             CMD=$(cat <<'GATE_CMD_EOF'
