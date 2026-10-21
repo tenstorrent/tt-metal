@@ -140,14 +140,28 @@ def image_to_uint8_on_device(image: ttnn.Tensor) -> ttnn.Tensor:
     + 1) * 127.5`` equals ``clamp((x + 1) * 127.5, 0, 255)`` for every x: the map is monotonic), then a typecast that
     cannot round because the values are already integral. Bit-identical to ``to_pil`` of the bf16 host copy
     (``test_readback_fast_equals_legacy``). The readback then moves 1 byte per channel instead of 2 and needs no host
-    untilize."""
+    untilize.
+
+    The result is ``[1, H, W * 3]``, one image row per page: a row-major page is the last dim, and the ``[1, H, W, 3]``
+    form read 3-byte pages (0.63 s for the 50 MB of a 4096x4096 image, 0.17 s for 12.6 MB at 2048x2048; the uint8
+    conversion itself is 0.15 / 0.04 s). The reshape runs on the fp32 row-major tensor because the reshape op has no
+    uint8 path; with it the whole conversion-plus-read is 0.19 s at 4096x4096 and 0.05 s at 2048x2048, bit-identical
+    (bin/probes/probe_readback_pages.py, 2026-10-21). ``image_rows_to_hwc`` restores ``[H, W, 3]`` on the host."""
+    n, h, w, c = (int(d) for d in image.shape)
     x = ttnn.typecast(image, ttnn.float32)
     x = ttnn.add(x, 1.0)
     x = ttnn.multiply(x, 127.5)
     x = ttnn.clamp(x, min=0.0, max=255.0)
     x = ttnn.floor(x)
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (n, h, w * c))
     return ttnn.typecast(x, ttnn.uint8)
+
+
+def image_rows_to_hwc(rows: torch.Tensor, channels: int = 3) -> torch.Tensor:
+    """``[H, W * C]`` (one replica of :func:`image_to_uint8_on_device`, batch dim dropped) -> ``[H, W, C]``."""
+    h, wc = rows.shape[-2], rows.shape[-1]
+    return rows.reshape(h, wc // channels, channels)
 
 
 # --- request / result ------------------------------------------------------------------------------------------------------
@@ -884,7 +898,7 @@ class Flux3KleinPipeline:
             from PIL import Image
 
             u8 = image_to_uint8_on_device(out)
-            array = ttnn.to_torch(ttnn.get_device_tensors(u8)[0])[0].numpy()
+            array = image_rows_to_hwc(ttnn.to_torch(ttnn.get_device_tensors(u8)[0])[0]).numpy()
             ttnn.deallocate(u8)
             if not traced:
                 ttnn.deallocate(out)
