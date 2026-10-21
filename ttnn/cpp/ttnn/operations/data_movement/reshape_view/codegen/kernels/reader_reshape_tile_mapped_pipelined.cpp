@@ -29,13 +29,13 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(0);
     const uint32_t end_row = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t map_page_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t map_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t input_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t read_batch = get_compile_time_arg_val(4);
-    constexpr uint32_t input_cb_depth = get_compile_time_arg_val(5);
-    constexpr auto map_args = TensorAccessorArgs<6>();
+    constexpr uint32_t map_page_bytes = get_named_compile_time_arg_val("map_page_bytes");
+    constexpr uint32_t tile_bytes = get_named_compile_time_arg_val("tile_bytes");
+    constexpr uint32_t map_cb = get_named_compile_time_arg_val("map_cb");
+    constexpr uint32_t input_cb = get_named_compile_time_arg_val("input_cb");
+    constexpr uint32_t read_batch = get_named_compile_time_arg_val("read_batch");
+    constexpr uint32_t input_cb_depth = get_named_compile_time_arg_val("input_cb_depth");
+    constexpr auto map_args = TensorAccessorArgs<0>();
     constexpr auto input_args = TensorAccessorArgs<map_args.next_compile_time_args_offset()>();
     constexpr uint32_t max_entries = map_page_bytes / sizeof(SegmentMapData);
     static_assert(read_batch >= 1, "pipelined reader needs a positive batch");

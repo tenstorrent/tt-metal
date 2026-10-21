@@ -78,34 +78,41 @@ ProgramDescriptor build_tile_rows(
     reader.kernel_source = op_kernel("reader_reshape_tile_rows.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    reader.compile_time_args = {
-        layout.page_bytes(), tile_bytes, kCbPlan, kCbStaged, layout.in_slots, rcg::kTileRowsHeaderWords};
     TensorAccessorArgs(*plan_buf).append_to(reader.compile_time_args);
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"plan_page_bytes", layout.page_bytes()},
+        {"tile_bytes", tile_bytes},
+        {"plan_cb", kCbPlan},
+        {"input_cb", kCbStaged},
+        {"in_slots", layout.in_slots},
+        {"header_words", rcg::kTileRowsHeaderWords},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_tile_rows.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {
-        tile_bytes,
-        tt::constants::FACE_WIDTH * static_cast<uint32_t>(input.element_size()),
-        kCbPlan,
-        kCbStaged,
-        kCbRing,
-        kCbZero,
-        layout.in_slots,
-        layout.entry_words(),
-        rcg::kTileRowsWriteGroup,
-        rcg::kTileRowsHeaderWords,
-        rcg::kTileRowsEntryHeaderWords,
-        rcg::kZeroSlot,
-        rcg::kRunSlotShift,
-        rcg::kRunSrcRowShift,
-        rcg::kRunDstRowShift,
-        rcg::kRunRowMask};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.named_compile_time_args = {
+        {"tile_bytes", tile_bytes},
+        {"face_row_bytes", tt::constants::FACE_WIDTH * static_cast<uint32_t>(input.element_size())},
+        {"plan_cb", kCbPlan},
+        {"input_cb", kCbStaged},
+        {"ring_cb", kCbRing},
+        {"zero_cb", kCbZero},
+        {"in_slots", layout.in_slots},
+        {"entry_words", layout.entry_words()},
+        {"write_group", rcg::kTileRowsWriteGroup},
+        {"header_words", rcg::kTileRowsHeaderWords},
+        {"entry_header_words", rcg::kTileRowsEntryHeaderWords},
+        {"zero_slot", rcg::kZeroSlot},
+        {"slot_shift", rcg::kRunSlotShift},
+        {"src_row_shift", rcg::kRunSrcRowShift},
+        {"dst_row_shift", rcg::kRunDstRowShift},
+        {"row_mask", rcg::kRunRowMask},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf, plan_buf});
@@ -147,25 +154,32 @@ ProgramDescriptor build_tile_mapped(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     // Half-depth batches keep a slot free for the tile the writer still holds across rows.
-    reader.compile_time_args = {
-        layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput, std::max<uint32_t>(1, input_depth / 2), input_depth};
     TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"map_page_bytes", layout.page_bytes()},
+        {"tile_bytes", tile_bytes},
+        {"map_cb", kCbMap},
+        {"input_cb", kCbMappedInput},
+        {"read_batch", std::max<uint32_t>(1, input_depth / 2)},
+        {"input_cb_depth", input_depth},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_tile_mapped.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {
-        tile_bytes,
-        layout.entries_per_page,
-        static_cast<uint32_t>(input.element_size()),
-        kCbMap,
-        kCbMappedInput,
-        kCbScratch,
-        static_cast<uint32_t>(layout.sliced)};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.named_compile_time_args = {
+        {"tile_bytes", tile_bytes},
+        {"max_entries", layout.entries_per_page},
+        {"element_bytes", static_cast<uint32_t>(input.element_size())},
+        {"map_cb", kCbMap},
+        {"input_cb", kCbMappedInput},
+        {"output_cb", kCbScratch},
+        {"sliced", static_cast<uint32_t>(layout.sliced)},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf, map_buf});

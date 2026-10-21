@@ -21,23 +21,23 @@ void kernel_main() {
     const uint32_t start_batch = get_arg_val<uint32_t>(0);
     const uint32_t end_batch = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t plan_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t input_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t ring_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t zero_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t in_slots = get_compile_time_arg_val(6);
-    constexpr uint32_t entry_words = get_compile_time_arg_val(7);
-    constexpr uint32_t write_group = get_compile_time_arg_val(8);
-    constexpr uint32_t header_words = get_compile_time_arg_val(9);
-    constexpr uint32_t entry_header_words = get_compile_time_arg_val(10);
-    constexpr uint32_t zero_slot = get_compile_time_arg_val(11);
-    constexpr uint32_t slot_shift = get_compile_time_arg_val(12);
-    constexpr uint32_t src_row_shift = get_compile_time_arg_val(13);
-    constexpr uint32_t dst_row_shift = get_compile_time_arg_val(14);
-    constexpr uint32_t row_mask = get_compile_time_arg_val(15);
-    constexpr auto output_args = TensorAccessorArgs<16>();
+    constexpr uint32_t tile_bytes = get_named_compile_time_arg_val("tile_bytes");
+    constexpr uint32_t face_row_bytes = get_named_compile_time_arg_val("face_row_bytes");
+    constexpr uint32_t plan_cb = get_named_compile_time_arg_val("plan_cb");
+    constexpr uint32_t input_cb = get_named_compile_time_arg_val("input_cb");
+    constexpr uint32_t ring_cb = get_named_compile_time_arg_val("ring_cb");
+    constexpr uint32_t zero_cb = get_named_compile_time_arg_val("zero_cb");
+    constexpr uint32_t in_slots = get_named_compile_time_arg_val("in_slots");
+    constexpr uint32_t entry_words = get_named_compile_time_arg_val("entry_words");
+    constexpr uint32_t write_group = get_named_compile_time_arg_val("write_group");
+    constexpr uint32_t header_words = get_named_compile_time_arg_val("header_words");
+    constexpr uint32_t entry_header_words = get_named_compile_time_arg_val("entry_header_words");
+    constexpr uint32_t zero_slot = get_named_compile_time_arg_val("zero_slot");
+    constexpr uint32_t slot_shift = get_named_compile_time_arg_val("slot_shift");
+    constexpr uint32_t src_row_shift = get_named_compile_time_arg_val("src_row_shift");
+    constexpr uint32_t dst_row_shift = get_named_compile_time_arg_val("dst_row_shift");
+    constexpr uint32_t row_mask = get_named_compile_time_arg_val("row_mask");
+    constexpr auto output_args = TensorAccessorArgs<0>();
 
     // 32x32 tiles of four 16x16 faces; the host rejects any other tile shape.
     constexpr uint32_t face_rows = 16;
@@ -55,11 +55,10 @@ void kernel_main() {
     CircularBuffer ring(ring_cb);
     CircularBuffer zero_tile(zero_cb);
 
-    zero_tile.reserve_back(1);
+    // Both are private scratch that is never pushed, so the write pointer stays at the buffer base.
     const uint32_t zero_l1 = zero_tile.get_write_ptr();
     noc.async_write_zeros(zero_tile, tile_bytes);
     noc.write_zeros_l1_barrier();
-    ring.reserve_back(write_group);
     const uint32_t ring_l1 = ring.get_write_ptr();
 
     uint32_t group_size = 0;

@@ -19,13 +19,13 @@ void kernel_main() {
     const uint32_t start_batch = get_arg_val<uint32_t>(0);
     const uint32_t end_batch = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t plan_page_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t plan_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t input_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t in_slots = get_compile_time_arg_val(4);
-    constexpr uint32_t header_words = get_compile_time_arg_val(5);
-    constexpr auto plan_args = TensorAccessorArgs<6>();
+    constexpr uint32_t plan_page_bytes = get_named_compile_time_arg_val("plan_page_bytes");
+    constexpr uint32_t tile_bytes = get_named_compile_time_arg_val("tile_bytes");
+    constexpr uint32_t plan_cb = get_named_compile_time_arg_val("plan_cb");
+    constexpr uint32_t input_cb = get_named_compile_time_arg_val("input_cb");
+    constexpr uint32_t in_slots = get_named_compile_time_arg_val("in_slots");
+    constexpr uint32_t header_words = get_named_compile_time_arg_val("header_words");
+    constexpr auto plan_args = TensorAccessorArgs<0>();
     constexpr auto input_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
     static_assert(in_slots > 0, "a batch reads at least one source tile");
     static_assert((header_words + in_slots) * sizeof(uint32_t) <= plan_page_bytes, "plan page holds the slot list");
