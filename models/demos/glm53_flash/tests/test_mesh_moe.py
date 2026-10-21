@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Phase 2: the hybrid MoE (experts over the mesh columns, intermediate over the rows) on a (2, 4)
-chip block vs the HF MoE module, real layer-3 weights, realistic inputs; each row carries its own
-tokens (decode shape 2 users/row and a 32-token block/row).
+"""Phase 2: the MoE layer on a (2, 4) chip block vs the HF MoE module, real layer-4 weights, realistic inputs; each
+row carries its own tokens (decode shape 2 users/row and a 32-token block/row). GLM53_MOE_LAYOUT=hybrid (default:
+experts over the mesh columns, intermediate over the rows) or ep (every chip 36 full-width experts, the tokens
+exchanged with all_to_all_dispatch / combine along the rows; the fabric defaults to FABRIC_1D for it).
 
     TT_VISIBLE_DEVICES=27,26,31,30,23,22,19,18 TT_MESH_GRAPH_DESC_PATH=.../p150_x8_mesh_graph_descriptor.textproto \
-    MESH_DEVICE=P150x8 pytest models/demos/glm53_flash/tests/test_mesh_moe.py -s
+    MESH_DEVICE=P150x8 [GLM53_MOE_LAYOUT=ep] pytest models/demos/glm53_flash/tests/test_mesh_moe.py -s
 """
 
 from __future__ import annotations
@@ -42,7 +43,8 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
     tt = TtMoE(mesh_device, cfg, mlp, mesh=mesh)
     layout = os.environ.get("GLM53_MOE_LAYOUT", "hybrid")
     logger.info(
-        f"{layout} MoE layer {LAYER} on {ROWS}x{COLS}: experts built + uploaded in {time.perf_counter() - t0:.1f} s"
+        f"{layout} MoE layer {LAYER} on {ROWS}x{COLS} (GLM53_FABRIC={os.environ.get('GLM53_FABRIC', 'default')}): "
+        f"experts built + uploaded in {time.perf_counter() - t0:.1f} s"
     )
     x = realistic_mlp_input(snapshot, text, raw, ROWS * 32).reshape(1, 1, ROWS * 32, -1)  # row r: rows [32r, 32r+T)
     xs = torch.cat([x[:, :, 32 * r : 32 * r + rows_T] for r in range(ROWS)], dim=2)  # [1,1,ROWS*T,4096]
