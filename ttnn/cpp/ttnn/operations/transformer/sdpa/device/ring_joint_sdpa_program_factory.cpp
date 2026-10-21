@@ -3351,10 +3351,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Per-phase device-profiler zones inside sdpa_inner_loop_step (Q@KT, reduce, exp, V matmul, SALAD, ...). They
     // only emit under TT_METAL_DEVICE_PROFILER=1 (PROFILE_KERNEL); this define flips the template gate that is
     // otherwise false at the two call sites. Measurement knob, not hashed: set it for the whole process.
-    if (std::getenv("TT_SOL_STEP_PROFILE") && std::string(std::getenv("TT_SOL_STEP_PROFILE")) == "1") {
+    // =1: the two phase zones per step. =2: also the per-key-subblock zones, which added ~6 KB of TRISC code and
+    // pushed the sparse build past the 70,656 B kernel config buffer (76,960 B measured 2026-10-21).
+    if (std::getenv("TT_SOL_STEP_PROFILE") && std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "0" &&
+        std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "") {
         compute_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
-        // The zones push the sparse compute binary past the 70,656 B kernel config buffer (76,960 B measured
-        // 2026-10-21); O2 trims the TRISC binaries ~30 % (same remedy as the K split below).
+        if (std::string(std::getenv("TT_SOL_STEP_PROFILE")) == "2") {
+            compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_FINE", "1");
+        }
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
     compute_kernel.config = ComputeConfigDescriptor{

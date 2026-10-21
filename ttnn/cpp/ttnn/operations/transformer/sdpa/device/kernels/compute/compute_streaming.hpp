@@ -144,6 +144,15 @@ constexpr bool kRingStepProfiling = true;
 #else
 constexpr bool kRingStepProfiling = false;
 #endif
+// Fine zones (per key subblock: Q@KT, SUB/EXP, QKT@V, rescale, normalize) add ~6 KB of TRISC code and push the
+// sparse build past the kernel config buffer; TT_SOL_STEP_PROFILE=2 (SOL_STEP_PROFILE_FINE) enables them. The
+// default (=1) keeps only the two phase zones, Softmax(Q@KT) and Softmax(Q@KT)@V, one each per Q subblock / row
+// group, which is enough to see step length against the gaps between steps.
+#if defined(SOL_STEP_PROFILE_FINE)
+constexpr bool kRingStepProfilingFine = true;
+#else
+constexpr bool kRingStepProfilingFine = false;
+#endif
 
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
@@ -1584,7 +1593,7 @@ static void sdpa_inner_loop_step(
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                sub_exp_block_bcast_cols<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                     cb_qkt_im,
                     cur.max,
                     cur.sum,
@@ -1599,7 +1608,7 @@ static void sdpa_inner_loop_step(
                 sdpa_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+                MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "Q@KT MM+Pack");
                 blocked_matmul_and_pack<true, KT_stride, KT_stride>(
                     cb_q_in,
                     cb_kt_in,
@@ -1714,7 +1723,7 @@ static void sdpa_inner_loop_step(
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
-            MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+            MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "Reduce max");
             CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
@@ -1809,7 +1818,7 @@ static void sdpa_inner_loop_step(
                 // Split-drain (common, materialized-V path): interleave each column-subblock's
                 // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                    sub_exp_block_bcast_cols<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -1833,7 +1842,7 @@ static void sdpa_inner_loop_step(
                     }
 
                     {
-                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                        MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                             out_cb, out_cb);
@@ -1881,7 +1890,7 @@ static void sdpa_inner_loop_step(
                 // tokens, matching PACK_DONE's capacity in init_sdpa_streaming_semaphores().
                 static_assert(qktv_first_group_reads_inplace_row, "in-place V always reads the in-place row");
                 static_assert(qktv_h == 1, "in-place V is single-tile Q");
-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                sub_exp_block_bcast_cols<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                     cb_qkt_im, cur.max, cur.sum, KT_stride, q_num_subblocks - 1, 0, qkt_subblock_h, actual_sbw);
                 PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
@@ -1889,7 +1898,7 @@ static void sdpa_inner_loop_step(
                     const bool prepare_next_block = kt_sub + 1 < kt_num_full_subblocks;
                     const bool accumulate_in_l1 = kt_sub > 0;  // Block 0 overwrites the output row.
                     if (prepare_next_block) {
-                        sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                        sub_exp_block_bcast_cols<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                             cb_qkt_im,
                             cur.max,
                             cur.sum,
@@ -1907,7 +1916,7 @@ static void sdpa_inner_loop_step(
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
                     {
-                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                        MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "QKT@V MM+Pack");
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                             out_cb, out_cb);
                         inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
@@ -1942,11 +1951,11 @@ static void sdpa_inner_loop_step(
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
-            MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+            MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "ROW_NORM");
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt);
             normalize_row_streaming<
-                profiling_enabled,
+                profiling_enabled && kRingStepProfilingFine,
                 vDHt,
                 dst_size,
                 cb_col_identity,
@@ -1967,7 +1976,7 @@ static void sdpa_inner_loop_step(
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+                MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "S_CORR_FUSED");
                 // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
                 // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                 if constexpr (has_qktv_remainder) {
@@ -2008,7 +2017,7 @@ static void sdpa_inner_loop_step(
             // SALAD for previous group (always a full group, h=qktv_h)
             if (!is_first_iter) {
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                sub_exp_first_col_blocks<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
@@ -2020,7 +2029,7 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
             }
             {
-                MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                MaybeDeviceZoneScopedN(profiling_enabled && kRingStepProfilingFine, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                     out_cb, out_cb);
@@ -2064,7 +2073,7 @@ static void sdpa_inner_loop_step(
                         has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
 
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                    sub_exp_first_col_blocks<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
 
@@ -2118,7 +2127,7 @@ static void sdpa_inner_loop_step(
                 if (!is_first_iter) {
                     constexpr uint32_t drain_salad_row = 0;
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                    sub_exp_first_col_blocks<profiling_enabled && kRingStepProfilingFine, scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
