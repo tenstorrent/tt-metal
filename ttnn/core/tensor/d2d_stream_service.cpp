@@ -5,8 +5,11 @@
 #include "tensor/d2d_stream_service.hpp"
 
 #include <array>
+#include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <limits>
@@ -2247,9 +2250,10 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
     std::string path;
     std::exception_ptr error;
     try {
-        std::array<char, 256> host{};
-        gethostname(host.data(), host.size() - 1);
-        local = {.rank = rank, .host_name = host.data()};
+        std::string host(HOST_NAME_MAX + 1, '\0');
+        TT_FATAL(gethostname(host.data(), host.size()) == 0, "gethostname failed: {}", std::strerror(errno));
+        host.resize(std::strlen(host.c_str()));
+        local = {.rank = rank, .host_name = std::move(host)};
         for (size_t b = 0; b < boundaries.size(); ++b) {
             TT_FATAL(
                 !boundaries[b].empty(),
