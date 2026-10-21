@@ -638,6 +638,38 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 }
 
 /**
+ * Pack num_tiles consecutive 32x32 tiles with the program _llk_pack_init_<PackMode::Tilize> set up, one tile per MOP run so
+ * every tile closes, to L1 tiles tile_stride bytes apart. Block-float outputs need the close of each tile.
+ * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
+ * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_tilize_block_closed_(
+    const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles, const std::uint32_t tile_stride)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination(address);
+
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+
+    // The tilize program packs two face pairs and steps Z two pairs, into the next tile, and closes the tile in its last pack.
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TT_MOP(1, 0, 0);
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 0, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+/**
  * Pack num_tiles consecutive tiles to L1 tiles tile_stride bytes apart, closing every tile so block-float and padded pages stay intact.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
@@ -662,7 +694,12 @@ inline void _llk_pack_block_closed_(
     program_packer_destination(address);
 
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+    // Rewriting an unchanged stride cost the call up to 8 cycles.
+    if (tile_stride != pack_ch1_w_stride)
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride = tile_stride;
+    }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {

@@ -219,9 +219,9 @@ def _run_unary_datacopy_test(
         blocks_calculation_algorithm,
     )
 
-    # Four-face blocks of two or more tiles pack with one block run under the block unpack; uncompressed four-face
+    # Blocks of two or more tiles pack with one block run under the block unpack; uncompressed four-face
     # tiles lie back to back in L1 like CB pages, so the block unpack walks from one into the next.
-    pack_block = unpack_block and num_faces == 4 and num_tiles_in_block > 1
+    pack_block = unpack_block and num_tiles_in_block > 1
     back_to_back = (
         unpack_block
         and num_faces == 4

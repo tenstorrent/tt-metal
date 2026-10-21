@@ -140,6 +140,29 @@ def test_unpack_tilize_block(
 
 
 @parametrize(
+    formats=[InputOutputFormat(DataFormat.Fp8_e4m3, DataFormat.Float16_b)]
+    + input_output_formats([DataFormat.Int8]),
+    num_faces=[2, 4],
+    input_dimensions=[[128, 64], [256, 96], [256, 160], [256, 288], [32, 256]],
+)
+def test_unpack_tilize_8bit_block(
+    formats,
+    num_faces,
+    input_dimensions,
+):
+    # Rows of 2, 3, 5, 9 and 8 tiles: the 8-bit block call replays one body per tile
+    unpack_tilize(
+        formats,
+        dest_acc=(
+            DestAccumulation.Yes if formats.input_format == DataFormat.Int8 else None
+        ),
+        num_faces=num_faces,
+        unpack_block=True,
+        input_dimensions=input_dimensions,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.Yes],
     num_faces=[2, 4],
@@ -159,6 +182,27 @@ def test_unpack_tilize_float32_lossless_block(
     )
 
 
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64], [128, 160], [128, 288]],
+)
+def test_unpack_tilize_dest_runs(
+    formats,
+    dest_acc,
+    input_dimensions,
+):
+    # Rows of 2, 5 (4 + 1) and 9 (4 + 4 + 1) tiles: one DEST slot handshake per run of up to 4 tiles
+    unpack_tilize(
+        formats,
+        unpack_to_dest=True,
+        validate_lossless=formats.input_format == DataFormat.Float32,
+        dest_acc=dest_acc,
+        unpack_block=True,
+        input_dimensions=input_dimensions,
+    )
+
+
 def unpack_tilize(
     formats,
     unpack_to_dest=False,
@@ -166,8 +210,10 @@ def unpack_tilize(
     dest_acc=None,
     num_faces=4,
     unpack_block=False,
+    input_dimensions=None,
 ):
-    input_dimensions = [64, 64]
+    if input_dimensions is None:
+        input_dimensions = [64, 64]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
