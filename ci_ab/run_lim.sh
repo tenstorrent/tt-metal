@@ -36,9 +36,9 @@ run() {  # kind side dir tag flags...
   grep -qaE '[0-9]+ passed' /tmp/r_$tag.txt || tail -5 /tmp/r_$tag.txt | cut -c1-240; cd $R
   python $S/ut_dump.py $k $tag $s $L/perf_data/runs/$tag
 }
-ARMS="MAINP HEADP LIMK LIM2"
+ARMS="MAINP HEADP LIMK KDF"
 for s in $ARMS M2; do build $s $HOME/ut_$s; done
-python $S/elfcheck_lim.py MAINP=$HOME/ut_MAINP M2=$HOME/ut_M2 HEADP=$HOME/ut_HEADP LIMK=$HOME/ut_LIMK LIM2=$HOME/ut_LIM2 | tee /tmp/elf.txt
+python $S/elfcheck_lim.py MAINP=$HOME/ut_MAINP M2=$HOME/ut_M2 HEADP=$HOME/ut_HEADP LIMK=$HOME/ut_LIMK KDF=$HOME/ut_KDF | tee /tmp/elf.txt
 grep -q "^GUARD ok" /tmp/elf.txt || { echo "== GUARD FAIL"; exit 1; }
 j=0
 FWD="$ARMS M2"; BWD=$(echo $FWD | tr ' ' '\n' | tac | tr '\n' ' ')

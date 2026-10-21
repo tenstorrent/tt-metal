@@ -15,6 +15,6 @@ def cmp(a, b):
     print(f"ELF {a} vs {b}: {len(ks)} common, identical unpack/math/pack {same['unpack']}/{same['math']}/{same['pack']}")
     return ks, same
 ks, same = cmp("MAINP", "M2"); ok &= len(ks) > 0 and all(v == len(ks) for v in same.values())
-for h in ("HEADP", "LIMK", "LIM2"):
+for h in ("HEADP", "LIMK", "KDF"):
     ks, same = cmp("MAINP", h); ok &= len(ks) > 0 and same["pack"] < len(ks)
 print("GUARD ok" if ok else "GUARD FAIL")
