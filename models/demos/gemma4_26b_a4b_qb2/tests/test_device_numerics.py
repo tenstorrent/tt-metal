@@ -3,50 +3,103 @@
 """Real-weight decoder parity and traced cached-continuation regressions."""
 
 import copy
+import hashlib
+import json
+from pathlib import Path
 
+import pytest
 import torch
+from transformers import AutoConfig
 from transformers.cache_utils import DynamicCache
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer, Gemma4TextRotaryEmbedding
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator
-from models.demos.gemma4_26b_a4b_qb2.tt.model import Checkpoint
+from models.demos.gemma4_26b_a4b_qb2.tt.model import MODEL_ID, REVISION, Checkpoint
+
+PREFILL_LENGTH = 65
 
 
 def host(tensor):
-    return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]).float()
+    replicas = [ttnn.to_torch(value).float() for value in ttnn.get_device_tensors(tensor)]
+    assert all(torch.equal(replicas[0], value) for value in replicas[1:]), "Decoder output replicas differ"
+    return replicas[0]
 
 
-def assert_decoder_close(reference, actual):
-    # Quantized BFP8 weights/KV and routed MoE arithmetic use the bring-up's
-    # 0.995 layer PCC gate, not the 0.999 gate for a single BF16 primitive.
-    assert torch.isfinite(actual).all()
+def assert_decoder_close(reference, actual, label):
+    # Preserve the original text-activation/FP32-HF accuracy gate. Arbitrary
+    # Gaussian hidden states were diagnostic stress inputs, not this contract.
+    assert torch.isfinite(reference).all() and torch.isfinite(actual).all(), label
     passed, pcc = comp_pcc(reference, actual, 0.995)
-    assert passed, f"Checkpoint decoder PCC {pcc} < 0.995"
+    print(f"DECODER_NUMERICS {label} pcc={pcc}", flush=True)
+    assert passed, f"{label}: checkpoint decoder PCC {pcc} < 0.995"
 
 
-def check_decoder(generator, layer_number):
+def reference_layer(config, index):
+    with torch.device("meta"):
+        layer = Gemma4TextDecoderLayer(config, index)
+    layer.load_state_dict(
+        {key: value.float() for key, value in Checkpoint().load(f"model.language_model.layers.{index}.").items()},
+        assign=True,
+    )
+    return layer.eval()
+
+
+@pytest.fixture(scope="module")
+def text_layer_inputs():
+    """Regenerate the original FP32 HF input recipe from small, pinned token IDs."""
+    fixture = json.loads(Path(__file__).with_name("decoder_input_tokens.json").read_text())
+    assert fixture["model"] == MODEL_ID
+    assert fixture["revision"] == fixture["tokenizer_revision"] == REVISION
+    tokens = torch.tensor(fixture["token_ids"])
+    length = PREFILL_LENGTH + 1
+    assert tokens.numel() == length
+    torch.set_num_threads(8)
+    config = AutoConfig.from_pretrained(MODEL_ID, revision=REVISION).text_config
+    config._attn_implementation = "eager"
+    with torch.inference_mode():
+        embedding = Checkpoint().load("model.language_model.embed_tokens.")["weight"]
+        hidden = embedding[tokens].float()[None] * torch.tensor(config.hidden_size**0.5, dtype=torch.float32)
+        del embedding
+        inputs = {0: hidden.bfloat16().float()}
+        mask = torch.zeros(length, length).masked_fill(
+            torch.triu(torch.ones(length, length, dtype=torch.bool), 1), -torch.inf
+        )[None, None]
+        rotary = Gemma4TextRotaryEmbedding(config)
+        # Layer 5 must receive the real HF 0..4 boundary, not layer-0 or random input.
+        for index in range(5):
+            layer = reference_layer(config, index)
+            rope = rotary(hidden, torch.arange(length)[None], layer_type=config.layer_types[index])
+            hidden = layer(hidden, position_embeddings=rope, attention_mask=mask)
+            del layer
+        inputs[5] = hidden.bfloat16().float()
+    return inputs
+
+
+@torch.inference_mode()
+def check_decoder(generator, layer_number, x):
     model = generator.model
     index = model.layer_indices[layer_number]
     config = copy.deepcopy(model.config)
     config._attn_implementation = "eager"
-    with torch.device("meta"):
-        reference = Gemma4TextDecoderLayer(config, index)
-    reference.load_state_dict(
-        {key: value.float() for key, value in Checkpoint().load(f"model.language_model.layers.{index}.").items()},
-        assign=True,
+    reference = reference_layer(config, index)
+    length = PREFILL_LENGTH
+    assert x.shape == (1, length + 1, config.hidden_size)
+    label = (
+        f"layer={index} length={length} precision={model.precision_config['config_id']} "
+        f"input_sha256={hashlib.sha256(x.numpy().tobytes()).hexdigest()}"
     )
-    reference.eval()
-    x = torch.randn(1, 65, config.hidden_size).bfloat16().float()
     kind = config.layer_types[index]
     cos, sin = Gemma4TextRotaryEmbedding(config)(x, torch.arange(128)[None], layer_type=kind)
-    mask = torch.zeros(64, 64).masked_fill(torch.triu(torch.ones(64, 64, dtype=torch.bool), 1), -torch.inf)
+    mask = torch.zeros(length, length).masked_fill(
+        torch.triu(torch.ones(length, length, dtype=torch.bool), 1), -torch.inf
+    )
     hf_cache = DynamicCache()
     with torch.no_grad():
         expected = reference(
-            x[:, :64],
-            position_embeddings=(cos[:, :64], sin[:, :64]),
+            x[:, :length],
+            position_embeddings=(cos[:, :length], sin[:, :length]),
             attention_mask=mask[None, None],
             past_key_values=hf_cache,
         )
@@ -54,22 +107,22 @@ def check_decoder(generator, layer_number):
     layer, cache = model.layers[layer_number], caches[layer_number]
     device_table = model.upload(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
     actual = layer.prefill_forward(
-        model.upload(x[:, :64][None]),
+        model.upload(x[:, :length][None]),
         rope_mats=model.rope_prefill[kind],
         page_table=device_table,
         kv_cache=cache,
     )
-    assert_decoder_close(expected, host(actual).squeeze(0))
+    assert_decoder_close(expected, host(actual).squeeze(0), label + " phase=prefill")
     with torch.no_grad():
         expected = reference(
-            x[:, 64:],
-            position_embeddings=(cos[:, 64:65], sin[:, 64:65]),
-            attention_mask=torch.zeros(1, 1, 1, 65),
+            x[:, length:],
+            position_embeddings=(cos[:, length : length + 1], sin[:, length : length + 1]),
+            attention_mask=torch.zeros(1, 1, 1, length + 1),
             past_key_values=hf_cache,
         )
-    hidden = model.upload(x[:, 64:][None])
-    position = model.upload(torch.tensor([[64]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-    cache_position = model.upload(torch.tensor([64], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    hidden = model.upload(x[:, length:][None])
+    position = model.upload(torch.tensor([[length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    cache_position = model.upload(torch.tensor([length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     def forward():
         return layer.decode_forward(
@@ -88,7 +141,7 @@ def check_decoder(generator, layer_number):
     ttnn.end_trace_capture(model.mesh, trace, cq_id=0)
     try:
         ttnn.execute_trace(model.mesh, trace, cq_id=0, blocking=True)
-        assert_decoder_close(expected, host(actual).squeeze(0))
+        assert_decoder_close(expected, host(actual).squeeze(0), label + " phase=traced_decode")
     finally:
         ttnn.release_trace(model.mesh, trace)
 
@@ -143,16 +196,24 @@ def check_continuation(generator, start):
     generator._release_trace()
 
 
-def test_checkpoint_decoder_and_cached_continuation(qb2_mesh, monkeypatch):
+@pytest.fixture
+def generator(qb2_mesh):
     torch.manual_seed(42)
     torch.set_num_threads(8)
-    monkeypatch.setenv("GEMMA4_PREFIX_TRACE_SUFFIX", "1")
-    # Exercise the submitted TP4 decoder and precision policy for both attention kinds.
     generator = Gemma4Generator(qb2_mesh, max_seq_len=2048, layer_indices=(0, 5))
     try:
-        for layer_number in range(2):
-            check_decoder(generator, layer_number)
-        for start in (31, generator.model.config.sliding_window - 1):
-            check_continuation(generator, start)
+        yield generator
     finally:
         generator._release_trace()
+
+
+@pytest.mark.parametrize("layer_number", [0, 1], ids=["sliding", "full"])
+def test_checkpoint_decoder_numerics(generator, text_layer_inputs, layer_number):
+    check_decoder(generator, layer_number, text_layer_inputs[generator.model.layer_indices[layer_number]])
+
+
+@pytest.mark.parametrize("boundary", ["partial_page", "sliding_window"])
+def test_cached_continuation(generator, monkeypatch, boundary):
+    monkeypatch.setenv("GEMMA4_PREFIX_TRACE_SUFFIX", "1")
+    start = 31 if boundary == "partial_page" else generator.model.config.sliding_window - 1
+    check_continuation(generator, start)
