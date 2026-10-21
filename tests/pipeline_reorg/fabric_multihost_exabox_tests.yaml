@@ -107,7 +107,7 @@
   team: scaleout
   budget_type: e2e
   sp_config: sc4
-  release_ready: true
+  release_ready: false
 
 # ============================================================================
 # SC4 express-link routing

@@ -16,7 +16,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_rms_norm
 

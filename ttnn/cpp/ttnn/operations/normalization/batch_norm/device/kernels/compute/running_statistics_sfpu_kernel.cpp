@@ -16,14 +16,24 @@ namespace ckl = compute_kernel_lib;
 using D = ckl::Dst;
 
 // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
-template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
+template <
+    uint32_t dfb_batch_id,
+    uint32_t dfb_old_id,
+    uint32_t dfb_updated_id,
+    bool AlsoOut0,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4,
+    typename DFB5>
 ALWI void update_running_stat(
-    DataflowBuffer& dfb_batch_obj,
-    DataflowBuffer& dfb_old_obj,
-    DataflowBuffer& dfb_updated_obj,
-    DataflowBuffer& dfb_one_obj,
-    DataflowBuffer& dfb_momentum_obj,
-    DataflowBuffer& dfb_out0_obj) {
+    DFB0& dfb_batch_obj,
+    DFB1& dfb_old_obj,
+    DFB2& dfb_updated_obj,
+    DFB3& dfb_one_obj,
+    DFB4& dfb_momentum_obj,
+    DFB5& dfb_out0_obj) {
     ckl::eltwise_chain(
         ckl::IterationShape::one_tile(),
         ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D0>{dfb_one_obj},
@@ -42,8 +52,15 @@ ALWI void update_running_stat(
             dfb_out0_obj});
 }
 
-template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcDfb, uint32_t DstDfb>
-ALWI void maybe_typecast_stat(DataflowBuffer& src_dfb_obj, DataflowBuffer& dst_dfb_obj) {
+template <
+    bool NeedsTypecast,
+    uint32_t TcInFmt,
+    uint32_t TcOutFmt,
+    uint32_t SrcDfb,
+    uint32_t DstDfb,
+    typename DFB0,
+    typename DFB1>
+ALWI void maybe_typecast_stat(DFB0& src_dfb_obj, DFB1& dst_dfb_obj) {
     if constexpr (NeedsTypecast) {
         ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcDfb), ckl::output(DstDfb)>(
             ckl::IterationShape::one_tile(), src_dfb_obj, dst_dfb_obj);
@@ -95,12 +112,12 @@ void kernel_main() {
 #ifdef NEEDS_MEAN_TYPECAST
     DataflowBuffer dfb_writer_updated_mean_obj(dfb_writer_updated_mean);
 #else
-    DataflowBuffer& dfb_writer_updated_mean_obj = dfb_updated_mean_obj;
+    auto& dfb_writer_updated_mean_obj = dfb_updated_mean_obj;
 #endif
 #ifdef NEEDS_VAR_TYPECAST
     DataflowBuffer dfb_writer_updated_var_obj(dfb_writer_updated_var);
 #else
-    DataflowBuffer& dfb_writer_updated_var_obj = dfb_updated_var_obj;
+    auto& dfb_writer_updated_var_obj = dfb_updated_var_obj;
 #endif
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::out);

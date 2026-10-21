@@ -45,3 +45,6 @@ training_config:
 device_config:
   enable_fsdp: true
   mesh_shape: [32, 1]
+  # The q/k norms are too small to shard into whole tiles, which makes FSDP's CCLs slow.
+  # Replicating them is faster and costs only a few MiB per device. See docs/FSDP.md.
+  fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]
