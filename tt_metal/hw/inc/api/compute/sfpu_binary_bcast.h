@@ -70,10 +70,10 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
  * | dst_col_vec_idx  | The index of the col-vector tile in DST (column 0 is broadcast)     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-// `VectorMode::None` makes `_llk_math_eltwise_sfpu_apply_vector_mode_` bypass the
-// per-face loop and invoke the full-tile bcast helper exactly once, with the same
-// `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
-// the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
+// `VectorMode::None` makes `_llk_math_eltwise_binary_sfpu_params_` bypass the
+// per-face loop and invoke the full-tile bcast helper exactly once, inside the same
+// calculation on Dest tile 0 (`_llk_math_eltwise_sfpu_start_(0)` / `_done_()`) the
+// standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
 // `_sfpu_binary_check_`.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {

@@ -13,8 +13,8 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
+#include "sfpu/shim.h"
 
 // local function declarations
 template <SfpuType sfpu_op>
