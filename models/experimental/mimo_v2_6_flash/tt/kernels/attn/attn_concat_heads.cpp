@@ -6,6 +6,7 @@
 // column h * v_tiles + dt is row h of user b's tile column dt, for dt < v_tiles (the V padding columns are dropped).
 // One unit is the 16-row half (faces 0-1 or 2-3) of one output tile; this core does units [first, first + units).
 // With a mask (owner mask [1, 1, B, 1], bf16 0 / 1): the rows of users whose mask is 0 are zeros (the mul by it).
+// The SDPA output may hold fewer users than the 32 output rows (a compact decode batch): rows >= in_users are zeros.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -18,6 +19,7 @@ void kernel_main() {
     constexpr bool in_dram = get_compile_time_arg_val(5) == 1;
     constexpr bool has_mask = get_compile_time_arg_val(6) == 1;
     constexpr bool mask_dram = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t in_users = get_compile_time_arg_val(8);  // users in the SDPA output (<= 32)
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t face_bytes = 512;
     constexpr uint32_t half_bytes = 2 * face_bytes;  // rows 0-15 or 16-31 of a tile: two faces
@@ -53,17 +55,19 @@ void kernel_main() {
             const uint32_t b = half * 16 + r;
             const uint32_t d0 = dst + r * row_bytes;
             const uint32_t d1 = d0 + face_bytes;
+            bool zero = b >= in_users;
             if constexpr (has_mask) {
                 // element (b, 0) of the mask tile: face (b / 16) * 2, row b % 16
-                if ((mask[(b >> 4) * (half_bytes / 2) + (b & 15) * 16] & 0x7fffu) == 0) {
-                    volatile tt_l1_ptr uint32_t* z0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(d0);
-                    volatile tt_l1_ptr uint32_t* z1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(d1);
-                    for (uint32_t w = 0; w < row_bytes / 4; w++) {
-                        z0[w] = 0;
-                        z1[w] = 0;
-                    }
-                    continue;
+                zero = zero || (mask[(b >> 4) * (half_bytes / 2) + (b & 15) * 16] & 0x7fffu) == 0;
+            }
+            if (zero) {
+                volatile tt_l1_ptr uint32_t* z0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(d0);
+                volatile tt_l1_ptr uint32_t* z1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(d1);
+                for (uint32_t w = 0; w < row_bytes / 4; w++) {
+                    z0[w] = 0;
+                    z1[w] = 0;
                 }
+                continue;
             }
             const uint32_t page = b * user_pages + page0;
             noc_async_read(in_gen.get_noc_addr(page, src_off), d0, row_bytes);

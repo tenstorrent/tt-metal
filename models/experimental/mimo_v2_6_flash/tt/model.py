@@ -884,17 +884,39 @@ class TtMiMoModel:
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
         if self.layer_groups is not None:
             positions["pos_update"] = cur_pos_tt  # vLLM's blocks: both chips of a pair keep every slot's K / V
+        # Global layers' SDPA over the decode users' rows only (see attention._forward_decode_split): with fewer
+        # users than table rows the kernel would spread its cores over 32 rows of mostly idle slots.
+        compact_sdpa = self.decode_users < self.max_batch and os.environ.get("MIMO_COMPACT_SDPA", "1") == "1"
+        sdpa_tables = {}
+        if compact_sdpa:
+            positions["pos_sdpa"] = ttnn.slice(pos_owned_tt, (0,), (self.decode_users,))
         h = None
         for i, layer in enumerate(self.layers):
+            layer_positions = positions
+            if compact_sdpa and not layer.is_swa:
+                key = self._table_key(i)
+                if key not in sdpa_tables:
+                    table = self.page_table_tt[key]
+                    sdpa_tables[key] = ttnn.slice(table, (0, 0), (self.decode_users, table.shape[-1]))
+                layer_positions = dict(positions, page_table_sdpa=sdpa_tables[key])
             y, h = layer.forward_decode(
-                x, rot_mats, positions, self._layer_page_table(i), self.kv_caches[i], mask_tt, h=h, return_norm=True
+                x,
+                rot_mats,
+                layer_positions,
+                self._layer_page_table(i),
+                self.kv_caches[i],
+                mask_tt,
+                h=h,
+                return_norm=True,
             )
             x.deallocate(True)
             x = y
         logits = self._logits(x, h)
         x.deallocate(True)
-        for t in (*rot_mats[True][:2], *rot_mats[False], *made):
+        for t in (*rot_mats[True][:2], *rot_mats[False], *made, *sdpa_tables.values()):
             t.deallocate(True)
+        if compact_sdpa:
+            positions["pos_sdpa"].deallocate(True)
         if greedy_only:
             next_tokens = self.greedy_head(logits, token_input=tokens_tt)
             return {"logits": logits, "next_tokens": next_tokens}

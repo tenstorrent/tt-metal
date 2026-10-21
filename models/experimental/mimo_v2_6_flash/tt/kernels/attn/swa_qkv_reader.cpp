@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_trans = get_compile_time_arg_val(4);
     constexpr uint32_t cb_cache = get_compile_time_arg_val(5);
     constexpr uint32_t cb_meta = get_compile_time_arg_val(6);  // pos / page-table scratch
-    constexpr uint32_t d_tiles = get_compile_time_arg_val(7);  // 6
+    constexpr uint32_t d_tiles = get_compile_time_arg_val(7);  // 6 (V cores: the V cache's 4 real columns)
     constexpr uint32_t block_size = get_compile_time_arg_val(8);
     constexpr uint32_t pos_page_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t pt_page_bytes = get_compile_time_arg_val(10);
