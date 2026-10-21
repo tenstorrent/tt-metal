@@ -571,11 +571,9 @@ class TtSharedExpert(LightweightModule):
             sub_device_id=self.subdevice_id,
         )
 
-        # 2) Combine the gate and up projections through the GLU activation. The ops directly rather than the
-        # situ_glu / clamped_silu_glu wrappers, which free gate_out and up_out: every intermediate here is kept
-        # alive past this forward, see step 4.
+        # 2) Combine the gate and up projections through the GLU activation
         if self.activation == ACTIVATION_SITU:
-            activated = ttnn.situ_glu(
+            activated = situ_glu(
                 gate_out,
                 up_out,
                 self.situ_beta,
@@ -583,7 +581,7 @@ class TtSharedExpert(LightweightModule):
                 sub_core_grids=self.subdevice_cores,
             )
         elif self.activation == ACTIVATION_CLAMPED_SILU_GLU:
-            activated = ttnn.clamped_silu_glu(
+            activated = clamped_silu_glu(
                 gate_out,
                 up_out,
                 self.clamped_silu_glu_limit,
@@ -592,6 +590,7 @@ class TtSharedExpert(LightweightModule):
         else:
             # gate_out already carries the matmul-fused SiLU.
             ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
+            ttnn.deallocate(up_out)
             activated = gate_out
 
         # 3) Compute down projection
@@ -602,6 +601,7 @@ class TtSharedExpert(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             sub_device_id=self.subdevice_id,
         )
+        ttnn.deallocate(activated)
 
         # 4) Reduce-scatter across mesh columns when TP > 1.
         if self.mesh_device.shape[1] > 1:
@@ -635,17 +635,12 @@ class TtSharedExpert(LightweightModule):
                 cluster_axis=1,
                 subdevice_id=self.subdevice_id,
             )
+            # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
+            # dispatch cannot reuse its slot mid-flight. (The intermediate is kept alive by the cache.)
+            # Stored on the shared tt_ccl (one slot for the whole model) rather than on self.
+            self.tt_ccl.set_shared_rs_input_keepalive(output_full)
         else:
             output = output_full
-        # Keep every buffer this expert computed into alive until the next shared-expert forward, so nothing allocated
-        # after it in this MoE forward can take their addresses. Allocation runs in lockstep across the mesh, but the
-        # chips do not: once the programs are cached a chip can run ahead into a later op that writes into its
-        # neighbours (combine, a reduce_scatter) while a neighbour is still in this expert, on the very addresses that
-        # op was handed. Overlapped, the concurrent dispatch could reuse the RS input the same way. Kimi K3's
-        # 6144-wide expert hit it: without its dispatch overlap, every MoE forward after the first returned
-        # shared_output at 0.55-0.73 PCC against 0.9996. (The RS intermediate is kept alive by the cache.)
-        # Stored on the shared tt_ccl (one slot for the whole model) rather than on self.
-        self.tt_ccl.set_shared_rs_input_keepalive((gate_out, up_out, activated, output_full))
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"After shared_expert_ffn: {output.shape}")
 

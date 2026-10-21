@@ -529,9 +529,8 @@ class TT_CCL:
         return self.shared_rs_intermediate
 
     def set_shared_rs_input_keepalive(self, input_tensor):
-        """Hold the shared expert's buffers -- its reduce_scatter INPUT and the matmul and GLU outputs before it,
-        passed as a tuple -- alive until the next shared-expert forward, so neither the concurrent (overlapped)
-        dispatch nor a later op a neighbouring chip runs ahead into can reuse their DRAM mid-flight. A single slot
+        """Hold the shared-expert reduce_scatter INPUT alive until the next shared-expert forward,
+        so the concurrent (overlapped) dispatch cannot reuse its DRAM slot mid-flight. A single slot
         shared across all sequentially-run layers: each layer's forward overwrites it, releasing the
         previous layer's input (its refcount drops to zero and the DRAM is freed). This must live on
         tt_ccl (one instance for the whole model), NOT on the per-layer TtSharedExpert object — the
