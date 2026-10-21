@@ -44,7 +44,6 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
 )
 from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 from models.experimental.mimo_v2_6_flash.tt.model import TtMiMoModel
-from models.experimental.mimo_v2_6_flash.tt.moe import PREFILL_MAX_TOKENS
 
 USERS = 4  # decode slots per row: 0 baseline cut, 1 the row's chunk size, 2 the shared prompt, 3 the chunk probe
 BASE, CHUNKED, SHARED, PROBE = range(USERS)
@@ -69,9 +68,9 @@ class Case:
 
     @property
     def probe_chunks(self):
-        """Chunk sizes for the step-4 probe, smallest first: vLLM's chunk, one MoE slice, the baseline, then doubling
-        up to the whole prompt."""
-        sizes, c = sorted({SERVING_CHUNK, PREFILL_MAX_TOKENS, self.base_chunk}), self.base_chunk * 2
+        """Chunk sizes for the step-4 probe: from vLLM's chunk (one MoE slice, moe.PREFILL_MAX_TOKENS) doubling up to the
+        whole prompt, through the baseline."""
+        sizes, c = [], SERVING_CHUNK
         while c <= self.prompt_len:
             sizes.append(c)
             c *= 2

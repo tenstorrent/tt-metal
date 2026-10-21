@@ -43,9 +43,11 @@ from .moe_stream import (
 from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
 
-# Longest prefill chunk one MoE call takes: past it the router's prefill program block (_router_program) and the
-# expert plan's row buffers (moe_prefill.DevicePlan) outgrow L1, so forward runs longer chunks in slices.
-PREFILL_MAX_TOKENS = 8192
+# Longest prefill chunk one MoE call takes; forward runs longer chunks in slices. The router's prefill program block
+# (_router_program) grows with the rows: at 8192 its static circular buffers end at 1.32 MB, past the L1 buffers decode
+# keeps allocated (from 1.21 MB), so after decode only 4096 fits. Without decode it fits to 8192, and the expert plan's
+# row buffers (moe_prefill.DevicePlan) outgrow L1 a little above that. vLLM's chunks are 4096.
+PREFILL_MAX_TOKENS = 4096
 
 
 def expert_quant(expert_dtype):
