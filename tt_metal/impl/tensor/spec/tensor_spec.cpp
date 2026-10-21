@@ -185,17 +185,6 @@ size_t TensorSpec::compute_packed_buffer_size_bytes() const {
     return tensor_layout_.impl().compute_packed_buffer_size_bytes(logical_shape_);
 }
 
-// Use the resolved distribution so unused grid cores do not become storage requirements.
-std::vector<CoreCoord> TensorSpec::compute_data_cores() const {
-    const auto args = compute_buffer_sharding_args();
-    TT_FATAL(is_sharded(args.buffer_layout()), "Data cores require sharded tensor memory");
-    if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
-        return distribution->cores_with_data();
-    }
-    const auto& shard = args.shard_spec().value();
-    return corerange_to_cores(shard.grid(), std::nullopt, shard.orientation() == ShardOrientation::ROW_MAJOR);
-}
-
 size_t TensorSpec::compute_page_size_bytes() const {
     return tensor_layout_.impl().compute_page_size_bytes(logical_shape_);
 }

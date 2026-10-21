@@ -20,7 +20,9 @@ def _spec(cores, width, per_core=True):
     )
     if per_core:
         memory.experimental_set_per_core_allocation(True)
-    return ttnn.TensorSpec([len(cores), width], ttnn.uint8, ttnn.ROW_MAJOR_LAYOUT, memory)
+    spec = ttnn.TensorSpec([len(cores), width], ttnn.uint8, ttnn.ROW_MAJOR_LAYOUT, memory)
+    assert spec.memory_config.experimental_is_per_core_allocation() == per_core
+    return spec
 
 
 def _owner(mesh, core, width=768, per_core=True):
@@ -107,7 +109,6 @@ def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
     nested = _view(mesh, _spec([core], 64), view, [(coord, core, 64)])
     assert _address(nested, coord, core) == _address(owner, coord, core) + 320
     assert nested.spec.compute_consumed_memory_bytes_per_bank(ttnn.get_l1_alignment(), 1) == 64
-    assert nested.spec.compute_data_cores() == [core]
 
 
 def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
@@ -181,35 +182,16 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     torch.testing.assert_close(_read(view), value)
 
 
-@pytest.fixture
-def selected_mesh(mesh_device):
-    """Keep the selected submesh alive for its tensors and release its command queue on teardown."""
-    mesh_device.quiesce_devices()
-    target = ttnn.MeshCoordinate(0, 1)
-    before = ttnn.experimental_get_l1_occupied_ranges(mesh_device, target)
-    child = mesh_device.create_submesh(ttnn.MeshShape(1, 1), target)
-    assert ttnn.experimental_get_l1_occupied_ranges(mesh_device, target) == before
-    yield child
-    child.quiesce_devices()
-    ttnn.close_mesh_device(child)
-
-
-def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device, selected_mesh):
+def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     """Exercise selected-device allocation, narrow writes and caller-owned backing for native copies."""
-    mesh, core = selected_mesh, ttnn.CoreCoord(0, 0)
-    coord = ttnn.MeshCoordinate(0, 0)
-    other_before = ttnn.experimental_get_l1_occupied_ranges(mesh_device, coord, core)
+    mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
+    coord, other = ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(0, 0)
+    other_before = ttnn.experimental_get_l1_occupied_ranges(mesh, other, core)
     baseline = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
     owner_spec = _spec([core], 768)
-    owner = ttnn.empty(
-        owner_spec.shape,
-        dtype=owner_spec.dtype,
-        layout=owner_spec.layout,
-        device=mesh,
-        memory_config=owner_spec.memory_config,
-    )
+    owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, owner_spec)
     assert owner.device_coords() == [coord]
-    assert ttnn.experimental_get_l1_occupied_ranges(mesh_device, coord, core) == other_before
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, other, core) == other_before
     address = _address(owner, coord, core)
     mapper = ttnn.create_mesh_mapper(
         mesh, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], ttnn.MeshShape(1, 1), coord)
@@ -228,15 +210,10 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device, selected_
     footprint = spec.compute_consumed_memory_bytes_per_bank(ttnn.get_l1_alignment(), 1)
     assert view.spec == spec
     upload(torch.full((1, 17), 7, dtype=torch.uint8), view)
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-    sem = ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1, address + 512)
-    assert ttnn.get_global_semaphore_address(sem) == address + 512
     data = _read(owner).reshape(-1)
     assert torch.all(data[:256] == 91)
     assert torch.all(data[256:273] == 7)
-    assert torch.all(data[256 + footprint : 512] == 91)
-    assert data[512:516].tolist() == [37, 0, 0, 0]
-    assert torch.all(data[528:] == 91)
+    assert torch.all(data[256 + footprint :] == 91)
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
     copied = ttnn.get_device_tensors(view)[0]
     del view
@@ -249,13 +226,7 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device, selected_
     gc.collect()
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
-    owner = ttnn.empty(
-        owner_spec.shape,
-        dtype=owner_spec.dtype,
-        layout=owner_spec.layout,
-        device=mesh,
-        memory_config=owner_spec.memory_config,
-    )
+    owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, owner_spec)
     view = _view(mesh, _spec([core], 64), owner, [(coord, core, 0)])
     assert _address(owner, coord, core) == address
     # Reacquisition must not zero or upload over the bytes written by the previous owner.
@@ -266,6 +237,7 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device, selected_
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
     ttnn.deallocate(view)
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, other, core) == other_before
 
 
 def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device, expect_error):
@@ -285,3 +257,14 @@ def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device
     with expect_error(RuntimeError, "ordinary SRAM"):
         ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1_SMALL, address)
     assert torch.all(_read(owner) == 0)
+    occupied = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
+    # The semaphore writes every supplied device, so use a single-device fixture with owned backing.
+    sem = ttnn.experimental_create_global_semaphore_at_address(mesh, grid, 37, ttnn.BufferType.L1, address + 256)
+    assert ttnn.get_global_semaphore_address(sem) == address + 256
+    data = _read(owner).reshape(-1)
+    assert torch.all(data[:256] == 0)
+    assert data[256:260].tolist() == [37, 0, 0, 0]
+    assert torch.all(data[256 + ttnn.get_l1_alignment() :] == 0)
+    del sem
+    gc.collect()
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
