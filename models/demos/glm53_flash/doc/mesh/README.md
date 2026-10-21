@@ -473,3 +473,7 @@ the dense rows (a caller splitting the first chunk at 2048 avoids it); the trace
 single-chip `tests/test_select_rows.py` check (a mesh row's selections == the single-chip ids) was not re-run here
 (no single-chip grant): the block tests compare the slab rows with the merged v1 rows, which that test validated
 against the single-chip ids by emulation. Logs: `_logs/agents/slabattn/`.
+
+### Multimodal on the (2,4) block (2026-10-21 03:52)
+
+45 layers bfp4, image + question (286 tokens, 256 image tokens): answer "The image contains a red circle, a blue square, a green triangle, and the word \"HELLO\"." (first token == HF); TTFT 1201 ms (tower 90 ms); decode 145 ms/step = 6.9 tok/s/user over 2 slots.
