@@ -13,6 +13,7 @@
 #include <climits>
 #include <type_traits>
 #include <utility>
+#include <tuple>
 
 // Impl-only includes (the public chain.hpp surface — element decls + enums — needs
 // none of these; they live here, with the implementation that uses them).
@@ -908,14 +909,20 @@ ALWI void check_bound_dataflow_buffer([[maybe_unused]] const DFB& buffer) {
 }
 
 // An element constructed without its DataflowBuffer(s) leading the arguments — `CopyTile<input(id)>{}`,
-// `{id}`, `{base}`, or a temporary `{DataflowBuffer(id)}` — selects the element's rejecting
-// constructor template, which instantiates this from the caller's expression and fails with a
-// message naming the fix, rather than an overload-resolution dump.
+// `{id}`, `{base}`, or a temporary `{DataflowBuffer(id)}` — or with DataflowBuffers that are not the ones
+// its specs name, selects the element's rejecting constructor template, which instantiates this from the
+// caller's expression and fails with a message naming the fix, rather than an overload-resolution dump.
 struct MissingDataflowBuffer {};
 
+// Any DataflowBuffer lvalue: any pattern pair, const or not.
 template <class T>
 inline constexpr bool is_dataflow_buffer_lvalue_v =
     std::is_lvalue_reference_v<T> && ::is_dataflow_buffer_v<std::remove_cv_t<std::remove_reference_t<T>>>;
+
+// The buffer an element binds: a non-const lvalue of exactly the DataflowBuffer type its spec names.
+template <class Expected, class T>
+inline constexpr bool is_bound_dataflow_buffer_v =
+    std::is_lvalue_reference_v<T> && std::is_same_v<std::remove_reference_t<T>, Expected>;
 
 template <std::size_t N, class... Args>
 constexpr bool leading_dataflow_buffers() {
@@ -932,22 +939,53 @@ constexpr bool leading_dataflow_buffers() {
     }
 }
 
+template <class Expected, class... Args, std::size_t... Is>
+constexpr bool leading_bound_buffers_impl(std::index_sequence<Is...>) {
+    return (is_bound_dataflow_buffer_v<std::tuple_element_t<Is, Expected>, std::tuple_element_t<Is, std::tuple<Args...>>> &&
+            ...);
+}
+
+// True when the argument list starts with the element's DataflowBuffers: one non-const lvalue of each
+// type in `Expected` (a std::tuple of the element's DataflowBuffer types, in spec order).
+template <class Expected, class... Args>
+constexpr bool leading_bound_buffers() {
+    if constexpr (sizeof...(Args) < std::tuple_size_v<Expected>) {
+        return false;
+    } else {
+        return leading_bound_buffers_impl<Expected, Args...>(std::make_index_sequence<std::tuple_size_v<Expected>>{});
+    }
+}
+
+// True when the leading arguments are DataflowBuffer lvalues but not the ones the element binds: a buffer
+// of another pattern pair (on Quasar, a spec built from a raw id paired with a token-built buffer, or the
+// reverse) or a const buffer.
+template <class Expected, class... Args>
+constexpr bool leading_mismatched_buffers() {
+    return leading_dataflow_buffers<std::tuple_size_v<Expected>, Args...>() &&
+           !leading_bound_buffers<Expected, Args...>();
+}
+
 // True for an argument list the element's real constructors cannot accept because it does not start
-// with `NumBuffers` DataflowBuffer lvalues. A single argument of the element's own type is a copy or
+// with the element's DataflowBuffer lvalues. A single argument of the element's own type is a copy or
 // move and is never rejected.
-template <class Self, std::size_t NumBuffers, class... Args>
+template <class Self, class Expected, class... Args>
 constexpr bool rejects_constructor_args() {
     if constexpr (sizeof...(Args) == 1 && (std::is_base_of_v<Self, std::decay_t<Args>> && ...)) {
         return false;
     } else {
-        return !leading_dataflow_buffers<NumBuffers, Args...>();
+        return !leading_bound_buffers<Expected, Args...>();
     }
 }
 
-template <bool Missing>
+template <bool Missing, bool Mismatch>
 constexpr void require_bound_dataflow_buffers() {
     static_assert(
-        !Missing,
+        !Mismatch,
+        "eltwise_chain: this DataflowBuffer does not match the element's spec (its access patterns differ, or it is "
+        "const): pass the DFBBindingToken to input()/output(), not its id, so the spec names the buffer that token "
+        "deduces.");
+    static_assert(
+        Mismatch || !Missing,
         "eltwise_chain: chain elements take the DataflowBuffer of each input(...) / output(...) spec as "
         "leading constructor arguments, in spec order — e.g. CopyTile<input(dfb::in)>{in}, "
         "BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b}, PackTile<output(dfb::out)>{out}.");
@@ -1026,9 +1064,11 @@ struct detail::CopyTileImpl : InputStream<DFB>, CopyTileTag {
     // defaults them to NO_PREV_DFB.
     static constexpr uint32_t reconfig_srca_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<CopyTileImpl, 1, Args...>(), int> = 0>
+    template <class... Args, std::enable_if_t<rejects_constructor_args<CopyTileImpl, std::tuple<DFB>, Args...>(), int> = 0>
     CopyTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<rejects_constructor_args<CopyTileImpl, 1, Args...>()>();
+        require_bound_dataflow_buffers<
+            rejects_constructor_args<CopyTileImpl, std::tuple<DFB>, Args...>(),
+            leading_mismatched_buffers<std::tuple<DFB>, Args...>()>();
     }
     ALWI explicit CopyTileImpl(DFB& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
     ALWI CopyTileImpl(DFB& in, uint32_t base) noexcept : Base(in, base) {
@@ -1148,9 +1188,11 @@ struct detail::PackTileImpl : OutputStream<DFB>, PackTileTag {
     // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
     static constexpr uint32_t reconfig_pack_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<PackTileImpl, 1, Args...>(), int> = 0>
+    template <class... Args, std::enable_if_t<rejects_constructor_args<PackTileImpl, std::tuple<DFB>, Args...>(), int> = 0>
     PackTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<rejects_constructor_args<PackTileImpl, 1, Args...>()>();
+        require_bound_dataflow_buffers<
+            rejects_constructor_args<PackTileImpl, std::tuple<DFB>, Args...>(),
+            leading_mismatched_buffers<std::tuple<DFB>, Args...>()>();
     }
     ALWI explicit PackTileImpl(DFB& out) noexcept : Base(out) { check_bound_dataflow_buffer<Cb>(out); }
     ALWI PackTileImpl(DFB& out, uint32_t base) noexcept : Base(out, base) {
@@ -1296,9 +1338,11 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
 
     // Leading arguments: the DataflowBuffers of AInput and BInput, in that order (pass the same
     // object twice when both specs name one buffer). Optional per-side tile bases follow.
-    template <class... Args, std::enable_if_t<rejects_constructor_args<BinaryFpuImpl, 2, Args...>(), int> = 0>
+    template <class... Args, std::enable_if_t<rejects_constructor_args<BinaryFpuImpl, std::tuple<DFBA, DFBB>, Args...>(), int> = 0>
     BinaryFpuImpl(Args&&...) noexcept : a(MissingDataflowBuffer{}), b(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<rejects_constructor_args<BinaryFpuImpl, 2, Args...>()>();
+        require_bound_dataflow_buffers<
+            rejects_constructor_args<BinaryFpuImpl, std::tuple<DFBA, DFBB>, Args...>(),
+            leading_mismatched_buffers<std::tuple<DFBA, DFBB>, Args...>()>();
     }
     ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b) noexcept : a(in_a), b(in_b) {
         check_bound(in_a, in_b);
@@ -1499,9 +1543,11 @@ struct detail::DestReuseBinaryImpl : InputStream<DFB>, DestReuseBinaryTag {
                                                                                                           : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<DestReuseBinaryImpl, 1, Args...>(), int> = 0>
+    template <class... Args, std::enable_if_t<rejects_constructor_args<DestReuseBinaryImpl, std::tuple<DFB>, Args...>(), int> = 0>
     DestReuseBinaryImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<rejects_constructor_args<DestReuseBinaryImpl, 1, Args...>()>();
+        require_bound_dataflow_buffers<
+            rejects_constructor_args<DestReuseBinaryImpl, std::tuple<DFB>, Args...>(),
+            leading_mismatched_buffers<std::tuple<DFB>, Args...>()>();
     }
     ALWI explicit DestReuseBinaryImpl(DFB& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
     ALWI DestReuseBinaryImpl(DFB& in, uint32_t base) noexcept : Base(in, base) {
