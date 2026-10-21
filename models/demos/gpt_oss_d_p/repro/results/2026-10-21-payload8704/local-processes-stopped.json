@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-21T17:59:52.785451+00:00",
+  "coordinator_exited": true,
+  "publisher_exited": true,
+  "coordinator_pid": 52128,
+  "publisher_pid": 52188,
+  "locks_free": true,
+  "publisher_children_gone": true
+}

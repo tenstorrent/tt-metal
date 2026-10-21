@@ -1,0 +1,16 @@
+{
+  "utc": "2026-10-21T18:15:45.885228+00:00",
+  "status": "DONE",
+  "allocations": [
+    141909,
+    142028
+  ],
+  "remaining_task_allocations": [],
+  "controller_records": {
+    "141909": "JobId=141909 JobName=no-shell UserId=divanovic(4225) GroupId=divanovic(4225) MCS_label=N/A Priority=1 Nice=0 Account=(null) QOS=(null) JobState=CANCELLED Reason=None Dependency=(null) Requeue=1 Restarts=0 BatchFlag=0 Reboot=0 ExitCode=0:0 RunTime=03:48:02 TimeLimit=06:00:00 TimeMin=N/A SubmitTime=2026-10-21T14:25:51 EligibleTime=2026-10-21T14:25:51 AccrueTime=Unknown StartTime=2026-10-21T14:25:51 EndTime=2026-10-21T18:13:53 Deadline=N/A PreemptEligibleTime=2026-10-21T14:25:51 PreemptTime=None SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-10-21T14:25:51 Scheduler=Main Partition=bh_sc5_B2B9_D12 AllocNode:Sid=localhost:1631779 ReqNodeList=bh-glx-120-b05u02 ExcNodeList=(null) NodeList=bh-glx-120-b05u02 BatchHost=bh-glx-120-b05u02 NumNodes=1 NumCPUs=1 NumTasks=1 CPUs/Task=1 ReqB:S:C:T=0:0:*:* ReqTRES=cpu=1,mem=1M,node=1,billing=1 AllocTRES=cpu=1,node=1,billing=1 Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=* MinCPUsNode=1 MinMemoryNode=0 MinTmpDiskNode=0 Features=(null) DelayBoot=00:00:00 OverSubscribe=NO Contiguous=0 Licenses=(null) Network=(null) Command=(null) WorkDir=/home/divanovic Power=",
+    "142028": "JobId=142028 JobName=gptoss-payload8704-decode-replacement UserId=divanovic(4225) GroupId=divanovic(4225) MCS_label=N/A Priority=1 Nice=0 Account=(null) QOS=(null) JobState=CANCELLED Reason=None Dependency=(null) Requeue=1 Restarts=0 BatchFlag=0 Reboot=0 ExitCode=0:0 RunTime=02:00:19 TimeLimit=06:00:00 TimeMin=N/A SubmitTime=2026-10-21T16:13:34 EligibleTime=2026-10-21T16:13:34 AccrueTime=Unknown StartTime=2026-10-21T16:13:34 EndTime=2026-10-21T18:13:53 Deadline=N/A PreemptEligibleTime=2026-10-21T16:13:34 PreemptTime=None SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-10-21T16:13:34 Scheduler=Main Partition=bh_sc5_B2B9_D12 AllocNode:Sid=slurm-login-01.exabox.tenstorrent.com:2009708 ReqNodeList=bh-glx-120-b08u02 ExcNodeList=(null) NodeList=bh-glx-120-b08u02 BatchHost=bh-glx-120-b08u02 NumNodes=1 NumCPUs=1 NumTasks=1 CPUs/Task=1 ReqB:S:C:T=0:0:*:* ReqTRES=cpu=1,mem=1M,node=1,billing=1 AllocTRES=cpu=1,node=1,billing=1 Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=* MinCPUsNode=1 MinMemoryNode=0 MinTmpDiskNode=0 Features=(null) DelayBoot=00:00:00 OverSubscribe=NO Contiguous=0 Licenses=(null) Network=(null) Command=(null) WorkDir=/home/divanovic Power="
+  },
+  "verification": "scancel succeeded; empty squeue and terminal scontrol job states verified. sacct unavailable because accounting storage is disabled. Waited for Slurm COMPLETING to finish.",
+  "cleanup_verified_before_release": true,
+  "no_compute_access_after_release": true
+}

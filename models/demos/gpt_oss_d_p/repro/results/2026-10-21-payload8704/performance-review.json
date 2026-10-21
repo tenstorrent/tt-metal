@@ -1,0 +1,28 @@
+{
+  "utc": "2026-10-21T18:01:11.975659+00:00",
+  "status": "DONE",
+  "scope": "Final 29-case saved measurements and host-observed performance claims; no numerical accuracy claim.",
+  "findings": [],
+  "resolved": [
+    "Decoder retention prose now distinguishes b03 and b08 cohorts.",
+    "Accepted-request span labels include preemption/replacement gap; concurrent stage durations are not summed as wall time."
+  ],
+  "checks": [
+    "Immutable 2880/4352 baselines exactly equal frozen baseline.",
+    "All29cases retained with29warmups and87measured requests; per-case means independently recomputed.",
+    "493 metric-statistic rows and116request rows exported with host cohorts.",
+    "Report includes every slower mean, sample SD and measured raw samples.",
+    "Host-observed rate and native host-commit TSU definitions disclosed."
+  ],
+  "limitations": [
+    "Different prefill and decoder host cohorts, historical D-gen cohorts, run order and cache state prevent packet-only causality.",
+    "Three measured samples per case; descriptive comparisons, no significance or numerical accuracy claim."
+  ],
+  "evidence_sha256": {
+    "measurement-complete-status.json": "c7efc0635ce572d54c29717e03891c409f3b42a581ee3b2504a8eb0cd03c7e50",
+    "sweep-audit.json": "3d1d99ea521014ec92d1cc10fef2230d1d0451319fb83612906891e2a0d8d27b",
+    "PAYLOAD8704_RUNS.csv": "5b856b73867121bb297a4f494b3a6a6dd4a1522fac9569ecc91483a64f00ac1c",
+    "PAYLOAD8704_STATISTICS.csv": "637bae4df15d0a916e0603251e393fd55c65a92a40293cc01e0fb251da419546",
+    "payload-comparison.csv": "4714855b80025d9c8f0702370907156e64abff598cff2c6eb9848251f800da7f"
+  }
+}

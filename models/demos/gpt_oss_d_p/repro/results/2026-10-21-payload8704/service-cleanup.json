@@ -1,0 +1,63 @@
+{
+  "utc": "2026-10-21T18:13:27.901290+00:00",
+  "status": "DONE",
+  "allocations": [
+    141909,
+    142028
+  ],
+  "allocation_released": false,
+  "targets": {
+    "run": "/data/divanovic/gptoss-payload8704-20261021/runtime/sweep-b05-pd-c1024",
+    "decoder": "/data/divanovic/gptoss-payload8704-20261021/runtime/repro-b08-full36/decode",
+    "decoder_driver": 979579,
+    "decoder_owners": [
+      981312,
+      981314,
+      981315,
+      981317
+    ],
+    "frontend": "/data/divanovic/gptoss-payload8704-20261021/runtime/repro-full36/services",
+    "allocations": [
+      141909,
+      142028
+    ],
+    "publication": {
+      "utc": "2026-10-21T18:02:45.466651+00:00",
+      "status": "SOURCE_PUBLISHED",
+      "branch": "divanovic/mg-gptoss-pd-payload8704-20261021-metal",
+      "source_commit": "076d79443138613e9e1a96b948d02db69858274a",
+      "results_commit": null,
+      "base": "9f7df82859f1b5e2e7d7f91e6fb3b1e69e9d628f",
+      "config_sha256": "f9465e46fe4cfdf8f80fdea8f4162b2aec453b58494c0f19bda3614e35d1b8f7",
+      "remote_verified": true,
+      "working_tree_clean": true,
+      "results_publication_pending": true,
+      "transport": "Existing authenticated HTTPS helper; SSH push failed host-key verification; no SSH trust change."
+    }
+  },
+  "checks": {
+    "bh-glx-120-b05u02": {
+      "task_processes": [],
+      "recorded_owners_live": [],
+      "device_holders": "",
+      "fuser_exit": 1
+    },
+    "bh-glx-120-b08u02": {
+      "task_processes": [],
+      "recorded_owners_live": [],
+      "device_holders": "",
+      "fuser_exit": 1
+    }
+  },
+  "decoder_shutdown": {
+    "exit": 1,
+    "live": [],
+    "mpi_warning": "prterun reports rank3 PID981317 exited improperly during owner-stop teardown"
+  },
+  "prefill_shutdown": "native H2D sentinel; shutdown complete; exit 0; idle devices",
+  "coordinator_exited": true,
+  "warnings": [
+    "Decoder owner-stop completed with MPI launcher exit1 (rank3 improper termination) at18:07:52.569903UTC. All recorded owners, task processes and device holders were independently verified gone. This is not a clean decoder exit0."
+  ],
+  "verification_note": "Original cleanup helper stopped after SSH-agent authentication timeout in final checks; shutdown was not repeated. Final read-only checks used the same accepted existing SSH key directly through ProxyJump and passed."
+}

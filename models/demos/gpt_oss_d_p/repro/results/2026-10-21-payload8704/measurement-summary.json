@@ -1,0 +1,26 @@
+{
+  "cases": 29,
+  "requests": 116,
+  "warmups": 29,
+  "measured": 87,
+  "statistics_rows": 493,
+  "first_request_utc": "2026-10-21T15:34:18.060038+00:00",
+  "last_request_end_utc": "2026-10-21T17:57:19.535874+00:00",
+  "accepted_request_span_s": 8581.475835561752,
+  "sum_accepted_request_duration_s": 484.15324030201737,
+  "decoder_cohorts": [
+    {
+      "prefill_host": "bh-glx-120-b05u02",
+      "decode_host": "bh-glx-120-b03u02",
+      "cases": 8,
+      "requests": 32
+    },
+    {
+      "prefill_host": "bh-glx-120-b05u02",
+      "decode_host": "bh-glx-120-b08u02",
+      "cases": 21,
+      "requests": 84
+    }
+  ],
+  "note": "Request span includes group switching and the decoder-preemption/replacement gap, including replacement decoder startup. Duration sum excludes setup and gaps. Neither includes decoder startup before the first accepted request."
+}
