@@ -4,7 +4,8 @@
 
 // Unified matmul compute kernel: per K chunk, multiplies the reader's A slice by its B slice one
 // subblock (what DST holds) at a time; running sums spill to C_partials between K chunks (or
-// accumulate there via packer_l1_acc) and the last K chunk packs into C_slice for the writer.
+// accumulate there via packer_l1_acc, or straight in C_slice with accumulate_in_C_slice) and the last K chunk
+// packs into C_slice, handing each finished subblock to the writer.
 // Loop order matches the reader and the writer: C slice (over all the core's batches), K chunk, subblocks, k_tile.
 // Compute threads (Quasar NEOs; one thread elsewhere) take the subblocks round-robin in walk order
 // and all see the whole A and B slices; a thread's subblocks sit back to back in its C_entries_per_thread
@@ -38,6 +39,7 @@ template <
     uint32_t num_compute_threads,
     uint32_t C_entries_per_thread,  // C_slice / C_partials entries one thread's subblocks of the C slice take
     uint32_t packer_l1_acc,
+    uint32_t accumulate_in_C_slice,              // packer L1 accumulation straight onto the C slice, no C_partials
     uint32_t partials_format_differs>            // C_partials and C_slice hold different formats
 TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C slices over all its batches
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
@@ -59,6 +61,12 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
     DataflowBuffer bias_row(dfb::bias);
 #endif
 
+#ifdef ARCH_QUASAR
+    if constexpr (accumulate_in_C_slice) {
+        pack_init(dfb::C_slice);
+    }
+#endif
+
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 
     for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
@@ -74,12 +82,13 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 continue;
             }
             const bool last_K_chunk = K_chunk == K_chunks_per_C_slice - 1;
-            // Without packer L1 accumulation every later K chunk reloads the partials; with it only
-            // the last one does.
-            const bool reload_partials = K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
-            // Pack target: C_slice on the last K chunk, C_partials before that.
-            DataflowBuffer& pack_target = last_K_chunk ? C_slice : C_partials;
-            const uint32_t pack_target_id = last_K_chunk ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
+            // Without packer L1 accumulation every later K chunk reloads the partials; with it in C_partials only
+            // the last one does, and accumulating in C_slice none.
+            const bool reload_partials = !accumulate_in_C_slice && K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
+            // Pack target: C_slice on the last K chunk (or always when accumulating in it), C_partials before that.
+            const bool pack_to_C_slice = accumulate_in_C_slice || last_K_chunk;
+            DataflowBuffer& pack_target = pack_to_C_slice ? C_slice : C_partials;
+            const uint32_t pack_target_id = pack_to_C_slice ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
             A_slice.wait_front(A_slice_tiles);
             B_slice.wait_front(B_slice_tiles);
 #ifdef FUSE_BIAS
@@ -94,14 +103,17 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_reconfig_data_format(pack_target_id);
             }
             if constexpr (packer_l1_acc) {
-                pack_reconfig_l1_acc((!last_K_chunk && K_chunk > 0) ? 1 : 0);
+                pack_reconfig_l1_acc((K_chunk > 0 && (accumulate_in_C_slice || !last_K_chunk)) ? 1 : 0);
             }
 #ifdef ARCH_QUASAR
             // Quasar: the pack destination alternates between C_partials and C_slice each K chunk. The pack
             // BFD is baked at pack_init (pack_reconfig_data_format is gasket-only, and only runs when the
             // formats differ), so re-init the packer for the current target every K chunk — otherwise the
-            // last chunk's result is packed to the C_partials BFD left by compute_kernel_hw_startup.
-            pack_init(pack_target_id);
+            // last chunk's result is packed to the C_partials BFD left by compute_kernel_hw_startup. Accumulating in
+            // C_slice packs there only, initialized once above.
+            if constexpr (!accumulate_in_C_slice) {
+                pack_init(pack_target_id);
+            }
 #endif
 
             // Release the previous K chunk's partials credits so the reserve below gets this thread's entries
@@ -109,12 +121,14 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
             // C_entries_per_thread entries, so the cursor returns to them, and this NEO is its only writer (each
             // subblock is reloaded before it is overwritten). dummy_unpack orders the pop after the wait on Quasar
             // (a no-op elsewhere).
-            if (K_chunk > 0) {
+            if (!accumulate_in_C_slice && K_chunk > 0) {
                 C_partials.wait_front(C_entries_per_thread);
                 dummy_unpack(dfb::C_partials);
                 C_partials.pop_front(C_entries_per_thread);
             }
-            pack_target.reserve_back(C_entries_per_thread);
+            if (!accumulate_in_C_slice || K_chunk == 0) {
+                pack_target.reserve_back(C_entries_per_thread);
+            }
 
             // (m_tile, n_tile) is the subblock's first tile within the C slice; entry_tile is where this
             // thread's next subblock sits in its entries.
@@ -206,16 +220,25 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
 #endif
                     tile_regs_commit();
 
-                    // Packs continue where the previous subblock's pack left off in the thread's entries.
+                    // pack_block continues where the previous subblock's pack left off in the thread's entries.
+                    // Accumulating in C_slice, the K chunks before the last add onto the same entries every time.
                     tile_regs_wait();
-                    pack_block(/*ifrom_dst=*/0, pack_target_id, subblock_tiles);
+                    if (accumulate_in_C_slice && !last_K_chunk) {
+                        for (uint32_t i = 0; i < subblock_tiles; ++i) {
+                            pack_tile<true>(i, dfb::C_slice, entry_tile + i);
+                        }
+                    } else {
+                        pack_block(/*ifrom_dst=*/0, pack_target_id, subblock_tiles);
+                    }
                     tile_regs_release();
+                    if (last_K_chunk) {
+                        C_slice.push_back(subblock_tiles);  // the writer takes each finished subblock
+                    }
                     entry_tile += subblock_tiles;
                 }
             }
 
             if (!has_subblocks) {
-                dummy_pack(pack_target_id);
                 dummy_unpack(dfb::A_slice);
                 dummy_unpack(dfb::B_slice);
 #ifdef FUSE_BIAS
@@ -224,7 +247,17 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 }
 #endif
             }
-            pack_target.push_back(C_entries_per_thread);
+            // The rest of this thread's entries: on the last K chunk the padding past its subblocks (each subblock
+            // went when it was packed); before that all of them, unless the sum stays in C_slice until the last.
+            const uint32_t entries_left = last_K_chunk            ? C_entries_per_thread - entry_tile
+                                          : accumulate_in_C_slice ? 0
+                                                                  : C_entries_per_thread;
+            if (entries_left > 0) {
+                if (!has_subblocks) {
+                    dummy_pack(pack_target_id);
+                }
+                pack_target.push_back(entries_left);
+            }
             A_slice.pop_front(A_slice_tiles);
             B_slice.pop_front(B_slice_tiles);
 #ifdef FUSE_BIAS
@@ -233,5 +266,8 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
             }
 #endif
         }
+    }
+    if constexpr (accumulate_in_C_slice) {
+        pack_reconfig_l1_acc(0);  // else L1 accumulation stays on into the next program (seen on Quasar)
     }
 }
