@@ -1411,3 +1411,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F125 (overseer, 2026-10-21): X.3 asks for `prefill_ms_full` only when the run's layers are a stack from layer 0 with no
   gaps (the condition `profile.full_prefill` times it under); a gapped subset (DeepSeek-V4.1's 0-3,14,20,21,24) could never
   record it, so X.3 failed MISSING after every test passed. Selftest: test_plan.py.
+- F126 (overseer, 2026-10-21): a fix job gated on a task that has not passed yet takes that task's deps and runs before
+  it; the task gains the fix as a dep. Before, the fix depended on its gate task, so the unpassed task re-ran its known-
+  failing gate first (DeepSeek-V4.1 X.3: 45 min) and could exhaust its attempts before the fix started.
+  Selftest: test_overseer.py::test_a_fix_gated_on_an_unpassed_task_runs_before_it.

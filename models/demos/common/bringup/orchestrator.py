@@ -1875,7 +1875,16 @@ def _place_fixes(orch: Orchestrator) -> bool:
         first = orch.led.first_unpassed()
         ids = [t["id"] for t in spec["tasks"]]
         at = ids.index(first) if first in ids else len(ids)
-        spec["tasks"].insert(at, OV.fix_task(job, tasks))
+        fix = OV.fix_task(job, tasks)
+        # F126: a gate task not passed yet runs after the fix (the fix takes its deps), never before it
+        open_gates = [g for g in job["gate"] if not satisfied(orch.led.status(g))]
+        if open_gates:
+            done = [g for g in job["gate"] if g not in open_gates]
+            fix["deps"] = list(dict.fromkeys([d for g in open_gates for d in tasks[g].get("deps") or []] + done))
+            for g in open_gates:
+                tasks[g]["deps"] = list(tasks[g].get("deps") or []) + [job["id"]]
+            at = min([at] + [ids.index(g) for g in open_gates])
+        spec["tasks"].insert(at, fix)
         tasks[job["id"]] = spec["tasks"][at]
         orch.echo(
             f"[{job['id']}] placed by the overseer before {first}: {job['title']} (gate: {', '.join(job['gate'])})"
