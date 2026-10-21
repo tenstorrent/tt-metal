@@ -10,7 +10,7 @@ reserved}`` followed by ``MAX_FORWARD_CHUNKS`` records, little-endian uint32, 20
 real tokens, and ``start == end`` is an empty entry (no attention, no KV write). Sentinels fill every word with
 ``SHUTDOWN_WORD`` / ``WARMUP_WORD``.
 
-Pure Python: the producer, the runner and host tests import it without a device.
+Pure Python: the runner and host tests import it without a device.
 """
 
 import struct
@@ -31,11 +31,15 @@ ENTRY_START_ALIGN = 32
 class PrefillEntry:
     slot: int  # KV-cache user slot
     start: int  # absolute KV position of the chunk's first row (the prefix already cached)
-    end: int  # past the last real token; start == end is an empty entry (no attention, no KV write)
+    end: int  # past the last real token
 
     @property
     def is_empty(self) -> bool:
         return self.end == self.start
+
+    @property
+    def is_sentinel(self) -> bool:
+        return self.slot in (SHUTDOWN_WORD, WARMUP_WORD) and self.start == self.end == self.slot
 
 
 EMPTY_ENTRY = PrefillEntry(0, 0, 0)
@@ -58,9 +62,8 @@ def pad_entries(entries, forward_chunks: int) -> list:
 def forward_metadata_words(entries) -> list:
     """The metadata of a forward of ``entries`` (empty ones at the tail) as int32 words, as the device tensor
     holds them."""
-    entries = list(entries)
     e = entries[0]
-    if e.slot in (SHUTDOWN_WORD, WARMUP_WORD) and e.start == e.end == e.slot:
+    if e.is_sentinel:
         return sentinel_words(e.slot, len(entries))
     if len(entries) == 1:
         return [e.slot, e.start, e.end]
@@ -94,14 +97,12 @@ def decode_forward_metadata(words, forward_chunks: int) -> list:
     """The forward's ``forward_chunks`` entries, empty ones at the tail, from its metadata words read as int32.
     A sentinel decodes to entries of its word. Words past the metadata (MTP's provided-levels word on D2D) are
     ignored."""
-    words = [int(w) for w in words]
     n = metadata_size_bytes(forward_chunks) // 4
     if len(words) < n:
         raise ValueError(f"metadata has {len(words)} words, a forward of {forward_chunks} entries needs {n}")
-    if forward_chunks == 1:
-        return [PrefillEntry(*words[:ENTRY_WORDS])]
-    if words[0] in (SHUTDOWN_WORD, WARMUP_WORD) and words[1] == words[2] == words[0]:
-        return [PrefillEntry(words[0], words[0], words[0])] * forward_chunks
+    head = PrefillEntry(*words[:ENTRY_WORDS])
+    if forward_chunks == 1 or head.is_sentinel:
+        return [head] * forward_chunks
     num_chunks = words[0]
     if not 1 <= num_chunks <= forward_chunks:
         raise ValueError(f"num_chunks={num_chunks} outside [1, {forward_chunks}]")
@@ -143,7 +144,9 @@ def validate_forward_entries(entries, *, chunk_size: int, forward_chunks: int, n
                 raise ValueError(f"{e}: slot {e.slot} appears in two separate runs")
             if prev.end != prev.start + chunk_size:
                 raise ValueError(f"{prev}: a partial entry must end its slot's run")
-            if e.start != prev.end:
+            # tt-d-gen moves a run's last chunk back to end at the cache end (#430), overlapping its predecessor.
+            clamped = e.start + chunk_size == max_seq_len and prev.start <= e.start < prev.end
+            if e.start != prev.end and not clamped:
                 raise ValueError(f"{e}: does not continue {prev}")
         seen.add(e.slot)
         prev = e

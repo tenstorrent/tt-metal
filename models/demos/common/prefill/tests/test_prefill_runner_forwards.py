@@ -16,7 +16,7 @@ from models.demos.common.prefill.forward_entries import (
 )
 from models.demos.common.prefill.runners import prefill_runner as runner
 
-C, SP, F = 1024, 8, 4
+C, F = 1024, 4
 
 
 class _Tensor:
@@ -34,19 +34,21 @@ class _PackedRuntime:
         self.calls.append((request_id, list(entries)))
 
 
+def _configure(monkeypatch, *, supports_packed_forward):
+    monkeypatch.setattr(runner, "FORWARD_CHUNKS", F)
+    monkeypatch.setattr(runner, "CHUNK_SIZE", C)
+    monkeypatch.setattr(runner, "NUM_USERS", 8)
+    monkeypatch.setattr(runner, "MAX_SEQ_LEN", 16 * C)
+    monkeypatch.setattr(runner, "MTP_LEVELS", 0)
+    monkeypatch.setattr(runner, "ADAPTER", SimpleNamespace(supports_packed_forward=supports_packed_forward))
+    monkeypatch.setattr(runner.ttnn, "deallocate", lambda t: None)
+    monkeypatch.setattr(runner.ttnn, "synchronize_device", lambda d: None)
+
+
 @pytest.fixture
 def loop(monkeypatch):
     def run(runtime, forwards, *, supports_packed_forward):
-        monkeypatch.setattr(runner, "FORWARD_CHUNKS", F)
-        monkeypatch.setattr(runner, "CHUNK_SIZE", C)
-        monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 200)
-        monkeypatch.setattr(runner, "_sp", SP)
-        monkeypatch.setattr(runner, "NUM_USERS", 8)
-        monkeypatch.setattr(runner, "MAX_SEQ_LEN", 16 * C)
-        monkeypatch.setattr(runner, "MTP_LEVELS", 0)
-        monkeypatch.setattr(runner, "ADAPTER", SimpleNamespace(supports_packed_forward=supports_packed_forward))
-        monkeypatch.setattr(runner.ttnn, "deallocate", lambda t: None)
-        monkeypatch.setattr(runner.ttnn, "synchronize_device", lambda d: None)
+        _configure(monkeypatch, supports_packed_forward=supports_packed_forward)
         words = [forward_metadata_words(pad_entries(f, F)) for f in forwards]
         words.append(sentinel_words(SHUTDOWN_WORD, F))
         it = iter(words)
@@ -75,3 +77,22 @@ def test_request_id_counts_chunks(loop):
         (3, FORWARDS[1]),
         (4, FORWARDS[2]),
     ]
+
+
+def test_first_rank_refuses_a_bad_forward(loop, expect_error):
+    split = [PrefillEntry(0, 0, C), PrefillEntry(1, 0, C), PrefillEntry(0, C, 2 * C)]
+    with expect_error(ValueError, "two separate runs"):
+        loop(_PackedRuntime(), [split], supports_packed_forward=True)
+
+
+def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
+    made = []
+    services = SimpleNamespace(
+        create_receiver=lambda **kw: made.append(kw["metadata_size_bytes"]),
+        create_sender=lambda **kw: made.append(kw["metadata_size_bytes"]),
+    )
+    monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
+    monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
+    monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
+    runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
+    assert made == [runner.CHUNK_METADATA_SIZE_BYTES] * 2
