@@ -10,13 +10,13 @@
 #include <filesystem>
 #include <map>
 #include <string_view>
+#include <tt-umd/types/arch.hpp>
 #include <unordered_map>
 #include <string>
 #include <vector>
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 

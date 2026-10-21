@@ -31,7 +31,7 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
@@ -50,7 +50,7 @@ namespace unit_tests::compute::broadcast {
 
 enum ApiConvention : std::uint8_t {
     DEFAULT = 0,
-    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init instead of init_bcast
+    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init instead of bcast_init<OP, DIM>
     SHORT_CALL = 2,  // call <op>_tiles_bcast_<dim> instead of <op>_tiles_bcast
     SHORT_BOTH = 3   // both SHORT_INIT and SHORT_CALL
 };
@@ -310,7 +310,7 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
 
         log_info(tt::LogTest, "Init function is {}", defines["BCAST_OP_INIT"]);
     } else {
-        log_info(tt::LogTest, "Init function is init_bcast");
+        log_info(tt::LogTest, "Init function is bcast_init");
     }
 
     if (test_config.api_convention == ApiConvention::SHORT_CALL ||

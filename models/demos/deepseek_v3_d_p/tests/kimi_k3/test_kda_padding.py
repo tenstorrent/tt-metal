@@ -9,6 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig, KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
     mla_row_permutation,
@@ -156,6 +157,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     # below, while retaining CPU PCC/RMSE and all other gates.
                     state_linf_threshold=None if sp == 4 and start == 96 and length == capacity - 64 else 0.6,
                     label=f"K3 {'trace' if traced else 'eager'} SP{sp} start={start} length={length}",
+                    nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
                 current = cache.read(1)
                 assert (current.recurrent.buffer_address(), current.convolution.buffer_address()) == addresses
