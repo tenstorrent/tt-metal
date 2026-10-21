@@ -22,6 +22,13 @@ target_link_libraries(
 
 install(TARGETS tt-nn-validation-basic RUNTIME COMPONENT ttnn-validation)
 
+# Kernel compile: JIT-compiles op kernels on mock devices, so it runs on CPU-only runners
+add_executable(tt-nn-validation-kernel-compile)
+
+target_link_libraries(tt-nn-validation-kernel-compile PRIVATE TTNN::Test::KernelCompile)
+
+install(TARGETS tt-nn-validation-kernel-compile RUNTIME COMPONENT ttnn-validation)
+
 # Mock cluster descriptor YAMLs used by configure_mock_mode() in tt-nn-validation-basic
 # ship in tt-metalium-validation.deb (see tt_metal/test/CMakeLists.txt). tt-nn-validation
 # picks them up via its Depends: metalium-validation in cmake/packaging.cmake.
