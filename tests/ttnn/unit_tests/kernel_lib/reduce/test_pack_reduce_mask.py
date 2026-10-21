@@ -12,6 +12,7 @@ KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/pack_reduce_mask.cpp"
 REPEATS = 5
 OUTPUTS_PER_SECTION = 4 + 3 * REPEATS
 TILE_SHAPES = [(32, 32), (32, 16), (16, 32), (16, 16), (8, 32), (4, 16), (2, 32), (1, 32), (1, 16)]
+# (16, 32) and (16, 16) bfp8 tiles are blocked by https://github.com/tenstorrent/tt-metal/issues/14305
 BFP8_TILE_SHAPES = [(32, 32), (32, 16), (8, 32), (4, 16), (2, 32), (1, 32), (1, 16)]
 CASES = [
     (tile_shape, dtype, fp32_dest)
