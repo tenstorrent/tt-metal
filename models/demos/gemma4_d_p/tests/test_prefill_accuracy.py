@@ -24,6 +24,7 @@ import torch
 
 from models.common.weight_cache import weight_cache_is_complete
 from models.demos.common.prefill.adapter import PrefillRunParams
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 from models.demos.gemma4_d_p.tests.scripts.likelihood import (
     HIDDEN_SAMPLES,
     HiddenSampler,
@@ -50,12 +51,13 @@ GPU_TRACES = Path(os.getenv("GEMMA4_GPU_TRACE_ROOT", "/mnt/models/huggingface/gp
 @dataclass(frozen=True)
 class Dataset:
     trace_dir: Path
-    min_per_head_pcc: float
-    min_overall_pcc: float
-    max_overall_rrmse: float
+    # Without limits a dataset is report-only: its metrics are printed but not gated.
+    min_per_head_pcc: float | None = None
+    min_overall_pcc: float | None = None
+    max_overall_rrmse: float | None = None
     # Per depth bin, keyed by its first position: minimum top-1 agreement, maximum mean ΔNLL and maximum
     # mean top-20 KL against the GPU reference. Text of another kind needs its own measured limits.
-    likelihood_limits: dict
+    likelihood_limits: dict | None = None
 
 
 DATASETS = {
@@ -69,6 +71,9 @@ DATASETS = {
         # same-build 256K runs differ by up to about 0.006 top-1, 0.03 ΔNLL and 0.02 KL; the limits leave room for it.
         likelihood_limits={0: (0.87, 0.36, 0.18), 8192: (0.86, 0.39, 0.24), 65536: (0.87, 0.39, 0.19)},
     ),
+    # InfiniteBench Code.Run id=391: 111161 tokens, so its last chunk is partly padded. Report-only until its
+    # limits are measured.
+    "code_run": Dataset(trace_dir=GPU_TRACES / "hf-gemma4-31b-coding-example-transformed"),
 }
 
 
@@ -117,24 +122,29 @@ def run_params(adapter):
 def prefill(runtime, kv_cache, token_ids, sampler):
     chunk = Gemma4ServiceConfig.CHUNK_SIZE
     for start in range(0, len(token_ids), chunk):
+        end = min(start + chunk, len(token_ids))
+        # The last chunk is right-padded with the producer's sentinel, as in serving.
+        tokens = token_ids[start:end] + [MTP_PAD_TOKEN_ID] * (start + chunk - end)
         runtime.prefill_chunk(
-            runtime.make_chunk_input(token_ids[start : start + chunk]),
+            runtime.make_chunk_input(tokens),
             kv_cache,
             slot_id=0,
             actual_start=start,
-            actual_end=start + chunk,
+            actual_end=end,
         )
-        sampler.add_chunk(runtime.output, start, start + chunk)
+        sampler.add_chunk(runtime.output, start, end)
 
 
 def compare_kv(kv_cache, context_len, trace_dir, output_dir):
     staging = {}
+    # The cache is read in whole chunks; positions past context_len hold the last chunk's padding.
+    padded_len = -(-context_len // Gemma4ServiceConfig.CHUNK_SIZE) * Gemma4ServiceConfig.CHUNK_SIZE
 
     def read_heads(layer):
         cache = kv_cache.layers[layer]
         tensors = ((0, cache.kv),) if hasattr(cache, "kv") else ((4, cache.k), (20, cache.v))
         for config_start, tensor in tensors:
-            for head, actual in enumerate(read_cache_tensor(tensor, 0, context_len, staging)):
+            for head, actual in enumerate(read_cache_tensor(tensor, 0, padded_len, staging)[:, :context_len]):
                 yield config_start + head, actual
 
     # compare_slot_cache writes its report to PREFILL_PCC_SUMMARY_DIR, which the caller points at output_dir.
@@ -211,7 +221,15 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
     print(f"Worst head: layer={worst['layer']} head={worst['head']} type={worst['cache_type']} PCC={worst['pcc']:.6f}")
     print(f"\nNext-token likelihood vs GPU reference\n{format_report(likelihood)}", flush=True)
 
-    return print_criteria(name, kv_criteria(kv, dataset) + check_limits(likelihood, dataset.likelihood_limits))
+    criteria = []
+    if dataset.min_per_head_pcc is not None:
+        criteria += kv_criteria(kv, dataset)
+    if dataset.likelihood_limits is not None:
+        criteria += check_limits(likelihood, dataset.likelihood_limits)
+    if not criteria:
+        print(f"\n{name}: report-only, no accuracy limits set", flush=True)
+        return []
+    return print_criteria(name, criteria)
 
 
 @torch.no_grad()
@@ -219,7 +237,9 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
 @parametrize_mesh_with_fabric(
     [Gemma4ServiceConfig.MESH_SHAPE], device_params_extra={"trace_region_size": TRACE_REGION_SIZE}
 )
-@pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
+@pytest.mark.parametrize(
+    "context_len", [8192, 16384, 111161, 131072, 262144], ids=["8k", "16k", "111161", "128k", "256k"]
+)
 def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypatch):
     adapter = Gemma4PrefillAdapter()
     hf_config = adapter.load_hf_config()

@@ -50,16 +50,14 @@ def prepare_gpu_reference(source, destination):
     metadata = json.loads((source / "metadata.json").read_text())
     if metadata["model_id"] != Gemma4PrefillAdapter().hf_model_id or metadata["layout"] != "chunked_group_a_v1":
         raise ValueError("Expected a Gemma4-31B-it chunked_group_a_v1 GPU capture")
-    if (
-        metadata["n_layers"] != Gemma4ServiceConfig.NUM_LAYERS
-        or len(metadata["token_ids"]) != Gemma4ServiceConfig.MAX_SEQ_LEN
-    ):
-        raise ValueError("Expected all 60 layers and 262144 token IDs")
+    tokens = len(metadata["token_ids"])
+    if metadata["n_layers"] != Gemma4ServiceConfig.NUM_LAYERS or not 0 < tokens <= Gemma4ServiceConfig.MAX_SEQ_LEN:
+        raise ValueError(f"Expected all 60 layers and 1 to {Gemma4ServiceConfig.MAX_SEQ_LEN} token IDs")
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "kv_cache").mkdir()
     measurements = []
     for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
-        result = prepare_layer(source, destination, layer, Gemma4ServiceConfig.MAX_SEQ_LEN)
+        result = prepare_layer(source, destination, layer, tokens)
         measurements.append(result)
         logger.info(f"GPU reference layer {layer + 1}/60 verified: {result}")
     metadata.update(
