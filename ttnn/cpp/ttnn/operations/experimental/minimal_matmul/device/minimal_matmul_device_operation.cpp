@@ -19,12 +19,12 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint64_t kProgramHashSalt = 0x4d4d5f6d6d5f7631ULL;  // "MM_mm_v1"
+constexpr uint64_t kMinimalMatmulProgramHashSalt = 0x4d4d5f6d6d5f7631ULL;  // "MM_mm_v1"
 
 // Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash.
 ttsl::hash::hash_t spec_without_rows(const std::optional<Tensor>& tensor) {
-    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kProgramHashSalt)
-                              : ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt);
+    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kMinimalMatmulProgramHashSalt)
+                              : ttsl::hash::hash_objects_with_default_seed(kMinimalMatmulProgramHashSalt);
 }
 
 }  // namespace
@@ -40,9 +40,9 @@ ttsl::hash::hash_t MinimalMatmulDeviceOperation::compute_program_hash(
     const bool transpose_core_grid = M > N;
     const bool b_broadcast = b.has_value() && b->padded_shape()[-2] == TILE_HEIGHT;
     return ttsl::hash::hash_objects_with_default_seed(
-        kProgramHashSalt,
+        kMinimalMatmulProgramHashSalt,
         operation_attributes,
-        operations::common::hash_spec_without_rows(input, kProgramHashSalt),
+        operations::common::hash_spec_without_rows(input, kMinimalMatmulProgramHashSalt),
         tensor_args.weight_tensor.tensor_spec(),
         spec_without_rows(tensor_args.bias_tensor),
         spec_without_rows(tensor_args.optional_input_tensor),

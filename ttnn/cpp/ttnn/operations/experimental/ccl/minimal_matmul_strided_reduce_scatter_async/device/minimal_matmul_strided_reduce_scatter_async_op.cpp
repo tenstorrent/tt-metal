@@ -15,19 +15,19 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-constexpr uint64_t kProgramHashSalt = 0x4d4d52535f763100ULL;  // "MMRS_v1"
+constexpr uint64_t kMmrsProgramHashSalt = 0x4d4d52535f763100ULL;  // "MMRS_v1"
 
 // Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash.
 template <typename OptionalTensor>
 ttsl::hash::hash_t spec_without_rows(const OptionalTensor& tensor) {
-    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kProgramHashSalt)
-                              : ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt);
+    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kMmrsProgramHashSalt)
+                              : ttsl::hash::hash_objects_with_default_seed(kMmrsProgramHashSalt);
 }
 
 template <typename OptionalTensor>
 ttsl::hash::hash_t full_spec(const OptionalTensor& tensor) {
     return tensor.has_value() ? ttsl::hash::hash_objects_with_default_seed(tensor->tensor_spec())
-                              : ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt);
+                              : ttsl::hash::hash_objects_with_default_seed(kMmrsProgramHashSalt);
 }
 
 }  // namespace
@@ -46,9 +46,9 @@ ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
     const auto& b = tensor_args.addcmul_input_tensor2;
     const bool b_broadcast = b.has_value() && b->logical_shape()[-2] <= 1;
     return ttsl::hash::hash_objects_with_default_seed(
-        kProgramHashSalt,
+        kMmrsProgramHashSalt,
         attributes,
-        workers_pinned ? operations::common::hash_spec_without_rows(tensor_args.input_tensor, kProgramHashSalt)
+        workers_pinned ? operations::common::hash_spec_without_rows(tensor_args.input_tensor, kMmrsProgramHashSalt)
                        : ttsl::hash::hash_objects_with_default_seed(tensor_args.input_tensor.tensor_spec()),
         tensor_args.weight_tensor.tensor_spec(),
         spec_without_rows(tensor_args.optional_rs_intermediate_tensor),

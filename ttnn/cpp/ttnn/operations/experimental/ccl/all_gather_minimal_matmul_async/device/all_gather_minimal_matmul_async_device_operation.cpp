@@ -24,7 +24,7 @@ namespace {
 
 // Keeps this op's row-free hash from colliding with another op's: a custom hash drops the
 // framework's canonical-key guard.
-constexpr uint64_t kProgramHashSalt = 0x41474d4d52544d31ull;  // "AGMM" runtime-M v1
+constexpr uint64_t kAgmmProgramHashSalt = 0x41474d4d52544d31ull;  // "AGMM" runtime-M v1
 
 // Rows (M) of the activation, upper dims folded in; the kernels take this count as a runtime word.
 uint32_t activation_rows(const Tensor& act_tensor) {
@@ -90,9 +90,9 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const uint32_t N = weight_tensor.padded_shape()[-1];
     const auto rows_free = [](const std::optional<Tensor>& tensor) -> ttsl::hash::hash_t {
         if (tensor.has_value() && tensor->is_sharded()) {
-            return ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt, tensor->tensor_spec());
+            return ttsl::hash::hash_objects_with_default_seed(kAgmmProgramHashSalt, tensor->tensor_spec());
         }
-        return ttnn::operations::common::hash_spec_without_rows(tensor, kProgramHashSalt);
+        return ttnn::operations::common::hash_spec_without_rows(tensor, kAgmmProgramHashSalt);
     };
     const bool fp32_dest_acc_en =
         std::get<2>(get_compute_kernel_config_args(act_tensor.device()->arch(), attributes.compute_kernel_config));
@@ -101,7 +101,7 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
                                  ? std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>{}
                                  : default_block_sizes(M, K, N, fp32_dest_acc_en);
     return ttsl::hash::hash_objects_with_default_seed(
-        kProgramHashSalt,
+        kAgmmProgramHashSalt,
         attributes,
         resolve_transpose_core_grid(attributes, M, N),
         block_sizes,
