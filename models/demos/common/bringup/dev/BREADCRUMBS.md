@@ -1582,3 +1582,13 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   - Selftests: test_no_fixed_numbers.py (ledger, spec, freeze, AST, every `limit` condition recorded by its gate's
     test on the fixture for C / S / L / M.1; the committed-ledger lint is xfail strict until F140); updated
     component / swap / opgen / dashboard tests.
+- F139 (owner, 2026-10-21; audit V17, V18): fork tests on a noise floor. testing/fork_cases.noise_limit(fn_ref, inputs,
+  dtypes, out_dtype): calib (2.0) x the rel L2 (and calib^2 on the PCC miss) of the torch reference at the op's real
+  formats (inputs rounded to bf16 / bfp8 / bfp4 on the CPU, a model of the 16-element shared-exponent blocks; fp32
+  sums; the output rounded) vs fp64. A math case declares `noise` (its formats), never a pcc / rtol / atol / rel of its
+  own; data movement stays `exact`. `fork_cases --lint` checks the model's own cases (O.1: fork_cases_lint == 0 in
+  newly generated ledgers; other models' legacy cases are F140's). The fork-tests skill says so; the rebase skill
+  judges a rebase by every metric within its limit and its move as a share of the margin, never identical bits.
+  - Not done: the 122 existing math cases (their tests read case["pcc"] / ["rtol"]) are F140's migration.
+  - Selftests: test_fork_cases.py (the floor on a matmul: correct passes, 1 % scale fails, bfp8 wider; the lint; the
+    legacy cases as xfail strict until F140).
