@@ -22,15 +22,18 @@ from loguru import logger
 import ttnn
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, dp_submeshes
 from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
-from models.experimental.mimo_v2_6_flash.tt.device_sampler import CANDIDATES_PER_CHIP, DeviceSampler
+from models.experimental.mimo_v2_6_flash.tt.device_sampler import (
+    CANDIDATES_PER_CHIP,
+    DeviceSampler,
+    reference_draw,
+    splitmix_next,
+)
 
 VOCAB = 152576
 B = 32
 USERS = 4
 DRAWS = 6
 REPLAYS = 50
-# How close (in cumulative probability) a uniform may land to a bucket edge before a mismatch counts as rounding.
-EDGE = 2e-5
 # (temperature, top_k, top_p) of users 0-3; top_k -1 or the vocabulary size is none, as the plugin sends it.
 PARAM_SETS = [
     ((0.0, 1.0, 0.6, 1.0), (-1, -1, 20, 1), (1.0, 0.95, 0.95, 0.0)),
@@ -39,7 +42,6 @@ PARAM_SETS = [
     ((0.6, 1.0, 0.0, 1.0), (-1, 50, -1, 3), (0.95, 1.0, 1.0, 0.8)),
 ]
 SCALES = [(6.0, 4.0, 3.0, 2.5), (5.0, 2.0, 1.0, 0.7), (8.0, 3.0, 1.5, 4.0)]
-MASK = (1 << 64) - 1
 
 
 class Streams:
@@ -47,7 +49,7 @@ class Streams:
 
     def __init__(self, gen):
         self.seeds = torch.randint(-(2**62), 2**62, (B,), generator=gen, dtype=torch.int64)
-        self.state = [int(x) & MASK for x in self.seeds]
+        self.state = [int(x) & ((1 << 64) - 1) for x in self.seeds]
 
     def draw(self, sampled):
         """The next uniforms of the sampled rows (others 0, their streams unchanged)."""
@@ -55,12 +57,7 @@ class Streams:
         for r in range(B):
             if not sampled[r]:
                 continue
-            self.state[r] = (self.state[r] + 0x9E3779B97F4A7C15) & MASK
-            z = self.state[r]
-            z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
-            z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
-            z ^= z >> 31
-            out[r] = (z >> 40) / float(1 << 24)
+            self.state[r], out[r] = splitmix_next(self.state[r])
         return out
 
 
@@ -74,29 +71,11 @@ def make_logits(gen, scales):
 
 
 def reference(logits, temperature, top_k, top_p, uniform):
-    """Per user: (token, nucleus size, whether the uniform is within EDGE of a bucket edge)."""
-    out = []
-    for r in range(USERS):
-        t, k, p, u = float(temperature[r]), int(top_k[r]), float(top_p[r]), float(uniform[r])
-        row = logits[r].double()
-        if t == 0.0 or k == 1:
-            out.append((int(torch.argmax(row)), 1, False))  # torch.argmax: the first maximum
-            continue
-        vals, ids = torch.sort(row / t, descending=True, stable=True)
-        probs = torch.softmax(vals, dim=0)
-        if 1 <= k < VOCAB:
-            probs = probs[:k] / probs[:k].sum()
-            ids = ids[:k]
-        above = probs.cumsum(0) - probs
-        keep = above < p
-        keep[0] = True
-        kept = probs[keep]
-        cum = kept.cumsum(0)
-        threshold = u * cum[-1]
-        pick = min(int((cum <= threshold).sum()), kept.numel() - 1)
-        near = bool(((cum - threshold).abs() < EDGE).any())
-        out.append((int(ids[keep][pick]), int(keep.sum()), near))
-    return out
+    """Per user: (token, nucleus size, whether the uniform is within rounding of a bucket edge)."""
+    return [
+        reference_draw(logits[r], float(temperature[r]), int(top_k[r]), float(top_p[r]), float(uniform[r]))
+        for r in range(USERS)
+    ]
 
 
 def read_tokens(t):

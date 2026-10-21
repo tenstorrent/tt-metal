@@ -43,6 +43,45 @@ PARAM_WORDS = 8  # per row: log2(e) / T (fp32 bits), top_p (Q24), top_k, greedy,
 CB_X, CB_M, CB_A, CB_S, CB_SCRATCH, CB_OUT, CB_READY = 0, 1, 2, 3, 4, 5, 6
 
 
+MASK64 = (1 << 64) - 1
+# How close (in cumulative probability) a uniform may land to a bucket edge before a mismatch counts as rounding.
+EDGE = 2e-5
+
+
+def splitmix_next(state):
+    """(next state, uniform in [0, 1)) of the device's splitmix64 stream (kernels/sample_fixed.hpp)."""
+    state = (state + 0x9E3779B97F4A7C15) & MASK64
+    z = state
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK64
+    z ^= z >> 31
+    return state, (z >> 40) / float(1 << 24)
+
+
+def reference_draw(logits, temperature, top_k, top_p, u):
+    """vLLM's draw over the whole vocabulary (logits: torch [vocab]): softmax(logits / T), or over the top_k largest
+    (top_k < 1 or >= vocab: none); keep a token while the mass ranked above it is below top_p; the first kept token
+    whose cumulative probability exceeds u * the kept mass. Greedy (T 0 or top_k 1): the first maximum. Returns
+    (token, nucleus size, whether u lies within EDGE of a bucket edge)."""
+    row = logits.double()
+    vocab = row.numel()
+    if temperature == 0.0 or top_k == 1:
+        return int(torch.argmax(row)), 1, False
+    vals, ids = torch.sort(row / temperature, descending=True, stable=True)
+    probs = torch.softmax(vals, dim=0)
+    if 1 <= top_k < vocab:
+        probs = probs[:top_k] / probs[:top_k].sum()
+        ids = ids[:top_k]
+    keep = (probs.cumsum(0) - probs) < top_p
+    keep[0] = True
+    kept = probs[keep]
+    cum = kept.cumsum(0)
+    threshold = u * cum[-1]
+    pick = min(int((cum <= threshold).sum()), kept.numel() - 1)
+    near = bool(((cum - threshold).abs() < EDGE).any())
+    return int(ids[keep][pick]), int(keep.sum()), near
+
+
 def _is_dram(t):
     return int(t.memory_config().buffer_type == ttnn.BufferType.DRAM)
 
@@ -154,6 +193,7 @@ class DeviceSampler:
         greedy = (temp == 0) | (k == 1)
         if seeds is None:
             seeds = torch.randint(-(2**63), 2**63 - 1, (self.max_batch,), dtype=torch.int64)
+        self.pending_rows = (temp.clone(), k.clone(), p.clone())
         words = seeds.numpy().astype(np.int64).view(np.int32).reshape(1, -1)  # low word first
         rep = self.plan.replicate()
         hosts = [
@@ -167,6 +207,35 @@ class DeviceSampler:
     def set_params(self, hosts):
         ttnn.copy_host_to_device_tensor(hosts[0], self.params)
         ttnn.copy_host_to_device_tensor(hosts[1], self.rng)
+        self.rows = self.pending_rows  # (temperature, top_k, top_p) torch [max_batch], for ``check``
+
+    def read_rng(self):
+        """The rows' stream states (Python ints), blocking."""
+        words = ttnn.to_torch(ttnn.get_device_tensors(self.rng)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
+        return [int(words[2 * r]) | int(words[2 * r + 1]) << 32 for r in range(self.max_batch)]
+
+    def check(self, logits, tokens, rng, active):
+        """Checks a step's tokens (torch [>= users]) against ``reference_draw`` on its logit rows (torch [users, vocab])
+        with each row's uniform from its stream state before the step (``read_rng``). Returns (rows checked, rows the
+        draw is exact for (nucleus and top_k within K), [(row, device token, reference token)] mismatches among those
+        away from a bucket edge)."""
+        temp, k, p = self.rows
+        checked, exact, bad = 0, 0, []
+        for r in range(self.users):
+            if not active[r]:
+                continue
+            t, kk, pp = float(temp[r]), int(k[r]), float(p[r])
+            greedy = t == 0.0 or kk == 1
+            u = 0.0 if greedy else splitmix_next(rng[r])[1]
+            token, nucleus, near = reference_draw(logits[r], t, kk if kk >= 1 else -1, pp, u)
+            checked += 1
+            if nucleus > self.k or kk > self.k:
+                continue
+            exact += 1
+            got = int(tokens[r])
+            if got != token and float(logits[r, got]) != float(logits[r, token]) and not near:
+                bad.append((r, got, token))
+        return checked, exact, bad
 
     # ------------------------------------------------------------------ device side (trace-capturable)
     def _scan(self, logits):

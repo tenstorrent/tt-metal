@@ -70,6 +70,9 @@ DEFAULT_KV_GB_PER_CHIP = 6.0
 SWA_TOKENS_PER_USER = 5 * (math.ceil((127 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZE
 # MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, and decode's host time every 128 steps.
 TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
+# MIMO_SAMPLER_CHECK=1 (debug): each device-sampled decode step blocks, recomputes every row's draw on the host from the
+# step's logit rows and the row's uniform (DeviceSampler.check) and logs the counts every 64 steps.
+SAMPLER_CHECK = os.environ.get("MIMO_SAMPLER_CHECK") == "1"
 # MIMO_PREFILL_BATCH=0: prefill every row on its own (TtMiMoModel.prefill_enqueue_batch is not used).
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
@@ -509,10 +512,13 @@ class MiMoV2ForCausalLM:
                 )
             if enable_trace and model.decode_trace is None:
                 raise RuntimeError("decode trace requested before warmup_model_decode captured it")
+            rng = model.sampler.read_rng() if sample and SAMPLER_CHECK else None
             if reload_inputs:
                 handle = model.decode_enqueue(tok, pos, sample=sample)
             else:
                 handle = model.decode_enqueue_resident(pos, sample=sample)
+            if rng is not None:
+                self._check_sampling(lane, model, handle, rng, active)
             self.decode_positions[lane] = torch.where(active, pos + 1, pos)
             handles.append((lane, last - first, handle))
         out = {"rows": rows, "handles": handles, "tokens": on_device}
@@ -539,6 +545,25 @@ class MiMoV2ForCausalLM:
             )
             stats = None
         self._timing = stats
+
+    def _check_sampling(self, lane, model, handle, rng, active):
+        """MIMO_SAMPLER_CHECK: the step's tokens against the host's draw on its logit rows (blocking)."""
+        logits = model.plan.to_torch_tp_concat(handle["logits_rows"], dim=-1).float().reshape(model.decode_users, -1)
+        tokens = ttnn.to_torch(ttnn.get_device_tensors(handle["next_tokens"])[0]).reshape(-1)
+        checked, exact, bad = model.sampler.check(logits, tokens, rng, active)
+        stats = getattr(self, "_check_stats", None) or {"steps": 0, "rows": 0, "exact": 0, "bad": 0}
+        stats["steps"] += 1
+        stats["rows"] += checked
+        stats["exact"] += exact
+        stats["bad"] += len(bad)
+        for r, got, want in bad:
+            logger.warning(f"MiMo sampler check: lane {lane} row {r}: device {got}, host {want}")
+        if stats["steps"] % 64 == 0:
+            logger.info(
+                f"MiMo sampler check: {stats['steps']} lane-steps, {stats['rows']} rows, {stats['exact']} with the "
+                f"nucleus in the candidates, {stats['bad']} mismatches"
+            )
+        self._check_stats = stats
 
     def _set_sampling(self, lane, model, sampling_params, first, last, active):
         """Uploads the sampling parameters of the lane's rows [first, last) (idle rows greedy) and records whether

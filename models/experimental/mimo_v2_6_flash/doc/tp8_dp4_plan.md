@@ -493,3 +493,13 @@ vLLM, DP=4 x 4, 64 x 128 / 128 (`--temperature 1.0 --top-p 0.95` for the sampled
 
 The sampled rows' first token still samples on host after prefill (`sample_on_device_mode="decode_only"`); their TTFT
 is ~90 ms above greedy's at c=16 (423 vs 324 ms median), not yet explained by the host sampler (~3 ms for 16 rows).
+
+Validation in serving:
+- `MIMO_SAMPLER_CHECK=1` (debug: each sampled step blocks, reads the logit rows and the rows' stream states, and
+  recomputes vLLM's draw on the host): 5 minutes of GPQA reasoning at c=16, 14333 sampled rows on the model's own
+  logits, 14278 with the nucleus in the candidates, 0 mismatches.
+- GPQA Diamond, first 64 questions, c=16, temperature 1.0 / top_p 0.95, 64K context (`runs/speed/gpqa_device.sh`):
+  50/64 (53/64 counting 3 answers that end in the template's literal "Answer: $LETTER" after reasoning to the right
+  letter); 6 truncated at 64K; 0 failed requests, 0 decode-trace recaptures; 1046 tok/s while all 16 requests decode
+  (host sampling: ~133). On the 62 questions both runs answered, host sampling 56 and device sampling 52 (with the
+  reasoning fallback), within T=1 run-to-run spread.
