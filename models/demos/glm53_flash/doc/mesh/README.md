@@ -830,3 +830,20 @@ DECODE step by a last-ulp amount that only shows at near-ties; the d56 prompt (1
 top-512 boundary broken differently for the last user's segments), or the heads->users all-to-all's last chunk.
 Next: a single-chip tie-break test of the scorer + top-k with 4 identical users (tests/custom_ops), and a 1 M-step
 dump of user 0 vs user 3's selected pool ids.
+
+**Slot-3 ledger, 21:26-21:46 (blocks):** same prompt in every slot -> bit-identical outputs for layers 3 and 4, eager
+and traced, positions 0..15 (`indep_2x4_sameprompt_*.log`); partitioned sparse decode of layer 3 with the R4097
+prompt in all 4 users (heads2users), 12 steps incl. trace replay -> slots byte-equal, worst PCC vs HF 0.999953
+(`sparse_partitioned_same_user_h2u.log`, `GLM53_SPARSE_SAME_USER=1`); full model 45 layers bfp4 at 16 K x 4
+users with a filler-only prompt (`GLM53_LONG_NO_QUESTION=1`) -> the model answers confidently ("I need the actual
+question ..."), all slots and rows identical over 64 tokens. Status: the slot-3 divergence is observed only at 1 M
+on the depth-0.5 prompt (a degenerate near-tie continuation); the 1 M prefill is bit-deterministic; no layer-level
+or <= 256 K check reproduces it. Parked as low impact (degenerate regime only); next probe if needed: a 1 M step dump
+of user 0 vs user 3's selected pool ids and attention output per layer.
+
+**128-token first token vs HF on the 8x4 (accuracy regression, open):** every 8x4 TTFT check since 17:35 mismatches
+the host-head argmax (EP32 builds: token 39030, the same as the 10-20 evening runs; hybrid dense B=32 at 21:26:
+99484, chain PCC 0.895-0.917 vs 0.943 this morning), while the hybrid sparse B=4 bfp8 build matched at 07:44-09:38
+and the block (bfp4, B=4) matches with the fused router on AND off (bit-identical chain PCC 0.823420:
+`ttft_2x4_router_fused_{0,1}.log`). So not the router. Queued on the 8x4 before the perf re-measures
+(`sched_ttft_ab.sh`): hybrid dense B=32 with the fused router 0 / 1 and hybrid sparse B=4 on today's code.
