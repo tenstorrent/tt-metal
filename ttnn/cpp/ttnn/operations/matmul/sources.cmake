@@ -4,6 +4,9 @@
 set(TTNN_OP_MATMUL_SRCS
     matmul.cpp
     device/config/matmul_program_config.cpp
+    device/config/model/gbdt_model.cpp
+    device/config/model/matmul_model_device_params.cpp
+    device/config/model/matmul_model_features.cpp
     device/matmul_device_operation.cpp
     device/utilities/matmul_utilities.cpp
     device/factory/matmul_multicore_program_factory.cpp
