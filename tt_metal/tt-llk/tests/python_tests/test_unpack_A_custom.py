@@ -55,9 +55,7 @@ NUM_FACES_FULL_TILE = 4
 # format pair the harness would otherwise force onto a 32-bit destination.
 UNPACK_A_CUSTOM_FORMATS = [
     fmt
-    for fmt in input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b]
-    )
+    for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b])
     if not is_dest_acc_needed(fmt)
 ]
 

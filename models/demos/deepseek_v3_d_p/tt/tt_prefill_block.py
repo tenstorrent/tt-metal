@@ -593,6 +593,7 @@ class TtPrefillBlock(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
         ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
     ):
         """
@@ -617,6 +618,8 @@ class TtPrefillBlock(LightweightModule):
                 d2h_service path does not cover.
             ack_layer_idx: global layer id this block acks under, overriding its own. MTP replays one
                 block per level, so each level needs a distinct id on the host-callback path.
+            ack_alias_layer_ids: global layer ids acked right after this block's own, for table rows
+                that alias its KV (decode MTP levels past the ones prefill computes).
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -702,6 +705,7 @@ class TtPrefillBlock(LightweightModule):
             on_layer_complete=on_layer_complete,
             trace_controller=getattr(self, "_trace_controller", None),
             tp_axis=self.mla.tp_shard_kv_axis,
+            alias_layer_ids=ack_alias_layer_ids,
         )
 
         if kv_only:
