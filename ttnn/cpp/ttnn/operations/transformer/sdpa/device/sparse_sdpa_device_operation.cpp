@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -181,6 +182,8 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
         tile_w,
         attrs.k_chunk_size);
     TT_FATAL(TOPK % attrs.k_chunk_size == 0, "k_chunk_size must divide TOPK");
+    // Every configuration reaches the block row-max reduce (the compute kernel has no legacy path).
+    detail::validate_chunk_fits_block_reduce(attrs.k_chunk_size, "k_chunk_size");
     TT_FATAL(attrs.scale > 0.0f, "scale must be > 0");
 
     // Row-byte alignment: each Q/K/index/output row is a DRAM page the reader DMAs from / the writer DMAs

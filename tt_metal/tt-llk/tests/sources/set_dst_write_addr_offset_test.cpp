@@ -50,9 +50,12 @@
 // test needing to model DEST layout. SFPU_ENABLED=false gives the datacopy-only baseline
 // the negate is diffed against.
 //
-// Not covered: the LLK_ASSERT on addr >= DEST_REGISTER_HALF_SIZE. Nothing in the suite
-// expects an LLK assert (conftest treats LLKAssertException as a failure), and tripping
-// one mid-kernel risks leaving the device wedged for the tests that follow.
+// Not covered: the LLK_ASSERT on addr >= DEST_REGISTER_HALF_SIZE. A test that expects an
+// LLK assert catches LLKAssertException around run() (see test_reduce_block_max.py); the
+// per-test TRISC soft reset restarts the halted cores but does not clear Tensix state they leave
+// behind (a packer waiting on MATH_PACK, a math MOP waiting on SrcA, tiles left in the source
+// banks), so such a test must also keep the other threads from waiting on the asserting one (the
+// REDUCE_*_SKIP_EXECUTE flags there). This test has no reason to trip one.
 
 #include <cstdint>
 

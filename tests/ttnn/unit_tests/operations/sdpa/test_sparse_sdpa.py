@@ -231,6 +231,24 @@ def test_sparse_sdpa_rejects_kv_format_storage_mismatch(device, expect_error, kv
         )
 
 
+@run_for_blackhole()
+def test_sparse_sdpa_rejects_k_chunk_above_block_reduce_limit(device, expect_error):
+    # The compute kernel reduces each k chunk with the block row-max LLK, whose loop count caps the
+    # chunk at 127 tiles (a wider one silently reduces the wrong tiles on Wormhole), so a 128-tile chunk
+    # must be rejected on the host. Validation fails before any program is built, so small tensors do.
+    H, S, T, TOPK = 32, 32, 4096, 4096
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1)
+    with expect_error(RuntimeError, "k_chunk_size must be at most"):
+        ttnn.transformer.sparse_sdpa(
+            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            V_DIM,
+            kv_format=BF16_KV,
+            k_chunk_size=TOPK,
+        )
+
+
 # ---- output dtype matches q (bf16 q -> bf16 out, fp8 q -> fp8 out) ----
 @run_for_blackhole()
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["q_bf16", "q_fp8"])

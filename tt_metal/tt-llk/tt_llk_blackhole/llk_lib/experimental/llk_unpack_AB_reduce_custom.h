@@ -14,6 +14,7 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "reduce_block_max_row_limits.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -36,8 +37,10 @@ using namespace ckernel::unpacker;
 template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
-    // Constraint on the outerloop and innerloop dim
-    static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
+    static_assert(is_valid_reduce_block_max_row_block_ct_dim(block_ct_dim), "block_ct_dim must be between 1 and 127");
+    // A split run delivers 2 * (block_ct_dim / 2) tiles while the math MOP waits for block_ct_dim, so the trigger
+    // needs an even width (an odd one hangs the math MOP; 1 would program an outer-loop count of 0).
+    static_assert(!respect_trigger || block_ct_dim % 2 == 0, "respect_trigger needs an even block_ct_dim");
     // Single UNPACR because TTI_SETADCXX for UNP_A is 1023, increment Z counter to point to the next tile, set dvalid each time
     static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -68,7 +71,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_(const ckernel::TensorShape tensor_shape)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(validate_tensor_shape_reduce_block_max_row_(tensor_shape), "block reduce_max_row supports 32x32 and 16x32 tiles only");
 
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything

@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/quasar/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -114,6 +115,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
+            // Off Quasar this op selects the streaming compute kernel when fp32_dest_acc_en is false (the
+            // program factory forces the standard kernel on Quasar), and that kernel reduces the K chunk
+            // with the block row-max LLK, which caps the chunk width; the standard kernel loops reduce_tile.
+            if (!get_fp32_dest_acc_en(attrs.compute_kernel_config) && tensors.q.device()->arch() != tt::ARCH::QUASAR) {
+                ttnn::prim::detail::validate_chunk_fits_block_reduce(
+                    k_chunk_size, "k_chunk_size", ttnn::prim::detail::kStreamingComputeCondition);
+            }
         }
     };
 
@@ -342,6 +350,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
+            // Off Quasar this op selects the streaming compute kernel when fp32_dest_acc_en is false (the
+            // program factory forces the standard kernel on Quasar), and that kernel reduces the K chunk
+            // with the block row-max LLK, which caps the chunk width; the standard kernel loops reduce_tile.
+            if (!get_fp32_dest_acc_en(attrs.compute_kernel_config) && tensors.q.device()->arch() != tt::ARCH::QUASAR) {
+                ttnn::prim::detail::validate_chunk_fits_block_reduce(
+                    k_chunk_size, "k_chunk_size", ttnn::prim::detail::kStreamingComputeCondition);
+            }
 
             if (legacy_chunked) {
                 // Validate that chunk_start_idx is a multiple of q_chunk_size

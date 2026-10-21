@@ -258,6 +258,7 @@ def run_test_sdpa_tt(
     use_high_precision_compute=False,
     rmse_threshold=None,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    sdpa_op=ttnn.transformer.scaled_dot_product_attention,
 ):
     torch.manual_seed(1234)
 
@@ -296,7 +297,7 @@ def run_test_sdpa_tt(
     tt_V = ttnn.from_torch(
         V, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device, pad_value=0.0
     )
-    tt_back = ttnn.transformer.scaled_dot_product_attention(
+    tt_back = sdpa_op(
         tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
     tt_back = ttnn.to_torch(tt_back)
@@ -591,6 +592,52 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
         rmse_threshold=rmse_threshold,
         memory_config=memory_config,
     )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
+@pytest.mark.parametrize("k_chunk_size", [4096], ids=["k4096"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 1, 1, 4096, 32],),
+)
+@pytest.mark.parametrize("use_high_precision_compute", [False, True], ids=["streaming", "legacy_fp32"])
+@pytest.mark.parametrize(
+    "sdpa_op",
+    [ttnn.transformer.scaled_dot_product_attention, ttnn.experimental.quasar.transformer.scaled_dot_product_attention],
+    ids=["mainline", "quasar_fork"],
+)
+def test_sdpa_k_chunk_size_above_block_reduce_limit(
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute, sdpa_op, expect_error
+):
+    """The streaming compute kernel (fp32_dest_acc_en=False) reduces each Q row over a k-chunk with
+    the block reduce_max_row LLK, whose runtime MOP loop count is a 7-bit field on Wormhole: a
+    128-tile chunk wraps to 0 tiles and the row max is silently stale. The LLK assert is compiled out
+    in production, so the op has to reject k_chunk_size / 32 > 127 on the host for that kernel. The
+    shape is small enough that the chunk fits L1, so the only thing standing between the call and a
+    wrong result is the host check. The legacy kernel (fp32_dest_acc_en=True) loops reduce_tile over
+    the chunk and has no such limit, so the same chunk must be accepted and computed there. The
+    experimental Quasar SDPA fork selects the same two kernels on Wormhole and Blackhole, so it must
+    behave the same way."""
+    if ttnn.get_arch_name() == "quasar":
+        pytest.skip("Covers the Wormhole/Blackhole block-reduce limit; Quasar runs the standard kernel")
+    if use_high_precision_compute:
+        run_test_sdpa_tt(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            dtype,
+            use_high_precision_compute=True,
+            sdpa_op=sdpa_op,
+        )
+        return
+    with expect_error(RuntimeError, "k_chunk_size must be at most"):
+        run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sdpa_op=sdpa_op)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])

@@ -69,6 +69,25 @@ static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 static constexpr std::uint32_t NUM_FACES = 4;
 
 // RESPECT_TRIGGER / OVERLAP_FIRST_HALF are supplied by the Python driver (params.h).
+//
+// REDUCE_OPERAND_SHAPE (params.h) is the operand tile geometry handed to the unpack and
+// math inits. The driver's default is the full 32x32 tile; the shape-guard test passes
+// face grids the op does not implement (one face column, short faces) to check that
+// the inits reject them. REDUCE_EXECUTE_OPERAND_SHAPE is the geometry the math execute call is
+// told (the driver defaults it to the init shape; the execute-guard test hands it one the op
+// rejects after a valid init). REDUCE_REINIT_BLOCK_CT_DIM / REDUCE_REINIT_OPERAND_SHAPE are
+// what the reinit_short re-arm is told (the driver defaults them to the init values); the
+// reinit-guard tests hand the re-arm a width or shape the op rejects; they also set
+// REDUCE_UNPACK_SKIP_EXECUTE so the unpack delivers no tiles (their math stops on the
+// re-arm's LLK_ASSERT and would leave the delivered tiles in the source banks, which the
+// per-test TRISC soft reset does not clear and which stall the next kernel). The trigger
+// odd-width guard test sets REDUCE_MATH_SKIP_EXECUTE for the mirror-image reason: its
+// unpack stops at init, and a math MOP left waiting for SrcA is a stalled Tensix
+// instruction the soft reset does not recover from. The guard tests whose math stops at
+// init set REDUCE_PACK_SKIP_EXECUTE for the same reason one thread further down: that math
+// never signals math-done, and a packer left on the MATH_PACK wait is a stalled Tensix
+// instruction that makes the next kernel on the core pack zeros. Otherwise the PACK thread
+// packs the 32x32 DEST slot the op writes the row max into.
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -82,7 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    const ckernel::TensorShape tensor_shape = REDUCE_OPERAND_SHAPE;
 
     // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -94,7 +113,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, RESPECT_TRIGGER, tensor_shape);
 
         // Operand A is REDUCE_BLOCK_CT_DIM contiguous tiles; scaler B is a single tile of 1.0.
-        _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
+        if constexpr (!REDUCE_UNPACK_SKIP_EXECUTE)
+        {
+            _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
+        }
 
         _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
     }
@@ -103,7 +125,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // reduce_block_max_row_init
         _llk_unpack_AB_reduce_block_max_row_init_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en, RESPECT_TRIGGER>(tensor_shape);
 
-        _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+        if constexpr (!REDUCE_UNPACK_SKIP_EXECUTE)
+        {
+            _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
+        }
 
         _llk_unpack_AB_reduce_block_max_row_uninit_<RESPECT_TRIGGER>();
     }
@@ -169,7 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+    const ckernel::TensorShape tensor_shape = REDUCE_OPERAND_SHAPE;
 
     // compute_kernel_hw_startup
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -185,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (REINIT_MODE == 1)
         {
             // reduce_block_max_row_reinit_short_runtime: reprogram MOP + restore addrmods (both arches).
-            _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, tensor_shape);
+            _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(REDUCE_REINIT_BLOCK_CT_DIM, REDUCE_REINIT_OPERAND_SHAPE);
         }
 #ifdef ARCH_BLACKHOLE
         else if constexpr (REINIT_MODE == 2)
@@ -202,7 +227,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        if constexpr (!REDUCE_MATH_SKIP_EXECUTE)
+        {
+            _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, REDUCE_EXECUTE_OPERAND_SHAPE);
+        }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
         _llk_math_reduce_block_max_row_uninit_runtime_<is_fp32_dest_acc_en>();
@@ -220,7 +248,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // reduce_block_max_row_reinit_short == reduce_max_row_configure_addrmod + mop_reprogram_only
             // (matches llk_math_reduce_block_max_row_reinit_with_mop). Blackhole-only lib path.
             reduce_max_row_configure_addrmod();
-            _llk_math_reduce_block_max_row_mop_reprogram_only_<REDUCE_BLOCK_CT_DIM>(tensor_shape);
+            _llk_math_reduce_block_max_row_mop_reprogram_only_<REDUCE_BLOCK_CT_DIM>(REDUCE_REINIT_OPERAND_SHAPE);
         }
         else if constexpr (REINIT_MODE == 2)
         {
@@ -230,7 +258,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
         _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+        if constexpr (!REDUCE_MATH_SKIP_EXECUTE)
+        {
+            _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, REDUCE_EXECUTE_OPERAND_SHAPE);
+        }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
         _llk_math_reduce_block_max_row_uninit_<is_fp32_dest_acc_en>();
@@ -250,6 +281,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // The op writes the row max into column [0] of a 32x32 DEST slot whatever the operand geometry.
     const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
@@ -287,9 +319,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Single output tile: the per-row maxima live in column [0] of DEST[0].
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    if constexpr (!REDUCE_PACK_SKIP_EXECUTE)
+    {
+        _llk_packer_wait_for_math_done_();
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
+        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    }
 
     // reduce_block_max_row_uninit
     _llk_pack_reduce_mask_clear_();

@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_chunk_limits.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -202,6 +203,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
+    // Every configuration reaches the block row-max reduce: the compute kernel static_asserts the streaming
+    // path.
+    detail::validate_chunk_fits_block_reduce(k_chunk_size, "k_chunk_size");
 
     TT_FATAL(
         N_local % tt::constants::TILE_HEIGHT == 0,

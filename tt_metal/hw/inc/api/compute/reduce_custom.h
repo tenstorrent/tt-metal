@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "llk_assert.h"
 #include "tensor_shape.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
@@ -23,6 +24,26 @@
 #endif
 
 namespace ckernel {
+
+// The num_faces convenience overloads below build a TensorShape from a flat face count. The LLK implements
+// two full 16-row column faces per face-row only, so the supported counts are 4 (32x32) and 2 (16x32); the
+// template overloads reject anything else at compile time, the runtime overloads with an LLK_ASSERT.
+constexpr bool reduce_block_max_row_supports_num_faces(std::uint32_t num_faces) {
+    return num_faces == 2 || num_faces == 4;
+}
+
+template <std::uint32_t num_faces>
+ALWI void reduce_block_max_row_check_num_faces() {
+    static_assert(
+        reduce_block_max_row_supports_num_faces(num_faces),
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
+}
+
+ALWI void reduce_block_max_row_check_num_faces(std::uint32_t num_faces) {
+    LLK_ASSERT(
+        reduce_block_max_row_supports_num_faces(num_faces),
+        "reduce_block_max_row supports 32x32 (num_faces=4) and 16x32 (num_faces=2) tiles only");
+}
 
 // clang-format off
 /**
@@ -69,6 +90,7 @@ ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, st
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
+    reduce_block_max_row_check_num_faces<num_faces>();
     reduce_block_max_row_init<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
@@ -134,6 +156,7 @@ ALWI void reduce_block_max_row(
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
+    reduce_block_max_row_check_num_faces<num_faces>();
     reduce_block_max_row<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         icb,
@@ -176,6 +199,7 @@ ALWI void reduce_block_max_row_reinit_short(const ckernel::TensorShape& tensor_s
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
+    reduce_block_max_row_check_num_faces<num_faces>();
     reduce_block_max_row_reinit_short<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
@@ -196,6 +220,7 @@ ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
+    reduce_block_max_row_check_num_faces<num_faces>();
     reduce_block_max_row_reinit_minimal<block_ct_dim, respect_trigger>(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
@@ -220,6 +245,7 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    reduce_block_max_row_check_num_faces(num_faces);
     reduce_block_max_row_reinit_minimal_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
@@ -243,6 +269,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 ALWI void reduce_block_max_row_reinit_short_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    reduce_block_max_row_check_num_faces(num_faces);
     reduce_block_max_row_reinit_short_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
@@ -298,7 +325,9 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
 }
 
-// Runtime variants - block_ct_dim and respect_trigger are runtime parameters. The input CBs
+// Runtime variants - block_ct_dim and respect_trigger are runtime parameters. block_ct_dim has the same
+// 1 to 127 range as the template overloads; the Wormhole and Blackhole LLKs assert 1 <= block_ct_dim <= 127 (and
+// an even block_ct_dim with respect_trigger) when LLK asserts are enabled, Quasar does not check it. The input CBs
 // (icb, icb_scaler) are bound at init: on Quasar this lets the unpack MOP -- which bakes the SrcA buffer
 // descriptor -- be programmed at init, like native Quasar reduce. WH/BH bind the operand at execute and
 // ignore the input CBs here.
@@ -331,6 +360,7 @@ ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t icb_scaler,
     bool respect_trigger = false,
     std::uint32_t num_faces = 4) {
+    reduce_block_max_row_check_num_faces(num_faces);
     reduce_block_max_row_init_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         ocb,
@@ -369,6 +399,7 @@ ALWI void reduce_block_max_row_runtime(
     bool respect_trigger = false,
     bool overlap_first_half = false,
     std::uint32_t num_faces = 4) {
+    reduce_block_max_row_check_num_faces(num_faces);
     reduce_block_max_row_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         icb,
