@@ -238,7 +238,7 @@ class ttKDA:
         # projection takes its fidelity from the program config.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=program_config.decay_math_fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )

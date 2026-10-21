@@ -117,6 +117,8 @@ class KDAProgramConfig:
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # The decay projection's (rank 128 -> heads x K, with the fused sigmoid).
+    decay_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Weight dtype of the input (q, k, v, f_a, f_b, g, b) and output projections.
     projection_dtype: ttnn.DataType = ttnn.bfloat16
@@ -256,6 +258,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # HiFi2 keeps the synthetic output NRMSE at 1.87e-2 (HiFi4 1.86e-2).
+        decay_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
