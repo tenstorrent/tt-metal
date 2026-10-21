@@ -51,10 +51,12 @@ with it. A fabric change falls into one of three cases:
 | [`type_parser.py`](type_parser.py) | Reads the struct, union and enum layouts the manifest describes, checks them, and decodes bytes into values with them. It holds no fabric names. In depth: [TYPE_PARSER.md](docs/TYPE_PARSER.md) |
 | [`inputs.py`](inputs.py) | Loads a snapshot, its `.bin` and the manifest it was taken with, refuses them when they don't belong together, and warns when the run's build and decode's checkout may differ. In depth: [INPUTS.md](docs/INPUTS.md) |
 | [`routers.py`](routers.py) | `decode_router`: decodes one router's part of a snapshot, its areas and regions and each stream and element reference, keyed by its path in the router. It puts the path rule, the type parser and `inputs.py` together, and has no rules of its own |
+| [`health.py`](health.py) | `get_health`: a router's liveness samples and main pass as facts: whether each ERISC is held in reset, how the wall clock moves, and whether the heartbeat moves. In depth: [HEALTH.md](docs/HEALTH.md) |
 | [`tests/test_routes.py`](tests/test_routes.py) | Hand-written cases for each rule |
 | [`tests/test_type_parser.py`](tests/test_type_parser.py) | Hand-written cases for every schema form, and for each check of the layouts |
 | [`tests/test_inputs.py`](tests/test_inputs.py) | Cases for loading, pairing and refusing snapshots, and for the build identity warnings |
 | [`tests/test_routers.py`](tests/test_routers.py) | Cases for decoding one router, including one capture stopped part way through, and snapshots that disagree with the manifest |
+| [`tests/test_health.py`](tests/test_health.py) | Cases for each health fact: reset bits by physical ERISC, the wall clock's join and wrap, and heartbeat words from other writers |
 | [`tests/check_manifest_routes.py`](tests/check_manifest_routes.py) | Checks that `routes.py` can read the manifests CI writes |
 | [`tests/test_check_manifest_routes.py`](tests/test_check_manifest_routes.py) | Cases for the check's `--expect-z-peers` |
 | [`../common/manifest_lookup.py`](../common/manifest_lookup.py) | `lookup`, which reads a manifest value and checks its JSON type, and `ManifestError`. Shared with the visualizer's other Python packages |
