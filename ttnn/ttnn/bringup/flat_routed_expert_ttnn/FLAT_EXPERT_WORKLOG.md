@@ -1201,8 +1201,10 @@ x 61 / 123 us, y 61 / 123 us (M 80 / 160) -> 1450 / 1573 us (1389 / 1450 without
   call), NoC writes 199 / 201, flush + semaphore 155 / 197, total 984 / 1048 (a third of it outside those sections).
   One RISC does all of it per block, serially.
 - DRISC_UB 2 halves the per-unit cost but halves the units in flight: -3.5% at M 80, +4.6% at M 160 (as GLM-Flash).
-- M 160 has two more costs: x reads (the relays' NOC1 DRAM reads against each bank's NOC1-endpoint DRISC tile: no
-  forwarding 1706 vs read only 1439, weights not read 1727) and a 93 us pipeline tail.
+- x is not it (no y in all): XRD_SKIP (no x DRAM reads) 1608 / 1740, XRD_SKIP + XMC_NODATA (no x data sent either)
+  1608 / 1737 vs 1617 / 1785: x costs 9 / 48 us. With x gone the weights alone run at 423 GB/s at M 80 (the ceiling)
+  and 391 at M 160; the extra ~130 us at M 160 is mostly the pipeline tail (93 us fixed from E 16 / 32) plus a slower
+  steady state (52.9 vs 49.7 us an expert). (The read-only vs no-forwarding gap at M 160, 1439 vs 1706, is not x.)
 Options: fewer RISC cycles a block on the DRISC (no ack wait per unit, batched flushes, a multicast write where a block
-goes to G > 1 receivers, fewer grant refreshes on tile 1); UB from the call's rows (2 at small M, 1 above); the x relay
-reads off the DRISC tiles' NOC1 endpoints; the tail at large M.
+goes to G > 1 receivers, fewer grant refreshes on tile 1); UB from the call's rows (2 at small M, 1 above); the tail at
+large M.
