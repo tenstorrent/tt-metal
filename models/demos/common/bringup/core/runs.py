@@ -62,6 +62,9 @@ def freeze_task(
     if not files:
         raise FreezeError(f"{tid}: nothing to freeze (no 'tests' in the task and no files given)")
     format_paths(spec.repo, files)
+    fixed = [f for f in files if F.literal_threshold(spec.repo / f) is not None]
+    if fixed:  # F138: every accuracy limit comes from the noise floor the test computes
+        raise FreezeError(f"{tid}: a numeric THRESHOLD in {fixed}; set THRESHOLD = None (the noise floor)")
     record = {"at": now()}
     if task.get("stub_check", True):
         ref = run_gate(spec, ledger, tid, force=True, extra_env={IMPL_ENV: "reference"}, record=False)

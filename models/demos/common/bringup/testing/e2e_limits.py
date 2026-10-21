@@ -41,7 +41,10 @@ def _entry(drift: dict, key: str) -> dict:
 
 
 def err_limit(drift: dict, key: str) -> float:
+    """calib x the drift's rel (a float tensor) or its missed fraction (a selection: 1 - overlap, one miss at least)."""
     e = _entry(drift, key)
+    if "overlap" in e:
+        return CALIB * max(1.0 - e["overlap"], 1.0 - e["overlap_res"])
     return CALIB * max(e["rel"], e["rel_res"])
 
 

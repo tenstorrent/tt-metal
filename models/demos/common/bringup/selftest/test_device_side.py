@@ -131,7 +131,7 @@ def test_rendered_templates(gspec, noise, monkeypatch, impl, passes):
             with pytest.raises(AssertionError):
                 test(None)
     before = comp.read_text()
-    render_component_test(s, "blk", "mlp", thr=0.5)  # never overwrites an existing (possibly frozen) test
+    render_component_test(s, "blk", "mlp", mode="pcc")  # never overwrites an existing (possibly frozen) test
     assert comp.read_text() == before
 
 

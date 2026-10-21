@@ -10,6 +10,7 @@ gate by editing its test or its golden.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 from pathlib import Path
 
@@ -51,3 +52,15 @@ def verify(repo: Path, task: dict) -> list[str]:
         elif sha256_file(f) != want:
             errs.append(f"frozen file changed: {rel}")
     return errs
+
+
+def literal_threshold(path: Path):
+    """F138: the number a test file assigns to its module-level THRESHOLD, else None (not a .py file, no number)."""
+    if Path(path).suffix != ".py" or not Path(path).exists():
+        return None
+    for node in ast.parse(Path(path).read_text()).body:
+        if isinstance(node, ast.Assign) and any(getattr(x, "id", None) == "THRESHOLD" for x in node.targets):
+            v = node.value
+            if isinstance(v, ast.Constant) and isinstance(v.value, (int, float)) and not isinstance(v.value, bool):
+                return v.value
+    return None

@@ -174,8 +174,9 @@ def rel(got: torch.Tensor, want: torch.Tensor) -> float:
 
 def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, failed: list[str]) -> None:
     """Every layer's state after the rung vs the golden, each with its drift limit (F128), over the positions the
-    device computed (the drift entry's region, F134). Float states by rel L2 (F135; PCC recorded), integer states
-    (top-k index lists) by the selection overlap, not the PCC of the ids (F99)."""
+    device computed (the drift entry's region, F134), gated as err_state_<name>_L<i>: float states by rel L2 (F135;
+    PCC recorded), integer states (top-k index lists) by the missed fraction 1 - overlap (F99, F138; overlap recorded),
+    never the PCC of the ids."""
     from models.demos.common.bringup.reference.drift import narrow
 
     worst, worst_err, worst_ov = 1.0, 0.0, 1.0
@@ -192,11 +193,12 @@ def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, fai
                 metrics.record(f"err_{key}", e)
                 worst, worst_err = min(worst, p), max(worst_err, e)
                 E.check(drift, key, f"err_{key}", e, failed)
-            else:
+            else:  # the missed fraction, as per step (F81): every state gates as err_state_* (F138)
                 ov = index_overlap(o, want)
                 metrics.record(f"overlap_{key}", ov)
-                worst_ov = min(worst_ov, ov)
-                E.check(drift, key, f"overlap_{key}", ov, failed)
+                metrics.record(f"err_{key}", 1.0 - ov)
+                worst_ov, worst_err = min(worst_ov, ov), max(worst_err, 1.0 - ov)
+                E.check(drift, key, f"err_{key}", 1.0 - ov, failed)
     metrics.record("pcc_state_min", worst)
     metrics.record("err_state_max", worst_err)
     metrics.record("overlap_state_min", worst_ov)

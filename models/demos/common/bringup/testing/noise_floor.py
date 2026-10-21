@@ -14,7 +14,7 @@ larger of
   from the official model and cached with the goldens: official_floor.json; testing/official_floor.py), and
 - the input nudge: the fp32 step on its inputs moved uniformly inside their rounding cell, in the dtype the official
   code holds each input (official_taps.yaml; default bf16; quantizer outputs `fixed`), SEEDS seeds, the worst.
-A limit is calib (component_calib; component_calib_low for tests.low_precision_kinds) x that floor on the same
+A limit is calib (component_calib) x that floor on the same
 comparison (vs the CPU step on the same inputs, or vs the golden), never below what one rounding of the output to
 its official dtype shows (F133: bf16, or fp32 for an fp32 output) (an exact step) or one element of an integer output. For a correlation the miss is 1 - pcc ~ rel^2 / 2, so calib
 applies squared. Selections (top-k): every flip must be explained (both swapped entries within 2x the nudge's spread
@@ -388,7 +388,9 @@ def waive(s, block_type, step: str, ok: bool, out, tag: str, ref=None) -> bool:
     whole = isinstance(out, torch.Tensor) and (not out.is_floating_point() or bool(torch.isfinite(out.float()).all()))
     note = "" if whole else " (but the output is not whole: FAIL)"
     if whole and isinstance(ref, torch.Tensor) and out.is_floating_point() and ref.is_floating_point():
-        lim = s.threshold("component_scaled_rel", 0.2)
+        from models.demos.common.bringup.testing.component_checks import limits
+
+        lim = limits(s)["struct_scaled_rel"]  # a structural bound (F97), not an accuracy limit (F138)
         r = ((out.float().reshape(ref.shape) - ref.float()).norm() / ref.float().norm().clamp_min(1e-30)).item()
         if r > lim:
             whole, note = False, f" (but rel {r:.3g} > {lim} vs the reference, a structural error: FAIL)"

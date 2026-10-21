@@ -30,7 +30,6 @@ import argparse
 import ast
 import inspect
 import keyword
-import math
 import re
 import sys
 import textwrap
@@ -242,8 +241,8 @@ Phase 0 SUPPORTED (what the bring-up needs; the golden suite pins each axis to t
 
 {supported}
 
-Accuracy: PCC >= {pcc} and relative RMS error <= {rel_rms} against the fp32 reference (the model's frozen component
-test gates the step at PCC {pcc} on real data).
+Accuracy: relative RMS error <= {rel_rms} against the fp32 reference (PCC >= {pcc}): the model's component test gates
+the step at that rel L2 on real data, calib x its noise floor (F138).
 
 ## Rules
 
@@ -259,30 +258,25 @@ def _torch_dtype_name(t, target_dtype: str) -> str:
 
 
 def _tolerance(task: dict, spec=None) -> dict:
-    """From the component gate's threshold (">= 0.99"): pcc, and the relative RMS a pure-noise error of that PCC has.
-    A ">= limit" gate (F76) takes the noise-floor limit its last run recorded (results/<task>.json), else 0.99."""
+    """F138: the component gate's recorded noise-floor limit only (err_<step>_L<i>_limit in results/<task>.json, the
+    rel L2 the step may miss the fp32 reference by); pcc is the PCC an unbiased error of that size has. No limit
+    recorded: refused (no fixed 0.99 / 0.02 fallback)."""
+    import fnmatch
+
     from models.demos.common.bringup.core import metrics
 
     got = metrics.load(task["id"], spec.bringup_dir / "results") if spec is not None else {}
-    pcc = None
     for name, c in (task["gate"].get("metrics") or {}).items():
-        op, v = str(c).split()
-        if op in ("<=", "<") and name.startswith("err_"):  # F81: a rel-error gate: its recorded limit is the rel
-            lim = (got.get(f"{name}_limit") or {}).get("value") if v == "limit" else float(v)
-            if isinstance(lim, (int, float)):
-                return {"pcc": round(1 - lim * lim / 2, 6), "rel_rms": round(max(0.02, float(lim)), 3)}
+        if not (name.startswith("err_") and str(c).split()[-1] == "limit"):
             continue
-        if op not in (">=", ">"):
-            continue
-        if v == "limit":
-            v = next(
-                (x["value"] for k, x in got.items() if k.endswith("_limit") and k.startswith(name.rstrip("*"))), None
-            )
-        if v is not None:
-            pcc = float(v)
-            break
-    pcc = 0.99 if pcc is None else pcc
-    return {"pcc": pcc, "rel_rms": round(max(0.02, math.sqrt(2 * (1 - pcc))), 3)}
+        lims = [x["value"] for k, x in got.items() if k.endswith("_limit") and fnmatch.fnmatchcase(k[:-6], name)]
+        if lims:
+            lim = float(max(lims))
+            return {"pcc": round(1 - lim * lim / 2, 6), "rel_rms": round(lim, 6)}
+    raise ValueError(
+        f"{task['id']}: no recorded noise-floor limit (err_*_limit): run the component test's CPU floor first "
+        "(BRINGUP_IMPL=reference on its gate command); an op request never takes a fixed tolerance (F138)"
+    )
 
 
 def _source_of(fn) -> tuple[str, str]:

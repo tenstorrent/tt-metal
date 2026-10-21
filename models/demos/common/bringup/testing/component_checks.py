@@ -7,28 +7,24 @@ The rendered component template had one gate, PCC (or exact match) vs the golden
 checks by hand for every step (Hy4: 42 reviews, 4 h). The checks it added are the same few each time; these do them
 generically, chosen by the kind of the step's output:
 
-    float       vs the CPU step on the same inputs and vs the golden: finite, rel L2, worst row rel L2
-                (<= component_row), every row's norm ratio (1 +- component_ratio), the median row norm ratio
-                (1 +- component_bias: a systematic scale), and every column's rel L2 over the rows (an iHC gate near 0
-                with its sign flipped moves nothing else), each column against its own limit: the rule below applied
-                to the precision model's error in that column, without the cap, and never below component_col_factor x
-                the whole-output limit (the column check is for structural column bugs); on the golden input only. The rel L2 limit follows the step's precision: the CPU step
-                run with every float intermediate rounded to bf16 (bf16 inputs and output; a model of a correct device
-                step, fp32 accumulation inside each op) has rel L2 e vs the fp32 step; the limit is
-                component_calib x e (component_calib_low for the step kinds in ``tests.low_precision_kinds``, default
-                [moe]: bfp8 expert weights are not in the model), within [component_floor, component_rel], never
-                below component_margin x e; vs the golden it adds the fp32 step's own error vs the golden.
+    float       vs the CPU step on the same inputs and vs the golden: finite, rel L2, every row and every column
+                against its own floor (F83, warn only), every row's norm ratio, the median row norm ratio (a
+                systematic scale). Limits: calib x the noise floor on the same comparison (testing/noise_floor.py:
+                the larger of the official arithmetic and the input nudge), never below one rounding of the output to
+                its official dtype (F133); the gated error vs the golden is rel L2 (err_<step>_L<i>, F81).
     selection   a float output with >= 75 % exact zeros (dense router weights): the same nonzero count per row, no
-                negative weight when the reference has none, mean selection overlap (>= component_select), rel L2 on
-                the rows with the same selection (<= component_select_rel), their row sums (1 +- component_rowsum).
+                negative weight when the reference has none, mean selection overlap, rel L2 on the rows with the same
+                selection, their row sums; each limit calib x the noise floor's (every flip explained, F80).
     index       an integer [rows, k] output whose rows are sets (top-k positions, pads -1 or 0xFFFFFFFF): order-free
-                overlap (mean >= the gate threshold, worst row >= component_index_row), the same valid count per row,
-                no repeats, and what the reference obeys: no position after its row (causal), every row selecting its
-                own position, pads only after the valid positions. The golden gate uses ``topk_overlap``, never positional match.
+                overlap (mean and worst row, calib x the noise floor's miss, never below one entry), the same valid
+                count per row, no repeats, and what the reference obeys: no position after its row (causal), every row
+                selecting its own position, pads only after the valid positions. The golden gate uses
+                ``topk_overlap``, never positional match.
     int         anything else: exact match as before; an unknown kind, so the freeze sweep sends it to a review.
 
-Second inputs, each compared with the CPU step on the same inputs, for structural bugs the golden cannot show (rel
-limit at least component_second_rel, the fixed limits x component_probe, no bias limit):
+Second inputs, each compared with the CPU step on the same inputs, for structural bugs the golden cannot show (the
+noise-floor limits x struct_probe, at least the struct_second_* floors, no bias limit; F138: structural, never
+accuracy limits):
     chunk0      stateful steps: the golden chunk 0 (start 0, empty prefix): short rows, the causal edge
     layer       the same step's inputs from the farthest other golden layer (distinct iHC streams where layer 0's
                 are equal)
@@ -53,35 +49,24 @@ import math
 
 import torch
 
-from models.demos.common.bringup.core import defaults, metrics
+from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.testing import mutate as MU
 from models.demos.common.bringup.testing import noise_floor as NF
 from models.demos.common.bringup.testing.harness import compare, default_mode, device_ctx, reference_ctx
 
 COMPONENT_DEFAULTS = {
-    "component_rel": 0.015,  # rel L2 cap (Hy4 device components vs golden: <= 0.0084)
-    "component_floor": 0.003,  # rel L2 limit never below this
-    "component_calib": 2.0,  # rel L2 limit = this x the bf16 precision model's error (Hy4 device: <= 1.7 x)
-    "component_calib_low": 3.5,  # the same for tests.low_precision_kinds (Hy4 bfp8 experts: 2.1 x)
-    "component_col_factor": 4.0,  # a column's limit is at least this x the whole-output rel limit (MiMo mlp: 2.8 x)
-    "component_margin": 1.2,  # ... and never below this x the model's error, even above the cap
-    "component_row": 0.03,  # worst row rel L2 (Hy4 device: <= 0.016)
-    "component_ratio": 0.015,  # every row's norm ratio within 1 +- this (Hy4 device: within 0.0073)
-    "component_bias": 0.004,  # median row norm ratio within 1 +- this (a systematic scale) ...
-    "component_bias_share": 0.5,  # ... or this x the rel limit, whichever is larger
-    "component_select": 0.995,  # selection outputs: mean selection overlap (Hy4 device router: 0.9982)
-    "component_select_rel": 0.005,  # rel L2 on rows with the same selection (Hy4 device: 0.0017)
-    "component_rowsum": 0.004,  # row sums on those rows within 1 +- this
-    "component_index_row": 0.95,  # index outputs: worst row set overlap (Hy4 device indexer: 0.9888)
-    "component_probe": 1.5,  # second inputs: the fixed limits x this ...
-    "component_second_rel": 0.03,  # ... and a rel limit of at least this, no bias limit ...
-    "component_second_row": 0.15,  # ... worst row at least this (GLM KDA attention x 1e-3: 0.09; hard cases >= 0.34)
-    "component_second_ratio": 0.1,  # ... row norm ratio within 1 +- at least this (GLM: 0.056; hard cases >= 0.13)
-    # F96: the scaled probes (small, big) catch structural bugs (rel 0.5-2); at RMS 1e-3 a correct device meets
-    # absolute floors (fp8 scale, epsilon) the nudge does not model (DeepSeek-V4.1 attention, small: 0.035)
-    "component_scaled_rel": 0.2,
+    "component_calib": 2.0,  # every limit = this x the noise floor on the same comparison (Hy4 device: <= 1.7 x)
+    "component_bias_share": 0.5,  # a systematic scale may use at most this share of the step's rel budget
+    # F138: structural probes, never accuracy limits (they only loosen the second inputs, synthetic or permuted, for
+    # structural bugs of 0.1 and more; recorded apart from the accuracy limits)
+    "struct_probe": 1.5,  # second inputs: the noise-floor limits x this ...
+    "struct_second_rel": 0.03,  # ... a rel limit of at least this, no bias limit ...
+    "struct_second_row": 0.15,  # ... worst row at least this (GLM KDA attention x 1e-3: 0.09; hard cases >= 0.34)
+    "struct_second_ratio": 0.1,  # ... row norm ratio within 1 +- at least this (GLM: 0.056; hard cases >= 0.13)
+    # F96: at RMS 1e-3 a correct device meets absolute floors (fp8 scale, epsilon) the nudge does not model
+    "struct_scaled_rel": 0.2,
+    "struct_col_factor": 4.0,  # a column's limit is at least this x the whole-output rel limit (MiMo mlp: 2.8 x)
 }
-LOW_PRECISION_KINDS = tuple(defaults.get("tests.low_precision_kinds"))
 SPARSE_ZEROS = 0.75
 SCALED_PROBES = ("small", "big")  # second inputs at synthetic scales (cases()): no own-floor checks (F83)
 COL_FLOOR = 1e-6  # a column is measured against at least this fraction of the mean column norm (as rows are)
@@ -113,7 +98,8 @@ def output_kind(t: torch.Tensor) -> str:
 
 
 def limits(s) -> dict:
-    return {k: s.threshold(k, v) for k, v in COMPONENT_DEFAULTS.items()}
+    """The calib and the structural probe factors (F138: no fixed accuracy number, no spec override)."""
+    return dict(COMPONENT_DEFAULTS)
 
 
 # ---------------------------------------------------------------- the precision model
@@ -125,15 +111,15 @@ def rel(a, b) -> float:
     return ((a.double().reshape(b.shape) - b.double()).norm() / b.double().norm().clamp_min(1e-30)).item()
 
 
-def calib(lim, low: bool) -> float:
-    return lim["component_calib_low"] if low else lim["component_calib"]
+def calib(lim) -> float:
+    return lim["component_calib"]
 
 
-def rel_limit(lim, e, low: bool, res=None):
+def rel_limit(lim, e, res=None):
     """F76: calib x the precision model's error e, never below calib x res, what one rounding of the output to its dtype
     shows (an exact step); no fixed floor or cap (owner: limits come from the noise floor, never a fixed bar). e (and
     res) is one error (the whole output) or a tensor of them (one per column)."""
-    k = calib(lim, low)
+    k = calib(lim)
     if isinstance(e, torch.Tensor):
         return k * (e if res is None else torch.maximum(e, res))
     return k * max(e, res or 0.0)
@@ -174,38 +160,25 @@ def float_errors(got, want) -> dict:
 def float_limits(
     lim, f: float, rel_lim: float, model: dict | None, second: bool = False, col_lim=None, res=None, k=None
 ) -> dict:
-    """The float limits of one input: rel from the precision model (rel_limit), the fixed ones x f; each at least
-    component_margin x what the precision model itself reaches (a correct bf16 step must pass). A second input is
-    there for structural bugs (a wrong epsilon, stream order, a clamp: errors of 0.1 and more), not for precision: its
-    rel limit is at least component_second_rel and it has no bias limit (a correct device drifts on synthetic scales;
-    Hy4 attention x 1e-3: rel 0.009, bias -0.0075). col_lim: the per-column rel limits (rel_limit of the precision
-    model's per-column errors, no cap), on the golden input only: on synthetic inputs a correct device's single
-    columns stray far from the model (Hy4 attention L1, one of 6144 columns: 0.043 on permuted, 0.14 on x 1e-3)."""
-    out = {
-        "rel": max(rel_lim, lim["component_second_rel"]) if second else rel_lim,
-        "row": max(f * lim["component_row"], lim["component_second_row"]) if second else lim["component_row"],
-        "col": None if second else col_lim,  # the golden input only (Hy4 attention on x 1e-3 inputs: one column 0.14)
-        "ratio": max(f * lim["component_ratio"], lim["component_second_ratio"]) if second else lim["component_ratio"],
-        # a systematic scale may use at most half of the step's error budget (GLM KDA attention: -0.45 % of 0.68 %)
-        "bias": math.inf if second else max(lim["component_bias"], lim["component_bias_share"] * rel_lim),
+    """The float limits of one input, every one calib (k) x the noise floor's statistic (model), never below what one
+    rounding of the output to its dtype shows (res); the bias may use half the rel budget. A second input is there for
+    structural bugs (a wrong epsilon, stream order, a clamp: errors of 0.1 and more), not for precision: its limits
+    are at least the struct_* probe floors (they only loosen) and it has no bias limit. col_lim: the per-column rel
+    limits, on the golden input only (on synthetic inputs a correct device's single columns stray far from the model).
+    F138: without a noise floor there is no limit (no fixed number to fall back to)."""
+    if not model or res is None or k is None:
+        raise ValueError("cannot judge: no noise floor for this output (F138: no fixed accuracy limit exists)")
+    dev = lambda e: max(1 - e["ratio_min"], e["ratio_max"] - 1)  # noqa: E731
+    row, ratio = k * max(model["row"], res["row"]), k * max(dev(model), dev(res))
+    return {
+        "rel": max(rel_lim, lim["struct_second_rel"]) if second else rel_lim,
+        "row": max(f * row, lim["struct_second_row"]) if second else row,
+        "col": None if second else col_lim,
+        "ratio": max(f * ratio, lim["struct_second_ratio"]) if second else ratio,
+        "bias": math.inf
+        if second
+        else max(k * abs(model["bias"]), k * abs(res["bias"]), lim["component_bias_share"] * rel_lim),
     }
-    if model and res is not None:
-        # F76: every limit from the noise floor: calib (k) x the precision model's statistic, never below what one
-        # rounding of the output to its dtype shows; the bias may use half the rel budget. A second input keeps its probe
-        # floors (they only loosen: structural probes, where a correct device drifts from the model on synthetic scales)
-        dev = lambda e: max(1 - e["ratio_min"], e["ratio_max"] - 1)  # noqa: E731
-        row = k * max(model["row"], res["row"])
-        ratio = k * max(dev(model), dev(res))
-        bias = max(k * abs(model["bias"]), k * abs(res["bias"]), lim["component_bias_share"] * rel_lim)
-        out["row"] = max(f * row, lim["component_second_row"]) if second else row
-        out["ratio"] = max(f * ratio, lim["component_second_ratio"]) if second else ratio
-        out["bias"] = math.inf if second else bias
-    elif model:  # no bf16 resolution known (direct callers): the margin over the model
-        m = lim["component_margin"]
-        out["row"] = max(out["row"], m * model["row"])
-        out["ratio"] = max(out["ratio"], m * max(1 - model["ratio_min"], model["ratio_max"] - 1))
-        out["bias"] = max(out["bias"], m * abs(model["bias"]))
-    return out
 
 
 def float_fails(got, want, L: dict) -> tuple[dict, list[str]]:
@@ -258,7 +231,7 @@ def selection_limits(lim, k: float, f: float, model: dict, res: dict, n: int) ->
 
 def selection_fails(got, want, lim, f=1.0, slack: dict | None = None, L: dict | None = None) -> tuple[dict, list[str]]:
     """slack: added to the rel and row-sum limits (vs the golden: the fp32 step's own error vs the golden).
-    L: the noise-floor limits (selection_limits); without it the fixed component_select* limits (no model)."""
+    L: the noise-floor limits (selection_limits); without it only the statistics and the structural checks (F138)."""
     slack = slack or {}
     if got.numel() != want.numel():
         return {}, [f"{got.numel()} elements, want {tuple(want.shape)}"]
@@ -275,7 +248,7 @@ def selection_fails(got, want, lim, f=1.0, slack: dict | None = None, L: dict | 
     overlap = ((gs & ws).sum(1).float() / ws.sum(1).clamp_min(1)).mean().item()
     m = (gs == ws).all(1)
     e = {"overlap": overlap, "matched": m.float().mean().item()}
-    ol = L["overlap"] if L else f_lim(lim["component_select"], f)
+    ol = L["overlap"] if L else -math.inf  # F138: no noise floor, no limit (the caller only wants the statistics)
     if overlap < ol:
         bad.append(f"selection overlap {overlap:.5f} < {ol:.4f}")
     if m.any():
@@ -284,8 +257,8 @@ def selection_fails(got, want, lim, f=1.0, slack: dict | None = None, L: dict | 
         sw = wm.sum(1)
         nz = sw.abs() > 1e-30
         e["rowsum"] = ((gm.sum(1)[nz] / sw[nz]) - 1).abs().max().item() if nz.any() else 0.0
-        rl = (L["rel"] if L else f * lim["component_select_rel"]) + slack.get("rel", 0.0)
-        sl = (L["rowsum"] if L else f * lim["component_rowsum"]) + slack.get("rowsum", 0.0)
+        rl = (L["rel"] if L else math.inf) + slack.get("rel", 0.0)
+        sl = (L["rowsum"] if L else math.inf) + slack.get("rowsum", 0.0)
         if e["rel"] > rl:
             bad.append(f"rel L2 on matched rows {e['rel']:.5f} > {rl:.4f}")
         if e["rowsum"] > sl:
@@ -296,7 +269,7 @@ def selection_fails(got, want, lim, f=1.0, slack: dict | None = None, L: dict | 
 
 
 def index_fails(got, want, start: int, lim, thr: float, f=1.0, L: dict | None = None) -> tuple[dict, list[str]]:
-    """L (F76): {overlap, worst_row} limits from the precision model; without it thr and component_index_row."""
+    """L (F76): {overlap, worst_row} limits from the noise floor; without it only the structural checks (F138)."""
     if got.is_floating_point():
         return {}, [f"integer positions expected, got {got.dtype}"]
     if got.numel() != want.numel():
@@ -323,8 +296,8 @@ def index_fails(got, want, start: int, lim, thr: float, f=1.0, L: dict | None = 
         [torch.isin(b[b >= 0], a[a >= 0]).float().mean().item() if (b >= 0).any() else 1.0 for a, b in zip(g, w)]
     )
     e = {"overlap": rows.mean().item(), "worst_row": rows.min().item()}
-    ol = L["overlap"] if L else f_lim(thr, f)
-    wl = L["worst_row"] if L else f_lim(lim["component_index_row"], f)
+    ol = L["overlap"] if L else -math.inf
+    wl = L["worst_row"] if L else -math.inf
     if e["overlap"] < ol:
         bad.append(f"set overlap {e['overlap']:.5f} < {ol:.4f}")
     if e["worst_row"] < wl:
@@ -427,8 +400,7 @@ class Expect:
         self.s, self.ref, self.layer, self.st, self.want, self.thr, self.mode = s, ref, layer, st, want, thr, mode
         self.kind = output_kind(want)
         self.lim = limits(s)
-        self.low = st.kind in tuple(s.get("tests.low_precision_kinds") or LOW_PRECISION_KINDS)
-        self.k = calib(self.lim, self.low)
+        self.k = calib(self.lim)
         self.cpu_step = ref.component(layer, st.name)
         self.cases = cases(s, ref, layer, st, g, c, self.kind)
         self.cpu = {x.name: run_cpu(self.cpu_step, x) for x in self.cases}
@@ -457,18 +429,16 @@ class Expect:
         self.rel_lim, self.model_err, self.res, self.col_lim, self.L = {}, {}, {}, {}, {}
         for x in self.cases:
             cpu, outs = self.cpu[x.name], self.floor[x.name]
-            f = 1.0 if x.name == "golden" else self.lim["component_probe"]
+            f = 1.0 if x.name == "golden" else self.lim["struct_probe"]
             if self.kind == "float":
                 fe = NF.worst_float(outs, cpu, float_errors)
                 self.model_err[x.name] = NF.merge_float(self.arith.get("vs_step") if x.name == "golden" else None, fe)
                 self.res[x.name] = float_errors(NF.round_to(cpu, self.out_dtype), cpu)
-                self.rel_lim[x.name] = rel_limit(
-                    self.lim, self.model_err[x.name]["rel"], self.low, self.res[x.name]["rel"]
-                )
+                self.rel_lim[x.name] = rel_limit(self.lim, self.model_err[x.name]["rel"], self.res[x.name]["rel"])
                 cols = [col_errors(o, cpu) for o in outs]
                 mc = None if cols[0] is None else torch.stack(cols).amax(0)
                 rc = col_errors(NF.round_to(cpu, self.out_dtype), cpu)
-                self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, self.low, rc)
+                self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, rc)
             elif self.kind == "selection":
                 me = _worst_selection([selection_fails(o, cpu, self.lim)[0] for o in outs])
                 re_ = selection_fails(NF.round_to(cpu, self.out_dtype), cpu, self.lim)[0]
@@ -488,29 +458,25 @@ class Expect:
             self.golden_L = selection_limits(self.lim, self.k, 1.0, gm, gr, int((want != 0).sum().item()))
         if self.kind == "index":
             self.golden_L = self._index_limits(self.floor["golden"], want, self.cases[0].start, 1.0)
-        # the gate vs the golden (the template's metric): the frozen test's literal THRESHOLD, else the noise floor
-        self.thr_how = "the frozen test's THRESHOLD"
-        self.thr_literal = thr is not None
-        if thr is None:
-            gm = (
-                "topk_overlap"
-                if self.kind == "index" and mode in (None, "topk_overlap")
-                else (mode or default_mode(want))
-            )
-            mv = min(gate_value(o, want, self.kind, mode) for o in self.floor["golden"])
-            if "pcc_vs_golden" in (self.arith.get("vs_golden") or {}) and gm == "pcc":
-                mv = min(mv, self.arith["vs_golden"]["pcc_vs_golden"])
-            rv = (
-                gate_value(NF.round_to(self.cpu["golden"], self.out_dtype), self.cpu["golden"], self.kind, mode)
-                if want.is_floating_point()
-                else 1.0
-            )
-            thr = NF.gate_limit(gm, mv, rv, self.k, want.numel())
-            self.thr_how = (
-                f"{self.k} x the noise floor's miss {1 - mv:.3g} (input nudge"
-                + (", official arithmetic" if self.arith else "")
-                + f"; {self.out_dtype} resolution {1 - rv:.3g})"
-            )
+        # the gate vs the golden (the template's metric): the noise floor; F138: a literal THRESHOLD never gates
+        if thr is not None:
+            raise ValueError("a literal THRESHOLD never gates (F138); run_component_test records it as a diagnostic")
+        self.thr_literal = False
+        gm = "topk_overlap" if self.kind == "index" and mode in (None, "topk_overlap") else (mode or default_mode(want))
+        mv = min(gate_value(o, want, self.kind, mode) for o in self.floor["golden"])
+        if "pcc_vs_golden" in (self.arith.get("vs_golden") or {}) and gm == "pcc":
+            mv = min(mv, self.arith["vs_golden"]["pcc_vs_golden"])
+        rv = (
+            gate_value(NF.round_to(self.cpu["golden"], self.out_dtype), self.cpu["golden"], self.kind, mode)
+            if want.is_floating_point()
+            else 1.0
+        )
+        thr = NF.gate_limit(gm, mv, rv, self.k, want.numel())
+        self.thr_how = (
+            f"{self.k} x the noise floor's miss {1 - mv:.3g} (input nudge"
+            + (", official arithmetic" if self.arith else "")
+            + f"; {self.out_dtype} resolution {1 - rv:.3g})"
+        )
         self.thr = thr
         # F81: the gated error vs the golden: rel L2 for float outputs (PCC is blind to a scale or an offset), the
         # missed fraction (1 - overlap / match) for integer outputs; limit = calib x the noise floor's error
@@ -543,11 +509,11 @@ class Expect:
             f"{self.st.name} L{self.layer}: output kind {self.kind}, input dtypes {self.dtypes}, out {self.out_dtype}"
             + (" + official arithmetic" if self.arith else "")
             + f", inputs {[x.name for x in self.cases]}"
-            + (f"; rel limits ({'low precision, ' if self.low else ''}calibrated) {lims}" if lims else "")
+            + (f"; rel limits (calibrated) {lims}" if lims else "")
         )
 
     def check(self, tag, got, ref, case, vs_golden, quiet):
-        f = 1.0 if case.name == "golden" else self.lim["component_probe"]
+        f = 1.0 if case.name == "golden" else self.lim["struct_probe"]
         warn = []  # F89: the own-floor row / column / bias checks warn, never gate (owner)
         if self.kind == "float":
             rl = self.rel_lim[case.name] + (self.golden_err if vs_golden else 0.0)
@@ -557,12 +523,12 @@ class Expect:
                 rl = max(rl, self.k * max(model["rel"], res["rel"]))
             second = case.name != "golden"
             if case.name in SCALED_PROBES:  # F96
-                rl = max(rl, self.lim["component_scaled_rel"])
+                rl = max(rl, self.lim["struct_scaled_rel"])
             cl = self.col_lim[case.name]
             if cl is not None and vs_golden and self.golden_col_err is not None:
                 cl = cl + self.golden_col_err
             if cl is not None:  # never tighter than col_factor x the whole-output limit (Gemma mlp: one column 1.06 x)
-                cl = cl.clamp_min(self.lim["component_col_factor"] * rl)
+                cl = cl.clamp_min(self.lim["struct_col_factor"] * rl)
             L = float_limits(self.lim, f, rl, model, second, cl, res, self.k)
             # F83: rows and columns against their own floors (below) replace the worst-row, row-ratio and per-column
             # limits, which divided by small norms behind a fixed 1e-6 floor
@@ -753,8 +719,6 @@ def sweep(ex: Expect, gate_name: str) -> bool:
     def verdict(outs, stop_early):
         f = ex.evaluate(outs, quiet=True, stop_early=stop_early)
         ok = error_gate(gate_name, outs["golden"], ex.want, ex, quiet=True)
-        if ex.thr_literal:  # a frozen test's literal THRESHOLD still gates too
-            ok = golden_gate_quiet(outs["golden"], ex.want, ex.kind, ex.thr, ex.mode) and ok
         return f + ([] if ok else [gate_name])
 
     rows, ok = [], True
@@ -771,8 +735,8 @@ def sweep(ex: Expect, gate_name: str) -> bool:
         f = verdict(mut, True)
         # F91 (owner): a mistake no larger than the step's own limit on every input is one a correct step may make
         size = {x.name: rel(mut[x.name], ex.cpu[x.name]) for x in ex.cases} if ex.kind == "float" else {}
-        rl = {n: v if n == "golden" else max(v, ex.lim["component_second_rel"]) for n, v in ex.rel_lim.items()}
-        rl.update({n: max(rl[n], ex.lim["component_scaled_rel"]) for n in SCALED_PROBES if n in rl})  # F96
+        rl = {n: v if n == "golden" else max(v, ex.lim["struct_second_rel"]) for n, v in ex.rel_lim.items()}
+        rl.update({n: max(rl[n], ex.lim["struct_scaled_rel"]) for n in SCALED_PROBES if n in rl})  # F96
         within = bool(size) and all(v <= rl.get(n, 0.0) for n, v in size.items())  # the limits check() applies
         how = f"size {max(size.values()):.3g} <= the step's limit" if within else ", ".join(f)
         rows.append((k, "caught" if f else "within limit" if within else "SLIPPED", how))
