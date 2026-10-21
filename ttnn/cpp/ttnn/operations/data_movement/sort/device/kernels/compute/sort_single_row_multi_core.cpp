@@ -173,7 +173,8 @@ void kernel_main() {
                                     DST_ACCUM_MODE,
                                     /*fused=*/false,
                                     /*rank_stamped=*/false,
-                                    tie_order>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                    tie_order,
+                                    /*ct_steps=*/stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
