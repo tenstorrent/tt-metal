@@ -1,0 +1,3 @@
+perf_transpose_x X MATH_ISOLATE,L1_TO_L1,UNPACK_ISOLATE,PACK_ISOLATE
+perf_transpose_dest X MATH_ISOLATE,L1_TO_L1
+perf_unpack_transpose X UNPACK_ISOLATE,L1_TO_L1
