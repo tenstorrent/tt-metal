@@ -27,7 +27,10 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
+#include "ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/kernels/matmul_reduce_scatter_args.hpp"
+
 using namespace tt::tt_fabric;
+namespace mrs = matmul_reduce_scatter;
 
 // One hop: 2D fabrics route by destination fabric node, 1D fabrics by hop count (ROUTING_MODE from the build).
 inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
@@ -42,43 +45,52 @@ inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t c
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
-    constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t group = get_compile_time_arg_val(3);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(mrs::port_ct::CB_PORT_CHUNKS);
+    constexpr uint32_t P = get_compile_time_arg_val(mrs::port_ct::P);
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(mrs::port_ct::CHUNK_TILES);
+    constexpr uint32_t group = get_compile_time_arg_val(mrs::port_ct::GROUP);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(mrs::port_ct::TILE_BYTES);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
     constexpr uint32_t num_headers = group;
     constexpr uint32_t slot_bytes = P * tile_bytes;
-    constexpr uint32_t num_waves = get_compile_time_arg_val(8);  // entry e is wave e mod num_waves
+    // entry e is wave e mod num_waves
+    constexpr uint32_t num_waves = get_compile_time_arg_val(mrs::port_ct::NUM_WAVES);
     // 1: every unit's last chunk per core carries the arrival increment; 0: only the block's last wave does (its
     // flush covers the earlier waves' chunks to the same core)
-    constexpr bool inc_every_wave = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(10);
-    constexpr uint32_t zone_sets = get_compile_time_arg_val(12);
+    constexpr bool inc_every_wave = get_compile_time_arg_val(mrs::port_ct::INC_EVERY_WAVE) != 0;
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(mrs::port_ct::NUM_CHUNKS);
+    constexpr uint32_t zone_sets = get_compile_time_arg_val(mrs::port_ct::ZONE_SETS);
 
-    size_t arg = 0;
-    const uint32_t zone_base = get_arg_val<uint32_t>(arg++);     // downstream zone of this direction (staging + offset)
-    const uint32_t arrival_addr = get_arg_val<uint32_t>(arg++);  // global arr_d on the downstream matmul cores
-    const uint32_t ready_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t send_ready = get_arg_val<uint32_t>(arg++);
-    const uint32_t ready_x = get_arg_val<uint32_t>(arg++);
-    const uint32_t ready_y = get_arg_val<uint32_t>(arg++);
-    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_units = get_arg_val<uint32_t>(arg++);
-    const uint32_t credit_addr = get_arg_val<uint32_t>(arg++);   // global credit counter (same address on every port)
-    const uint32_t wait_credits = get_arg_val<uint32_t>(arg++);  // credits this port waits for this call
-    const uint32_t expect = get_arg_val<uint32_t>(arg++);        // `freed` reports per consumed chunk
-    const uint32_t fwd_total = get_arg_val<uint32_t>(arg++);     // credits this port forwards this call
-    const uint32_t ring_slots = get_arg_val<uint32_t>(arg++);    // downstream zone slots of this direction
-    const uint32_t down_per_chunk0 = get_arg_val<uint32_t>(arg++);  // downstream arrivals per chunk, half 0 / 1
-    const uint32_t down_per_chunk1 = get_arg_val<uint32_t>(arg++);
-    const uint32_t wave_tiles_idx = arg;  // per wave: tiles one core sends (<= P), dense at the front of its slot
-    const uint32_t cores_idx = arg + num_waves;
+    // downstream zone of this direction (staging + offset)
+    const uint32_t zone_base = get_common_arg_val<uint32_t>(mrs::port_sender_common::STAGING_ADDR) +
+                               get_arg_val<uint32_t>(mrs::port_sender_rt::ZONE_OFFSET);
+    // global arr_d on the downstream matmul cores
+    const uint32_t arrival_addr = get_arg_val<uint32_t>(mrs::port_sender_rt::ARRIVAL_ADDR);
+    const uint32_t ready_addr = get_common_arg_val<uint32_t>(mrs::port_sender_common::READY_ADDR);
+    const uint32_t send_ready = get_arg_val<uint32_t>(mrs::port_sender_rt::SEND_READY);
+    const uint32_t ready_x = get_arg_val<uint32_t>(mrs::port_sender_rt::READY_X);
+    const uint32_t ready_y = get_arg_val<uint32_t>(mrs::port_sender_rt::READY_Y);
+    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(mrs::port_sender_rt::DST_MESH_ID));
+    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(mrs::port_sender_rt::DST_CHIP_ID));
+    const uint32_t num_cores = get_arg_val<uint32_t>(mrs::port_sender_rt::NUM_CORES);
+    const uint32_t num_units = get_arg_val<uint32_t>(mrs::port_sender_rt::NUM_UNITS);
+    // global credit counter (same address on every port)
+    const uint32_t credit_addr = get_common_arg_val<uint32_t>(mrs::port_sender_common::CREDIT_ADDR);
+    // credits this port waits for this call
+    const uint32_t wait_credits = get_arg_val<uint32_t>(mrs::port_sender_rt::WAIT_CREDITS);
+    const uint32_t expect = get_arg_val<uint32_t>(mrs::port_sender_rt::EXPECT);  // `freed` reports per consumed chunk
+    // credits this port forwards this call
+    const uint32_t fwd_total = get_arg_val<uint32_t>(mrs::port_sender_rt::FWD_TOTAL);
+    // downstream zone slots of this direction
+    const uint32_t ring_slots = get_arg_val<uint32_t>(mrs::port_sender_rt::RING_SLOTS);
+    // downstream arrivals per chunk, half 0 / 1
+    const uint32_t down_per_chunk0 = get_arg_val<uint32_t>(mrs::port_sender_rt::DOWN_PER_CHUNK0);
+    const uint32_t down_per_chunk1 = get_arg_val<uint32_t>(mrs::port_sender_rt::DOWN_PER_CHUNK1);
+    // per wave (common): tiles one core sends (<= P), dense at the front of its slot
+    constexpr uint32_t wave_tiles_idx = mrs::port_sender_common::COUNT;
+    constexpr uint32_t cores_idx = mrs::port_sender_rt::COUNT;
     const uint32_t units_idx = cores_idx + num_cores;
-    arg = units_idx + num_units;  // fabric connection args follow
+    size_t arg = units_idx + num_units;  // fabric connection args follow
 
     if (num_units == 0 && !send_ready && fwd_total == 0) {
         return;
@@ -97,7 +109,7 @@ void kernel_main() {
     conn.open();
 
     // chunk credits (see header): forward one per chunk of the peer's arrivals my matmul cores consumed
-    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));
+    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(mrs::sem::FREED));
     volatile tt_l1_ptr uint32_t* credits = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_addr);
     uint32_t forwarded = 0;
     auto forward_poll = [&]() {
@@ -157,7 +169,7 @@ void kernel_main() {
         const uint32_t slot0 = (unit >> 16) & 0xFF;
         const uint32_t slot1 = (unit >> 24) & 0xFF;
         const uint32_t first_half = (unit >> 10) & 0x1;
-        const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + (unit & 0xFF) % num_waves);
+        const uint32_t tiles = get_common_arg_val<uint32_t>(wave_tiles_idx + (unit & 0xFF) % num_waves);
         const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
         const bool carries_inc = inc_every_wave || (unit & 0xFF) % num_waves == num_waves - 1;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // the reader's walk: first_half's cores first

@@ -10,8 +10,5 @@ from .matmul_reduce_scatter import (
     validate,
 )
 
-# Test hooks (read / written at call time through this package module, so monkeypatch.setattr works):
-#   _FORCE_XBLOCK_RESIDENCY: None (choose_k_block decides) | True | False
-#   _LAST_PLAN: overwritten on every call with the regime / schedule / grid the call used.
-_FORCE_XBLOCK_RESIDENCY = None
+# Kept for tests that read it (the native op does not report its plan, so it stays empty).
 _LAST_PLAN = {}

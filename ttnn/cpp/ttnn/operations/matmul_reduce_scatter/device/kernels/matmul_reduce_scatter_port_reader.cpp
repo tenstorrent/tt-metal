@@ -16,29 +16,38 @@
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/kernels/matmul_reduce_scatter_args.hpp"
+
+namespace mrs = matmul_reduce_scatter;
 
 void kernel_main() {
-    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
-    constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t group = get_compile_time_arg_val(3);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t depth_handoff = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(mrs::port_ct::CB_PORT_CHUNKS);
+    constexpr uint32_t P = get_compile_time_arg_val(mrs::port_ct::P);
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(mrs::port_ct::CHUNK_TILES);
+    constexpr uint32_t group = get_compile_time_arg_val(mrs::port_ct::GROUP);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(mrs::port_ct::TILE_BYTES);
+    constexpr uint32_t depth_handoff = get_compile_time_arg_val(mrs::port_ct::DEPTH_HANDOFF);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
-    constexpr uint32_t mailbox_stride = get_compile_time_arg_val(6);  // bytes per matmul core in the mailbox
-    constexpr uint32_t max_cores = get_compile_time_arg_val(7);       // matmul cores this port serves (upper bound)
-    constexpr uint32_t num_waves = get_compile_time_arg_val(8);       // entry e is wave e mod num_waves
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(10);     // the unit walk repeats once per output chunk
-    constexpr uint32_t entries_per_chunk = get_compile_time_arg_val(11);
+    // bytes per matmul core in the mailbox
+    constexpr uint32_t mailbox_stride = get_compile_time_arg_val(mrs::port_ct::MAILBOX_STRIDE);
+    // matmul cores this port serves (upper bound)
+    constexpr uint32_t max_cores = get_compile_time_arg_val(mrs::port_ct::MAX_CORES);
+    // entry e is wave e mod num_waves
+    constexpr uint32_t num_waves = get_compile_time_arg_val(mrs::port_ct::NUM_WAVES);
+    // the unit walk repeats once per output chunk
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(mrs::port_ct::NUM_CHUNKS);
+    constexpr uint32_t entries_per_chunk = get_compile_time_arg_val(mrs::port_ct::ENTRIES_PER_CHUNK);
 
-    uint32_t arg = 0;
-    const uint32_t finished_base = get_arg_val<uint32_t>(arg++);  // staging address (cb_finished slot 0) on every core
-    const uint32_t mailbox_base = get_arg_val<uint32_t>(arg++);
-    const uint32_t consumed_id = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_units = get_arg_val<uint32_t>(arg++);
-    const uint32_t wave_tiles_idx = arg;               // per wave: tiles one core sends (<= P)
-    const uint32_t cores_idx = arg + num_waves;        // per core: x | y << 8 | half << 16 | k << 20
+    // staging address (cb_finished slot 0) on every core
+    const uint32_t finished_base = get_common_arg_val<uint32_t>(mrs::port_reader_common::FINISHED_BASE);
+    const uint32_t mailbox_base = get_common_arg_val<uint32_t>(mrs::port_reader_common::MAILBOX_BASE);
+    const uint32_t consumed_id = get_arg_val<uint32_t>(mrs::port_reader_rt::CONSUMED_ID);
+    const uint32_t num_cores = get_arg_val<uint32_t>(mrs::port_reader_rt::NUM_CORES);
+    const uint32_t num_units = get_arg_val<uint32_t>(mrs::port_reader_rt::NUM_UNITS);
+    // per wave (common): tiles one core sends (<= P)
+    constexpr uint32_t wave_tiles_idx = mrs::port_reader_common::COUNT;
+    // per core: x | y << 8 | half << 16 | k << 20
+    constexpr uint32_t cores_idx = mrs::port_reader_rt::COUNT;
     const uint32_t units_idx = cores_idx + num_cores;  // per unit: entry | half_mask << 8 | slots (sender side)
     const uint32_t consumed_addr = get_semaphore(consumed_id);
     ASSERT(num_cores <= max_cores);
@@ -75,7 +84,7 @@ void kernel_main() {
         const uint32_t first_half = (unit >> 10) & 0x1;
         // the producing core's cb_finished slot: its global entry index (chunk-major) mod the handoff depth
         const uint32_t slot_off = (((ug / num_units) * entries_per_chunk + entry) % depth_handoff) * P * tile_bytes;
-        const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + entry % num_waves);
+        const uint32_t tiles = get_common_arg_val<uint32_t>(wave_tiles_idx + entry % num_waves);
         const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // halves in unit order (first_half first)
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);

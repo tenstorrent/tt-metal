@@ -1,18 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""matmul_reduce_scatter — fused multi-device matmul + reduce-scatter (SUM) over one mesh axis, as ONE generic_op.
+"""matmul_reduce_scatter — fused multi-device matmul + reduce-scatter (SUM) over one mesh axis, as one native C++ op.
 
 Every device of a group holds a K-slice A[g] (..., M, K) and W[g] (K, N). The op computes, block by block in transport
 order, each device's partial A[g] @ W[g] on a 2D dual-multicast matmul grid; the partial of block b travels along the
 shorter way to its owner (ring) or along the line, landing straight in the L1 of the matmul core that owns the same
 output tiles on the next chip, which adds its own partial and hands the sum to a port core that forwards it. See
-op_design.md for the full design; the planner lives in matmul_reduce_scatter_program_descriptor.py.
+op_design.md for the full design; the planner lives in
+ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/matmul_reduce_scatter_planner.cpp.
 """
 
 from __future__ import annotations
-
-import sys
 
 import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
@@ -112,38 +111,6 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
-def matmul_reduce_scatter(
-    input_tensor: ttnn.Tensor,
-    weight: ttnn.Tensor,
-    *,
-    cluster_axis: int,
-    scatter_dim: int = -2,
-    topology=Topology.Linear,
-    num_links: int | None = None,
-    compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
-    memory_config: ttnn.MemoryConfig | None = None,
-) -> ttnn.Tensor:
-    validate(
-        input_tensor,
-        weight,
-        cluster_axis=cluster_axis,
-        scatter_dim=scatter_dim,
-        topology=topology,
-        num_links=num_links,
-    )
-    from .matmul_reduce_scatter_program_descriptor import run
-
-    pkg = sys.modules[__package__]  # test hooks are read from / written to the package at call time
-    if compute_kernel_config is None:
-        compute_kernel_config = default_compute_kernel_config()
-    return run(
-        input_tensor,
-        weight,
-        cluster_axis=cluster_axis,
-        scatter_dim=_canonical_scatter_dim(scatter_dim, len(tuple(input_tensor.shape))),
-        topology=topology,
-        num_links=num_links,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=memory_config,
-        hooks=pkg,
-    )
+# The registered C++ operation (ttnn/cpp/ttnn/operations/matmul_reduce_scatter): it checks this support contract,
+# refuses with the same exceptions, plans and dispatches the program natively.
+matmul_reduce_scatter = ttnn.matmul_reduce_scatter

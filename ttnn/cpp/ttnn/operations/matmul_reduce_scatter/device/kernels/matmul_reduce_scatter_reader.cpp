@@ -40,8 +40,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/kernels/matmul_reduce_scatter_args.hpp"
 
 using namespace dataflow_kernel_lib;
+namespace mrs = matmul_reduce_scatter;
 
 // split-phase halves of ReceiverPipe::receive (Flag signal, pre-handshake, fixed sender); no-ops for an absent family
 template <typename MC>
@@ -63,47 +65,50 @@ FORCE_INLINE void rx_wait(const MC&, Poll&& poll) {
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_act_k_window = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_act_k_window = get_compile_time_arg_val(mrs::reader_ct::CB_ACT_K_WINDOW);
+    constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(mrs::reader_ct::CB_WEIGHT_K_WINDOW);
+    constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(mrs::reader_ct::CB_ARRIVALS_FWD);
+    constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(mrs::reader_ct::CB_ARRIVALS_BWD);
     // streamed windows of one wave: A core_m x kb, W kb x core_n (with waves, the split axis is a wave's extent; the
     // resident operand's axis is never split)
-    constexpr uint32_t core_m = get_compile_time_arg_val(4);
-    constexpr uint32_t core_n = get_compile_time_arg_val(5);
-    constexpr uint32_t kb = get_compile_time_arg_val(6);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(7);
-    constexpr uint32_t Kt = get_compile_time_arg_val(8);
-    constexpr uint32_t Nt = get_compile_time_arg_val(9);
-    constexpr uint32_t a_row_per_block = get_compile_time_arg_val(10);  // scatter -2: block_m, else 0
-    constexpr uint32_t w_col_per_block = get_compile_time_arg_val(11);  // scatter -1: block_n, else 0
-    constexpr bool resident_a = get_compile_time_arg_val(12) != 0;
-    constexpr bool resident_w = get_compile_time_arg_val(13) != 0;
-    constexpr uint32_t P = get_compile_time_arg_val(14);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(15);  // G x num_waves
-    constexpr uint32_t a_tile_bytes = get_compile_time_arg_val(16);
-    constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(17);
-    constexpr uint32_t a_cap_windows = get_compile_time_arg_val(18);  // CB capacity in K-block windows
-    constexpr uint32_t w_cap_windows = get_compile_time_arg_val(19);
-    constexpr uint32_t a_split = get_compile_time_arg_val(20);         // m rows of part 0 (core_m: one part)
-    constexpr uint32_t w_split = get_compile_time_arg_val(21);         // k rows of part 0 (kb: one part)
-    constexpr uint32_t prefetch_steps = get_compile_time_arg_val(22);  // K-block windows a sender reads ahead
-    constexpr bool lookahead_after_barrier = get_compile_time_arg_val(23) != 0;  // issue look-ahead reads after the
+    constexpr uint32_t core_m = get_compile_time_arg_val(mrs::reader_ct::CORE_M);
+    constexpr uint32_t core_n = get_compile_time_arg_val(mrs::reader_ct::CORE_N);
+    constexpr uint32_t kb = get_compile_time_arg_val(mrs::reader_ct::KB);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(mrs::reader_ct::NUM_K_BLOCKS);
+    constexpr uint32_t Kt = get_compile_time_arg_val(mrs::reader_ct::KT);
+    constexpr uint32_t Nt = get_compile_time_arg_val(mrs::reader_ct::NT);
+    constexpr uint32_t a_row_per_block = get_compile_time_arg_val(mrs::reader_ct::A_ROW_PER_BLOCK);
+    constexpr uint32_t w_col_per_block = get_compile_time_arg_val(mrs::reader_ct::W_COL_PER_BLOCK);
+    constexpr bool resident_a = get_compile_time_arg_val(mrs::reader_ct::RESIDENT_A) != 0;
+    constexpr bool resident_w = get_compile_time_arg_val(mrs::reader_ct::RESIDENT_W) != 0;
+    constexpr uint32_t P = get_compile_time_arg_val(mrs::reader_ct::P);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(mrs::reader_ct::NUM_ENTRIES);  // G x num_waves
+    constexpr uint32_t a_tile_bytes = get_compile_time_arg_val(mrs::reader_ct::A_TILE_BYTES);
+    constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(mrs::reader_ct::W_TILE_BYTES);
+    constexpr uint32_t a_cap_windows = get_compile_time_arg_val(mrs::reader_ct::A_CAP_WINDOWS);  // in K-block windows
+    constexpr uint32_t w_cap_windows = get_compile_time_arg_val(mrs::reader_ct::W_CAP_WINDOWS);
+    constexpr uint32_t a_split = get_compile_time_arg_val(mrs::reader_ct::A_SPLIT);  // m rows of part 0
+    constexpr uint32_t w_split = get_compile_time_arg_val(mrs::reader_ct::W_SPLIT);  // k rows of part 0
+    constexpr uint32_t prefetch_steps = get_compile_time_arg_val(mrs::reader_ct::PREFETCH_STEPS);
+    constexpr bool lookahead_after_barrier =
+        get_compile_time_arg_val(mrs::reader_ct::LOOKAHEAD_AFTER_BARRIER) != 0;  // issue look-ahead reads after the
     // current step's read barrier (else before it)
     // NoC of each operand's DRAM reads. This kernel owns every read on both NoCs of its core (the writer only writes),
     // so the second NoC adds DRAM-response links for the fill
-    constexpr uint8_t a_read_noc = get_compile_time_arg_val(24);
-    constexpr uint8_t w_read_noc = get_compile_time_arg_val(25);
+    constexpr uint8_t a_read_noc = get_compile_time_arg_val(mrs::reader_ct::A_READ_NOC);
+    constexpr uint8_t w_read_noc = get_compile_time_arg_val(mrs::reader_ct::W_READ_NOC);
     constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
-    constexpr uint32_t num_waves = get_compile_time_arg_val(26);  // entries per block (entry e is wave e mod num_waves)
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(27);
-    constexpr uint32_t n_inner = get_compile_time_arg_val(28);   // chunks along the inner axis
-    constexpr bool m_outer = get_compile_time_arg_val(29) != 0;  // chunk c: (c / n_inner, c % n_inner) as (m, n)
-    constexpr uint32_t chunk_m = get_compile_time_arg_val(30);
-    constexpr uint32_t chunk_n = get_compile_time_arg_val(31);
-    constexpr uint32_t block_m = get_compile_time_arg_val(32);
-    constexpr uint32_t block_n = get_compile_time_arg_val(33);
-    constexpr auto a_args = TensorAccessorArgs<34>();
+    // entries per block (entry e is wave e mod num_waves)
+    constexpr uint32_t num_waves = get_compile_time_arg_val(mrs::reader_ct::NUM_WAVES);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(mrs::reader_ct::NUM_CHUNKS);
+    constexpr uint32_t n_inner = get_compile_time_arg_val(mrs::reader_ct::N_INNER);  // chunks along the inner axis
+    // chunk c: (c / n_inner, c % n_inner) as (m, n)
+    constexpr bool m_outer = get_compile_time_arg_val(mrs::reader_ct::M_OUTER) != 0;
+    constexpr uint32_t chunk_m = get_compile_time_arg_val(mrs::reader_ct::CHUNK_M);
+    constexpr uint32_t chunk_n = get_compile_time_arg_val(mrs::reader_ct::CHUNK_N);
+    constexpr uint32_t block_m = get_compile_time_arg_val(mrs::reader_ct::BLOCK_M);
+    constexpr uint32_t block_n = get_compile_time_arg_val(mrs::reader_ct::BLOCK_N);
+    constexpr auto a_args = TensorAccessorArgs<mrs::reader_ct::COUNT>();
     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
@@ -126,26 +131,29 @@ void kernel_main() {
     constexpr uint32_t w_part_off[2] = {0, w_split * core_n * w_tile_bytes};
     constexpr uint32_t w_part_bytes[2] = {w_split * core_n * w_tile_bytes, (kb - w_split) * core_n * w_tile_bytes};
 
-    uint32_t arg = 0;
-    const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t w_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // gm * core_m (chunk-local)
-    const uint32_t col0 = get_arg_val<uint32_t>(arg++);  // gn * core_n (chunk-local)
-    const uint32_t arr_fwd_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t arr_bwd_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // arrival increments my counters receive per chunk
-    const uint32_t total_bwd = get_arg_val<uint32_t>(arg++);
-    const uint32_t slots_fwd = get_arg_val<uint32_t>(arg++);  // arrival slots I consume per chunk, per direction
-    const uint32_t slots_bwd = get_arg_val<uint32_t>(arg++);
-    const uint32_t rep_fwd_xy = get_arg_val<uint32_t>(arg++);  // port counting my consumed fwd / bwd chunks
-    const uint32_t rep_bwd_xy = get_arg_val<uint32_t>(arg++);
-    const uint32_t report_chunks = get_arg_val<uint32_t>(arg++);  // chunks the upstream waits for (num - zone sets)
-    // per wave: row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
-    const uint32_t waves_idx = arg;
+    const uint32_t a_addr = get_common_arg_val<uint32_t>(mrs::reader_common::A_ADDR);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(mrs::reader_common::W_ADDR);
+    const uint32_t row0 = get_arg_val<uint32_t>(mrs::reader_rt::ROW0);  // gm * core_m (chunk-local)
+    const uint32_t col0 = get_arg_val<uint32_t>(mrs::reader_rt::COL0);  // gn * core_n (chunk-local)
+    const uint32_t arr_fwd_addr = get_common_arg_val<uint32_t>(mrs::reader_common::ARR_FWD_ADDR);
+    const uint32_t arr_bwd_addr = get_common_arg_val<uint32_t>(mrs::reader_common::ARR_BWD_ADDR);
+    // arrival increments my counters receive per chunk
+    const uint32_t total_fwd = get_arg_val<uint32_t>(mrs::reader_rt::TOTAL_FWD);
+    const uint32_t total_bwd = get_arg_val<uint32_t>(mrs::reader_rt::TOTAL_BWD);
+    // arrival slots I consume per chunk, per direction
+    const uint32_t slots_fwd = get_arg_val<uint32_t>(mrs::reader_rt::SLOTS_FWD);
+    const uint32_t slots_bwd = get_arg_val<uint32_t>(mrs::reader_rt::SLOTS_BWD);
+    // port counting my consumed fwd / bwd chunks
+    const uint32_t rep_fwd_xy = get_arg_val<uint32_t>(mrs::reader_rt::REP_FWD_XY);
+    const uint32_t rep_bwd_xy = get_arg_val<uint32_t>(mrs::reader_rt::REP_BWD_XY);
+    // chunks the upstream waits for (num - zone sets)
+    const uint32_t report_chunks = get_common_arg_val<uint32_t>(mrs::reader_common::REPORT_CHUNKS);
+    // per wave (common): row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
+    constexpr uint32_t waves_idx = mrs::reader_common::COUNT;
     // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
     // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
-    const uint32_t entries_idx = waves_idx + num_waves;
-    constexpr uint32_t ENTRY_WORDS = 2;
+    constexpr uint32_t entries_idx = mrs::reader_rt::COUNT;
+    constexpr uint32_t ENTRY_WORDS = mrs::reader_rt::ENTRY_WORDS;
     constexpr uint32_t total_entries = num_chunks * num_entries;
     // chunk c's tile origin inside the block and my valid extents there
     auto chunk_mn = [](uint32_t c, uint32_t& im, uint32_t& in) {
@@ -165,7 +173,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* arr_bwd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_bwd_addr);
     // try_land: credit, in entry order, every entry whose arrival counter(s) already cover it; never blocks
     // consumption reports: chunks of my arrivals compute has popped (16-bit CB ack counter, accumulated as deltas)
-    const uint32_t freed_addr = get_semaphore(2);
+    const uint32_t freed_addr = get_semaphore(mrs::sem::FREED);
     uint32_t reported[2] = {0, 0};
     uint16_t acked_seen[2] = {
         (uint16_t)reg_read((uintptr_t)get_cb_tiles_acked_ptr(cb_arrivals_fwd)),
@@ -242,7 +250,7 @@ void kernel_main() {
         return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
     };
     auto wave_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
+        return get_common_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
     };
     // valid extent of a wave along one axis: my valid tiles past the wave's offset, capped at its extent
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
