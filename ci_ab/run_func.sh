@@ -16,6 +16,9 @@ g ln_post_nightly $N/fused/test_distributed_layernorm_post_allgather.py
 g rms_post_nightly $N/fused/test_distributed_rmsnorm_allgather.py
 g wan_rmsnorm $N/transformers/test_distributed_fused_rmsnorm.py
 g hardswish $U/eltwise/test_unary.py $U/eltwise/test_unary_category2_bfloat16.py $U/eltwise/test_unary_category2_float32.py $N/eltwise/backward/test_backward_hardswish.py -k hardswish
+elif [[ $1 == 3 ]]; then
+g dit_layernorm $N/transformers/test_distributed_dit_layernorm.py
+g dit_rms_unary $N/experimental/test_dit_rms_norm_unary_fused.py
 else
 g ln_sharded $U/fused/test_layer_norm_sharded.py
 g rms_sharded $U/fused/test_rms_norm_sharded.py
