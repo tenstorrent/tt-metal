@@ -40,14 +40,14 @@ struct HighBwAllGatherFabricFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const HighBwAllGatherParams& operation_attributes,
+        const HighBwAllGatherParams& args,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const HighBwAllGatherInputs& tensor_args,
         Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const HighBwAllGatherParams& operation_attributes,
+        const HighBwAllGatherParams& args,
         const HighBwAllGatherInputs& tensor_args,
         Tensor& output_tensor);
 };

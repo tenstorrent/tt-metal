@@ -237,6 +237,7 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
         }
         auto to_coords = [&](const std::vector<uint32_t>& chips) {
             std::vector<Coord> coords;
+            coords.reserve(chips.size());
             for (uint32_t chip : chips) {
                 coords.push_back(Coord(chip / cols, chip % cols));
             }
@@ -319,6 +320,7 @@ GatherPlan build_gather_plan(
         closed_ring = axis_topology[axis] == tt::tt_fabric::Topology::Ring && mesh_shape[axis] > 2;
         for (uint32_t o = 0; o < mesh_shape[other_axis]; ++o) {
             std::vector<Coord> members;
+            members.reserve(mesh_shape[axis]);
             for (uint32_t i = 0; i < mesh_shape[axis]; ++i) {
                 members.push_back(axis == 0 ? Coord(i, o) : Coord(o, i));
             }
@@ -349,6 +351,7 @@ GatherPlan build_gather_plan(
                 mesh_rows,
                 mesh_cols);
             std::vector<Coord> snake;
+            snake.reserve(num_chips);
             for (uint32_t t = 0; t < num_chips; ++t) {
                 snake.push_back(
                     ttnn::operations::ccl::common::snake_ring_coordinate(t, mesh_shape, resolved->plan.orientation));
@@ -749,6 +752,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     if (external_counters) {
         for (const auto& chip_fabric_link_workers : plan.fabric_link_workers) {
             std::vector<tt::tt_metal::CoreCoord> cores;
+            cores.reserve(chip_fabric_link_workers.size());
             for (const auto& fabric_link_worker : chip_fabric_link_workers) {
                 cores.push_back(fabric_link_worker.core);
             }
