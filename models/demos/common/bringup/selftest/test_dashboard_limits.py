@@ -49,3 +49,13 @@ def test_state_keeps_only_gated_metrics_even_when_few():
     """F129: a gate with a few informational metrics no longer copies them into state.json (results/ has them)."""
     got = {"pcc_layer_L00": {"value": 0.99}, "pcc_layer_L00_limit": {"value": 0.98}, "chunk_seconds_c00": {"value": 1}}
     assert state_metrics({"pcc_layer_L*": ">= limit"}, got) == {"pcc_layer_L00": 0.99, "pcc_layer_L00_limit": 0.98}
+
+
+def test_a_fixed_check_added_after_a_pass_is_a_note_not_red():
+    """F130: F128 added drift_metrics to the golden tasks; goldens passed before it are noted, not painted red."""
+    vals = {"golden_hash_ok": 1}
+    out, note = resolve_thresholds({"golden_hash_ok": "== 1", "drift_metrics": ">= 1"}, vals, {}, "PASS")
+    assert out == {"golden_hash_ok": "== 1"} and "earlier rule" in note
+    assert red_passed([{"id": "G.s", "status": "PASS", "thresholds": out, "metrics": vals}]) == []
+    out, _ = resolve_thresholds({"drift_metrics": ">= 1"}, vals, {}, "FAIL")
+    assert out == {"drift_metrics": ">= 1"}  # a step not passed still shows what it misses

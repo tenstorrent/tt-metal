@@ -1438,3 +1438,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   results/<task>.json keeps every metric, and the dashboard reads both). Ledger._save_state trims older entries on the
   next save. DeepSeek-V4.1 FIX.6's gate passed every check and then failed its commit: state.json 502 KB > the repo's
   500 KB large-file hook (128 KB of it were ungated metrics). Selftests: test_core.py, test_dashboard_limits.py.
+- F130 (overseer, 2026-10-21): the dashboard notes, instead of painting red, a passed task whose gate gained a fixed
+  check after it passed (F128 added drift_metrics to the G tasks); the check runs at the task's rerun. Before, the
+  export's consistency check flagged it as an export bug and the watch woke at once on every arm.
+  Selftest: test_dashboard_limits.py::test_a_fixed_check_added_after_a_pass_is_a_note_not_red.
