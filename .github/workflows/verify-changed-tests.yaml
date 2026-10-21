@@ -376,6 +376,7 @@ jobs:
              || needs.build-default.outputs.wheel-artifact-name
              || '' }}
           enable-watcher: ${{ contains(env.WATCHER_YAMLS, format('{0}.yaml', matrix.leg.source_yaml)) && 'true' || 'false' }}
+          hang-detection-timeout: ${{ matrix.leg.source_yaml == 'blackhole_multi_card_sanity_tests' && contains(matrix.leg.name, 'PERF') && '20.0' || '5.0' }}
 
       - name: ⬇️ Download packages artifact
         if: ${{ matrix.leg.gate_packages }}
