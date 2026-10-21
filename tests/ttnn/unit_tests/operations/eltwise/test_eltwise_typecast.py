@@ -979,3 +979,31 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
     expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
     assert_equal(expected, ttnn.to_torch(chained))
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_typecast_to_uint16_truncation(layout, pt_input_dtype, tt_input_dtype, device):
+    """Typecast from floating point to uint16 truncates towards zero (issue #51655)."""
+    values = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.5, 3.5, 4.5, 65534.9, 65535.0, 65535.5, -0.5, -1.5])
+    padded = torch.zeros(1024, dtype=pt_input_dtype)
+    padded[: len(values)] = values.to(pt_input_dtype)
+    torch_input = padded.reshape(1, 1, 32, 32)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=layout, device=device)
+    result = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint16))
+
+    expected = torch.clamp(torch_input.to(torch.int32), min=0, max=65535)
+    assert_integer_typecast_equal(expected, result)

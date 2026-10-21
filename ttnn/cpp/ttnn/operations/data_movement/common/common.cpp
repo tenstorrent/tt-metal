@@ -684,8 +684,8 @@ uint16_t float_to_uint16(float f) {
         return std::numeric_limits<uint16_t>::min();
     }
 
-    // For all other finite values, safely cast after rounding
-    return static_cast<uint16_t>(std::round(f));
+    // For all other finite values, safely cast after truncating
+    return static_cast<uint16_t>(f);
 }
 
 // based off pack_two_bfloat16_into_uint32
