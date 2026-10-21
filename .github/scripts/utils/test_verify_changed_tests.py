@@ -1796,9 +1796,13 @@ def test_declared_env_matches_the_owning_pipeline(stem: str, spec: tuple):
 
     import yaml as _yaml
 
-    declared = {tuple(sorted(e["env"].items())) for e in _yaml.safe_load(tests_yaml.read_text())}
-    assert len(declared) == 1, f"{stem}: entries disagree on env"
-    declared_value = dict(declared.pop())[env_key]
+    # Only the entries that declare the watched key: entries in one yaml may need
+    # different env (the quasar legs declare CHIP_ARCH and no markers, because
+    # run_ttsim_regression.sh sets its own marker expression).
+    declared = {e["env"][env_key] for e in _yaml.safe_load(tests_yaml.read_text()) if env_key in (e.get("env") or {})}
+    assert declared, f"{stem}: no entry declares {env_key}"
+    assert len(declared) == 1, f"{stem}: entries disagree on {env_key}: {sorted(declared)}"
+    declared_value = declared.pop()
 
     # Written either as `pytest-markers: "<value>"`, `perf-run-types: ALL_MODES` (an
     # unquoted scalar needs no quoting), or `${{ inputs.x || '<value>' }}` where the

@@ -1,7 +1,10 @@
 # LLK PR-gate python_tests matrix.
 #
 # Merge-gate gtest coverage lives in llk_merge_gate_tests.yaml.
-# PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs.
+# llk-smoke-impl.yaml sets PYTEST_MARKERS from its workflow_call inputs; the
+# `env:` and `workdir:` on each entry are what verify-changed-tests uses instead.
+# The sim_quasar legs declare CHIP_ARCH because there is no device to detect it
+# from, and run_ttsim_regression.sh sets its own marker expression.
 # For max allowed timeout refer to .github/time_budget.yaml (llk -> pr_gate and
 # llk -> sanity). Two allowances, because two pipelines run this list: the PR gate
 # charges llk.pr_gate and sanity-tests charges llk.sanity.
@@ -131,6 +134,8 @@
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    CHIP_ARCH: "quasar"
 
 - name: llk_smoke_quasar group 2/2
   split_group: 2
@@ -146,3 +151,5 @@
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    CHIP_ARCH: "quasar"
