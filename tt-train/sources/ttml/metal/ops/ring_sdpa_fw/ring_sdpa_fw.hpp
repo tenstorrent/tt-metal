@@ -21,6 +21,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
     AttentionMaskType mask_type = AttentionMaskType::None,
     ops::ring_sdpa_fw::RingDirection ring_direction = ops::ring_sdpa_fw::RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt,
+    const SDPAForwardProgramConfig& program_config = {});
 
 }  // namespace ttml::metal

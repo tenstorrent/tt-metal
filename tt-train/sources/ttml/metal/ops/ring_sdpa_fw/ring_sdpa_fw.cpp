@@ -18,7 +18,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
     AttentionMaskType mask_type,
     ops::ring_sdpa_fw::RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_output,
-    const std::optional<ttnn::Tensor>& preallocated_intermediates) {
+    const std::optional<ttnn::Tensor>& preallocated_intermediates,
+    const SDPAForwardProgramConfig& program_config) {
     return ttnn::prim::ttml_ring_sdpa_fw(
         query,
         key,
@@ -29,7 +30,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
         mask_type,
         ring_direction,
         preallocated_output,
-        preallocated_intermediates);
+        preallocated_intermediates,
+        program_config);
 }
 
 }  // namespace ttml::metal
