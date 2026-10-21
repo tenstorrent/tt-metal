@@ -127,6 +127,16 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
         index_tensor.logical_shape(),
         src_tensor.logical_shape());
 
+    // Every reader addresses src pages with index's geometry (ttnn::scatter slices src down to
+    // index's shape before calling), so a wider src would read the wrong pages and a narrower one
+    // past its buffer.
+    TT_FATAL(
+        src_tensor.logical_shape() == index_tensor.logical_shape() &&
+            src_tensor.padded_shape() == index_tensor.padded_shape(),
+        "scatter_codegen: src must carry index's shape (index {}, src {}).",
+        index_tensor.logical_shape(),
+        src_tensor.logical_shape());
+
     // The prim only ever holds an already-normalized tensor (transpose-to-last-dim already applied),
     // so the scatter axis here is always the last dim; -1 says that without re-deriving rank.
     TT_FATAL(
