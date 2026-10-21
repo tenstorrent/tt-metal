@@ -4,6 +4,298 @@
 
 #pragma once
 
+#ifdef ARCH_QUASAR
+
+#include <cstdint>
+#include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/dest_sync.h"
+#include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
+
+namespace ckernel {
+namespace experimental {
+namespace detail {
+
+template <EltwiseBinaryType type, bool is_fp32_dest_acc_en, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void binary_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_dest) {
+    static_assert(llk_2_0::is_supported_format(FA) && llk_2_0::is_supported_format(FB), "binary init: Float16_b / Float16 only.");
+    static_assert(is_legal_tile_shape(SA), "binary init: illegal tile shape for operand A.");
+    static_assert(same_tile_shape(SA, SB), "binary init: operands A and B must have the same tile shape.");
+    detail::dest_join<dest_dvalid_client::FPU>();
+    UNPACK((llk_2_0::unpack_AB_init<LLKOperand<FA, SA>::descriptor, LLKOperand<FB, SB>::descriptor>(
+        a.l1_address, b.l1_address)));
+    MATH((llk_2_0::math_binary_init<
+          type,
+          LLKOperand<FA, SA>::descriptor,
+          LLKOperand<FB, SB>::descriptor,
+          is_fp32_dest_acc_en,
+          MATH_FIDELITY>(acc_to_dest)));
+}
+
+template <EltwiseBinaryType type, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void binary_tile(
+    LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    detail::dest_take<dest_dvalid_client::FPU>();
+    UNPACK((llk_2_0::unpack_AB<LLKOperand<FA, SA>::descriptor>(
+        a.l1_address, b.l1_address, a.tile(itile0), b.tile(itile1))));
+    MATH((llk_2_0::math_binary<type, LLKOperand<FA, SA>::descriptor>(idst)));
+}
+
+template <EltwiseBinaryType type, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void binary_block(
+    LLKOperand<FA, SA> a,
+    LLKOperand<FB, SB> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        binary_tile<type>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+    }
+}
+
+}  // namespace detail
+
+// clang-format off
+/**
+ * Id-free add init, Quasar: Dest = A + B. Unpack TRISC programs Unp0 (A -> SrcA) and Unp1 (B -> SrcB) buffer
+ * descriptors at the operands' bases, their formats and the binary unpack MOP; math TRISC programs the ALU formats
+ * and the ELWADD MOP. Joins the FPU unit to the Dest chain. Re-init when another op ran in between (Quasar rule).
+ * No uninit. Only 16-bit float operands with the same tile shape.
+ *
+ * | Param Type | Name                | Description                                 | Type        | Valid Range | Required |
+ * |------------|---------------------|---------------------------------------------|-------------|-------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                   | bool        |             | False    |
+ * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | N/A         | True     |
+ * | Function   | acc_to_dest         | Accumulate into Dest instead of overwriting | bool        | N/A         | False    |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void add_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_dest = false) {
+    detail::binary_init<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en>(a, b, acc_to_dest);
+}
+
+// clang-format off
+/**
+ * Id-free sub init, Quasar: Dest = A - B. Same contract as add_init.
+ *
+ * | Param Type | Name                | Description                                 | Type        | Valid Range | Required |
+ * |------------|---------------------|---------------------------------------------|-------------|-------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                   | bool        |             | False    |
+ * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | N/A         | True     |
+ * | Function   | acc_to_dest         | Accumulate into Dest instead of overwriting | bool        | N/A         | False    |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void sub_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_dest = false) {
+    detail::binary_init<EltwiseBinaryType::ELWSUB, is_fp32_dest_acc_en>(a, b, acc_to_dest);
+}
+
+// clang-format off
+/**
+ * Id-free mul init, Quasar: Dest = A * B at the kernel's math fidelity. Same contract as add_init.
+ *
+ * | Param Type | Name                | Description                                 | Type        | Valid Range | Required |
+ * |------------|---------------------|---------------------------------------------|-------------|-------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                   | bool        |             | False    |
+ * | Function   | a / b               | Input operands (A -> SrcA, B -> SrcB)       | LLKOperand  | N/A         | True     |
+ * | Function   | acc_to_dest         | Accumulate into Dest instead of overwriting | bool        | N/A         | False    |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void mul_init(LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, bool acc_to_dest = false) {
+    detail::binary_init<EltwiseBinaryType::ELWMUL, is_fp32_dest_acc_en>(a, b, acc_to_dest);
+}
+
+// clang-format off
+/**
+ * Id-free add of one tile pair, Quasar: Dest[idst] = A[itile0] + B[itile1]. Tile i of an operand is L1 tile
+ * entry_idx + i * stride_tiles of its buffer (stride applied to both operands). Takes Dest for FPU inside the
+ * section the kernel opened with dest_acquire. Pair with add_init.
+ *
+ * | Param Type | Name            | Description                 | Type       | Valid Range            | Required |
+ * |------------|-----------------|-----------------------------|------------|------------------------|----------|
+ * | Function   | a / b           | Input operands              | LLKOperand | N/A                    | True     |
+ * | Function   | itile0 / itile1 | Tile indices within A / B   | uint32_t   | N/A                    | True     |
+ * | Function   | idst            | Dest tile index             | uint32_t   | < Dest tiles / section | True     |
+ */
+// clang-format on
+template <DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void add_tile(
+    LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    detail::binary_tile<EltwiseBinaryType::ELWADD>(a, b, itile0, itile1, idst);
+}
+
+// clang-format off
+/**
+ * Id-free sub of one tile pair, Quasar: Dest[idst] = A[itile0] - B[itile1]. Same contract as add_tile; pair with
+ * sub_init.
+ *
+ * | Param Type | Name            | Description                 | Type       | Valid Range            | Required |
+ * |------------|-----------------|-----------------------------|------------|------------------------|----------|
+ * | Function   | a / b           | Input operands              | LLKOperand | N/A                    | True     |
+ * | Function   | itile0 / itile1 | Tile indices within A / B   | uint32_t   | N/A                    | True     |
+ * | Function   | idst            | Dest tile index             | uint32_t   | < Dest tiles / section | True     |
+ */
+// clang-format on
+template <DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void sub_tile(
+    LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    detail::binary_tile<EltwiseBinaryType::ELWSUB>(a, b, itile0, itile1, idst);
+}
+
+// clang-format off
+/**
+ * Id-free mul of one tile pair, Quasar: Dest[idst] = A[itile0] * B[itile1]. Same contract as add_tile; pair with
+ * mul_init.
+ *
+ * | Param Type | Name            | Description                 | Type       | Valid Range            | Required |
+ * |------------|-----------------|-----------------------------|------------|------------------------|----------|
+ * | Function   | a / b           | Input operands              | LLKOperand | N/A                    | True     |
+ * | Function   | itile0 / itile1 | Tile indices within A / B   | uint32_t   | N/A                    | True     |
+ * | Function   | idst            | Dest tile index             | uint32_t   | < Dest tiles / section | True     |
+ */
+// clang-format on
+template <DataFormat FA, TensorShape SA, DataFormat FB, TensorShape SB>
+ALWI void mul_tile(
+    LLKOperand<FA, SA> a, LLKOperand<FB, SB> b, std::uint32_t itile0, std::uint32_t itile1, std::uint32_t idst) {
+    detail::binary_tile<EltwiseBinaryType::ELWMUL>(a, b, itile0, itile1, idst);
+}
+
+// clang-format off
+/**
+ * Id-free block add, Quasar: add_tile over a ct_dim x rt_dim block, A[start_itile0 + i] + B[start_itile1 + i] ->
+ * Dest[start_idst + i]. The block must fit one Dest section (static_assert). sub_block / mul_block are identical
+ * with - / *.
+ *
+ * | Param Type | Name                        | Description                    | Type       | Valid Range                     | Required |
+ * |------------|-----------------------------|--------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim             | Block columns / rows (tiles)   | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | is_fp32_dest_acc_en         | fp32 dest-accumulate mode      | bool       |                                 | False    |
+ * | Function   | a / b                       | Input operands                 | LLKOperand | N/A                             | True     |
+ * | Function   | start_itile0 / start_itile1 | First tiles within A / B       | uint32_t   | N/A                             | True     |
+ * | Function   | start_idst                  | First Dest tile                | uint32_t   | N/A                             | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat FA,
+    TensorShape SA,
+    DataFormat FB,
+    TensorShape SB>
+ALWI void add_block(
+    LLKOperand<FA, SA> a,
+    LLKOperand<FB, SB> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst = 0) {
+    static_assert(ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "add_block: exceeds Dest");
+    detail::binary_block<EltwiseBinaryType::ELWADD>(a, b, start_itile0, start_itile1, start_idst, ct_dim * rt_dim);
+}
+
+// clang-format off
+/**
+ * Id-free block sub, Quasar: see add_block.
+ *
+ * | Param Type | Name                        | Description                    | Type       | Valid Range                     | Required |
+ * |------------|-----------------------------|--------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim             | Block columns / rows (tiles)   | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | is_fp32_dest_acc_en         | fp32 dest-accumulate mode      | bool       |                                 | False    |
+ * | Function   | a / b                       | Input operands                 | LLKOperand | N/A                             | True     |
+ * | Function   | start_itile0 / start_itile1 | First tiles within A / B       | uint32_t   | N/A                             | True     |
+ * | Function   | start_idst                  | First Dest tile                | uint32_t   | N/A                             | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat FA,
+    TensorShape SA,
+    DataFormat FB,
+    TensorShape SB>
+ALWI void sub_block(
+    LLKOperand<FA, SA> a,
+    LLKOperand<FB, SB> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst = 0) {
+    static_assert(ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "sub_block: exceeds Dest");
+    detail::binary_block<EltwiseBinaryType::ELWSUB>(a, b, start_itile0, start_itile1, start_idst, ct_dim * rt_dim);
+}
+
+// clang-format off
+/**
+ * Id-free block mul, Quasar: see add_block.
+ *
+ * | Param Type | Name                        | Description                    | Type       | Valid Range                     | Required |
+ * |------------|-----------------------------|--------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim             | Block columns / rows (tiles)   | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | is_fp32_dest_acc_en         | fp32 dest-accumulate mode      | bool       |                                 | False    |
+ * | Function   | a / b                       | Input operands                 | LLKOperand | N/A                             | True     |
+ * | Function   | start_itile0 / start_itile1 | First tiles within A / B       | uint32_t   | N/A                             | True     |
+ * | Function   | start_idst                  | First Dest tile                | uint32_t   | N/A                             | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat FA,
+    TensorShape SA,
+    DataFormat FB,
+    TensorShape SB>
+ALWI void mul_block(
+    LLKOperand<FA, SA> a,
+    LLKOperand<FB, SB> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst = 0) {
+    static_assert(ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "mul_block: exceeds Dest");
+    detail::binary_block<EltwiseBinaryType::ELWMUL>(a, b, start_itile0, start_itile1, start_idst, ct_dim * rt_dim);
+}
+
+// clang-format off
+/**
+ * Id-free block binary with a runtime tile count (tails), Quasar: Dest[start_idst + i] = A[start_itile0 + i] [op]
+ * B[start_itile1 + i], i < ntiles, op = add / sub / mul as the preceding init.
+ *
+ * | Param Type | Name                        | Description                    | Type              | Valid Range                         | Required |
+ * |------------|-----------------------------|--------------------------------|-------------------|-------------------------------------|----------|
+ * | Template   | type                        | ELWADD / ELWSUB / ELWMUL       | EltwiseBinaryType |                                     | True     |
+ * | Template   | is_fp32_dest_acc_en         | fp32 dest-accumulate mode      | bool              |                                     | False    |
+ * | Function   | a / b                       | Input operands                 | LLKOperand        | N/A                                 | True     |
+ * | Function   | start_itile0 / start_itile1 | First tiles within A / B       | uint32_t          | N/A                                 | True     |
+ * | Function   | start_idst                  | First Dest tile                | uint32_t          | N/A                                 | True     |
+ * | Function   | ntiles                      | Number of tile pairs           | uint32_t          | start_idst + ntiles <= section size | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType type,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat FA,
+    TensorShape SA,
+    DataFormat FB,
+    TensorShape SB>
+ALWI void binary_block(
+    LLKOperand<FA, SA> a,
+    LLKOperand<FB, SB> b,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    LLK_ASSERT(
+        start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "binary_block: block exceeds Dest");
+    detail::binary_block<type>(a, b, start_itile0, start_itile1, start_idst, ntiles);
+}
+
+}  // namespace experimental
+}  // namespace ckernel
+
+#else  // Blackhole
+
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
@@ -537,3 +829,5 @@ ALWI void mul_reuse_dest_tiles(
 
 }  // namespace experimental
 }  // namespace ckernel
+
+#endif  // ARCH_QUASAR

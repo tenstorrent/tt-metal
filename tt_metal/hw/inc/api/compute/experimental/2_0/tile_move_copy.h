@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/dest_sync.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
 #include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
 
@@ -16,74 +17,118 @@ namespace experimental {
 
 // clang-format off
 /**
- * Id-free datacopy init, Quasar. Programs a fresh unpack buffer descriptor whose base is `src.l1_address`
- * (unpack TRISC) and the SrcA -> Dest datacopy MOP (math TRISC). Tiles of the following copy_tile / copy_block
- * calls are indexed relative to that address, so call copy_init again whenever the source address changes
- * (e.g. once per DataflowBuffer::front()) -- on Quasar every op init must precede its op anyway. No uninit.
+ * Id-free copy init, Quasar. Two paths, selected by `unpack_to_dest`:
+ *   * false (FPU datacopy): unpack TRISC programs an Unp0 buffer descriptor at src's base and the unpack-to-SrcA MOP;
+ *     math TRISC programs the SrcA -> Dest datacopy. Joins the FPU unit to the Dest chain.
+ *   * true (unpack-to-dest): unpack TRISC programs the descriptor and the UNP_DEST MOP; the unpacker writes Dest
+ *     directly. Joins the UNPACK unit to the Dest chain. Full 32x32 tiles only.
+ * src's base is the DFB ring base, so one init serves every front() of the ring. Re-init when another op ran in
+ * between (Quasar rule). No uninit. Only 16-bit float operands (Float16_b, Float16).
  *
- * Only 16-bit float operands (Float16_b, Float16) are supported.
- *
- * | Param Type | Name                | Description                                       | Type        | Valid Range        | Required |
- * |------------|---------------------|---------------------------------------------------|-------------|--------------------|----------|
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        |                    | False    |
- * | Template   | Format              | Source L1 data format (deduced from LLKOperand)   | DataFormat  | Float16_b, Float16 | True     |
- * | Template   | Shape               | Source tile geometry (deduced from LLKOperand)    | TensorShape | N/A                | True     |
- * | Function   | src                 | Source operand; l1_address = tile 0 of the copies | LLKOperand  | N/A                | True     |
+ * | Param Type | Name                | Description                                          | Type        | Valid Range        | Required |
+ * |------------|---------------------|------------------------------------------------------|-------------|--------------------|----------|
+ * | Template   | unpack_to_dest      | true: unpack straight to Dest; false: FPU datacopy   | bool        |                    | False    |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                            | bool        |                    | False    |
+ * | Template   | Format / Shape      | Source L1 format + geometry (deduced)                | DataFormat/TensorShape | Float16_b, Float16 | True |
+ * | Function   | src                 | Source operand (e.g. DataflowBuffer::front)          | LLKOperand  | N/A                | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+template <bool unpack_to_dest = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void copy_init(LLKOperand<Format, Shape> src) {
     static_assert(llk_2_0::is_supported_format(Format), "copy_init (Quasar 2.0): only Float16_b / Float16.");
     static_assert(is_legal_tile_shape(Shape), "copy_init: illegal tile shape.");
-    UNPACK((llk_2_0::unpack_A_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>(src.l1_address)));
-    MATH((llk_2_0::math_datacopy_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
+    constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
+    if constexpr (unpack_to_dest) {
+        detail::dest_join<dest_dvalid_client::UNPACK>();
+        UNPACK((llk_2_0::unpack_to_dest_init<D>(src.l1_address)));
+    } else {
+        detail::dest_join<dest_dvalid_client::FPU>();
+        UNPACK((llk_2_0::unpack_A_init<D, is_fp32_dest_acc_en>(src.l1_address)));
+        MATH((llk_2_0::math_datacopy_init<D, is_fp32_dest_acc_en>()));
+    }
 }
 
 // clang-format off
 /**
- * Id-free datacopy, Quasar. Unpacks source tile `itile` (relative to the address the preceding copy_init
- * programmed) into SrcA and copies it to Dest tile `dst_tile_index`. `src` must be the operand passed to that
- * copy_init. Dest synchronization is outside this op: the math client must hold Dest (dest_acquire) and later
- * release it (dest_release).
+ * Id-free copy of one tile, Quasar: source tile `itile` of `src` (L1 tile src.entry_idx + itile * src.stride_tiles)
+ * to Dest tile `idst`, on the path the preceding copy_init chose. Takes Dest for its unit (FPU or UNPACK) inside the
+ * section the kernel opened with dest_acquire.
  *
- * | Param Type | Name           | Description                                         | Type        | Valid Range                          | Required |
- * |------------|----------------|-----------------------------------------------------|-------------|--------------------------------------|----------|
- * | Template   | Format         | Source L1 data format (deduced from LLKOperand)     | DataFormat  | Float16_b, Float16                   | True     |
- * | Template   | Shape          | Source tile geometry (deduced from LLKOperand)      | TensorShape | N/A                                  | True     |
- * | Function   | src            | Source operand (same as the preceding copy_init)    | LLKOperand  | N/A                                  | True     |
- * | Function   | itile          | Source tile index relative to the copy_init address | uint32_t    | N/A                                  | True     |
- * | Function   | dst_tile_index | Tile index in the Dest register                     | uint32_t    | < tiles per Dest section             | True     |
+ * | Param Type | Name           | Description                                     | Type        | Valid Range            | Required |
+ * |------------|----------------|-------------------------------------------------|-------------|------------------------|----------|
+ * | Template   | unpack_to_dest | Same as the preceding copy_init                 | bool        |                        | False    |
+ * | Template   | Format / Shape | Source L1 format + geometry (deduced)           | DataFormat/TensorShape | N/A   | True     |
+ * | Function   | src            | Source operand (its base = the copy_init's)     | LLKOperand  | N/A                    | True     |
+ * | Function   | itile          | Source tile index within src                    | uint32_t    | N/A                    | True     |
+ * | Function   | idst           | Dest tile index                                 | uint32_t    | < Dest tiles / section | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void copy_tile(LLKOperand<Format, Shape> /*src*/, std::uint32_t itile, std::uint32_t dst_tile_index) {
-    UNPACK((llk_2_0::unpack_A<LLKOperand<Format, Shape>::descriptor>(itile)));
-    MATH((llk_2_0::math_datacopy(dst_tile_index)));
+template <bool unpack_to_dest = false, DataFormat Format, TensorShape Shape>
+ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
+    constexpr LLKMemDescriptor D = LLKOperand<Format, Shape>::descriptor;
+    if constexpr (unpack_to_dest) {
+        detail::dest_take<dest_dvalid_client::UNPACK>();
+        UNPACK((llk_2_0::unpack_to_dest(src.l1_address, src.tile(itile), idst)));
+    } else {
+        detail::dest_take<dest_dvalid_client::FPU>();
+        UNPACK((llk_2_0::unpack_A<D>(src.l1_address, src.tile(itile))));
+        MATH((llk_2_0::math_datacopy(idst)));
+    }
 }
 
 // clang-format off
 /**
- * Id-free block datacopy, Quasar: copy_tile over `ntiles` consecutive tiles (source tile start_in_tile_index+i
- * -> Dest tile start_dst_tile_index+i). Same init and Dest-sync contract as copy_tile.
+ * Id-free block copy, Quasar: copy_tile over a ct_dim x rt_dim block, source tiles start_itile + i -> Dest tiles
+ * start_idst + i, i < ct_dim * rt_dim. The block must fit one Dest section (static_assert).
  *
- * | Param Type | Name                 | Description                                        | Type        | Valid Range                                 | Required |
- * |------------|----------------------|----------------------------------------------------|-------------|---------------------------------------------|----------|
- * | Template   | Format               | Source L1 data format (deduced from LLKOperand)    | DataFormat  | Float16_b, Float16                          | True     |
- * | Template   | Shape                | Source tile geometry (deduced from LLKOperand)     | TensorShape | N/A                                         | True     |
- * | Function   | src                  | Source operand (same as the preceding copy_init)   | LLKOperand  | N/A                                         | True     |
- * | Function   | start_in_tile_index  | First source tile, relative to the copy_init address | uint32_t  | N/A                                         | True     |
- * | Function   | start_dst_tile_index | First Dest tile                                    | uint32_t    | N/A                                         | True     |
- * | Function   | ntiles               | Number of tiles                                    | uint32_t    | start_dst_tile_index + ntiles <= section size | True   |
+ * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
+ * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim     | Block columns / rows (tiles)              | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | unpack_to_dest      | Same as the preceding copy_init           | bool       |                                 | False    |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                 | bool       |                                 | False    |
+ * | Function   | src                 | Source operand                            | LLKOperand | N/A                             | True     |
+ * | Function   | start_itile         | First source tile within src              | uint32_t   | N/A                             | True     |
+ * | Function   | start_idst          | First Dest tile                           | uint32_t   | N/A                             | False    |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool unpack_to_dest = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
+ALWI void copy_block(LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst = 0) {
+    static_assert(
+        ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(),
+        "copy_block: block exceeds the Dest section");
+    for (std::uint32_t i = 0; i < ct_dim * rt_dim; ++i) {
+        copy_tile<unpack_to_dest>(src, start_itile + i, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Id-free block copy with a runtime tile count (tails), Quasar: copy_tile over `ntiles` tiles, source tiles
+ * start_itile + i -> Dest tiles start_idst + i.
+ *
+ * | Param Type | Name                | Description                               | Type       | Valid Range                          | Required |
+ * |------------|---------------------|-------------------------------------------|------------|--------------------------------------|----------|
+ * | Template   | unpack_to_dest      | Same as the preceding copy_init           | bool       |                                      | False    |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                 | bool       |                                      | False    |
+ * | Function   | src                 | Source operand                            | LLKOperand | N/A                                  | True     |
+ * | Function   | start_itile         | First source tile within src              | uint32_t   | N/A                                  | True     |
+ * | Function   | start_idst          | First Dest tile                           | uint32_t   | N/A                                  | True     |
+ * | Function   | ntiles              | Number of tiles                           | uint32_t   | start_idst + ntiles <= section size  | True     |
+ */
+// clang-format on
+template <bool unpack_to_dest = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void copy_block(
-    LLKOperand<Format, Shape> src,
-    std::uint32_t start_in_tile_index,
-    std::uint32_t start_dst_tile_index,
-    std::uint32_t ntiles) {
+    LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
+    LLK_ASSERT(
+        start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "copy_block: block exceeds Dest");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        copy_tile<is_fp32_dest_acc_en>(src, start_in_tile_index + i, start_dst_tile_index + i);
+        copy_tile<unpack_to_dest>(src, start_itile + i, start_idst + i);
     }
 }
 
