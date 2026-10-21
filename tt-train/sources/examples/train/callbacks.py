@@ -22,11 +22,12 @@ class ThroughputCallback(TrainerCallback):
     """Print wall-clock TPS / TFLOPS / MFU every `log_interval` steps."""
 
     def __init__(
-        self, flops_per_token: float, peak_tflops: float, data_parallel_size: int = 1, log_interval: int = 1
+        self, flops_per_token: float, peak_tflops: float, token_shards: int = 1, log_interval: int = 1
     ) -> None:
         self._flops_per_token = flops_per_token
         self._peak_tflops = peak_tflops
-        self._data_parallel_size = max(1, int(data_parallel_size))
+        # Devices holding distinct tokens: the data-parallel groups times the cp ranks splitting each sequence.
+        self._token_shards = max(1, int(token_shards))
         self._log_interval = max(1, int(log_interval))
         self._step_start: float | None = None
         self._tokens_in_step: int = 0
@@ -37,8 +38,8 @@ class ThroughputCallback(TrainerCallback):
 
     def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
         shape = batch.input_ids.shape()
-        # Per-device micro-shard tokens × data_parallel_size = global tokens processed this step.
-        self._tokens_in_step += int(shape[0]) * int(shape[-1]) * self._data_parallel_size
+        # Per-device micro-shard tokens × token_shards = global tokens processed this step.
+        self._tokens_in_step += int(shape[0]) * int(shape[-1]) * self._token_shards
 
     def on_step_end(self, trainer: SFTTrainer, step: int, step_loss: float = 0.0, *args: Any, **kwargs: Any) -> None:
         if step % self._log_interval != 0 or self._step_start is None:

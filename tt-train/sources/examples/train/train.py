@@ -474,7 +474,9 @@ def run_training(
     # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
     lazy_init = device_cfg.enable_fsdp and not args.no_lazy
     print("Building model...", flush=True)
-    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, tp_strategy=tp_strategy)
+    model = instantiate_model_from_config(
+        model_cfg, lazy_init=lazy_init, tp_strategy=tp_strategy, context_parallel=device_cfg.enable_cp
+    )
 
     flops_per_token = 0
     flops_fn = FLOPS_REGISTRY.get(model_cfg.model_type)
@@ -515,8 +517,19 @@ def run_training(
     mesh = ttml.mesh()
     # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
     # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
+    # Under CP every cp rank also takes its chunk of each sequence.
     data_axes, data_parallel_size = resolve_data_parallel_axes(mesh)
-    if len(data_axes) == 1:
+    cp_size = mesh.axis_size("cp") if mesh.has_axis("cp") else 1
+    if cp_size > 1:
+        if len(data_axes) > 1:
+            raise NotImplementedError("HSDP + CP batch sharding is not supported.")
+        batch_dims = {data_axes[0]: 0} if data_axes else {}
+        # The sequence lies on a different dim in each field: ids (B,1,1,S), labels (B,S), loss_mask (B,1,S,1).
+        mapper = {
+            field: mesh.shard_mapper({**batch_dims, "cp": seq_dim})
+            for field, seq_dim in (("input_ids", 3), ("labels", 1), ("loss_mask", 2))
+        }
+    elif len(data_axes) == 1:
         mapper = mesh.axis_mapper(data_axes[0], tdim=0)
     elif len(data_axes) >= 2:
         if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
@@ -554,7 +567,7 @@ def run_training(
         callbacks.append(MoECallback(args.log_expert_activations))
 
     # Metrics.
-    callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, data_parallel_size, log_interval=1))
+    callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, data_parallel_size * cp_size, log_interval=1))
     if steps_per_epoch > 0:
         callbacks.append(EpochCallback(steps_per_epoch))
     avg_loss_cb = AverageLossCallback()
@@ -892,7 +905,7 @@ def main() -> None:
     if model_cfg.model_type == "deepseek":
         model_cfg.spec.moe_axis_name = resolved_moe_axis
 
-    if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
+    if device_cfg.enable_ddp or device_cfg.enable_tp or device_cfg.enable_cp or moe_ax != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()

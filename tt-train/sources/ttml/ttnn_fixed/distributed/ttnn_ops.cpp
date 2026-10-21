@@ -101,14 +101,14 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
         tensor,
         /* persistent_output_buffer */ std::nullopt,
         dim,
-        ccl_resources.get_all_gather_semaphore(),
+        ccl_resources.get_all_gather_semaphore(cluster_axis),
         num_links,
         /* memory_config */ std::nullopt,
         topology,
         /* subdevice_id */ std::nullopt,
         cluster_axis,
         /* use_optimal_ccl_for_llama */ false,
-        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore(cluster_axis));
 }
 
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
@@ -124,9 +124,9 @@ ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t
     }
 
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores();
-    auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
-    auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
+    auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores(cluster_axis);
+    auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore(cluster_axis);
+    auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores(cluster_axis);
 
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
 
@@ -176,8 +176,8 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
         tensor,
         /* persistent_output_buffers */ std::nullopt,
         dim,
-        ccl_resources.get_reduce_scatter_semaphores(),
-        ccl_resources.get_barrier_semaphore(),
+        ccl_resources.get_reduce_scatter_semaphores(cluster_axis),
+        ccl_resources.get_barrier_semaphore(cluster_axis),
         num_links,
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,

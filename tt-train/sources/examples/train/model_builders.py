@@ -182,7 +182,7 @@ def _parse_llama(tc: dict) -> LlamaSpec:
     return spec
 
 
-def _build_llama(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
+def _build_llama(cfg: ModelConfig, tp_strategy: TPStrategy, *, context_parallel: bool = False) -> Model:
     assert isinstance(cfg.spec, LlamaSpec)
     spec = cfg.spec
     if spec.num_groups <= 0:
@@ -211,6 +211,7 @@ def _build_llama(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
             ),
             tp_strategy=tp_strategy,
             embedding_placement=spec.embedding_placement,
+            context_parallel=context_parallel,
         )
     )
 
@@ -391,22 +392,31 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     return cfg
 
 
-def create_model(cfg: ModelConfig, tp_strategy: TPStrategy = TPStrategy.NONE) -> Model:
+def create_model(
+    cfg: ModelConfig, tp_strategy: TPStrategy = TPStrategy.NONE, *, context_parallel: bool = False
+) -> Model:
     """Dispatch on `cfg.model_type` to the registered builder.
 
     `cfg.vocab_size` is the raw (unpadded) vocab; each builder tile-pads it to a 32-multiple
     for the model, since the embedding/LM-head weights must be tile-aligned.
 
     ``tp_strategy`` selects tensor / sequence parallelism (llama only; see ``TPStrategy``).
+    ``context_parallel`` splits the sequence across the mesh's "cp" axis (llama only).
     """
     adapter = MODEL_ADAPTERS.get(cfg.model_type)
     if adapter is None:
         raise ValueError(f"Unsupported model type: {cfg.model_type}")
+    if context_parallel:
+        if cfg.model_type != "llama":
+            raise ValueError(
+                f"model_type={cfg.model_type} has no context-parallel path; enable_cp needs model_type=llama"
+            )
+        return adapter.build(cfg, tp_strategy, context_parallel=True)
     return adapter.build(cfg, tp_strategy)
 
 
 def instantiate_model_from_config(
-    cfg: ModelConfig, lazy_init: bool, *, tp_strategy: TPStrategy = TPStrategy.NONE
+    cfg: ModelConfig, lazy_init: bool, *, tp_strategy: TPStrategy = TPStrategy.NONE, context_parallel: bool = False
 ) -> Model:
     """Create the model, deferring Parameter allocation when ``lazy_init`` is True.
 
@@ -417,5 +427,5 @@ def instantiate_model_from_config(
     """
     if lazy_init:
         with ttml.lazy_init():
-            return create_model(cfg, tp_strategy=tp_strategy)
-    return create_model(cfg, tp_strategy=tp_strategy)
+            return create_model(cfg, tp_strategy=tp_strategy, context_parallel=context_parallel)
+    return create_model(cfg, tp_strategy=tp_strategy, context_parallel=context_parallel)

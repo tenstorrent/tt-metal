@@ -4,6 +4,7 @@
 
 """Concrete TTMLDataloader and SFT collate function for HuggingFace datasets."""
 
+from collections.abc import Mapping
 from typing import Any, Callable, Iterator, Optional
 
 import ml_dtypes
@@ -176,8 +177,11 @@ def causal_lm_collate_fn(
     loss regardless of batch composition (see :class:`Batch` docstring).
 
     When ``mapper`` is given (typically ``mesh.axis_mapper("dp", tdim=0)``)
-    all three tensors are sharded across the dp axis.
+    all three tensors are sharded across the dp axis. Under context parallelism
+    each tensor keeps the sequence on its own dim, so ``mapper`` may instead map
+    each field name (``input_ids``, ``labels``, ``loss_mask``) to its own mapper.
     """
+    mappers = mapper if isinstance(mapper, Mapping) else dict.fromkeys(("input_ids", "labels", "loss_mask"), mapper)
     batch_size = len(examples)
 
     input_ids_np = np.zeros((batch_size, 1, 1, seq_len), dtype=np.uint32)
@@ -202,18 +206,18 @@ def causal_lm_collate_fn(
             input_ids_np,
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
-            mapper,
+            mappers["input_ids"],
         ),
         labels=ttml.autograd.Tensor.from_numpy(
             labels_np,
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
-            mapper,
+            mappers["labels"],
         ),
         loss_mask=ttml.autograd.Tensor.from_numpy(
             loss_mask_np.astype(ml_dtypes.bfloat16),
             ttnn.Layout.TILE,
             ttnn.DataType.BFLOAT16,
-            mapper,
+            mappers["loss_mask"],
         ),
     )

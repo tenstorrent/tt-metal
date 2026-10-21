@@ -24,13 +24,13 @@ def set_seed(seed: int = 42):
 
 
 def build_mesh(device_config) -> "ttml.Mesh":
-    """Construct a named mesh from ``device_config``; axis names follow the C++ ``(dp -> fsdp -> tp)`` order.
+    """Construct a named mesh from ``device_config``; axis names follow the C++ ``(dp -> fsdp -> cp -> tp)`` order.
 
     First enabled name claims axis 0, the next claims axis 1, etc. -- matching PyTorch FSDP2's HSDP
     convention (replicate/``dp`` outermost, shard/``fsdp`` inner) so ``ttml.fsdp.fully_shard`` and
     ``ttml.sync_gradients`` bind to the same physical axes the C++ trainer would. A line mesh
-    (<=1 dim > 1) needs exactly one of enable_ddp/enable_fsdp/enable_tp. HSDP+TP (a full 3D mesh)
-    is not supported by the dataloader batch sharding in the training scripts.
+    (<=1 dim > 1) needs exactly one of enable_ddp/enable_fsdp/enable_cp/enable_tp. HSDP+TP (a full 3D
+    mesh) is not supported by the dataloader batch sharding in the training scripts.
 
     ``device_config`` is a :class:`ttml.common.config.DeviceConfig` (accessed by duck typing -- it
     is not imported here to avoid a circular import, since ``config`` imports from this module).
@@ -40,12 +40,14 @@ def build_mesh(device_config) -> "ttml.Mesh":
     nontrivial = [i for i, s in enumerate(shape) if s > 1]
     is_line = len(nontrivial) <= 1
 
-    # Ordered (dp -> fsdp -> tp): maps mesh axis index -> parallelism name.
+    # Ordered (dp -> fsdp -> cp -> tp): maps mesh axis index -> parallelism name.
     enabled_names: list[str] = []
     if device_config.enable_ddp:
         enabled_names.append("dp")
     if device_config.enable_fsdp:
         enabled_names.append("fsdp")
+    if device_config.enable_cp:
+        enabled_names.append("cp")
     if device_config.enable_tp:
         enabled_names.append("tp")
 
@@ -57,7 +59,7 @@ def build_mesh(device_config) -> "ttml.Mesh":
     if is_line:
         if len(enabled_names) != 1:
             raise ValueError(
-                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_tp; "
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_cp / enable_tp; "
                 f"got enabled={enabled_names}"
             )
         active = nontrivial[0] if nontrivial else 0
@@ -66,7 +68,7 @@ def build_mesh(device_config) -> "ttml.Mesh":
         if len(enabled_names) != n:
             raise ValueError(
                 f"Mesh {shape} requires {n} parallelisms enabled "
-                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
+                f"(any subset of enable_ddp / enable_fsdp / enable_cp / enable_tp); got enabled={enabled_names}"
             )
         for i, name in enumerate(enabled_names):
             axis_names[i] = name

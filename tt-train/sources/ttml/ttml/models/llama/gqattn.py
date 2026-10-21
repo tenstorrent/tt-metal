@@ -22,6 +22,10 @@ class GroupedQueryAttention(AbstractModuleBase):
     (output features sharded) with ``gather_output=False``, and the output projection
     uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
     communication between the two matmuls.
+
+    With ``cp_axis`` set (context parallelism) each rank holds a contiguous chunk of the
+    sequence and causal attention runs as a ring of K/V shifts along that mesh axis;
+    ``rope_params`` must then cover the same chunk.
     """
 
     def __init__(
@@ -34,6 +38,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         bias_linears: bool = False,
         tp_strategy: TPStrategy = TPStrategy.NONE,
         out_proj_init: Optional[Callable] = None,
+        cp_axis: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -50,6 +55,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.dropout_prob = dropout
         self.rope_params = rope_params
         self.sequence_parallel = sequence_parallel
+        self.cp_axis = cp_axis
         # Identical masks across tp ranks that hold identical activations,
         # per-device masks once SP gives each rank its own tokens.
         self._per_device_dropout_seed = not use_tp or sequence_parallel
@@ -112,6 +118,12 @@ class GroupedQueryAttention(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
     ) -> ttml.autograd.Tensor:
         """The attention kernel; assign per instance or override to swap it."""
+        if self.cp_axis is not None:
+            if mask is not None:
+                raise ValueError(
+                    "context parallelism computes causal attention across the ring and takes no mask; pass mask=None"
+                )
+            return ttml.ops.distributed.ring_attention_sdpa(q_heads, k_heads, v_heads, cluster_axis=self.cp_axis)
         return ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
 
     def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -191,6 +203,8 @@ class GroupedQueryAttention(AbstractModuleBase):
         if self.sequence_parallel:
             # Single-token decode has no sequence to shard.
             raise NotImplementedError("sequence_parallel does not support the KV-cache path")
+        if self.cp_axis is not None:
+            raise NotImplementedError("context parallelism does not support the KV-cache path")
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)

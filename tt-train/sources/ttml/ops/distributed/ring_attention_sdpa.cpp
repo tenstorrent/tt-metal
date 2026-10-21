@@ -30,6 +30,8 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/full/full.hpp"
+#include "ttnn/operations/full_like/full_like.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -38,6 +40,18 @@
 namespace ttml::ops::distributed {
 
 namespace {
+
+// ttnn::full and ttnn::zeros_like build the tensor on the host and write it to every chip, which
+// dominated the ring's setup (Bazyli Klockiewicz measured 24-30 ms of a 38-55 ms backward at 4096
+// rows per chip); moreh_full fills it on the device in one dispatch.
+ttnn::Tensor device_full(
+    ttnn::MeshDevice* mesh_device, const ttsl::SmallVector<uint32_t>& shape, float value, ttnn::DataType dtype) {
+    return ttnn::moreh_full(shape, value, mesh_device, dtype, ttnn::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG);
+}
+
+ttnn::Tensor device_zeros_like(const ttnn::Tensor& like, std::optional<ttnn::DataType> dtype = std::nullopt) {
+    return ttnn::moreh_full_like(like, 0.0F, dtype.value_or(like.dtype()), like.layout(), like.memory_config());
+}
 
 // Pads a (B, H, S, 1) FP32 logsumexp tensor into the (B, H, S, 32) intermediates layout
 // the SDPA kernels expect: lse in column 0, the remaining 31 columns are ignored padding.
@@ -58,18 +72,26 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    const ttml::metal::AttentionMaskType mask_type) {
-    if (!autograd::ctx().is_parallelism_context_initialized() ||
-        !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
-        return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
+    const ttml::metal::AttentionMaskType mask_type,
+    std::optional<uint32_t> cluster_axis) {
+    if (!cluster_axis.has_value() && autograd::ctx().is_parallelism_context_initialized()) {
+        cluster_axis = autograd::ctx().get_parallelism_context().get_cp_axis();
     }
-
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    const uint32_t cp_axis_value = pctx.get_cp_axis().value();
-    const uint32_t ring_size = pctx.get_cp_size();
     const auto& query_tensor = query->get_value();
     auto* mesh_device = query_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(
+        !cluster_axis.has_value() || cluster_axis.value() < mesh_shape.dims(),
+        "Ring attention cluster_axis {} is out of range for mesh shape {}",
+        cluster_axis.value_or(0U),
+        mesh_shape);
+    if (!cluster_axis.has_value() || mesh_shape[cluster_axis.value()] == 1U) {
+        return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
+    }
+
+    const uint32_t cp_axis_value = cluster_axis.value();
+    const uint32_t ring_size = mesh_shape[cp_axis_value];
     TT_FATAL(
         !mask.has_value(),
         "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
@@ -90,22 +112,17 @@ autograd::TensorPtr ring_attention_sdpa(
     // compounds ~ring_size rounding errors into the saved O. Backward consumes that O in
     // u = rowsum(dO * O), where the error is amplified by the softmax-backward
     // cancellation in (dP - u) — enough to push dK outside test tolerance.
-    ttnn::Tensor output_accum = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, dim},
-        0.0F,
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
+    ttnn::Tensor output_accum =
+        device_full(mesh_device, {batch_num, heads, seq_len_local, dim}, 0.0F, ttnn::DataType::FLOAT32);
 
     // global_lse: running logsumexp across all steps
     // lse = log(sum(exp(scale * score_i))) — the log of the softmax normalizer
     // Initialized to -inf (no contribution: exp(-inf) = 0)
-    ttnn::Tensor global_lse = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
+    ttnn::Tensor global_lse = device_full(
+        mesh_device,
+        {batch_num, heads, seq_len_local, 1U},
         -std::numeric_limits<float>::infinity(),
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
+        ttnn::DataType::FLOAT32);
 
     // Allocate output and intermediate tensors (mesh tensors)
     // These will be reused each step
@@ -119,12 +136,11 @@ autograd::TensorPtr ring_attention_sdpa(
 
     // "no contribution" intermediate: logsumexp = -inf (col 0), rest zeros
     // exp(-inf) = 0, so this chunk contributes nothing to the combined softmax
-    ttnn::Tensor col0_neg_inf = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
+    ttnn::Tensor col0_neg_inf = device_full(
+        mesh_device,
+        {batch_num, heads, seq_len_local, 1U},
         -std::numeric_limits<float>::infinity(),
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
+        ttnn::DataType::FLOAT32);
     ttnn::Tensor no_contrib_intermediate = pad_lse_to_intermediates_layout(col0_neg_inf);
 
     for (uint32_t step = 0; step < ring_size; ++step) {
@@ -205,13 +221,13 @@ autograd::TensorPtr ring_attention_sdpa(
         // FP32 host accumulators: each ring step contributes a bf16 kernel output, but
         // summing them in bf16 rounds the full running magnitude every step. The
         // accumulators are cast back to the input dtype once, after the loop.
-        ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor, ttnn::DataType::FLOAT32);
-        ttnn::Tensor grad_K_accum = ttnn::zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
-        ttnn::Tensor grad_V_accum = ttnn::zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_Q_accum = device_zeros_like(query_tensor, ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_K_accum = device_zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_V_accum = device_zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
 
-        ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
-        ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
-        ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());
+        ttnn::Tensor grad_Q_step = device_zeros_like(query_tensor);
+        ttnn::Tensor grad_K_step = device_zeros_like(key->get_value());
+        ttnn::Tensor grad_V_step = device_zeros_like(value->get_value());
 
         // Standard ring-flash-attention backward: every step gets the UNSCALED upstream
         // gradient, the GLOBAL forward output, and the GLOBAL logsumexp. The sdpa_bw
@@ -223,9 +239,9 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Tensor global_intermediates = pad_lse_to_intermediates_layout(final_lse);
 
         // Zero sources for resetting the step buffers before every ring step.
-        const ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);
-        const ttnn::Tensor zero_K = ttnn::zeros_like(grad_K_step);
-        const ttnn::Tensor zero_V = ttnn::zeros_like(grad_V_step);
+        const ttnn::Tensor zero_Q = device_zeros_like(grad_Q_step);
+        const ttnn::Tensor zero_K = device_zeros_like(grad_K_step);
+        const ttnn::Tensor zero_V = device_zeros_like(grad_V_step);
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {

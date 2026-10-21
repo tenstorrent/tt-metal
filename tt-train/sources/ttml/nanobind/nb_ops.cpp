@@ -25,6 +25,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -172,6 +173,29 @@ void py_module(nb::module_& m) {
             nb::arg("targets"),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("reduce") = ReduceType::MEAN);
+        py_distributed.def(
+            "ring_attention_sdpa",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               std::optional<uint32_t> cluster_axis,
+               bool causal) -> autograd::TensorPtr {
+                return ttml::ops::distributed::ring_attention_sdpa(
+                    query,
+                    key,
+                    value,
+                    std::nullopt,
+                    causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None,
+                    cluster_axis);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("causal") = true,
+            "Context-parallel attention over the sequence chunks held along cluster_axis (ring of K/V shifts).\n"
+            "query (B, H, S_local, D); key, value (B, G, S_local, D); device i along the axis holds chunk i.\n"
+            "With a single device on the axis this is plain causal SDPA.");
     }
 
     {
@@ -433,7 +457,8 @@ void py_module(nb::module_& m) {
             nb::arg("sequence_length"),
             nb::arg("head_dim"),
             nb::arg("theta") = 10000.0F,
-            nb::arg("rope_scaling_params") = RopeScalingParams{});
+            nb::arg("rope_scaling_params") = RopeScalingParams{},
+            nb::arg("cp_axis") = nb::none());
         py_rope.def(
             "validate_rope_input_and_params",
             &ttml::ops::validate_rope_input_and_params,

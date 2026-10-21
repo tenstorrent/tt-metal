@@ -61,6 +61,12 @@ class LlamaConfig:
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
     sharding) and is ignored when tensor parallelism is disabled.
+
+    ``context_parallel`` splits the sequence across the mesh's ``"cp"`` axis: rank ``i``
+    takes the ``i``-th contiguous chunk of a ``max_position_embeddings``-long sequence as
+    input (the caller shards tokens and labels), and attention runs as a ring along the
+    axis. It composes with either TP strategy, so under SP each rank's residual stream holds
+    ``S / (cp * tp)`` tokens.
     """
 
     hidden_size: int = 384
@@ -79,6 +85,7 @@ class LlamaConfig:
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
+    context_parallel: bool = False
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -141,6 +148,21 @@ class LlamaConfig:
                     "Intermediate size must be divisible by TP size. "
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
+        if self.context_parallel:
+            mesh = ttml.mesh()
+            if not mesh.has_axis("cp"):
+                raise ValueError(f"context_parallel needs a mesh axis named 'cp'; mesh axes are {mesh.axis_names}")
+            cp_size = mesh.axis_size("cp")
+            if cp_size > 1 and cp_size % 2 != 0:
+                raise ValueError(f"ring attention needs an even number of cp ranks, got cp_size={cp_size}")
+            # Every rank's chunk is whole tiles, and under SP splits again into whole tiles per tp rank.
+            sp_size = mesh.axis_size("tp") if self.tp_strategy.sequence_parallel else 1
+            if self.max_position_embeddings % (32 * cp_size * sp_size) != 0:
+                raise ValueError(
+                    f"context_parallel requires max_position_embeddings divisible by {32 * cp_size * sp_size} "
+                    f"(32 * cp_size{' * tp_size under sequence parallelism' if sp_size > 1 else ''}), "
+                    f"got {self.max_position_embeddings}"
+                )
 
     @classmethod
     def from_hf(cls, hf_config: str | os.PathLike | Mapping, max_position_embeddings: int, **overrides) -> LlamaConfig:
@@ -196,6 +218,8 @@ class Llama(AbstractModuleBase):
 
         self.config = config
         sequence_parallel = config.tp_strategy.sequence_parallel
+        self.cp_axis = ttml.mesh().axis_index("cp") if config.context_parallel else None
+        self.cp_size = ttml.mesh().axis_size("cp") if config.context_parallel else 1
 
         if config.tp_strategy.tensor_parallel:
             # Pad the vocab so the LM head's sharded output rows are
@@ -273,11 +297,13 @@ class Llama(AbstractModuleBase):
             rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
             rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
 
+        # Under CP each rank rotates its own chunk's positions.
         rope_params = ttml.ops.rope.build_rope_params(
             config.max_position_embeddings,
             head_dim,
             config.rope_theta,
             rope_scaling_params,
+            cp_axis=self.cp_axis,
         )
 
         # Depth-scaled init for the residual-writing projections (attention out-proj, MLP
@@ -304,6 +330,7 @@ class Llama(AbstractModuleBase):
                     tp_strategy=config.tp_strategy,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
+                    cp_axis=self.cp_axis,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -337,6 +364,17 @@ class Llama(AbstractModuleBase):
                 raise ValueError(
                     "sequence_parallel requires the input sequence length divisible by 32*tp_size "
                     f"(got seq_len={actual_seq_len}, tp_size={self.tp_size})"
+                )
+
+        if self.config.context_parallel:
+            if kv_cache is not None:
+                raise NotImplementedError("context parallelism does not support the KV-cache path")
+            # RoPE's per-rank caches fix the positions of the chunk each rank holds.
+            if actual_seq_len * self.cp_size != self.config.max_position_embeddings:
+                raise ValueError(
+                    "context_parallel expects each rank to hold its chunk of a max_position_embeddings-long "
+                    f"sequence ({self.config.max_position_embeddings} / cp_size {self.cp_size} = "
+                    f"{self.config.max_position_embeddings // self.cp_size} tokens), got {actual_seq_len}"
                 )
 
         input_padded = input
