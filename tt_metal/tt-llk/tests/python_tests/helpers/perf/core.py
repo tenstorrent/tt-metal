@@ -978,17 +978,16 @@ class PerfConfig(TestConfig):
             )
 
     def _read_counters_of_launch(self, variant_counter_results, run_index):
-        try:
-            counter_results = read_counters(
-                location=TestConfig.TENSIX_LOCATION,
-                zones=self.counted_zones,
-                token=self.launch_token,
-            )
-            if counter_results is not None and not counter_results.empty:
-                counter_results["run_index"] = run_index
-                variant_counter_results.append(counter_results)
-        except Exception as e:
-            logger.warning("Error reading counters: {}", e)
+        # A counted zone without its readout raises (counters.py) and fails the test instead of leaving a blank window.
+        if TestConfig.counted_zones_address() is None:
+            return  # ttsim: no launch word, nothing counts
+        counter_results = read_counters(
+            location=TestConfig.TENSIX_LOCATION,
+            zones=self.counted_zones,
+            token=self.launch_token,
+        )
+        counter_results["run_index"] = run_index
+        variant_counter_results.append(counter_results)
 
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
