@@ -70,11 +70,12 @@ class BlockAttention:
         users (batch-32 verify, parts(user=...)): users side by side in one kernel set, cores user-major
         (cores_needed cores each).
         """
-        assert head_dim == 64 and n_heads // n_kv == 8 and rows == 8
+        assert head_dim == 64 and n_heads // n_kv == 8 and rows in (1, 2, 4, 8)
         assert uniform or not window
         assert not (uniform and swin) and (not swin or swin >= 128)
         self.mesh, self.M, self.nq, self.nkv, self.hd = mesh_device, rows, n_heads, n_kv, head_dim
-        self.block, self.S, self.Tt = block_size, slices, rows // 4
+        # Tt packed Q tiles per kv head (M < 4: one, its first M row groups real)
+        self.block, self.S, self.Tt = block_size, slices, max(1, rows // 4)
         self.uniform, self.window, self.q_rows, self.swin = uniform, window, q_rows, swin
         # one DRAM read of each K / V group per (kv head, slice): the tile-group-1 core copies it from the tile-group-0
         # core's L1
@@ -127,7 +128,7 @@ class BlockAttention:
 
     @staticmethod
     def cores_needed(n_kv, rows, slices):
-        return n_kv * (rows // 4) * slices
+        return n_kv * max(1, rows // 4) * slices
 
     def noc_cores(self):
         return [self.mesh.worker_core_from_logical_core(c) for c in self.core_list]

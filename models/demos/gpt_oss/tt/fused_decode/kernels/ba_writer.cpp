@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 #endif
     constexpr uint32_t tile = 2048;
-    constexpr uint32_t Tt = M / 4;
+    constexpr uint32_t Tt = BA_TQ;   // (M < 4: one tile, its first M row groups real)
     const uint32_t t = grp % BA_TQ;  // this core's packed Q tile
     const auto s_out = TensorAccessor(out_args, out_addr, tile);
 
@@ -103,7 +103,13 @@ void kernel_main() {
         const auto s_q = TensorAccessor(q_args, get_common_arg_val<uint32_t>(BA_Q_SPLIT), tile);
         const uint32_t ql1 = get_write_ptr(BA_CB_Q);
         constexpr uint32_t d = 1;
-        for (uint32_t i = 0; i < 4; ++i) {
+        if constexpr (M < 4) {  // the tile's rows past the block's M rows: zero queries
+            for (uint32_t z = 0; z < tile; z += MEM_ZEROS_SIZE) {
+                noc_async_read(get_noc_addr(MEM_ZEROS_BASE), ql1 + d * tile + z, MEM_ZEROS_SIZE);
+            }
+            noc_async_read_barrier();
+        }
+        for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
             const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
             for (uint32_t j = 0; j < 8; ++j) {
                 const uint64_t src = s_q.get_noc_addr(((8 * g + j) * BA_Q_HEADS + R / 32) * 2 + d);
@@ -134,7 +140,7 @@ void kernel_main() {
         constexpr uint32_t n_d = 2;
 #endif
         for (uint32_t d = 0; d < n_d; ++d) {
-            for (uint32_t i = 0; i < 4; ++i) {
+            for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
                 const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
                 for (uint32_t j = 0; j < 8; ++j) {
                     const uint64_t dst = s_out.get_noc_addr((R / 32) * BA_OUT_CONCAT + 2 * (8 * g + j) + d);

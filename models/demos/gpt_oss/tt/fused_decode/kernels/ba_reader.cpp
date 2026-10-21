@@ -4,9 +4,9 @@
 // Block attention, reader (NCRISC) (dflash/block_attention.py): one core per (kv head g, tile group t, history slice
 // s), fused into the QKV program. The M block rows' queries of kv head g are Tt = M / 4 packed tiles (tile t, rows
 // 8 i .. 8 i + 7 = block row 4 t + i's query heads 8 g .. 8 g + 7), each [32 rows, 64 dims] = 2 BF16 tiles; this core
-// runs packed Q tile t. The Tt = 2 tile-group cores of a (kv head, slice) share each K / V group's read (the leader
-// reads it from DRAM, its partner copies it from the leader's L1): every K / V chunk of the slice is read from DRAM
-// once for all M rows. Pushes:
+// runs packed Q tile t (M < 4: one tile, its first M row groups real). The Tt = 2 tile-group cores of a (kv head,
+// slice) share each K / V group's read (the leader reads it from DRAM, its partner copies it from the leader's L1):
+// every K / V chunk of the slice is read from DRAM once for all M rows. Pushes:
 //   cb_aux: [scaler (1.0 in row 0 of each face), the causal masks of the block's chunks c_block + e (tile 1 + e: row
 //            group i keeps the columns at positions <= pos[4 t + i]), the sink-column mask (tile 3: keeps column 0),
 //            the sink tile (tile 4; slice 0: column 0 of row group i = kv head g's 8 sink logits / scale), a zero tile
@@ -83,7 +83,9 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t tile = 2048;  // BF16 tile
-    constexpr uint32_t Tt = M / 4;   // packed Q tiles per kv head
+    constexpr uint32_t Tt = BA_TQ;   // packed Q tiles per kv head (M / 4, 1 for M < 4: the tile's first M row groups)
+    static_assert(Tt == (M + 3) / 4 && (M == 8 || M <= 4));
+    constexpr bool shared = Tt == 2;  // the 2 tile groups' cores share the K / V reads (leader / partner)
     constexpr uint32_t tpb = block / 32;
     const auto s_q = TensorAccessor(q_args, q_addr, tile);
     const auto s_k = TensorAccessor(k_args, k_addr, kv_tile_bytes);
@@ -122,6 +124,9 @@ void kernel_main() {
         cb_push_back(BA_CB_POS, 1);
     }
     uint32_t p0 = static_cast<uint32_t>(pos[0]);  // the block's first position (its K / V rows written by QKV)
+    // row group i of this core's tile is block row 4 t + i (M < 4: the rows past M take the last row's position; their
+    // queries are zero and their outputs are not written)
+    auto rowp = [&](uint32_t i) -> int32_t { return pos[4 * t + i < M ? 4 * t + i : M - 1]; };
 #ifdef BA_UNIFORM
     // every row attends [lo, hi = pos[M - 1]] (the drafter; lo = 0, or hi + 1 - BA_WINDOW with a window): the last
     // chunk masked past hi (mask e = 0), with a window the first chunk before lo (mask e = 1, slice 0's chunk 0), no
@@ -224,7 +229,7 @@ void kernel_main() {
 #ifdef BA_UNIFORM
             const int32_t k = pos[M - 1] - c0 + 1;
 #else
-            const int32_t k = pos[4 * t + i] - c0 + 1;
+            const int32_t k = rowp(i) - c0 + 1;
 #endif
             keep[i] = k < 0 ? 0 : (k > 32 ? 32 : static_cast<uint32_t>(k));
         }
@@ -252,7 +257,7 @@ void kernel_main() {
         const uint32_t keep32[4] = {32, 32, 32, 32};
         uint32_t from[4];
         for (uint32_t i = 0; i < 4; ++i) {
-            const int32_t lo_i = pos[4 * t + i] + 1 - static_cast<int32_t>(BA_SWIN);
+            const int32_t lo_i = rowp(i) + 1 - static_cast<int32_t>(BA_SWIN);
             const int32_t a = lo_i - static_cast<int32_t>(c * 32);
             from[i] = a < 0 ? 0 : (a > 32 ? 32 : static_cast<uint32_t>(a));
         }
@@ -314,6 +319,17 @@ void kernel_main() {
     auto read_q = [&]() {
         cb_reserve_back(cb_q, 2);
         const uint32_t ql1 = get_write_ptr(cb_q);
+        if constexpr (M < 4) {  // the tile's rows past the block's M rows: zero queries
+#ifdef BA_Q_SPLIT
+            constexpr uint32_t zt = 1;  // (column tile 1: the writer's)
+#else
+            constexpr uint32_t zt = 2;
+#endif
+            for (uint32_t z = 0; z < zt * tile; z += MEM_ZEROS_SIZE) {
+                noc_async_read(get_noc_addr(MEM_ZEROS_BASE), ql1 + z, MEM_ZEROS_SIZE);
+            }
+            noc_async_read_barrier();
+        }
         noc_async_read_set_trid(15);
 #ifdef BA_Q_HEADS
         // Q in the heads layout [1, heads, rows, 64] (the RoPE output: head h's row tile rt at pages (h BA_Q_HEADS +
@@ -325,7 +341,7 @@ void kernel_main() {
         constexpr uint32_t n_qd = 2;
 #endif
         for (uint32_t d = 0; d < n_qd; ++d) {
-            for (uint32_t i = 0; i < 4; ++i) {
+            for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
                 const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
                 for (uint32_t j = 0; j < 8; ++j) {
                     const uint64_t src = s_q.get_noc_addr(((8 * g + j) * BA_Q_HEADS + R / 32) * 2 + d);
@@ -343,7 +359,7 @@ void kernel_main() {
         // Q in the rows layout [1, M, heads, 64] (row r's tiles 2 r + d, heads in tile rows): gather packed tile (t, d)
         // rows 8 i .. 8 i + 7 = row 4 t + i's heads 8 g .. 8 g + 7 (256-byte segments per 16-column half f)
         for (uint32_t d = 0; d < 2; ++d) {
-            for (uint32_t i = 0; i < 4; ++i) {
+            for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
                 const uint64_t src = s_q.get_noc_addr(2 * (4 * t + i) + d);
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_read(src + rows8(g, f), ql1 + d * tile + rows8(i, f), 256);
@@ -409,15 +425,15 @@ void kernel_main() {
     // (only readable after QKV, on the critical path) the partner reads from DRAM itself. Program semaphores:
     // BA_LAND_SEM on the partner (groups landed in the leader), BA_COPY_SEM on the leader (groups the partner has
     // copied: a slot is reused after).
-    const bool leader = (ci / S) % BA_TQ == 0;
-    const uint32_t partner = leader ? ci + S : ci - S;
+    const bool leader = !shared || (ci / S) % BA_TQ == 0;
+    const uint32_t partner = !shared ? ci : leader ? ci + S : ci - S;  // (one tile per kv head: no partner)
     const uint32_t pnw = get_common_arg_val<uint32_t>(7 + BA_NIDX + partner / 2) >> (16 * (partner % 2));
     const uint32_t pnx = (pnw >> 8) & 0xFF, pny = pnw & 0xFF;
     volatile tt_l1_ptr uint32_t* land_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_LAND_SEM));
     volatile tt_l1_ptr uint32_t* copy_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_COPY_SEM));
     auto slot_free = [&](uint32_t gi) {  // the partner has copied what this slot held before
         invalidate_l1_cache();
-        return gi < cap_groups || *copy_sem >= gi - cap_groups + 1;
+        return !shared || gi < cap_groups || *copy_sem >= gi - cap_groups + 1;
     };
     if (!leader) {
         while (pushed < n_groups) {
@@ -480,7 +496,9 @@ void kernel_main() {
             cb_push_back(cb_k, group_pages);
             cb_push_back(cb_v, group_pages);
             ++pushed;
-            noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(BA_LAND_SEM)), 1);  // the partner may copy it
+            if (shared) {
+                noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(BA_LAND_SEM)), 1);  // the partner may copy it
+            }
         } else if (!q_done) {
             while (!kv_ready()) {  // nothing in flight: the next group needs the block's rows
             }
@@ -493,7 +511,7 @@ void kernel_main() {
         }
         read_q();
     }
-    if (leader) {  // the slots stay readable until the partner has copied the last groups
+    if (shared && leader) {  // the slots stay readable until the partner has copied the last groups
         while (true) {
             invalidate_l1_cache();
             if (*copy_sem >= n_groups) {
@@ -528,7 +546,7 @@ void kernel_main() {
         cb_wait_front(BA_CB_OUT, 2);
         const uint32_t src = get_read_ptr(BA_CB_OUT);
         constexpr uint32_t d = 1;
-        for (uint32_t i = 0; i < 4; ++i) {
+        for (uint32_t i = 0; i < 4 && 4 * t + i < M; ++i) {
             const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
             for (uint32_t j = 0; j < 8; ++j) {
                 const uint64_t dst = s_out.get_noc_addr((R / 32) * BA_OUT_CONCAT + 2 * (8 * g + j) + d);

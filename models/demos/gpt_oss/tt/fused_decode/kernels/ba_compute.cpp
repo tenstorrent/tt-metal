@@ -57,7 +57,8 @@ constexpr uint32_t scale_bits = get_compile_time_arg_val(15);
 constexpr uint32_t M = get_compile_time_arg_val(16);
 constexpr uint32_t G = get_compile_time_arg_val(17);
 constexpr uint32_t Tt = 1;  // this core's packed Q tiles (of M / 4): one
-static_assert(M / 4 == 2, "2 packed Q tiles per kv head, one per core (the 2 cores share the K / V reads)");
+static_assert(
+    M == 8 || M <= 4, "one packed Q tile per core: 2 per kv head (M = 8) or 1 (M <= 4, its first M row groups)");
 #ifdef BA_SWIN
 constexpr uint32_t NM = 4;  // causal masks (tiles 1, 2), the window's first 2 chunks' masks (tiles 3, 4)
 #else

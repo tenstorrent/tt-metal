@@ -18,7 +18,8 @@
 // paged_fused_update_cache: the same cache bytes).
 //
 // KV_SRC_HSTRIDE: one source tensor pair for every layer, layer l's kv heads from head l KV_SRC_HSTRIDE.
-// runtime args: [user, k_src, v_src, k_cache, v_cache, pos, page_table, (k_cache, v_cache) of layers 1 .. L - 1]
+// runtime args: [u0 | u1 << 10 | h_lo << 20 | h_hi << 26, k_src, v_src, k_cache, v_cache, pos, page_table, (k_cache,
+// v_cache) of layers 1 .. L - 1]: the core's users [u0, u1) one after another, kv heads [h_lo, h_hi) (h_hi 0: all)
 // compile-time args: [cb_scr, M, kv_heads, head_tiles, block, pt_row_bytes, users, accessors (k_cache, v_cache, pos,
 // page_table, k_src)]
 
@@ -30,10 +31,8 @@
 #endif
 
 void kernel_main() {
-    // arg 0: user | head range [h_lo, h_hi) << 8 / << 16 (h_hi 0: every head; the BFP8 path splits users over cores
-    // by kv head)
     const uint32_t arg0 = get_arg_val<uint32_t>(0);
-    const uint32_t user = arg0 & 0xFF;
+    const uint32_t u0 = arg0 & 0x3FF, u1 = (arg0 >> 10) & 0x3FF;
     const uint32_t k_src = get_arg_val<uint32_t>(1);
     const uint32_t v_src = get_arg_val<uint32_t>(2);
     const uint32_t k_cache = get_arg_val<uint32_t>(3);
@@ -53,7 +52,7 @@ void kernel_main() {
     constexpr auto pos_args = TensorAccessorArgs<vc_args.next_compile_time_args_offset()>();
     constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto src_args = TensorAccessorArgs<pt_args.next_compile_time_args_offset()>();
-    const uint32_t h_lo = (arg0 >> 8) & 0xFF, h_hi = (arg0 >> 16) ? (arg0 >> 16) : kv_heads;
+    const uint32_t h_lo = (arg0 >> 20) & 0x3F, h_hi = (arg0 >> 26) ? (arg0 >> 26) : kv_heads;
 #ifdef KV_LAYERS
     constexpr uint32_t n_layers = KV_LAYERS;
 #else
@@ -77,40 +76,41 @@ void kernel_main() {
     const uint32_t scr = get_write_ptr(cb_scr) + KV_SEL * 256;
     const uint32_t dst = get_write_ptr(cb_scr) + 512;
 
-    const uint32_t pos_off = user * M * 4, pos_a = pos_off & ~63u;
-    noc_async_read(s_pos.get_noc_addr(0) + pos_a, scr, 64);
-    noc_async_read_barrier();
-    invalidate_l1_cache();
-    int32_t pos[M];
-    uint32_t first = M, last = 0;
-    for (uint32_t r = 0; r < M; ++r) {
-        pos[r] = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr + (pos_off - pos_a))[r];
-        if (pos[r] >= 0) {
-            first = first == M ? r : first;
-            last = r;
+    for (uint32_t user = u0; user < u1; ++user) {
+        const uint32_t pos_off = user * M * 4, pos_a = pos_off & ~63u;
+        noc_async_read(s_pos.get_noc_addr(0) + pos_a, scr, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        int32_t pos[M];
+        uint32_t first = M, last = 0;
+        for (uint32_t r = 0; r < M; ++r) {
+            pos[r] = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr + (pos_off - pos_a))[r];
+            if (pos[r] >= 0) {
+                first = first == M ? r : first;
+                last = r;
+            }
         }
-    }
-    if (first == M) {
-        return;
-    }
-    const uint32_t p0 = pos[first], p1 = pos[last];
-    const uint32_t bi0 = p0 / block, bi1 = p1 / block;
-    noc_async_read(s_pt.get_noc_addr(user) + ((bi0 * 4) & ~63u), scr + 128, 64);
-    noc_async_read(s_pt.get_noc_addr(user) + ((bi1 * 4) & ~63u), scr + 192, 64);
-    noc_async_read_barrier();
-    invalidate_l1_cache();
-    const uint32_t blk0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + 128)[bi0 & 15];
-    const uint32_t blk1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + 192)[bi1 & 15];
-    const uint32_t tr0 = (p0 % block) / 32, tr1 = (p1 % block) / 32;
-    const uint32_t groups = (bi0 != bi1 || tr0 != tr1) ? 2 : 1;
+        if (first == M) {
+            continue;
+        }
+        const uint32_t p0 = pos[first], p1 = pos[last];
+        const uint32_t bi0 = p0 / block, bi1 = p1 / block;
+        noc_async_read(s_pt.get_noc_addr(user) + ((bi0 * 4) & ~63u), scr + 128, 64);
+        noc_async_read(s_pt.get_noc_addr(user) + ((bi1 * 4) & ~63u), scr + 192, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t blk0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + 128)[bi0 & 15];
+        const uint32_t blk1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + 192)[bi1 & 15];
+        const uint32_t tr0 = (p0 % block) / 32, tr1 = (p1 % block) / 32;
+        const uint32_t groups = (bi0 != bi1 || tr0 != tr1) ? 2 : 1;
 
-    auto cache_tile = [&](uint32_t g, uint32_t h, uint32_t t) -> uint32_t {
-        const uint32_t blk = g == 0 ? blk0 : blk1, tr = g == 0 ? tr0 : tr1;
-        return ((blk * kv_heads + h) * (block / 32) + tr) * head_tiles + t;
-    };
-    auto dst_l1 = [&](uint32_t l, uint32_t kv, uint32_t g, uint32_t h, uint32_t t) -> uint32_t {
-        return dst + ((((l * 2 + kv) * 2 + g) * kv_heads + h) * head_tiles + t) * tile;
-    };
+        auto cache_tile = [&](uint32_t g, uint32_t h, uint32_t t) -> uint32_t {
+            const uint32_t blk = g == 0 ? blk0 : blk1, tr = g == 0 ? tr0 : tr1;
+            return ((blk * kv_heads + h) * (block / 32) + tr) * head_tiles + t;
+        };
+        auto dst_l1 = [&](uint32_t l, uint32_t kv, uint32_t g, uint32_t h, uint32_t t) -> uint32_t {
+            return dst + ((((l * 2 + kv) * 2 + g) * kv_heads + h) * head_tiles + t) * tile;
+        };
 #ifdef KV_BF8
     // this kernel's staged BF16 source rows (layer, row, h, t): two 32-byte halves each, after both kernels' tiles
     const uint32_t stage =
@@ -222,5 +222,6 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
+    noc_async_write_barrier();  // (the next user's tiles land in the same scratch)
+    }
 }

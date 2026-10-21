@@ -569,8 +569,21 @@ class BatchedKVWrite:
         self.hpc = 1 if head_split else kv_heads  # kv heads per core
         grid = mesh.compute_with_storage_grid_size()
         n = users * kv_heads // self.hpc
+        # more (user, head) units than cores (more than 32 users): consecutive units per core
+        self.max_cores = min(grid.x * grid.y, 100)
+        n = min(n, self.max_cores)
         self.core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:n]
         self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.core_list])
+
+    def _units(self, hpc):
+        """Per core of core_list: (u0, u1, h_lo, h_hi): users [u0, u1) of kv heads [h_lo, h_hi)."""
+        per = self.kv_heads // hpc
+        n_units = self.users * per
+        if n_units <= len(self.core_list):
+            return [(i // per, i // per + 1, (i % per) * hpc, (i % per) * hpc + hpc) for i in range(n_units)]
+        # every head per core, users split evenly
+        n = len(self.core_list)
+        return [(self.users * i // n, self.users * (i + 1) // n, 0, self.kv_heads) for i in range(n)]
 
     def __call__(self, ks, vs, caches, pos_ui, page_table, src_head_stride=0):
         """ks / vs: per layer [1, kv_heads, rows, hd]; caches: per layer (k_cache, v_cache). src_head_stride: ks / vs
@@ -587,10 +600,10 @@ class BatchedKVWrite:
         rt = ttnn.RuntimeArgs()
         more = [a for l in range(1, n) for a in (caches[l][0].buffer_address(), caches[l][1].buffer_address(),
                                                   ks[l].buffer_address(), vs[l].buffer_address())]  # fmt: skip
-        for i, c in enumerate(self.core_list):
-            per = self.kv_heads // self.hpc
-            u, h0 = i // per, (i % per) * self.hpc
-            arg0 = u | (h0 << 8) | ((h0 + self.hpc) << 16)
+        units = self._units(self.hpc)
+        cores = self.core_list[: len(units)]
+        for c, (u0, u1, h0, h1) in zip(cores, units):
+            arg0 = u0 | (u1 << 10) | (h0 << 20) | (h1 << 26)
             rt[c.x][c.y] = [arg0, ks[0].buffer_address(), vs[0].buffer_address(), k0.buffer_address(),
                             v0.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()] + more  # fmt: skip
         defines = [("KV_LAYERS", str(n))] if n > 1 else []
@@ -599,10 +612,11 @@ class BatchedKVWrite:
         bf8 = k0.dtype == ttnn.bfloat8_b  # the target's cache: rows packed to BFP8_b in the kernel
         if bf8:
             defines.append(("KV_BF8", "1"))
+        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "b32_kv_write.cpp"),
-                core_ranges=self.cores,
+                core_ranges=core_set,
                 compile_time_args=ct,
                 runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(
@@ -618,7 +632,7 @@ class BatchedKVWrite:
         scratch = 512 + n * 2 * 2 * self.kv_heads * self.head_tiles * tile_bytes + stage
         cb = ttnn.CBDescriptor(
             total_size=scratch,
-            core_ranges=self.cores,
+            core_ranges=core_set,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=scratch)],
         )
         io = [pos_ui, page_table] + [t for l in range(n) for t in (ks[l], vs[l], caches[l][0], caches[l][1])]
@@ -641,16 +655,21 @@ class BatchedKVWrite:
               self.users, cb_old, cb_new, cb_mask, cb_out]  # fmt: skip
         for t in (k_cache, v_cache, pos_ui, page_table, k):
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        rt = ttnn.RuntimeArgs()
-        for i, c in enumerate(self.core_list):
-            u, h = i // self.kv_heads, i % self.kv_heads
-            rt[c.x][c.y] = [u | (h << 8), k.buffer_address(), v.buffer_address(), k_cache.buffer_address(),
+        rt, rtc = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        P = self.users * self.kv_heads  # (user, kv head) pairs p = u kv_heads + h, consecutive ranges per core
+        nc = min(P, len(self.core_list))
+        cores = self.core_list[:nc]
+        for i, c in enumerate(cores):
+            p0, p1 = P * i // nc, P * (i + 1) // nc
+            rt[c.x][c.y] = [p0 | (p1 << 16), k.buffer_address(), v.buffer_address(), k_cache.buffer_address(),
                             v_cache.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()]  # fmt: skip
             if joint is not None:
                 rt[c.x][c.y].append(joint[0].buffer_address())
+            rtc[c.x][c.y] = [p1 - p0]
+        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         dm = [
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "b32_kv_write_pack.cpp"), core_ranges=self.cores, compile_time_args=ct,
+                kernel_source=str(KERNEL_DIR / "b32_kv_write_pack.cpp"), core_ranges=core_set, compile_time_args=ct,
                 runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=(ttnn.DataMovementProcessor.RISCV_0, ttnn.DataMovementProcessor.RISCV_1)[sel],
@@ -661,15 +680,15 @@ class BatchedKVWrite:
             for sel in (0, 1)
         ]  # fmt: skip
         comp = ttnn.KernelDescriptor(
-            kernel_source=str(KERNEL_DIR / "b32_kv_write_pack_compute.cpp"), core_ranges=self.cores,
-            compile_time_args=[cb_old, cb_new, cb_mask, cb_out, self.head_tiles], runtime_args=[],
+            kernel_source=str(KERNEL_DIR / "b32_kv_write_pack_compute.cpp"), core_ranges=core_set,
+            compile_time_args=[cb_old, cb_new, cb_mask, cb_out, self.head_tiles], runtime_args=rtc,
             config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
                                                 math_approx_mode=False),
         )  # fmt: skip
         n = 2 * self.head_tiles  # tiles per kv at most (2 groups)
 
         def cb(i, dtype, page, pages):
-            return ttnn.CBDescriptor(total_size=page * pages, core_ranges=self.cores,
+            return ttnn.CBDescriptor(total_size=page * pages, core_ranges=core_set,
                                      format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype,
                                                                                  page_size=page)])  # fmt: skip
 
@@ -758,11 +777,12 @@ class BatchedDraft:
     K/V cache; draft and context passes over all users' rows at once."""
 
     def __init__(self, mesh_device, target, max_positions, users, window=None, block_size=64, cache_users=None,
-                 ring=None):  # fmt: skip
+                 ring=None, block=None, share=None):  # fmt: skip
         """users: the rows' users (a pass: users x block rows); cache_users: the users with a K/V cache (lanes of `users`
         each: the page table rows of a lane's users are set before its passes, BatchedDFlashRunner); ring: each user's
         cache a ring of `ring` blocks (logical block b at physical block b mod ring; with the window the drafter reads
-        only the last `window` positions, add_prompt_context fills only those)."""
+        only the last `window` positions, add_prompt_context fills only those). share: another BatchedDraft whose
+        weights and K / V caches (with their prompt context) this one uses, with its own block and users per pass."""
         from safetensors.torch import load_file
 
         self.mesh_device = mesh_device
@@ -774,13 +794,22 @@ class BatchedDraft:
         self.nq, self.nkv = c["num_attention_heads"] // D, c["num_key_value_heads"] // D
         self.layers = c["num_hidden_layers"]
         self.eps = c["rms_norm_eps"]
-        self.block = c["block_size"]
+        # the draft block: the last token + block - 1 masks (the checkpoint's 8, or fewer: more users per pass)
+        self.block = block or c["block_size"]
         self.mask_token_id = c["dflash_config"]["mask_token_id"]
         self.target_layer_ids = c["dflash_config"]["target_layer_ids"]
         self.ctx_in = len(self.target_layer_ids) * self.hidden
         self.window = window
         self.users = users
         self.rows = users * self.block
+        if share is not None:
+            for k in ("fc_full", "hidden_norm", "norm", "L", "kv_joint", "kv_joint_b", "knorm_joint", "block_size",
+                      "num_blocks", "ring", "user_tables", "caches", "rope", "ck", "fc_ck", "act_mc", "mm_ck", "lm_head",
+                      "logits_dt", "argmax"):  # fmt: skip
+                setattr(self, k, getattr(share, k))
+            self.page_table = _replicate(mesh_device, self.user_tables[:users].contiguous(), ttnn.int32)
+            self._setup_passes(mesh_device, users, window)
+            return
         w = load_file(str(self.path / "model.safetensors"))
         mesh = mesh_device
         rep = ttnn.ReplicateTensorToMesh(mesh)
@@ -891,29 +920,6 @@ class BatchedDraft:
         self.page_table = _replicate(
             mesh, user_tables[:users].contiguous(), ttnn.int32
         )  # row u: user u (each 32-row step)
-        from ..batched_decode import sharded_norm_program_config
-        from ..fused_decode.config import width_sharded_memory_config
-
-        # the FP32 residual block sharded on 10 x 8 cores, one 32-row tile x 9 column tiles each, as the verify's: the
-        # sharded norm reduces over 10 cores per row tile
-        self.res_mc = ttnn.create_sharded_memory_config(
-            (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
-            ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
-        )  # fmt: skip
-        self.norm_pc = sharded_norm_program_config(self.res_mc)
-        # each residual add (+ the o_proj bias) and the norm after it in one program (_ResNorm, FP32 residual, FP32 norm
-        # outputs as the sharded norm's); the all-reduces' outputs stay in their width shards
-        self.rn = _ResNorm(mesh, self.rows, self.hidden, self.res_mc,
-                           width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows))  # fmt: skip
-        self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
-        # (the context pass's 8-layer write: one core per (user, kv head))
-        self.kv_write_ctx = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size, head_split=True)
-        # attention: block attention (b1's kernels, uniform), 16 users per program on 4 cores each
-        # (16 users x 1 history slice: the window bounds every core's history to ~33 chunks; vs 8 x 3: round 25.0 -> 24.8
-        # ms at ISL 256, 25.8 -> 25.4 at 1024)
-        self.ba = _UserBlockAttention(
-            mesh, users, self.block, nq, nkv, hd, block_size, 16, 1, uniform=True, window=window or 0
-        )
         heads_split = ttnn.ShardTensorToMesh(mesh, dim=1)
         self.caches = []
         for _ in range(self.layers):
@@ -958,6 +964,37 @@ class BatchedDraft:
         # ISL 256, acceptance in its spread
         self.logits_dt = ttnn.bfloat8_b
         self.argmax = _Argmax(lm8.shape[-1], target.vocab_size)
+        self._setup_passes(mesh, users, window)
+
+    def _setup_passes(self, mesh, users, window):
+        """The passes' block-dependent pieces (rows = users x block)."""
+        nq, nkv, hd, block_size = self.nq, self.nkv, self.hd, self.block_size
+        from ..batched_decode import sharded_norm_program_config
+        from ..fused_decode.config import width_sharded_memory_config
+
+        # the FP32 residual block sharded on 10 x 8 cores, one 32-row tile x 9 column tiles each, as the verify's: the
+        # sharded norm reduces over 10 cores per row tile
+        self.res_mc = ttnn.create_sharded_memory_config(
+            (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
+            ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+        )  # fmt: skip
+        self.norm_pc = sharded_norm_program_config(self.res_mc)
+        # each residual add (+ the o_proj bias) and the norm after it in one program (_ResNorm, FP32 residual, FP32 norm
+        # outputs as the sharded norm's); the all-reduces' outputs stay in their width shards
+        self.rn = _ResNorm(mesh, self.rows, self.hidden, self.res_mc,
+                           width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows))  # fmt: skip
+        self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
+        # (the context pass's 8-layer write: one core per (user, kv head))
+        self.kv_write_ctx = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size, head_split=True)
+        # attention: block attention (b1's kernels, uniform), 16 users per program on 4 cores each
+        # (16 users x 1 history slice: the window bounds every core's history to ~33 chunks; vs 8 x 3: round 25.0 -> 24.8
+        # ms at ISL 256, 25.8 -> 25.4 at 1024)
+        from .block_attention import BlockAttention
+
+        per = min(users, 64 // BlockAttention.cores_needed(nkv, self.block, 1))  # (16 users per program at block 8)
+        self.ba = _UserBlockAttention(
+            mesh, users, self.block, nq, nkv, hd, block_size, per, 1, uniform=True, window=window or 0
+        )
         for L in self.L:  # (the weights' tiles made here, not during a trace capture)
             self.rn.gamma(L["ln1"])
             self.rn.gamma(L["ln2"])
@@ -1167,8 +1204,8 @@ class BatchedDraft:
             mlp.deallocate(True)
             h2.deallocate(True)
         h.deallocate(True)
-        # rows 0 .. 31 (each user's last token, i = 0) draft nothing: the LM head on rows 32 .. 255 only
-        x8r = ttnn.slice(x8, [0, 0, U32, 0], [1, 1, self.rows, self.hidden])
+        # rows 0 .. users - 1 (each user's last token, i = 0) draft nothing: the LM head on the other rows only
+        x8r = ttnn.slice(x8, [0, 0, self.users, 0], [1, 1, self.rows, self.hidden])
         x8.deallocate(True)
         logits = ttnn.matmul(
             x8r, self.lm_head, dtype=self.logits_dt, program_config=_matmul_config(x8r, self.lm_head, True)
@@ -1244,7 +1281,8 @@ class BatchedVerify:
     """The target's 256-row verify pass for 32 users on the batched decode model's layers (DecoderLayer.batched_decode):
     every op over all 256 rows at once, the residual block sharded on 10 x 8 cores."""
 
-    def __init__(self, model, page_table, kv_cache, users, block, capture_layers):
+    def __init__(self, model, page_table, kv_cache, users, block, capture_layers, moe_copies=True):
+        """moe_copies: the interleaved MoE weight copies GroupedMoE relays out (False: the grouped MoE is shared)."""
         self.model = model
         self.mesh = model.mesh_device
         self.users, self.block = users, block
@@ -1257,6 +1295,8 @@ class BatchedVerify:
         self.moe = []
         for layer in model.layers:
             assert layer.batched_decode, "BatchedVerify runs on the batched decode model (batch 32, dense MoE)"
+            if not moe_copies:
+                continue
             dw = layer.mlp.experts.dense_decode_weights
             n_act = dw.gate.shape[-1]
             self.moe.append(
@@ -1311,8 +1351,14 @@ class BatchedVerify:
         ]
         # (users x slices measured at ISL 256 / 4K / 16K: 8 x 3 18.9 / 21.4 / 26.4 ms per round, 12 x 2 18.5 / 21.0 /
         # 26.6, 16 x 1 18.4 / 21.2 / 28.7)
+        from .block_attention import BlockAttention
+
+        # (block 8: 8 users per program on 3 history slices each; smaller blocks, more users: 1 slice, more users per
+        # program)
+        slices = 3 if block == 8 or users <= 32 else 1
+        per = min(users, 96 // BlockAttention.cores_needed(self.local_kv_heads, block, slices))
         self.block_attn = _UserBlockAttention(
-            self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
+            self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], per, slices
         )
         # sliding-window layers: the same block attention, windowed (row r attends [pos_r + 1 - window, pos_r]: at most
         # 6 chunks), 16 users per program on 1 slice each (64 cores), instead of one decode SDPA per 32-row step (8
@@ -1327,7 +1373,7 @@ class BatchedVerify:
             self.local_kv_heads,
             hd,
             kv_cache[0][0].shape[2],
-            16,
+            min(users, 64 // BlockAttention.cores_needed(self.local_kv_heads, block, 1)),
             1,
             swin=window,
         )
@@ -1430,7 +1476,7 @@ class BatchedVerify:
             res2.deallocate(True)
             if li in self.capture_layers:
                 feats.append(ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG, dtype=self.feat_dt))
-        features = ttnn.concat(feats, dim=-1)
+        features = ttnn.concat(feats, dim=-1) if feats else None
         for t in feats:
             t.deallocate(True)
         res.deallocate(True)
@@ -1454,18 +1500,22 @@ class BatchedDFlashRunner:
     32 users run as lanes of 32: every lane's round (draft, verify, context, acceptance: the batch-32 passes on the
     lane's users) in one trace, the weights and the passes' buffers shared."""
 
-    LANE = 32
+    ROWS = 256  # rows per pass: users per lane x block
 
     def __init__(self, generator, model, page_table, kv_cache, users=32, window=1024, eos_ids=(200002, 200012),
-                 ring=None):  # fmt: skip
+                 ring=None, block=None, share=None):  # fmt: skip
         """ring: the drafter's per-user cache as a ring of `ring` blocks (BatchedDraft; with more than one lane, 24 by
-        default: the window's 1024 positions + a block)."""
+        default: the window's 1024 positions + a block). share: a runner over the same users (prefilled) whose drafter
+        (weights, caches with the prompt context) and grouped MoE weights this one uses, with its own block."""
         from .capture import TargetCapture
 
         self.generator, self.model, self.kv_cache = generator, model, kv_cache
         mesh = model.mesh_device
         self.mesh = mesh
         self.total_users = users
+        # block: the draft / verify block per user (the checkpoint's 8 by default); a lane holds 256 / block users
+        block = block or load_draft_config(draft_snapshot())["block_size"]
+        self.LANE = self.ROWS // block
         lanes = max(1, users // self.LANE)
         assert users == self.LANE * lanes or (lanes == 1 and users <= self.LANE)
         users = min(users, self.LANE)  # (a lane's users)
@@ -1474,24 +1524,37 @@ class BatchedDFlashRunner:
         self.V = model.vocab_size
         self.eos_ids = set(eos_ids)
         max_pos = page_table.shape[-1] * 64
-        if ring is None and lanes > 1:
+        if ring is None and self.total_users > 32:  # (more users: the drafter's cache only holds its window)
             ring = 24
-        self.draft = BatchedDraft(mesh, model, max_pos, users, window=window, cache_users=self.total_users, ring=ring)
+        if share is not None:
+            ring = share.draft.ring
+        self.draft = BatchedDraft(mesh, model, max_pos, users, window=window, cache_users=self.total_users, ring=ring,
+                                  block=block, share=share.draft if share is not None else None)  # fmt: skip
         self.block = B = self.draft.block
         self.rows = users * B
-        self.capture = TargetCapture(model, self.draft.target_layer_ids)
-        self.capture.on_device = True  # (the prompt features stay on the device: no host round trip per user)
+        if share is not None:
+            self.capture = share.capture
+        else:
+            self.capture = TargetCapture(model, self.draft.target_layer_ids)
+            self.capture.on_device = True  # (the prompt features stay on the device: no host round trip per user)
         kv = kv_cache[0] if isinstance(kv_cache[0][0], list) else kv_cache
         self.page_table = _replicate(mesh, page_table[:users].contiguous(), ttnn.int32)
-        self.verify = BatchedVerify(model, self.page_table, kv, users, B, self.draft.target_layer_ids)
+        self.verify = BatchedVerify(model, self.page_table, kv, users, B, self.draft.target_layer_ids,
+                                    moe_copies=share is None)  # fmt: skip
         self.verify.trans_rows = self.draft.rope.get_both_trans_mats()["prefill"]  # (the target's RoPE)
         from .grouped_moe import GroupedMoE
 
         # the verify MoE on only the routed (row, expert) pairs
-        self.verify.grouped = GroupedMoE(mesh, self.verify.moe, self.verify.hidden)
-        for W in self.verify.moe:  # (the interleaved copies were only the relayout's source)
-            for k in ("gate", "up", "down"):
-                W.pop(k).deallocate(True)
+        if share is not None:
+            self.verify.grouped = GroupedMoE(mesh, None, self.verify.hidden, rows=self.rows, share=share.verify.grouped)
+            for t in self.verify.oproj_w:  # (the share's copies)
+                t.deallocate(True)
+            self.verify.oproj_w = share.verify.oproj_w
+        else:
+            self.verify.grouped = GroupedMoE(mesh, self.verify.moe, self.verify.hidden, rows=self.rows)
+            for W in self.verify.moe:  # (the interleaved copies were only the relayout's source)
+                for k in ("gate", "up", "down"):
+                    W.pop(k).deallocate(True)
         # the plain batched decode's dense MoE streams the same relaid gate|up pages (experts/decode.py
         # _dense_gate_up_stream: gate, up and SwiGLU in one program)
         for li, layer in enumerate(model.layers):
@@ -1564,7 +1627,7 @@ class BatchedDFlashRunner:
                 page_table=self.page_table_host[u : u + 1],
                 kv_cache=self.kv_cache,
                 prompt_lens=[len(p)],
-                empty_slots=[u % self.LANE],  # (the model's batch: 32 slots; the page table row picks the blocks)
+                empty_slots=[u % 32],  # (the model's batch: 32 slots; the page table row picks the blocks)
                 enable_trace=False,
                 warmup_prefill=False,
             )

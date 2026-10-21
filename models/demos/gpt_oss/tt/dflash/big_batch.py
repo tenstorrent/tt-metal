@@ -309,3 +309,73 @@ class BigPlain:
             drain()
         gaps = sorted(b - a for a, b in zip(done, done[1:]))
         return out, gaps[len(gaps) // 2] if gaps else float("nan")
+
+
+class VerifyPlain:
+    """Plain greedy decode of `users` (at most 256) sequences as the DFlash verify pass with a block of one row per user
+    (BatchedVerify, block 1): QKV, the attention (block attention, one row per user: every user in a few programs),
+    o_proj, the residual + norm programs, the grouped MoE and the LM head each once over the users' rows."""
+
+    def __init__(self, model, page_table, kv_cache, users, grouped=None):
+        """page_table: host INT32 [users, blocks]; grouped: a GroupedMoE to share relaid weights with."""
+        from ..model import create_rope_setup
+        from .batched import BatchedVerify
+
+        assert users % U32 == 0 and U32 <= users <= 256
+        self.model, self.mesh = model, model.mesh_device
+        mesh = self.mesh
+        self.users = self.rows = users
+        kv = kv_cache[0] if isinstance(kv_cache[0][0], list) else kv_cache
+        self.page_table = _replicate(mesh, page_table, ttnn.int32)
+        self.verify = BatchedVerify(model, self.page_table, kv, users, 1, [], moe_copies=grouped is None)
+        if grouped is None:
+            from .grouped_moe import GroupedMoE
+
+            self.verify.grouped = GroupedMoE(mesh, self.verify.moe, self.verify.hidden, rows=users)
+            for W in self.verify.moe:
+                for k in ("gate", "up", "down"):
+                    W.pop(k).deallocate(True)
+        else:
+            self.verify.grouped = grouped_moe_for(model, users, share=grouped)
+        self.rope = create_rope_setup(mesh, model.hf_config, max_local_batch_size=U32, datatype=ttnn.bfloat16)
+        self.verify.trans_rows = self.rope.get_both_trans_mats()["prefill"]
+        self.hd = model.layers[0].self_attn.config.head_dim
+        # persistent per-step inputs: the tokens, the positions (INT32 [users]: the cache writes and the attention;
+        # UINT32 [1, users]: the RoPE rows)
+        self.tokens = _replicate(mesh, torch.zeros(1, users, dtype=torch.int32), ttnn.uint32)
+        self.pos = _replicate(mesh, torch.zeros(users, dtype=torch.int32), ttnn.int32)
+        self.pos_rows = _replicate(mesh, torch.zeros(1, users, dtype=torch.int32), ttnn.uint32)
+        self.trace = None
+
+    def step(self):
+        rot = []
+        for m in (self.rope.cos_matrix, self.rope.sin_matrix):
+            t = ttnn.embedding(self.pos_rows, m, layout=ttnn.TILE_LAYOUT)
+            rot.append(ttnn.reshape(t, [1, 1, self.rows, self.hd]))
+        out, _ = self.verify.forward(self.tokens, [self.pos, self.pos], rot)
+        for t in rot:
+            t.deallocate(True)
+        tok = self.verify.argmax.combine(out, self.mesh)
+        for t in out:
+            t.deallocate(True)
+        row = ttnn.transpose(tok, -2, -1)
+        nxt = ttnn.reshape(ttnn.to_layout(ttnn.typecast(row, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, self.rows])
+        row.deallocate(True)
+        ttnn.copy(nxt, self.tokens)
+        nxt.deallocate(True)
+        ttnn.plus_one(self.pos, skip_negative_entries=True)
+        ttnn.plus_one(self.pos_rows)
+        return tok
+
+    def set_inputs(self, tokens, positions):
+        mesh = self.mesh
+        p = torch.tensor(positions, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            _replicate(mesh, torch.tensor([tokens], dtype=torch.int32), ttnn.uint32, device=False), self.tokens
+        )
+        ttnn.copy_host_to_device_tensor(_replicate(mesh, p, ttnn.int32, device=False), self.pos)
+        ttnn.copy_host_to_device_tensor(_replicate(mesh, p.reshape(1, -1), ttnn.uint32, device=False), self.pos_rows)
+
+    capture = BigPlain.capture
+    release = BigPlain.release
+    generate = BigPlain.generate
