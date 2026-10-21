@@ -342,16 +342,15 @@ class TTTRolloutSampler(RolloutSampler):
                 if user_done[u]:
                     continue
                 tok = step_tokens[u]
+                completions[u].append(tok)
+                if logprobs is not None:
+                    # step_logprobs may be None on paths that don't have them, in which
+                    # case we align the token with 0.0 -- callers of
+                    # generate_and_get_log_probs always request them, so in practice
+                    # this branch is never taken there.
+                    logprobs[u].append(float(step_logprobs[u]) if step_logprobs is not None else 0.0)
                 if stop_at_eos and tok in stop_ids:
                     user_done[u] = True
-                else:
-                    completions[u].append(tok)
-                    if logprobs is not None:
-                        # step_logprobs may be None on paths that don't have them, in which
-                        # case we align the token with 0.0 -- callers of
-                        # generate_and_get_log_probs always request them, so in practice
-                        # this branch is never taken there.
-                        logprobs[u].append(float(step_logprobs[u]) if step_logprobs is not None else 0.0)
 
         _collect_step(
             [int(t) for t in prefilled_token.tolist()],

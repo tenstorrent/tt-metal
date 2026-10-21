@@ -207,7 +207,7 @@ config's `max_completion_length`, `temperature` and `num_generations`, plus its
 |-------|------|-------------|
 | `weight_version` | `int` | Which policy version produced this batch. |
 | `prompts` | `List[List[int]]` | `B` prompts, already expanded: each input prompt repeated `num_generations` times, in order. |
-| `completions` | `List[List[int]]` | `B` completions, trimmed at the stop token. |
+| `completions` | `List[List[int]]` | `B` completions, ending with the stop token when one is sampled. |
 | `logprobs` | `np.ndarray` `[B, max_completion_length]` float32 | `+log pi_old` of completion token `j` at column `j`; columns past `len(completion)` are ignored. |
 
 ### Required methods
