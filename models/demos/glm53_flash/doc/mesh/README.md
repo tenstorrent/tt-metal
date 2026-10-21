@@ -584,6 +584,28 @@ L1 clash, "statically allocated circular buffers in program N clash with L1 buff
 token buffers overflow the L1 plan of the EP decode graph. Open item for the EP32 track; the hybrid layout is unaffected.
 The EP weight conversion is cold on the first run (43 s per layer, 33 min), cached afterwards.
 
+### EP32 L1 clash: root cause and fix (2026-10-21, ep32l1)
+
+Not the 32-way exchange. `TtEPExperts.combine_rows` pre-zeroes the `all_to_all_combine(local_reduce)` output by
+cloning a persistent zero constant `[K=8, T, 1, H]` bf16 ROW_MAJOR (`ttnn.zeros` is a host write, not allowed in a
+trace), and that constant was built **in L1, once per MoE layer**. Interleaved L1 pages are 8 KB and round-robin
+from bank 0, so every layer pinned 24 KB (32 users/row: 256 pages) / 8 KB (4 users/row: 32 pages) of the first
+cores' L1 for the life of the model, and the region left for the next program's static circular buffers shrank by
+that much per layer:
+
+| users/row | per-layer L1 constant | clash in the log | arithmetic |
+|---|---|---|---|
+| 32 | 2 MB = 24 KB on cores 0-15 | `paged_update_cache` (dataflow buffers end at 1361056), L1 buffers down to 1351232 | 1572864 - 1351232 = 216.4 KB = 9 MoE layers x 24 KB: the 10th MoE layer's DSA update fails |
+| 4 | 256 KB = 8 KB on cores 0-31 | gate|up dispatch op (CBs end at 1215872), L1 buffers down to 1207808 | 1572864 - 1207808 = 356.5 KB = 42 MoE layers x 8 KB + the op's own transients: the last layers fail |
+
+The footprint depends on T (users per row) only, not on the EP group size; the (2,4) block had only ever run ONE EP
+layer (`test_mesh_moe.py`), which is why "EP=8 passed". The hybrid layout has no such constant. Fix: the zero
+constant lives in DRAM and is shared by every EP layer of the model (`GLMMesh.const`, one tensor per shape); the
+op graph is unchanged (the per-call `ttnn.clone` into L1 now reads DRAM: 2 MB per layer at 32 users/row).
+`test_mesh_moe.py` now asserts that the L1 high-water mark (the address of a fresh one-tile L1 probe, top-down
+allocator) is identical before and after the MoE forward, so a lazily built per-layer L1 constant fails the
+single-layer block test. Validation below.
+
 ### Fresh-model TTFT and the keep-stacked decode (v19 / v20, 09:40-09:55)
 
 A fresh-model `-k ttft` with the fast configuration gives chain PCC 0.901 on the 128-token prompt (fresh wrap 0.944;

@@ -28,6 +28,20 @@ from models.demos.glm53_flash.tt.moe import TtMoE
 ROWS, COLS = 2, 4
 
 
+def l1_high_water(mesh_device) -> int:
+    """The address of a fresh one-tile L1 probe (freed again): the L1 allocator is top-down, so a lower address
+    after a forward means the module left persistent L1 buffers behind (lazily built constants). A per-layer L1
+    constant is a model-level bug even when one layer passes: on the 45-layer 8x4 EP e2e the per-layer zeroed slot
+    constant of the EP combine shrank the L1 left for the static CBs until a later program clashed
+    (doc/mesh/README.md, EP32 L1 clash)."""
+    probe = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.L1_MEMORY_CONFIG
+    )
+    addr = probe.buffer_address()
+    ttnn.deallocate(probe)
+    return addr
+
+
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [mesh_device_params(ROWS, COLS)], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
@@ -51,6 +65,7 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
     with torch.no_grad():
         y_hf = hf(xs.reshape(1, ROWS * rows_T, -1)).reshape(1, 1, ROWS * rows_T, -1)
     tt_x = mesh.upload(xs.bfloat16(), ttnn.bfloat16, rows=2)
+    l1_before = l1_high_water(mesh_device)
     for it in range(2):
         logger.info(f"{layout} MoE forward iter {it} (T={rows_T}/row) starting")
         t0 = time.perf_counter()
@@ -69,3 +84,12 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
             f"{layout} MoE layer {LAYER} on {ROWS}x{COLS}, T={rows_T}/row, iter {it}: worst pcc vs HF {worst:.6f}"
         )
         assert worst > 0.995
+        ttnn.deallocate(y)
+        l1_after = l1_high_water(mesh_device)
+        logger.info(
+            f"{layout} MoE layer: L1 high-water mark {l1_before} before the forward, {l1_after} after iter {it}"
+        )
+        assert l1_after == l1_before, (
+            f"the {layout} MoE layer left {l1_before - l1_after} B of persistent L1 buffers behind (lazily built L1 "
+            "constants: they pile up per layer and clash with later programs' static CBs on the 45-layer model)"
+        )
