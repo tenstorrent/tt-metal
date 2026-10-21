@@ -507,9 +507,7 @@ ttnn::Tensor concat_force_codegen(
     TT_FATAL(
         cc::supported_execution_controls(groups, sub_core_grids),
         "ttnn.concat: codegen path does not support groups > 1 or sub_core_grids");
-    TT_FATAL(
-        cc::supported_by_codegen(input_tensors, params, optional_output_tensor),
-        "ttnn.concat: codegen path does not support this input");
+    TT_FATAL(cc::supported_by_codegen(input_tensors, params), "ttnn.concat: codegen path does not support this input");
     return ttnn::prim::concat_codegen(input_tensors, params, optional_output_tensor);
 }
 

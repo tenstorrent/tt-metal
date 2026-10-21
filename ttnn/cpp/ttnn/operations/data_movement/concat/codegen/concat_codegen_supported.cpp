@@ -27,12 +27,6 @@ using tt::tt_metal::DataType;
 // Batching the CB plan starts from; plan_batches halves it until the plan fits the L1 it is given.
 constexpr uint32_t kBatch = 4;
 
-bool same_tile(const tt::tt_metal::Tile& a, const tt::tt_metal::Tile& b) {
-    return a.get_height() == b.get_height() && a.get_width() == b.get_width() &&
-           a.get_face_shape() == b.get_face_shape() && a.get_transpose_within_face() == b.get_transpose_within_face() &&
-           a.get_transpose_of_faces() == b.get_transpose_of_faces();
-}
-
 bool dtype_ok(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16:
@@ -73,8 +67,7 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
             input.device() != first.device()) {
             return false;
         }
-        if (input.layout() != ttnn::ROW_MAJOR_LAYOUT || input.layout() != first.layout() ||
-            input.dtype() != first.dtype() || !dtype_ok(input.dtype())) {
+        if (input.layout() != ttnn::ROW_MAJOR_LAYOUT || input.dtype() != first.dtype() || !dtype_ok(input.dtype())) {
             return false;
         }
         if (!interleaved_in_dram_or_l1(input.memory_config())) {
@@ -96,14 +89,6 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
         }
     }
     return true;
-}
-
-bool output_matches(
-    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, const Tensor& output) {
-    const auto expected = codegen_output_spec(input_tensors, attrs);
-    return output.layout() == expected.layout() && output.dtype() == expected.data_type() &&
-           same_tile(output.tensor_spec().tile(), expected.tile()) &&
-           output.logical_shape() == expected.logical_shape() && output.memory_config() == expected.memory_config();
 }
 
 uint64_t l1_output_reservation(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
@@ -199,20 +184,11 @@ tt::tt_metal::TensorSpec codegen_output_spec(
             attrs.output_mem_config));
 }
 
-bool supported_by_codegen(
-    const std::vector<Tensor>& input_tensors,
-    const ttnn::prim::ConcatCodegenParams& attrs,
-    const std::optional<Tensor>& optional_output) {
+bool supported_by_codegen(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
     if (!inputs_supported(input_tensors, attrs) || !interleaved_in_dram_or_l1(attrs.output_mem_config)) {
         return false;
     }
-    if (optional_output.has_value() &&
-        (optional_output->storage_type() != ttnn::StorageType::DEVICE || optional_output->buffer() == nullptr ||
-         !output_matches(input_tensors, attrs, *optional_output))) {
-        return false;
-    }
-    // Static window, not live L1: routing and the prim's validate run at different moments of one dispatch, and the
-    // output allocation between them would flip a live answer.
+    // Static window: the output allocation between routing and validate would flip a live answer.
     const uint64_t budget =
         saturating_sub(get_static_l1_space(input_tensors.front()), l1_output_reservation(input_tensors, attrs));
     return plan_batches(input_tensors, attrs, budget).has_value();

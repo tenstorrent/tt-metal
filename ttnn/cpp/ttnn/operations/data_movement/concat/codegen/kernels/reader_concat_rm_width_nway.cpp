@@ -32,8 +32,7 @@ void kernel_main() {
     CircularBuffer out_cb(cb_out);
     CircularBuffer scratch_cb(cb_scratch);
 
-    // Private staging: reserved once and never pushed, so no consumer waits on it.
-    scratch_cb.reserve_back(1);
+    // Private staging: only this RISC touches it, so there is nothing to reserve or push.
     const uint32_t scratch_addr = scratch_cb.get_write_ptr();
 
     while (num_pages > 0) {

@@ -276,7 +276,7 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
             const BlockCursor cursor = block_cursor(start, pages_per_block, output_per_block);
             RtArgs args = {n, cursor.curr_tensor, cursor.curr_tensor_id};
             args.insert(args.end(), cursor.page_id.begin(), cursor.page_id.end());
-            reader_desc.emplace_runtime_args(core, std::move(args));
+            reader_desc.emplace_runtime_args(core, args);
         } else if (two_input) {
             reader_desc.emplace_runtime_args(core, RtArgs{n, start, start});
         } else {

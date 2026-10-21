@@ -6,11 +6,12 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/data_movement/common/kernels/codegen/sequencers.h"
 
 void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(0);
-    uint32_t curr_tensor = get_arg_val<uint32_t>(1);
-    uint32_t curr_tensor_id = get_arg_val<uint32_t>(2);
+    const uint32_t start_tensor = get_arg_val<uint32_t>(1);
+    const uint32_t start_tensor_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t BATCH = get_compile_time_arg_val(1);
@@ -28,8 +29,8 @@ void kernel_main() {
     const uint32_t src_addr_0 = get_common_arg_val<uint32_t>(0);
     const uint32_t src_addr_1 = get_common_arg_val<uint32_t>(1);
 
-    uint32_t stick_id_0 = get_arg_val<uint32_t>(3);
-    uint32_t stick_id_1 = get_arg_val<uint32_t>(4);
+    SeqConcatState seq = seq_concat_init(
+        start_tensor, start_tensor_id, get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4), ppb_0, ppb_1);
 
     // DRAM and L1 pages have different alignment, so each accessor needs its own buffer's pitch.
     const auto s0 = TensorAccessor(ta0_args, src_addr_0, IN0_PAGE_SIZE);
@@ -46,23 +47,14 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
-            if (curr_tensor == 0) {
-                noc.async_read(s0, input_cb, IN0_PAGE_SIZE, {.page_id = stick_id_0}, {.offset_bytes = l1_offset});
-                stick_id_0++;
+            const bool from_first = seq.curr_tensor == 0;
+            const uint32_t stick_id = seq_concat_next(seq);
+            if (from_first) {
+                noc.async_read(s0, input_cb, IN0_PAGE_SIZE, {.page_id = stick_id}, {.offset_bytes = l1_offset});
             } else {
-                noc.async_read(s1, input_cb, IN1_PAGE_SIZE, {.page_id = stick_id_1}, {.offset_bytes = l1_offset});
-                stick_id_1++;
+                noc.async_read(s1, input_cb, IN1_PAGE_SIZE, {.page_id = stick_id}, {.offset_bytes = l1_offset});
             }
             l1_offset += CB_PAGE_SIZE;
-
-            curr_tensor_id++;
-            if (curr_tensor == 0 && curr_tensor_id == ppb_0) {
-                curr_tensor_id = 0;
-                curr_tensor = 1;
-            } else if (curr_tensor == 1 && curr_tensor_id == ppb_1) {
-                curr_tensor_id = 0;
-                curr_tensor = 0;
-            }
         }
         noc.async_read_barrier();
         input_cb.push_back(batch);

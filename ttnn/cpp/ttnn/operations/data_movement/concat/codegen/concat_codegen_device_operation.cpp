@@ -63,6 +63,31 @@ void validate_tensors(const ConcatCodegenParams& operation_attributes, const Con
     }
 }
 
+// The hash runs before validation, and the batch plan reads every input's buffer and shape, so each one is checked
+// here.
+bool all_inputs_plannable(const ConcatCodegenParams& operation_attributes, const ConcatCodegenInputs& tensor_args) {
+    const auto& input_tensors = tensor_args.input_tensors;
+    if (input_tensors.empty()) {
+        return false;
+    }
+    const auto& first = input_tensors.front();
+    if (first.storage_type() != ttnn::StorageType::DEVICE) {
+        return false;
+    }
+    const auto rank = first.logical_shape().rank();
+    if (operation_attributes.dim >= rank) {
+        return false;
+    }
+    for (const auto& input : input_tensors) {
+        if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr ||
+            input.device() != first.device() || input.logical_shape().rank() != rank ||
+            input.layout() != first.layout() || input.dtype() != first.dtype()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 void ConcatCodegenDeviceOperation::validate_on_program_cache_miss(
@@ -70,7 +95,7 @@ void ConcatCodegenDeviceOperation::validate_on_program_cache_miss(
     validate_tensors(operation_attributes, tensor_args);
     TT_FATAL(
         ttnn::operations::data_movement::concat_codegen::supported_by_codegen(
-            tensor_args.input_tensors, operation_attributes, tensor_args.optional_output_tensor),
+            tensor_args.input_tensors, operation_attributes),
         "ConcatCodegen does not support this input");
 }
 
@@ -80,16 +105,14 @@ void ConcatCodegenDeviceOperation::validate_on_program_cache_hit(
     validate_tensors(operation_attributes, tensor_args);
 }
 
-// The CB batching follows the L1 free right now (plan_batches_live runs on every dispatch), so it is part of the key:
-// an occupancy change that moves the plan is a miss that rebuilds, not a hit that replays CBs sized for L1 that is no
-// longer free. Because the hash depends on live L1, a trace captured under one L1 state replays that state's plan.
+// The batch plan follows live L1, so it is keyed: a plan change must rebuild, not replay CBs sized for L1 no longer
+// free.
 ttsl::hash::hash_t ConcatCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensors = tensor_args.input_tensors;
     uint32_t read_batch = 0;
     uint32_t write_batch = 0;
-    if (!input_tensors.empty() && input_tensors.front().storage_type() == ttnn::StorageType::DEVICE &&
-        input_tensors.front().buffer() != nullptr) {
+    if (all_inputs_plannable(operation_attributes, tensor_args)) {
         const auto batches =
             ttnn::operations::data_movement::concat_codegen::plan_batches_live(input_tensors, operation_attributes);
         if (batches.has_value()) {
