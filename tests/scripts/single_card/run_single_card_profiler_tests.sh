@@ -111,6 +111,17 @@ run_perf_counter_analysis_test() {
     pytest $PROFILER_TEST_SCRIPTS_ROOT/test_perf_counter_analysis.py --noconftest
 }
 
+run_58718_readout_check() {
+    # #58718: the issue's capture (one pass, five counter groups) three times; every counter bank of every core must
+    # report one ref cnt per op, i.e. stay frozen through the BRISC readout.
+    for i in 1 2 3; do
+        rm -rf generated/profiler/.logs
+        TT_METAL_PROFILE_PERF_COUNTERS=47 python -m tracy -r -v -m pytest \
+            tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul -k "1375 and width" -q
+        python tests/scripts/single_card/check_58718_readout.py
+    done
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
