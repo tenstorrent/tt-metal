@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
+from ttml.common.utils import repeat_interleave
 
 from .grpo_trainer import RolloutBatch, RolloutSampler, _derive_reward_names, dispatch_reward
 
@@ -93,12 +94,12 @@ def score_rollout(
 ) -> ScoredRolloutBatch:
     start = time.perf_counter()
     g = num_generations
-    if [list(p) for p in rollout.prompts] != [list(p) for p in prompts for _ in range(g)]:
+    if [list(p) for p in rollout.prompts] != repeat_interleave(prompts, g):
         raise RuntimeError(
             "RolloutBatch.prompts must hold each prompt repeated num_generations times, in order "
             f"(got {len(rollout.prompts)} prompts for {len(prompts)} x {g})"
         )
-    columns_x = {k: [v for v in col for _ in range(g)] for k, col in extra_columns.items()}
+    columns_x = {k: repeat_interleave(col, g) for k, col in extra_columns.items()}
     prompt_strs = [tokenizer.decode(p) for p in rollout.prompts]
     completion_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in rollout.completions]
     per_func = [

@@ -272,6 +272,11 @@ def resolve_pad_token_id(tokenizer) -> int:
     return int(pad)
 
 
+def repeat_interleave(items, n: int) -> list:
+    """Repeat each item ``n`` times in place: ``[a, b]`` -> ``[a, a, b, b]``."""
+    return [item for item in items for _ in range(n)]
+
+
 def summary(model) -> None:
     """Print a torchsummary-style overview of model parameters.
 
