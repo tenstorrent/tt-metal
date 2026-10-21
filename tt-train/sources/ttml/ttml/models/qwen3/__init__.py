@@ -22,6 +22,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
+from ..llama.autograd_ops import Truncate
 from .transformer import Qwen3Block, Qwen3RMSNorm
 from .safetensors_loader import load_from_safetensors
 
@@ -167,16 +168,7 @@ class Qwen3(AbstractModuleBase):
 
         out = tok_emb_out
         if padded_seq_len != actual_seq_len:
-            slice_start = [0, 0, 0, 0]
-            slice_end = [
-                tok_emb_out.shape()[0],
-                tok_emb_out.shape()[1],
-                actual_seq_len,
-                tok_emb_out.shape()[3],
-            ]
-            step = [1, 1, 1, 1]
-            out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
-            out = ttml.autograd.create_tensor(out_val)
+            out = Truncate.apply(tok_emb_out, 2, actual_seq_len)
 
         out = self._snapshot(out, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
 

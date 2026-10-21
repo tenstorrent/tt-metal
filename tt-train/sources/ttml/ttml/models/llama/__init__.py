@@ -25,7 +25,7 @@ from ttml.modules import (
 )
 
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
-from .autograd_ops import SliceLastDim
+from .autograd_ops import Truncate
 from ttml.parallel import SEQUENCE_DIM, TPStrategy
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
@@ -364,16 +364,7 @@ class Llama(AbstractModuleBase):
 
         out = tok_emb_out
         if padded_seq_len != actual_seq_len:
-            slice_start = [0, 0, 0, 0]
-            slice_end = [
-                tok_emb_out.shape()[0],
-                tok_emb_out.shape()[1],
-                actual_seq_len,
-                tok_emb_out.shape()[3],
-            ]
-            step = [1, 1, 1, 1]
-            out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
-            out = ttml.autograd.create_tensor(out_val)
+            out = Truncate.apply(tok_emb_out, 2, actual_seq_len)
 
         if sequence_parallel and not isinstance(self.tok_emb, VocabParallelEmbedding):
             out = ttml.ops.distributed.scatter(out, SEQUENCE_DIM, self._tp_axis)
@@ -392,7 +383,7 @@ class Llama(AbstractModuleBase):
         # Under TP the padding is handled inside
         # vocab_parallel_cross_entropy_loss.
         if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
-            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+            logits = Truncate.apply(logits, 3, self.config.vocab_size)
         return logits
 
 

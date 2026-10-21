@@ -21,7 +21,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, LinearLayer, ModuleList
 
 from .. import RunnerType, memory_efficient_runner
-from ..llama.autograd_ops import SliceLastDim
+from ..llama.autograd_ops import Truncate
 from .transformer import RMSNormLayer, DeepSeekBlock
 
 
@@ -165,7 +165,7 @@ class DeepSeek(AbstractModuleBase):
         x = self.norm(x)
         logits = self.head(x)
         if self.padded_vocab_size != self.config.vocab_size:
-            logits = SliceLastDim.apply(logits, self.config.vocab_size)
+            logits = Truncate.apply(logits, 3, self.config.vocab_size)
         return logits
 
     def get_moe_layers(self):

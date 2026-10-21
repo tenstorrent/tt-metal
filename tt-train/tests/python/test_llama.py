@@ -222,6 +222,22 @@ class TestLlama:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
+    @pytest.mark.parametrize("seq_len", [64, 40], ids=["tile_aligned", "padded"])
+    def test_every_parameter_gets_a_gradient(self, tiny_config, seq_len):
+        """The embedding too: the padding the lookup needs is sliced off inside the autograd graph. A sequence that is
+        not tile-aligned trains through the composite attention, as GRPO's completions do."""
+        model = Llama(replace(tiny_config, use_composite_sdpa=seq_len % 32 != 0))
+        model.train()
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(2, 1, 1, seq_len)).astype(np.uint32)
+        input_tensor = ttml.autograd.Tensor.from_numpy(
+            tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        )
+        ttml.ops.unary.mean(model(input_tensor, create_causal_mask(seq_len))).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        missing = [name for name, p in model.parameters().items() if not p.is_grad_initialized()]
+        assert not missing, f"no gradient for {missing}"
+
     def test_model_callable(self, tiny_config):
         """Test that model is callable via __call__."""
         model = Llama(tiny_config)

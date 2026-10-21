@@ -10,22 +10,19 @@ import ttnn
 import ttml
 
 
-class SliceLastDim(ttml.autograd.Function):
-    """Differentiable truncation of the last dimension: ``y = x[..., :width]``."""
+class Truncate(ttml.autograd.Function):
+    """Differentiable truncation of a 4-D tensor's dimension ``dim``: its first ``width`` entries."""
 
     @staticmethod
-    def forward(ctx, x, width):
-        shape = x.shape()
-        ctx.full_last = shape[-1]
-        ctx.width = width
-        return ttnn.slice(
-            x.get_value(),
-            [0, 0, 0, 0],
-            [shape[0], shape[1], shape[2], width],
-        )
+    def forward(ctx, x, dim, width):
+        shape = list(x.shape())
+        ctx.dim, ctx.pad_amount = dim, shape[dim] - width
+        end = list(shape)
+        end[dim] = width
+        return ttnn.slice(x.get_value(), [0, 0, 0, 0], end)
 
     @staticmethod
     def backward(ctx, grad_output):
-        pad_amount = ctx.full_last - ctx.width
-        padding = [(0, 0), (0, 0), (0, 0), (0, pad_amount)]
+        padding = [(0, 0)] * 4
+        padding[ctx.dim] = (0, ctx.pad_amount)
         return ttnn.pad(grad_output, padding=padding, value=0.0)
