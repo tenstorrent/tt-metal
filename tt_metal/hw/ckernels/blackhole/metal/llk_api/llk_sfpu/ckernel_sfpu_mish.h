@@ -43,10 +43,14 @@ inline void calculate_mish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // x >= SAT_HI: mish(x) ≈ x
+        // x >= SAT_HI: mish(x) ≈ x; x <= -88.0f (including -inf): exp(x) == 0 so mish(x) -> 0.0f
+        // (avoids (-inf) * 0.0f = NaN).
         sfpi::vFloat result = x;
 
-        v_if(x < SAT_HI) {
+        v_if(x <= -88.0f) {
+            result = 0.0f;
+        }
+        v_elseif(x < SAT_HI) {
             sfpi::vFloat u;
             if constexpr (APPROXIMATION_MODE) {
                 u = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(x);
