@@ -546,4 +546,7 @@ def test_fill_implicit_tile_padding_block_sharded_orientations(device, shape, gr
     )
     tensor = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     tensor = ttnn.fill_implicit_tile_padding(tensor, 7.0)
-    assert torch.equal(ttnn.to_torch(tensor), x)
+    padded_output = ttnn.from_device(tensor).to_torch_with_padded_shape()
+    expected = torch.full_like(padded_output, 7.0)
+    expected[..., : shape[-2], : shape[-1]] = x
+    assert torch.equal(padded_output, expected)
