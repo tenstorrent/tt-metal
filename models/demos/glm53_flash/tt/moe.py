@@ -75,6 +75,21 @@ TILE = 32
 # the position of every (token, pick) -> ttnn.embedding gathers the token rows into the regions, the kernel runs, a
 # second ttnn.embedding gathers every pick's output row back, post_combine_reduce applies the routing weights
 PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+
+
+def prefill_experts_mode() -> str:
+    """The prefill expert path, read at construction time (``GLM53_PREFILL_EXPERTS``): blocks | batched | dispatch |
+    regions | auto. ``auto`` = the regions path (5x the blocks path's prefill rate, exact) with the stacked expert copy
+    kept for the decode block op whenever the memory planner says it fits; ``GLM53MeshModel`` resolves it from its
+    (users, max_seq_len) before the layers are built (tt/mesh_model.py), a bare layer treats it as ``regions``."""
+    mode = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+    return "regions" if mode == "auto" else mode
+
+
+def regions_keep_stacked() -> bool:
+    return os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
+
+
 # regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
 # chunk, which does not fit next to the 1 M caches; the expert weights are re-read once per sub-chunk)
 REGIONS_T = int(os.environ.get("GLM53_REGIONS_T", "4096"))
@@ -330,7 +345,7 @@ class TtRouter(LightweightModule):
         return self._const[key]
 
     def forward(
-        self, x: ttnn.Tensor, *, dense_only: bool = False, ep_rows: bool = False
+        self, x: ttnn.Tensor, *, dense_only: bool = False, ep_rows: bool = False, prefill: bool = False
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
         ``dense_only`` (the MoE forward): weights / indices come back as ``None`` (their host-side casts are skipped).
@@ -343,7 +358,10 @@ class TtRouter(LightweightModule):
         biased scores), which swaps the 8th expert on ~20% of real tokens; the composite is exact.
         """
         T = x.shape[-2]
-        if self.fused and T <= TILE and self.tie_break == "topk":
+        # the fused op is validated against the composite on decode shapes only; a prefill slab of <= 32 rows (a
+        # <= 256-token prompt sequence-parallel over 8 rows) keeps the composite: with the fused op the 128-token
+        # first token on the 8x4 stopped matching the HF head (2026-10-21, doc/mesh/README.md)
+        if self.fused and not prefill and T <= TILE and self.tie_break == "topk":
             return self._forward_fused(x, T, dense_only=dense_only, ep_rows=ep_rows)
         if self.fused_sigmoid and T <= TILE and self.tie_break == "topk":
             scores = self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # sigmoid fused
@@ -605,7 +623,7 @@ class TtRoutedExperts(LightweightModule):
             self.w2 = self.mesh.upload_cached(
                 make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
             )
-        self.prefill_experts = PREFILL_EXPERTS if not (dense or stream) else "blocks"
+        self.prefill_experts = prefill_experts_mode() if not (dense or stream) else "blocks"
         self._dispatch = None
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
@@ -873,7 +891,7 @@ class TtRoutedExperts(LightweightModule):
             gate.append(ttnn.reshape(g, [H, I]))
             up.append(ttnn.reshape(u, [H, I]))
             down.append(ttnn.reshape(d, [I, H]))
-        if not REGIONS_KEEP_STACKED:
+        if not regions_keep_stacked():
             ttnn.deallocate(self.w13)
             ttnn.deallocate(self.w2)
             self.w13 = self.w2 = None
@@ -1644,26 +1662,27 @@ class TtMoE(LightweightModule):
             cache_dir, mesh, expert_dtype, expert_down_dtype, dense_experts, stream_experts
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""
+    def forward(self, x: ttnn.Tensor, *, prefill: bool = False) -> ttnn.Tensor:
+        """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated.
+        ``prefill``: the rows are a prompt slab (the router keeps its composite path, see ``TtRouter.forward``)."""
         if self.layout == "ep" and self.experts.D > 1:
-            w16, idx, _ = self.router(x, ep_rows=True)
+            w16, idx, _ = self.router(x, ep_rows=True, prefill=prefill)
             routed = self.experts(x, w16, idx)
             ttnn.deallocate(w16)
             ttnn.deallocate(idx)
         elif self.layout == "ep":
-            w, idx, dense = self.router(x)
+            w, idx, dense = self.router(x, prefill=prefill)
             routed = self.experts(x, w, idx)
             for t in (w, idx, dense):
                 ttnn.deallocate(t)
         elif getattr(self.experts, "_dispatch", None) is not None:
-            w, idx, dense = self.router(x)
+            w, idx, dense = self.router(x, prefill=prefill)
             routed = self.experts(x, dense, idx=idx, w=w)
             for t in (w, idx, dense):
                 if t.is_allocated():
                     ttnn.deallocate(t)
         else:
-            _, _, dense = self.router(x, dense_only=True)
+            _, _, dense = self.router(x, dense_only=True, prefill=prefill)
             routed = self.experts(x, dense)
             ttnn.deallocate(dense)
         shared = self.shared(x, reduce=False)
