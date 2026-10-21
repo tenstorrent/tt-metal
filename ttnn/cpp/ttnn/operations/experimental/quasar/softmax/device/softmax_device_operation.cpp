@@ -5,12 +5,38 @@
 #include "softmax_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tile.hpp>
 
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
+
+namespace {
+// True when the padded shape is the logical shape with only the last two dims rounded up to whole tiles.
+bool softmax_is_minimally_tile_padded(const Tensor& t) {
+    const auto& logical = t.logical_shape();
+    const auto& padded = t.padded_shape();
+    const auto& tile = t.tensor_spec().tile();
+    if (logical.rank() != padded.rank()) {
+        return false;
+    }
+    for (int d = 0; d < static_cast<int>(logical.rank()); ++d) {
+        uint32_t expected = logical[d];
+        if (d == static_cast<int>(logical.rank()) - 1) {
+            expected = tt::round_up(expected, tile.get_width());
+        } else if (d == static_cast<int>(logical.rank()) - 2) {
+            expected = tt::round_up(expected, tile.get_height());
+        }
+        if (padded[d] != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
 
 SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
@@ -30,18 +56,38 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         "Quasar softmax: input must be BFLOAT16 (no BFLOAT8_B on Quasar; FLOAT32 not implemented), got: {}",
         a.dtype());
     TT_FATAL(
-        a.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
-        "Quasar softmax: the last dimension ({}) must be a multiple of {} (no padding mask yet)",
+        a.tensor_spec().tile() == Tile{},
+        "Quasar softmax requires standard 32x32 tiles, got {}x{}",
+        a.tensor_spec().tile().get_height(),
+        a.tensor_spec().tile().get_width());
+    // Both reductions run over every physical tile of the row (no padding mask yet), so the softmax dimension
+    // must be tile-aligned with no padded columns; the factory schedules the input's physical rows, so the
+    // other dims must not be padded beyond the last logical tile either.
+    TT_FATAL(
+        a.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0 && a.padded_shape()[-1] == a.logical_shape()[-1],
+        "Quasar softmax: the last dimension ({}) must be a multiple of {} with no padded columns (padded {})",
         a.logical_shape()[-1],
-        tt::constants::TILE_WIDTH);
+        tt::constants::TILE_WIDTH,
+        a.padded_shape()[-1]);
+    TT_FATAL(
+        softmax_is_minimally_tile_padded(a),
+        "Quasar softmax does not support padding beyond the last logical tile (logical {}, padded {})",
+        a.logical_shape(),
+        a.padded_shape());
 }
 
 TensorSpec SoftmaxDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Keep the input's page config and alignment: the factory schedules the input's physical tiles.
     const auto& input = tensor_args.input;
+    const auto& in_layout = input.tensor_spec().tensor_layout();
     return TensorSpec(
         input.logical_shape(),
-        TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.output_mem_config));
+        TensorLayout(
+            input.dtype(),
+            in_layout.get_page_config(),
+            operation_attributes.output_mem_config,
+            in_layout.get_alignment()));
 }
 
 Tensor SoftmaxDeviceOperation::create_output_tensors(
@@ -53,12 +99,14 @@ Tensor softmax(
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool numeric_stable) {
+    bool numeric_stable,
+    const ThreadPlan& threads) {
     return ttnn::device_operation::launch<SoftmaxDeviceOperation>(
         SoftmaxParams{
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
             .numeric_stable = numeric_stable,
+            .threads = threads,
         },
         SoftmaxInputs{.input = input_tensor});
 }

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/quasar/common/thread_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim::qsr {
@@ -16,6 +17,7 @@ struct BatchNormParams {
     float eps = 1e-5f;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    ThreadPlan threads;
 };
 
 struct BatchNormInputs {

@@ -36,6 +36,7 @@ Tensor softmax(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    bool numeric_stable);
+    bool numeric_stable,
+    const ThreadPlan& threads = {});
 
 }  // namespace ttnn::prim::qsr

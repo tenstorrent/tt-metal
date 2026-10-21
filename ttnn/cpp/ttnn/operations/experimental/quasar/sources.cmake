@@ -37,6 +37,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
     op_slicing/op_slicing.hpp
+    common/thread_plan.hpp
     layernorm/layernorm.hpp
     softmax/softmax.hpp
     batch_norm/batch_norm.hpp

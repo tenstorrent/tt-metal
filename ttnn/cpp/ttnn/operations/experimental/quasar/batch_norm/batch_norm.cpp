@@ -15,7 +15,11 @@ namespace {
 // HiFi4, approx off, fp32 accumulation for the per-channel scale / shift.
 DeviceComputeKernelConfig batch_norm_default_compute_config(tt::ARCH arch) {
     return init_device_compute_kernel_config(
-        arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, /*approx_mode=*/false, /*fp32_acc=*/true);
+        arch,
+        std::nullopt,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true);
 }
 }  // namespace
 
@@ -46,8 +50,9 @@ Tensor batch_norm(
         input.storage_type() == StorageType::DEVICE ? input.device()->arch() : ttnn::GetDefaultDevice()->arch();
     const auto kernel_config_val = compute_kernel_config.value_or(batch_norm_default_compute_config(arch));
 
+    const auto threads = ttnn::prim::qsr::thread_plan_from_env("TTNN_QSR_BATCH_NORM_THREADS", "batch_norm");
     return ttnn::prim::qsr::batch_norm(
-        input, *running_mean, *running_var, weight, bias, eps, output_memory_config, kernel_config_val);
+        input, *running_mean, *running_var, weight, bias, eps, output_memory_config, kernel_config_val, threads);
 }
 
 }  // namespace ttnn::operations::experimental::quasar

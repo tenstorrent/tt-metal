@@ -16,7 +16,11 @@ namespace {
 // kept in fp32 when the config asks for it.
 DeviceComputeKernelConfig softmax_default_compute_config(tt::ARCH arch) {
     return init_device_compute_kernel_config(
-        arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, /*approx_mode=*/false, /*fp32_acc=*/true);
+        arch,
+        std::nullopt,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true);
 }
 }  // namespace
 
@@ -46,7 +50,8 @@ Tensor softmax(
                                                                          : ttnn::GetDefaultDevice()->arch();
     const auto kernel_config_val = compute_kernel_config.value_or(softmax_default_compute_config(arch));
 
-    return ttnn::prim::qsr::softmax(input_tensor, output_memory_config, kernel_config_val, numeric_stable);
+    const auto threads = ttnn::prim::qsr::thread_plan_from_env("TTNN_QSR_SOFTMAX_THREADS", "softmax");
+    return ttnn::prim::qsr::softmax(input_tensor, output_memory_config, kernel_config_val, numeric_stable, threads);
 }
 
 }  // namespace ttnn::operations::experimental::quasar

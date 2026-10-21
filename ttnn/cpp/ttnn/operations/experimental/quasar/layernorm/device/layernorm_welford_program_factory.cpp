@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstdlib>
 #include <string>
 
 #include <tt-metalium/constants.hpp>
@@ -56,34 +55,9 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 // Thread plan: DM0 (DFB ISR) and DM1 (remapper) are reserved, leaving six DM harts; 4 readers + 2 writers
 // use all six, and the 4 NEOs each take a quarter of the rows. The reader side carries 2-3x the writer's
 // bytes (input twice minus the resident tail, plus gamma/beta/eps, vs. the output once), so it gets the
-// extra harts. Each writer hart drains 2 NEOs in rotation. TTNN_QSR_LAYERNORM_THREADS="R,C,W" overrides
-// for experiments (C % R == 0 and C % W == 0).
-struct ThreadPlan {
-    uint32_t reader = 4, compute = 4, writer = 2;
-};
-
-ThreadPlan thread_plan() {
-    ThreadPlan plan;
-    if (const char* env = std::getenv("TTNN_QSR_LAYERNORM_THREADS")) {
-        unsigned r = 0, c = 0, w = 0;
-        TT_FATAL(
-            std::sscanf(env, "%u,%u,%u", &r, &c, &w) == 3 && r > 0 && c > 0 && w > 0,
-            "TTNN_QSR_LAYERNORM_THREADS must be \"R,C,W\" with positive counts, got '{}'",
-            env);
-        plan = {.reader = r, .compute = c, .writer = w};
-    }
-    TT_FATAL(
-        plan.compute % plan.reader == 0,
-        "layer_norm: compute threads ({}) must be a multiple of reader threads ({}) for STRIDED rings",
-        plan.compute,
-        plan.reader);
-    TT_FATAL(
-        plan.compute % plan.writer == 0 && plan.writer <= plan.compute,
-        "layer_norm: compute threads ({}) must be a multiple of writer threads ({}) for STRIDED rings",
-        plan.compute,
-        plan.writer);
-    return plan;
-}
+// extra harts. Each writer hart drains 2 NEOs in rotation.
+// The plan is an op attribute (ThreadPlan, see common/thread_plan.hpp); the host entry reads the
+// TTNN_QSR_LAYERNORM_THREADS override.
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -98,7 +72,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
     const auto& gamma = tensor_args.weight;
     const auto& beta = tensor_args.bias;
     auto* device = input.device();
-    const ThreadPlan threads = thread_plan();
+    const ThreadPlan& threads = operation_attributes.threads;
     const uint32_t R = threads.reader;
     const uint32_t C = threads.compute;
     const uint32_t Wr = threads.writer;
@@ -258,14 +232,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
     if (beta.has_value() && beta->dtype() == DataType::FLOAT32) {
         compute_hw.unpack_modes.emplace(BETA_DFB, UnpackMode::UnpackToSrc);
     }
-    // TEMPORARY (sim bring-up): extra include path, e.g. a stub welford LLK for Quasar JIT experiments.
+    // TEMPORARY (sim bring-up, see LayerNormParams): stub-LLK include path and debug define.
     m2::KernelSpec::CompilerOptions::IncludePaths compute_includes;
-    if (const char* inc = std::getenv("TTNN_QSR_LAYERNORM_EXTRA_INC")) {
-        compute_includes.emplace_back(inc);
+    if (!operation_attributes.extra_include_path.empty()) {
+        compute_includes.emplace_back(operation_attributes.extra_include_path);
     }
     auto compute_defines = affine_defines;
-    if (const char* def = std::getenv("TTNN_QSR_LAYERNORM_EXTRA_DEFINE")) {
-        compute_defines.emplace(def, "1");
+    if (!operation_attributes.extra_define.empty()) {
+        compute_defines.emplace(operation_attributes.extra_define, "1");
     }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,

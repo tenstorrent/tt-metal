@@ -33,3 +33,61 @@ def test_quasar_softmax(device, shape, numeric_stable):
     out = ttnn.experimental.quasar.softmax(tx, dim=-1, numeric_stable=numeric_stable)
     out = ttnn.to_torch(out).float()
     assert_with_pcc(ref, out, 0.999)
+
+
+# ---- contract rejections (host-side validation, run on every arch) ----
+
+
+def test_quasar_softmax_rejects_unaligned_width(device, expect_error):
+    x = ttnn.from_torch(torch.randn((1, 1, 32, 100), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must be a multiple of 32 with no padded columns"):
+        ttnn.experimental.quasar.softmax(x, dim=-1)
+
+
+def test_quasar_softmax_rejects_non_last_dim(device, expect_error):
+    x = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "only implements the last dimension"):
+        ttnn.experimental.quasar.softmax(x, dim=2)
+
+
+def test_quasar_softmax_rejects_fp32_input(device, expect_error):
+    x = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "input must be BFLOAT16"):
+        ttnn.experimental.quasar.softmax(x, dim=-1)
+
+
+def test_quasar_softmax_rejects_row_major_input(device, expect_error):
+    x = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must have TILE layout"):
+        ttnn.experimental.quasar.softmax(x, dim=-1)
+
+
+@pytest.mark.parametrize(
+    "plan, message",
+    [
+        ("3,4,2", "must be a multiple of reader threads"),
+        ("2,4,3", "must be a multiple of writer threads"),
+        ("4,8,2", "exceed the 4 NEOs"),
+        ("4,4,4", "exceed the 6 free DM harts"),
+        ("-1,4,2", 'must be "R,C,W"'),
+        ("4,4,2x", 'must be "R,C,W"'),
+    ],
+)
+def test_quasar_softmax_rejects_bad_thread_plan(device, expect_error, monkeypatch, plan, message):
+    monkeypatch.setenv("TTNN_QSR_SOFTMAX_THREADS", plan)
+    x = ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.quasar.softmax(x, dim=-1)
+
+
+@pytest.mark.parametrize("plan", ["1,4,1", "2,4,4", "1,1,1"])
+def test_quasar_softmax_thread_plan_override(device, monkeypatch, plan):
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-native kernels (DFB implicit sync, multi-hart DM / NEO threading)")
+    monkeypatch.setenv("TTNN_QSR_SOFTMAX_THREADS", plan)
+    torch.manual_seed(0)
+    x = torch.randn((1, 1, 96, 256), dtype=torch.bfloat16)
+    ref = torch.softmax(x.float(), dim=-1)
+    tx = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.experimental.quasar.softmax(tx, dim=-1)).float()
+    assert_with_pcc(ref, out, 0.999)

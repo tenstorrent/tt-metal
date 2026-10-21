@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/quasar/common/thread_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim::qsr {
@@ -14,6 +15,7 @@ struct SoftmaxParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
     bool numeric_stable = true;
+    ThreadPlan threads;
 };
 
 struct SoftmaxInputs {

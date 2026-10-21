@@ -41,6 +41,7 @@ Tensor batch_norm(
     const std::optional<Tensor>& bias,
     float eps,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const ThreadPlan& threads = {});
 
 }  // namespace ttnn::prim::qsr

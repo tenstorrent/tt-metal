@@ -4,7 +4,9 @@
 
 #include "layernorm.hpp"
 
+#include <cstdlib>
 #include <optional>
+#include <string>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/quasar/layernorm/device/layernorm_device_operation.hpp"
@@ -16,7 +18,11 @@ namespace {
 // this library does not depend on ttnn_op_normalization.
 DeviceComputeKernelConfig default_compute_config(tt::ARCH arch) {
     return init_device_compute_kernel_config(
-        arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, /*approx_mode=*/false, /*fp32_acc=*/true);
+        arch,
+        std::nullopt,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true);
 }
 }  // namespace
 
@@ -44,6 +50,11 @@ Tensor layer_norm(
     const ttnn::prim::LayerNormProgramConfig program_config_val =
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true});
 
+    // Experiment knobs (thread plan; TEMPORARY stub-LLK include path / debug define) travel as op attributes.
+    const auto threads = ttnn::prim::qsr::thread_plan_from_env("TTNN_QSR_LAYERNORM_THREADS", "layer_norm");
+    const char* extra_inc = std::getenv("TTNN_QSR_LAYERNORM_EXTRA_INC");
+    const char* extra_def = std::getenv("TTNN_QSR_LAYERNORM_EXTRA_DEFINE");
+
     return ttnn::prim::qsr::layer_norm(
         input_tensor,
         epsilon,
@@ -53,7 +64,11 @@ Tensor layer_norm(
         output_memory_config,
         program_config_val,
         kernel_config_val,
-        recip_tensor);
+        recip_tensor,
+        std::nullopt,
+        threads,
+        extra_inc ? std::string(extra_inc) : std::string{},
+        extra_def ? std::string(extra_def) : std::string{});
 }
 
 }  // namespace ttnn::operations::experimental::quasar

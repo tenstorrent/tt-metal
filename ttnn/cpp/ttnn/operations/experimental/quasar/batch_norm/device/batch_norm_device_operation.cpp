@@ -5,12 +5,38 @@
 #include "batch_norm_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tile.hpp>
 
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
+
+namespace {
+// True when the padded shape is the logical shape with only the last two dims rounded up to whole tiles.
+bool batch_norm_is_minimally_tile_padded(const Tensor& t) {
+    const auto& logical = t.logical_shape();
+    const auto& padded = t.padded_shape();
+    const auto& tile = t.tensor_spec().tile();
+    if (logical.rank() != padded.rank()) {
+        return false;
+    }
+    for (int d = 0; d < static_cast<int>(logical.rank()); ++d) {
+        uint32_t expected = logical[d];
+        if (d == static_cast<int>(logical.rank()) - 1) {
+            expected = tt::round_up(expected, tile.get_width());
+        } else if (d == static_cast<int>(logical.rank()) - 2) {
+            expected = tt::round_up(expected, tile.get_height());
+        }
+        if (padded[d] != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
 
 BatchNormDeviceOperation::program_factory_t BatchNormDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
@@ -31,6 +57,18 @@ void BatchNormDeviceOperation::validate_on_program_cache_miss(
         input.dtype() == DataType::BFLOAT16,
         "Quasar batch_norm: input must be BFLOAT16 (no BFLOAT8_B on Quasar; FLOAT32 not implemented), got: {}",
         input.dtype());
+    TT_FATAL(
+        input.tensor_spec().tile() == Tile{},
+        "Quasar batch_norm requires standard 32x32 tiles, got {}x{}",
+        input.tensor_spec().tile().get_height(),
+        input.tensor_spec().tile().get_width());
+    // The factory schedules every physical tile of every (n, c) plane, so the padded shape must be the logical
+    // shape rounded up to whole tiles and nothing more.
+    TT_FATAL(
+        batch_norm_is_minimally_tile_padded(input),
+        "Quasar batch_norm does not support padding beyond the last logical tile (logical {}, padded {})",
+        input.logical_shape(),
+        input.padded_shape());
 
     const uint32_t channels = input.logical_shape()[1];
     auto check_param = [&](const Tensor& t, const char* name) {
@@ -52,6 +90,18 @@ void BatchNormDeviceOperation::validate_on_program_cache_miss(
             name,
             t.logical_shape()[1],
             channels);
+        // The reader fetches page c for channel c: exactly one standard tile per channel.
+        TT_FATAL(
+            t.tensor_spec().tile() == Tile{},
+            "Quasar batch_norm requires standard 32x32 {} tiles, got {}x{}",
+            name,
+            t.tensor_spec().tile().get_height(),
+            t.tensor_spec().tile().get_width());
+        TT_FATAL(
+            t.padded_shape() == Shape({1, channels, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+            "{} must have exactly one tile per channel (padded shape [1, C, 32, 32]), got padded shape {}",
+            name,
+            t.padded_shape());
     };
     check_param(tensor_args.running_mean, "running_mean");
     check_param(tensor_args.running_var, "running_var");
@@ -65,10 +115,16 @@ void BatchNormDeviceOperation::validate_on_program_cache_miss(
 
 TensorSpec BatchNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Keep the input's page config and alignment: the factory schedules the input's physical tiles.
     const auto& input = tensor_args.input;
+    const auto& in_layout = input.tensor_spec().tensor_layout();
     return TensorSpec(
         input.logical_shape(),
-        TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.output_mem_config));
+        TensorLayout(
+            input.dtype(),
+            in_layout.get_page_config(),
+            operation_attributes.output_mem_config,
+            in_layout.get_alignment()));
 }
 
 Tensor BatchNormDeviceOperation::create_output_tensors(
@@ -84,12 +140,14 @@ Tensor batch_norm(
     const std::optional<Tensor>& bias,
     float eps,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const ThreadPlan& threads) {
     return ttnn::device_operation::launch<BatchNormDeviceOperation>(
         BatchNormParams{
             .eps = eps,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
+            .threads = threads,
         },
         BatchNormInputs{
             .input = input,
