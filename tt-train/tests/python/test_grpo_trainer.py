@@ -35,11 +35,9 @@ from __future__ import annotations
 import collections
 import contextlib
 import csv
-import os
 import queue
-import subprocess
-import sys
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -52,8 +50,16 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
-from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs, save_checkpoint
-from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout
+from ttml.trainers.grpo_trainer import (
+    RemoteRolloutConfig,
+    grpo_ttml_model,
+    layout_microbatch,
+    place_old_nlog_probs,
+    save_checkpoint,
+)
+from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
+from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout, sync_remote_rollout_batch_source
+from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
@@ -516,8 +522,6 @@ def test_grpo_config_rejects_invalid_lr_and_clip(expect_error, override, message
 
 
 def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_error):
-    from types import SimpleNamespace
-
     from ttml.common.utils import validate_clip_grad_norm
 
     replicated, sharded = object(), object()
@@ -800,18 +804,15 @@ class _EchoSampler(RolloutSampler):
             raise ValueError(f"version {version} <= {self._version}")
         self._version = version
 
+    def close(self):
+        self.closed = True
 
-def test_mpi_rollout_loopback(monkeypatch, expect_error):
-    """Real MPIRolloutServer (in a thread) against the real MPIRolloutClient, with MPI
-    replaced by one in-memory queue per tag. In order:
 
-    1. send_weights delivers the version, and the client consumes the transfer response.
-    2. remote_generate returns completions, log-probs cut to each completion's length, and the version.
-    3. A raising generate() reaches the client as OP_ERROR: a RuntimeError with rank 1's traceback.
-    4. A raising update_weights() reaches the client the same way.
-    5. After both errors the protocol is still in sync: the next remote_generate works.
-    """
+@pytest.fixture
+def mpi_loopback(monkeypatch):
+    """Replace MPI with one in-memory queue per tag; returns (queues, atexit hooks)."""
     queues = collections.defaultdict(queue.Queue)
+    at_exit = []
     monkeypatch.setattr(mpi_rollout, "_mpi_send_bytes", lambda data, peer, tag: queues[tag].put(bytes(data)))
     monkeypatch.setattr(mpi_rollout, "_mpi_recv_bytes", lambda n, peer, tag: queues[tag].get(timeout=30))
     monkeypatch.setattr(
@@ -821,12 +822,31 @@ def test_mpi_rollout_loopback(monkeypatch, expect_error):
     )
     # Without real MPI: no os._exit, and no shutdown at pytest exit.
     monkeypatch.setattr(mpi_rollout, "exit_on_error", contextlib.nullcontext)
-    monkeypatch.setattr(mpi_rollout.atexit, "register", lambda fn: None)
-    bridge, sampler = _LoopbackBridge(), _EchoSampler()
+    monkeypatch.setattr(mpi_rollout.atexit, "register", at_exit.append)
+    return queues, at_exit
+
+
+def _start_rollout_server(sampler):
+    """Connect a client to an MPIRolloutServer serving ``sampler`` in a thread."""
+    bridge = _LoopbackBridge()
     server = mpi_rollout.MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=sampler)
     client = mpi_rollout.MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    return client, thread
+
+
+def test_mpi_rollout_loopback(mpi_loopback, expect_error):
+    """Real MPIRolloutServer (in a thread) against the real MPIRolloutClient, with MPI
+    replaced by one in-memory queue per tag. In order:
+
+    1. send_weights delivers the version, and the client consumes the transfer response.
+    2. remote_generate returns completions, log-probs cut to each completion's length, and the version.
+    3. A raising generate() reaches the client as OP_ERROR: a RuntimeError with rank 1's traceback.
+    4. A raising update_weights() reaches the client the same way.
+    5. After both errors the protocol is still in sync: the next remote_generate works.
+    """
+    client, thread = _start_rollout_server(_EchoSampler())
 
     client.send_weights({}, version=0)
     assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0)
@@ -841,26 +861,68 @@ def test_mpi_rollout_loopback(monkeypatch, expect_error):
     thread.join(timeout=30)
 
 
-_RAISE_AFTER_CONNECT = """
-from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout
-
-class _Bridge:
-    def connect(self):
-        pass
-
-mpi_rollout._require_distributed_context = lambda owner: mpi_rollout.TTML_RANK
-mpi_rollout._mpi_send_bytes = lambda data, peer, tag: print("sent op", int.from_bytes(bytes(data)[:4], "little"), flush=True)
-client = mpi_rollout.MPIRolloutClient(peer_rank=mpi_rollout.TTT_RANK, bridge=_Bridge())
-raise ValueError("trainer failed")
-"""
+class _IdsTokenizer:
+    def decode(self, ids, **kwargs):
+        return str(ids)
 
 
-def test_mpi_rollout_client_sends_shutdown_when_process_raises():
-    """A process that raises after connecting sends OP_SHUTDOWN once, from atexit."""
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
-    result = subprocess.run(
-        [sys.executable, "-c", _RAISE_AFTER_CONNECT], capture_output=True, text=True, timeout=120, env=env
+def _failing_reward(completions, **kwargs):
+    raise ValueError("reward failed")
+
+
+def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs):
+    """A real GRPOTrainer on the ttt_remote_sync backend whose rollouts go through ``client``.
+    Device, fabric and MPI setup are patched out."""
+
+    def build_policy(self, transformer_config, device_config, dataset_func):
+        self.rollout_batch_source = SyncRemoteRolloutBatchSource(
+            client=client,
+            prompts=[[1, 2]],
+            extra_columns={},
+            batch_prompts=1,
+            tokenizer=_IdsTokenizer(),
+            reward_funcs=reward_funcs,
+            num_generations=1,
+            max_completion_length=4,
+            weight_sync_every=1,
+        )
+
+    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config: None)
+    monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
+    monkeypatch.setattr(GRPOTrainer, "_build_policy", build_policy)
+    monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    config = GRPOConfig(
+        **{
+            **_HOST_GRPO_CONFIG,
+            "rollout_backend": "ttt_remote_sync",
+            "remote_rollout": RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=1, max_seq_len=64),
+        }
     )
-    assert result.returncode == 1
-    assert "ValueError: trainer failed" in result.stderr
-    assert result.stdout.splitlines().count(f"sent op {mpi_rollout.OP_SHUTDOWN}") == 1
+    return GRPOTrainer(
+        transformer_config=SimpleNamespace(model_type="llama"),
+        device_config=SimpleNamespace(enable_fsdp=False),
+        model_source=HF_MODEL_ID,
+        dataset_func=lambda: None,
+        config=config,
+        reward_funcs=reward_funcs,
+        optimizer_dict={},
+    )
+
+
+def test_failed_trainer_shuts_down_the_rollout_server(mpi_loopback, monkeypatch, expect_error):
+    """A trainer that fails mid-run sends OP_SHUTDOWN; the rollout server stops and closes its
+    sampler, and the atexit backstop sends nothing more."""
+    queues, at_exit = mpi_loopback
+    sampler = _EchoSampler()
+    client, server_thread = _start_rollout_server(sampler)
+    trainer = _trainer_with_remote_rollout(monkeypatch, client, reward_funcs=[_failing_reward])
+
+    with expect_error(ValueError, "reward failed"):
+        trainer.train()
+
+    server_thread.join(timeout=30)
+    assert not server_thread.is_alive()
+    assert sampler.closed
+    assert at_exit == [client.shutdown]
+    at_exit[0]()
+    assert queues[mpi_rollout._INFER_REQ_HDR_TAG].empty()
