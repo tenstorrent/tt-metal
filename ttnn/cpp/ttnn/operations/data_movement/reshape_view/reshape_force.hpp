@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement::detail {
 // Verification-only entry points that pin which reshape implementation runs, so bit-exactness and device time
 // of each can be checked. Bound only under `ttnn._ttnn.operations.data_movement`; use `ttnn::reshape` elsewhere.
 
-// The existing implementation, unconditionally. Input normalization is identical to `ttnn::reshape`.
+// The native implementation, unconditionally. Input normalization is identical to `ttnn::reshape`.
 ttnn::Tensor reshape_force_native(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int32_t>& shape,
