@@ -49,9 +49,13 @@ def extract_logits(logits, distributed=False):
 
 
 def get_tp_size(shard_dim=None):
-    ctx = ttml.autograd.AutoContext.get_instance()
-    pctx = ctx.get_parallelism_context()
-    return pctx.get_tp_size()
+    """Ranks along mesh axis ``shard_dim``, or along the "tp" axis when none is given; 1 without a mesh."""
+    mesh = ttml.maybe_mesh()
+    if mesh is None:
+        return 1
+    if shard_dim is not None:
+        return mesh.shape[shard_dim]
+    return mesh.axis_size("tp") if mesh.has_axis("tp") else 1
 
 
 def tile_pad(dim: int) -> int:

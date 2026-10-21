@@ -477,7 +477,7 @@ def run_backward_comparison(
     ttml_loss.backward(False)
 
     if dp_size > 1:
-        ttml.core.distributed.synchronize_gradients(ttml_model.parameters())
+        ttml.sync_gradients(ttml_model.parameters())
 
     if track_memory:
         MemoryUsageTracker.snapshot("BACKWARD_PASS")

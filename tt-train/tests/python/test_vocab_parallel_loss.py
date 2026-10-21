@@ -52,10 +52,7 @@ def setup_device(dp_size: int, tp_size: int, seed: int = 42):
             f"\nEnabling distributed mode: DP={dp_size}, TP={tp_size} "
             f"({dp_size * tp_size} devices, mesh [{dp_size}, {tp_size}])"
         )
-        ttml.open_device_mesh((dp_size, tp_size))
-        ctx.initialize_parallelism_context(
-            ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
-        )
+        ttml.open_device_mesh(ttml.Mesh((dp_size, tp_size), ("dp", "tp")))
     else:
         ctx.open_device()
     ctx.set_seed(seed)

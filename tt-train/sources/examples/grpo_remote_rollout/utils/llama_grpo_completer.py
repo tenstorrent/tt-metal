@@ -107,11 +107,9 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         mesh_device: Any,
         model_source: str,
         inference_client: Optional[MPIRolloutClient] = None,
-        enable_ddp: bool = False,
     ) -> None:
         tf_config = transformer_config
 
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
         self._mesh_device: Any = mesh_device
         self._num_devices: int = mesh_device.get_num_devices()
 
@@ -141,15 +139,9 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
 
         tt_model = LlamaCompositeKV(llama_cfg)
 
-        if enable_ddp:
-            autograd_ctx.initialize_parallelism_context(
-                ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
-            )
-
-        self._ddp_enabled: bool = (
-            autograd_ctx.is_parallelism_context_initialized()
-            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-        )
+        # The batch is split across the batch axes of the mesh the caller opened.
+        mesh = ttml.maybe_mesh()
+        self._ddp_enabled: bool = mesh is not None and bool(mesh.batch_axes)
         self._dp_mapper: Any = (
             ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if self._ddp_enabled else None
         )

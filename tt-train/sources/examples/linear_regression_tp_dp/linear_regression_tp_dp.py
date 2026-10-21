@@ -35,7 +35,6 @@ import argparse
 import math
 import numpy as np
 from typing import Optional
-from ttml.autograd import DistributedConfig
 
 import ttnn
 import ttml
@@ -284,22 +283,14 @@ def main():
     batch_size = args.batch_size
     use_row_parallel = args.row
 
-    # Enable fabric BEFORE opening the device
-    ttml.core.distributed.enable_fabric(num_devices)
-
-    # Open device with mesh shape
+    # Open the [dp, tp] mesh (fabric included)
+    mesh = ttml.Mesh((mesh_rows, mesh_cols), ("dp", "tp"))
+    ttml.open_device_mesh(mesh)
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    autograd_ctx.open_device([mesh_rows, mesh_cols])
     device = autograd_ctx.get_device()
-
-    # Initialize parallelism context for TP+DP
-    autograd_ctx.initialize_parallelism_context(DistributedConfig(enable_ddp=True, enable_tp=True))
-
-    # Get parallelism parameters from context
-    pctx = autograd_ctx.get_parallelism_context()
-    tp_axis = pctx.get_tp_axis()
-    dp_size = pctx.get_ddp_size()
-    tp_size = pctx.get_tp_size()
+    tp_axis = mesh.axis_index("tp")
+    dp_size = mesh.axis_size("dp")
+    tp_size = mesh.axis_size("tp")
 
     # Validate dimensions
     if num_features % tp_size != 0:
@@ -480,7 +471,7 @@ def main():
             loss.backward(False)
 
             # Synchronize gradients across DP groups
-            ttml.core.distributed.synchronize_gradients(model.parameters())
+            ttml.sync_gradients(model.parameters())
 
             # Optimizer step
             optimizer.step()
@@ -491,7 +482,7 @@ def main():
     print("\nTraining complete!")
 
     # Cleanup
-    autograd_ctx.close_device()
+    ttml.close_device_mesh()
 
 
 if __name__ == "__main__":

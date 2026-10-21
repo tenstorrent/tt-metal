@@ -864,7 +864,7 @@ def main():
         # Synchronize gradients across DP groups (all-reduce along mesh dim 0)
         if dp_size > 1:
             t0 = time.time()
-            ttml.core.distributed.synchronize_gradients(ttml_model.parameters())
+            ttml.sync_gradients(ttml_model.parameters())
             t0 = _tlog(step, "sync_grads", t0)
 
         # Average accumulated loss

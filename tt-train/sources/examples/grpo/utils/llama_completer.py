@@ -14,7 +14,7 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad, round_up_to_tile
+from ttml.common.utils import build_mesh, no_grad, round_up_to_tile
 from ttml.models import RunnerType
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
@@ -86,7 +86,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         transformer_config: A :class:`ttml.common.config.TransformerConfig`.
         device_config: Device mesh config (a
             :class:`ttml.common.config.DeviceConfig` instance). Device
-            initialisation (``enable_fabric``, ``open_device``) is delegated
+            initialisation (``ttml.open_device_mesh``) is delegated
             to :meth:`setup_device`, which the constructor calls. Subclasses
             and tests may override ``setup_device`` to swap that behaviour
             (e.g. reuse an already-open device).
@@ -95,7 +95,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
     """
 
     def setup_device(self, device_config: DeviceConfig) -> Any:
-        """Enable fabric (multi-device) and open the AutoContext mesh device.
+        """Open the named device mesh (``build_mesh``) and return its device.
 
         Returns the resulting ``ttnn.MeshDevice``. Tests may override this
         method (e.g. via ``monkeypatch.setattr``) to reuse a device that was
@@ -106,11 +106,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
         ``_mesh_device``/``_num_devices`` will be inconsistent with the rest
         of the completer.
         """
-        if device_config.total_devices() > 1:
-            ttml.core.distributed.enable_fabric(device_config.total_devices())
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
-        return autograd_ctx.get_device()
+        device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
+        ttml.open_device_mesh(build_mesh(device_config), device_ids)
+        return ttml.autograd.AutoContext.get_instance().get_device()
 
     def __init__(
         self,
@@ -127,7 +125,6 @@ class LlamaGRPOCompleter(GRPOCompleter):
         # the trainer that drives it) only handles single-device or DDP today;
         # tensor parallelism is intentionally not supported here.
         mesh_device: Any = self.setup_device(dev_config)
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
         self._mesh_device: Any = mesh_device
         self._num_devices: int = mesh_device.get_num_devices()
 
@@ -160,31 +157,21 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         tt_model = Llama(llama_cfg)
 
-        if dev_config.enable_ddp:
-            # NOTE: TP is intentionally disabled here. The cross_entropy_loss call below
-            # assumes full-vocab logits;
-            autograd_ctx.initialize_parallelism_context(
-                ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
-            )
-
-        # Resolve DDP state once after the parallelism context is (maybe)
-        # initialised so callers can use the cached mapper/composer/flags
-        # without re-querying ``AutoContext``.
-        self._ddp_enabled: bool = (
-            autograd_ctx.is_parallelism_context_initialized()
-            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-        )
+        # TP is intentionally not supported here: the cross_entropy_loss call below assumes full-vocab logits.
+        # The batch is split across the mesh's batch axes; the cached mapper/composer/flags spare callers from
+        # re-querying the mesh.
+        mesh = ttml.maybe_mesh()
+        batch_axes = mesh.batch_axes if mesh is not None else []
+        self._ddp_enabled: bool = bool(batch_axes)
         self._dp_mapper: Any = (
             ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if self._ddp_enabled else None
         )
         self._dp_composer: Any = (
             ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if self._ddp_enabled else None
         )
-        # Mesh axis to seed UNIQUELY in the sample op: the DDP (data-parallel) axis, whose devices hold
-        # DISTINCT prompts and must draw independent Gumbel noise. TP is disabled on this path (see
-        # above), so the ddp axis is the only sharded axis; None => no per-device seeding (identical noise).
-        ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if self._ddp_enabled else None
-        self._seed_axes: Any = [int(ddp_axis)] if ddp_axis is not None else None
+        # Mesh axes to seed UNIQUELY in the sample op: the batch axes, whose devices hold DISTINCT prompts and must
+        # draw independent Gumbel noise; None => no per-device seeding (identical noise).
+        self._seed_axes: Any = [mesh.axis_index(axis) for axis in batch_axes] or None
 
         if local_checkpoint:
             logging.info("Loading model from local safetensors: %s", model_source)

@@ -178,7 +178,7 @@ def unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
 
 
 def initialize_device(yaml_config: dict):
-    """Initialize device mesh from configuration.
+    """Open the device mesh described by the configuration, its axes named by :func:`build_mesh`.
 
     Args:
         yaml_config: Dictionary containing device configuration
@@ -186,9 +186,8 @@ def initialize_device(yaml_config: dict):
     from ttml.common.config import DeviceConfig
 
     device_config = DeviceConfig(yaml_config)
-    if device_config.total_devices() > 1:
-        ttml.core.distributed.enable_fabric(device_config.total_devices())
-    ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
+    device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
+    ttml.open_device_mesh(build_mesh(device_config), device_ids)
 
 
 def create_optimizer(model, yaml_config: dict):

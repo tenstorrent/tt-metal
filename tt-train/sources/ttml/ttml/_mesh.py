@@ -187,11 +187,14 @@ def _validate_mgd(mesh: Mesh) -> None:
 _mesh: Mesh | None = None
 
 
-def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
+def open_device_mesh(
+    mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None, *, configure_fabric: bool = True
+):
     """Initialize the global device mesh and open the underlying TT devices.
 
     When more than one device is requested the MGD file is validated and the
-    TT-Fabric interconnect is enabled.  A plain tuple is accepted for backward
+    TT-Fabric interconnect is enabled, unless ``configure_fabric`` is off for a
+    process that configured fabric itself. A plain tuple is accepted for backward
     compatibility and converted into a ``Mesh`` with anonymous axis names.
 
     If ``enable_fabric`` succeeds but the subsequent ``open_device`` raises
@@ -208,7 +211,7 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
         device_ids = ()
 
     fabric_enabled = False
-    if mesh.num_devices() > 1:
+    if configure_fabric and mesh.num_devices() > 1:
         _validate_mgd(mesh)
         ttml.core.distributed.enable_fabric(mesh.num_devices())
         fabric_enabled = True
@@ -280,14 +283,10 @@ def data_parallel_size() -> int:
     average restores the global mean.
     """
     m = maybe_mesh()
-    if m is not None:
-        data = ttml.core.distributed.AxisKind.Data
-        return prod(size for size, kind in zip(m.shape, m.axis_kinds) if kind == data)
-    ctx = ttml.autograd.AutoContext.get_instance()
-    if not ctx.is_parallelism_context_initialized():
+    if m is None:
         return 1
-    pctx = ctx.get_parallelism_context()
-    return pctx.get_ddp_size() * pctx.get_cp_size()
+    data = ttml.core.distributed.AxisKind.Data
+    return prod(size for size, kind in zip(m.shape, m.axis_kinds) if kind == data)
 
 
 def sync_gradients(parameters) -> None:
@@ -295,11 +294,15 @@ def sync_gradients(parameters) -> None:
 
     Each gradient is reduced only along mesh axes where its parameter is replicated: averaged over the data axes,
     and summed over a model axis where it differs across ranks (the partial gradients of sequence parallelism).
-    Both are read off the topologies, see ``ttml.core.distributed.gradient_reductions``. Without a named mesh the
-    ParallelismContext's axes are used, and without either this is a no-op.
+    Both are read off the topologies, see ``ttml.core.distributed.gradient_reductions``, and the axes' kinds off the
+    mesh opened by :func:`open_device_mesh`. A single device has nothing to reduce.
     """
     m = maybe_mesh()
     if m is None:
-        ttml.core.distributed.synchronize_gradients(parameters)
+        if ttml.autograd.AutoContext.get_instance().get_device().get_num_devices() > 1:
+            raise RuntimeError(
+                "sync_gradients needs the mesh's axis names to tell data axes from model axes: open the device with "
+                "ttml.open_device_mesh(ttml.Mesh(shape, axis_names))"
+            )
         return
     ttml.core.distributed.synchronize_gradients(parameters, m.axis_kinds)

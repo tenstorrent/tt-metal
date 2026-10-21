@@ -223,27 +223,9 @@ def tp_mesh():
 
     Skips the requesting tests on a host with too few devices for the shape. A host
     that has the devices but fails to open the mesh is a real failure and therefore,
-    not skipped. The parallelism context is initialised here too, since the qwen3
-    model paths resolve their TP size through it.
+    not skipped.
     """
-    dp_expected, tp_expected = TP_MESH_SHAPE
     with _fresh_device_mesh(TP_MESH_SHAPE, ("dp", "tp"), what="tp") as mesh:
-        ctx = ttml.autograd.AutoContext.get_instance()
-        if ctx.is_parallelism_context_initialized():
-            # ParallelismContext is a one-shot singleton with no reset hook, so an
-            # earlier module's may still be installed. It is only usable here if it
-            # describes this same shape -- reusing a mismatched one (a dp-enabled GRPO
-            # context, say) silently shards the model for the wrong device count
-            # instead of failing.
-            pctx = ctx.get_parallelism_context()
-            actual = (pctx.get_ddp_size(), pctx.get_tp_size())
-            if actual != (dp_expected, tp_expected):
-                raise RuntimeError(
-                    f"this process already installed a ParallelismContext for DP={actual[0]}, "
-                    f"TP={actual[1]} and it cannot be reset; needed DP={dp_expected}, TP={tp_expected}"
-                )
-        else:
-            ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
         yield mesh
 
 
@@ -258,9 +240,8 @@ FSDP_MESH_SHAPE = (1, 2)  # same shape as TP_MESH_SHAPE, so _MGD_FOR_ARCH_AND_SH
 def fsdp_mesh(fresh_device_mesh):
     """Open a ``[1, 2]`` mesh with axes ``("dp", "fsdp")``, per requesting module.
 
-    ``"fsdp"`` is the axis ``ttml.fsdp.fully_shard`` shards across by default. FSDP does not consult the
-    ParallelismContext, so none is installed here and this fixture is usable in a session before or after
-    ``tp_mesh`` modules. Module-scoped for the same reason as ``tp_mesh``; skips if the mesh cannot be opened.
+    ``"fsdp"`` is the axis ``ttml.fsdp.fully_shard`` shards across by default. Module-scoped for the same reason
+    as ``tp_mesh``; skips if the mesh cannot be opened.
 
     The mesh is closed at teardown so later test modules can lazily reopen
     a fresh single-device handle if they need to.

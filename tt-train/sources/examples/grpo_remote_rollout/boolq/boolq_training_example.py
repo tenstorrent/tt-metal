@@ -28,6 +28,7 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, get_model_config, load_config
+from ttml.common.utils import build_mesh
 from ttml.trainers import GRPOTrainer, get_grpo_config
 from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
 from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
@@ -96,16 +97,16 @@ def _load_device_config():
 
 
 def _open_ttml_device(device_config) -> Any:
-    # Do NOT call enable_fabric() here: fabric is already pinned FABRIC_2D at
+    # Do NOT configure fabric here: fabric is already pinned FABRIC_2D at
     # import. A repeat SetFabricConfig re-runs a control-plane reinit collective
     # with no peer (TTT never re-sets) and deadlocks device bring-up.
-    autograd_ctx = ttml.autograd.AutoContext.get_instance()
-    autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
-    return autograd_ctx.get_device()
+    device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
+    ttml.open_device_mesh(build_mesh(device_config), device_ids, configure_fabric=False)
+    return ttml.autograd.AutoContext.get_instance().get_device()
 
 
 def _close_ttml_device() -> None:
-    ttml.autograd.AutoContext.get_instance().close_device()
+    ttml.close_device_mesh()
 
 
 def _ttml_main() -> None:
@@ -152,7 +153,6 @@ def _ttml_main() -> None:
             transformer_config=transformer_config,
             mesh_device=mesh_device,
             model_source=model_id,
-            enable_ddp=device_config.enable_ddp,
         )
 
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
