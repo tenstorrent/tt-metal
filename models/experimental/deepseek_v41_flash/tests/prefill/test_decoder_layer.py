@@ -143,8 +143,8 @@ def test_decoder_layer_prefill(device, layers, seq_len, chunk):
             )
             actual[i][0].append(ttnn.to_torch(out).reshape(chunk, hc, -1).float())
             actual[i][1].append(ttnn.to_torch(out_pre).reshape(chunk, hc).float())
-        if shared.entry_sel is not None:
-            ttnn.deallocate(shared.entry_sel)
+        if shared.entry_idx is not None:
+            ttnn.deallocate(shared.entry_idx)
 
     # Reference: every layer over the whole prompt.
     for j, i in enumerate(layers):
