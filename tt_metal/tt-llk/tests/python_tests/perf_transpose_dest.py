@@ -24,7 +24,7 @@ from helpers.test_variant_parameters import (
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Int32],
+        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Int32],
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     math_transpose_faces=[Transpose.No, Transpose.Yes],
@@ -54,7 +54,7 @@ def test_perf_transpose_dest(
     configuration = PerfConfig(
         "sources/math_transpose_perf.cpp",
         formats,
-        run_types=[PerfRunType.L1_TO_L1],
+        run_types=[PerfRunType.L1_TO_L1, PerfRunType.MATH_ISOLATE],
         templates=[
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
