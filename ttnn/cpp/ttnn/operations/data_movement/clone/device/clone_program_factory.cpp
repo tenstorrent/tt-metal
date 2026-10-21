@@ -210,7 +210,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             return KernelSpec{
                 .unique_id = unique_id,
                 .source = "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
-                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+                .compiler_options = {.defines = {{"LLK_PACK_ADDR_RMW", "1"}}, .opt_level = KernelBuildOptLevel::O3},
                 .dfb_bindings =
                     {DFBBinding{
                          .dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},

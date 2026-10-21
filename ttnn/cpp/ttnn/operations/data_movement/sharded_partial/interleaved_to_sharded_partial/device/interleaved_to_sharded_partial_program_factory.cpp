@@ -236,6 +236,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
+        compute_desc.defines = {{"LLK_PACK_ADDR_RMW", "1"}};
         compute_desc.config = ComputeConfigDescriptor{};
     }
 

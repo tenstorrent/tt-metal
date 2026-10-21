@@ -207,6 +207,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         compute_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_g1.core_ranges = core_group_1;
         compute_g1.compile_time_args = {num_units_per_core_group_1};
+        compute_g1.defines = {{"LLK_PACK_ADDR_RMW", "1"}};
         compute_g1.config = ComputeConfigDescriptor{};
         desc.kernels.push_back(std::move(compute_g1));
 
@@ -216,6 +217,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
             compute_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
             compute_g2.core_ranges = core_group_2;
             compute_g2.compile_time_args = {num_units_per_core_group_2};
+            compute_g2.defines = {{"LLK_PACK_ADDR_RMW", "1"}};
             compute_g2.config = ComputeConfigDescriptor{};
             desc.kernels.push_back(std::move(compute_g2));
         }

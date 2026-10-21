@@ -207,7 +207,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             .source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp",
             // The legacy ComputeConfigDescriptor set no opt_level, which resolves to O3 for a compute
             // kernel; Metal 2.0's CompilerOptions defaults to O2, so O3 has to be stated here.
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = {{"LLK_PACK_ADDR_RMW", "1"}}, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{
                      .dfb_spec_name = IN_DFB,

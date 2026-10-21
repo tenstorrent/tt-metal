@@ -179,6 +179,7 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
         compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = used_cores;
+        compute_desc.defines = {{"LLK_PACK_ADDR_RMW", "1"}};
         compute_desc.config = ComputeConfigDescriptor{};
         compute_desc.compile_time_args = {num_units_per_shard};
     }
