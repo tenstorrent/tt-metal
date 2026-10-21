@@ -13,6 +13,7 @@
 //      the shards-arrived counter for the next call.
 
 #include <cstdint>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -22,16 +23,18 @@
 
 using namespace tt::tt_fabric;
 
-// One hop: 2D fabrics route by destination chip, 1D fabrics by hop count.
+// One hop: a 2D fabric's mesh header routes by destination chip, a 1D fabric's header by hop count. Keyed on the
+// header type, as in ccl/all_gather's unicast_common.hpp.
 FORCE_INLINE void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* header, uint16_t chip_id, uint16_t mesh_id) {
-#if (defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0)) || defined(EMULE_FABRIC_2D)
-    (void)fabric_set_unicast_route(header, chip_id, mesh_id);
-#else
-    (void)chip_id;
-    (void)mesh_id;
-    (void)fabric_set_unicast_route<false>(
-        reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(header), static_cast<uint16_t>(1));
-#endif
+    if constexpr (std::is_base_of_v<HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+        (void)fabric_set_unicast_route(
+            reinterpret_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(header), chip_id, mesh_id);
+    } else {
+        (void)chip_id;
+        (void)mesh_id;
+        (void)fabric_set_unicast_route<false>(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(header), static_cast<uint16_t>(1));
+    }
 }
 
 void kernel_main() {
