@@ -2298,3 +2298,60 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: fork `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/indexer_score/tests/unit/test_block_epilogue.py`;
   profile `DS41_INDEXER_GLUE=on|off` + the gate's profile command; final `python -m
   models.demos.common.bringup.orchestrator measure --task P.16`.
+
+## FIX.5 (overseer fix, attempt 1): ChunkMemo cleared at chunk start: NOT DONE, blocked by scope
+- The brief allows no model code: tasks.yaml FIX.5 has `paths: []`, so tt/ and hooks.py are read-only; the fix is
+  in tt/model.py. No code changed, no device run.
+- Patch for the retry (needs `paths: [models/demos/deepseek_v41_flash_d_p/tt]`): first lines of
+  `TtDS41Model.begin_chunk` (tt/model.py:682), before the engram early return:
+  `st = self.state` / `if st is not None and st.memo is not None: st.memo.clear()`. harness.begin_chunk calls it
+  before every chunk (profile and timeline runs alike).
+- Diagnosis note: memo keys already carry (start, cache id, cache version) (sparse_attention.py:251,
+  indexer.py:265), so another chunk misses; the stale hit needs the same start and an unchanged source version
+  (X.3 profile run -> timeline run of the same chunk). Clearing in begin_chunk covers both cases.
+- Re-run: the X.3 gate command in the FIX.5 brief.
+
+## FIX.6 (overseer fix, attempt 1): reference numerics switch official | native
+- `DS41Reference(..., numerics="official" | "native")` (reference/ds41_ref.py, docstring "Numerics"), passed by
+  `hooks.reference(spec, layers=None, dtype=None, numerics="official")`. One switch: `_q8` (fp8 act q-dq per 32) and
+  `_q4` (fp4 q-dq) at every call site, `_fp8_linear` = mm(_q8(x), w). native: all are x.float(): fp8 inputs of q_a,
+  kv, wq_b, wo_b, indexer wq_b, engram wkv, shared / routed experts x and h; window-KV fp8; attention output fp8
+  before wo_a; compressed-KV, index-key and index-query fp4. Weights unchanged (exact dequant).
+- Nothing else to remove: the reference has no TF32 rounding and casts no intermediate to bf16 (it computes in fp32).
+  `kernels.attend`'s bf16 P only runs on bf16 inputs, which only the oracle passes. kernels.py is untouched: the
+  oracle (hf_oracle.py) keeps running the faithful port, and official stays bit for bit (DS41-1: same tiled GEMMs).
+- `with_numerics(n)`: shallow copy that shares weights, tables and hasher (the test loads the weights once).
+- Gate (CPU, 35 min): R.2 every layer maxabs 0, logits pcc 1.0, top1 1.0; R.3 hidden / state pcc 1.000000000,
+  graph replay 0 for every block type.
+- reference/test_numerics.py (CPU): (1) at 512 tokens, the official forward calls the quantizers
+  (act_quant_dequant 3472, fp4_quant_dequant 10 on the real checkpoint); the native forward runs with every
+  kernels.py quantizer patched to raise. (2) At 4096 tokens, one-shot: rel of native vs official.
+  rel = ||native - official|| / ||official||:
+    | checkpoint | L0 | L1 | L2 | L3 | L14 | L20 | L21 | L24 | final_norm |
+    |---|---|---|---|---|---|---|---|---|---|
+    | real (BRINGUP_SCALED=0) | .0281 | .0270 | .0315 | .0360 | .0910 | .1411 | .0308 | .0201 | .2886 |
+    | scaled quietbox_2x2 | .0285 | .0355 | .0525 | .0741 | .1205 | .1848 | .1724 | .1984 | .2145 |
+  L0 steps (identical inputs): q_resid .0115 (one fp8 q-dq; DS41-72 had .0116), kv .0289, attn_out .043.
+  L20: router row-rel median .51, top-k overlap .85 / .79 (real / scaled). Logits top-1 agreement over the last 512
+  positions: .45 / .51. These are the partial model's layers (0-3, 14, 20, 21, 24, chained).
+  Bounds: L0 q_resid in (.008, .016), kv in (.020, .040); layers < 0.3; final_norm < 0.4.
+- Not ~1e-2 as the brief expected: one fp8 rounding alone is 1.15 %, and routing and top-k flips compound it (DS41-90).
+- Heads-up (DS41-89): now that the hook takes `numerics`, component / swap tests get the native reference
+  (defaults.yaml tests.step_numerics: native), but the device's MAX_PRECISION is still NUMERICS=official. Those tests
+  were not rerun here; F128 should switch both together. tt/settings.py NUMERICS text ("the reference hook has no
+  numerics switch") is now stale; settings.py was outside this step's paths.
+- Gotcha: run the CPU test with `--no-precompile`. The wrapper's up-front collect pass gave other numbers (scaled
+  L24 .334, 1562 vs 1328 quantizer calls) than the real pass, which matched a standalone script exactly.
+- Re-run: the gate in the FIX.6 brief; `BRINGUP_SCALED=0|1 scripts/run_safe_pytest.sh --no-precompile --run-all
+  models/demos/deepseek_v41_flash_d_p/reference/test_numerics.py` (scaled ~8 min, real ~12 min).
+
+## FIX.6 (overseer fix, attempt 2): no code change; attempt 1's switch stands
+- Attempt 1 passed the gate (R.2 maxabs 0 on all 25 layers, logits pcc 1.0; R.3 pcc 1.000000000, replay 0). Only the
+  commit failed: pre-commit `check-large-files` refused bringup/state.json (502 KB then, 516 KB now, limit 500 KB).
+  state.json is the orchestrator's file and outside this step's paths, so this attempt cannot shrink it. The
+  orchestrator must trim it, or commit it apart from the hook, before FIX.6 can land.
+- Reviewed attempt 1's diff again: every K.act_quant_dequant / K.fp4_quant_dequant call in ds41_ref.py goes through
+  `_q8` / `_q4`. Only the module-level `fp8_linear` (ds41_ref.py:308) still calls K directly, and the per-layer
+  steps no longer use it (they call `self._fp8_linear`). reference/test_numerics.py makes every K quantizer raise
+  under native.
+- Reran the gate unchanged (result in the summary below / results/FIX.6.json).
