@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     STEADY_STATE_LTX_PROMPT,
@@ -31,7 +32,6 @@ from models.tt_dit.utils.ltx import (
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
-from models.tt_dit.utils.vbench import assert_vbench_quality
 
 from .ltx_mesh_params import (
     LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
@@ -220,7 +220,7 @@ def test_pipeline_distilled(
     if run_clip:
         __import__("decord")
 
-    def check_output_with_vbench(prompt, number, seed=None):
+    def check_output_with_vbench(prompt, number, seed, num_seeds=1):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
@@ -230,51 +230,37 @@ def test_pipeline_distilled(
         if thresholds is None:
             pytest.skip(f"no VBench thresholds calibrated for height {height}")
 
-        # Gate on the average of VBENCH_SEEDS traced replays (default 5): a single clip's VBench score
-        # is too noisy to gate on — dynamic_degree is near-binary per clip — so score the set together
-        # (VBench averages over a directory). The primary clip (`number`, `seed`) is already rendered;
-        # the rest are cheap warm replays. A single-clip caller (no seed) or OUTPUT_PATH (one pinned
-        # filename) keeps the one-clip path.
-        num_seeds = int(os.environ.get("VBENCH_SEEDS", "5"))
-        if export_dir and (seed is None or num_seeds != 5 or os.environ.get("OUTPUT_PATH")):
-            raise ValueError("CI VBench export requires five distinct traced seed clips")
-        if seed is None or num_seeds <= 1 or os.environ.get("OUTPUT_PATH"):
-            output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
-            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
-            return
+        # One prompt over `num_seeds` seeds: a single clip's VBench score is too noisy to gate on
+        # (dynamic_degree is near-binary per clip). The clip at `seed` is already rendered; the rest
+        # are cheap warm replays.
+        # VBENCH_TEMPORAL_WIDTH scores motion_smoothness / dynamic_degree on a reduced-width lossless
+        # copy so the 1080p clips fit the CI budget (models/tt_dit/tests/models/ltx/vbench_gate.md).
+        temporal_width = int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0"))
+        scorer = (
+            {
+                "scorer": "models.tt_dit.utils.vbench_cpu:score_clip_ci",
+                "scorer_kwargs": {"temporal_width": temporal_width},
+            }
+            if temporal_width
+            else {}
+        )
+        seeds = [seed + k for k in range(num_seeds)]
 
-        cwd = os.path.abspath(os.getcwd())
-
-        with tempfile.TemporaryDirectory() as vbench_dir:
-
-            def _link(idx: int, mp4_number: int) -> None:
-                # The render always lands directly in CWD; resolve the path and confirm it stays there so
-                # the number threaded into the filename can't escape it, and give the link a plain integer
-                # name so nothing dynamic reaches the destination path either.
-                src = os.path.abspath(os.path.join(cwd, f"ltx_av_fast_{width}x{height}_{mp4_number}.mp4"))
-                if os.path.dirname(src) != cwd:
-                    raise ValueError(f"render path escaped the working dir: {src!r}")
-                os.symlink(src, os.path.join(vbench_dir, f"seed_{idx}.mp4"))
-
-            _link(0, number)
-            for k in range(1, num_seeds):
-                run(prompt=prompt, number=1000 + k, seed=seed + k)
-                _link(k, 1000 + k)
-            logger.info(f"VBench gate averaged over {num_seeds} seeds (base seed {seed})")
+        with tempfile.TemporaryDirectory() as scratch:
+            bundle = vbench_bundle.create_bundle(export_dir or os.path.join(scratch, "vbench"))
+            for k, clip_seed in enumerate(seeds):
+                clip_number = number if k == 0 else 1000 + k
+                if k:
+                    run(prompt=prompt, number=clip_number, seed=clip_seed)
+                rendered = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{clip_number}.mp4")
+                shutil.copyfile(rendered, vbench_bundle.clip_path(bundle, 0, clip_seed))
+            vbench_bundle.write_manifest(
+                bundle, prompts=[{"text": prompt, "thresholds": thresholds}], seeds=seeds, **scorer
+            )
             if export_dir:
-                from models.tt_dit.utils.vbench_bundle import export_bundle
-
-                export_bundle(
-                    vbench_dir,
-                    export_dir,
-                    prompt=prompt,
-                    thresholds=thresholds,
-                    temporal_width=int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0")),
-                    # The clips must be exactly what this configuration rendered (NUM_FRAMES / HEIGHT / WIDTH).
-                    clip_shape=(num_frames, height, width),
-                )
+                logger.info(f"VBench bundle written to {export_dir}; scored after pytest")
             else:
-                assert_vbench_quality(vbench_dir, prompt=prompt, thresholds=thresholds)
+                vbench_bundle.evaluate(bundle)
 
     def check_output_with_clip(prompt, number, clip_threshold=None):
         # Mirrors wan2.2's check_output_with_clip: sample ~8 evenly-spaced frames, score each
@@ -336,10 +322,10 @@ def test_pipeline_distilled(
             # Gate gen #2: a corrupted full-replay pass is the failure this structure exists to
             # catch, and gen #1 still has a capture in it.
             check_output_with_clip(replay_prompt, 2)
-            check_output_with_vbench(replay_prompt, 2, seed=seed)
+            check_output_with_vbench(replay_prompt, 2, seed, num_seeds=int(os.environ.get("VBENCH_SEEDS", "5")))
         else:
             check_output_with_clip(prompt, 0)
-            check_output_with_vbench(prompt, 0)
+            check_output_with_vbench(prompt, 0, seed)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -349,7 +335,7 @@ def test_pipeline_distilled(
                 break
             run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, i)
-            check_output_with_vbench(prompt, i)
+            check_output_with_vbench(prompt, i, i)
 
     if traced:
         pipeline.release_traces()

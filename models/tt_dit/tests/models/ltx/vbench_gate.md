@@ -1,8 +1,8 @@
 # LTX CI quality gate
 
 The Fast T2V CI test generates five 145-frame, 1920×1088 clips. After pytest closes
-the TT devices, the same worker runs `vbench_bundle evaluate` with up to five CPU
-processes, four Torch threads each. Generation and scoring share the existing
+the TT devices, the same worker runs `vbench_bundle evaluate` (`models/tt_dit/utils/vbench_bundle.py`)
+with up to five CPU processes, four Torch threads each. Generation and scoring share the existing
 35-minute test timeout. The commands live in `tests/pipeline_reorg/models_e2e_tests.yaml`.
 
 The evaluation policy splits metrics by their input needs:
@@ -17,8 +17,7 @@ encoding; source frame timestamps are preserved and no OS command is launched. T
 sensitivity to small spatial motion artifacts; it is **not equivalent to evaluating
 temporal quality at full resolution**. It preserves every seed, frame, metric and
 the existing mean thresholds. Resize fails if the frame count or frame rate changes.
-Missing seeds, worker failures, mismatched clip hashes, missing metrics and non-finite
-scores all fail the gate.
+Missing seeds, worker failures, missing metrics and non-finite scores all fail the gate.
 
 Dynamic degree uses VBench 0.1.5's original RAFT model, frame sampling, flow threshold
 and required positive-pair count. It stops once the remaining pairs cannot change
@@ -43,8 +42,8 @@ smoothness 0.9911, dynamic degree 1.0). Freezing its frames failed dynamic degre
 These measurements cover CPU scoring, not cold model startup. CI must also fit
 weight conversion, kernel compilation, generation and CLIP inside the total budget.
 
-`VBENCH_TEMPORAL_WIDTH=960` selects the CI policy when exporting a bundle.
-The manifest records this setting and result files identify the exact manifest.
-An exported width of `0`, or a local pipeline run without `VBENCH_EXPORT_DIR`,
-uses the original full-resolution evaluation. Evaluator weights come from the
+`VBENCH_TEMPORAL_WIDTH=960` selects this policy: the LTX test records
+`vbench_cpu:score_clip_ci` with that width as the bundle's scorer, for both the CI export
+(`VBENCH_EXPORT_DIR`) and a local in-process run. A width of `0`, or none, uses the
+original full-resolution evaluation. Evaluator weights come from the
 worker's existing `VBENCH_CACHE_DIR`, `TORCH_HOME` and CLIP caches.

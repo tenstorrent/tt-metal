@@ -2,108 +2,127 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.vbench import assert_scores
-from models.tt_dit.utils.vbench_bundle import METRICS, aggregate, digest
+
+SEEDS = [42, 43, 44, 45]
+PROMPTS = [
+    {"text": "cats", "thresholds": {"imaging_quality": 0.6, "dynamic_degree": 0.75}},
+    {"text": "alley", "thresholds": {"subject_consistency": 0.8}},
+]
 
 
 @pytest.fixture
-def gate(tmp_path):
-    bundle = tmp_path / "input"
-    bundle.mkdir()
-    manifest = {
-        "prompt": "test",
-        "thresholds": {metric: 0.8 for metric in METRICS},
-        "clips": [{"name": f"seed_{i}.mp4", "shape": [145, 1088, 1920], "sha256": "unused"} for i in range(5)],
-    }
-    (bundle / "manifest.json").write_text(json.dumps(manifest))
-    results = tmp_path / "scores"
-    results.mkdir()
-    for i in range(5):
-        scores = {metric: 0.9 for metric in METRICS}
-        scores["dynamic_degree"] = int(i != 0)
-        row = {"index": i, "manifest_sha256": digest(bundle / "manifest.json"), "scores": scores}
-        (results / f"score_{i}.json").write_text(json.dumps(row))
-    return bundle, results
+def bundle(tmp_path):
+    bundle = vbench_bundle.create_bundle(tmp_path / "vbench")
+    for index in range(len(PROMPTS)):
+        for seed in SEEDS:
+            vbench_bundle.clip_path(bundle, index, seed).touch()
+    vbench_bundle.write_manifest(bundle, prompts=PROMPTS, seeds=SEEDS)
+    return bundle
 
 
-def test_gate_averages_all_five_seeds(gate):
-    assert aggregate(*gate)["dynamic_degree"] == 0.8
+def passing_scores():
+    # Prompt 0 moves on 3 of 4 seeds: exactly the 0.75 dynamic_degree floor.
+    scores = {(0, seed): {"imaging_quality": 0.65, "dynamic_degree": float(seed != 42)} for seed in SEEDS}
+    scores.update({(1, seed): {"subject_consistency": 0.9} for seed in SEEDS})
+    return scores
 
 
-@pytest.mark.parametrize("failure", ["missing", "duplicate", "metric", "nan", "wrong_input", "below_floor"])
-def test_incomplete_or_bad_quality_cannot_pass(gate, failure, expect_error):
-    bundle, results = gate
-    path = results / "score_4.json"
-    row = json.loads(path.read_text())
-    if failure == "missing":
-        path.unlink()
+def test_each_prompt_is_gated_on_its_mean_over_seeds(bundle):
+    means = vbench_bundle.aggregate(vbench_bundle.read_manifest(bundle), passing_scores())
+    assert means == [{"imaging_quality": 0.65, "dynamic_degree": 0.75}, {"subject_consistency": 0.9}]
+
+
+@pytest.mark.parametrize("failure", ["below_floor", "missing_metric", "nan"])
+def test_one_bad_prompt_fails_the_gate(bundle, failure, expect_error):
+    scores = passing_scores()
+    if failure == "below_floor":
+        scores[(1, 45)]["subject_consistency"] = 0.0
+    elif failure == "missing_metric":
+        del scores[(1, 45)]["subject_consistency"]
     else:
-        if failure == "duplicate":
-            row["index"] = 0
-        elif failure == "metric":
-            del row["scores"]["motion_smoothness"]
-        elif failure == "nan":
-            row["scores"]["motion_smoothness"] = float("nan")
-        elif failure == "wrong_input":
-            row["manifest_sha256"] = "different build"
-        else:
-            row["scores"]["dynamic_degree"] = 0
-        path.write_text(json.dumps(row))
-    with expect_error((ValueError, AssertionError), "VBench"):
-        aggregate(bundle, results)
+        scores[(1, 45)]["subject_consistency"] = float("nan")
+    with expect_error(AssertionError, "(?s)prompt 1 .*subject_consistency"):
+        vbench_bundle.aggregate(vbench_bundle.read_manifest(bundle), scores)
+
+
+@pytest.mark.parametrize("failure", ["missing_clip", "duplicate_seed", "foreign_scorer", "no_thresholds"])
+def test_incomplete_or_bad_gate_is_rejected(bundle, failure, expect_error):
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    if failure == "missing_clip":
+        vbench_bundle.clip_path(bundle, 1, 45).unlink()
+    elif failure == "duplicate_seed":
+        manifest["seeds"] = [42, 42]
+    elif failure == "foreign_scorer":
+        manifest["scorer"] = "os:system"
+    else:
+        manifest["prompts"][0]["thresholds"] = {}
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+    with expect_error(ValueError, "VBench"):
+        vbench_bundle.read_manifest(bundle)
+
+
+def test_existing_bundle_directory_is_refused(bundle, expect_error):
+    with expect_error(FileExistsError, "vbench"):
+        vbench_bundle.create_bundle(bundle)
+
+
+class InlinePool:
+    def __init__(self, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def submit(self, fn, *args):
+        try:
+            result = fn(*args)
+        except Exception as error:
+            failure = error
+
+            def result_fn():
+                raise failure
+
+            return SimpleNamespace(result=result_fn)
+        return SimpleNamespace(result=lambda: result)
+
+
+def test_evaluate_scores_every_clip_with_the_manifest_scorer(bundle, monkeypatch):
+    calls = []
+    scores = passing_scores()
+
+    def score(path, *, prompt, dimensions, **kwargs):
+        index = next(i for i, p in enumerate(PROMPTS) if p["text"] == prompt)
+        seed = int(path.rsplit("_s", 1)[1].removesuffix(".mp4"))
+        calls.append((index, seed, dimensions))
+        return scores[(index, seed)]
+
+    monkeypatch.setattr(vbench_bundle, "ProcessPoolExecutor", InlinePool)
+    monkeypatch.setattr(vbench_bundle, "load_scorer", lambda name: score)
+    vbench_bundle.evaluate(bundle)
+    assert sorted((i, s) for i, s, _ in calls) == sorted(scores)
+    assert all(dimensions == list(PROMPTS[i]["thresholds"]) for i, _, dimensions in calls)
+
+
+def test_worker_failure_fails_the_gate(bundle, monkeypatch, expect_error):
+    def score(path, **kwargs):
+        raise RuntimeError("scoring worker failed")
+
+    monkeypatch.setattr(vbench_bundle, "ProcessPoolExecutor", InlinePool)
+    monkeypatch.setattr(vbench_bundle, "load_scorer", lambda name: score)
+    with expect_error(RuntimeError, "scoring worker failed"):
+        vbench_bundle.evaluate(bundle)
 
 
 @pytest.mark.parametrize("score", [float("nan"), float("inf"), -1])
 def test_invalid_scores_fail(score, expect_error):
     with expect_error(AssertionError, "VBench quality gate failed"):
         assert_scores({"quality": score}, {"quality": 0.8})
-
-
-def test_parallel_worker_failure_cannot_reach_aggregate(gate, monkeypatch, expect_error):
-    from types import SimpleNamespace
-
-    from models.tt_dit.utils import vbench_bundle
-
-    submitted = []
-
-    def fail():
-        raise RuntimeError("scoring worker failed")
-
-    class Pool:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def submit(self, fn, bundle, index, output):
-            submitted.append(index)
-            return SimpleNamespace(result=fail)
-
-    def aggregate(*args):
-        raise AssertionError("must not aggregate after a worker failure")
-
-    monkeypatch.setattr(vbench_bundle, "ProcessPoolExecutor", Pool)
-    monkeypatch.setattr(vbench_bundle, "aggregate", aggregate)
-    with expect_error(RuntimeError, "scoring worker failed"):
-        vbench_bundle.evaluate(gate[0])
-    assert submitted == list(range(5))
-
-
-@pytest.mark.parametrize("width", [-1, 959, 1922, "960"])
-def test_invalid_temporal_policy_cannot_pass(gate, width, expect_error):
-    from models.tt_dit.utils.vbench_bundle import read_manifest
-
-    bundle, _ = gate
-    path = bundle / "manifest.json"
-    manifest = json.loads(path.read_text())
-    manifest["temporal_width"] = width
-    path.write_text(json.dumps(manifest))
-    with expect_error(ValueError, "Invalid VBench temporal width"):
-        read_manifest(bundle)
