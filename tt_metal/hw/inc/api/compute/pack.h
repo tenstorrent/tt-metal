@@ -158,7 +158,12 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_block_mop(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+    // A single tile reads slower through the block path than through pack_tile.
+    if (ntiles == 1) {
+        PACK((llk_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, 0)));
+    } else {
+        PACK((llk_pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles)));
+    }
 #elif defined(ARCH_QUASAR)
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #else
