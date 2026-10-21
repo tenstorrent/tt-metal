@@ -38,8 +38,22 @@ struct DeepseekV4PrefillIndexerSelectOperation {
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    // Pool mode (candidates given): one query per unit over its candidate blocks' entries.
+    struct PoolProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& outputs);
 
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory, PoolProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -50,12 +64,13 @@ struct DeepseekV4PrefillIndexerSelectOperation {
 // Cores one query tile's blocks are split across: spare cores go to splitting once every query tile has a core.
 uint32_t deepseek_v4_prefill_indexer_select_num_splits(uint32_t num_q_tiles, uint32_t num_cores);
 
-// The indices, or with candidates set the candidate block ids.
+// The indices (restricted to pool's candidate blocks when given), or with candidates set the candidate block ids.
 Tensor deepseek_v4_prefill_indexer_select(
     const Tensor& q,
     const Tensor& weights,
     const Tensor& idx_keys,
     const Tensor& start,
+    const std::optional<Tensor>& pool,
     uint32_t compress_ratio,
     bool candidates,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);

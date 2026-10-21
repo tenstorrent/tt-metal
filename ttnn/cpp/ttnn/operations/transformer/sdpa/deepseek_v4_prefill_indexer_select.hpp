@@ -44,4 +44,19 @@ ttnn::Tensor deepseek_v4_prefill_indexer_select_candidates(
     uint32_t compress_ratio,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
+// The two-level select's level two: deepseek_v4_prefill_indexer_select restricted to the entries of each query's
+// candidate blocks (its pool, at most 2048 * 8 entries), so the cost follows the pool rather than the entries the
+// query can see. H must be 32.
+//   candidates  [1, 1, T, 2048] uint32 ROW_MAJOR: deepseek_v4_prefill_indexer_select_candidates of a layer with the
+//               same compress_ratio at the same chunk; blocks the query cannot see are ignored.
+// Returns [1, 1, T, 512] uint32 ROW_MAJOR entry indices as deepseek_v4_prefill_indexer_select.
+ttnn::Tensor deepseek_v4_prefill_indexer_select_from_candidates(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& weights,
+    const ttnn::Tensor& idx_keys,
+    const ttnn::Tensor& start,
+    const ttnn::Tensor& candidates,
+    uint32_t compress_ratio,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::transformer
