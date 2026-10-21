@@ -893,7 +893,9 @@ class TtRoutedExperts(LightweightModule):
         offsets = ttnn.reshape(ttnn.to_layout(excl_u32, ttnn.ROW_MAJOR_LAYOUT), [1, E])
         for t in (cf, aligned, incl, excl, excl_u32):
             ttnn.deallocate(t)
-        max_buf = self.dispatch_max_tokens or (T * k + E_loc * TILE)
+        # region rows = every pick + up to 31 alignment rows per local expert, rounded up to a tile multiple (the
+        # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320)
+        max_buf = self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, T, H])
         idx_rm = ttnn.reshape(ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT), [1, T, k])  # dispatch + reduce ids
         ttnn.deallocate(idx_u16)
@@ -970,13 +972,22 @@ class TtRoutedExperts(LightweightModule):
         d = self._dispatch
         E, E_loc, H, k = self.E, self.E_local, self.H, idx.shape[-1]
         T = x.shape[-2]
+        # the kernel wants a tile-multiple token count (decode gathers 2 tokens; a ragged last chunk any T): pad the
+        # rows with zeros (zero routing = no pick, every padded row lands on the dummy slot) and slice the output back
+        T_pad = -(-T // TILE) * TILE
+        padded = []
+        if T_pad != T:
+            x, dense_w, idx, w = padded = [self._pad_rows(t, T_pad) for t in (x, dense_w, idx, w)]
+        T_logical, T = T, T_pad
         onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dense_w, 0.0), ttnn.float32), d["mask"])  # [1,1,T,E] fp32 0/1
         counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)  # [1,1,1,E]
         rank = ttnn.cumsum(onehot, dim=-2)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
         aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(counts_f, TILE - 1), 1.0 / TILE)), float(TILE))
         incl = ttnn.cumsum(aligned, dim=-1)
         offsets_f = ttnn.subtract(incl, aligned)  # [1,1,1,E] exclusive, tile-aligned
-        max_buf = self.dispatch_max_tokens or (T * k + E_loc * TILE)
+        # region rows = every pick + up to 31 alignment rows per local expert, rounded up to a tile multiple (the
+        # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320)
+        max_buf = self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
         # pos[t, e] = offsets[e] + rank[t, e] - 1 at the local picks; the non-local picks go to the dummy slot
         # max_buf - 1, which no region reaches (the tile-aligned regions total at most T*k + E_loc*31 rows), so
         # they never overwrite a region row (slot 0 is the first row of the first local expert's region)
@@ -1038,6 +1049,10 @@ class TtRoutedExperts(LightweightModule):
             ttnn.deallocate(t)
         if y.dtype != self.activation_dtype:
             y = ttnn.typecast(y, self.activation_dtype)
+        for t in padded:
+            ttnn.deallocate(t)
+        if T_logical != T:
+            y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
 
     def _iota_rows(self, T: int, k: int) -> ttnn.Tensor:
@@ -1047,6 +1062,17 @@ class TtRoutedExperts(LightweightModule):
             t = torch.arange(T, dtype=torch.int32).reshape(T, 1).expand(T, k).reshape(1, T * k).contiguous()
             self._const_cache[key] = self.mesh.upload(t, ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         return self._const_cache[key]
+
+    @staticmethod
+    def _pad_rows(t: ttnn.Tensor, T_pad: int) -> ttnn.Tensor:
+        """[1,1,T,W] TILE -> [1,1,T_pad,W] TILE with zero rows appended (through ROW_MAJOR so the new rows are
+        really zero, not the tile padding's leftovers)."""
+        T = t.shape[-2]
+        if T == T_pad:
+            return t
+        rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+        rm = ttnn.pad(rm, [(0, 0), (0, 0), (0, T_pad - T), (0, 0)], 0.0)
+        return ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
 
     def _zero_u32_row(self, n: int) -> ttnn.Tensor:
         key = ("zero_u32", n)
