@@ -47,6 +47,7 @@ from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
 from .moe_stream import KERNEL_DIR, zero_output
+from .profiling import steps
 from .rope import permute_heads_for_rope
 
 # chunked_flash_mla_prefill reads its start position from a device tensor (chunk_start_idx_tensor); builds without
@@ -538,8 +539,12 @@ class TtMiMoAttention:
         # MIMO_SDPA_FP32_ACC=1: prefill SDPA accumulates in fp32 dest (positions >= 2 KL -9% with stock-packed experts).
         # Off by default: its larger circular buffers clash with decode's persistent L1 buffers once the vLLM adapter
         # warms the 2048-token prefill chunks. Decode SDPA stays in bf16 dest (fp32 dest gave non-finite values).
+        # Prefill SDPA at HiFi2 (MIMO_PREFILL_SDPA_FIDELITY overrides): a global layer's chunk at 128K is compute bound,
+        # 78.3 -> 46.7 ms; top-1, the chunked-prefill PCCs and the 32K pass keys are unchanged (tp8_dp4_plan.md).
         self.sdpa_config = compute_config(
-            ttnn.MathFidelity.HiFi4, fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1", packer_l1_acc=False
+            getattr(ttnn.MathFidelity, os.environ.get("MIMO_PREFILL_SDPA_FIDELITY", "HiFi2")),
+            fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1",
+            packer_l1_acc=False,
         )
         self.decode_sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
@@ -719,9 +724,15 @@ class TtMiMoAttention:
         """
         assert start_pos == 0 or tables is not None, "a later chunk needs its kv.PrefillTables"
         assert users == 1 or (start_pos == 0 and isinstance(tables, BatchFillTables)), "a batch is first chunks"
-        if start_pos > 0 and self.split_users:
-            return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables)
+        with steps() as step:  # profiling zones (profiling.py)
+            if start_pos > 0 and self.split_users:
+                return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables, step)
+            return self._prefill_chunk(x, user_id, page_table, kv_cache, start_pos, tables, users, step)
+
+    def _prefill_chunk(self, x, user_id, page_table, kv_cache, start_pos, tables, users, step):
+        """forward_prefill of a first chunk, or of an SWA layer's later chunk (window from the cache)."""
         seq_len = x.shape[-2] // users
+        step("qkv")
         xqkv = self._prefill_qkv(x)
         if users > 1:
             xqkv = ttnn.reshape(xqkv, (users, 1, seq_len, xqkv.shape[-1]))
@@ -733,8 +744,10 @@ class TtMiMoAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         xqkv.deallocate(True)
+        step("rope")
         q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
 
+        step("kv_cache")
         lead = 0
         if start_pos > 0:
             # SWA: the window before the chunk from the cache, read before the fill can reuse any of its blocks.
@@ -744,6 +757,7 @@ class TtMiMoAttention:
             k_win = self._cached_window(k_cache, tables.window)
             v_win = self._cached_window(v_cache, tables.window)
         self._fill(kv_cache, k_rot, v, page_table, user_id, tables)
+        step("sdpa")
         if lead:
             q_lead = ttnn.zeros(
                 (1, self.nh_local, lead, self.head_dim),
@@ -777,6 +791,7 @@ class TtMiMoAttention:
             chunk = ttnn.slice(attn, (0, 0, lead, 0), (1, self.nh_local, lead + seq_len, self.head_dim))
             attn.deallocate(True)
             attn = chunk
+        step("o_proj")
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         if users > 1:  # [R, 1, S, heads * dim] -> the users' rows back to back (after the head concat: see above)
@@ -789,14 +804,16 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
         attn_cat.deallocate(True)
+        step("all_reduce")
         return self.plan.all_reduce(out)
 
-    def _prefill_owner_chunk(self, x, user_id, kv_cache, start_pos, tables):
+    def _prefill_owner_chunk(self, x, user_id, kv_cache, start_pos, tables, step):
         """A global layer's chunk after the first: the group's 16 Q heads over the whole cached context on the
         chip that owns the user (the other chip of the pair runs the same program on its scratch block and its
         result is zeroed)."""
         assert self.sinks is None and self.sliding_window is None
         seq_len = x.shape[-2]
+        step("qkv")
         xqkv = ttnn.linear(
             x,
             self.wqkv_decode,
@@ -812,11 +829,14 @@ class TtMiMoAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         xqkv.deallocate(True)
+        step("rope")
         q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
+        step("kv_cache")
         self._fill(kv_cache, k_rot, v, None, user_id, tables)
         k_rot.deallocate(True)
         v.deallocate(True)
 
+        step("sdpa")
         k_cache, v_cache = kv_cache
         assert tables.context.shape[-1] * k_cache.shape[-2] >= start_pos + seq_len, "chunk runs past its context table"
         # The context table is one fixed width for every chunk; the kernel reads only its blocks before the chunk's end.
@@ -833,6 +853,7 @@ class TtMiMoAttention:
             input_tensor_v=v_cache,
         )  # [1, 16, S, 128]
         q_rot.deallocate(True)
+        step("o_proj")
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         owned = ttnn.mul(attn_cat, self.prefill_owner_masks[user_id % self.rep], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -845,6 +866,7 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
         owned.deallocate(True)
+        step("all_reduce")
         return self.plan.all_reduce(out)
 
     # ---------------------------------------------------------------- decode

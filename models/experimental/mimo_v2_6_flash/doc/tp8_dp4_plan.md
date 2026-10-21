@@ -404,3 +404,81 @@ Fixes that came out of these runs:
 - **Page table width.** `SwaDecodeQkv` reads a page table row in 64 B pieces, so `attention.page_table_width` pads the
   width to 16 blocks, for the standalone tables and for vLLM's. A `max_seq_len` or `--max-model-len` that was not a
   multiple of 1024 tokens failed on the first decode step.
+
+## Prefill profile, 2026-10-21 (#61418, on `mimo-v2.6/dev`, MOPD)
+
+`tests/perf/profile_prefill.py` under `python -m tracy` profiles the last 4096-token chunk of a prompt on one row,
+one user, all 48 layers. The zones (`tt/profiling.py`, on with `MIMO_PROFILE_ZONES=1`) mark every layer and its
+QKV, RoPE, KV write, SDPA, o_proj, all-reduces, router, expert plan, grouped expert matmul and combine;
+`tests/perf/parse_prefill_zones.py` sums the device-kernel time between the markers (worst of the row's 8 chips).
+The profiler is read every 3 layers: one read of a 48-layer chunk (~1700 programs per chip) fails its marker
+matching. For 32K and 128K the earlier chunks only take their SWA blocks (`--fill skip`) and the cache keeps zeros:
+at 32K on layers 0, 1, 5 this changes the chunk by 0.4% and SDPA by 0.0%, the MoE experts by 4-10% (routing sees
+other hidden states).
+
+TTFT, one user on one row, random tokens, chunks of 4096, profiler off (`profile_prefill.py --ttft`, second run):
+
+| Prompt | TTFT | tokens/s |
+|---|---|---|
+| 4K | 0.58 s | 7.1k |
+| 32K | 5.12 s | 6.4k |
+| 128K | 29.06 s | 4.5k |
+
+Device time of the last chunk, all 48 layers (ms, summed over the layers):
+
+| Zone | 4K (start 0) | 32K (start 28K) | 128K (start 124K) |
+|---|---|---|---|
+| MoE grouped expert matmul | 186.9 | 178.4 | 176.4 |
+| MoE plan (`DevicePlan`) | 74.6 | 73.4 | 73.3 |
+| MoE combine | 38.1 | 38.0 | 38.0 |
+| MoE router | 23.2 | 23.1 | 23.2 |
+| SDPA, 9 global layers | 7.6 | 168.6 | 704.9 |
+| SDPA, 39 SWA layers | 10.5 | 15.3 | 15.3 |
+| QKV + o_proj | 54.6 | 62.0 | 62.0 |
+| RoPE + KV write | 8.5 | 10.3 | 10.3 |
+| All-reduces (2 per layer) | 77.8 | 80.6 | 84.0 |
+| Dense MLP (layer 0) | 2.2 | 2.2 | 2.2 |
+| Norms, residual adds, other | 46.1 | 45.7 | 45.7 |
+| **Chunk** | **530.1** | **697.6** | **1235.2** |
+
+- The MoE is ~311 ms of every chunk at any context: 59% of a 4K chunk. The expert plan (1.56 ms per layer) moves
+  almost no data (1.2 GB/s): it is latency, 14% of a 4K chunk.
+- A global layer's SDPA grows linearly with the cached context (0.84 ms at 4K, 18.7 ms at 32K, 78.3 ms at 128K), so
+  over a whole prompt it grows quadratically: 57% of the 128K chunk, ~11 s of the 29 s 128K TTFT (the MoE ~10 s).
+  Summing the chunks this way gives 28 s for 128K, against 29.06 s measured.
+- The global SDPA is compute-bound: 256 (head, 256-query) units of 131072 keys each, 4 per core on the 8 x 8 grid,
+  ~1.1 TFLOP/s per core at HiFi4. Its other chip of the pair runs the same program on the scratch block (#60957).
+
+### Global prefill SDPA at 128K: program config and math fidelity
+
+One global layer's SDPA, last chunk of 128K (layers 0, 1, 5 profiled, `--fill skip`):
+
+| Change | ms | |
+|---|---|---|
+| 8 x 8 grid, Q / K chunks 256, HiFi4 (before) | 78.3 | |
+| Whole 12 x 10 grid (120 cores) | 78.4 | the 128 causal (q, q') pairs still give some cores 2 |
+| Q chunk 128 / 64 (whole grid) | 97.2 / 175.4 | smaller units run slower; halving the units (Q 512) gains 1% |
+| Q chunk 128 (8 x 8) | 86.9 | |
+| K chunk 128 / with Q chunk 512 | 90.5 / 89.3 | Q 512 with K 256 and Q 1024 do not fit L1 |
+| HiFi3 | 62.4 | |
+| **HiFi2 (now the default, `MIMO_PREFILL_SDPA_FIDELITY` overrides)** | **46.7** | 1.68x |
+
+Accuracy at HiFi2 against HiFi4 (decode SDPA stays HiFi4):
+
+- `test_chunked_prefill_tp8_dp4.py` (short and 32k, layers 0, 1, 5): 8 passed, every prefill PCC within 0.0008 of
+  HiFi4 (worst chunked vs reference 0.99843 -> 0.99860, worst delta 0.99374 -> 0.99369).
+- `test_model_tp8_dp4.py`: top-1 0.950 both, 34/34 rows with a clear margin; logits PCC min 0.9004 -> 0.8658 (a row
+  whose reference margin is 0.07), mean 0.9929 -> 0.9917.
+- `test_model_long_tp8_dp4.py -k 32k`: every pass key found at 10-90% depth by both cuts, chunked vs one shot logits
+  PCC 0.9933-0.9966 (HiFi4: 0.9948-0.9972), shared prompt identical on all rows.
+
+TTFT (one user, one row, chunks of 4096): 4K 0.58 -> 0.56 s, 32K 5.12 -> 4.78 s, **128K 29.06 -> 24.35 s**.
+
+What the profile points at next:
+
+- **Global SDPA on both chips of the pair** (plan step 3): the non-owner chip runs the same 47 ms per layer on its
+  scratch block. Splitting the 16 heads 8 / 8 across the pair would halve it again.
+- **MoE plan** (`DevicePlan`, 1.56 ms per layer, 14% of a 4K chunk) is latency, not bandwidth: overlap it with the
+  router or spread it over more cores.
+- **All-reduces** (2 per layer, ~80 ms per chunk): the fabric packet is 4352 B for 2048 B pages (`ccl_common.cpp`
+  warns); 8192 B packets would carry 4 pages instead of 2.

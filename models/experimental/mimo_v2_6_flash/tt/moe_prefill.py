@@ -29,6 +29,7 @@ import ttnn
 
 from .common import TILE
 from .moe_stream import is_dram_interleaved, noc_coords
+from .profiling import zone
 
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels/prefill"
 
@@ -517,31 +518,34 @@ class PrefillExperts:
         grouped = self._grouped()
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (T, H))
         if grouped is not None:
-            if self.host_plan:
-                row_token, row_weight, row_dest, groups, _ = self.plan(indices, weights, T)
-                row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
-                row_weight_tt = self._upload(row_weight.reshape(1, -1).to(torch.bfloat16), ttnn.bfloat16)
-                row_dest_tt = self._upload(row_dest.to(torch.uint32).reshape(1, -1), ttnn.uint32)
-                plan = self._upload(grouped.plan(groups), ttnn.uint32)
-            else:
-                if self.device_plan is None:
-                    self.device_plan = DevicePlan(moe, grouped)
-                row_token_tt, row_weight_tt, row_dest_tt, plan = self.device_plan(indices, weights)
+            with zone("plan"):
+                if self.host_plan:
+                    row_token, row_weight, row_dest, groups, _ = self.plan(indices, weights, T)
+                    row_token_tt = self._upload(row_token.reshape(1, -1), ttnn.uint32)
+                    row_weight_tt = self._upload(row_weight.reshape(1, -1).to(torch.bfloat16), ttnn.bfloat16)
+                    row_dest_tt = self._upload(row_dest.to(torch.uint32).reshape(1, -1), ttnn.uint32)
+                    plan = self._upload(grouped.plan(groups), ttnn.uint32)
+                else:
+                    if self.device_plan is None:
+                        self.device_plan = DevicePlan(moe, grouped)
+                    row_token_tt, row_weight_tt, row_dest_tt, plan = self.device_plan(indices, weights)
             # The team cores read their tokens' rows of x themselves and write every pair's output row into the
             # k-major [K * T, H]; CombineK sums over k.
-            y = ttnn.empty(
-                [K * T, H],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=moe.plan.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            grouped(x_rm, row_token_tt, row_weight_tt, row_dest_tt, plan, y)
+            with zone("grouped_matmul"):
+                y = ttnn.empty(
+                    [K * T, H],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=moe.plan.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                grouped(x_rm, row_token_tt, row_weight_tt, row_dest_tt, plan, y)
             for t in (x_rm, row_token_tt, row_weight_tt, row_dest_tt, plan):
                 t.deallocate(True)
             if self.combine is None:
                 self.combine = CombineK(moe, grouped.cores, grouped.ranges)
-            out = self.combine(y, T, K)
+            with zone("combine"):
+                out = self.combine(y, T, K)
             y.deallocate(True)
             return out
 

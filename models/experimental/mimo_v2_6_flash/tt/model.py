@@ -34,6 +34,7 @@ from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .moe import expert_quant
 from .moe_stream import zero_output
+from .profiling import zone
 from .rope import MiMoRotarySetup, partial_rope_cos_sin
 
 
@@ -511,10 +512,11 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None):
+    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, after_layer=None):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
-        ``hidden`` when given."""
+        ``hidden`` when given. ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/
+        profile_prefill.py reads the device profiler there)."""
         n = tokens.numel()
         padded = prefill_padded_len(n)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -525,22 +527,27 @@ class TtMiMoModel:
         tables, start = self._prefill_tables(slot, start_pos, padded, layers)
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
-        x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+        with zone("embed"):
+            x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
         with self._prefill_reduce(padded):
             for k, i in enumerate(layers):
-                y = self.layers[i].forward_prefill(
-                    x,
-                    slot,
-                    self._layer_page_table(i),
-                    self.kv_caches[i],
-                    real_len=n,
-                    start_pos=start_pos,
-                    tables=tables[self._table_key(i)],
-                )
+                layer = self.layers[i]
+                with zone(f"layer{i:02d}_{'swa' if layer.is_swa else 'global'}{'' if layer.is_moe else '_dense'}"):
+                    y = layer.forward_prefill(
+                        x,
+                        slot,
+                        self._layer_page_table(i),
+                        self.kv_caches[i],
+                        real_len=n,
+                        start_pos=start_pos,
+                        tables=tables[self._table_key(i)],
+                    )
                 x.deallocate(True)
                 x = y
                 if hidden is not None:
                     hidden[k].append((ttnn.clone(x), n))
+                if after_layer is not None:
+                    after_layer(i)
         # Enqueued: freeing them now is ordered with the work that reads them.
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
