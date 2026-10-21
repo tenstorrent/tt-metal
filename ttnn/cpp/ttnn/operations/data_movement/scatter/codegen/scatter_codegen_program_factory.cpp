@@ -224,7 +224,6 @@ ScatterTileGeometry compute_scatter_tile_geometry(
     const uint32_t idx_w_mod = logical_index[-1] % tile_w;
     const uint32_t idx_valid_w_last = idx_w_mod != 0 ? idx_w_mod : tile_w;
 
-    const uint32_t Ht_per_batch_input = padded_input[-2] / tile_h;
     const uint32_t Ht_per_batch_src = padded_src[-2] / tile_h;
 
     return ScatterTileGeometry{
@@ -234,7 +233,6 @@ ScatterTileGeometry compute_scatter_tile_geometry(
         input_tensor.logical_shape()[-1],
         idx_valid_h_last,
         idx_valid_w_last,
-        Ht_per_batch_input,
         Ht_per_batch_src};
 }
 
@@ -246,17 +244,6 @@ ScatterRmGeometry compute_scatter_rm_geometry(const Tensor& input_tensor, const 
         num_sticks *= input_shape[i];
     }
     return ScatterRmGeometry{num_sticks, input_shape[-1], index_shape[-1]};
-}
-
-uint32_t scatter_value_kind(tt::tt_metal::DataType dtype) {
-    switch (dtype) {
-        case DataType::FLOAT32: return 1;
-        case DataType::INT32: return 2;
-        case DataType::UINT32: return 3;
-        case DataType::UINT16: return 4;
-        case DataType::BFLOAT16: return 5;
-        default: TT_THROW("scatter_codegen: no reduction value_kind for dtype {}", dtype);
-    }
 }
 
 uint64_t scatter_output_aligned_page_size(
@@ -373,7 +360,6 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
         split.num_cores,
         attributes.idx_valid_h_last,
         attributes.idx_valid_w_last,
-        attributes.Ht_per_batch_input,
         attributes.Ht_per_batch_src,
         attributes.output_logical_w,
     };
@@ -387,7 +373,6 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
     reader_desc.compile_time_args = reader_ct;
     reader_desc.named_compile_time_args = {
         {"reduction_mode", attributes.reduction_mode},
-        {"value_kind", attributes.value_kind},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -455,7 +440,6 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
         split.num_cores,
         attributes.idx_valid_h_last,
         attributes.idx_valid_w_last,
-        attributes.Ht_per_batch_input,
         attributes.Ht_per_batch_src,
         attributes.output_logical_w,
     };
@@ -469,12 +453,6 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     reader_desc.compile_time_args = reader_ct;
     reader_desc.named_compile_time_args = {
         {"reduction_mode", attributes.reduction_mode},
-        {"value_kind", attributes.value_kind},
-        // Our index dtype scope (INT32/UINT32) never satisfies this packed-uint16 fast path's
-        // index_elem_size==2 precondition, so it never fires; kept present (and off) because the
-        // kernel always reads this named compile-time argument regardless.
-        {"packed_uint16_reject", 0},
-        {"packed_uint16_4", 0},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -576,11 +554,10 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
     // A ROW_MAJOR reduce routes to ScatterCodegenProgramFactoryBf16ReduceRowMajor instead
-    // (select_program_factory), so this reader only ever runs with reduction_mode == kReductionNone
-    // and its scatter_reduce_value call is never a reduction.
+    // (select_program_factory), so this reader only ever runs with reduction_mode == kReductionNone,
+    // which it static_asserts.
     reader_desc.named_compile_time_args = {
         {"reduction_mode", attributes.reduction_mode},
-        {"value_kind", attributes.value_kind},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 
@@ -679,12 +656,8 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
-    // packed_bf16_io stays off: the 2-lane packed load/store needs an even input_stick_elems (every
-    // page 32-byte aligned), which supported_by_codegen() does not guarantee; the scalar branch is
-    // correct for every width.
     reader_desc.named_compile_time_args = {
         {"reduction_mode", attributes.reduction_mode},
-        {"packed_bf16_io", 0},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 

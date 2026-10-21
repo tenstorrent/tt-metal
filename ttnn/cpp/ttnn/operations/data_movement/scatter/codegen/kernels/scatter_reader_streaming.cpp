@@ -48,18 +48,13 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);
     constexpr uint32_t src_valid_h_last = get_compile_time_arg_val(8);
     constexpr uint32_t src_valid_w_last = get_compile_time_arg_val(9);
-    constexpr uint32_t Ht_per_batch_input = get_compile_time_arg_val(10);
-    constexpr uint32_t Ht_per_batch_src = get_compile_time_arg_val(11);
-    constexpr uint32_t output_logical_w = get_compile_time_arg_val(12);
-    constexpr auto index_ta_args = TensorAccessorArgs<13>();
+    constexpr uint32_t Ht_per_batch_src = get_compile_time_arg_val(10);
+    constexpr uint32_t output_logical_w = get_compile_time_arg_val(11);
+    constexpr auto index_ta_args = TensorAccessorArgs<12>();
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
+    // This reader overwrites; every reduce the gate admits is served by scatter_reader_bf16_reduce_rm.cpp.
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
-    constexpr uint32_t value_kind = get_named_compile_time_arg_val("value_kind");
-    // scatter_reduce_value has no bfloat16 (kind 5) arm; a bf16 reduce belongs to
-    // scatter_reader_bf16_reduce_rm.cpp, and here it would drop every update.
-    static_assert(reduction_mode == 0 || value_kind != 5, "bfloat16 reduction is not served by this reader");
-    constexpr bool packed_uint16_reject = get_named_compile_time_arg_val("packed_uint16_reject") != 0;
-    constexpr bool packed_uint16_4 = get_named_compile_time_arg_val("packed_uint16_4") != 0;
+    static_assert(reduction_mode == 0, "this reader does not reduce");
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
@@ -91,13 +86,10 @@ void kernel_main() {
     const uint32_t my_noc_y = my_y[noc.get_noc_id()];
 
     // Work split by Wt_output: each core handles a strided subset of output columns.
-    // The output-column tile id must restart at core_id for EACH tile-row h — this
-    // core owns the same strided columns {core_id, core_id+num_cores, ...} in every
-    // row, and both the `tile_idx == current_output_tile_id` scatter match and the
-    // writer's DRAM tile id (h*Wt_output + column) depend on it. A single running
-    // counter (not reset per h) drifts past Wt_output after the first row, so for
-    // Ht>1 no element matches and the src is never scattered (root cause of the
-    // >60-tile scatter corruption).
+    // The output-column tile id restarts at core_id for EACH tile-row h — this core
+    // owns the same strided columns {core_id, core_id+num_cores, ...} in every row,
+    // and both the `tile_idx == current_output_tile_id` scatter match and the
+    // writer's DRAM tile id (h*Wt_output + column) depend on it.
     for (uint32_t h = 0; h < Ht; h++) {
         uint32_t current_output_tile_id = core_id;
         uint32_t h_src = 0;
@@ -158,150 +150,41 @@ void kernel_main() {
                     for (uint32_t i = 0; i < tile_faces; ++i) {
                         for (uint32_t j = 0; j < tile_faces; ++j) {
                             for (uint32_t k = 0; k < face_size; ++k) {
-                                if constexpr (packed_uint16_reject) {
-                                    // Full-tile uint16 indices only.  Most lanes in
-                                    // a column-owned streaming worker target one of
-                                    // the other output tiles.  Reject two such lanes
-                                    // per aligned 32-bit load before paying the
-                                    // scalar row/column and accumulator address
-                                    // arithmetic.  Matching lanes retain the exact
-                                    // original increasing-count update order.
-                                    if constexpr (packed_uint16_4) {
-                                        for (uint32_t l = 0; l < face_size; l += 4) {
-                                            const uint32_t packed01 =
-                                                read_data_from_type<uint32_t>(index_l1, count >> 1);
-                                            const uint32_t packed23 =
-                                                read_data_from_type<uint32_t>(index_l1, (count >> 1) + 1);
-                                            const uint32_t index0 = packed01 & 0xffffu;
-                                            const uint32_t index1 = packed01 >> 16;
-                                            const uint32_t index2 = packed23 & 0xffffu;
-                                            const uint32_t index3 = packed23 >> 16;
-                                            const bool match0 =
-                                                index0 < output_logical_w && (index0 >> 5) == current_output_tile_id;
-                                            const bool match1 =
-                                                index1 < output_logical_w && (index1 >> 5) == current_output_tile_id;
-                                            const bool match2 =
-                                                index2 < output_logical_w && (index2 >> 5) == current_output_tile_id;
-                                            const bool match3 =
-                                                index3 < output_logical_w && (index3 >> 5) == current_output_tile_id;
-                                            if (!match0 && !match1 && !match2 && !match3) {
-                                                count += 4;
-                                                continue;
-                                            }
-                                            for (uint32_t lane = 0; lane < 4; ++lane) {
-                                                const uint32_t global_index = lane == 0   ? index0
-                                                                              : lane == 1 ? index1
-                                                                              : lane == 2 ? index2
-                                                                                          : index3;
-                                                const bool matches = lane == 0   ? match0
-                                                                     : lane == 1 ? match1
-                                                                     : lane == 2 ? match2
-                                                                                 : match3;
-                                                if (matches) {
-                                                    const uint32_t src_value =
-                                                        get_value_from_tile(src_l1, count, src_df_size);
-                                                    const uint32_t index_in_local_tile = global_index & tile_width_mask;
-                                                    const uint32_t which_row =
-                                                        index_in_local_tile >> __builtin_ctz(face_size);
-                                                    const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
-                                                    const uint16_t local_index = which_row * (face_size * face_size) +
-                                                                                 k * face_size + which_col +
-                                                                                 i * (tile_width * face_size);
-                                                    const uint32_t output_value = scatter_reduce_value(
-                                                        get_value_from_tile(output_l1, local_index, output_df_size),
-                                                        src_value,
-                                                        reduction_mode,
-                                                        value_kind);
-                                                    write_value_to_tile(
-                                                        output_l1, local_index, output_df_size, output_value);
-                                                }
-                                                count++;
-                                            }
-                                        }
-                                    } else {
-                                        for (uint32_t l = 0; l < face_size; l += 2) {
-                                            const uint32_t packed_indices =
-                                                read_data_from_type<uint32_t>(index_l1, count >> 1);
-                                            const uint32_t index0 = packed_indices & 0xffffu;
-                                            const uint32_t index1 = packed_indices >> 16;
-                                            const bool match0 =
-                                                index0 < output_logical_w && (index0 >> 5) == current_output_tile_id;
-                                            const bool match1 =
-                                                index1 < output_logical_w && (index1 >> 5) == current_output_tile_id;
-                                            if (!match0 && !match1) {
-                                                count += 2;
-                                                continue;
-                                            }
+                                for (uint32_t l = 0; l < face_size; l++) {
+                                    const uint32_t row_in_tile = i * face_size + k;
+                                    const uint32_t col_in_tile = j * face_size + l;
 
-                                            for (uint32_t lane = 0; lane < 2; ++lane) {
-                                                const uint32_t global_index = lane == 0 ? index0 : index1;
-                                                const bool matches = lane == 0 ? match0 : match1;
-                                                if (matches) {
-                                                    const uint32_t src_value =
-                                                        get_value_from_tile(src_l1, count, src_df_size);
-                                                    const uint32_t index_in_local_tile = global_index & tile_width_mask;
-                                                    const uint32_t which_row =
-                                                        index_in_local_tile >> __builtin_ctz(face_size);
-                                                    const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
-                                                    const uint16_t local_index = which_row * (face_size * face_size) +
-                                                                                 k * face_size + which_col +
-                                                                                 i * (tile_width * face_size);
-                                                    const uint32_t output_value = scatter_reduce_value(
-                                                        get_value_from_tile(output_l1, local_index, output_df_size),
-                                                        src_value,
-                                                        reduction_mode,
-                                                        value_kind);
-                                                    write_value_to_tile(
-                                                        output_l1, local_index, output_df_size, output_value);
-                                                }
-                                                count++;
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    for (uint32_t l = 0; l < face_size; l++) {
-                                        const uint32_t row_in_tile = i * face_size + k;
-                                        const uint32_t col_in_tile = j * face_size + l;
-
-                                        if (row_in_tile >= valid_h || col_in_tile >= valid_w) {
-                                            count++;
-                                            continue;
-                                        }
-
-                                        const uint32_t global_index =
-                                            get_value_from_tile(index_l1, count, index_df_size);
-                                        // Signed-negative and otherwise invalid
-                                        // device index values must not target a
-                                        // padded logical column or escape the
-                                        // output row's resident L1 allocation.
-                                        if (global_index >= output_logical_w) {
-                                            count++;
-                                            continue;
-                                        }
-                                        const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
-
-                                        if (tile_idx != current_output_tile_id) {
-                                            count++;
-                                            continue;
-                                        }
-
-                                        const uint32_t src_value = get_value_from_tile(src_l1, count, src_df_size);
-                                        const uint32_t index_in_local_tile = global_index & tile_width_mask;
-                                        const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
-                                        const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
-
-                                        const uint16_t local_index = which_row * (face_size * face_size) +
-                                                                     k * face_size + which_col +
-                                                                     i * (tile_width * face_size);
-
-                                        const uint32_t output_value = scatter_reduce_value(
-                                            get_value_from_tile(output_l1, local_index, output_df_size),
-                                            src_value,
-                                            reduction_mode,
-                                            value_kind);
-                                        write_value_to_tile(output_l1, local_index, output_df_size, output_value);
+                                    if (row_in_tile >= valid_h || col_in_tile >= valid_w) {
                                         count++;
+                                        continue;
                                     }
+
+                                    const uint32_t global_index = get_value_from_tile(index_l1, count, index_df_size);
+                                    // Signed-negative and otherwise invalid
+                                    // device index values must not target a
+                                    // padded logical column or escape the
+                                    // output row's resident L1 allocation.
+                                    if (global_index >= output_logical_w) {
+                                        count++;
+                                        continue;
+                                    }
+                                    const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+
+                                    if (tile_idx != current_output_tile_id) {
+                                        count++;
+                                        continue;
+                                    }
+
+                                    const uint32_t src_value = get_value_from_tile(src_l1, count, src_df_size);
+                                    const uint32_t index_in_local_tile = global_index & tile_width_mask;
+                                    const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
+                                    const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
+
+                                    const uint16_t local_index = which_row * (face_size * face_size) + k * face_size +
+                                                                 which_col + i * (tile_width * face_size);
+
+                                    write_value_to_tile(output_l1, local_index, output_df_size, src_value);
+                                    count++;
                                 }
                             }
                         }
