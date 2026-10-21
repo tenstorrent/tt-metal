@@ -74,6 +74,16 @@
 // there.
 //   contiguous input run  Up to pages_per_fabric_chunk logically consecutive pages that are also physically
 //                     consecutive in the input: one DRAM read (for_each_contiguous_input_run).
+//   input run entry   What a local copy core's reader tells its copy writer about each run it read into the chunk CB,
+//                     on input_run_cb (one 16 B page per run, two words used):
+//                       [0] flat_page: the run's first page in the own shard, numbered over the valid pages only
+//                           (outer_slice * valid_pages_per_outer_slice + page_in_slice);
+//                       [1] num_pages in bits 0..30 (at most pages_per_fabric_chunk), and in bit 31 whether this
+//                           is the last run of its conversion block.
+//                     The chunk CB carries only page bytes, and only the reader knows where runs start and end (it
+//                     probes physical contiguity through the input accessor), so the writer takes both from here: the
+//                     position to place the run's pages in the output, and the block end, where it waits for its
+//                     writes to land and then signals the blocks-converted semaphores.
 //   conversion block  The unit a local copy core converts and reports: copy core c converts blocks c, c + n, ...
 //   blocks-converted semaphore  Per local copy core: how many of its conversion blocks are in the output. A link worker
 //                     waits for the blocks a chunk of its own shard touches.
