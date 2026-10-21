@@ -13,14 +13,24 @@
 namespace ckl = compute_kernel_lib;
 
 // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
-template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
+template <
+    uint32_t dfb_batch_id,
+    uint32_t dfb_old_id,
+    uint32_t dfb_updated_id,
+    bool AlsoOut0,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4,
+    typename DFB5>
 ALWI void update_running_stat(
-    DataflowBuffer& dfb_batch_obj,
-    DataflowBuffer& dfb_old_obj,
-    DataflowBuffer& dfb_updated_obj,
-    DataflowBuffer& dfb_one_obj,
-    DataflowBuffer& dfb_momentum_obj,
-    DataflowBuffer& dfb_out_obj) {
+    DFB0& dfb_batch_obj,
+    DFB1& dfb_old_obj,
+    DFB2& dfb_updated_obj,
+    DFB3& dfb_one_obj,
+    DFB4& dfb_momentum_obj,
+    DFB5& dfb_out_obj) {
     using D = ckl::Dst;
     using ckl::BinaryFpuOp;
 

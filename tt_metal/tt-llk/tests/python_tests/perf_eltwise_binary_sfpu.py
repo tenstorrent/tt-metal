@@ -180,6 +180,32 @@ def test_perf_eltwise_binary_sfpu_float_shallow(
 
 @pytest.mark.perf
 @parametrize(
+    **_func.MIXED_FORMAT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_mixed_format(
+    perf_report,
+    formats,
+    mathop,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_mixed_format(
+        formats,
+        mathop,
+        dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
     **_distinct_dest_acc(_func.DIV_SWEEP),
     **_PERF_AXES,
 )
@@ -560,6 +586,30 @@ def test_perf_eltwise_binary_sfpu_bcast(
         bcast_dim,
         mathop,
         dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.QUANT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_quant(
+    perf_report,
+    mathop,
+    sign_magnitude,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_quant(
+        mathop,
+        sign_magnitude,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),

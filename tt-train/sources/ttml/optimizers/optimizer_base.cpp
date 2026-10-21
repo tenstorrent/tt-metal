@@ -255,6 +255,16 @@ void OptimizerBase::init_param_groups(ParamGroupOptions defaults, std::vector<Pa
     m_param_groups = std::move(groups);
 }
 
+void restore_topology(
+    std::initializer_list<autograd::TensorPtr> written, const tt::tt_metal::TensorTopology& topology) {
+    for (const auto& tensor_ptr : written) {
+        // A Tensor is a handle: this copy shares the stored tensor's attributes, so the relabel lands on the stored
+        // tensor (the one the step wrote) and on every alias of it. No set_value: nothing else changes.
+        auto value = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE);
+        value.update_tensor_topology(topology);
+    }
+}
+
 void OptimizerBase::print_stats() const {
     fmt::print("\n\nOptimization parameters values and gradients:\n");
     for (const auto& [name, tensor] : m_parameters) {
