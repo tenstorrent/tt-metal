@@ -31,6 +31,11 @@ on:
         required: false
         default: false
         type: boolean
+      tests-yaml:
+        description: "Test list (validation only)"
+        required: false
+        default: ./tests/pipeline_reorg/llk_perf_tests.yaml
+        type: string
       debug-symbols:
         description: "Build the ELFs with -g (the nightly builds without)"
         required: false
@@ -67,6 +72,7 @@ jobs:
       pipeline: ${{ github.event_name == 'schedule' && 'nightly' || inputs.pipeline }}
       # Nightly runs always use speed-of-light; manual runs use the checkbox.
       speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
+      tests-yaml: ${{ inputs.tests-yaml || './tests/pipeline_reorg/llk_perf_tests.yaml' }}
       debug-symbols: ${{ github.event_name != 'schedule' && inputs.debug-symbols }}
       # Nightly runs always publish; manual runs use the checkbox.
       upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
