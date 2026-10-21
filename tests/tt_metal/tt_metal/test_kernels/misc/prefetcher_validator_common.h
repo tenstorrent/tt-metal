@@ -15,7 +15,9 @@
 
 #include <stdint.h>
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
+#include "internal/local_mem/address_access.h"
 
 namespace prefetcher_validator {
 
@@ -77,6 +79,44 @@ FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t ex
         }
     }
     return kNoMismatch;
+}
+
+// Handle overloads of the helpers above, for receivers that hold CoreLocalMem handles (a scratchpad's
+// local_mem(), a scoped lock's get_ptr()) rather than raw L1 addresses. They unwrap the address once
+// here and forward, so both receivers run the exact same code.
+template <typename Accessor, typename T, typename A>
+FORCE_INLINE void read_expected_block_tiles(
+    const Accessor& accessor,
+    const CoreLocalMem<T, A>& scratch,
+    uint32_t tile_bytes,
+    uint32_t phys_blk,
+    uint32_t k_block_w_tiles,
+    uint32_t total_n_tiles,
+    uint32_t n_col_start,
+    uint32_t n_per_recv_tiles) {
+    read_expected_block_tiles(
+        accessor,
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(scratch)),
+        tile_bytes,
+        phys_blk,
+        k_block_w_tiles,
+        total_n_tiles,
+        n_col_start,
+        n_per_recv_tiles);
+}
+
+template <typename T, typename A>
+FORCE_INLINE uint32_t l1_word(const CoreLocalMem<T, A>& base, uint32_t word_index) {
+    return l1_word(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(base)), word_index);
+}
+
+template <typename T1, typename A1, typename T2, typename A2>
+FORCE_INLINE uint32_t first_mismatching_word(
+    const CoreLocalMem<T1, A1>& received, const CoreLocalMem<T2, A2>& expected, uint32_t page_bytes) {
+    return first_mismatching_word(
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(received)),
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(expected)),
+        page_bytes);
 }
 
 }  // namespace prefetcher_validator
