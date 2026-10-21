@@ -573,46 +573,52 @@ inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_fact
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C4));
 
     constexpr int BODY_LEN = 24 + (SCALE_EN ? 1 : 0);
-    TTI_REPLAY(0, BODY_LEN, 1, 1);
-    // LREG1 = a; LREG3 = j = a / ln2; LREG0 = r0
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
-    if constexpr (SCALE_EN) {
-        TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG1, 0);
-    }
-    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATA, EXP_FP32_R0_FP16A);
-    // LREG3 = sm = round(j) as a sign-magnitude int16; LREG2 = j = float(sm)
-    TTI_SFP_STOCH_RND(
-        sfpi::SFPSTOCHRND_RND_NEAREST,
-        0,
-        p_sfpu::LREG0,
-        p_sfpu::LREG3,
-        p_sfpu::LREG3,
-        sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16);
-    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
-    // LREG1 = f = a - j ln2, two parts
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG1, 0);
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG1, 0);
-    // LREG0 = r = (((r0 f + c1) f + c2) f + c3) f + c4; LREG3 = i = two's complement of sm, in the chain's shadow
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG0, 0);
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
-    // LREG0 = y = r f + 1; LREG1 = r = y f + 1; y *= inf
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
-    TTI_SFPMULI(0x7F80, p_sfpu::LREG0, 0);
-    // LREG2 = e = biased exponent of r + i; lanes with e < 255: y = setexp(r, e); lanes with e < 1: y = 0
-    TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPIADD(0xF01 /* -255 */, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPIADD(0xFFF /* -1 */, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
-    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_6, 0);
+    // Recorded and executed once through load_replay_buf, which brackets the record with
+    // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined.
+    load_replay_buf<Exec>(0 /*start*/, BODY_LEN, [exp_base_scale_factor] {
+        // LREG1 = a; LREG3 = j = a / ln2; LREG0 = r0
+        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        if constexpr (SCALE_EN) {
+            TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG1, 0);
+        }
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATA, EXP_FP32_R0_FP16A);
+        // LREG3 = sm = round(j) as a sign-magnitude int16; LREG2 = j = float(sm)
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_NEAREST,
+            0,
+            p_sfpu::LREG0,
+            p_sfpu::LREG3,
+            p_sfpu::LREG3,
+            sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16);
+        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+        // LREG1 = f = a - j ln2, two parts
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        // LREG0 = r = (((r0 f + c1) f + c2) f + c3) f + c4;
+        // LREG3 = i = two's complement of sm, in the chain's shadow
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
+        // LREG0 = y = r f + 1; LREG1 = r = y f + 1; y *= inf
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+        TTI_SFPMULI(0x7F80, p_sfpu::LREG0, 0);
+        // LREG2 = e = biased exponent of r + i; lanes with e < 255: y = setexp(r, e); lanes with e < 1: y = 0
+        TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(
+            0xF01 /* -255 */, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPIADD(
+            0xFFF /* -1 */, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
+        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_6, 0);
+    });
 
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
