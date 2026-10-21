@@ -111,8 +111,8 @@ void append_go_signal_sequence(
     MeshDevice& mesh_device,
     SubDeviceId sub_device,
     uint32_t expected_workers,
-    CoreCoord dispatch_core,
-    bool send_multicast) {
+    bool send_multicast,
+    uint32_t go_ring_slot) {
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     // GO-signal-only sequences carry no kernel binary; marking them cached skips the prefetcher ring-buffer offset
     // command.
@@ -122,8 +122,8 @@ void append_go_signal_sequence(
         &mesh_device,
         sub_device,
         expected_workers,
-        dispatch_core,
         send_multicast,
+        go_ring_slot,
         dispatch_metadata,
         std::nullopt);
     append_command_bytes(output, commands.data(), commands.size_bytes());
@@ -254,7 +254,9 @@ CommandList::Impl::Impl(
     command_buffer(std::move(command_buffer)),
     retained_binary_buffers(std::move(retained_binary_buffers)),
     bound_cq_id(cq_id),
-    sub_device_manager_id(sub_device_manager_id) {}
+    sub_device_manager_id(sub_device_manager_id) {
+    mesh_device.impl().register_command_list();
+}
 
 CommandList::Impl::~Impl() {
     try {
@@ -281,6 +283,7 @@ void CommandList::Impl::release_resources() noexcept {
     descriptor = {};
     retained_binary_buffers.clear();
     valid = false;
+    mesh_device->impl().unregister_command_list();
 }
 
 void CommandList::Impl::deallocate() {
@@ -330,7 +333,6 @@ struct CommandListBuilderImpl::OfflineDispatchState {
     // against the real prefetcher.
     OfflineDispatchState(MeshDevice& mesh_device, uint8_t cq_id) :
         cq_id(cq_id),
-        dispatch_core(mesh_device.virtual_program_dispatch_core(cq_id)),
         prefetcher_block_size(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::DRAM)),
         prefetcher_cache_size(mesh_device.impl().metal_context().dispatch_mem_map().ringbuffer_size()),
         prefetcher_num_blocks(prefetcher_cache_size / prefetcher_block_size),
@@ -345,7 +347,6 @@ struct CommandListBuilderImpl::OfflineDispatchState {
     }
 
     uint8_t cq_id;
-    CoreCoord dispatch_core;
     uint32_t prefetcher_block_size;
     uint64_t prefetcher_cache_size;
     uint32_t prefetcher_num_blocks;
@@ -440,8 +441,8 @@ CommandListData CommandListBuilderImpl::serialize_range(
                 mesh_device,
                 sub_device,
                 expected_workers[sub_device_idx],
-                dispatch_state.dispatch_core,
-                /*send_multicast=*/true);
+                /*send_multicast=*/true,
+                launch_state[sub_device_idx].get_mcast_wptr());
             launch_state[sub_device_idx].inc_mcast_wptr(1);
             expected_workers[sub_device_idx] += staged_node.num_workers;
         }
@@ -482,10 +483,7 @@ CommandListData CommandListBuilderImpl::serialize_range(
             command_sequence,
             worker_launch_state.get_mcast_wptr(),
             expected_workers[*sub_device],
-            dispatch_state.dispatch_core,
-            sub_device,
-            ProgramBinaryStatus::Committed,
-            dispatch_state.cq_id);
+            ProgramBinaryStatus::Committed);
 
         program_dispatch::for_each_program_command_sequence_chunk(
             command_sequence,

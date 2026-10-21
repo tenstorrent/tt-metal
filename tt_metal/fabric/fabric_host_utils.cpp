@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <vector>
 #include <algorithm>
@@ -137,6 +137,18 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     }
 
     return link_indices;
+}
+
+std::vector<uint32_t> get_forwarding_link_indices(
+    const ControlPlane& control_plane, const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    // find the forwarding direction b/w src and dest chip
+    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!forwarding_direction.has_value()) {
+        return {};
+    }
+
+    return get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
 void serialize_mesh_coordinates_to_file(

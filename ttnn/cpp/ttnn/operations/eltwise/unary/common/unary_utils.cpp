@@ -54,10 +54,13 @@ bool is_native_L1_sharding(
         output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return false;
     }
-    if (input_spec.memory_config().shard_spec()->grid != output_memory_config.shard_spec()->grid) {
-        return false;
-    }
-    return true;
+    // The aliased path computes input shard k into whichever output shard lives on the same core, with
+    // no data movement in between, so the two specs must place the same tensor region on each core.
+    const auto& in_shard = *input_spec.memory_config().shard_spec();
+    const auto& out_shard = *output_memory_config.shard_spec();
+    return in_shard.grid == out_shard.grid && in_shard.shape == out_shard.shape &&
+           in_shard.orientation == out_shard.orientation &&
+           input_spec.memory_config().memory_layout() == output_memory_config.memory_layout();
 }
 
 std::optional<UnaryShardSpecs> get_shard_specs(
@@ -165,8 +168,9 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
     // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
     // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
     // grid is a small vector and copying it keeps the lifetime obvious.
-    auto sub_device_workers_for = [](const tt::tt_metal::CoreRangeSet& grid,
-                                     tt::tt_metal::IDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
+    auto sub_device_workers_for =
+        [](const tt::tt_metal::CoreRangeSet& grid,
+           tt::tt_metal::distributed::MeshDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
