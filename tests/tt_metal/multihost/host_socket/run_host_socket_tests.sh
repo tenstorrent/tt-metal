@@ -45,6 +45,8 @@
 #                              soak must raise it above HOST_SOCKET_SOAK_SECONDS.
 #   HOST_SOCKET_DEVICE_ID      index within the visible set (default 0)
 #   HOST_SOCKET_NIC_IF         interface for MPI out-of-band; else docker/flannel
+#   HOST_SOCKET_MPIRUN         mpirun to use (default: the in-tree ULFM one)
+#   HOST_SOCKET_MPI_X          extra env vars to forward to the ranks, e.g. "UCX_TLS UCX_NET_DEVICES"
 #                              are excluded
 #   HOST_SOCKET_MGD            mesh graph descriptor (default: config/two_bh_single_chip_mgd.textproto)
 #   HOST_SOCKET_SOAK_SECONDS   soak duration in seconds (soak mode defaults to 3900)
@@ -133,8 +135,13 @@ set_layout() {
 }
 set_layout "${HOST_SOCKET_RANKS:-2}"
 
-MPIRUN=/opt/openmpi-v5.0.7-ulfm/bin/mpirun
+MPIRUN="${HOST_SOCKET_MPIRUN:-/opt/openmpi-v5.0.7-ulfm/bin/mpirun}"
 [[ -x "$MPIRUN" ]] || MPIRUN=$(command -v mpirun) || { echo "error: no mpirun" >&2; exit 2; }
+# Extra variables to forward to the ranks (space separated), e.g. UCX_TLS UCX_NET_DEVICES
+# when the binary was built against an MPI with pml/osc ucx. OMPI_MCA_* in this
+# environment reach the ranks on their own.
+MPI_X=()
+for v in ${HOST_SOCKET_MPI_X:-}; do MPI_X+=(-x "$v"); done
 
 # MPI now carries the data path too. These hosts have docker, flannel and Calico
 # interfaces, and OpenMPI will otherwise try to reach a peer on 172.17.0.1 and
@@ -219,7 +226,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             -x TT_HOST_SOCKET_RING_CAP_BYTES -x TT_HOST_SOCKET_ACK_PAGE_SIZE \
             -x TT_HOST_SOCKET_L1_RING_BUDGET -x TT_H2D_DMA_DOORBELL -x TT_H2D_DMA_DEBUG \
             -x OMPI_MCA_btl_tcp_if_include -x OMPI_MCA_oob_tcp_if_include \
-            -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude \
+            -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude "${MPI_X[@]}" \
             "$HERE/rank_env.sh" "$BIN" --gtest_filter="$filter" 2>&1 | tee "$log"
         rc=${PIPESTATUS[0]}
         if (( rc == 124 )); then
