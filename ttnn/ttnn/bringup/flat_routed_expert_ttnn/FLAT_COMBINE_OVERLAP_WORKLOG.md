@@ -1671,3 +1671,39 @@ last); the device 0.70 (test_perf fixed: it re-ran the last chunk on KDA carries
   The amplification is the model's (routing flips, context), not our numerics. But the reference's argmax agrees
   99.7% between the two runs (top-1 vs text 0.964 / 0.965, 0.970 / 0.971): its predictions have margin. The
   device's flip 11-14% because its degraded (KDA state) predictions have little margin.
+
+### dispatch_prep's route rule on Iva's sparse KV push shape (2026-10-21, bh-lb-09, one chip; zz_scratch_kv_route_plan.py)
+Why: would our sparse 2D dispatch's planner fit the GLM-5.3 sparse KV push (8x4 torus, 1M prefix)? Owner-side step
+only: 32 requester want-bitmaps over the owner's 32640 rows (owner-major, 4 KB each) -> per-row 32-bit masks (bit
+scatter) -> dispatch_prep's order (fewer tree links, 8x4 torus span tables) + link -> compacted (mask, row | flags)
+list per core. Synthetic bitmaps with her statistics (~5.5k wanted rows per owner, ~5.5 requesters per row; heavy
+~7.9k / 6.5; runs = clustered rows). Exact vs a host reference in every case. Device kernel us, 32 / 64 cores:
+| case | dispatch_prep code | + route by nibble arithmetic | masks only (stateless order) |
+| median | 115 / 63 | 69 / 39 | 29 / 18 |
+| clustered | 190 / 118 | 109 / 68 | 34 / 22 |
+| heavy | 218 / 151 | 126 / 87 | 39 / 26 |
+| every row, every requester | 780 / 393 | 550 / 278 | 232 / 119 |
+Reading: the 32 strided L1 loads per 32-row word (~10 cycles each) set a floor of 333 us on one core with nothing
+wanted (13 us on 32 cores); the fewer-links order rule costs ~630 cycles per row as written, ~290 with nibble
+arithmetic. On 100x the rows of a MoE dispatch the order rule dominates; a stateless order (hash / fixed) leaves
+the mask pass. Clustered rows load the word-range split unevenly (round-robin blocks would fix it).
+
+### Full sparse-KV-push planning on device, 8x4 shape (2026-10-21, bh-lb-09; combine_rf/kv_push_plan.py, zz_scratch_kv_plan.py)
+Why: the owner-side step alone (above) is not the plan; this is the whole chain in the 2D dispatch's style for GLM-5.3
+(1,044,480-row prefix, chunk 5120, top-k 2048, Iva's TP-deduped block-cyclic cache: stripes of 160 rows on 8x4).
+1. want (both RISCs of up to 120 cores): top-k -> owner-major want bitmap. Producers bucket bit addresses by consumer
+   slice into the consumers' L1 inboxes (NoC writes, inline counts, one semaphore); consumers (288-word slices in
+   local memory, ~114 cores, each RISC half the inboxes) write the slices straight into the exchange buffer.
+2. exchange: sparse_all_gather_2d, each 4 KB page to its owner (static route words).
+3. route: the step above (masks, fewer-links order, link), on the delivered pages.
+Exact vs host references (bitmaps, every delivered slice, every owner's (row, mask, flags) list). Synthetic top-k
+with her 1M stats (real trace not on this box): ~30k distinct rows per Galaxy chip, ~6 requesters per pushed row.
+| | 8x4, one chip as chip 13 | LoudBox 2x4, whole chain (slowest chip) |
+| want | 88 us (120 cores x 2 RISCs) | 287 us (4x the indices per chip) |
+| exchange | not run (no Galaxy) | 60 us |
+| route | 51 us (64 cores) | 83 us |
+Fixes on the way: one RISC per core -> both (bucket 120 -> 42 us); 64 -> ~114 consumers (consumer 36 -> 26 us);
+exchange buffer S = N PPO + 1 pages per chip (S = 32 put all of an owner's requester pages on one DRAM bank: route
+masks 45 -> 23 us). No gain: unrolling the bucket loop (~27 instructions per index, issue bound). Open: route
+imbalance from clustered rows (max / mean rows per core 1.9 at 64 cores), the bucket loop's instruction count.
+Her plan for comparison: sparse_push_plan 0.73-0.80 ms on 120 cores + table gather 0.06 ms per full layer.
