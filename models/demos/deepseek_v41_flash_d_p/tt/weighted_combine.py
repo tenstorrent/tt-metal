@@ -380,7 +380,6 @@ class WeightedCombine:
                 axis=0,
                 out_dtype=self.out_dtype,
                 out_row0=p * self.S_pass,
-                acc_unpack_fp32=True,
                 zero_unseen=True,
                 acc_dtype=self.acc_dtype,
             )

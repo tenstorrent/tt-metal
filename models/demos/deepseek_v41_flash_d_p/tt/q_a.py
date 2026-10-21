@@ -3,17 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1 q_a stem (reference/ds41_ref.py "q_a": q_resid = q_norm(fp8_linear(attn_norm, wq_a)) [S, 1280]) on the
 SP x TP mesh. Adapted from models/demos/xing40_a4b_d_p/tt/q_a.py:TtQa and deepseek_v3_d_p/tt/mla/v4_attention_base.py:
-TtV4AttentionBase._q_lora, with the model's fp8 act quant and an exact exchange.
+TtV4AttentionBase._q_lora, with an exact exchange.
 
 Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TILE (tt/norm.py output):
 
-    tt/quant.fp8_qdq            the reference fp8_linear's act_quant_dequant(x, 32), bit-exact: groups of 32 inside the
-                                chip's H/TP columns (H/TP % 32 == 0), bf16 out (exact)
-    TtAttnInProj                q(x) @ the chip's K rows of [wq_a | wkv]^T [H/TP, 1280 + 512] (bf16: e4m3 x 2^k is
-                                bf16-exact), HiFi4 + fp32 accumulation, fp32 partial out. The FPU rounds each in-tile
-                                partial dot to ~TF32 (DS41-16). Default (settings ATTN_IN_MM = fpu, owner 2026-10-15):
-                                one ttnn.linear. ATTN_IN_MM = exact (comparison only): tt/exact_mm.py:ExactMatmul (one
-                                product per tile-dot, fp32 SFPU adds; only the summation order differs from the CPU)
+    bf16 cast                   the device's matmul input (the released fp8_linear's act_quant_dequant(x, 32) is a
+                                rounding the device does not compute in: not emulated, agent rule 17; FIX.8)
+    TtAttnInProj                x @ the chip's K rows of [wq_a | wkv]^T [H/TP, 1280 + 512] (DENSE_WEIGHTS), one
+                                ttnn.linear at ATTN_FIDELITY + fp32 accumulation, partial out (CCL_IMPL's dtype)
     tt/common.py:tp_sum         all_gather over axis 1 + SFPU ttnn.add in mesh-column order (K-30: exact fp32 sum,
                                 bit-identical on every chip of the row; the FPU in reduce_scatter / all_reduce reads fp32
                                 at about TF32) -> [1, 1, S/SP, 1792] fp32, replicated over TP
@@ -32,16 +29,14 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, attn_compute_config, compute_config, dense_dtype, tp_sum
-from .exact_mm import ExactMatmul
+from .common import DRAM, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
 from .norm import TtDistributedRmsNorm
-from .quant import act_q
 from .settings import settings
 
 
 class TtAttnInProj:
     """The fp8 projections that read q(attn_norm), fused: [wq_a | wkv] (more column blocks may be appended).
-    Call with q(attn_norm) [1, 1, S/SP, H/TP] bf16 TILE; returns [1, 1, S/SP, sum(widths)] fp32 TILE, the full sum
+    Call with attn_norm [1, 1, S/SP, H/TP] bf16 TILE; returns [1, 1, S/SP, sum(widths)] fp32 TILE, the full sum
     over the hidden, replicated over TP. ``cols[name]`` = (start, end) of each block."""
 
     def __init__(self, mesh, weights: dict[str, torch.Tensor]):
@@ -58,19 +53,14 @@ class TtAttnInProj:
             blocks.append(w)
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         self.mesh, self.cols, self.width = mesh, cols, start
-        self.ckc = compute_config(mesh)  # ExactMatmul (comparison path): its exactness needs MATMUL_FIDELITY
-        self.attn_ckc = attn_compute_config(mesh)  # the fpu linear: ATTN_FIDELITY (P.7)
+        self.attn_ckc = attn_compute_config(mesh)  # ATTN_FIDELITY (P.7)
         w_t = torch.cat(blocks, dim=0).t().contiguous()  # [H, width]
         assert torch.equal(w_t.bfloat16().float(), w_t.float()), "fp8 weights must be bf16-exact"
-        self.exact = settings.get("ATTN_IN_MM") == "exact"
-        if self.exact:  # ExactMatmul needs products of <= 11 significant bits: e4m3 x 2^k (3 mantissa bits) both sides
-            assert not (w_t.float().contiguous().view(torch.int32) & 0xFFFFF).any(), "weights are not on the e4m3 grid"
-            self.mm = ExactMatmul(mesh, hidden // tp, self.ckc, groups=4)
         # K (dim 2) split over the TP axis: chip column c holds rows [c H/TP, (c+1) H/TP), its attn_norm columns;
         # replicated over the SP axis.
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
-        # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b (the checkpoint's 8-bit width; the exact path keeps bf16)
-        wdt = ttnn.bfloat16 if self.exact else dense_dtype(w_t, "attn." + " | ".join(cols))
+        # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b (the checkpoint's 8-bit width)
+        wdt = dense_dtype(w_t, "attn." + " | ".join(cols))
         self.weight = ttnn.from_torch(
             w_t.reshape(1, 1, hidden, self.width),
             dtype=wdt,
@@ -81,12 +71,9 @@ class TtAttnInProj:
         )
 
     def __call__(self, xq: ttnn.Tensor) -> ttnn.Tensor:
-        if self.exact:
-            part = self.mm(xq, self.weight)
-        else:
-            # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
-            pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
-            part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM)
+        # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
+        pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
+        part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM)
         out = tp_sum(self.mesh, part)
         ttnn.deallocate(part)
         return out
@@ -106,7 +93,7 @@ class TtQa:
         """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step
         keeps p for the kv step (tt/kv.py:TtWindowKv.from_proj), one matmul and one exchange for both. The caller
         frees p."""
-        xq = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
+        xq = cast(x, ttnn.bfloat16)
         p = self.proj(xq)
         if xq is not x:
             ttnn.deallocate(xq)

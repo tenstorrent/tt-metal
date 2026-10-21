@@ -9915,6 +9915,56 @@ tasks:
     gate_tasks:
     - R.2
     - R.3
+- id: FIX.8
+  title: 'Migrate DeepSeek onto F131-F142: shipped settings everywhere, parity code deleted'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - M.1
+  - L.last
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=M.1 BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      host_transfers_per_layer: == 0
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  brief:
+    details: 'The framework now follows the owner''s two rules (F128-F142; read models/demos/common/bringup/skill/bringup/SKILL.md
+      ''Accuracy'' and dev/BREADCRUMBS.md F128-F142): the device always runs the shipped realistic settings (no max-precision
+      tables or device runs, F137), every check compares with the full-precision CPU reference within the real reference''s
+      margin (goldens and drift regenerated, pinned), gates are err_* <= limit (F135). The model does not import today because
+      Settings no longer takes max_precision. Do: (1) tt/settings.py without MAX_PRECISION and the max_precision= argument;
+      the settings lint (testing/settings_lint.py) must pass: no setting may default to an emulation. (2) Delete every parity-only
+      path (precision_debt_report.md section 6 J1, /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md):
+      tt/quant.py quantizers, NUMERICS and every official branch, COMPRESSOR_X (round_tf32), ENGRAM_KV_QDQ (qdq), exact_mm.py,
+      window_exact.py, ATTN_IN_MM, WINDOW_PIECES, WINDOW_SDPA high_precision / exact and the _OUT / _SCORES / _PROBS settings,
+      the model''s use of acc_unpack_fp32; keep only the shipped path. (3) Port the framework''s contract-helper changes for
+      this model from the dev tree (reports/fix8_dev_model_diffs.patch: tests/bringup/contract/caches.py and server_rules.py
+      take their limits from testing/e2e_limits; apply the intent to today''s files, ignore its tt/settings.py hunk where
+      it conflicts with (1)). The shipped defaults must not change numerically (device time and layer errors as before). Gate:
+      M.1, L.last, K.1 against the new limits. FIX.5''s uncommitted edits (tt/model.py held input wrappers and begin_chunk
+      memo clear, tt/sparse_attention.py doc) are in the tree: keep them. Report: what was deleted (files, settings, lines),
+      device ms per chunk and every err_* vs its limit from the gates.'
+    gate_tasks:
+    - M.1
+    - L.last
+    - K.1
 - id: FIX.5
   title: P.16 ChunkMemo cleared at every chunk start
   step: overseer_fix

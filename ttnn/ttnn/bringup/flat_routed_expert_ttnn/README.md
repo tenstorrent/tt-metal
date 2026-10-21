@@ -135,14 +135,16 @@ test_weighted_combine_routes.
 
 ## Used by
 - deepseek_v41_flash_d_p P.3 / P.4: tt/experts.py `_flat` (EXPERTS_KERNEL=flat, tt/settings.py default): clamped_silu,
-  routing_weights, fp8_act_quant, weights_nk, hidden, routed plan, HiFi4, bfp8 / bfp4.
+  routing_weights, weights_nk, hidden, HiFi4, bfp8 / bfp4 (fp8_act_quant and the routed plan until FIX.8, used only
+  by the deleted official numerics; EXPERTS_COMBINE=separate only, not the default path).
 - deepseek_v41_flash_d_p P.8: tt/weighted_combine.py (EXPERTS_COMBINE=weighted): flat_routed_expert_with_program with
   combine_rf's sparse_combine_rf appended, token_index x (the column's gathered q(x)), math_fidelity, weights_nk,
   down_fp32, the plan without the h options (routed=False).
 - deepseek_v41_flash_d_p P.12: tt/shared_expert.py (SHARED_EXPERT_IMPL=flat): the shared expert's TP slice as one
   always-on expert (counts [S], regions [0]; intermediate zero-padded to a multiple of 256, the down kernel's K block:
   se6_dcompute.cpp `kt_d % 8`), bfp8 weights_nk, token_index into the routed experts' gathered q(x), y_bf16,
-  down_fp32, LoFi / bfp8 x / h (EXPERTS_PRECISION=glm); official numerics: routing_weights = 1 + fp8_act_quant. 2x2,
+  down_fp32, LoFi / bfp8 x / h (EXPERTS_PRECISION=glm) (the official-numerics path routing_weights = 1 +
+  fp8_act_quant was deleted in FIX.8). 2x2,
   1024 rows x 1280 x 5120: 250 us a layer vs 1431 us for the ttnn.linear chain.
 - glm53_flash_d_p (via glm53_flash_d_p_lb): tt/experts_ag.py (GLM_EXPERTS_MODE=ag): indexed x, y_row_major,
   down_fp32 (GLM_AG_DOWN_FP32=1 default), clamped_silu.

@@ -11,6 +11,8 @@ Indexer key path) on the SP x TP mesh, and the served caches it writes (serving_
     ckv = fp4_qdq(rope(latent, pos 2 j), 16, e4m3 scale)                 the compressed KV, a group at its 1st token
     k   = fp4_qdq(rope(k_norm(latent wk^T), pos 2 j), 32, ue8m0 scale)  the index key
     out = [ckv | k] [S / r, 512 + 128]
+(the released code's fp4 quant-dequant is not emulated: the device stores ckv / k in bf16 and casts to it, agent
+rule 17; FIX.8)
 
 Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TILE, natural row blocks (mesh row
 r = positions [start + r S/SP, ...)); every start is a multiple of 32 and S/SP is even, so groups never straddle
@@ -23,13 +25,13 @@ a chip row and no group is pending at a chunk start (serving_contract.md "Compre
                         kv_1 w_1 (fp32 SFPU)
     tt/norm.TtDistributedRmsNorm(split=False) compressor.norm (fp32 SFPU)
     (a) tt/rope.rope_deinterleaved at the groups' positions (cos / sin from the load-time compressed-row table,
-        positions r j) -> tt/quant.fp4_qdq(16, e4m3) -> ckv bf16 (exact)
+        positions r j) -> ckv bf16
     (b) ttnn.linear wk^T [512 -> 128] (replicated, bf16 as stored, HiFi4, fp32 acc) -> k_norm (fp32) -> RoPE ->
-        tt/quant.fp4_qdq(32, ue8m0) -> k bf16 (exact)
+        k bf16
 The rope dims of every producing weight (wkv / wgate rows, compressor.norm, wk's input columns, wk's rows and
 k_norm for the key) are permuted at load to [even | odd] (tt/rope.deinterleave_perm), so RoPE is the exact fp32
-SFPU composition and returns the reference's interleaved order (DS41-15). The latent stays fp32 up to fp4
-(DS41-47: model.py's bf16 points ahead of fp4 miss the chunk0 / small / big limits).
+SFPU composition and returns the reference's interleaved order (DS41-15). The latent stays fp32 up to the bf16
+cast (ATTN_GLUE=on: the rope's last ops write bf16, re-interleaved by a PairPerm matmul).
 
 The served caches (``TtServedRows``): bf16 ROW_MAJOR [.., rows / r, width], one 32-token record (32 / r compressed
 rows of the full width, the contract's shard [1, 1, 32 / r, width]) per ND shard round-robin over the DRAM banks
@@ -49,15 +51,11 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, tp_sum
 from .norm import TtDistributedRmsNorm
-from .quant import fp4_q, native, round_tf32
 from .rope import PairPerm, RowsMemo, deinterleave_perm, glue, indexer_glue, rope_deinterleaved, rope_deinterleaved_bf16
 from .served import CacheSlab, alloc_served
 from .settings import settings
-
-CKV_BLOCK = 16  # fp4 block of the compressed KV (e4m3 scale per block)
-K_BLOCK = 32  # fp4 block of the index key (ue8m0 scale per block)
 
 
 def _upload(mesh, t, dtype, layout, dims=None):
@@ -265,9 +263,9 @@ class TtCompressCaches:
 
 class TtCompressor:
     """compressor step of one KV-source layer. ``__call__(x, start)``: attn_norm [1, 1, S/SP, H/TP] fp32 ->
-    (ckv [1, 1, S/SP/r, head_dim], k [1, 1, S/SP/r, index_dim]) bf16 TILE, row-split, TP-replicated (exact fp4
-    values). ``write(ckv, k, start, end, caches)``: the served-cache write of the groups complete by ``end``.
-    Does not consume its input."""
+    (ckv [1, 1, S/SP/r, head_dim], k [1, 1, S/SP/r, index_dim]) bf16 TILE, row-split, TP-replicated.
+    ``write(ckv, k, start, end, caches)``: the served-cache write of the groups complete by ``end``. Does not consume
+    its input."""
 
     def __init__(self, mesh, w: dict[str, torch.Tensor], cfg, ratio: int, rope: CompressRope, tables):
         self.mesh, self.ratio, self.rope, self.tables = mesh, ratio, rope, tables
@@ -276,7 +274,6 @@ class TtCompressor:
         perm, permk = deinterleave_perm(self.hd, rd), deinterleave_perm(self.idx, rd)
         tp = mesh.shape[TP_AXIS]
         self.ckc = attn_compute_config(mesh)  # [wkv | wgate] and wk: ATTN_FIDELITY (P.7)
-        self.round_x = settings.get("COMPRESSOR_X") == "round_tf32" and not native()  # NUMERICS=native: as is
         blocks = [w["wkv"].float()[perm]] + ([w["wgate"].float()[perm]] if ratio > 1 else [])
         w_t = torch.cat(blocks, dim=0).t().contiguous()  # [H, 512 | 1024]
         hidden = w_t.shape[0]
@@ -292,8 +289,6 @@ class TtCompressor:
         self.glue_partial = indexer_glue() and settings.get("HC_TP_SUM") == "gather_add"  # P.16 (tt/ccl.tp_sum)
 
     def _mm(self, a: ttnn.Tensor, b: ttnn.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
-        if self.round_x:  # the FPU reads fp32 in0 at TF32 by truncation: round it to nearest first (DS41-31)
-            a = round_tf32(a)
         return ttnn.linear(a, b, dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
 
     def _pool(self, p: ttnn.Tensor) -> ttnn.Tensor:
@@ -349,15 +344,15 @@ class TtCompressor:
         ttnn.deallocate(pooled)
         n = rows // r
         cos, sin = self.rope.rows(start // r, n * self.mesh.shape[SP_AXIS])
-        # ATTN_GLUE=on + NUMERICS=native (P.15): fp4_q is a cast; the rope's last ops write bf16 and the re-interleave
-        # is a PairPerm matmul (bit-identical). Official: the fp4 blocks need the fp32 interleaved rows first.
-        fold = self.rope.pairs is not None and native()
+        # ATTN_GLUE=on (P.15): the rope's last ops write bf16 and the re-interleave is a PairPerm matmul
+        fold = self.rope.pairs is not None
         if fold:
             ckv = rope_deinterleaved_bf16(latent, cos, sin, self.rope.pairs)
         else:
             lr = rope_deinterleaved(latent, cos, sin)
-            ckv = fp4_q(lr, CKV_BLOCK, e4m3_scale=True, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast
-            ttnn.deallocate(lr)
+            ckv = cast(lr, ttnn.bfloat16)
+            if ckv is not lr:
+                ttnn.deallocate(lr)
         kp = self._mm(latent, self.wk)
         ttnn.deallocate(latent)
         kn = self.k_norm(kp)
@@ -370,8 +365,9 @@ class TtCompressor:
         kr = rope_deinterleaved(kn, cos, sin)
         ttnn.deallocate(kn)
         self.rope.free(cos, sin)
-        k = fp4_q(kr, K_BLOCK, dtype=ttnn.bfloat16)
-        ttnn.deallocate(kr)
+        k = cast(kr, ttnn.bfloat16)
+        if k is not kr:
+            ttnn.deallocate(kr)
         return ckv, k
 
     def _gathered(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:

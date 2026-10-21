@@ -231,7 +231,7 @@ def rope_deinterleaved(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tt
 
 
 def rope_deinterleaved_bf16(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, pairs: PairPerm) -> ttnn.Tensor:
-    """ATTN_GLUE=on, NUMERICS=native (P.15): ``rope_deinterleaved`` then a cast to bf16, bit for bit, with the
+    """ATTN_GLUE=on (P.15): ``rope_deinterleaved`` then a cast to bf16, bit for bit, with the
     re-interleave as a ``PairPerm`` matmul on the bf16 tail (the rope's add / subtract write bf16: the same RNE as
     ttnn.typecast, probe ds41_attn_glue/probe_001). x [1, 1, R, W] fp32 TILE -> [1, 1, R, W] bf16 TILE, interleaved
     tail. Does not consume its inputs."""

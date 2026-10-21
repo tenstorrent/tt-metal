@@ -7,12 +7,13 @@ along axis 0 (plan.md "Experts"), the pipeline of xing40_a4b_d_p/tt/experts.py:T
 
 Per expert e and token t routed to it (weight r = router[t, e], fp32):
 
-    y_e(t) = w2 q(r * silu(min(w1 q(x), 10)) * clamp(w3 q(x), +-10))       q = fp8 act quant, blocks of 32 (tt/quant)
+    y_e(t) = w2 q(r * silu(min(w1 q(x), 10)) * clamp(w3 q(x), +-10))       q = fp8 act quant, blocks of 32 (released code)
 
-The routing weight multiplies h BEFORE its fp8 quantization (q(r h) != r q(h)), so the expert math needs each
-dispatched row's own fp32 weight. Dispatch carries only the row, so the row carries it:
+The device does not emulate q (agent rule 17; FIX.8 deleted the quantizers): x and h are cast to the bf16 the
+matmuls read. The separate chain below still carries each dispatched row's own fp32 weight (it was built for q(r h)
+!= r q(h), DS41-23); dispatch carries only the row, so the row carries it:
 
-    x_aug [S/SP, H + 3 Egp] bf16 = [q(x) | p0 | p1 | p2]     q(x) bf16-exact; p0 + p1 + p2 = the fp32 routing weights of
+    x_aug [S/SP, H + 3 Egp] bf16 = [x | p0 | p1 | p2]        x bf16; p0 + p1 + p2 = the fp32 routing weights of
                                                              this column's dispatch group (Eg experts, padded to Egp,
                                                              a multiple of 32), split into three bf16 pieces by
                                                              truncation (exact: 8 + 8 + 8 significant bits)
@@ -24,7 +25,7 @@ dispatched row's own fp32 weight. Dispatch carries only the row, so the row carr
            g | u = ttnn.linear(x, [W1; W3], transpose_b, HiFi4 + fp32 acc, fp32 out)   (bfp8 / bfp4 [N, K] at load;
                                                                 fp4_decode: two linears on per-chunk decoded bf16 W^T)
            h   = silu(min(g, 10)) * clamp(u, +-10) * r            fp32 (SFPU)
-           y   = ttnn.linear(fp8_qdq(h), W2, transpose_b) -> bf16  (insert / combine are bf16-only)
+           y   = ttnn.linear(bf16(h), W2, transpose_b) -> bf16  (insert / combine are bf16-only)
            insert
       -> ttnn.bringup.combine (axis 0, init_zeros: the other group's slots read 0) -> [S/SP, K, H] bf16
       -> fp32 sum over the K slots (SFPU adds; weights already applied) = this group's partial [S/SP, H] fp32
@@ -54,30 +55,28 @@ Weights (setting EXPERTS_IMPL, DS41-10 / DS41-35):
              arithmetic (0.5 c + 0.5 relu(c - 4) + relu(c - 6), sign from bit 3; 'arith')
     T = concat(planes, rows) * (Rep [K, K/32] @ S^T)  (the 0/1 Rep matmul repeats each scale over its 32 rows, exact)
 Kernel (setting EXPERTS_KERNEL, bfp8 / bfp4 weights):
-  loop     the per-local-expert pipeline above (extract -> ttnn.linear -> SFPU -> fp8_qdq -> ttnn.linear -> insert).
+  loop     the per-local-expert pipeline above (extract -> ttnn.linear -> SFPU -> bf16 -> ttnn.linear -> insert).
   unified  ONE ttnn.bringup.unified_routed_expert_moe program over every local expert (P.2), on the dispatched buffer:
              x      = buf[:, :H] (q(x), bf16 ROW_MAJOR)
              r_rows = pieces @ SelAll (bf16 0/1 [3 Egp, 32] per mesh row r, column le = local expert le's three piece
                       columns r epc + le: one nonzero product per tile-dot, exact, DS41-16) -> fp32 ROW_MAJOR
                       [rows, 32], row i column le = row i's routing weight for local expert le
-             op(x, routing_weights=r_rows, fp8_act_quant=True, weights_transposed=True, ClampedSiluGlu,
-                high_precision, HiFi4 + fp32 dest): per local expert le and routed row i,
-                y_i = w2 q(r_i,le silu(min(w1 x_i, 10)) clamp(w3 x_i, +-10)); w1 / w3 / w2 as stored ([N, K], the
-                same block-float tensors the loop uses, w1 and w3 separate), q in-kernel per 32 (ue8m0, e4m3 RNE,
-                bit-exact with tt/quant.fp8_qdq on exact inputs: the fork's tests/unit/test_ds41_h_options.py)
+             op(x, routing_weights=r_rows, weights_transposed=True, ClampedSiluGlu, high_precision, HiFi4 + fp32
+                dest): per local expert le and routed row i, y_i = w2 (r_i,le silu(min(w1 x_i, 10)) clamp(w3 x_i,
+                +-10)); w1 / w3 / w2 as stored ([N, K], the same block-float tensors the loop uses, w1 and w3
+                separate); the fork's fp8_act_quant is off (FIX.8)
            -> the same combine / sum / reduce.
   flat     ONE ttnn.bringup.flat_routed_expert program (Marko Staletovic's flat spatially pipelined expert, P.3:
            16 DRAM bank readers stream every local expert's weights once into the gate/up cores, x relays tilize the
            dispatched rows and multicast them, down cores write y at each expert's region), on the dispatched buffer:
-             x      = buf (q(x) | routing pieces, bf16 ROW_MAJOR; the op reads each row's first H values, hidden=H)
+             x      = buf (x | routing pieces, bf16 ROW_MAJOR; the op reads each row's first H values, hidden=H)
              r_rows = pieces @ SelAll as for unified, kept Float32 TILE [rows, 32]
-             op(x, routing_weights=r_rows, fp8_act_quant=True, weights_nk, clamped_silu, x / h / y bf16, fp32 DEST
-                (gate/up, down_fp32), fidelity MATMUL_FIDELITY; EXPERTS_PRECISION=glm: LoFi, x / h / y bfp8 tiles,
-                fp32 DEST down, P.4): per local expert le and routed row i,
-                y_i = w2 q(r_i,le silu(min(w1 x_i, 10)) clamp(w3 x_i, +-10)), w1 / w3 / w2 laid out once at load in
-                the op's bank layout from the stored [N, K] matrices (every tile the transpose of the x @ W tile, so
-                bfp8 shares its exponents along K: exact, asserted at load, DS41-35), q in-kernel per 32 (ue8m0, e4m3
-                RNE; the fork's tests/unit/test_ds41_h_options.py: bit-exact on exact GEMMs)
+             op(x, routing_weights=r_rows, weights_nk, clamped_silu, x / h / y bf16, fp32 DEST (gate/up,
+                down_fp32), fidelity MATMUL_FIDELITY; EXPERTS_PRECISION=glm: LoFi, x / h / y bfp8 tiles, fp32 DEST
+                down, P.4): per local expert le and routed row i, y_i = w2 (r_i,le silu(min(w1 x_i, 10)) clamp(w3
+                x_i, +-10)), w1 / w3 / w2 laid out once at load in the op's bank layout from the stored [N, K]
+                matrices (every tile the transpose of the x @ W tile, so bfp8 shares its exponents along K: exact,
+                asserted at load, DS41-35); the fork's fp8_act_quant is off (FIX.8)
            -> the same combine / sum / reduce.
 
 The per-expert cap is the whole chunk (a token picks an expert once; the counts stay on the device), the flat
@@ -97,8 +96,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, fp32_acc, sum_cols
-from .quant import act_q, native
+from .common import DRAM, SP_AXIS, TP_AXIS, cast, compute_config, fp32_acc, sum_cols
 from .settings import settings
 
 TILE = 32
@@ -235,8 +233,6 @@ class TtExperts:
         # planner (bit-identical tables)
         self.combine_planner = combine_planner or settings.get("COMBINE_PLANNER")
         assert self.combine_planner in ("one", "multi"), self.combine_planner
-        # NUMERICS=native (P.8): no fp8 q(x) / q(h) (rule 17); the expert ops then run without fp8_act_quant
-        self.qdq = not native()
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
         self.E, self.K, self.H, self.I = E, int(top_k), int(hidden), int(inter)
         self.lim = float(swiglu_limit)
@@ -685,7 +681,7 @@ class TtExperts:
         ttnn.deallocate(u)
         hr = ttnn.multiply(h, r, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(h)
-        hq = act_q(hr, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast
+        hq = cast(hr, ttnn.bfloat16)
         ttnn.deallocate(hr)
         if self.impl in BLOCK_DTYPES:
             y = ttnn.linear(
@@ -754,7 +750,6 @@ class TtExperts:
             activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
             high_precision=True,
             routing_weights=rwr,
-            fp8_act_quant=self.qdq,
             weights_transposed=True,
         )
         ttnn.deallocate(xr)
@@ -791,7 +786,6 @@ class TtExperts:
             down_fp32=fp32_acc(needed=True),  # the experts' down keeps fp32 DEST (P.13, as GLM-5.3)
             math_fidelity=int(self.fidelity.value),
             routing_weights=rw,
-            fp8_act_quant=self.qdq,
             hidden=self.H,
         )
         ttnn.deallocate(rw)
@@ -806,7 +800,7 @@ class TtExperts:
         s, K = x.shape[-2], self.K
         wc = self.wc
         assert s == wc.S, f"EXPERTS_COMBINE=weighted is built for {wc.S} rows per chip, got {s}"
-        qx = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (x itself when ffn_norm wrote bf16)
+        qx = cast(x, ttnn.bfloat16)  # (x itself when ffn_norm wrote bf16)
         xg = wc.gather_x(qx)
         if qx is not x:
             ttnn.deallocate(qx)
@@ -876,8 +870,8 @@ class TtExperts:
             hist, cluster_axis=SP_AXIS, num_links=self.num_links, experts_per_chip=self.epc, memory_config=DRAM
         )
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, s, K))
-        # the dispatched row: q(x) bf16 (exact) | the group's routing weights as three bf16 pieces
-        qx = act_q(x, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (x itself when ffn_norm wrote bf16)
+        # the dispatched row: x bf16 | the group's routing weights as three bf16 pieces
+        qx = cast(x, ttnn.bfloat16)  # (x itself when ffn_norm wrote bf16)
         pieces = self._pieces(dense, s)
         xa = ttnn.concat([qx] + pieces, dim=-1, memory_config=DRAM)
         for t in ([qx] if qx is not x else []) + pieces:
