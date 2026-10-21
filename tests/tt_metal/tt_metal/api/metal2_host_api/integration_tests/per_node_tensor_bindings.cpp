@@ -178,7 +178,8 @@ void kernel_main() {
             .advanced_options = std::move(advanced_options),
         };
     };
-    auto run_and_check = [&](const MeshTensor& expected_per_node, uint32_t expected_tag) {
+    auto run_and_check = [&](const char* step, const MeshTensor& expected_per_node, uint32_t expected_tag) {
+        SCOPED_TRACE(step);
         std::vector<uint32_t> zero_report(kNumReportWords, 0u);
         for (const NodeCoord& node : {node0, node1}) {
             slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
@@ -205,17 +206,11 @@ void kernel_main() {
                 {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}},
                  {TensorParamName{"plain"}, TensorArgument{plain}}},
         });
-    {
-        SCOPED_TRACE("SetProgramRunArgs");
-        run_and_check(per_node_a.tensor, 0x1000);
-    }
+    run_and_check("SetProgramRunArgs", per_node_a.tensor, 0x1000);
     UpdateTensorArgs(
         program,
         {{TensorParamName{"per_node"}, TensorArgument{per_node_b}}, {TensorParamName{"plain"}, TensorArgument{plain}}});
-    {
-        SCOPED_TRACE("UpdateTensorArgs");
-        run_and_check(per_node_b, 0x1000);
-    }
+    run_and_check("UpdateTensorArgs", per_node_b, 0x1000);
     // Omits the ordinary tensor and the varargs, which must keep their values.
     UpdateProgramRunArgs(
         program,
@@ -223,10 +218,7 @@ void kernel_main() {
             .kernel_run_args = {kernel_run_args(0x2000, /*with_varargs=*/false)},
             .tensor_args = {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}}},
         });
-    {
-        SCOPED_TRACE("partial UpdateProgramRunArgs");
-        run_and_check(per_node_a.tensor, 0x2000);
-    }
+    run_and_check("partial UpdateProgramRunArgs", per_node_a.tensor, 0x2000);
 }
 
 }  // namespace
