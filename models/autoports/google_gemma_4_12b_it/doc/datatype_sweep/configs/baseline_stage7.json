@@ -1,0 +1,134 @@
+{
+ "schema": "gemma4_12b_precision/v1",
+ "config_id": "baseline_stage7",
+ "description": "optimized-full-model (stage 7) policy: BFP8 weights with the per-layer BFP4 exceptions of tt/optimized_decoder.py layer_policy, LoFi decode / prefill matmuls (HiFi2 prefill on layer 47), BFP8 KV cache, BFP8 decode all-reduce payloads, BFP8 HiFi2 LM head",
+ "weights": {
+  "groups": {
+   "qkv": "fused q/k/v projection (column-parallel by head)",
+   "o": "o_proj (row-parallel, decode all-reduce / prefill reduce-scatter after it)",
+   "gate_up": "gate_proj + up_proj (FF1 + FF3, column-parallel; prefill packed copy uses the same dtype)",
+   "down": "down_proj (FF2, row-parallel)"
+  },
+  "default": {
+   "qkv": "bfp8",
+   "o": "bfp8",
+   "gate_up": "bfp8",
+   "down": "bfp8"
+  },
+  "layer_exceptions": [
+   {
+    "layers": "13-26,35-39",
+    "dtype": {
+     "gate_up": "bfp4"
+    }
+   },
+   {
+    "layers": "13-24",
+    "dtype": {
+     "down": "bfp4"
+    }
+   },
+   {
+    "layers": "13-20,22,23,25",
+    "dtype": {
+     "qkv": "bfp4",
+     "o": "bfp4"
+    }
+   },
+   {
+    "layers": "24,36,37",
+    "dtype": {
+     "qkv": "bfp4"
+    }
+   }
+  ]
+ },
+ "compute_fidelity": {
+  "decode_matmul": {
+   "default": {
+    "qkv": "lofi",
+    "o": "lofi",
+    "gate_up": "lofi",
+    "down": "lofi"
+   },
+   "layer_exceptions": []
+  },
+  "prefill_matmul": {
+   "default": {
+    "qkv": "lofi",
+    "o": "lofi",
+    "gate_up": "lofi",
+    "down": "lofi"
+   },
+   "layer_exceptions": [
+    {
+     "layers": "47",
+     "fidelity": {
+      "qkv": "hifi2",
+      "o": "hifi2",
+      "gate_up": "hifi2",
+      "down": "hifi2"
+     }
+    }
+   ]
+  },
+  "lm_head": "hifi2",
+  "sdpa_decode": "hifi2fp32",
+  "sdpa_prefill": {
+   "sliding": "hifi2",
+   "full": "hifi2fp32"
+  },
+  "fixed": {
+   "norms": "hifi4fp32",
+   "rope_decode": "hifi4",
+   "sdpa_prefill_short_chunk": "hifi2"
+  }
+ },
+ "lm_head": {
+  "dtype": "bfp8"
+ },
+ "kv_cache": {
+  "dtype": "bfp8"
+ },
+ "ccl": {
+  "decode_all_reduce": {
+   "o": "bfp8",
+   "down": "bfp8"
+  },
+  "prefill_reduce_scatter_o": "bf16",
+  "prefill_all_gather": {
+   "qkv": "bf16",
+   "gate_up": "bfp8"
+  },
+  "prefill_reduce_scatter_down": "follows_prefill_mlp_product"
+ },
+ "activations": {
+  "residual": "bf16",
+  "decode_intermediates": "bf16",
+  "decode_intermediates_note": "decode matmul outputs kept on chip (qkv, gate_up, the MLP product, norm outputs) are BF16; the o_proj and down outputs that feed the decode all-reduce take ccl.decode_all_reduce (BFP8)",
+  "prefill_mlp_intermediates": {
+   "default": {
+    "gate_up": "bfp8",
+    "product": "bfp8"
+   },
+   "layer_exceptions": [
+    {
+     "layers": "10-11",
+     "dtype": {
+      "gate_up": "bf16",
+      "product": "bf16"
+     }
+    }
+   ]
+  }
+ },
+ "logits": {
+  "dtype": "bf16",
+  "softcap": "30 * tanh(x / 30) on device into the persistent BF16 logits buffer"
+ },
+ "sampling": {
+  "sampler": "split_topk",
+  "input_dtype": "bf16",
+  "note": "on-device two-level top-32 per chip over the vocab-sharded BF16 logits; greedy = lowest-id argmax"
+ }
+}
