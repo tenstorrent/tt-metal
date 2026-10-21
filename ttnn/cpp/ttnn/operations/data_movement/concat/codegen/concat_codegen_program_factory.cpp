@@ -134,8 +134,8 @@ KernelDescriptor make_kernel(
 
 }  // namespace
 
-// Batching follows the L1 free after the output is allocated; the program hash keys the same plan. Forced codegen only
-// checked the static window, so having no live room here is an error.
+// The output is allocated by now, so the live L1 already excludes it; the program hash keys the same plan. Forced
+// codegen only checked the static window, so having no live room here is an error.
 ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     const ConcatCodegenParams& operation_attributes,
     const ConcatCodegenInputs& tensor_args,
@@ -144,7 +144,7 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     const auto& inputs = tensor_args.input_tensors;
     const Tensor& first = inputs.front();
 
-    const auto batches = cc::plan_batches_live(inputs, operation_attributes);
+    const auto batches = cc::plan_batches_live(inputs, operation_attributes, /*output_allocated=*/true);
     if (!batches.has_value()) {
         TT_THROW(
             "ttnn.concat: codegen path needs {} B of L1 per core for its circular buffers but only {} B is free",
@@ -215,8 +215,10 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
         TensorAccessorArgs(*src_buffers[1]).append_to(reader_ct_args);
     } else if (!width) {
         reader_source = kReaderRmNonwidthNway;
-        reader_ct_args = {kCbOut, batches->read_batch, num_inputs, pages.out_page, src_page_bytes[0]};
-        TensorAccessorArgs(*src_buffers[0]).append_to(reader_ct_args);
+        reader_ct_args = {kCbOut, batches->read_batch, num_inputs, pages.out_page};
+        for (const Buffer* src_buffer : src_buffers) {
+            TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+        }
     } else if (two_input) {
         reader_source = kReaderRmWidthInterleaved;
         reader_ct_args = {
@@ -233,9 +235,14 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
         TensorAccessorArgs(*src_buffers[1]).append_to(reader_ct_args);
     } else {
         reader_source = kReaderRmWidthNway;
-        reader_ct_args = {
-            kCbOut, kCbScratch, num_inputs, pages.out_page, batches->read_batch, src_buffers[0]->alignment()};
-        TensorAccessorArgs(*src_buffers[0]).append_to(reader_ct_args);
+        uint32_t src_alignment = 0;
+        for (const Buffer* src_buffer : src_buffers) {
+            src_alignment = std::max(src_alignment, src_buffer->alignment());
+        }
+        reader_ct_args = {kCbOut, kCbScratch, num_inputs, pages.out_page, batches->read_batch, src_alignment};
+        for (const Buffer* src_buffer : src_buffers) {
+            TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+        }
     }
 
     KernelDescriptor reader_desc =
@@ -259,6 +266,9 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     if (!width && !two_input) {
         for (const uint32_t pages : pages_per_block) {
             reader_common_args.push_back(pages);
+        }
+        for (const uint32_t page_bytes : src_page_bytes) {
+            reader_common_args.push_back(page_bytes);
         }
     } else if (width && !two_input) {
         for (const uint32_t stick_bytes : src_stick_bytes) {

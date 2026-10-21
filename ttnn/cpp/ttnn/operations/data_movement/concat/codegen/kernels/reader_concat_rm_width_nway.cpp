@@ -10,23 +10,42 @@
 #include "api/core_local_mem.h"
 #include "ckernel.h"
 
+constexpr uint32_t cb_out = get_compile_time_arg_val(0);
+constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
+constexpr uint32_t N_INPUTS = get_compile_time_arg_val(2);
+constexpr uint32_t OUT_PAGE_SIZE = get_compile_time_arg_val(3);
+constexpr uint32_t BATCH = get_compile_time_arg_val(4);
+constexpr uint32_t SRC_NOC_ALIGNMENT = get_compile_time_arg_val(5);
+constexpr uint32_t FIRST_ACCESSOR_ARGS = 6;
+
+constexpr uint32_t base_rt = 0;
+constexpr uint32_t stick_rt = base_rt + N_INPUTS;
+constexpr uint32_t page_rt = stick_rt + N_INPUTS;
+
+constexpr auto source_args = make_tensor_accessor_args_tuple<N_INPUTS, FIRST_ACCESSOR_ARGS>();
+
+// Each input carries its own accessor type (DRAM vs L1), so the one to read through is picked by walking the inputs.
+template <uint32_t Index>
+FORCE_INLINE void read_source_page(
+    Noc& noc, CircularBuffer& dst_cb, uint32_t input, uint32_t page_id, uint32_t dst_offset) {
+    if constexpr (Index < N_INPUTS) {
+        if (input == Index) {
+            constexpr auto args = std::get<Index>(source_args);
+            const uint32_t page_size = get_common_arg_val<uint32_t>(page_rt + Index);
+            const auto accessor = TensorAccessor(args, get_common_arg_val<uint32_t>(base_rt + Index), page_size);
+            noc.async_read(accessor, dst_cb, page_size, {.page_id = page_id}, {.offset_bytes = dst_offset});
+        } else {
+            read_source_page<Index + 1>(noc, dst_cb, input, page_id, dst_offset);
+        }
+    }
+}
+
 void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
     uint32_t src_page = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_scratch = get_compile_time_arg_val(1);
-    constexpr uint32_t N_INPUTS = get_compile_time_arg_val(2);
-    constexpr uint32_t OUT_PAGE_SIZE = get_compile_time_arg_val(3);
-    constexpr uint32_t BATCH = get_compile_time_arg_val(4);
-    constexpr uint32_t SRC_NOC_ALIGNMENT = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
     constexpr bool WORD_COPY = get_named_compile_time_arg_val("word_copy") != 0;
     constexpr bool DIRECT_READ = get_named_compile_time_arg_val("direct_read") != 0;
-
-    constexpr uint32_t base_rt = 0;
-    constexpr uint32_t stick_rt = base_rt + N_INPUTS;
-    constexpr uint32_t page_rt = stick_rt + N_INPUTS;
 
     Noc noc;
     CircularBuffer out_cb(cb_out);
@@ -49,26 +68,19 @@ void kernel_main() {
             uint32_t dst_offset = 0;
 
             for (uint32_t input = 0; input < N_INPUTS; ++input) {
-                const uint32_t base = get_common_arg_val<uint32_t>(base_rt + input);
                 const uint32_t stick_size = get_common_arg_val<uint32_t>(stick_rt + input);
                 const uint32_t page_size = get_common_arg_val<uint32_t>(page_rt + input);
-                const auto accessor = TensorAccessor(src_args, base, page_size);
 
                 if constexpr (DIRECT_READ) {
                     const uint32_t out_cb_offset = page * OUT_PAGE_SIZE + dst_offset;
                     if (stick_size == page_size && (out_cb_offset % SRC_NOC_ALIGNMENT) == 0) {
-                        noc.async_read(
-                            accessor,
-                            out_cb,
-                            stick_size,
-                            {.page_id = src_page + page},
-                            {.offset_bytes = out_cb_offset});
+                        read_source_page<0>(noc, out_cb, input, src_page + page, out_cb_offset);
                         dst_offset += stick_size;
                         continue;
                     }
                 }
 
-                noc.async_read(accessor, scratch_cb, page_size, {.page_id = src_page + page}, {.offset_bytes = 0});
+                read_source_page<0>(noc, scratch_cb, input, src_page + page, 0);
                 noc.async_read_barrier();
                 bool word_store = false;
                 if constexpr (WORD_COPY) {

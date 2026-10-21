@@ -73,10 +73,6 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
         if (!interleaved_in_dram_or_l1(input.memory_config())) {
             return false;
         }
-        // The N-way readers share one accessor, so every input must be placed alike.
-        if (input_tensors.size() > 2 && input.memory_config() != first.memory_config()) {
-            return false;
-        }
         // The kernels derive sticks from the logical shape, and an empty input leaves a core no work.
         if (input.padded_shape() != input.logical_shape() || input.logical_shape().volume() == 0 ||
             input.logical_shape().rank() != rank) {
@@ -163,14 +159,15 @@ std::optional<BatchPlan> plan_batches(
 }
 
 std::optional<BatchPlan> plan_batches_live(
-    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
-    return plan_batches(input_tensors, attrs, get_max_l1_space(input_tensors.front()));
+    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, bool output_allocated) {
+    // An allocated output has already lowered the live frontier; charging it again would shrink the plan.
+    const uint64_t live = get_max_l1_space(input_tensors.front());
+    const uint64_t budget = output_allocated ? live : saturating_sub(live, l1_output_reservation(input_tensors, attrs));
+    return plan_batches(input_tensors, attrs, budget);
 }
 
 bool fits_live_l1(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
-    const uint64_t budget =
-        saturating_sub(get_max_l1_space(input_tensors.front()), l1_output_reservation(input_tensors, attrs));
-    return plan_batches(input_tensors, attrs, budget).has_value();
+    return plan_batches_live(input_tensors, attrs, /*output_allocated=*/false).has_value();
 }
 
 tt::tt_metal::TensorSpec codegen_output_spec(

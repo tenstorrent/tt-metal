@@ -44,11 +44,12 @@ uint64_t cb_footprint_bytes(
 std::optional<BatchPlan> plan_batches(
     const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, uint64_t budget);
 
-// Live L1 (output already allocated) for the hash and the factory; the gate uses the static window instead.
+// Live L1 as the plan's budget, shared by routing, the hash and the factory. `output_allocated` says the output already
+// sits below the live frontier; otherwise its L1 reservation is subtracted. The gate uses the static window instead.
 std::optional<BatchPlan> plan_batches_live(
-    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
+    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, bool output_allocated);
 
-// Routing-only: the output is not allocated yet, so its reservation is subtracted from live L1.
+// Routing-only: whether plan_batches_live finds a plan.
 bool fits_live_l1(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
 
 tt::tt_metal::TensorSpec codegen_output_spec(
