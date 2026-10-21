@@ -1276,6 +1276,16 @@ void MeshDeviceImpl::register_command_list() { ++num_command_lists_; }
 
 void MeshDeviceImpl::unregister_command_list() noexcept { --num_command_lists_; }
 
+bool MeshDeviceImpl::has_recorded_commands() const {
+    if (num_command_lists_ > 0) {
+        return true;
+    }
+    // Trace creation/release and builder acquisition change these under the API lock.
+    std::lock_guard<std::mutex> lock(api_mutex_);
+    return command_list_builder_active_ ||
+           (sub_device_manager_tracker_ != nullptr && sub_device_manager_tracker_->num_traces() > 0);
+}
+
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
