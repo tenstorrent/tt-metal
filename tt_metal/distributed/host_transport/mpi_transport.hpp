@@ -46,9 +46,10 @@ private:
     // Caps the request bookkeeping; the relay's credit gate is the real limit.
     static constexpr size_t kMaxOutstanding = 512;
 
-    std::span<std::byte> page_span(uint64_t page_index) const;
+    // The contiguous ring bytes from page `first` for `pages` pages; never crosses the wrap.
+    std::span<std::byte> run_span(uint64_t first, uint32_t pages) const;
     void arm_credit_recv();
-    void top_up_receives();
+    void post_receive();
     bool retire_credit_send();
 
     RingGeometry geom_;
@@ -59,14 +60,16 @@ private:
     multihost::Tag payload_tag_;
     multihost::Tag credit_tag_;
 
-    // Front-retired only, so the counts stay monotonic; the page a request
-    // belongs to is its position, which is why none is stored.
-    std::deque<multihost::RequestPtr> pending_send_;
-    std::deque<multihost::RequestPtr> pending_recv_;
+    // Front-retired only, so the count stays monotonic. Each entry is one message
+    // and the number of pages it carries; the pages a message holds are its
+    // position in the stream, so no index goes on the wire.
+    std::deque<std::pair<multihost::RequestPtr, uint32_t>> pending_send_;
+    // One receive at a time: a message's size is only known once it has landed,
+    // and the next one starts where it ended.
+    multihost::RequestPtr payload_recv_;
     uint64_t sent_ = 0;
     uint64_t released_ = 0;
     uint64_t delivered_ = 0;
-    uint64_t posted_ = 0;
     uint64_t consumed_ = 0;
 
     multihost::RequestPtr credit_recv_;

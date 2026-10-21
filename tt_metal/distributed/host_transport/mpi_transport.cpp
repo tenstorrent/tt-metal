@@ -16,11 +16,16 @@ namespace tt::tt_metal::distributed::host_transport {
 
 namespace {
 
-// One message per page, so no framing is needed and a message never spans the
-// ring wrap. Point-to-point delivery between a rank pair with one tag is ordered,
-// so the receiver's queued receives fill in send order and each lands on the page
-// the sender took it from -- which is what lets both sides agree on page index
-// without putting it on the wire.
+// One message per contiguous run of pages, never across the ring wrap, so no
+// framing is needed: point-to-point delivery between a rank pair with one tag is
+// ordered, the receiver has exactly one receive posted from the page after the
+// last one that landed to the end of the ring, and the message's byte count says
+// how many pages it carried. Both sides agree on page index without putting it on
+// the wire.
+//
+// The batching is whatever the relay found ready at this poll: one page goes out
+// on its own, and when the link falls behind the pages that pile up meanwhile go
+// out together. Nothing is held back waiting for company.
 constexpr int kPayloadTagOffset = 0;
 constexpr int kCreditTagOffset = 1;
 
@@ -42,15 +47,14 @@ MpiTransport::MpiTransport(const TransportParams& params) :
         // One standing receive for the peer's credit; re-posted on completion.
         arm_credit_recv();
     } else {
-        // Queue a receive for every page the ring can hold. The sender is credit
-        // gated to at most a ring ahead, so a receive is always already waiting.
-        top_up_receives();
+        post_receive();
     }
 }
 
-std::span<std::byte> MpiTransport::page_span(uint64_t page_index) const {
-    const uint64_t slot = page_index % geom_.num_pages;
-    return {ring_ + slot * geom_.page_size, geom_.page_size};
+std::span<std::byte> MpiTransport::run_span(uint64_t first, uint32_t pages) const {
+    const uint64_t slot = first % geom_.num_pages;
+    TT_ASSERT(slot + pages <= geom_.num_pages, "run of {} pages from slot {} crosses the ring wrap", pages, slot);
+    return std::span<std::byte>(ring_ + slot * geom_.page_size, static_cast<size_t>(pages) * geom_.page_size);
 }
 
 void MpiTransport::arm_credit_recv() {
@@ -58,28 +62,40 @@ void MpiTransport::arm_credit_recv() {
         std::span<std::byte>(reinterpret_cast<std::byte*>(&credit_inbox_), sizeof(credit_inbox_)), peer_, credit_tag_);
 }
 
-void MpiTransport::top_up_receives() {
-    // Only up to the consumed watermark plus a ring: receiving into a page the
-    // device has not read yet would overwrite live data.
-    const uint64_t limit = consumed_ + geom_.num_pages;
-    while (posted_ < limit) {
-        pending_recv_.push_back(context_->irecv(page_span(posted_), peer_, payload_tag_));
-        posted_++;
+void MpiTransport::post_receive() {
+    // The buffer runs from the next page to the end of the ring, which covers any
+    // run the sender may form (it splits at the wrap too). It overlaps pages the
+    // device has not read yet, but only received bytes are written and the sender
+    // is credit gated to a ring ahead of consumed, so nothing live is touched.
+    // Skipped while the ring is full: nothing can arrive until a credit goes out.
+    if (payload_recv_ || delivered_ >= consumed_ + geom_.num_pages) {
+        return;
     }
+    const uint32_t slot = static_cast<uint32_t>(delivered_ % geom_.num_pages);
+    payload_recv_ = context_->irecv(run_span(delivered_, geom_.num_pages - slot), peer_, payload_tag_);
 }
 
-bool MpiTransport::can_send(uint32_t pages) const { return pending_send_.size() + pages <= kMaxOutstanding; }
+bool MpiTransport::can_send(uint32_t /*pages*/) const {
+    // A batch is at most two messages (one each side of the wrap).
+    return pending_send_.size() + 2 <= kMaxOutstanding;
+}
 
 bool MpiTransport::send(uint64_t first_page, uint32_t pages) {
     TT_ASSERT(is_sender_, "send() on a receiving transport");
     // Both sides derive the destination page from their own counter, so a caller
     // that skips or repeats a page would silently misplace every later one.
     TT_ASSERT(first_page == sent_, "send() expects the absolute page index: got {}, sent {}", first_page, sent_);
-    if (!can_send(pages)) {
+    if (pages == 0 || !can_send(pages)) {
         return false;
     }
-    for (uint32_t i = 0; i < pages; i++) {
-        pending_send_.push_back(context_->isend(page_span(first_page + i), peer_, payload_tag_));
+    uint64_t next = first_page;
+    uint32_t left = pages;
+    while (left > 0) {
+        const uint32_t slot = static_cast<uint32_t>(next % geom_.num_pages);
+        const uint32_t run = std::min(left, geom_.num_pages - slot);
+        pending_send_.emplace_back(context_->isend(run_span(next, run), peer_, payload_tag_), run);
+        next += run;
+        left -= run;
     }
     sent_ += pages;
     return true;
@@ -112,7 +128,7 @@ bool MpiTransport::post_credit(uint64_t consumed_pages) {
 void MpiTransport::set_consumed(uint64_t consumed_pages) {
     consumed_ = consumed_pages;
     if (!is_sender_) {
-        top_up_receives();
+        post_receive();
     }
 }
 
@@ -120,18 +136,27 @@ void MpiTransport::poll() {
     if (is_sender_) {
         // Completion order is not guaranteed, so retire from the front only: the
         // count stays monotonic and never claims a page is free early.
-        while (!pending_send_.empty() && pending_send_.front()->test().has_value()) {
+        while (!pending_send_.empty() && pending_send_.front().first->test().has_value()) {
+            released_ += pending_send_.front().second;
             pending_send_.pop_front();
-            released_++;
         }
         if (credit_recv_ && credit_recv_->test().has_value()) {
             peer_consumed_ = std::max(peer_consumed_, credit_inbox_);
             arm_credit_recv();
         }
     } else {
-        while (!pending_recv_.empty() && pending_recv_.front()->test().has_value()) {
-            pending_recv_.pop_front();
-            delivered_++;
+        if (payload_recv_) {
+            if (const auto status = payload_recv_->test(); status.has_value()) {
+                const uint64_t bytes = static_cast<uint64_t>(status->count);
+                TT_FATAL(
+                    bytes != 0 && bytes % geom_.page_size == 0,
+                    "mpi receiver got a {} B message on a {} B page ring",
+                    bytes,
+                    geom_.page_size);
+                delivered_ += bytes / geom_.page_size;
+                payload_recv_.reset();
+                post_receive();
+            }
         }
         retire_credit_send();
     }
@@ -145,11 +170,10 @@ std::string MpiTransport::describe() const {
                             peer_consumed_,
                             pending_send_.size())
                       : fmt::format(
-                            "mpi receiver delivered={} posted={} consumed={} queued_recv={}",
+                            "mpi receiver delivered={} consumed={} recv_posted={}",
                             delivered_,
-                            posted_,
                             consumed_,
-                            pending_recv_.size());
+                            payload_recv_ != nullptr);
 }
 
 MpiTransport::~MpiTransport() {
@@ -162,11 +186,11 @@ MpiTransport::~MpiTransport() {
     // owns it is destroyed after the transport), but credit_inbox_/outbox_ are
     // members and do not. Closing this needs cancel-then-wait in the shared
     // request abstraction, which is outside this change; see the PR thread.
-    for (auto& r : pending_send_) {
+    for (auto& [r, pages] : pending_send_) {
         r->cancel();
     }
-    for (auto& r : pending_recv_) {
-        r->cancel();
+    if (payload_recv_) {
+        payload_recv_->cancel();
     }
     if (credit_recv_) {
         credit_recv_->cancel();

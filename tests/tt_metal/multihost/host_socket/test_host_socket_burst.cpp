@@ -99,7 +99,7 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
     HostMeshSocket::TransportConfig fwd_transport;
     fwd_transport.h2d_mode = env_h2d_mode();
     fwd_transport.page_size = page_size;
-    fwd_transport.max_batch_pages = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_BATCH_PAGES", 8));
+    fwd_transport.max_batch_pages = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_BATCH_PAGES", 0));
     HostMeshSocket::TransportConfig rev_transport;
     rev_transport.h2d_mode = env_h2d_mode();
     rev_transport.page_size = ack_page_size;
