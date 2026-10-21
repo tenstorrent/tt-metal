@@ -26,8 +26,8 @@ namespace sfpu {
 // compatibility -- calculate_tanh_derivative_sech2 is accurate to 1 bfloat16 ULP instead.
 // Nothing in this repository calls it: tanh_derivative_tile dispatches
 // calculate_tanh_derivative_sech2 unconditionally and ignores fast_and_approx, and the
-// LLK harness runs _calculate_tanh_derivative_ (same algorithm, runtime iterations; kept
-// under its tt-llk name) rather than this copy. The table
+// LLK harness runs _calculate_tanh_derivative_ (same algorithm, runtime iterations; defined
+// in this file) rather than this copy. The table
 // in tanh_derivative_init below is live even though this function is not -- see there.
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
 inline void calculate_tanh_derivative() {
@@ -63,9 +63,9 @@ inline void calculate_tanh_derivative() {
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
     // A 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1, 1.5, 2, 3, evaluated
-    // as 1 - lut(x)^2. Its consumer is not calculate_tanh_derivative above but tt-llk's
-    // _calculate_tanh_derivative_, paired with this init under SfpuType::tanh_derivative_lut;
-    // the table crosses repositories in LReg0/1/2 (slopes) and LReg4/5/6 (intercepts) and is
+    // as 1 - lut(x)^2. Its consumer is not calculate_tanh_derivative above but
+    // _calculate_tanh_derivative_ (below), paired with this init under SfpuType::tanh_derivative_lut;
+    // the table is shared through LReg0/1/2 (slopes) and LReg4/5/6 (intercepts) and is
     // the whole of that kernel's approximation. Fitted for sech^2, not tanh: tanh_init's own
     // table measures 0.0179 here and is not monotone once squared, against 0.0143 for this.
     //
