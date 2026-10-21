@@ -51,11 +51,15 @@ def unpack_A_tile_config(
     dest_acc: DestAccumulation,
     broadcast_type: BroadcastType = BroadcastType.None_,
     transpose: Transpose = Transpose.No,
+    within_face_transpose: Transpose | None = None,
 ) -> TestConfig:
-    """Build the config; transpose sets both the face and the within-face transpose.
+    """Build the config; transpose sets the face transpose, and also the within-face
+    transpose unless within_face_transpose is given.
 
     Unpack to dest is used when the input is 32-bit and dest_acc is Yes.
     """
+    if within_face_transpose is None:
+        within_face_transpose = transpose
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
@@ -86,7 +90,7 @@ def unpack_A_tile_config(
         ],
         runtimes=[
             UNPACK_TRANS_FACES(transpose),
-            UNPACK_TRANS_WITHIN_FACE(transpose),
+            UNPACK_TRANS_WITHIN_FACE(within_face_transpose),
             NUM_FACES(num_faces),
             NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
             NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),

@@ -753,8 +753,9 @@ def test_unpack_A_targeted_tensor_shape_coverage(
 # Face-grid coverage for the _llk_unpack_A_ transpose-of-faces MOP (tt-metal#47328). 16x32 (1x2)
 # and 32x16 (2x1) have the same face count, so each must be run with its own grid. The face-grid
 # broadcast cases (incl. Float32 unpack to dest) are in test_eltwise_unary_datacopy_tensor_shape.py.
-# Float32 unpack-to-dest transpose is left out: it fails on 32x32 (also on main) and
-# _llk_unpack_A_init_ asserts it on other tiles.
+# Float32 unpack to dest is in test_unpack_A_face_grid_transpose_of_faces_unpack_to_dest below:
+# within-face transpose with unpack to dest is wrong on every tile shape and _llk_unpack_A_init_
+# asserts it (tt-llk#1702).
 @pytest.mark.parametrize(
     "tile_dimensions",
     [[16, 16], [16, 32], [32, 16], [32, 32]],
@@ -794,6 +795,57 @@ def test_unpack_A_face_grid_transpose(tile_dimensions):
         dest_acc=DestAccumulation.No,
         transpose=Transpose.Yes,
     )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    # Transpose only moves data, so the result must match the golden exactly.
+    assert torch.equal(
+        golden_tensor.to(format_dict[formats.output_format]), res_tensor
+    ), "Result does not match golden"
+
+
+# Face transpose alone with Float32 unpack to dest, the path the compute API's transpose_wh_init
+# uses (it transposes within faces on the math thread). Only a 2x2 grid changes the face order.
+@pytest.mark.parametrize(
+    "tile_dimensions",
+    [[16, 16], [16, 32], [32, 16], [32, 32]],
+    ids=lambda dims: f"{dims[0]}x{dims[1]}",
+)
+def test_unpack_A_face_grid_transpose_of_faces_unpack_to_dest(tile_dimensions):
+    formats = input_output_formats([DataFormat.Float32], same=True)[0]
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.num_faces_r_dim * tile_shape.num_faces_c_dim
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=tile_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=tile_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
+    transpose_golden = get_golden_generator(TransposeGolden)
+    golden_tensor = transpose_golden.transpose_faces(
+        src_A, formats.output_format, tile_dimensions, num_faces
+    )
+
+    configuration = unpack_A_tile_config(
+        formats,
+        tile_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+        dest_acc=DestAccumulation.Yes,
+        transpose=Transpose.Yes,
+        within_face_transpose=Transpose.No,
+    )
+    assert configuration.unpack_to_dest
 
     res_from_L1 = configuration.run().result
 
