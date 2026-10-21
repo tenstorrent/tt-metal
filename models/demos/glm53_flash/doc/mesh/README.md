@@ -707,3 +707,14 @@ at short context (expert compute: EP32 dispatch).
 
 The fused mHC pre-block (`GLM53_MHC_PRE_BLOCK=1`) had never run on a mesh: its norm-weight read-back assumed one
 device (fixed d83e20b2094, shard 0 through `ttnn.get_device_tensors`); the block A/B is queued after the 8x4 windows.
+
+### Knee probes and the router A/B (2026-10-21 15:30-16:00)
+
+Two more 1 M needle probes with a 160-token budget: depth 0.62 (~400 K tokens before the question) and 0.56 (~460 K)
+are both found (reasoning preamble, then the key), so the 1 M miss is confined to the ~523 K-distance case while 20 K,
+262 K, 400 K and 460 K distances work under the same 1 M prefix: the model-side reading stands.
+
+Fused router top-k on the 8x4 (45 layers, bfp8, 4 users per row, `test_mesh_model -k chain`): chain PCC
+0.750624 / 0.811891 / 0.827025 and the greedy ids identical to the composite's digits, traced decode step **69.8 ms**
+(14.3 tok/s per user, 458 aggregate) vs 75.5 ms with the composite. `GLM53_ROUTER_FUSED=1` is the default from
+4d62fa6795c (`0` keeps the composite).
