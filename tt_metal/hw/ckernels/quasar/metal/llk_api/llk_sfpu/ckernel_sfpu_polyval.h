@@ -27,7 +27,7 @@ namespace ckernel::sfpu
  * The split kicks in only once the number of coefficients reaches SplitThreshold, because for short
  * chains the extra x^2 / combine overhead outweighs the shorter dependency chain.
  *
- * Kept in sync with the Blackhole evaluator (tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_polyval.h)
+ * Kept in sync with the Blackhole evaluator (hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_polyval.h)
  * so kernels ported between the two architectures evaluate their polynomials identically.
  *
  * @note Horner's method is used for numerical stability and O(N) complexity.

@@ -13,7 +13,7 @@
 // clang-format off: sfpi_inline must be defined before ckernel_sfpu_polyval.h
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
