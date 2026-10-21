@@ -295,6 +295,31 @@ def test_custom_cycle_count():
     _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
+# Regression test for #61816: the host profile buffer is (bank size x DRAM banks) bytes, and that product used to be
+# formed in 32-bit, so a large program support count wrapped it to a fraction of the device data and the read at device
+# close overran it. A Blackhole bank holds 48 B x 5 RISCs x profiler cores per bank x N, so the product passes
+# UINT32_MAX above N = 142,029 on p100a (18 cores x 7 banks) and lower on 8-bank parts; 150,000 wraps on all of them.
+# Wormhole runs out of device DRAM before its own wrap point (N = 186,413), so it cannot reach this path.
+def test_large_program_support_count():
+    WRAPPING_PROGRAM_SUPPORT_COUNT = 150000
+    REF_CYCLE_COUNT = 52 * 2000
+    testName = f"build/{PROG_EXMP_DIR}/test_custom_cycle_count"
+    setupStr = "-s test_custom_cycle_count"
+
+    run_device_profiler_test(testName=testName, noPostProcess=True)
+    defaultData = get_device_data(setupStr)
+    if defaultData["data"]["deviceInfo"]["arch"] != "blackhole":
+        pytest.skip("Only Blackhole can reach the 32-bit wrap")
+
+    run_device_profiler_test(testName=testName, noPostProcess=True, setOpSupportCount=WRAPPING_PROGRAM_SUPPORT_COUNT)
+    largeData = get_device_data(setupStr)
+
+    _assert_kernel_cycle_counts(largeData, REF_CYCLE_COUNT // 5, REF_CYCLE_COUNT * 10)
+    defaultCores = set(defaultData["data"]["devices"]["0"]["cores"].keys())
+    largeCores = set(largeData["data"]["devices"]["0"]["cores"].keys())
+    assert largeCores == defaultCores, f"Cores missing at a large support count: {sorted(defaultCores - largeCores)}"
+
+
 @pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
