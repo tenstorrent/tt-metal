@@ -147,16 +147,6 @@ class ACC_TO_DEST(TemplateParameter):
 
 
 @dataclass
-class MEASURE_RECONFIG(TemplateParameter):
-    measure_reconfig: bool
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool MEASURE_RECONFIG = {str(self.measure_reconfig).lower()};"
-        )
-
-
-@dataclass
 class REUSE_DEST_TYPE(TemplateParameter):
     reuse_dest_type: EltwiseBinaryReuseDestType
 

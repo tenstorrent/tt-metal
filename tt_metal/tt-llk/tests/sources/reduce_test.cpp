@@ -19,20 +19,6 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) && (POOL_TYPE != ckernel::PoolType::MAX);
-// A zone costs harness cycles outside it, so only the dedicated reconfig perf test opens RECONFIG.
-static constexpr bool MEASURE_RECONFIG_ZONE = IS_SWAPPED_REDUCE_ROW && MEASURE_RECONFIG;
-
-// Nothing in RECONFIG makes pack wait on unpack or math, and the span run types time from unpack start to pack end.
-// Meeting here before the zone closes makes that span cover every thread's reconfig; isolate runs skip the barrier.
-inline void reconfig_zone_rendezvous()
-{
-#if defined(LLK_PROFILER)
-    if constexpr (!llk_perf::is_single_thread_runtype(PERF_RUN_TYPE))
-    {
-        llk_barrier::rendezvous(llk_barrier::is_action_thread());
-    }
-#endif
-}
 
 // Swapped 4-face REDUCE_ROW unpacks a whole tile with one UNPACR per operand; every other path posts one per face.
 // Must match full_tile in _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
@@ -103,18 +89,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
-    }
-    if constexpr (MEASURE_RECONFIG_ZONE)
-    {
-        // Production reconfigures to scaler->SrcA, data->SrcB before every Row Sum/Avg block.
-        START_PERF_MEASURE("RECONFIG")
-        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
-            formats.unpack_B_src, formats.unpack_B_dst, TILE_SIZE_UNPACK_B, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
-        _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
-            formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
-        PROFILER_SYNC();
-        reconfig_zone_rendezvous();
     }
 }
 
@@ -187,15 +161,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
-    }
-    if constexpr (MEASURE_RECONFIG_ZONE)
-    {
-        START_PERF_MEASURE("RECONFIG")
-        _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
-        _llk_math_reduce_uninit_();
-        PROFILER_SYNC();
-        reconfig_zone_rendezvous();
     }
 }
 
@@ -276,14 +241,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
-    }
-    if constexpr (MEASURE_RECONFIG_ZONE)
-    {
-        START_PERF_MEASURE("RECONFIG")
-        _llk_pack_reduce_mask_clear_();
-        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);
-        PROFILER_SYNC();
-        reconfig_zone_rendezvous();
     }
     _llk_pack_reduce_mask_clear_();
 }
