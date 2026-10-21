@@ -53,6 +53,7 @@ add_subdirectory(chain_affine_transforms)
 add_subdirectory(select_final_carry)
 add_subdirectory(ring_relay_prefix)
 add_subdirectory(block_matmul)
+add_subdirectory(entry_correction)
 add_subdirectory(affine_exclusive_scan)
 add_subdirectory(prepare_chunk_recurrence)
 add_subdirectory(recurrent_chunk_scan)
@@ -70,6 +71,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::KDA::SelectFinalCarry
         TTNN::Ops::Experimental::KDA::RingRelayPrefix
         TTNN::Ops::Experimental::KDA::BlockMatmul
+        TTNN::Ops::Experimental::KDA::EntryCorrection
         TTNN::Ops::Experimental::KDA::AffineExclusiveScan
         TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
         TTNN::Ops::Experimental::KDA::RecurrentChunkScan
@@ -89,6 +91,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SelectFinalCarry>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::RingRelayPrefix>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::BlockMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::EntryCorrection>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::RecurrentChunkScan>

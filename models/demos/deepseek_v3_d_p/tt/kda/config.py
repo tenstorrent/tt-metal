@@ -90,6 +90,12 @@ class KDARecurrenceProgramConfig:
     # Compose the SP prefix by relaying each head's state around the sequence-parallel ring (RingRelayPrefix) instead
     # of gathering every summary and chaining them. Taken only when the fabric wraps the SP axis.
     ring_relay_prefix: bool = False
+    # With the ring relay: the summary also emits each chunk's output terms and an EntryCorrection program forms
+    # the chunk outputs and the final state from the entry states in parallel, instead of a second sequential scan.
+    entry_correction: bool = False
+    # Cores the entry correction may use: its products count toward the Blackhole di/dt bound (as
+    # KDAProgramConfig.max_matmul_cores).
+    entry_correction_max_cores: int = 110
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
@@ -236,6 +242,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
             high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
             ring_relay_prefix=True,
+            entry_correction=True,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,

@@ -283,7 +283,10 @@ FORCE_INLINE void multiply_by_decay(
 
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+// With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
+// FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
+// segment's A and B also leave in FP32.
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -301,11 +304,16 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer transport_state(dfb::transport_state);
     DataflowBuffer state_update(dfb::state_update);
     DataflowBuffer state_temporary(dfb::state_temporary);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer query_projection(dfb::query_projection);
+    DataflowBuffer chunk_base(dfb::chunk_base);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t pair_columns = 2 * Vt;
+    constexpr uint32_t chunk_pair_tiles = Ct * pair_columns;
     constexpr uint32_t key_pair_tiles = Kt * pair_columns;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
@@ -324,6 +332,10 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         current.wait_front(key_pair_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, pair_columns, Vt>(
             kd, current, v_beta, value_new);  // v_beta - kd S
+        if constexpr (EmitOutputs) {
+            q_decay.wait_front(chunk_key_tiles);
+            matrix_multiply<Ct, Kt, pair_columns>(q_decay, current, query_projection);  // q_decay S
+        }
         multiply_by_decay(current, final_decay, state_temporary, Kt, pair_columns);
         value_new.wait_front(Ct * pair_columns);
         matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
@@ -332,6 +344,16 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         state_temporary.wait_front(key_pair_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, pair_columns, key_pair_tiles>(
             k_decay_transposed, scratch, state_temporary, last ? final_state : state_ring);  // dl S + k_dec_t v_new
+        if constexpr (EmitOutputs) {
+            intra.wait_front(chunk_chunk_tiles);
+            query_projection.wait_front(chunk_pair_tiles);
+            // q_decay S + intra v_new on both paths, [F(0) | F(I)], straight to the writer in FP32.
+            matrix_multiply_then<EltwiseBinaryType::ELWADD, Ct, Ct, pair_columns, chunk_pair_tiles>(
+                intra, scratch, query_projection, chunk_base);
+            query_projection.pop_front(chunk_pair_tiles);
+            intra.pop_front(chunk_chunk_tiles);
+            q_decay.pop_front(chunk_key_tiles);
+        }
         state_temporary.pop_front(key_pair_tiles);
         scratch.pop_front(Ct * pair_columns);
         current.pop_front(key_pair_tiles);
@@ -360,6 +382,13 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
     extract_paths<true, Kt, Vt, packet_rows>(final_state, output);
     extract_paths<false, Kt, Vt, packet_rows>(final_state, transport_state);
+    if constexpr (EmitOutputs) {
+        DataflowBuffer final_a(dfb::final_a);
+        DataflowBuffer final_b(dfb::final_b);
+        pack_reconfig_data_format(final_a.get_id());
+        extract_paths<true, Kt, Vt, packet_rows>(final_state, final_a);
+        extract_paths<false, Kt, Vt, packet_rows>(final_state, final_b);
+    }
     final_state.pop_front(key_pair_tiles);
 }
 
@@ -457,7 +486,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
 
@@ -473,7 +502,7 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
         return;
     }
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt>(valid_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt, emit_outputs != 0>(valid_chunks, reset_chunk);
     } else {
         compute_recurrent<Ct, Kt, Vt>(valid_chunks, reset_chunk);
     }

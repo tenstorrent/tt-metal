@@ -123,6 +123,8 @@ class RingRelayPrefix:
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
+        # Where the entry states land for their reader (the chunk scan, or the entry correction's many cores).
+        self.entry_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     def __call__(self, packed, initial_state, actual_start, output_gate: RelayOutputGate | None = None):
         """Return this rank's entry states and the final state, both [BH, K, K] FP32, and the output gate's output
@@ -153,6 +155,7 @@ class RingRelayPrefix:
             num_links=self.num_links,
             cores=self.cores,
             sequence_parallel_axis=self.axis,
+            entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
             **gate,
         )

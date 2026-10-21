@@ -131,6 +131,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         !attrs.packed_head || (attrs.mode == RecurrentChunkScanMode::SUMMARY && attrs.groups_per_head == 1),
         "{}: packed_head requires a summary with one group per head",
         operation_name);
+    TT_FATAL(!attrs.emit_outputs || attrs.packed_head, "{}: emit_outputs requires packed_head", operation_name);
     TT_FATAL(
         !attrs.packed_head || attrs.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "{}: packed_head requires an interleaved output",
@@ -145,8 +146,21 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto state_layout = TensorLayout(
         summary ? DataType::BFLOAT16 : DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     if (attrs.packed_head) {
-        return {
+        spec_return_value_t specs = {
             TensorSpec(Shape({1, attrs.batch_heads, attrs.key_dim, attrs.key_dim + attrs.value_dim}), output_layout)};
+        if (attrs.emit_outputs) {
+            const auto fp32_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+            const auto emit_layout = TensorLayout(
+                DataType::FLOAT32, PageConfig(Layout::TILE), attrs.emit_mem_config.value_or(attrs.output_mem_config));
+            specs.push_back(TensorSpec(
+                Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}),
+                emit_layout));
+            specs.push_back(TensorSpec(
+                Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.key_dim}), emit_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+        }
+        return specs;
     }
     // Summary precision and structure are independent of actual_start. Only live
     // head/tail slots are defined; unsplit execution defines the head pair.
@@ -230,7 +244,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
-    bool packed_head) {
+    bool packed_head,
+    bool emit_outputs,
+    const std::optional<MemoryConfig>& emit_mem_config) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -245,6 +261,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .groups_per_head = groups_per_head,
             .mode = mode,
             .packed_head = packed_head,
+            .emit_outputs = emit_outputs,
+            .emit_mem_config = emit_mem_config,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
