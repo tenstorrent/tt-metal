@@ -59,7 +59,8 @@ distributed::MeshBuffer create_sram_buffer_view(
     }
     const bool per_core = is_per_core_allocation(local_config.sharding_args);
     const auto lockstep_address = placements.front().second;
-    const auto expected_cores = spec.compute_data_cores();
+    // TensorSpec resolves a distribution for every sharded layout, including partially used grids.
+    const auto& expected_cores = local_config.sharding_args.buffer_distribution_spec().value().cores_with_data();
     const std::unordered_set<CoreCoord> core_set(expected_cores.begin(), expected_cores.end());
     for (const auto& [coord, entries] : by_device) {
         auto* device = mesh.impl().get_device(coord);
