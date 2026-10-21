@@ -1204,17 +1204,24 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     "shape, dim",
     [((2, 3, 37, 45), -1), ((2, 3, 37, 45), None), ((1, 1, 32, 40), -1), ((1, 1, 64, 7), -2), ((1, 1, 1, 1), None)],
 )
-def test_max_min_bfloat8_b_unaligned_width(device, op, shape, dim):
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("scalar", [1.0, -1.0])
+def test_max_min_block_float_unaligned_width(device, op, shape, dim, keepdim, dtype, scalar):
     torch.manual_seed(0)
     torch_input = torch.randn(shape) * 4
     if shape == (1, 1, 1, 1):
         torch_input = -torch_input.abs() - 1 if op == "max" else torch_input.abs() + 1
-    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     stored = ttnn.to_torch(tt_input).float()
     dims = tuple(range(len(shape))) if dim is None else (dim,)
-    expected = torch.amax(stored, dim=dims, keepdim=True) if op == "max" else torch.amin(stored, dim=dims, keepdim=True)
+    take_max = (op == "max") == (scalar > 0)
+    picked = torch.amax(stored, dim=dims, keepdim=keepdim) if take_max else torch.amin(stored, dim=dims, keepdim=keepdim)
+    expected = scalar * picked
 
-    tt_output = getattr(ttnn, op)(tt_input, dim=dim, keepdim=True)
-    assert tt_output.dtype == ttnn.bfloat8_b
-    output = ttnn.to_torch(tt_output).float().reshape(expected.shape)
-    assert torch.allclose(output, expected, rtol=0.02, atol=0.02), f"max abs diff {(output - expected).abs().max()}"
+    tt_output = getattr(ttnn, op)(tt_input, dim=dim, keepdim=keepdim, scalar=scalar)
+    assert tt_output.dtype == dtype
+    output = ttnn.to_torch(tt_output).float()
+    assert output.shape == expected.shape
+    tol = 0.02 if dtype == ttnn.bfloat8_b else 0.13
+    assert torch.allclose(output, expected, rtol=tol, atol=tol), f"max abs diff {(output - expected).abs().max()}"

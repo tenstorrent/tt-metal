@@ -572,7 +572,8 @@ Tensor reduce(
                 sub_core_grids,
                 fast_and_approximate_mode,
                 output_layout);
-            return ttnn::typecast(ttnn::fill_implicit_tile_padding(widened, ttnn::PadValue{0.0f}), input_tensor_arg.dtype());
+            return ttnn::typecast(
+                ttnn::fill_implicit_tile_padding(widened, ttnn::PadValue{0.0f}), input_tensor_arg.dtype());
         }
     }
     // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
