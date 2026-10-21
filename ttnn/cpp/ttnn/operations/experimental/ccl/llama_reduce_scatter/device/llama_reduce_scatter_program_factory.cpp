@@ -829,38 +829,24 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    auto* target_device = mesh_device->get_device(coord);
+    // Fabric node ids cover remote coordinates; row/column device pointers are local-only.
     const uint32_t ring_size = operation_attributes.ring_devices;
     auto topology = operation_attributes.topology;
-
-    uint32_t ring_index = 0;
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                                             : mesh_view.get_devices_on_row(coord[0]);
+    const uint32_t ring_index = coord[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(coord[1])
                                      : mesh_view.get_fabric_node_ids_on_row(coord[0]);
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) == target_device) {
-            ring_index = i;
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-                backward_fabric_node_id = fabric_node_ids.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(ring_size - 1);
-                backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
-            }
-            if (i != ring_size - 1) {
-                forward_device = devices.at(i + 1);
-                forward_fabric_node_id = fabric_node_ids.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-                forward_fabric_node_id = fabric_node_ids.at(0);
-            }
-        }
+    if (ring_index != 0) {
+        backward_fabric_node_id = fabric_node_ids.at(ring_index - 1);
+    } else if (topology == ttnn::ccl::Topology::Ring) {
+        backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
+    }
+    if (ring_index != ring_size - 1) {
+        forward_fabric_node_id = fabric_node_ids.at(ring_index + 1);
+    } else if (topology == ttnn::ccl::Topology::Ring) {
+        forward_fabric_node_id = fabric_node_ids.at(0);
     }
     uint32_t num_links = operation_attributes.num_links;
     std::string device_order = detail::device_order_array_string(ring_size, ring_index, topology);
@@ -1127,8 +1113,8 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
     uint32_t writer_sender_packet_start = 0;
     uint32_t sender_core_idx = 0;
     uint32_t link_idx = 0;
-    bool forward_fabric_connection = forward_device.has_value();
-    bool backward_fabric_connection = backward_device.has_value();
+    bool forward_fabric_connection = forward_fabric_node_id.has_value();
+    bool backward_fabric_connection = backward_fabric_node_id.has_value();
     const uint32_t semaphore_address = static_cast<uint32_t>(cross_device_semaphore->address());
 
     for (auto core : all_cores) {
