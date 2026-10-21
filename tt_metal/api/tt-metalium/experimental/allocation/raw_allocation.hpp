@@ -13,33 +13,34 @@ namespace tt::tt_metal::experimental {
 
 struct RawAllocationImpl;
 
-// Represent a unique handle to a piece of memory allocation.
-// **Currently L1 only.**
-//
-// An allocation could be lockstep, per-node or node range allocated.
-// Current interface is intentionally minimal as this is currently a shim to permit arena allocation for metal 2.0.
-//
-// In long term, we should surface dedicated structs to represent each kind of allocation and use RawAllocation class
-// to represent "any" allocation.
-// Currently, details of RawAllocation is only visible to the implementation details of tt_metal runtime.
+/**
+ * An opaque handle to a device-side memory reservation with a user-managed lifetime.
+ *
+ * A RawAllocation represents either a lockstep or range-lockstep allocation.
+ * It provides a minimal interface for passing memory reservations between
+ * the user and the runtime. It is the sole owner of the memory reservation it
+ * represents.
+ *
+ * **Currently SRAM only**.
+ */
 struct RawAllocation {
-    // No default constructor for now to reduce states & ease implementation.
-    // This could be added to express an allocation that owns no resource
+    // No default constructor to be consistent with MeshTensor & MeshBuffer.
     RawAllocation() = delete;
-    // Internal constructor
-    explicit RawAllocation(RawAllocationImpl&& impl);
+    // Releases the associated reservation
     ~RawAllocation();
 
-    // General RAII resource semantics
-
+    // General move-only RAII resource semantics
     // Disable copy
     RawAllocation(const RawAllocation&) = delete;
     RawAllocation& operator=(const RawAllocation&) = delete;
-
     // Allow move
     RawAllocation(RawAllocation&&) noexcept;
     RawAllocation& operator=(RawAllocation&&) noexcept;
 
+    // Opaque handle.
+
+    // Implementation details
+    explicit RawAllocation(RawAllocationImpl&& impl);
     RawAllocationImpl& impl();
     const RawAllocationImpl& impl() const;
 
@@ -48,7 +49,9 @@ private:
 };
 
 /**
- * Reserve L1 memory at a common address across the participating banks on each device in the mesh.
+ * Reserve SRAM memory at a common address across the entire MeshDevice consistent with given properties (e.g. size).
+ *
+ * See: LockstepAllocationProperties.
  *
  * Precondition:
  * - properties satisfies its documented invariants.
@@ -57,11 +60,11 @@ private:
  * - Returns a valid RawAllocation that owns the memory reservation described by properties.
  * - No other allocation can occupy the reserved memory region until the returned allocation is destroyed.
  */
-RawAllocation allocate_l1(distributed::MeshDevice& device, LockstepAllocationProperties properties);
+RawAllocation allocate_on_sram(distributed::MeshDevice& device, LockstepAllocationProperties properties);
 
 /**
- * Reserve L1 memory at a common address across the banks specified by properties.banks_to_be_allocated_on
- * on each device in the mesh.
+ * Reserve SRAM memory at a common address across the banks specified by the properties
+ * across the entire MeshDevice.
  *
  * Precondition:
  * - properties satisfies its documented invariants.
@@ -71,6 +74,6 @@ RawAllocation allocate_l1(distributed::MeshDevice& device, LockstepAllocationPro
  * - No other allocation can occupy the reserved memory region on the specified banks until the returned
  *   allocation is destroyed.
  */
-RawAllocation allocate_l1(distributed::MeshDevice& device, RangeLockstepAllocationProperties properties);
+RawAllocation allocate_on_sram(distributed::MeshDevice& device, RangeLockstepAllocationProperties properties);
 
 }  // namespace tt::tt_metal::experimental
