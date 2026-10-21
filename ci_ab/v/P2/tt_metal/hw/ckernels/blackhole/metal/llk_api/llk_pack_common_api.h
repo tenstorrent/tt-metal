@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "llk_assert.h"
+#include "llk_dest_clear_api.h"
 #include "llk_fp32_dest_acc.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
@@ -117,10 +118,14 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * back to the math thread.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam math_clears_dest    Release without clearing; the math thread clears the section when it acquires it.
  */
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool math_clears_dest = false>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    static_assert(
+        !math_clears_dest || !llk_unpack_may_write_dest(),
+        "math_clears_dest needs the math thread as DEST's only writer: no 32-bit unpack source in the kernel");
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest>();
 }
 
 /**

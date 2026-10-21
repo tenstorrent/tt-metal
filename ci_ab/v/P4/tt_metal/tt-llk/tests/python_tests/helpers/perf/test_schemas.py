@@ -168,7 +168,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_eltwise_binary_sfpu": "perf_eltwise_binary_sfpu"},
     },
     "perf_eltwise_unary_datacopy": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -196,6 +196,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_tiles_in_block",
             "tile_cnt",
             "tilize",
+            "unpack_block",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
@@ -507,7 +508,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_dest_bank": "perf_pack_dest_bank"},
     },
     "perf_pack": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -534,6 +535,7 @@ PERF_TEST_SCHEMAS = {
             "num_tiles_in_block",
             "output_num_blocks",
             "output_num_tiles_in_block",
+            "pack_block",
             "relu_config",
             "tile_cnt",
             "tilize",
@@ -783,7 +785,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_unpack_tilize": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -800,6 +802,7 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "tile_cnt",
+            "unpack_block",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},

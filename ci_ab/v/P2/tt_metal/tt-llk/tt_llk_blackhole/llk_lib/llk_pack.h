@@ -589,8 +589,6 @@ inline void _llk_pack_uninit_()
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
-    TTI_NOP;
-    TTI_NOP;
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
     static_assert(
@@ -608,4 +606,74 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
         T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
         TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
     }
+}
+
+/**
+ * Pack num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the program the last pack init set up.
+ * @tparam pack_mode: Packing layout of that program, values = <Default/Tilize>.
+ * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
+{
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Tilize, "Blackhole: _llk_pack_block_ supports PackMode::Default and PackMode::Tilize only");
+
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination(address);
+
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
+    // A tilize outer loop packs a face pair and steps Z one pair, so Z walks on into the next tile.
+    constexpr std::uint32_t faces_per_outer_loop = (pack_mode == PackMode::Tilize) ? 2 : 1;
+    const std::uint32_t outer_loop_len           = (TILE_NUM_FACES / faces_per_outer_loop) * num_tiles;
+    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+}
+
+/**
+ * Pack num_tiles consecutive tiles to L1 tiles tile_stride bytes apart, closing every tile so block-float and padded pages stay intact.
+ * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
+ * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_(
+    const std::uint32_t start_tile_index,
+    const std::uint32_t address,
+    const std::uint32_t num_tiles,
+    const std::uint32_t tile_stride,
+    const std::uint32_t num_faces = TILE_NUM_FACES)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination(address);
+
+    // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
+    // Rewriting an unchanged stride cost the call up to 8 cycles.
+    if (tile_stride != pack_ch1_w_stride)
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride = tile_stride;
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TT_MOP(1, 0, num_faces << 10);
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
