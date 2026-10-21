@@ -87,9 +87,7 @@ def _stage_binary_operands(op0_flat, op1_flat, tile_indices, dtype):
 
     def _pad_to_tile(flat):
         if len(flat) < MAX_TILE_ELEMENTS:
-            return torch.cat(
-                [flat, torch.zeros(MAX_TILE_ELEMENTS - len(flat), dtype=dtype)]
-            )
+            return torch.cat([flat, torch.zeros(MAX_TILE_ELEMENTS - len(flat), dtype=dtype)])
         return flat
 
     tiles = [torch.zeros(MAX_TILE_ELEMENTS, dtype=dtype) for _ in range(tile_cnt)]
@@ -129,9 +127,7 @@ def _run_sfpu_binary_llk_golden(
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
     num_faces = MAX_NUM_FACES
 
-    src_A, tile_cnt_A, src_B = prepare_stimuli(
-        formats, input_dimensions, src0_idx, src1_idx, mathop
-    )
+    src_A, tile_cnt_A, src_B = prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)
 
     golden_input = src_A
     if broadcast_type != BroadcastType.None_:
@@ -156,16 +152,12 @@ def _run_sfpu_binary_llk_golden(
     ).flatten()
     dst_start = dst_idx * MAX_TILE_ELEMENTS
     torch_format_out = format_dict[formats.output_format]
-    golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(
-        torch_format_out
-    )
+    golden_tensor = golden_full[dst_start : dst_start + MAX_TILE_ELEMENTS].to(torch_format_out)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
-    unpack_to_dest = (
-        format_variant.unpack_to_dest if format_variant is not None else True
-    )
+    unpack_to_dest = format_variant.unpack_to_dest if format_variant is not None else True
     test_config_kwargs = {
         "test_name": _CPP_SOURCE,
         "formats": formats,
@@ -173,9 +165,7 @@ def _run_sfpu_binary_llk_golden(
             SFPU_BINARY_OP(binary_op),
             APPROX_MODE(approx_mode),
             DATA_COPY_TYPE(DataCopyType.A2D),
-            UNPACKER_ENGINE_SEL(
-                UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
-            ),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA),
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
@@ -225,9 +215,7 @@ def _run_sfpu_binary_llk_golden(
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(golden_tensor)
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format_out)
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
-    )
+    assert passed_test(golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp)
 
     if broadcast_type != BroadcastType.None_ and mathop != MathOperation.SfpuElwmul:
         # isclose ignores the sign of zero. MUL is skipped: SFPMUL adds +0.0, so
@@ -251,9 +239,7 @@ _LCM_MAX_OPERAND = 32767
 
 def _prepare_lcm_stimuli(input_dimensions):
     """Uniform in-contract lcm operands; sfpu_int32_lcm_pairs_*.yaml cover the edge pairs."""
-    spec = StimuliSpec.uniform(
-        low=float(-_LCM_MAX_OPERAND), high=float(_LCM_MAX_OPERAND)
-    )
+    spec = StimuliSpec.uniform(low=float(-_LCM_MAX_OPERAND), high=float(_LCM_MAX_OPERAND))
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=DataFormat.Int32,
         input_dimensions_A=input_dimensions,
@@ -265,9 +251,7 @@ def _prepare_lcm_stimuli(input_dimensions):
     return src_A, tile_cnt_A, src_B
 
 
-def _prepare_int_stimuli(
-    formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs
-):
+def _prepare_int_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
     clamps to keep the product representable). Both operands live in src_A."""
     if mathop == MathOperation.SfpuLcm:
@@ -341,9 +325,7 @@ def test_eltwise_binary_sfpu_int_quasar(
         tile_indices,
         mathop,
         binary_op,
-        prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
-            f, dims, s0, s1, op, clamp_inputs
-        ),
+        prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(f, dims, s0, s1, op, clamp_inputs),
         approx_mode=approx_mode,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -358,20 +340,33 @@ def test_eltwise_binary_sfpu_int_quasar(
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
 # Crafted lanes in face 0 exercising the div special-case branches.
+_INF = float("inf")
+_NAN = float("nan")
 _DIV_SPECIAL_CASE_LANES = [
     (0, 0.0, 0.0, "nan"),
     (1, 1.5, 0.0, "pos_inf"),
     (2, -1.5, 0.0, "neg_inf"),
     (3, 2.7, 2.7, "one"),
     (4, -3.3, -3.3, "one"),
+    (5, 0.0, -0.0, "nan"),
+    (6, -0.0, 0.0, "nan"),
+    (7, -0.0, -0.0, "nan"),
+    (8, _INF, _INF, "nan"),
+    (9, -_INF, -_INF, "nan"),
+    (10, _NAN, 0.0, "nan"),
+    (11, _INF, -_INF, "nan"),
+    (12, 1.5, _NAN, "nan"),
+    (13, _NAN, 1.5, "nan"),
+    (14, 1.5, -0.0, "neg_inf"),
+    (15, -1.5, -0.0, "pos_inf"),
+    (16, 1.5, _INF, "zero"),
+    (17, -1.5, -_INF, "zero"),
 ]
 
 
 def _get_valid_float_formats_dest_acc():
     """Resolve all executable float binary format and path variants."""
-    formats = input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    )
+    formats = input_output_formats([DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32])
     return generate_quasar_sfpu_format_variants(MathOperation.SfpuElwadd, formats)
 
 
@@ -413,22 +408,28 @@ def _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop
         spec_A=spec,
         spec_B=spec,
     )
-    src_A = _prepare_float_inputs(
-        src_A, formats.input_format, src0_idx, src1_idx, mathop
-    )
+    src_A = _prepare_float_inputs(src_A, formats.input_format, src0_idx, src1_idx, mathop)
     return src_A, tile_cnt_A, src_B
 
 
+_DIV_SPECIAL_CASE_CHECKS = {
+    "nan": lambda v: v != v,
+    "pos_inf": lambda v: v == _INF,
+    "neg_inf": lambda v: v == -_INF,
+    # Zero results come out +0 (the -0 canonicalisation), so only the magnitude is checked.
+    "zero": lambda v: v == 0.0,
+    # The x/x branch forces an exact 1.0 regardless of reciprocal rounding.
+    "one": lambda v: v == 1.0,
+}
+
+
 def _check_div_special_cases(res_tensor):
-    """The kernel's x/x branch forces an exact 1.0 regardless of reciprocal
-    rounding — verify the 'one' special-case lanes."""
-    for lane, _, _, kind in _DIV_SPECIAL_CASE_LANES:
-        if kind != "one":
-            continue
+    """Check each IEEE special-case lane exactly."""
+    for lane, dividend, divisor, kind in _DIV_SPECIAL_CASE_LANES:
         actual = res_tensor[lane].item()
-        assert (
-            actual == 1.0
-        ), f"x/x special case at lane {lane}: expected 1.0, got {actual}"
+        assert _DIV_SPECIAL_CASE_CHECKS[kind](
+            actual
+        ), f"{dividend} / {divisor} at lane {lane}: expected {kind}, got {actual}"
 
 
 _DIV_FP32_MAX_ULP = 4
@@ -490,22 +491,15 @@ def test_eltwise_binary_sfpu_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
-    format_variant = resolve_quasar_sfpu_variant(
-        MathOperation.SfpuElwadd, formats, dest_acc
-    )
-    assert (
-        format_variant is not None
-    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    format_variant = resolve_quasar_sfpu_variant(MathOperation.SfpuElwadd, formats, dest_acc)
+    assert format_variant is not None, f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
     binary_op = mathop.cpp_enum_value
-    post_check = (
-        _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
-    )
+    post_check = _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
     # A 32-bit Dest DIV runs two Newton-Raphson steps in every approximation mode; the
     # default 5% tolerance would also pass the bare LUT seed, so gate it by ULP instead.
     max_ulp = (
         _DIV_FP32_MAX_ULP
-        if mathop == MathOperation.SfpuElwdiv
-        and formats.output_format == DataFormat.Float32
+        if mathop == MathOperation.SfpuElwdiv and formats.output_format == DataFormat.Float32
         else None
     )
     _run_sfpu_binary_llk_golden(
@@ -565,9 +559,7 @@ def _inject_bcast_specials(src_A, src0_idx, src1_idx, broadcast_type):
                     flat[data_base + offset] = -0.0
                 idx = base + offset
                 if ignored:
-                    flat[idx] = _BCAST_SPECIALS[
-                        (tile_r + tile_c) % len(_BCAST_SPECIALS)
-                    ]
+                    flat[idx] = _BCAST_SPECIALS[(tile_r + tile_c) % len(_BCAST_SPECIALS)]
                 elif (tile_r + tile_c) % _BCAST_NEG_ZERO_STRIDE == 1:
                     flat[idx] = -0.0
     return flat.reshape(src_A.shape)
@@ -591,18 +583,12 @@ def test_eltwise_binary_sfpu_bcast_quasar(
     perf_report=None,
 ):
     """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast."""
-    format_variant = resolve_quasar_sfpu_variant(
-        MathOperation.SfpuElwadd, formats, dest_acc
-    )
-    assert (
-        format_variant is not None
-    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    format_variant = resolve_quasar_sfpu_variant(MathOperation.SfpuElwadd, formats, dest_acc)
+    assert format_variant is not None, f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
     binary_op = mathop.cpp_enum_value
 
     def prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
-        src_A, tile_cnt_A, src_B = _prepare_float_stimuli(
-            formats, input_dimensions, src0_idx, src1_idx, mathop
-        )
+        src_A, tile_cnt_A, src_B = _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)
         src_A = _inject_bcast_specials(src_A, src0_idx, src1_idx, broadcast_type)
         return src_A, tile_cnt_A, src_B
 
@@ -652,9 +638,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     disabled), so this test is scoped to Float16_b with DestAccumulation.No.
     """
     binary_op, mathop = binary_op_mathop
-    formats = InputOutputFormat(
-        input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
-    )
+    formats = InputOutputFormat(input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b)
     _run_sfpu_binary_llk_golden(
         formats,
         DestAccumulation.No,
@@ -695,9 +679,7 @@ def test_eltwise_binary_sfpu_add_top_row_quasar(
     """Binary SFPU add_top_row, Float32 and Int32."""
     formats = InputOutputFormat(input_format=data_format, output_format=data_format)
     if data_format == DataFormat.Int32:
-        prepare_stimuli = lambda f, dims, s0, s1, op: _prepare_int_stimuli(
-            f, dims, s0, s1, op, None
-        )
+        prepare_stimuli = lambda f, dims, s0, s1, op: _prepare_int_stimuli(f, dims, s0, s1, op, None)
     else:
         prepare_stimuli = _prepare_float_stimuli
     _run_sfpu_binary_llk_golden(
@@ -765,9 +747,7 @@ def _generate_max_min_combinations(
 ):
     """Generate max/min resolved routes and the operation-specific axes."""
     combinations = []
-    for format_variant in generate_quasar_sfpu_format_variants(
-        MathOperation.SfpuBinaryMax, formats_list
-    ):
+    for format_variant in generate_quasar_sfpu_format_variants(MathOperation.SfpuBinaryMax, formats_list):
         for is_max_op in [True, False]:
             for input_dimensions in input_dimensions_list:
                 combinations.append(
@@ -820,23 +800,15 @@ def _run_max_min(
         spec_B=spec,
     )
 
-    in0, in1 = prepare_binary_max_min_inputs(
-        src_A, src_B, formats.input_format, formats.output_format
-    )
+    in0, in1 = prepare_binary_max_min_inputs(src_A, src_B, formats.input_format, formats.output_format)
     output_torch_fmt = format_dict[formats.output_format]
 
     if is_int:
         in0_int = in0.to(torch.int32)
         in1_int = in1.to(torch.int32)
-        golden_int = (
-            torch.maximum(in0_int, in1_int)
-            if is_max_op
-            else torch.minimum(in0_int, in1_int)
-        )
+        golden_int = torch.maximum(in0_int, in1_int) if is_max_op else torch.minimum(in0_int, in1_int)
         golden_tensor = golden_int.to(torch.float32)
-        buffer_A_combined, tile_cnt = _stage_binary_operands(
-            in0_int, in1_int, tile_indices, torch.int32
-        )
+        buffer_A_combined, tile_cnt = _stage_binary_operands(in0_int, in1_int, tile_indices, torch.int32)
         buffer_B_dummy = in1_int
     else:
         torch_fmt = format_dict[formats.input_format]
@@ -844,15 +816,9 @@ def _run_max_min(
         in1 = in1.to(torch_fmt)
         in0_f32 = in0.to(torch.float32)
         in1_f32 = in1.to(torch.float32)
-        golden_f32 = (
-            torch.maximum(in0_f32, in1_f32)
-            if is_max_op
-            else torch.minimum(in0_f32, in1_f32)
-        )
+        golden_f32 = torch.maximum(in0_f32, in1_f32) if is_max_op else torch.minimum(in0_f32, in1_f32)
         golden_tensor = golden_f32.to(output_torch_fmt)
-        buffer_A_combined, tile_cnt = _stage_binary_operands(
-            in0, in1, tile_indices, in0.dtype
-        )
+        buffer_A_combined, tile_cnt = _stage_binary_operands(in0, in1, tile_indices, in0.dtype)
         buffer_B_dummy = in1
 
     unpack_to_dest = format_variant.unpack_to_dest
@@ -867,9 +833,7 @@ def _run_max_min(
             SFPU_BINARY_OP(binary_op),
             APPROX_MODE(),
             DATA_COPY_TYPE(DataCopyType.A2D),
-            UNPACKER_ENGINE_SEL(
-                UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
-            ),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA),
             DEST_SYNC(),
             # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
@@ -1062,9 +1026,7 @@ def _run_quant(
 
     b_staged = fp32_bits_as_int32(scale)
 
-    buffer_A, tile_cnt = _stage_binary_operands(
-        a_staged, b_staged, tile_indices, torch.int32
-    )
+    buffer_A, tile_cnt = _stage_binary_operands(a_staged, b_staged, tile_indices, torch.int32)
 
     # ---- golden ----
     if is_dequant:
@@ -1097,9 +1059,7 @@ def _run_quant(
     zp_bits = struct.unpack("<I", struct.pack("<f", zp_for_kernel))[0]
 
     # buffer_A is raw int32; operand B's fp32 bits ride along as int32 words.
-    formats = InputOutputFormat(
-        input_format=DataFormat.Int32, output_format=output_format
-    )
+    formats = InputOutputFormat(input_format=DataFormat.Int32, output_format=output_format)
 
     test_config_kwargs = {
         "test_name": _CPP_SOURCE,

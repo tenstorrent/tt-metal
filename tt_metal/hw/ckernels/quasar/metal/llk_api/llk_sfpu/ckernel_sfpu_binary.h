@@ -21,10 +21,10 @@ namespace sfpu {
 /**
  * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, MUL and DIV.
  *
- * @note DIV special cases (matching BH semantics):
- *   - 0 / 0 -> NaN
- *   - x / 0 -> ±inf, sign of x
- *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
+ * @note DIV special cases (IEEE 754):
+ *   - ±0 / ±0, ±inf / ±inf and any NaN operand -> NaN
+ *   - x / ±0 -> ±inf, sign of x XOR sign of the divisor
+ *   - x / x -> 1.0 for finite nonzero x (forced exact, regardless of reciprocal rounding)
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
@@ -73,18 +73,28 @@ inline void calculate_sfpu_binary(
                 constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
                 result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
 
-                v_if(in1 == 0) {
-                    v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-                    v_else {
-                        result = std::numeric_limits<float>::infinity();
-                        result = sfpi::copysgn(result, in0);
-                    }
+                // SFPSETCC's zero test reads the raw bits, so classify on the magnitude bits:
+                // that also matches -0.0. Above inf_bits is NaN.
+                constexpr std::int32_t inf_bits = 0x7F800000;
+                const sfpi::vInt mag0 = sfpi::as<sfpi::vInt>(sfpi::setsgn(in0, 0));
+                const sfpi::vInt mag1 = sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0));
+
+                v_if(mag1 == 0) {
+                    const sfpi::vInt sign = sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1);
+                    result = sfpi::copysgn(
+                        sfpi::vFloat(std::numeric_limits<float>::infinity()), sfpi::as<sfpi::vFloat>(sign));
+                    v_if(mag0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
                     v_endif;
                 }
-                // sfpi's vFloat equality subtracts the operands as integers and tests the
-                // difference as sign-magnitude, so it matches x == -x as well as x == x. Take the
-                // magnitude from the shortcut and the sign from the quotient, correct for both.
                 v_elseif(in0 == in1) { result = sfpi::copysgn(sfpi::vFloat(1.0f), result); }
+                v_endif;
+
+                // inf / inf and NaN operands; overrides both shortcuts above.
+                v_if(mag0 >= inf_bits && mag1 >= inf_bits) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_endif;
+                v_if(mag0 > inf_bits) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_endif;
+                v_if(mag1 > inf_bits) { result = std::numeric_limits<float>::quiet_NaN(); }
                 v_endif;
 
                 if constexpr (!is_fp32_dest_acc_en) {
