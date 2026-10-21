@@ -160,6 +160,15 @@ repos:
       files: ^(tests/pipeline_reorg/.*\.yaml|\.github/pipeline_cmd_lint_baseline\.yaml|\.github/scripts/utils/lint_pipeline_cmds\.py)$
 - repo: local
   hooks:
+    # The sweep workflows refuse to start when the generated trace allocation entries are stale.
+    - id: sync-trace-sweeps
+      name: Trace allocation sweeps match the e2e registry
+      entry: python3 .github/scripts/utils/model_trace_tests.py sync-sweeps
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/models_(e2e_tests|trace_config|sweep_tests)\.yaml|\.github/scripts/utils/model_trace_tests\.py)$
+- repo: local
+  hooks:
     - id: triage-type-check
       name: tt-triage type checks
       entry: tools/triage/run_type_checks.sh
