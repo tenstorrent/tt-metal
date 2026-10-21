@@ -30,7 +30,7 @@ L1_SMALL_SIZE = 65536
 # 2026-10-17): 4x8 ring base CFG T2I 3,203,072 B (25.6 MB total, 82 % of the old 31 MB
 # budget), ring distilled 1,622,016 B, (2,2) submesh base 1,523,712 B, distilled 778,240 B. One ring base trace plus
 # any second trace (the other model, a 1-ref layout, a second length bucket) does not fit in 31 MB.
-TRACE_REGION_SIZE = 64_000_000
+TRACE_REGION_SIZE = 256_000_000  # 2026-10-21: base 4096x4096 DiT trace 64.27 MB + the VAE trace exceeded 64 MB
 
 # Base fabric/topology params + L1_SMALL for the VAE conv2d. line_params_flux3_klein already carries
 # require_exact (via line_params_req_exact_devices).
