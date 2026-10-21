@@ -79,7 +79,7 @@ def test_ladder_all_chunks(gspec, noise):
         "pcc_layer_L01",
         "pcc_layer_L02",
     ]
-    assert all(m[f"{k}_limit"] < 1 for k in ("pcc_layer_L00", "pcc_layer_L01", "pcc_layer_L02"))  # F128
+    assert all(0 < m[f"{k}_limit"] for k in ("err_layer_L00", "err_layer_L01", "err_layer_L02"))  # F128 / F135
     assert m["pcc_final_hidden"] > 0.99 and m["top5_overlap"] >= 0.9 and m["pcc_state_min"] > 0.99
     assert m["subset"] == 0 and "chunk_seconds_c03" in m
 
