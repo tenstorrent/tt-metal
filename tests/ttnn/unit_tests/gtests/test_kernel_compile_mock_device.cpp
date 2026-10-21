@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <functional>
@@ -104,8 +105,12 @@ void PrintTo(const CompileCase& compile_case, std::ostream* os) { *os << compile
 
 const std::vector<DataType> kSweepDtypes = {DataType::BFLOAT16, DataType::INT32};
 
+// Errors from finding or building a kernel; any other error is the op rejecting the config on host.
+constexpr std::string_view kKernelErrors[] = {
+    "build failed", "Failed to generate binaries", "doesn't exist in any of the searched paths"};
+
 // Runs with the first dtype the op accepts on host. If it accepts none the case is skipped; a kernel that
-// does not build always fails.
+// is missing or does not build always fails.
 void run_with_supported_dtype(
     const std::function<void(DataType)>& run, const std::vector<DataType>& dtypes = kSweepDtypes) {
     std::string rejected;
@@ -115,8 +120,8 @@ void run_with_supported_dtype(
             return;
         } catch (const std::exception& e) {
             const std::string_view what = e.what();
-            if (what.find("build failed") != std::string_view::npos ||
-                what.find("Failed to generate binaries") != std::string_view::npos) {
+            if (std::ranges::any_of(
+                    kKernelErrors, [&](auto error) { return what.find(error) != std::string_view::npos; })) {
                 throw;
             }
             rejected = what.substr(0, what.find('\n'));
