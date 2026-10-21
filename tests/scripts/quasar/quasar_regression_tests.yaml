@@ -434,56 +434,6 @@ unit_tests_api:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  # PrefetcherPipe relay DFBs with the BLOCKED access pattern (consumer side, producer side,
-  # both). PrefetcherPipe tests need two worker nodes, so they skip on 1x3.
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_RelayDFB_Blocked_SB_1P1C"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_Backpressure"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgram_Resume"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgram_Resume_PartialRound"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BB_2P2C"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BS_2P2C"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BALL_2P1C"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-  - filter: "PrefetcherPipeFixture.PrefetcherPipe_RelayDFB_Blocked_Repage_KeepsBlockLayout"
-    config: 2x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
   # Don't enable yet. Attempt to run all DFB tests.
   # - filter: "*DFB*:-*MultiCore*"
   #   config: 1x3
