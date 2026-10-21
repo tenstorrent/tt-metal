@@ -1,20 +1,228 @@
 {
  "metrics": {
-  "cpu_seconds": {
-   "t": "2026-10-15T22:26:15",
-   "value": 533.9
+  "drift_layers": {
+   "t": "2026-10-21T18:37:14",
+   "value": 8
+  },
+  "drift_layers_above_res": {
+   "t": "2026-10-21T18:37:14",
+   "value": 8
+  },
+  "drift_metrics": {
+   "t": "2026-10-21T18:37:14",
+   "value": 47
+  },
+  "drift_metrics_s4096": {
+   "t": "2026-10-21T18:37:14",
+   "value": 47
+  },
+  "drift_s4096_contract_state_compress_kv_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.10420212688326622
+  },
+  "drift_s4096_contract_state_compress_kv_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.09545934420553469
+  },
+  "drift_s4096_contract_state_compress_kv_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.09544601430737822
+  },
+  "drift_s4096_contract_state_compress_partial_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_contract_state_compress_partial_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_contract_state_index_k_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.12032027950722224
+  },
+  "drift_s4096_contract_state_index_k_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.11835865147233086
+  },
+  "drift_s4096_contract_state_index_k_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.1164341310775283
+  },
+  "drift_s4096_contract_state_window_kv_L00": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0289919646385815
+  },
+  "drift_s4096_contract_state_window_kv_L01": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.044399716838729265
+  },
+  "drift_s4096_contract_state_window_kv_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.052498652479544404
+  },
+  "drift_s4096_contract_state_window_kv_L03": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0646211508319325
+  },
+  "drift_s4096_contract_state_window_kv_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.03243518420536327
+  },
+  "drift_s4096_contract_state_window_kv_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.036340849457868495
+  },
+  "drift_s4096_contract_state_window_kv_L21": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.059950430469310326
+  },
+  "drift_s4096_contract_state_window_kv_L24": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.06264070205478701
+  },
+  "drift_s4096_layer_L00": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.028051955485386054
+  },
+  "drift_s4096_layer_L01": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.036702792903557206
+  },
+  "drift_s4096_layer_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.05353288558442333
+  },
+  "drift_s4096_layer_L03": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.07789931645397835
+  },
+  "drift_s4096_layer_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0602210124354983
+  },
+  "drift_s4096_layer_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.02597286818735753
+  },
+  "drift_s4096_layer_L21": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.06324197883652877
+  },
+  "drift_s4096_layer_L24": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.022446727017433367
+  },
+  "drift_s4096_state_candidates_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_state_compress_kv_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.10420481398583298
+  },
+  "drift_s4096_state_compress_kv_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.09545800320406828
+  },
+  "drift_s4096_state_compress_kv_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.09544532661562691
+  },
+  "drift_s4096_state_compress_partial_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_state_compress_partial_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_state_engram_tail_L01": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_state_engram_tail_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.0
+  },
+  "drift_s4096_state_index_k_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.12030272067883997
+  },
+  "drift_s4096_state_index_k_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.1183604541280676
+  },
+  "drift_s4096_state_index_k_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.11643336793445426
+  },
+  "drift_s4096_state_topk_idx_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.05242818593978882
+  },
+  "drift_s4096_state_topk_idx_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.047782182693481445
+  },
+  "drift_s4096_state_topk_idx_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.07695770263671875
+  },
+  "drift_s4096_state_topk_idx_L24": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.11411380767822266
+  },
+  "drift_s4096_state_window_kv_L00": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.029166761456389922
+  },
+  "drift_s4096_state_window_kv_L01": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.04326118585096735
+  },
+  "drift_s4096_state_window_kv_L02": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.05350054296213949
+  },
+  "drift_s4096_state_window_kv_L03": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.06667803709133041
+  },
+  "drift_s4096_state_window_kv_L14": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.032577816563131315
+  },
+  "drift_s4096_state_window_kv_L20": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.03198841541703599
+  },
+  "drift_s4096_state_window_kv_L21": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.05693703086208119
+  },
+  "drift_s4096_state_window_kv_L24": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0.037636832812423464
   },
   "golden_chunks": {
-   "t": "2026-10-15T22:26:08",
+   "t": "2026-10-21T18:28:09",
    "value": 2
   },
   "golden_hash_ok": {
-   "t": "2026-10-15T22:26:15",
+   "t": "2026-10-21T18:28:26",
    "value": 1
   },
   "golden_layers": {
-   "t": "2026-10-15T22:26:08",
+   "t": "2026-10-21T18:28:09",
    "value": 8
+  },
+  "golden_reused": {
+   "t": "2026-10-21T18:28:26",
+   "value": 1
+  },
+  "official_identical": {
+   "t": "2026-10-21T18:37:14",
+   "value": 0
   }
  },
  "task": "G.s4096"

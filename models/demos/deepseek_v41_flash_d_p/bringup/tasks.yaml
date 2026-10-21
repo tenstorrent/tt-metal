@@ -8926,6 +8926,9 @@ tasks:
       err_state_*_L*: <= limit
   device: true
   paths: *id003
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: L.s4096
   title: 'Ladder s4096: all chunks of 4096 in 2048'
   step: integrate
@@ -8940,6 +8943,9 @@ tasks:
       err_state_*_L*: <= limit
   device: true
   paths: *id003
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: L.last
   title: 'Ladder last: last chunk after a golden prefix of 55296 in 2048'
   step: integrate
@@ -8953,6 +8959,9 @@ tasks:
       err_state_*_L*: <= limit
   device: true
   paths: *id003
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: L.s55296
   title: 'Ladder s55296: all chunks of 55296 in 2048'
   step: integrate
@@ -8967,6 +8976,9 @@ tasks:
       err_state_*_L*: <= limit
   device: true
   paths: *id003
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: K.1
   title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
   step: contract
@@ -8985,6 +8997,9 @@ tasks:
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: X.1
   title: Warm per-section, per-chip profile of one long chunk
   step: perf
@@ -9044,6 +9059,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.2
   title: 'Routed experts on the fused ttnn.bringup.unified_routed_expert_moe (fork options: routing weight on h, fp8 q(h)
     before w2)'
@@ -9090,6 +9108,9 @@ tasks:
       device_ms_experts: < 2522
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.3
   title: 'Routed experts on Marko''s flat_routed_expert (V4.1-tuned, imported @ f080c8df021; options: routing weight on h,
     fp8 q(h), bf16 x / h / y, exact bfp8)'
@@ -9138,6 +9159,9 @@ tasks:
       device_ms_experts: < 2522
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.4
   title: 'Routed experts at LoFi with bfp8 x / h / y tiles and bfp8 weights (Marko''s GLM precision without bfp4) vs full
     precision: owner comparison'
@@ -9184,6 +9208,9 @@ tasks:
       device_ms_experts: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.5
   title: Collectives on the bring-up fabric forks (fabric_all_gather, fabric_reduce_scatter with an exact fp32 add) vs stock
     ttnn CCLs
@@ -9231,6 +9258,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.6
   title: 'Partial sums in bf16 on the fabric reduce-scatter (Marko''s GLM-5.3 choice) vs the exact fp32 fabric sums: owner
     comparison'
@@ -9265,6 +9295,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.7
   title: 'Attention matmuls at HiFi2 (MLA projections, sparse SDPA, indexer, q_a; Marko''s GLM-5.3 setting) vs HiFi4: owner
     comparison'
@@ -9303,6 +9336,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.8
   title: 'Routed experts + weighted combine in one program (flat expert + combine_rf), no parity-only rounding, ffn_norm in
     bf16: owner comparison'
@@ -9372,6 +9408,9 @@ tasks:
       device_ms_experts: < 134.2
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.9
   title: 'Weighted combine with bf16 accumulators: the chunk in one pass (weights streamed once) vs fp32 sums in two passes:
     owner comparison'
@@ -9419,6 +9458,9 @@ tasks:
       device_ms_experts: < 45.3
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.10
   title: 'Routed expert weights in bfp4 (the checkpoint''s fp4 width, owner rule F117) vs bfp8: owner comparison'
   step: perf
@@ -9459,6 +9501,9 @@ tasks:
       device_ms_experts: < 38.9
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.11
   title: 'Combine planner on several cores: our column mode on Marko''s multi-core v2 planner vs the one-core planner: owner
     comparison'
@@ -9503,6 +9548,9 @@ tasks:
       device_ms_experts: < 38.9
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.12
   title: 'Shared expert run by the flat routed expert (always-on slices, bfp8 weights) vs today''s separate shared expert:
     owner comparison'
@@ -9548,6 +9596,9 @@ tasks:
       device_ms_shared_expert: < 11.4
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.13
   title: 'Realistic defaults (owner rule F123): fp8 weights in bfp8, HiFi2, fp32 accumulation only where needed, stock window
     attention vs today''s: owner comparison'
@@ -9596,6 +9647,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.14
   title: 'Fused mHC: mhc_post also emits the next sublayer''s statistics, mhc_pre collapses with split hidden columns (one
     pass each) vs the addcmul chain: owner comparison'
@@ -9644,6 +9698,9 @@ tasks:
       device_ms_attn_collapse: < 5.0
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.15
   title: 'Attention and RoPE glue folded into ops (glue report items 1, 2, 6): owner comparison'
   step: perf
@@ -9682,6 +9739,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.16
   title: 'Indexer and shared-source glue (glue report items 3, 7, 8, 9, 10): owner comparison'
   step: perf
@@ -9719,6 +9779,9 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: FIX.6
   title: 'Reference numerics switch: official | native (full precision)'
   step: overseer_fix
@@ -9854,6 +9917,9 @@ tasks:
       timeline_ok == 1, device time unchanged (about 104 ms per chunk), worst layer PCC unchanged.'
     gate_tasks:
     - X.3
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.17
   title: 'Glue fold: RoPE as one op, RMS norms as one op, mhc_post options, host-path fixes (fusion report): owner comparison'
   step: perf
@@ -9899,6 +9965,9 @@ tasks:
       err_state_*_L*: <= limit
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: P.18
   title: 'Static tables: one persistent attention table per KV source, window glue (fusion report item 3): owner comparison'
   step: perf
@@ -9938,6 +10007,9 @@ tasks:
       err_state_*_L*: <= limit
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9970,6 +10042,9 @@ tasks:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
   device: true
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
 - id: O.1
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
   step: optests
@@ -10003,3 +10078,6 @@ tasks:
       err_state_*_L*: <= limit
   device: true
   role: settings
+  frozen:
+    files:
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
