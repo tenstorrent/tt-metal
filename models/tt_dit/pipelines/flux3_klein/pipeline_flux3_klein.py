@@ -345,6 +345,52 @@ class Flux3KleinResult:
     """Whether the upsampler produced ``caption`` (the record's ``upsampled``)."""
     boxes: tuple | None = None
     """The request's 0-1 boxes (the record's ``boxes``)."""
+    layout: str = ""
+    """The DiT mesh layout that rendered it (``"sp4tp8"`` / ``"sp8tp4"``, :func:`layout_name`)."""
+
+
+# --- layouts -------------------------------------------------------------------------------------------------------------
+
+
+def layout_name(sp_axis: int, tp_axis: int, shape: tuple[int, ...] = (4, 8)) -> str:
+    """``"sp4tp8"`` for SP over axis 0 x TP over axis 1 of a 4x8 mesh; ``"sp8tp4"`` for the transposed assignment."""
+    return f"sp{shape[sp_axis]}tp{shape[tp_axis]}"
+
+
+LARGE_LAYOUT_MIN_TOKENS = 16384
+"""Requests with at least this many DiT tokens (image + reference + text rows) take the large-canvas layout when one is
+resident. Measured 2026-10-21 (distilled, 4x8 ring, 160 W; docs/STAGE_TIMING.md): SP8 x TP4 against SP4 x TP8 is
++13 % / +19 % / +8 % denoise at 768² / 1024² / 1536² (2.3K-9.2K tokens), equal at 1024² + 2 references (12.4K), and
+-7 % at 2048² (16.4K), -4.5 % at 2048² + 2 references, -8 % at 4096x2304, -10 % at 4096² and -5 % at 4096² + 10
+references. The crossover is between 12K and 16K tokens."""
+
+
+def pick_layout(
+    total_tokens: int, *, primary: str, large: str | None, min_tokens: int = LARGE_LAYOUT_MIN_TOKENS
+) -> str:
+    """The layout name a request with ``total_tokens`` DiT rows renders on: ``large`` from ``min_tokens`` up (when it
+    is resident), else ``primary``."""
+    if large is not None and int(total_tokens) >= int(min_tokens):
+        return large
+    return primary
+
+
+@dataclass
+class _Layout:
+    """One DiT mesh layout resident in the pipeline: its transformers and denoisers (per variant), the prompt encoder
+    wrapper that shards the text rows on its SP axis, the decode helper that gathers the state from that axis, and the
+    empty prompt's encoding for the base CFG."""
+
+    name: str
+    sp_axis: int
+    tp_axis: int
+    ccl: CCLManager
+    parallel: DiTGParallelConfigNoCFG
+    transformers: dict[str, Flux3KleinTransformer]
+    denoisers: dict[str, Flux3KleinDenoiser]
+    prompt_encoder: Flux3KleinPromptEncoder
+    vae: Flux3KleinVaeDecode
+    null_text: TextPair | None = None
 
 
 # --- weights ---------------------------------------------------------------------------------------------------------------
@@ -439,9 +485,19 @@ class Flux3KleinPipeline:
         max_live_traces: int = 1,
         warmup_size: tuple[int, int] | None = (1024, 1024),
         upsampler=None,
+        large_layout: tuple[int, int] | None = None,
+        large_layout_min_tokens: int = LARGE_LAYOUT_MIN_TOKENS,
     ) -> None:
+        """``sp_axis`` x ``tp_axis`` is the primary DiT layout (SP4 x TP8 on a 4x8 mesh). ``large_layout`` =
+        ``(sp_axis, tp_axis)`` of a second resident layout (``(1, 0)`` = SP8 x TP4) that requests with at least
+        ``large_layout_min_tokens`` DiT rows render on (:func:`pick_layout`); it costs a second set of transformer
+        weights per resident variant (TP4: 2.8 GB per chip for one variant) and a second warm-up."""
         if not resident:
             raise ValueError("at least one resident variant is required")
+        if large_layout is not None:
+            large_layout = (int(large_layout[0]), int(large_layout[1]))
+            if sorted(large_layout) != [0, 1]:
+                raise ValueError(f"large_layout must name the two mesh axes, got {large_layout}")
         self.upsampler = upsampler
         """Anything with ``__call__(prompt, images, boxes) -> str`` (``resolve_caption``); ``None`` = no upsampling."""
         self.readback = "fast"
@@ -460,33 +516,12 @@ class Flux3KleinPipeline:
         self.timings_init: dict[str, float] = {}
         t_init = time.time()
 
-        # DiTs (one CCL manager, both resident).
-        self._dit_ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
-        self._dit_parallel = DiTGParallelConfigNoCFG(
-            tensor_parallel=ParallelFactor(factor=self._shape[tp_axis], mesh_axis=tp_axis),
-            sequence_parallel=ParallelFactor(factor=self._shape[sp_axis], mesh_axis=sp_axis),
-        )
-        self._transformers: dict[str, Flux3KleinTransformer] = {}
-        self._denoisers: dict[str, Flux3KleinDenoiser] = {}
-        for variant in self._resident:
-            t0 = time.time()
-            model = Flux3KleinTransformer(
-                flow_map=variant == "distilled",
-                device=mesh_device,
-                ccl_manager=self._dit_ccl,
-                parallel_config=self._dit_parallel,
-            )
-            load_flux3_klein_transformer_weights(
-                model, variant, self._snapshots[variant], parallel_config=self._dit_parallel, mesh_device=mesh_device
-            )
-            self._transformers[variant] = model
-            self._denoisers[variant] = Flux3KleinDenoiser(
-                model, device=mesh_device, sp_axis=sp_axis, max_live_traces=max_live_traces
-            )
-            self.timings_init[f"load_{variant}_s"] = time.time() - t0
-            logger.info(f"RECORD after transformer[{variant}]: {dram_per_bank(mesh_device)}")
+        self._num_links, self._topology, self._max_live_traces = num_links, topology, max_live_traces
+        self._vae_tp_axis, self._vae_h_axis = vae_tp_axis, vae_h_axis
+        self._large_layout_min_tokens = int(large_layout_min_tokens)
 
-        # Text encoder (co-resident, TP over the DiT's TP axis, FSDP over the other).
+        # Text encoder (co-resident, TP over the primary layout's TP axis, FSDP over the other). Built first: each
+        # layout's prompt encoder wraps it with its own output row axis.
         shared = self._snapshots[self._resident[0]]
         t0 = time.time()
         self._enc_ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -502,31 +537,36 @@ class Flux3KleinPipeline:
             load_weights=True,
         )
         self._encoder = encoder
-        self._prompt_encoder = Flux3KleinPromptEncoder(
-            encoder, shared, mesh_device, text_config=text_config, output_sp_axis=sp_axis
-        )
+        self._text_config = text_config
         self.timings_init["load_text_encoder_s"] = time.time() - t0
         logger.info(f"RECORD after text encoder: {dram_per_bank(mesh_device)}")
 
-        # VAE decoder (its own CCL manager, Flux2's 4x8 row: channels TP over axis 0, latent rows H over axis 1).
+        # VAE decoder (its own CCL manager, Flux2's 4x8 row: channels TP over axis 0, latent rows H over axis 1); the
+        # weights are loaded once and every layout's decode helper shares the module.
         t0 = time.time()
         self._vae_ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         decoder, self._vae_parallel = build_flux3_klein_vae_decoder(
             mesh_device, tp_axis=vae_tp_axis, h_axis=vae_h_axis, ccl_manager=self._vae_ccl
         )
         load_flux3_klein_vae_weights(decoder, shared, parallel_config=self._vae_parallel, mesh_device=mesh_device)
-        self._vae = Flux3KleinVaeDecode(
-            decoder,
-            device=mesh_device,
-            dit_ccl=self._dit_ccl,
-            sp_axis=sp_axis,
-            h_axis=vae_h_axis,
-            tp_axis=vae_tp_axis,
-            vae_ccl=self._vae_ccl,
-            snapshot=shared,
-        )
+        self._decoder = decoder
         self.timings_init["load_vae_s"] = time.time() - t0
         logger.info(f"RECORD after vae: {dram_per_bank(mesh_device)}")
+
+        # DiT layouts: the primary, then the large-canvas layout (each with its own CCL manager and weight shards).
+        self._layouts: dict[str, _Layout] = {}
+        self._primary = layout_name(sp_axis, tp_axis, self._shape)
+        self._layouts[self._primary] = self._build_layout(sp_axis, tp_axis, shared)
+        self._large: str | None = None
+        if large_layout is not None and large_layout != (sp_axis, tp_axis):
+            self._large = layout_name(large_layout[0], large_layout[1], self._shape)
+            self._layouts[self._large] = self._build_layout(large_layout[0], large_layout[1], shared)
+        primary = self._layouts[self._primary]
+        self._dit_ccl, self._dit_parallel = primary.ccl, primary.parallel
+        self._transformers, self._denoisers = primary.transformers, primary.denoisers
+        self._prompt_encoder, self._vae = primary.prompt_encoder, primary.vae
+        for variant in self._resident:  # the pre-layout timing keys name the primary layout's loads
+            self.timings_init[f"load_{variant}_s"] = self.timings_init[f"load_{variant}_{self._primary}_s"]
 
         # VAE encoder (references): channels TP over the decoder's TP axis, spatial axes replicated; same CCL manager.
         t0 = time.time()
@@ -541,15 +581,21 @@ class Flux3KleinPipeline:
         self.timings_init["load_vae_encoder_s"] = time.time() - t0
         logger.info(f"RECORD after vae encoder: {dram_per_bank(mesh_device)}")
 
-        # Warm-ups BEFORE any trace exists: the empty prompt (base CFG; also allocates the encoder's persistent CCL
-        # buffers) and one eager VAE decode of a zero state (kernel compile, ~95 s on a cold TT_METAL_CACHE).
-        t0 = time.time()
-        self._null_text: TextPair = self._prompt_encoder.encode_host("")
-        self.timings_init["encode_null_s"] = time.time() - t0
-        if warmup_size is not None:
+        # Warm-ups BEFORE any trace exists, per layout: the empty prompt (base CFG; also allocates the encoder's
+        # persistent CCL buffers) and one eager VAE decode of a zero state (kernel compile, ~95 s on a cold
+        # TT_METAL_CACHE; the second layout's decode only adds its state gather).
+        for name, layout in self._layouts.items():
             t0 = time.time()
-            self._warm_vae(*warmup_size)
-            self.timings_init["vae_warmup_s"] = time.time() - t0
+            layout.null_text = layout.prompt_encoder.encode_host("")
+            self.timings_init[f"encode_null_{name}_s"] = time.time() - t0
+            if warmup_size is not None:
+                t0 = time.time()
+                self._warm_vae(*warmup_size, layout=layout)
+                self.timings_init[f"vae_warmup_{name}_s"] = time.time() - t0
+        self._null_text: TextPair = primary.null_text
+        self.timings_init["encode_null_s"] = self.timings_init[f"encode_null_{self._primary}_s"]
+        if warmup_size is not None:
+            self.timings_init["vae_warmup_s"] = self.timings_init[f"vae_warmup_{self._primary}_s"]
             t0 = time.time()
             self._warm_vae_encoder(*warmup_size)
             self.timings_init["vae_encoder_warmup_s"] = time.time() - t0
@@ -599,25 +645,97 @@ class Flux3KleinPipeline:
 
     @property
     def null_text(self) -> TextPair:
-        """The empty prompt's encoding ``((80, 20480) bf16, ids)``, computed once."""
+        """The empty prompt's encoding ``((80, 20480) bf16, ids)``, computed once (the primary layout's)."""
         return self._null_text
+
+    @property
+    def layouts(self) -> tuple[str, ...]:
+        """The resident DiT layouts, primary first (``"sp4tp8"``, then ``"sp8tp4"`` when ``large_layout`` is set)."""
+        return tuple(self._layouts)
+
+    @property
+    def primary_layout(self) -> str:
+        return self._primary
+
+    @property
+    def large_layout(self) -> str | None:
+        return self._large
+
+    def layout_for(self, total_tokens: int) -> str:
+        """The layout a request with ``total_tokens`` DiT rows (image + reference + text) renders on."""
+        return pick_layout(
+            total_tokens, primary=self._primary, large=self._large, min_tokens=self._large_layout_min_tokens
+        )
+
+    def denoisers_of(self, layout: str) -> dict[str, Flux3KleinDenoiser]:
+        return self._layouts[layout].denoisers
 
     # --- internals -------------------------------------------------------------------------------------------------------
 
-    def _warm_vae(self, height: int, width: int, *, traced: bool = False) -> None:
+    def _build_layout(self, sp_axis: int, tp_axis: int, shared: Path) -> _Layout:
+        """The transformers (weights loaded), denoisers, prompt encoder wrapper and decode helper of one layout."""
+        name = layout_name(sp_axis, tp_axis, self._shape)
+        ccl = CCLManager(mesh_device=self._device, num_links=self._num_links, topology=self._topology)
+        parallel = DiTGParallelConfigNoCFG(
+            tensor_parallel=ParallelFactor(factor=self._shape[tp_axis], mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=self._shape[sp_axis], mesh_axis=sp_axis),
+        )
+        transformers: dict[str, Flux3KleinTransformer] = {}
+        denoisers: dict[str, Flux3KleinDenoiser] = {}
+        for variant in self._resident:
+            t0 = time.time()
+            model = Flux3KleinTransformer(
+                flow_map=variant == "distilled", device=self._device, ccl_manager=ccl, parallel_config=parallel
+            )
+            load_flux3_klein_transformer_weights(
+                model, variant, self._snapshots[variant], parallel_config=parallel, mesh_device=self._device
+            )
+            transformers[variant] = model
+            denoisers[variant] = Flux3KleinDenoiser(
+                model, device=self._device, sp_axis=sp_axis, max_live_traces=self._max_live_traces
+            )
+            self.timings_init[f"load_{variant}_{name}_s"] = time.time() - t0
+            logger.info(f"RECORD after transformer[{variant}] {name}: {dram_per_bank(self._device)}")
+        prompt_encoder = Flux3KleinPromptEncoder(
+            self._encoder, shared, self._device, text_config=self._text_config, output_sp_axis=sp_axis
+        )
+        vae = Flux3KleinVaeDecode(
+            self._decoder,
+            device=self._device,
+            dit_ccl=ccl,
+            sp_axis=sp_axis,
+            h_axis=self._vae_h_axis,
+            tp_axis=self._vae_tp_axis,
+            vae_ccl=self._vae_ccl,
+            snapshot=shared,
+        )
+        return _Layout(
+            name=name,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            ccl=ccl,
+            parallel=parallel,
+            transformers=transformers,
+            denoisers=denoisers,
+            prompt_encoder=prompt_encoder,
+            vae=vae,
+        )
+
+    def _warm_vae(self, height: int, width: int, *, traced: bool = False, layout: _Layout | None = None) -> None:
         """One decode of a zero state at ``height x width``: eager (``__init__``) compiles the kernels and allocates
         the gather buffers; traced (``generate``, before the DiT capture of a layout) CAPTURES the decoder trace of
         the size, so its captured input buffer and the VAE CCL buffers exist before any DiT trace (module docstring).
-        The traced output is the trace's buffer (never deallocated here)."""
+        The traced output is the trace's buffer (never deallocated here). ``layout``: the primary when ``None``."""
+        layout = layout or self._layouts[self._primary]
         h, w = latent_shape(height, width)
-        rows = padded_length(h * w, self._shape[self._sp_axis])
+        rows = padded_length(h * w, self._shape[layout.sp_axis])
         zero = tensor.from_torch(
             torch.zeros(1, rows, FLUX3_KLEIN_IN_CHANNELS["image"]),
             device=self._device,
             dtype=ttnn.float32,
-            mesh_axes=[None, self._sp_axis, None],
+            mesh_axes=[None, layout.sp_axis, None],
         )
-        out = self._vae.decode(zero, num_image_rows=h * w, height=height, width=width, traced=traced)
+        out = layout.vae.decode(zero, num_image_rows=h * w, height=height, width=width, traced=traced)
         ttnn.synchronize_device(self._device)
         if not traced:
             ttnn.deallocate(out)
@@ -635,13 +753,18 @@ class Flux3KleinPipeline:
     def traces_live(self) -> bool:
         """Whether any denoiser or VAE trace is captured (the condition under which a long-lived allocation needs the
         aliasing rule)."""
-        return any(d.captured_keys for d in self._denoisers.values()) or self._vae.trace_captured()
+        return any(
+            any(d.captured_keys for d in layout.denoisers.values()) or layout.vae.trace_captured()
+            for layout in self._layouts.values()
+        )
 
     def release_traces(self) -> None:
-        """Release every live trace (both denoisers and the VAE); each is recaptured on its next traced use."""
-        for denoiser in self._denoisers.values():
-            denoiser.release_traces()
-        self._vae.release_trace()
+        """Release every live trace (every layout's denoisers and decode helper, and the VAE encoder); each is
+        recaptured on its next traced use."""
+        for layout in self._layouts.values():
+            for denoiser in layout.denoisers.values():
+                denoiser.release_traces()
+            layout.vae.release_trace()
         self._vae_encode.release_trace()
 
     def _encode(self, prompt: str) -> TextPair:
@@ -678,13 +801,17 @@ class Flux3KleinPipeline:
         ids = image_ids(h, w)
         prepared_refs = resolved.prepared
 
-        # 3. encode text
+        # 2b. the DiT layout for this request's row count (image + reference + text rows; :func:`pick_layout`).
+        cond_rows = prepared_refs.cond_tokens() if prepared_refs is not None and prepared_refs.images else 0
+        layout = self._layouts[self.layout_for(h * w + cond_rows + text_length)]
+
+        # 3. encode text (sharded on the layout's SP axis)
         t0 = time.time()
         if resolved.text_override is not None:
             text, null = resolved.text_override
         else:
-            text = self._encode(caption)
-            null = None if resolved.flow_map else self._null_text
+            text = layout.prompt_encoder.encode_host(caption)
+            null = None if resolved.flow_map else layout.null_text
         encode_s = time.time() - t0
 
         # 4. encode references (device VAE encoder; the override is for the bit-comparable golden rows only). The
@@ -715,26 +842,27 @@ class Flux3KleinPipeline:
             image_cond=image_cond,
             alpha=resolved.alpha,
         )
-        denoiser = self._denoisers[resolved.model]
+        denoiser = layout.denoisers[resolved.model]
+        vae = layout.vae
 
         # 5. denoise (the aliasing rule of the module docstring before any long-lived allocation): slots first, then
         # the VAE trace of the canvas size, then the DiT trace (capture order; module docstring).
-        needs_fallback_vae = not self._vae.partitioned(resolved.height, resolved.width) and self._vae._fallback is None
-        vae_captured_before = (not traced) or self._vae.trace_captured_for(resolved.height, resolved.width)
+        needs_fallback_vae = not vae.partitioned(resolved.height, resolved.width) and vae._fallback is None
+        vae_captured_before = (not traced) or vae.trace_captured_for(resolved.height, resolved.width)
         if (
             not denoiser.has_layout(denoise_request)
             or needs_fallback_vae
             or (not vae_captured_before and self.traces_live())
         ):
             self.release_traces()
-            vae_captured_before = (not traced) or self._vae.trace_captured_for(resolved.height, resolved.width)
+            vae_captured_before = (not traced) or vae.trace_captured_for(resolved.height, resolved.width)
         t0 = time.time()
         prepared: Flux3KleinPreparedRequest = denoiser.prepare(denoise_request)
         prepare_s = time.time() - t0
         t0 = time.time()
         if not vae_captured_before:
             assert not self.traces_live(), "a VAE capture must precede every DiT trace (aliasing rule)"
-            self._warm_vae(resolved.height, resolved.width, traced=True)
+            self._warm_vae(resolved.height, resolved.width, traced=True, layout=layout)
         vae_capture_s = time.time() - t0
         captured_before = prepared.key in denoiser.captured_keys
         t0 = time.time()
@@ -743,7 +871,7 @@ class Flux3KleinPipeline:
 
         # 6. decode (a replay when traced: the trace was captured above, before the DiT trace)
         t0 = time.time()
-        out = self._vae.decode(state, num_image_rows=h * w, height=resolved.height, width=resolved.width, traced=traced)
+        out = vae.decode(state, num_image_rows=h * w, height=resolved.height, width=resolved.width, traced=traced)
         ttnn.synchronize_device(self._device)
         decode_s = time.time() - t0
 
@@ -786,7 +914,7 @@ class Flux3KleinPipeline:
         }
         references = prepared_refs.sizes if prepared_refs is not None else ()
         logger.info(
-            f"RECORD generate[{resolved.model}] {resolved.width}x{resolved.height} seed {resolved.seed} steps "
+            f"RECORD generate[{resolved.model}] {layout.name} {resolved.width}x{resolved.height} seed {resolved.seed} steps "
             f"{resolved.steps} guidance {resolved.guidance} upsampled {upsampled} caption L {text_length} references "
             f"{list(references)} cond rows {0 if image_cond is None else int(image_cond[0].shape[0])} crop "
             f"{resolved.crop}: upsample {upsample_s:.3f}s encode "
@@ -814,19 +942,21 @@ class Flux3KleinPipeline:
             caption=caption,
             upsampled=upsampled,
             boxes=resolved.boxes,
+            layout=layout.name,
         )
 
     def close(self) -> None:
         """Traces, then slots, then weights; the caller closes the mesh."""
         self.release_traces()
-        for denoiser in self._denoisers.values():
-            denoiser.deallocate()
+        for layout in self._layouts.values():
+            for denoiser in layout.denoisers.values():
+                denoiser.deallocate()
         ttnn.synchronize_device(self._device)
         for module in (
-            *self._transformers.values(),
+            *(m for layout in self._layouts.values() for m in layout.transformers.values()),
             self._encoder,
-            self._vae.decoder,
-            self._vae._fallback,
+            self._decoder,
+            *(layout.vae._fallback for layout in self._layouts.values()),
             self._vae_encode.encoder,
         ):
             if module is not None and hasattr(module, "deallocate_weights"):
@@ -841,6 +971,9 @@ __all__ = [
     "Flux3KleinRequest",
     "Flux3KleinResolved",
     "Flux3KleinResult",
+    "LARGE_LAYOUT_MIN_TOKENS",
+    "layout_name",
+    "pick_layout",
     "load_flux3_klein_transformer_weights",
     "make_noise",
     "noise_sha256",
