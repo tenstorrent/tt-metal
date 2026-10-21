@@ -6,6 +6,7 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn/operations/experimental/kda/affine_exclusive_scan/affine_exclusive_scan_nanobind.hpp"
+#include "ttnn/operations/experimental/kda/block_matmul/block_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/chain_affine_transforms/chain_affine_transforms_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/qkv_causal_conv1d_silu_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/recurrent_chunk_scan/recurrent_chunk_scan_nanobind.hpp"
@@ -20,6 +21,7 @@ namespace ttnn::operations::experimental::kda::detail {
 void bind_kda(nb::module_& mod) {
     auto kda_module = mod.def_submodule("kda", "Experimental KDA operations");
     affine_exclusive_scan::detail::bind_affine_exclusive_scan(kda_module);
+    block_matmul::detail::bind_block_matmul(kda_module);
     chain_affine_transforms::detail::bind_chain_affine_transforms(kda_module);
     qkv_causal_conv1d_silu::detail::bind_qkv_causal_conv1d_silu(kda_module);
     recurrent_chunk_scan::detail::bind_recurrent_chunk_scan(kda_module);

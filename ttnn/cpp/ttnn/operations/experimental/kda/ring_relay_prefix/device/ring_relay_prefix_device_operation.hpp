@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -17,6 +18,18 @@
 
 namespace ttnn::experimental::prim {
 
+// A projection gate_input @ gate_weight run in the relay's dispatch on cores it leaves idle: the output's first
+// output_column tile columns are copied from gate_copy_source (from copy_source_column) by copy_cores.
+struct RingRelayOutputGateParams {
+    tt::tt_metal::CoreRangeSet cores;
+    uint32_t k_block;
+    DeviceComputeKernelConfig compute_kernel_config;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    uint32_t output_column = 0;
+    uint32_t copy_source_column = 0;
+    std::vector<tt::tt_metal::CoreCoord> copy_cores;
+};
+
 struct RingRelayPrefixParams {
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
@@ -27,6 +40,7 @@ struct RingRelayPrefixParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // The caller's entry-state and final-state arrival semaphores: a peer can bump them before this call starts.
     std::array<uint32_t, 2> semaphore_addresses{};
+    std::optional<RingRelayOutputGateParams> output_gate;
 };
 
 struct RingRelayPrefixInputs {
@@ -39,6 +53,9 @@ struct RingRelayPrefixInputs {
     Tensor entry_landing;
     Tensor state_staging;
     Tensor final_landing;
+    std::optional<Tensor> gate_input;
+    std::optional<Tensor> gate_weight;
+    std::optional<Tensor> gate_copy_source;
 };
 
 // Legacy program descriptors, as select_final_carry's: the metal2 ProgramSpec cannot yet open fabric connections.

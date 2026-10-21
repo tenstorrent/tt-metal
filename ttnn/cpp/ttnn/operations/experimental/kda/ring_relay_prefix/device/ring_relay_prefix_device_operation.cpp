@@ -6,6 +6,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
+#include "ttnn/operations/experimental/kda/factory/kda_block_matmul.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -45,6 +46,16 @@ void RingRelayPrefixOperation::validate_on_program_cache_miss(
             state[1],
             state[1]);
     }
+    if (attrs.output_gate) {
+        const auto& gate = *attrs.output_gate;
+        TT_FATAL(in.gate_input && in.gate_weight, "{}: an output gate needs its input and weight", name);
+        kda_factory_detail::check_block_matmul(
+            *in.gate_input, *in.gate_weight, gate.cores.bounding_box(), gate.k_block, name);
+        TT_FATAL(
+            gate.output_column == 0 || (in.gate_copy_source && !gate.copy_cores.empty()),
+            "{}: the output gate's copied columns need a copy source and copy cores",
+            name);
+    }
 }
 
 RingRelayPrefixOperation::spec_return_value_t RingRelayPrefixOperation::compute_output_specs(
@@ -55,7 +66,19 @@ RingRelayPrefixOperation::spec_return_value_t RingRelayPrefixOperation::compute_
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
     };
-    return {spec(attrs.entry_mem_config), spec(ttnn::DRAM_MEMORY_CONFIG)};
+    spec_return_value_t specs = {spec(attrs.entry_mem_config), spec(ttnn::DRAM_MEMORY_CONFIG)};
+    if (attrs.output_gate) {
+        // The copied tile columns, then the projection's.
+        auto shape = in.gate_input->logical_shape();
+        shape[-1] = attrs.output_gate->output_column * tt::constants::TILE_WIDTH + in.gate_weight->logical_shape()[-1];
+        specs.emplace_back(
+            shape,
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                attrs.output_gate->output_mem_config));
+    }
+    return specs;
 }
 
 RingRelayPrefixOperation::tensor_return_value_t RingRelayPrefixOperation::create_output_tensors(
