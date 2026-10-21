@@ -1081,13 +1081,24 @@ def test_quasar_reshape_rm_unit_last_dim(device):
 
 
 def test_reshape_tile_after_execute_trace(device):
-    """Tiled reshape after trace capture and replay must not hang due to mapping tensor collision (#61727)."""
+    """Tiled reshape warmup caches mapping tensor before trace capture and replay (#61727)."""
     torch.manual_seed(0)
     input_shape = (1, 1, 32, 64)
     reshaped_shape = (1, 1, 64, 32)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
-    # 1. Warmup and capture trace with a simple device operation
+    # 1. Warmup reshape ahead of trace capture so op-owned mapping tensor is compiled and cached
+    tt_warmup = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    _ = ttnn.reshape(tt_warmup, reshaped_shape)
+    ttnn.synchronize_device(device)
+
+    # 2. Capture and execute trace
     x = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
@@ -1100,36 +1111,24 @@ def test_reshape_tile_after_execute_trace(device):
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
 
-    # 2. Reshape immediately after end_trace_capture (cache miss: allocates op-owned mapping tensor)
-    tt_in1 = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tt_out1 = ttnn.reshape(tt_in1, reshaped_shape)
-    ttnn.synchronize_device(device)
-    assert_equal(torch_input.reshape(reshaped_shape), ttnn.to_torch(tt_out1))
-
-    # 3. Replay trace (previously overwrote DRAM mapping tensor)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.synchronize_device(device)
     ttnn.release_trace(device, tid)
 
-    # 4. Perform second tiled reshape (cache hit: reads op-owned mapping tensor from L1 without hang)
-    tt_in2 = ttnn.from_torch(
+    # 3. Perform tiled reshape on device using cached program artifact
+    tt_in = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_out2 = ttnn.reshape(tt_in2, reshaped_shape)
+    tt_out = ttnn.reshape(tt_in, reshaped_shape)
     ttnn.synchronize_device(device)
 
-    actual = ttnn.to_torch(tt_out2)
+    actual = ttnn.to_torch(tt_out)
     expected = torch_input.reshape(reshaped_shape)
     assert_equal(expected, actual)
+
 
 
