@@ -142,9 +142,24 @@ hand-written copy either: `build_pipeline` derives the graph from stage harnesse
 ### 1.2 The pipeline descriptor
 
 The descriptor carries how many stages there are, how big each one is, and how they
-connect.
+connect. It sits in the same file as the mesh it runs on. Here is the whole MGD for GPT-OSS
+on one galaxy: the mesh part is blaze's existing
+`single_bh_galaxy_4x2_mesh_graph_descriptor.textproto`, unchanged, and the pipeline part is
+new.
 
 ```textproto
+# --- Existing: the mesh -----------------------------------------------------
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] }   # chip grid: 8 rows x 4 columns = 32 chips
+  host_topology   { dims: [ 2, 2 ] }   # hosts in a 2x2 grid = 4 ranks; each owns
+                                       #   (8 / 2) x (4 / 2) = a 4x2 slice of chips
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }   # one mesh, mesh_id 0
+
+# --- New: the pipeline ------------------------------------------------------
 pipeline_descriptors {
   name: "gpt_oss_120b_single_galaxy"
   stages { id: "s0" label: "Embedding" shape { dims: [ 4, 2 ] } }
@@ -157,6 +172,18 @@ pipeline_descriptors {
   edges { src: "s3" dst: "s0" }
 }
 ```
+
+The slice shape is never written down. It follows from the two `dims` lines: the host grid
+divides the chip grid, rows by rows and columns by columns:
+
+```
+              cols 0-1    cols 2-3
+  rows 0-3    rank 0      rank 1        device_topology [8, 4] / host_topology [2, 2]
+  rows 4-7    rank 2      rank 3        = four 4x2 slices, one per rank
+```
+
+Each stage here is `[4, 2]`, exactly one slice, so each runs on one rank and the four
+stages use all four ranks.
 
 **No stage names a mesh.** A stage may bind to any mesh it is *able* to bind to: one whose
 host slice divides the stage shape into a whole-slice rectangle that fits the mesh. The

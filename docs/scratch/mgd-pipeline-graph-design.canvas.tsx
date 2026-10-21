@@ -3144,13 +3144,26 @@ function DescriptorTab() {
           <H2>The new MGD section</H2>
           <Text tone="secondary">
             Stages, their shapes, and how they connect. No stage names a mesh: the mapper decides where each stage lands. GPT-OSS
-            single galaxy:
+            single galaxy, as one MGD file: the mesh part is blaze's existing single_bh_galaxy_4x2 MGD, unchanged; the pipeline
+            part is new.
           </Text>
           <CodeCard
             path="gpt_oss_120b_single_galaxy.textproto"
             mode="plain"
             language="protobuf"
             src={`
+# --- Existing: the mesh ------------------------------------------
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] }   # 8 rows x 4 cols = 32 chips
+  host_topology   { dims: [ 2, 2 ] }   # 2x2 hosts = 4 ranks; each owns
+                                       #   (8/2) x (4/2) = a 4x2 slice
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+
+# --- New: the pipeline -------------------------------------------
 pipeline_descriptors {
   name: "gpt_oss_120b_single_galaxy"
   stages { id: "s0" label: "Embedding" shape { dims: [ 4, 2 ] } }
@@ -3169,6 +3182,20 @@ pipeline_descriptors {
           <Text size="small" tone="tertiary">
             One way to place it: single-mesh tiling gives four 4x2 tiles, the resolver lays the ring on them.
           </Text>
+          <CodeCard
+            path="where the 4x2 slice comes from"
+            mode="plain"
+            language="text"
+            src={`
+device_topology [8, 4] / host_topology [2, 2]
+
+              cols 0-1    cols 2-3
+  rows 0-3    rank 0      rank 1
+  rows 4-7    rank 2      rank 3
+
+= four 4x2 slices, one per rank. Each stage is
+[4, 2] = one slice, so each runs on one rank.`}
+          />
         </Stack>
       </Grid>
 
