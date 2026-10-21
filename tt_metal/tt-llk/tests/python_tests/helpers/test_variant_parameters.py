@@ -2041,6 +2041,44 @@ class TILE_DST_CT_OFFSET(TemplateParameter):
 
 
 @dataclass
+class PACK_UNTILIZE_DST_RT_OFFSET(RuntimeParameter):
+    """Runtime row-tile offset into Dest for pack untilize (``tile_dst_rt_offset``): math writes the block
+    at this tile offset and the packer reads it from there (on top of TILE_DST_CT_OFFSET).
+    """
+
+    tile_dst_rt_offset: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t PACK_UNTILIZE_DST_RT_OFFSET = {self.tile_dst_rt_offset};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t PACK_UNTILIZE_DST_RT_OFFSET;", "I"
+
+
+@dataclass
+class PACK_UNTILIZE_NARROW_ROW(TemplateParameter):
+    """Narrow-row pack untilize (``_llk_pack_untilize_init_`` / ``_llk_pack_untilize_``
+    ``narrow_row`` + ``row_num_datums`` template arguments).
+
+    ``PACK_UNTILIZE_NARROW_ROW``      pack only the first ``row_num_datums`` datums of every
+                                     tile row, so each tile contributes ``row_num_datums``
+                                     datums to an untilized output row.
+    ``PACK_UNTILIZE_ROW_NUM_DATUMS``  datums per tile row to pack; TILE_C_DIM (32) when not narrow.
+    """
+
+    narrow_row: bool = False
+    row_num_datums: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool PACK_UNTILIZE_NARROW_ROW = {str(self.narrow_row).lower()};",
+                f"constexpr std::uint32_t PACK_UNTILIZE_ROW_NUM_DATUMS = {self.row_num_datums};",
+            ]
+        )
+
+
+@dataclass
 class CONFIGURE_TEST_RUN_IDX(RuntimeParameter):
     configure_test_run_idx: int = 0
 

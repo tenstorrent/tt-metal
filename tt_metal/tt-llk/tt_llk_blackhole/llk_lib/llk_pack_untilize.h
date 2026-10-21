@@ -175,7 +175,9 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
- * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @tparam row_num_datums: Datums each tile contributes to an output row when narrow_row is set; the per-row L1
+ *         stride and the block start are kept in 16 B units, so block_ct_dim * row_num_datums datums must be a
+ *         multiple of 16 bytes (asserted).
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
@@ -220,6 +222,12 @@ inline void _llk_pack_untilize_init_(
     if constexpr (narrow_row)
     {
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_num_datums);
+        // The per-row stride (added to the L1 address by the MOP after every row) and a block start are kept in
+        // 16 B units: a narrow block row that is not a multiple of 16 B would be truncated and the rows would
+        // overlap. full_ct_dim is a multiple of block_ct_dim, so this also covers the row stride.
+        LLK_ASSERT(
+            SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * row_num_datums) % 16 == 0,
+            "block_ct_dim * row_num_datums datums must be a multiple of 16 bytes for narrow_row packing");
     }
     else
     {
