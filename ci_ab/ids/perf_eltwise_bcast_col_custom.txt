@@ -1,2 +1,0 @@
-perf_eltwise_bcast_col_custom.py::test_perf_eltwise_bcast_col_custom[formats:Float16_b->Float16_b-mathop:Elwsub-dest_acc:No-math_fidelity:LoFi-broadcast_type:Column-ct_dim:1-loop_factor:64]
-perf_eltwise_bcast_col_custom.py::test_perf_eltwise_bcast_col_custom[formats:Float16_b->Float16_b-mathop:Elwsub-dest_acc:No-math_fidelity:LoFi-broadcast_type:Column-ct_dim:8-loop_factor:64]
