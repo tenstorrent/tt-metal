@@ -55,7 +55,7 @@ def summary(lines):
 
 
 def shard_of(cmd: str) -> tuple[int, int]:
-    m = re.search(r"run_llk_perf_\w+\.sh\s+(\d+)\s+(\d+)", cmd)
+    m = re.search(r"run_llk_\w+\.sh\s+(\d+)\s+(\d+)", cmd)
     if not m:
         sys.exit(f"cannot find '<group> <n_groups>' in the matrix cmd: {cmd!r}")
     return int(m.group(1)), int(m.group(2))
