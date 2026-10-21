@@ -13,6 +13,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 
 def _skip_if_too_big(device, grid):
@@ -22,6 +23,10 @@ def _skip_if_too_big(device, grid):
 
 
 def _sdpa(device, q, k, v, grid, q_chunk, k_chunk, **kwargs):
+    # LoFi with fp16 dest hangs Wormhole SDPA at q_chunk >= 256 (also on main):
+    # https://github.com/tenstorrent/tt-metal/issues/61772
+    if is_wormhole_b0() and q_chunk >= 256:
+        pytest.skip("q_chunk >= 256 with LoFi + fp16 dest hangs on Wormhole, see #61772")
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid), q_chunk_size=q_chunk, k_chunk_size=k_chunk
     )
