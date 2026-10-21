@@ -516,6 +516,21 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/true);
 }
 
+const MeshTensor* FindBoundTensor(
+    const TensorBindingHandle& handle,
+    const std::unordered_map<std::string, const MeshTensor*>& tensor_by_param,
+    bool required) {
+    auto it = tensor_by_param.find(handle.tensor_parameter_name);
+    if (it == tensor_by_param.end()) {
+        TT_FATAL(
+            !required,
+            "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught this).",
+            handle.tensor_parameter_name);
+        return nullptr;
+    }
+    return it->second;
+}
+
 // Write each per-node TensorBinding's base address into the RTA buffer of every node `kernel` runs on,
 // at the handle's addr_rta_offset. Bindings whose tensor is absent from tensor_by_param are left
 // untouched unless require_all is set (partial updates omit them).
@@ -532,15 +547,11 @@ void PatchPerNodeBindingRtas(
         if (!handle.is_per_node) {
             continue;
         }
-        auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-        if (t_it == tensor_by_param.end()) {
-            TT_FATAL(
-                !require_all,
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught this).",
-                handle.tensor_parameter_name);
+        const MeshTensor* tensor = FindBoundTensor(handle, tensor_by_param, require_all);
+        if (tensor == nullptr) {
             continue;
         }
-        const Buffer* buffer = t_it->second->mesh_buffer().get_reference_buffer();
+        const Buffer* buffer = tensor->mesh_buffer().get_reference_buffer();
         TT_FATAL(
             buffer != nullptr,
             "Tensor argument for per-node TensorParameter '{}' has no backing Buffer.",
@@ -700,13 +711,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             if (handle.is_per_node) {
                 continue;  // Lives in the per-node RTAs (see PatchPerNodeBindingRtas).
             }
-            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-            TT_FATAL(
-                t_it != tensor_by_param.end(),
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have caught "
-                "this).",
-                handle.tensor_parameter_name);
-            EmitBindingCrtaValues(handle, *t_it->second, [&out](uint32_t w) { out.push_back(w); });
+            const MeshTensor& tensor = *FindBoundTensor(handle, tensor_by_param, /*required=*/true);
+            EmitBindingCrtaValues(handle, tensor, [&out](uint32_t w) { out.push_back(w); });
         }
     };
 
@@ -1036,15 +1042,10 @@ void UpdateTensorArgs(
             if (handle.is_per_node) {
                 continue;
             }
-            auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-            TT_FATAL(
-                t_it != tensor_by_param.end(),
-                "Internal error: tensor binding '{}' has no resolved MeshTensor (validation should have "
-                "caught this).",
-                handle.tensor_parameter_name);
+            const MeshTensor& tensor = *FindBoundTensor(handle, tensor_by_param, /*required=*/true);
             // addr_crta_offset is a byte offset; data() is uint32_t*.
             uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-            EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+            EmitBindingCrtaValues(handle, tensor, [&dst](uint32_t w) { *dst++ = w; });
         }
     }
 
@@ -1435,12 +1436,15 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 kernel_name);
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
             for (const auto& handle : binding_handles) {
-                auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
-                if (handle.is_per_node || t_it == tensor_by_param.end()) {
-                    continue;  // per-node (patched above), or tensor omitted → binding slot retained.
+                if (handle.is_per_node) {
+                    continue;  // Patched above.
+                }
+                const MeshTensor* tensor = FindBoundTensor(handle, tensor_by_param, /*required=*/false);
+                if (tensor == nullptr) {
+                    continue;  // Tensor omitted → binding slot retained.
                 }
                 uint32_t* dst = crta.data() + (handle.addr_crta_offset / sizeof(uint32_t));
-                EmitBindingCrtaValues(handle, *t_it->second, [&dst](uint32_t w) { *dst++ = w; });
+                EmitBindingCrtaValues(handle, *tensor, [&dst](uint32_t w) { *dst++ = w; });
             }
         }
 
