@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_row,
     rotated_row_of_position,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPSplitChipLookahead, MTPUnionEmbedding
 
 # The one-hot matmuls stand in for slices, so they must copy rows bit-exactly: HiFi4 keeps every
@@ -162,7 +163,9 @@ class MTPTraceGeometry:
         self._tensors, self._selects, self._level_pick, self._level_cols = {}, [], [], []
 
     def _mapper(self):
-        return ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=self.mesh_shape, dims=(self.sp_axis, None))
+        return ttnn.ShardTensor2dMesh(
+            self.mesh_device, mesh_shape=self.mesh_shape, dims=mesh_shard_dims(0, self.sp_axis)
+        )
 
     def _host_tensor(self, host: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper())

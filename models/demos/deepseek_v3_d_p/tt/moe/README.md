@@ -137,7 +137,7 @@ metadata_len = 5 fields:
 mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
     mesh_device,
     mesh_shape=mesh_device.shape,
-    dims=(sp_axis, None),  # e.g., (0, None) for 2D mesh
+    dims=mesh_shard_dims(0, sp_axis),  # (0, None) at sp_axis=0, (None, 0) at sp_axis=1
 )
 
 # expert_offsets: shard dim 0 across full mesh
