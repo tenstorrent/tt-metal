@@ -54,6 +54,17 @@ pass of 286 tokens 457 s, decode passes 620-1030 s (16 tokens over three host re
 | single chip, 45 layers streamed (`GLM53Model`, fullmodel tensorbin cache), `GLM53_MM_N=3` | first token 785 `'The'` == HF; 3/3 greedy tokens == HF (`'The image contains'`); step-0 top-5 ids identical to HF's (TT logits 21.375 / 19.125 / 18.625 / 18.375 / 17.125 vs HF 21.75 / 19.0 / 18.625 / 18.5 / 18.0); device argmax == host argmax on every decode step. Prefill pass 417 s, decode passes 389 / 370 s, tower 7.5 s: 1192 s per job, so 3 tokens is the maximum under the 1500 s device-job cap (16 tokens would take ~85 min) |
 | mesh (`GLM53_MESH_SHAPE`): first token == HF; traced decode | pending |
 
+## Reuse of the repo's reference implementations (standing rule)
+
+| this branch | sibling | verdict |
+|---|---|---|
+| `multimodal_streams` merge (host keep/img masks, fp32 multiply + add on the packed streams) | `models/demos/qwen3_vl/tt/common.py::merge_vision_tokens_single_user_ttnn` (`ttnn.scatter` of the device image embeddings at the `image_token_id` rows; torch twin `merge_vision_tokens`) | replace: scatter into the `[T, 4096]` device embedding before `mhc_expand` (no host masks, no readback) |
+| `image_features` (tower on device, host readback per image) | `models/demos/qwen3_vl/tt/model.py::DropInVisionTransformer.forward` / `forward_single_user` (per-image loop, device embeddings straight to the merge) | replace together with the merge |
+| `tt/vision.py` tower | `models/demos/qwen25_vl/tt/{vision_block,vision_attention,vision_mlp,vision_rmsnorm,rope,patch_merger}.py` + `qwen3_vl/tt/model.py::VisionTransformer` | port target: GLM5Next = the Qwen2.5-VL block structure + per-head q/k RMSNorm + 2x2 downsample conv + LayerNorm/GELU/SwiGLU-10240 merger |
+| `prefill_streams` on both models | `qwen3_vl/tt/model.py::Transformer.prepare_inputs_prefill` (the stack takes embeddings) | same pattern, keep |
+| `encode_multimodal` | the qwen VL demos' processor-driven prompts | same pattern, keep (`</think>` append is GLM-specific) |
+| the generate / decode loops (`GLM53Model.generate`, mesh test, `multimodal_demo.py`) | `models/tt_transformers/tt/generator.py::Generator` via an adapter like `qwen3_vl/tt/generator.py` | replace when the GLM text stack gets a Generator adapter (not a `TTTransformer`: mHC streams, KDA/DSA state) |
+
 ## Open issues
 
 - The single-chip test yields 3 tokens per ~20-min device job (the 1500 s job cap, not a model limit); it
