@@ -284,10 +284,11 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // by ADDR_MOD_6 inside the body so each replay walks to the next
     // element correctly.
     //
-    // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
-    // the replay buffer, so slot 0 is free here. Callers that mix this
-    // function with other replay-buffer clients should ensure they don't
-    // require slot 0 to survive across the call.
+    // The fp32-accurate path (_sfpu_exp_fp32_accurate_tti_) records into the
+    // same SFPU slots; the two never run under one init, since the DEST
+    // accumulation mode picks one of them. Callers that mix this function
+    // with other replay-buffer clients should not rely on slots
+    // [0, BODY_LEN) surviving the call.
     //
     // The record goes through load_replay_buf, which brackets it with
     // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined
@@ -549,35 +550,52 @@ constexpr float EXP_FP32_C3 = 1.66664720e-1f;           // LREG6, 0x3E2AAA28
 constexpr float EXP_FP32_C4 = 4.99999851e-1f;           // LREG7, 0x3EFFFFFB
 constexpr std::uint16_t EXP_FP32_R0_FP16A = 0x15A5;     // 1.37805939e-3f, exact in fp16
 
+constexpr std::uint16_t EXP_FP32_INF_FP16B = 0x7F80;  // +inf as an fp16b SFPMULI immediate
+
+// LREG = BITS as two SFPLOADI immediates, lower half first as the sfpi form loads them; BITS is a template argument
+// so both words stay compile-time TTI_ encodings.
+template <std::uint32_t LREG, std::uint32_t BITS>
+inline void _sfpu_exp_fp32_load_imm32_() {
+    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_LOWER, BITS & 0xFFFFu);
+    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_UPPER, BITS >> 16);
+}
+
 /**
- * @brief _sfpu_exp_fp32_accurate_<false> over ITERATIONS vectors as one recorded instruction stream.
+ * @brief _sfpu_exp_fp32_accurate_<false> over ITERATIONS vectors, its head replayed from the SFPU's replay slots.
  *
  * Same instructions, operand roles and order as the sfpi form, so the result is bit-identical to it; the constants
  * come from LREG4..7 and LREG12..14 instead of per-vector SFPLOADIs, the sign-magnitude to two's complement step
- * is one SFPCAST, the body is recorded into replay slot 0 and replayed, and the store advances DEST by ADDR_MOD_6.
+ * is one SFPCAST, and the store advances DEST by ADDR_MOD_6.
+ *
+ * The body is 24 instructions (25 with SCALE_EN). Blackhole splits each thread's 32-entry replay buffer: slots
+ * [0, ckernel::math::replay_buf_offset) belong to the SFPU and the rest hold the FPU ops' recorded sequences
+ * (matmul records its MVMUL sequence there once per matmul_init and replays it on every matmul_tiles). So only the
+ * head of the body, the input load through y *= inf, is recorded into slots [0, HEAD_LEN) and replayed; the
+ * 9-instruction tail (exponent assembly, the overflow and underflow lanes, the store) is issued inline per vector.
  *
  * @tparam SCALE_EN: Multiply the input by exp_base_scale_factor first
  * @tparam ITERATIONS: Vectors per call
  * @param exp_base_scale_factor: fp16b scale, read when SCALE_EN.
- * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay slot 0.
+ * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay
+ * slots [0, 15 + SCALE_EN).
  */
 template <bool SCALE_EN, int ITERATIONS>
 inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C1));
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C1));
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C2));
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C2));
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C3));
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C3));
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, lo16(EXP_FP32_C4));
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, hi16(EXP_FP32_C4));
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG4, bits(EXP_FP32_C1)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG5, bits(EXP_FP32_C2)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG6, bits(EXP_FP32_C3)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG7, bits(EXP_FP32_C4)>();
 
-    constexpr int BODY_LEN = 24 + (SCALE_EN ? 1 : 0);
-    // Recorded and executed once through load_replay_buf, which brackets the record with
-    // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined.
-    load_replay_buf<Exec>(0 /*start*/, BODY_LEN, [exp_base_scale_factor] {
+    // Instructions the head emits; MUST match the lambda exactly (load_replay_buf does not check the count, and a
+    // mismatch misaligns every replay):
+    //   SFPLOAD, [SFPMULI scale], SFPMUL, SFPLOADI r0, SFP_STOCH_RND, SFPCAST,
+    //   2 SFPMAD (f), 4 SFPMAD (Horner), SFPCAST, 2 SFPMAD (y, r), SFPMULI inf      = 15 + SCALE_EN
+    constexpr std::uint32_t HEAD_LEN = 15 + (SCALE_EN ? 1 : 0);
+    static_assert(HEAD_LEN <= ckernel::math::replay_buf_offset, "the head must stay inside the SFPU's replay slots");
+
+    auto head = [exp_base_scale_factor] {
         // LREG1 = a; LREG3 = j = a / ln2; LREG0 = r0
-        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         if constexpr (SCALE_EN) {
             TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG1, 0);
         }
@@ -601,11 +619,16 @@ inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_fact
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG0, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+        // INT32_TO_SM32 is its own inverse on sign-magnitude values, so on sm it gives the two's complement the
+        // sfpi form builds with abs and copysgn. Exact because FP32_TO_SMAG16 never produces SM -0, the one input
+        // where the two would differ.
         TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPCAST_MOD1_INT32_TO_SM32);
         // LREG0 = y = r f + 1; LREG1 = r = y f + 1; y *= inf
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
-        TTI_SFPMULI(0x7F80, p_sfpu::LREG0, 0);
+        TTI_SFPMULI(EXP_FP32_INF_FP16B, p_sfpu::LREG0, 0);
+    };
+    auto tail = [] {
         // LREG2 = e = biased exponent of r + i; lanes with e < 255: y = setexp(r, e); lanes with e < 1: y = 0
         TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
         TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -617,12 +640,17 @@ inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_fact
             0xFFF /* -1 */, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI);
-        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_6, 0);
-    });
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    };
 
+    // The first vector records the head while executing it; load_replay_buf brackets the record with
+    // disable_gathering()/enable_gathering() when ENABLE_GATHERING is defined.
+    load_replay_buf<Exec>(0 /*start*/, HEAD_LEN, head);
+    tail();
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        TTI_REPLAY(0, BODY_LEN, 0, 0);
+        TTI_REPLAY(0, HEAD_LEN, 0, 0);
+        tail();
     }
 }
 
@@ -690,6 +718,9 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             // effectively free (no other instruction to interleave with SFPMAD).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
+            // The replayed form uses no SFPLOADMACRO, but DISABLE_SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO, the
+            // simulator build) selects the sfpi form here too, so that switch gives the plain reference stream.
+            // TensixSfpuExpFp32ReplayBitExact builds both forms through it and skips when the variable is set.
 #ifdef DISABLE_SFPLOADMACRO
             for (int d = 0; d < ITERATIONS; d++) {
                 sfpi::vFloat val = sfpi::dst_reg[0];
