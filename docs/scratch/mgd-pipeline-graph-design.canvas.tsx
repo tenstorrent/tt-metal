@@ -1401,6 +1401,7 @@ TEST_P(CarvePlannerParity, SameVerdictAsBlaze) {
     ],
     tests: [
       "Goldens: ring, heterogeneous, joint stage, fork with fabric and host returns, every failure phase.",
+      "Goldens on one galaxy with 4x1 rank columns (carver example F): 4x2 stages on odd columns, a 4x2 group on the C7-C0 wrap rejected, a 6-slice ring rejected with achievable [8].",
       "Determinism: same input twice gives the same plan sequence.",
     ],
     behaviour: "None. Library only.",
@@ -1507,6 +1508,7 @@ std::expected<AnnotatedIntermeshConnections, BindFailure> bind_intermesh_connect
     ],
     steps: [
       "PipelineFeasibility::check: candidates -> slices -> carve paths -> resolver.",
+      "allowed_paths follows blaze's multi_mesh rule: one mesh with every stage on one rank gets single-mesh tiling; one mesh with a joint stage (e.g. 4x2 stages on 4x1 rank columns), or several meshes, gets the planned carve, then per-rank tiling.",
       "Hook into MultiMeshSolutionEnumerator::next() after intra-mesh success; on reject call exclude_mapping(seating) (seat set), never add_forbidden_constraint.",
       "Turn unique_shapes off when a pipeline is present (runtime overloads and --all-solutions).",
       "failure_stage pipeline_carve / pipeline_layout; cap rejections per run and report the last reason.",
@@ -1554,6 +1556,7 @@ PipelineCheck PipelineFeasibility::check(
     const auto links  = routed_links(mesh_graph_, full, cands);         // intra-mesh topology + candidates
 
     PipelineCheck last = PipelineCheck::reject("pipeline_carve", "no carve path applies");
+    // A joint stage takes the planned carve even on one mesh, as blaze's multi_mesh flag does.
     for (const CarvePath path : allowed_paths(pipeline_, mesh_graph_)) {   // planned | tiling | single mesh
         auto attempt = try_path(path, slices, links);                       // slots -> subs -> resolver (P4-P6)
         if (!attempt.accepted) { last = attempt; continue; }                // reject only if every path fails
@@ -1593,6 +1596,7 @@ PipelineCheck PipelineFeasibility::check(
       "mesh4x4_stage4x2 on a crafted PSD with Case A / B / C cabling: accept / reject / reject (STRICT).",
       "GPT-OSS single galaxy, llama_8b_pod, subtorus 8-stage: accepted, and blaze builds on the emitted mapping (hardware CI).",
       "A seating that fails only when swapped (unique_shapes regression test).",
+      "Single galaxy, host_topology [1, 8], ring 4x1, 4x2, 4x2, 4x2, 4x1: takes the planned carve, not single-mesh tiling, and is accepted; the same with a LINE column axis is rejected.",
       "No pipeline: every existing topology-mapper golden unchanged.",
     ],
     behaviour: "The mapper skips seatings the pipeline cannot be built on. --all-solutions only emits buildable ones.",

@@ -959,8 +959,9 @@ next to the resolver:
   adjacency, including the failure phase. Matching plans is not required. Keep the C++ copy
   deterministic anyway (geometry-keyed slices, sorted iteration, fixed search budgets) so the
   mapper's output is stable run to run.
-- **Parity tests.** A shared set of golden cases (ring, heterogeneous, joint stage, fork with
-  fabric and host returns, the known failure phases) fed to both copies, comparing accept or
+- **Parity tests.** A shared set of golden cases (ring, heterogeneous, joint stage, joint
+  stages on one mesh of 4x1 rank columns as in example F, fork with fabric and host returns,
+  the known failure phases) fed to both copies, comparing accept or
   reject and the failure phase. Comparing the emitted plan and its crc32 digest is optional
   and only matters if the plan is ever consumed (4.1).
 - **Discovery stays out.** `discover_host_slices` and `discover_slice_adjacency` are not
