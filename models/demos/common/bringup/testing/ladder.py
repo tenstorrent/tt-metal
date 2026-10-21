@@ -167,9 +167,23 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
     print(f"worst state pcc {worst:.6f}, worst index-state overlap {worst_ov:.6f}")
     if worst < threshold(s, "state"):
         out["failed"].append(f"state {worst:.5f}")
-    if worst_ov < threshold(s, "state_overlap"):
-        out["failed"].append(f"index-state overlap {worst_ov:.5f}")
+    bad = overlap_failure(s, worst_ov)
+    if bad:
+        out["failed"].append(bad)
     return out
+
+
+def overlap_failure(s, worst_ov: float) -> str | None:
+    """The index-state overlap verdict. F124: an owner waiver (tests.waivers ``ladder.state_overlap``: reason) lowers the
+    limit to the structural floor ``state_overlap_waived``, reported WAIVED; a wrong selector still fails."""
+    if worst_ov >= threshold(s, "state_overlap"):
+        return None
+    why = str((s.get("tests.waivers") or {}).get("ladder.state_overlap") or "").strip()
+    if why and worst_ov >= threshold(s, "state_overlap_waived"):
+        print(f"WAIVED index-state overlap {worst_ov:.5f} (limit {threshold(s, 'state_overlap')}): owner waiver: {why}")
+        metrics.record("overlap_state_min_waived", 1)
+        return None
+    return f"index-state overlap {worst_ov:.5f}"
 
 
 def index_overlap(got: torch.Tensor, want: torch.Tensor) -> float:
