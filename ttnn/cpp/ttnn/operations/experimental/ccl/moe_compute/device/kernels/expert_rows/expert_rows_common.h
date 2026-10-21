@@ -12,6 +12,7 @@
 namespace expert_rows {
 
 constexpr uint32_t u16_bytes = sizeof(uint16_t);
+constexpr uint32_t bf16_bytes = 2;
 
 __attribute__((always_inline)) constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
@@ -21,6 +22,10 @@ __attribute__((always_inline)) constexpr uint32_t align_up(uint32_t bytes, uint3
 
 // Rows of a row tile; a job of row_tiles row tiles holds at most tile_rows * row_tiles rows of one expert.
 constexpr uint32_t tile_rows = 32;
+// A tile is tile_rows x tile_rows values in four faces of face_rows x face_columns: rows 0..15 in faces 0 (columns
+// 0..15) and 1 (columns 16..31), rows 16..31 in faces 2 and 3.
+constexpr uint32_t face_rows = 16;
+constexpr uint32_t face_columns = 16;
 
 __attribute__((always_inline)) constexpr uint32_t row_tiles_of(uint32_t rows) { return div_up(rows, tile_rows); }
 
@@ -30,6 +35,9 @@ constexpr uint32_t group_tiles = moe_ring::W0_W1_BLOCK_TILES_W;
 constexpr uint32_t half_group_tiles = moe_ring::W0_W1_HALF_BLOCK_TILES_W;
 static_assert(group_tiles == moe_ring::W2_TILES_PER_A2A_ITER_W, "column and output groups are equally wide");
 static_assert(half_group_tiles == moe_ring::W2_HALF_A2A_ITER_TILES_W, "half column and output groups too");
+
+// A full column group's intermediate columns, one activated tile each.
+constexpr uint32_t group_columns = 2;
 
 // `count` groups of group_tiles tiles per K row; the last is half_group_tiles wide when half_last.
 struct GroupRun {
@@ -73,14 +81,15 @@ struct JobRecord {
     uint16_t first_row;
     uint16_t rows;
 };
-static_assert(sizeof(JobRecord) == 3 * u16_bytes, "job records are packed u16 triples");
+constexpr uint32_t job_record_bytes = sizeof(JobRecord);
+static_assert(job_record_bytes == 3 * u16_bytes, "job records are packed u16 triples");
 
-// This expert group's jobs in the routing table. With one row tile per job the group's job j is table job
-// group + expert_groups j; with several (dealt) the root deals the jobs and lists the group's from `first`.
+// This expert group's jobs in the routing table, from its first, table job `first`. With one row tile per job the
+// group's job j is table job group + expert_groups j; with several (dealt) the root lists each group's jobs together.
 template <bool dealt, uint32_t expert_groups, typename JobRecords>
 struct GroupJobs {
     JobRecords table;
-    uint32_t group, first, count;
+    uint32_t group, first;
     __attribute__((always_inline)) uint32_t at(uint32_t job) const {
         return dealt ? first + job : group + expert_groups * job;
     }
@@ -91,16 +100,11 @@ struct GroupJobs {
     __attribute__((always_inline)) bool held(uint32_t job) const { return dealt && rows(job) > tile_rows; }
 };
 
-// The group's jobs from the routing scratch: its job records, the ctl block's first job of each group, the job count.
+// The group's jobs from the routing scratch: its job records and the ctl block's first job of each group.
 template <bool dealt, uint32_t expert_groups, typename JobRecords, typename FirstJobs>
 __attribute__((always_inline)) inline GroupJobs<dealt, expert_groups, JobRecords> group_jobs(
-    JobRecords table, FirstJobs group_first_job, uint32_t group, uint32_t table_jobs) {
-    if constexpr (dealt) {
-        const uint32_t first = group_first_job[group];
-        return {table, group, first, group_first_job[group + 1] - first};
-    } else {
-        return {table, group, 0, table_jobs > group ? div_up(table_jobs - group, expert_groups) : 0};
-    }
+    JobRecords table, FirstJobs group_first_job, uint32_t group) {
+    return {table, group, dealt ? uint32_t(group_first_job[group]) : group};
 }
 
 // Activation rows place.cpp keeps in flight before a write barrier.
