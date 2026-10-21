@@ -172,11 +172,17 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     geometry = ttnn.experimental_l1_tensor_geometry(mesh, coord, spec)
     assert view.spec == spec
     upload(torch.full((1, 17), 7, dtype=torch.uint8), view)
+    # Hand the physical command queue from the parent to the selected-device mesh.
+    mesh.quiesce_devices()
     submesh = mesh.create_submesh(ttnn.MeshShape(1, 1), coord)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-    sem = ttnn.experimental_create_global_semaphore_at_address(submesh, grid, 37, ttnn.BufferType.L1, address + 512)
-    assert ttnn.get_global_semaphore_address(sem) == address + 512
-    del sem
+    try:
+        sem = ttnn.experimental_create_global_semaphore_at_address(submesh, grid, 37, ttnn.BufferType.L1, address + 512)
+        assert ttnn.get_global_semaphore_address(sem) == address + 512
+    finally:
+        # Synchronizing alone leaves the child queue marked in use during parent teardown.
+        submesh.quiesce_devices()
+        ttnn.close_mesh_device(submesh)
     data = _read(owner).reshape(-1)
     assert torch.all(data[:256] == 91)
     assert torch.all(data[256:273] == 7)
