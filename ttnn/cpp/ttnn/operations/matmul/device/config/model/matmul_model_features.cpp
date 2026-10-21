@@ -122,7 +122,7 @@ inline double pymax(double a, double b, double c) { return pymax(pymax(a, b), c)
 inline double npmax(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a >= b ? a : b); }
 inline double npmin(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a <= b ? a : b); }
 
-double tile_bytes(DataType t) {
+double feature_tile_bytes(DataType t) {
     switch (t) {
         case DataType::kBfloat16: return 2048.0;
         case DataType::kBfloat8B: return 1088.0;
@@ -212,9 +212,9 @@ Geometry geometry(const MatmulProblem& p, const MatmulCandidate& c) {
     g.obh = obh;
     g.obw = obw;
     g.nsb = std::ceil(obh / g.sbh) * std::ceil(obw / g.sbw);
-    g.tb_a = tile_bytes(p.a_dtype);
-    g.tb_b = tile_bytes(p.b_dtype);
-    g.tb_o = tile_bytes(p.has_out_dtype ? p.out_dtype : p.a_dtype);
+    g.tb_a = feature_tile_bytes(p.a_dtype);
+    g.tb_b = feature_tile_bytes(p.b_dtype);
+    g.tb_o = feature_tile_bytes(p.has_out_dtype ? p.out_dtype : p.a_dtype);
     const bool acc32 = p.fp32_dest_acc, l1acc = p.packer_l1_acc;
     g.bias = p.bias;
     g.tb_p = acc32 ? 4096.0 : (l1acc ? 2048.0 : g.tb_o);
