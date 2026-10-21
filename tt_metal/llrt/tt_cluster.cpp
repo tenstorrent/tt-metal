@@ -899,6 +899,11 @@ namespace {
 // TODO: Remove this once we have a proper fix for small DMA sizes.
 constexpr uint32_t min_dma_size_bytes = 32;
 
+// UMD rejects a DMA transfer whose device address or size is not a multiple of 4, so those stay on MMIO.
+bool dma_transfer_shape_supported(uint32_t sz_in_bytes, uint64_t addr) {
+    return addr % 4 == 0 && sz_in_bytes % 4 == 0 && sz_in_bytes >= min_dma_size_bytes;
+}
+
 }  // namespace
 
 bool Cluster::dma_available(ChipId chip_id) const {
@@ -906,13 +911,13 @@ bool Cluster::dma_available(ChipId chip_id) const {
            this->get_cluster_desc()->is_chip_mmio_capable(chip_id);
 }
 
-bool Cluster::use_dma_read(ChipId chip_id, uint32_t sz_in_bytes) const {
-    return this->dma_available(chip_id) && this->hal_->supports_dma_reads() && sz_in_bytes >= min_dma_size_bytes;
+bool Cluster::use_dma_read(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr) const {
+    return this->dma_available(chip_id) && this->hal_->supports_dma_reads() &&
+           dma_transfer_shape_supported(sz_in_bytes, addr);
 }
 
 bool Cluster::use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const {
-    // UMD rejects a DMA write whose address or size is not a multiple of 4.
-    return this->dma_available(chip_id) && addr % 4 == 0 && sz_in_bytes % 4 == 0 && sz_in_bytes >= min_dma_size_bytes &&
+    return this->dma_available(chip_id) && dma_transfer_shape_supported(sz_in_bytes, addr) &&
            sz_in_bytes >= this->hal_->get_dma_write_min_bytes(ordering);
 }
 
@@ -978,7 +983,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->use_dma_read(chip_id, size_in_bytes)) {
+    if (this->use_dma_read(chip_id, size_in_bytes, addr)) {
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);

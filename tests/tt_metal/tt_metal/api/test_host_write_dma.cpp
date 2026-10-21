@@ -19,13 +19,13 @@
 
 namespace tt::tt_metal {
 
-namespace {
-
 struct HostWriteCase {
     std::string name;
     HalMemType mem_type;
     uint32_t size_bytes;
 };
+
+namespace {
 
 // On Wormhole and Blackhole, Cluster::write_core sends Strict writes of 2 KiB or more and Relaxed writes of 64 KiB
 // or more through PCIe DMA, and everything else, including sizes that are not a multiple of 4, through MMIO. L1

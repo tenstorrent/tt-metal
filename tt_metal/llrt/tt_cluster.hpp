@@ -443,7 +443,7 @@ private:
     void set_tunnels_from_mmio_device();
 
     bool dma_available(ChipId chip_id) const;
-    bool use_dma_read(ChipId chip_id, uint32_t sz_in_bytes) const;
+    bool use_dma_read(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr) const;
     bool use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const;
 
     ARCH arch_{tt::ARCH::Invalid};
