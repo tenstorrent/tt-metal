@@ -39,6 +39,8 @@ ttnn::Tensor update_padded_kv_cache(
         tp_axis,
         rope,
         scales,
+        /*input_row_offset=*/0,
+        /*input_rows=*/std::nullopt,
         page_table);
 }
 
@@ -56,6 +58,8 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> tp_axis,
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
+    uint32_t input_row_offset,
+    std::optional<uint32_t> input_rows,
     const std::optional<ttnn::Tensor>& page_table) {
     return ttnn::prim::update_padded_kv_cache(
         cache,
@@ -72,6 +76,8 @@ ttnn::Tensor update_padded_kv_cache(
         tp_axis,
         rope,
         scales,
+        input_row_offset,
+        input_rows,
         page_table);
 }
 

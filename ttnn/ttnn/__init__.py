@@ -220,10 +220,6 @@ from ttnn._ttnn.d2d_stream_service import (
     D2D_STAGE_GATE_UNGATED_SLOT,
 )
 
-from ttnn._ttnn.counter_channel import (
-    InterProcessCounterChannel,
-)
-
 from ttnn._ttnn.layer_ack_service import (
     LayerAckService,
 )
@@ -337,6 +333,7 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
+    experimental_get_l1_occupied_ranges,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,

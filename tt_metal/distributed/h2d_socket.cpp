@@ -24,7 +24,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdlib>

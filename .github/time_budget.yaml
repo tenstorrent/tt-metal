@@ -232,7 +232,7 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 155
+    bh_galaxy: 175
     bh_sc1: 20
     bh_sc4: 160
     bh_sc16: 150
@@ -263,7 +263,7 @@ runtime:
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
-    sim_bh_galaxy: 10
+    sim_bh_galaxy: 15
   unit:
     wh_n150_civ2: 232
     wh_n300_civ2: 139
@@ -308,9 +308,11 @@ llk:
   pr_gate:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
+    sim_quasar_xl: 30
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
+    sim_quasar_xl: 30
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -425,7 +427,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1836
+    bh_sc1: 1866
     bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500

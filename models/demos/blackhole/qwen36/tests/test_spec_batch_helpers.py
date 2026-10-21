@@ -166,6 +166,12 @@ def test_spec_kv_write_conflicts(expect_error):
     # by user 1 in call 0, but never by two users in one call.
     assert spec_kv_write_conflicts([[5, 6], [5, 6]], [31, 63], T, BS) == []
 
+    # (f) null-block writes are skipped: two users at 4094 with max_model_len 4096 spill 4096..4097 into column 64 = 0
+    eol = torch.zeros(2, 65, dtype=torch.int32)
+    eol[0, :64] = torch.arange(1, 65)
+    eol[1, :64] = torch.arange(65, 129)
+    assert spec_kv_write_conflicts(eol, [4094, 4094], 4, BS) == []
+
     # a write past the page table is an error, not a silent skip
     with expect_error(IndexError, "past its 2-block page table"):
         spec_kv_write_conflicts(shared, [3, 127], T, BS)

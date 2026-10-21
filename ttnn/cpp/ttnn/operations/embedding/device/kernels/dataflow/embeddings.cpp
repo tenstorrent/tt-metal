@@ -81,14 +81,14 @@ void kernel_main() {
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
 #ifdef OUTPUT_SHARDED
-            uint32_t l1_write_addr = out_shard.get_bank_base_address() + out_offset;
+            const CoreLocalMem<uint8_t> l1_write_mem = out_shard.local_mem() + out_offset;
 #else
             dfb_in0.reserve_back(1);
-            uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+            const CoreLocalMem<uint8_t> l1_write_mem(dfb_in0.get_write_ptr());
 #endif
             uint32_t current_chunk_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
             uint32_t chunk_offset = chunk * chunk_size;
-            read_token_async(noc, token, weights, l1_write_addr, current_chunk_size, chunk_offset);
+            read_token_async(noc, token, weights, l1_write_mem, current_chunk_size, chunk_offset);
             noc.async_read_barrier();
 #ifdef OUTPUT_SHARDED
             out_offset += chunk_size;

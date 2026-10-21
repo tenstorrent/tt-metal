@@ -23,6 +23,7 @@
 // publishes them. The helper takes uncached-alias addresses (what the DFB getters hand out on Quasar DM); a
 // LocalTensorAccessor base is the plain (cached) L1 address, so normalise both operands first.
 #include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
+#include "internal/local_mem/address_access.h"
 FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
     return addr >= MEM_L1_UNCACHED_BASE ? addr : MEM_L1_UNCACHED_BASE + (addr - MEM_L1_BASE);
 }
@@ -102,7 +103,9 @@ void kernel_main() {
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    uint32_t local_read_addr = in0_shard.get_bank_base_address();
+    // Raw address needed: the shard sits at the same L1 address on every core, so this core's base is also the
+    // remote read address of the other storage cores' shards; it is a pad_last_ktile / local_l1_copy operand too.
+    uint32_t local_read_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in0_shard.local_mem()));
 
     // Gather the shards_per_block shards of this sender's block from the storage cores (this one
     // included; the shard buffer sits at the same L1 address on every core) into dst_addr. The
@@ -140,7 +143,9 @@ void kernel_main() {
 
 #ifdef IN0_MULTISHARD
             // The gather overlaps the credit wait below.
-            const uint32_t staging_addr = stage.get_base_address();
+            // Raw address needed: gather_block_shards and local_read_addr (see above) take raw L1 addresses.
+            const uint32_t staging_addr =
+                static_cast<uint32_t>(local_mem::detail::AddressAccess::address(stage.local_mem()));
             gather_block_shards(staging_addr);
             local_read_addr = staging_addr;
 #endif
