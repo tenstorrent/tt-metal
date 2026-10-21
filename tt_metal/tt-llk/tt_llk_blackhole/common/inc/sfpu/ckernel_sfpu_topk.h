@@ -939,6 +939,18 @@ inline void bitonic_topk_step_N(bool dir)
     }
 }
 
+// INCRWC adds at most 15, so a constant step needs about half the words of a run of 8s and nothing is looped.
+template <std::uint32_t INC, bool CR>
+[[gnu::always_inline]] inline void bitonic_topk_inc_dest_const()
+{
+    if constexpr (INC > 0)
+    {
+        constexpr std::uint32_t step = INC > 15 ? 15 : INC;
+        TTI_INCRWC(CR ? 0b100 : 0, step, 0, 0);
+        bitonic_topk_inc_dest_const<INC - step, CR>();
+    }
+}
+
 inline void bitonic_topk_inc_x8_dest(std::uint32_t inc, bool cr)
 {
     std::uint32_t inc_grp8 = inc >> 3;
@@ -1273,6 +1285,123 @@ inline void topk_validate_mode_combo()
     static_assert(!(RANK_STAMPED && TOPK_UINT16_IN_FP32_DEST), "rank-stamped keys and uint16-in-fp32-dest are mutually exclusive");
 }
 
+struct TopkStepInc
+{
+    std::uint32_t inc;
+    bool cr;
+};
+
+// Counter step after group g of a step pass at distance dist: 8 rows, 32 at the second group of a 16 row slab, 4 * dist at the last.
+constexpr TopkStepInc topk_step_inc(const std::uint32_t dist, const std::uint32_t g)
+{
+    const std::uint32_t inner_d = dist >> 3;
+    std::uint32_t off           = 0;
+    TopkStepInc r {8, false};
+    for (std::uint32_t i = 0; i <= g; i++)
+    {
+        off += 8;
+        r = {8, false};
+        if ((i % inner_d) == inner_d - 1)
+        {
+            r   = {4 * dist, true};
+            off = 2 * dist;
+        }
+        else if (off == 16)
+        {
+            r = {32, true};
+        }
+    }
+    return r;
+}
+
+// The direction flips after every pass slab whose datum count equals the sorted sequence length.
+constexpr bool topk_step_dir(const std::uint32_t dist, const std::uint32_t seq, const std::uint32_t g, const bool dir)
+{
+    bool d = dir;
+    for (std::uint32_t j = 0; j < g / (dist >> 3); j++)
+    {
+        d = (2 * dist * (j + 1) == seq) ? !d : d;
+    }
+    return d;
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t DIST,
+    std::uint32_t TOTAL,
+    std::uint32_t SEQ,
+    bool DIR,
+    std::uint32_t G = 0>
+[[gnu::always_inline]] inline void topk_step_pass_ct_groups()
+{
+    constexpr int io = FUSED ? 4 : 8;
+    if constexpr (G < TOTAL / 16)
+    {
+        if constexpr (G == 0)
+        {
+            load_replay_buf<Exec>(TOPK_STEP_LOAD_REPLAY_START, io, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 2 * DIST); });
+        }
+        else
+        {
+            lltt::replay(TOPK_STEP_LOAD_REPLAY_START, io);
+        }
+        bitonic_topk_step_N<STABLE_SORT, TIE_ORDER>(topk_step_dir(DIST, SEQ, G, DIR));
+        if constexpr (G == 0)
+        {
+            load_replay_buf<Exec>(TOPK_STEP_STORE_REPLAY_START, io, [] { bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED, RANK_STAMPED>(4, 2 * DIST); });
+        }
+        else
+        {
+            lltt::replay(TOPK_STEP_STORE_REPLAY_START, io);
+        }
+        bitonic_topk_inc_dest_const<topk_step_inc(DIST, G).inc, topk_step_inc(DIST, G).cr>();
+        topk_step_pass_ct_groups<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, DIR, G + 1>();
+    }
+}
+
+// One step pass of the 64 datum local sort at distance DIST over TOTAL datums with every counter step a constant.
+template <
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t DIST,
+    std::uint32_t TOTAL,
+    std::uint32_t SEQ,
+    bool DIR>
+[[gnu::noinline]] inline void topk_step_pass_ct_dir()
+{
+    topk_step_pass_ct_groups<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, DIR>();
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t DIST,
+    std::uint32_t TOTAL,
+    std::uint32_t SEQ>
+inline void topk_step_pass_ct(const bool dir)
+{
+    if (dir)
+    {
+        topk_step_pass_ct_dir<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, true>();
+    }
+    else
+    {
+        topk_step_pass_ct_dir<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, DIST, TOTAL, SEQ, false>();
+    }
+}
+
+// CT_STEPS: a full local sort (i_start_phase below i_end_phase, 64 datums, i_end_phase 5 at most) runs its step 5 and 6 passes with
+// constant counter steps. A template parameter so that every other instantiation keeps its code.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1280,7 +1409,8 @@ template <
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
-    bool TILE0_SORTED      = false>
+    bool TILE0_SORTED      = false,
+    bool CT_STEPS          = false>
 // TILE0_SORTED: the first value tile (and its index tile) is already sorted in direction idir; phases 0 to 4 then run on the
 // second tile only. A template parameter, since the phase loops below unroll only with constant group bounds.
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
@@ -1657,6 +1787,22 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             {
                                 bitonic_topk_step_pass_macro<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dist, pass_dir, tile1_only, sorted_seq_length);
                             }
+                            else if (CT_STEPS && i_start_phase != i_end_phase)
+                            {
+                                if (ss == 6)
+                                {
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, 64, 64>(pass_dir);
+                                }
+                                else if (ph == 5)
+                                {
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, 64, 64>(pass_dir);
+                                }
+                                else
+                                {
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, TILE0_SORTED ? 32 : 64, 32>(
+                                        pass_dir);
+                                }
+                            }
                             else
                             {
                                 std::uint32_t inner_d    = dist >> 3; // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
@@ -1783,11 +1929,12 @@ template <
     bool STABLE_SORT       = false,
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
-    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    bool CT_STEPS          = false>
 inline __attribute__((always_inline, flatten)) void _bitonic_topk_phases_steps_tile0_sorted_(
     const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
-    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true>(
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, CT_STEPS>(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
@@ -1848,8 +1995,7 @@ inline void bitonic_topk_merge_group(const std::uint32_t offset, const std::uint
     bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(offset, ld_dist);
 }
 
-// K 4, 8 and fused 16 merges record one group in the replay buffer and replay it with a counter step per group, as K and m_iter
-// fix every group position. It overwrites the sort's and rebuild's windows, so topk_replay_init is cleared after.
+// K and m_iter fix every group position, so one recorded group replays with a counter step per group.
 template <std::uint32_t K, std::uint32_t M>
 struct TopkMergeGeometry
 {
@@ -1988,7 +2134,13 @@ inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 
     if constexpr (PER_GROUP)
     {
-        if constexpr (KT == 4 || KT == 8 || (KT == 16 && FUSED))
+        if constexpr (KT >= 32)
+        {
+            // k_max is 32 whatever k and m_iter: one block of 8 groups a quadrant at distance 32
+            topk_merge_replay_quadrants<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, 0>();
+            return;
+        }
+        else if constexpr (KT == 4 || KT == 8 || KT == 16)
         {
             // m_iter past the last distinct case (dist stays 32, the datums stop shrinking) reads like it
             constexpr std::uint32_t last_m = KT == 4 ? 3 : (KT == 8 ? 2 : 1);
@@ -2221,8 +2373,60 @@ inline void _topk_merge_k32_macros_()
     bitonic_topk_step_macro_drain<FUSED>();
 }
 
-// k from 32 up is the run-time-k merge unchanged. Below that, a k whose later m_iter cannot walk the dest counter
-// (dist not a multiple of 8, or at most 16 group words a quadrant) addresses each group on its own.
+// Each set's group is recorded once, executing in the first quadrant, and every later group replays it after a counter step.
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t K, std::uint32_t M, std::uint32_t Q, std::uint32_t G = 0>
+[[gnu::always_inline]] inline void topk_merge_quadrant_macros()
+{
+    using Geo                     = TopkMergeGeometry<K, M>;
+    constexpr std::uint32_t sets  = topk_merge_macro_sets<FUSED>();
+    constexpr std::uint32_t words = FUSED ? 2 : 4;
+    if constexpr (G < Geo::groups)
+    {
+        if constexpr (G > 0)
+        {
+            topk_incr_dest_counter<Geo::pos(G) - Geo::pos(G - 1)>();
+        }
+        constexpr std::uint32_t set = (Q * Geo::groups + G) % sets;
+        if constexpr (Q == 0 && G < sets)
+        {
+            load_replay_buf<Exec>(
+                set * words,
+                words,
+                [] { bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, set>(top_min ? Geo::ld_dist : 0, top_min ? 0 : Geo::ld_dist); });
+        }
+        else
+        {
+            lltt::replay(set * words, words);
+        }
+        topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, Q, G + 1>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t K, std::uint32_t M>
+inline void _topk_merge_macros_replay_()
+{
+    topk_uint16_clear_value_tiles_high_bits();
+    topk_validate_mode_combo<is_fp32_dest_acc_en, false, FUSED, false, TopkTieOrder::Unset>();
+    _topk_merge_macros_init_<FUSED>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 0>();
+    set_dst_write_addr(2);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 1>();
+    set_dst_write_addr(4);
+    set_dst_write_addr(16);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 2>();
+    set_dst_write_addr(18);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 3>();
+    set_dst_write_addr(20);
+    set_dst_write_addr(16);
+    bitonic_topk_step_macro_drain<FUSED>();
+    topk_replay_init = 0;
+}
+
+// Unstable K 16 and fused unstable K >= 32 use macros; other K 4, 8, 16 and stable or rank-stamped K >= 32 replay one group; the rest walk the counter.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -2236,13 +2440,25 @@ template <
 inline void _bitonic_topk_merge(const int m_iter)
 {
     static_assert(K > 0, "K is the merge's run length");
-    constexpr bool per_group = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
+    if constexpr (K == 16 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED)
+    {
+        if (m_iter == 0)
+        {
+            _topk_merge_macros_replay_<is_fp32_dest_acc_en, top_min, FUSED, 16, 0>();
+        }
+        else
+        {
+            _topk_merge_macros_replay_<is_fp32_dest_acc_en, top_min, FUSED, 16, 1>();
+        }
+        return;
+    }
     if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED && (FUSED))
     {
         _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
         return;
     }
-    constexpr bool per_group_k = K < 32 && per_group;
+    constexpr bool per_group   = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
+    constexpr bool per_group_k = (K < 32 && (per_group || K == 16)) || (K >= 32 && (STABLE_SORT || RANK_STAMPED));
     _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, per_group_k, K>(
         m_iter, static_cast<int>(K));
 }
@@ -2284,16 +2500,16 @@ inline void bitonic_topk_rebuild_step(const std::uint32_t sorted_seq_length)
                 dst_offset = 2 * DIST;
                 if (blk < (num_blocks - 1))
                 {
-                    bitonic_topk_inc_x8_dest(4 * DIST, true);
+                    bitonic_topk_inc_dest_const<4 * DIST, true>();
                 }
             }
             else if (dst_offset == 16)
             {
-                bitonic_topk_inc_x8_dest(32, true);
+                bitonic_topk_inc_dest_const<32, true>();
             }
             else
             {
-                bitonic_topk_inc_x8_dest(8, false);
+                bitonic_topk_inc_dest_const<8, false>();
             }
         }
         dir = ((blk + 1) * 16 * inner_d == sorted_seq_length) ? !dir : dir;
@@ -2385,7 +2601,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                                 bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                 bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                bitonic_topk_inc_x8_dest(64, false);
+                                bitonic_topk_inc_dest_const<64, false>();
                             }
                             else
                             {
@@ -2399,7 +2615,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                                             bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                             bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                             bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                            bitonic_topk_inc_x8_dest(64, false);
+                                            bitonic_topk_inc_x8_dest(64, false); // rebuild_win_ld8 counts these 8 words
                                         });
                                     init_rebuild = false;
                                 }
