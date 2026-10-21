@@ -30,8 +30,13 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& index_dtype{index_tensor.dtype()};
     const auto& src_dtype{src_tensor.dtype()};
 
+    // Compared as untilized: ttnn::scatter runs these checks on the caller's tensors, then untilizes TILE
+    // operands, which turns BFLOAT8_B into BFLOAT16. So a BFLOAT8_B operand and a BFLOAT16 one reach the
+    // kernels with the same dtype. On the row-major tensors the device operation receives, this is the
+    // plain comparison.
     TT_FATAL(
-        input_dtype == src_dtype,
+        ttnn::operations::data_movement::untilize_output_dtype(input_dtype) ==
+            ttnn::operations::data_movement::untilize_output_dtype(src_dtype),
         "input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
         enchantum::to_string(input_dtype),
         enchantum::to_string(src_dtype));
