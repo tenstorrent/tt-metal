@@ -8,7 +8,7 @@ import torch
 from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
 from helpers.format_config import DataFormat
 from helpers.golden_generator.heavyweight.mismatch import describe_mismatch
-from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+from helpers.golden_generator.heavyweight.operations import (
     QuasarEltwiseBinaryReuseDestGolden,
 )
 from helpers.llk_params import (
