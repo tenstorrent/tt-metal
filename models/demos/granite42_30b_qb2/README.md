@@ -5,9 +5,9 @@ Run `ibm-granite/granite-4.2-30b` on two P300 cards (four Blackhole devices,
 `9e668ce1c538387ef24d3644e9b0606647762636`.
 
 The implementation supports 1–16 requests, decode buckets 1/8/16, and a shared
-327,680-token KV pool. That pool is shared across requests; it is not 131,072
+655,360-token KV pool. That pool is shared across requests; it is not 131,072
 tokens per request at batch 16. Prefill uses chunks up to 1024 tokens. Prefix
-caching is not supported. Configured capacity does not establish accuracy at
+caching is supported and enabled in the release configuration. Configured capacity does not establish accuracy at
 maximum context.
 
 The selected precision policy is in `tt/precision_config.json`: BFP4 decoder
@@ -43,7 +43,7 @@ vllm serve ibm-granite/granite-4.2-30b \
   --tokenizer-revision 9e668ce1c538387ef24d3644e9b0606647762636 \
   --max-model-len 131072 --max-num-seqs 16 \
   --block-size 32 --max-num-batched-tokens 1024 --enable-chunked-prefill \
-  --no-enable-prefix-caching --hf-overrides '{"architectures":["TTGraniteForCausalLM"]}' \
+  --enable-prefix-caching --enable-prompt-tokens-details --hf-overrides '{"architectures":["TTGraniteForCausalLM"]}' \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
   --additional-config '{"tt":{"fabric_config":"FABRIC_1D_RING","sample_on_device_mode":"all","trace_region_size":134217728}}'
 ```
@@ -86,7 +86,8 @@ Weekly CI uses the Agentic Research model-tests pipeline.
 The `granite42-30b-qb2` entry in `Agentic Research Model Tests` runs
 `tests/run_ci.sh` on `bh_quietbox_2`. It runs the host contracts, token-history
 trace and external-cache device regressions, reasoning-channel and partial-batch
-API checks, warmed serving at concurrency 1/8/16, and the first ten GPQA Diamond
+API checks, cold-versus-cached comparisons for ten concurrent requests with aligned
+and unaligned cached prefixes, warmed serving at concurrency 1/8/16, and the first ten GPQA Diamond
 questions with a 32K output budget and thinking enabled. The subset gate is 6/10;
 this is CI regression coverage, not a full-set accuracy or GPU-parity claim.
 Fixed-length performance uses raw token continuations and checks completion;
@@ -94,7 +95,7 @@ Shield separately grades release performance targets and Terminal/SWE results.
 
 Dispatch the workflow on this PR branch with model `granite42-30b-qb2`,
 sku `bh_quietbox_2`, tier `3`, and plugin ref
-`0a76258e14ca7237067ca9a22ec02e257bee570a`. The initial 60-minute allowance
+`a2500313c990b129d78b74dadca312ed696caca0`. The initial 60-minute allowance
 includes device tests, model startup, reasoning and setup variance; phase timings
 in the artifacts allow recalibration after a complete run. The weights must be
 available in the runner's pinned Hugging Face cache.
