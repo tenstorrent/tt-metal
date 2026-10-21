@@ -1191,6 +1191,7 @@ def _finish_ulp_emit(session):
     import yaml
 
     from . import ulp_sweep
+    from .ulp_table import TABLE_PATH
 
     if not ulp_sweep.EMIT:
         return
@@ -1204,11 +1205,9 @@ def _finish_ulp_emit(session):
         if not ulp_sweep.MEASURED:
             raise RuntimeError("nothing was measured, so the table was not touched")
         # The hook also runs after a Ctrl-C, with INTERRUPTED already in `exitstatus`.
-        message = ulp_sweep.finish_emit(
-            get_chip_architecture(),
-            session.testsfailed,
-            exitstatus=session.exitstatus,
-        ).summary()
+        clean = session.testsfailed == 0 and session.exitstatus == pytest.ExitCode.OK
+        written = ulp_sweep.finish_emit(get_chip_architecture(), clean, TABLE_PATH)
+        message = f"--ulp-emit: rewrote {len(written)} op(s) in {TABLE_PATH.name}"
     except (RuntimeError, ValueError, yaml.YAMLError) as exc:
         message = f"--ulp-emit: {exc}"
         if session.exitstatus == pytest.ExitCode.OK:
