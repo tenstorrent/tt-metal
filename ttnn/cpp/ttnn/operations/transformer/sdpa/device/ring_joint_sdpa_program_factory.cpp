@@ -1432,8 +1432,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    // K/V CB depth in chunks. Default 2 (double buffer). TT_SOL_KV_PAGES=3|4 is a measurement knob (not hashed:
+    // set it for the whole process): the store-and-forward chain is ~10 cores deep and the sparse op's time per
+    // chunk visit measures as reader time PLUS compute time rather than the larger of the two, which a 2-deep
+    // buffer cannot decouple across that many hops. Costs Sk_chunk_t * (DHt + vDHt) tiles of L1 per extra page.
+    const uint32_t kv_cb_pages = [&]() -> uint32_t {
+        const char* env = std::getenv("TT_SOL_KV_PAGES");
+        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : 2u;
+        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : 2u;
+    }();
+    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : kv_cb_pages);
+    uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -3271,6 +3280,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
+        // K/V CB depth in chunks (see kv_cb_pages above); the chain's end-of-iteration phase alignment uses it.
+        {"kv_cb_pages", kv_cb_pages},
         // Sol-Attn block-sparse mode (all zero / inactive CB ids when off).
         {"sol_enabled", sol_enabled ? 1u : 0u},
         {"sol_chunk_mode", sol_chunk_mode ? 1u : 0u},

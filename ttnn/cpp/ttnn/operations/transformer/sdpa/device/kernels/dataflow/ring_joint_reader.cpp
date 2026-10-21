@@ -582,6 +582,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
+    // K/V CB depth in chunks (factory kv_cb_pages, default 2); only the end-of-iteration phase alignment needs it.
+    constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
     constexpr uint32_t kSolBlockTiles = 2;  // 64-token blocks
     constexpr uint32_t sol_bias_tile_bytes = get_tile_size(cb_sol_bias);
 
@@ -2328,8 +2330,8 @@ void kernel_main() {
         }
         if constexpr (!has_sliding_window) {
             for (uint32_t dummy_chunk = 0;
-                 dummy_chunk <
-                 dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
+                 dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v, kv_cb_pages>(
+                                   KV_chunks_processed_in_iter);
                  ++dummy_chunk) {
                 CircularBuffer cb_k_dummy(cb_k_in);
                 cb_k_dummy.reserve_back(k_chunk_tiles);

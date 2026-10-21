@@ -241,6 +241,8 @@ void kernel_main() {
     // reach compute, so there is nothing here to drain and no extra CB to name.
     constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
+    // K/V CB depth in chunks (factory kv_cb_pages, default 2): the end-of-iteration phase alignment pads to it.
+    constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
     static_assert(!sol_pack || sol_compact, "Q2 packing builds on compact-mode block selection");
     static_assert(!sol_enabled || (!ksplit_enabled && !seg_accum_enabled), "Sol-Attn excludes the K split");
     static_assert(!(ksplit_enabled && seg_accum_enabled));
@@ -669,7 +671,8 @@ void kernel_main() {
                 sol_drain_all,
                 sol_compact,
                 sol_pack,
-                sol_blocks_per_page>(
+                sol_blocks_per_page,
+                kv_cb_pages>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,

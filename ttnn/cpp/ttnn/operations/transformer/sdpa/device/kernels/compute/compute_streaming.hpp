@@ -2605,7 +2605,9 @@ template <
     // words are added either; reader and compute walk the same kept bitmask and derive identical page
     // boundaries. The loop's unit becomes the page, so k_chunk is a page ordinal under sol_pack.
     bool sol_pack = false,
-    uint32_t sol_blocks_per_page = 1>
+    uint32_t sol_blocks_per_page = 1,
+    // K/V CB depth in chunks; the end-of-iteration phase alignment pads to a whole number of cycles of it.
+    uint32_t kv_cb_pages = 2>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -3562,8 +3564,8 @@ void sdpa_ring_v2(
     // per-core reads so each core can prune a different K range and needs no phase padding.
     if constexpr (!has_sliding_window) {
         for (uint32_t dummy_chunk = 0;
-             dummy_chunk <
-             dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
+             dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v, kv_cb_pages>(
+                               KV_chunks_processed_in_iter);
              ++dummy_chunk) {
             CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
             sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
