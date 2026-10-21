@@ -15,6 +15,7 @@ from ttml.common.utils import (
     build_causal_mask,
     deallocate_tensors,
     no_grad,
+    repeat_interleave,
     resolve_pad_token_id,
     round_up_to_tile,
     run_mode,
@@ -286,7 +287,7 @@ class TTMLRolloutSampler(RolloutSampler):
         mesh_device = self._mesh_device
 
         G = self._completions_per_prompt
-        rows: List[List[int]] = [list(p) for p in prompts for _ in range(G)]
+        rows: List[List[int]] = repeat_interleave(prompts, G)
         B = len(rows)
         num_shards = self._batch_layout.num_shards
         assert B % num_shards == 0, f"batch {B} must be divisible by num_shards {num_shards}"

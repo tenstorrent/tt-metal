@@ -24,6 +24,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
+from ttml.common.utils import repeat_interleave
 
 from ..grpo_trainer import RolloutBatch, RolloutSampler
 from ..rollout_batch_source import pad_logprobs, validate_rollout_batch
@@ -179,7 +180,7 @@ class TTTRolloutSampler(RolloutSampler):
             raise RuntimeError("TTTRolloutSampler has dummy weights; call update_weights before generate")
         version = self._weight_version
         g, W = self._completions_per_prompt, self._max_completion_length
-        prompts_x = [list(p) for p in prompts for _ in range(g)]
+        prompts_x = repeat_interleave(prompts, g)
         completions: List[List[int]] = []
         token_logprobs: List[List[float]] = []
         for start in range(0, len(prompts_x), self._slots_per_call):
