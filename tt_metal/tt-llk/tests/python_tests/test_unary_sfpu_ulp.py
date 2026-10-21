@@ -21,7 +21,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import FastMode, format_dict
 from helpers.sfpu_accuracy_budget import accuracy_contract, domains_of, enrolled_ops
-from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+from helpers.sfpu_domains import swept_unary_ops
 from helpers.stimuli_generator import generate_stimuli
 from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance, ulp_stats
 from helpers.ulp_domains import partition, usable_budget_ceiling
@@ -98,8 +98,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
 def _sweep_ops():
     """Every unary op with a row in the table, gating or emitting: the row is the
     enrolment, and an op without one has nowhere to be written."""
-    unary = set(sfpu_unary_ops()) - set(_UNARY_OPS_NOT_SWEPT)
-    return sorted(set(enrolled_ops()) & unary, key=lambda op: op.name)
+    return sorted(set(enrolled_ops()) & swept_unary_ops(), key=lambda op: op.name)
 
 
 def _skip_measured(cell, why):

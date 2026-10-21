@@ -42,7 +42,7 @@ from helpers.sfpu_accuracy_budget import (
     resolve_contract,
     validate_registry,
 )
-from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+from helpers.sfpu_domains import sfpu_unary_ops, swept_unary_ops
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import ULP_FORMATS, has_ulp_gate, mantissa_bits, ulp_dtype
 from helpers.ulp_domains import Domain, Problem, usable_budget_ceiling
@@ -773,7 +773,7 @@ def test_every_driven_variant_of_an_exact_op_is_gated():
 def _swept_exact_ops():
     """The exact ops the exhaustive sweep drives: every sign-bit/copy/integer op, and
     the unary members of EXACT_ZERO_BY_CONSTRUCTION it has a domain for."""
-    swept = set(sfpu_unary_ops()) - set(_UNARY_OPS_NOT_SWEPT)
+    swept = swept_unary_ops()
     return sorted(
         set(EXACT_BY_CONSTRUCTION)
         | {op for op in EXACT_ZERO_BY_CONSTRUCTION if op in swept},
@@ -1149,7 +1149,7 @@ def test_every_unary_op_is_enrolled_or_excused():
     the table, so every unary op either has a row or `_UNARY_OPS_NOT_SWEPT` says why
     not."""
     unaccounted = sorted(
-        set(sfpu_unary_ops()) - set(enrolled_ops()) - set(_UNARY_OPS_NOT_SWEPT),
+        set(swept_unary_ops()) - set(enrolled_ops()),
         key=lambda op: op.name,
     )
     assert (
