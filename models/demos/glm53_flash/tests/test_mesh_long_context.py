@@ -115,6 +115,10 @@ def build_needle_ids(tok, n_tokens: int, depth: float) -> tuple[list[int], str]:
     def prompt(n_sent: int) -> str:
         a = filler_sentences(max(1, int(n_sent * depth)), seed=1)
         b = filler_sentences(max(1, n_sent - int(n_sent * depth)), seed=2)
+        if (
+            os.environ.get("GLM53_LONG_NO_QUESTION", "0") == "1"
+        ):  # filler only: the model continues it (near-tie numbers)
+            return f"{a} {NEEDLE} {b}"
         return f"{a} {NEEDLE} {b}\n\n{QUESTION}"
 
     n_sent = max(2, n_tokens // 20)

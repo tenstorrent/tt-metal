@@ -38,6 +38,11 @@ LAYER = 3
 ROWS, COLS = (int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))  # (8,4) = the whole Galaxy
 B = 4  # users per row = one per column
 DUMPS = ["R4097", "R2040", "R2042", "R2043"]
+# GLM53_SPARSE_SAME_USER=1: every user gets the R4097 prompt (sparse rows) and the four users of a row must decode
+# byte-equal (the 1 M x 32-user runs: slot 3 of a row diverges from slots 0-2 at near-ties; doc/mesh/README.md)
+SAME_USER = os.environ.get("GLM53_SPARSE_SAME_USER", "0") == "1"
+if SAME_USER:
+    DUMPS = ["R4097"] * 4
 REF = Path("bringup/references/glm53_flash")
 
 
@@ -86,12 +91,22 @@ def test_partitioned_two_rows_four_users(mesh_device):
     streams_dev = mesh.upload(_packed([steps[0][u % B]["x_in"] for u in range(U)]), ttnn.float32, rows=2)
     dp = dec.make_decode_positions(positions)
     results = []
+    slot_mismatch = []
 
     def check(out_dev, s, mode):
         shards = [ttnn.to_torch(d).float() for d in mesh.device_tensors(out_dev)]  # [1,1,B,16384] per chip
         for r in range(ROWS):
             for c in range(1, COLS):
                 assert torch.equal(shards[r * COLS + c], shards[r * COLS]), (s, r, c, "columns differ")
+        if SAME_USER:
+            for r in range(ROWS):
+                for u in range(1, B):
+                    a, b = shards[r * COLS][0, 0, 0], shards[r * COLS][0, 0, u]
+                    if not torch.equal(a, b):
+                        slot_mismatch.append((s, r, u, float((a - b).abs().max()), int((a != b).sum())))
+            logger.info(
+                f"  step {s} ({mode}): slots {'byte-equal' if not slot_mismatch else 'DIFFER'} ({len(slot_mismatch)} so far)"
+            )
         for r in range(ROWS):
             for u in range(B):
                 d = steps[s][u]
@@ -128,6 +143,11 @@ def test_partitioned_two_rows_four_users(mesh_device):
     worst = min(r[4] for r in results)
     logger.info(f"partitioned ({ROWS},{COLS}): worst pcc {worst:.6f} over {len(results)} (step, row, user) samples")
     assert all(r[4] > 0.995 for r in results), [r for r in results if r[4] <= 0.995]
+    if SAME_USER:
+        logger.info(
+            f"same prompt in every slot: {'byte-equal' if not slot_mismatch else 'SLOTS DIFFER'} {slot_mismatch[:8]}"
+        )
+        assert not slot_mismatch, slot_mismatch[:8]
 
 
 @pytest.mark.timeout(3600)

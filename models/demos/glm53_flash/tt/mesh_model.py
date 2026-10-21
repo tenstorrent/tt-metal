@@ -11,6 +11,7 @@ Memory per chip at 8x4: experts 42 layers x 7.7 GB / 32 ~ 10 GB, non-expert weig
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -57,6 +58,34 @@ class GLM53MeshModel:
         self.max_batch = max_batch  # per row
         self.total_users = max_batch * self.mesh.rows
         self.max_seq_len = max_seq_len
+        if os.environ.get("GLM53_PREFILL_EXPERTS", "blocks") == "auto":
+            # the regions prefill path, with the stacked expert copy kept for the decode block op when the memory
+            # planner says both fit beside the caches of (max_batch users per row x max_seq_len); resolved for the
+            # whole process before the layers are built (tt/moe.py reads the knobs at construction)
+            from models.demos.glm53_flash.tt.memory_plan import BF16_BYTES, BFP4_BYTES, BFP8_BYTES, MemoryPlan
+
+            eb = {ttnn.bfloat8_b: BFP8_BYTES, ttnn.bfloat4_b: BFP4_BYTES, ttnn.bfloat16: BF16_BYTES}.get(
+                expert_dtype, BFP8_BYTES
+            )
+            partition = os.environ.get("GLM53_PARTITION_USERS", "0") == "1"
+            scratch = os.environ.get("GLM53_PREFILL_PARTITION", "scratch") != "heads2users"
+            plan = MemoryPlan.estimate(
+                cfg,
+                self.mesh.rows,
+                self.mesh.cols,
+                partition=partition,
+                expert_bytes=eb,
+                keep_stacked=True,
+                scratch_slot=scratch,
+                trace_mb=int(os.environ.get("GLM53_MODEL_TRACE_MB", "512")),
+            )
+            keep = plan.fits(max_batch, max_seq_len)
+            os.environ["GLM53_PREFILL_EXPERTS"] = "regions"
+            os.environ["GLM53_REGIONS_KEEP_STACKED"] = "1" if keep else "0"
+            logger.info(
+                f"mesh model: GLM53_PREFILL_EXPERTS=auto -> regions prefill, stacked decode copy "
+                f"{'kept' if keep else 'dropped (does not fit beside the caches)'} for {max_batch} users/row x {max_seq_len}"
+            )
         snapshot = snapshot or default_snapshot_dir()
         headers = shard_headers(snapshot)
         t0 = time.time()
