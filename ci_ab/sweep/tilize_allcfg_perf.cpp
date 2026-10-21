@@ -302,7 +302,7 @@ inline bool pack_block_ok(const std::uint32_t pack_dst_format, const std::uint32
            (!IS_BFP_FORMAT(pack_dst_format) || (TA_BFP_CLOSED && !_llk_pack_skip_bh_tilize_workaround_wrapper_(unpack_src_format)));
 }
 
-inline void pack_tilize_block(const std::uint32_t num_tiles, const std::uint32_t unpack_src_format, const std::uint32_t pack_dst_format)
+inline void pack_tilize_block(const std::uint32_t num_tiles, const std::uint32_t unpack_src_format, [[maybe_unused]] const std::uint32_t pack_dst_format)
 {
 #if TA_BFP_CLOSED
     if (IS_BFP_FORMAT(pack_dst_format))
