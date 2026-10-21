@@ -1,0 +1,25 @@
+# Validation only, not for main.
+
+- name: llk_perf_blackhole group 1/200
+  split_group: 1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_blackhole.sh {split_group} 200
+  skus:
+    bh_p150b_civ2:
+      timeout: 60
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_wormhole group 1/200
+  split_group: 1
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} 200
+  skus:
+    wh_n150_civ2:
+      timeout: 60
+  owner_id: U09UC143684 # Nemanja Divnic

@@ -211,6 +211,7 @@ jobs:
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           MATRIX_CMD: ${{ matrix.test-group.cmd }}
         run: |
+          exit 1
           python3 tests/llk_perf_offload.py pack --cmd "$MATRIX_CMD" \
             --out "$RUNNER_TEMP/shadow/llk-elfs-${CHIP_ARCH}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}.tar.zst" \
             --junit tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
