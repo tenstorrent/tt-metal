@@ -20,9 +20,11 @@
 //
 // Steps 1 and 7 (complex_mul_safe) use a 1024-element chunked path when
 // P = N > 1024.  If P%1024 ≠ 0, the function falls back to ttnn::pad (Case B),
-// which allocates CB ≈ 17 × P_pad × elem_bytes.  This is safe for P < ~16 K
-// (fp32) or ~32 K (bf16), but overflows L1 for larger non-1024-aligned N.
-// Callers must restrict to P%1024==0 when P*elem_bytes > 64 KB.
+// which now runs the single-core pad_rm_reader_writer factory
+// (use_multicore=false).  That factory clamps its CB page count to the L1
+// budget, so Case B works for any P_pad whose row itself fits in roughly
+// half of L1 — ~128 K (fp32) or ~256 K (bf16).  Larger non-aligned N still
+// needs the proper streaming kernel (tracked as future work).
 //
 // Step 3 / 5 each lower to either the SingleTileStockham factory
 // (M ≤ 1024) or fft_two_pass (1024 < M ≤ 1M).  Chirp_n, chirp_k, and
@@ -248,37 +250,43 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> complex_mul_safe(
 
     // Case B: P not divisible by 1024 — pad to P_pad, multiply, slice back.
     //
-    // L1 capacity constraint: ttnn::pad allocates CB ≈ 17 × output_page_bytes.
-    // For large P (P_pad × elem_bytes > kBluesteinRebankThreshold), this
-    // overflows the 1.5 MB L1 limit.  The concat-based alternative also
-    // overflows (CB = 2 × P_pad × elem_bytes).
+    // Previous implementation used ttnn::pad with use_multicore=true, whose
+    // async kernel allocates CB ≈ 17 × output_page_bytes and overflows L1
+    // once the padded row exceeds ~64 KB.  Switching to use_multicore=false
+    // routes to pad_rm_reader_writer, which clamps its page count to
+    // clamp(l1_budget / page_bytes, 1, 16) — so CB_total ≤ l1_budget and
+    // the operation succeeds for any padded row that itself fits in L1
+    // (roughly ≤ 512 KB per row to leave headroom for complex_mul state).
     //
-    // Callers must ensure P × elem_bytes ≤ kBluesteinRebankThreshold when
-    // using this function.  In Bluestein, steps 1 and 7 multiply (B, N)
-    // tensors; for large N the Bluestein planner must only schedule this path
-    // for N < ~16 K (fp32) or ~32 K (bf16).  Larger non-1024-aligned N
-    // requires a new streaming kernel (tracked as a future enhancement).
+    // That lifts the non-1024-aligned N cap from ~16 K (fp32) / ~32 K (bf16)
+    // up to ~128 K (fp32) / ~256 K (bf16), covering common audio lengths
+    // (44100, 48000, 22050) without a new kernel.
     const uint32_t P_pad = (P + 1023u) & ~1023u;
     const uint32_t pad_len = P_pad - P;
 
     const uint32_t elem_bytes = (ar.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
+    // Single-core pad lays out one output row per CB page; keep headroom for
+    // the downstream complex_mul_chunked state (~1 MB of CBs) by capping the
+    // padded row at ~512 KB.  Larger non-aligned N needs the proper streaming
+    // kernel (future work).
+    constexpr uint64_t kCaseBPaddedRowCapBytes = 512ull * 1024ull;
     TT_FATAL(
-        (uint64_t)P_pad * elem_bytes <= kBluesteinRebankThreshold,
-        "complex_mul_safe Case B: P_pad×elem_bytes = {} exceeds L1 rebank threshold {} "
-        "(would overflow the 1.5 MB L1 via the ~17× ttnn::pad CB). "
-        "Restrict non-1024-aligned N to N×elem_bytes ≤ {} bytes.",
+        (uint64_t)P_pad * elem_bytes <= kCaseBPaddedRowCapBytes,
+        "complex_mul_safe Case B: P_pad×elem_bytes = {} exceeds the single-core "
+        "pad row cap of {} bytes.  Restrict non-1024-aligned N so the row fits.",
         (uint64_t)P_pad * elem_bytes,
-        kBluesteinRebankThreshold,
-        kBluesteinRebankThreshold);
+        kCaseBPaddedRowCapBytes);
 
     const ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
         {{0u, 0u}},
         {{0u, pad_len}},
     };
-    auto ar_p = ttnn::pad(ar, padding, 0.0f, /*use_multicore=*/true, mc);
-    auto ai_p = ttnn::pad(ai, padding, 0.0f, /*use_multicore=*/true, mc);
-    auto br_p = ttnn::pad(br, padding, 0.0f, /*use_multicore=*/true, mc);
-    auto bi_p = ttnn::pad(bi, padding, 0.0f, /*use_multicore=*/true, mc);
+    // use_multicore=false → pad_rm_reader_writer, which caps CB pages to the
+    // L1 budget (see pad_rm_reader_writer_program_factory.cpp).
+    auto ar_p = ttnn::pad(ar, padding, 0.0f, /*use_multicore=*/false, mc);
+    auto ai_p = ttnn::pad(ai, padding, 0.0f, /*use_multicore=*/false, mc);
+    auto br_p = ttnn::pad(br, padding, 0.0f, /*use_multicore=*/false, mc);
+    auto bi_p = ttnn::pad(bi, padding, 0.0f, /*use_multicore=*/false, mc);
 
     auto [cr_p, ci_p] = complex_mul_chunked(ar_p, ai_p, br_p, bi_p, B, P_pad);
 
@@ -343,6 +351,34 @@ ttnn::Tensor zero_pad_to_m(const ttnn::Tensor& t, uint32_t M) {
             ttnn::Shape{ttnn::SmallVector<uint32_t>{pad_chunks, 1024u}}, t.dtype(), t.layout(), std::ref(*dev), mc);
         auto stacked = ttnn::concat({rebankd, zeros_r}, /*dim=*/0);
         return ttnn::prim::rebank_rm_merge(stacked, M / 1024u);
+    }
+
+    // Non-aligned N with large M: the rebank fast path above needs
+    // N % 1024 == 0, and plain column-concat with (B, M-N) zeros would
+    // allocate CB = 2 × M × elem_bytes which overflows L1 for M ≥ 131072.
+    //
+    // Two-step path: first pad (B, N) → (B, N_up) using single-core ttnn::pad
+    // (CB ≈ one row at a time, fits for N_up × elem ≤ ~512 KB), then recurse
+    // into the fast path which handles the much larger M via rebank chunks.
+    if ((uint64_t)M * elem_bytes > kBluesteinRebankThreshold && N % 1024u != 0u) {
+        const uint32_t N_up = (N + 1023u) & ~1023u;
+        constexpr uint64_t kSingleCorePadRowCapBytes = 512ull * 1024ull;
+        TT_FATAL(
+            (uint64_t)N_up * elem_bytes <= kSingleCorePadRowCapBytes,
+            "zero_pad_to_m: N_up×elem_bytes = {} exceeds single-core pad row cap of {} B "
+            "(N={}, M={}).",
+            (uint64_t)N_up * elem_bytes,
+            kSingleCorePadRowCapBytes,
+            N,
+            M);
+        const ttnn::SmallVector<std::array<uint32_t, 2>> pad_up = {
+            {{0u, 0u}},
+            {{0u, N_up - N}},
+        };
+        // use_multicore=false → pad_rm_reader_writer (clamped CB).
+        auto t_up = ttnn::pad(t, pad_up, 0.0f, /*use_multicore=*/false, mc);
+        // Recurse with N_up (1024-aligned), which hits the rebank fast path.
+        return zero_pad_to_m(t_up, M);
     }
 
     // Fallback: (B, M-N) zeros, column-concatenated.  CB = 2 × M × elem_bytes.

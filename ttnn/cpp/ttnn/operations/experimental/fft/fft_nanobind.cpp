@@ -161,10 +161,11 @@ void bind_experimental_fft_operation(nb::module_& mod) {
                   treated as the complex signal ``input_real + i * input_imag``;
                   when omitted, the imaginary part is taken to be zero.
                 * Non-power-of-two ``N`` that is not a multiple of 1024 must
-                  satisfy ``N <= 16384`` (Float32) or ``N <= 32768`` (BFloat16).
-                  Larger lengths are supported when ``N`` is a multiple of 1024.
-                  (Support for larger non-aligned ``N`` and for ``N > 2^30``
-                  will land in follow-up PRs.)
+                  satisfy ``N <= 131072`` (Float32) or ``N <= 262144`` (BFloat16).
+                  Common audio lengths (``44100``, ``48000``, ``22050``) all go
+                  through the Bluestein chirp-Z path. Larger ``N`` is supported
+                  when it is a multiple of 1024 (up to ``N <= 2^30``).
+                  (Support for ``N > 2^30`` will land in a follow-up PR.)
                 * :attr:`precision` (str, default ``"precise"``):
                   ``"precise"`` → SFPU true-fp32 path (matches ``torch.fft``
                   precision; round-trip ~1e-7).

@@ -141,12 +141,24 @@ def test_tile_layout_is_auto_converted(device, N):
     assert rel < 2e-3, f"TILE auto-convert N={N} rel err {rel:.2e}"
 
 
-def test_large_unaligned_length_is_rejected(device, expect_error):
-    """N=44100 is a common audio length. Still rejected on this tree (fix lands in
-    a follow-up PR); the error must say 'multiple of 1024'."""
-    tt_in = _from_torch(torch.randn(1, 44100), device, ttnn.float32)
-    with expect_error(RuntimeError, "multiple of 1024"):
-        ttnn.experimental.fft(tt_in)
+@pytest.mark.parametrize("N", [44100, 48000, 22050])
+def test_large_unaligned_length_works(device, N):
+    """Common audio lengths (not pow-2 and not a multiple of 1024) go through
+    Bluestein's chirp-Z. The Case-B / zero_pad_to_m paths now use single-core
+    ttnn.pad (clamped-CB) instead of the 17x multicore pad, so lengths up to
+    ~128 K (fp32) work without a dedicated streaming kernel."""
+    torch_in = torch.randn(1, N, dtype=torch.float32)
+    tt_in = _from_torch(torch_in, device, ttnn.float32)
+    real, imag = ttnn.experimental.fft(tt_in)
+    assert real.shape == tt_in.shape, f"N={N}: shape {real.shape} != input {tt_in.shape}"
+    got = torch.complex(
+        ttnn.to_torch(real).reshape(-1).to(torch.float32),
+        ttnn.to_torch(imag).reshape(-1).to(torch.float32),
+    )
+    rel = _rel_err(got, torch.fft.fft(torch_in.reshape(-1)))
+    # Bluestein tolerance: single-precision chirp-Z accumulates more
+    # rounding error than a plain radix-2 pass, especially for long N.
+    assert rel < 5e-3, f"N={N} rel err {rel:.2e} exceeds 5e-3"
 
 
 def test_rank3_large_n_keeps_input_shape(device):

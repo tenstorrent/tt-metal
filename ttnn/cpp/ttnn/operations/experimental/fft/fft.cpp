@@ -382,10 +382,16 @@ bool three_pass_eligible(const ttnn::Tensor& t) {
 // Bluestein eligible: non-pow-2 N where M = next_pow2(2N-1) ≤ 2^30.
 // Covers N up to ~715M for the XL range once three-pass inner FFTs are
 // available.
-// complex_mul_safe Case B pads a non-1024-aligned row up to the next multiple
-// of 1024 and then runs ttnn::pad, whose circular buffer is about 17 times the
-// padded row. That overflows L1 once the padded row exceeds 64 KB, which is
-// N > 16384 for fp32 and N > 32768 for bf16 when N is not a multiple of 1024.
+//
+// Non-1024-aligned N is handled by complex_mul_safe Case B and
+// zero_pad_to_m's non-aligned branch, both of which now pad with
+// ttnn::pad(use_multicore=false) → the pad_rm_reader_writer factory
+// clamps CB page count to the L1 budget, so correctness holds for any
+// padded row that itself fits in roughly half of L1 (we cap at 512 KB
+// per row to leave headroom for the complex_mul and FFT state).
+// That allows N up to ~128 K (fp32) or ~256 K (bf16) when N is not a
+// multiple of 1024; larger aligned N keeps working unchanged.
+static constexpr uint64_t kBluesteinNonAlignedRowCapBytes = 512ull * 1024ull;
 static void ensure_bluestein_row_fits(const ttnn::Tensor& real, const char* op_name) {
     const uint32_t N = static_cast<uint32_t>(real.padded_shape()[-1]);
     if ((N % 1024u) == 0u) {
@@ -394,14 +400,14 @@ static void ensure_bluestein_row_fits(const ttnn::Tensor& real, const char* op_n
     const uint32_t elem_bytes = (real.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
     const uint32_t n_pad = (N + 1023u) & ~1023u;
     TT_FATAL(
-        static_cast<uint64_t>(n_pad) * elem_bytes <= kRebankThresholdBytes,
-        "{}: non-power-of-two length N={} is not supported. When N is not a multiple of 1024, "
-        "the row is padded to the next multiple of 1024 ({}) and that padded row must be at most {} bytes. "
-        "That allows N <= 16384 for Float32 and N <= 32768 for BFloat16, or any larger N that is a multiple of 1024.",
+        static_cast<uint64_t>(n_pad) * elem_bytes <= kBluesteinNonAlignedRowCapBytes,
+        "{}: non-power-of-two length N={} is not supported.  When N is not a multiple of 1024, "
+        "the row is padded to the next multiple of 1024 ({}) and that padded row must be at most {} bytes.  "
+        "That allows N <= 131072 for Float32 and N <= 262144 for BFloat16, or any larger N that is a multiple of 1024.",
         op_name,
         N,
         n_pad,
-        kRebankThresholdBytes);
+        kBluesteinNonAlignedRowCapBytes);
 }
 
 bool bluestein_eligible(const ttnn::Tensor& t) {
