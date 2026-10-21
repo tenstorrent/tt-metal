@@ -41,7 +41,7 @@ from models.demos.common.bringup.reference.interface import Ctx
 
 DEFAULT_THRESHOLDS = {
     k: defaults.get(f"thresholds.{k}")
-    for k in ("component", "block", "layer", "state", "state_overlap", "final_hidden", "top5")
+    for k in ("component", "block", "layer", "state", "state_overlap", "state_overlap_waived", "final_hidden", "top5")
 }
 
 
