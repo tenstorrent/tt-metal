@@ -202,6 +202,28 @@ BlockPlan make_block_plan(
     uint32_t tile_width,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
+// The part of make_block_plan's split that free L1 decides. When the unconstrained block does not
+// fit, the split falls back to the smaller `sizes` (nullopt if none fits); everything else in the
+// plan follows from the shapes and the grid. Two calls with equal attributes and tensor specs build
+// the same plan exactly when this is equal, so a compute_program_hash can key on it per dispatch
+// without building the plan. The output is given by its padded shape, since a hash has no output
+// tensor.
+struct BlockL1Fit {
+    bool l1_limited = false;
+    std::optional<ttnn::NcoresWHsb> sizes;
+};
+
+BlockL1Fit block_l1_fit(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
 // a downstream size check only catches that when the widths happen to differ numerically.
