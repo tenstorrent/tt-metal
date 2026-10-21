@@ -35,9 +35,17 @@ static constexpr std::uint32_t DST_INDEX = 0;
 
 // The tile geometry is parametrized by the Python test: the full 32x32 tile
 // (2x2 faces, num_faces=4) plus the 16x32 (1x2, num_faces=2) and 16x16 (1x1,
-// num_faces=1) "tiny tiles". Only num_faces_{r,c}_dim vary; face_r_dim /
-// face_c_dim stay at the full 16 (FACE_R_DIM / FACE_C_DIM). Each thread rebuilds
-// the shape from the runtime params, matching the reduce_test.cpp idiom.
+// num_faces=1) "tiny tiles", and 1x32 to 8x32 tiles with short faces
+// (TEST_FACE_R_DIM rows). Each thread rebuilds the shape from the runtime
+// params, matching the reduce_test.cpp idiom.
+
+// Before the measured op, a poison op unpacks POISON_TILES full 32x32 tiles of
+// 100.0, stored after the input tiles in buffer_A, into every row of both SrcA
+// and SrcB banks, then releases its DEST section with no reduce. The unpackers
+// must zero the SrcA rows that a short face leaves stale, or the reduce sums
+// the stale rows.
+static constexpr std::uint32_t POISON_TILES      = 2;
+static constexpr std::uint32_t POISON_TILE_BYTES = 2 * DEFAULT_TENSOR_SHAPE.total_tensor_size(); // bf16
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -52,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
@@ -63,10 +71,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces());
+        FACE_R_DIM,
+        FACE_R_DIM,
+        DEFAULT_TENSOR_SHAPE.total_num_faces(),
+        DEFAULT_TENSOR_SHAPE.total_num_faces());
+
+    // Poison op (see the file header).
+    _llk_unpack_AB_init_<BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, ckernel::Transpose::None);
+    for (std::uint32_t i = 0; i < POISON_TILES; ++i)
+    {
+        const std::uint32_t poison = L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * POISON_TILE_BYTES);
+        _llk_unpack_AB_<BroadcastType::NONE>(poison, poison);
+    }
+    _llk_unpack_reconfig_tile_shape_srca_(0 /* tile_size */, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
+    _llk_unpack_reconfig_tile_shape_srcb_(0 /* tile_size */, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
 
     // mul_reduce_scalar_init: unpack A and B, no broadcast/transpose.
     _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
@@ -103,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t tile_cnt            = params.TILE_CNT;
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
@@ -115,6 +133,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // kernel; this standalone harness bypasses it, so run the idempotent
     // once-init before the reduce-phase _calculate_fill_ SFPU stores.
     _llk_math_eltwise_unary_sfpu_init_once_();
+
+    // Poison op (see the file header).
+    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+        DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
+    _llk_math_wait_for_dest_available_<DST_SYNC>();
+    for (std::uint32_t i = 0; i < POISON_TILES; ++i)
+    {
+        _llk_math_eltwise_binary_<
+            EltwiseBinaryType::ELWMUL,
+            BroadcastType::NONE,
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            MATH_FIDELITY,
+            EltwiseBinaryReuseDestType::NONE>(DEFAULT_TENSOR_SHAPE, i, true /* clear_fp32_dst_acc */);
+    }
+    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest.
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
@@ -178,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
@@ -201,6 +235,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_SCALAR>();
 
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+
+    // Poison op (see the file header): release its DEST section without packing it.
+    _llk_packer_wait_for_math_done_();
+    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // Single output tile: the scalar lives in DEST[0].
     _llk_packer_wait_for_math_done_();
