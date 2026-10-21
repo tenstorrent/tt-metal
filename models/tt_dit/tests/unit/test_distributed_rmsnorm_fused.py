@@ -1944,9 +1944,13 @@ def test_h3_dynamic_rows_block_norm(mesh_device, tile_row_map):
         row_capacity=_H3_ROW_CAPACITY,
     )
 
+    variants = [(t, False) for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], True)]
+    # Built up front: from_torch tilizes on device, one program per shape, which the flat check must not see.
+    inputs = {v: _h3_block_inputs(mesh_device, v[0], tile_row_map=tile_row_map, in_fp32=v[1]) for v in variants}
+
     def run(variant):
         tile_rows, in_fp32 = variant
-        inp = _h3_block_inputs(mesh_device, tile_rows, tile_row_map=tile_row_map, in_fp32=in_fp32)
+        inp = inputs[variant]
         out = norm(
             inp["x"],
             dynamic_weight=inp["weight"],
@@ -1962,7 +1966,6 @@ def test_h3_dynamic_rows_block_norm(mesh_device, tile_row_map):
         logger.info(f"H3 block norm map={tile_row_map} tile_rows={tile_rows} fp32={in_fp32} pcc={pcc:.6f}")
         assert pcc >= 0.999, f"{variant}: pcc={pcc}"
 
-    variants = [(t, False) for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], True)]
     assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
 
 
@@ -1974,7 +1977,8 @@ def test_h3_dynamic_rows_stats_scratch(mesh_device):
     ring, links = 4, 2
     ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
     sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
-    probe = _h3_block_inputs(mesh_device, _H3_TILE_ROWS[0], tile_row_map=False)
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=False) for t in _H3_TILE_ROWS}  # built up front
+    probe = inputs[_H3_TILE_ROWS[0]]
     spec = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
         probe["x"], tp_axis, mesh_device, num_links=links, weight=probe["weight"], row_capacity=_H3_ROW_CAPACITY
     )
@@ -1991,7 +1995,7 @@ def test_h3_dynamic_rows_stats_scratch(mesh_device):
 
     def run(tile_rows):
         nonlocal calls
-        inp = _h3_block_inputs(mesh_device, tile_rows, tile_row_map=False)
+        inp = inputs[tile_rows]
         pob = pobs[calls % _PINGPONG]
         out = ttnn.experimental.dit_fused_distributed_rmsnorm(
             inp["x"],
@@ -2035,10 +2039,13 @@ def test_h3_dynamic_rows_per_head_rope(mesh_device):
             f"h3_qk_{tile_rows}", FLUX, tp, tile_rows * 32, _H3_QK_DIM, _H3_HEAD_DIM, True, _H3_HEADS, True, True, in_dtype
         )
 
+    variants = [(t, "bf16") for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], "fp32")]
+    inputs = {v: _build(mesh_device, cfg_for(*v), tp_axis) for v in variants}  # built up front (device tilize)
+
     def run(variant):
         tile_rows, in_dtype = variant
         cfg = cfg_for(tile_rows, in_dtype)
-        inp = _build(mesh_device, cfg, tp_axis)
+        inp = inputs[variant]
         out = _call_op(
             inp,
             mesh_device,
@@ -2060,5 +2067,4 @@ def test_h3_dynamic_rows_per_head_rope(mesh_device):
         logger.info(f"H3 per-head rope tile_rows={tile_rows} dtype={in_dtype} pcc={pcc:.6f}")
         assert pcc >= 0.997, f"{variant}: pcc={pcc}"
 
-    variants = [(t, "bf16") for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], "fp32")]
     assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
