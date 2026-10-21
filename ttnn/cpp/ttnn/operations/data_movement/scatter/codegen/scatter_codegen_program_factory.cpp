@@ -305,14 +305,15 @@ bool scatter_interleaved_fits_l1(
     return footprint <= l1_budget;
 }
 
+uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce) {
+    return input_page_bytes + output_page_bytes + (bf16_reduce ? 2 * input_page_bytes : 0);
+}
+
 bool scatter_rm_min_plan_fits_l1(
     uint64_t static_l1, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce) {
-    // Input + output sticks are unconditionally resident; the bf16-reduce factory adds a same-sized
-    // FP32 accumulator stick (2x the BF16 page) on top of that.
-    uint64_t fixed_bytes = 2 * input_page_bytes;
-    if (bf16_reduce) {
-        fixed_bytes += 2 * input_page_bytes;
-    }
+    // The gate runs before the output exists; supported_execution_controls() pins the output's buffer
+    // type to the input's, so the output page is the input's own.
+    const uint64_t fixed_bytes = scatter_rm_fixed_bytes(input_page_bytes, input_page_bytes, bf16_reduce);
     const uint64_t min_chunk_bytes = static_cast<uint64_t>(kRmMinChunkElems) * (index_elem_size + src_elem_size);
     return fixed_bytes + min_chunk_bytes <= static_l1;
 }
@@ -536,7 +537,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     const uint32_t src_page_bytes = static_cast<uint32_t>(src_t.buffer()->aligned_page_size());
     const uint32_t chunk_elems = scatter_rm_chunk_elems(
         scatter_usable_l1(in_t),
-        static_cast<uint64_t>(input_page_bytes) + output_page_bytes,
+        scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, /*bf16_reduce=*/false),
         attributes.index_stick_elems,
         index_elem_size,
         src_elem_size);
@@ -637,9 +638,9 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     const uint32_t fp32_temp_page_bytes = attributes.input_stick_elems * 4;
     const uint32_t chunk_elems = scatter_rm_chunk_elems(
         scatter_usable_l1(in_t),
-        // input + output (BF16) + FP32 accumulator. The accumulator is L1-only scratch sized exactly
-        // input_stick_elems*4 bytes, not a device buffer page; 2x an aligned BF16 page upper-bounds it.
-        static_cast<uint64_t>(input_page_bytes) + output_page_bytes + 2ull * input_page_bytes,
+        // The FP32 accumulator is L1-only scratch of exactly input_stick_elems*4 bytes, not a device
+        // buffer page; 2x an aligned BF16 page upper-bounds it.
+        scatter_rm_fixed_bytes(input_page_bytes, output_page_bytes, /*bf16_reduce=*/true),
         attributes.index_stick_elems,
         index_elem_size,
         src_elem_size);
