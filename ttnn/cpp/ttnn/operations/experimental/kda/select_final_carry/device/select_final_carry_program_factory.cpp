@@ -17,6 +17,7 @@
 
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -253,10 +254,21 @@ tt::tt_metal::WorkloadDescriptor SelectFinalCarryProgramFactory::create_workload
         tt::tt_metal::distributed::Synchronize(
             *mesh, std::nullopt, ttsl::SmallVector<tt::tt_metal::SubDeviceId>{sub_device});
     }
+    // The projection runs on the cores the carry leaves, the same program on every device.
+    std::vector<tt::tt_metal::ProgramDescriptor> projection;
+    if (const auto& config = attrs.projection) {
+        projection.push_back(kda_factory_detail::projection_program(
+            *in.projection_input,
+            *in.projection_weight,
+            outputs[1],
+            config->program_config,
+            0,
+            config->compute_kernel_config));
+    }
     for (const auto& coord : tensor_coords.coords()) {
-        workload.programs.push_back(
-            {ttnn::MeshCoordinateRange(coord),
-             build_program(attrs, in, outputs[0], coord, semaphores[0], semaphores[1])});
+        auto parts = projection;
+        parts.insert(parts.begin(), build_program(attrs, in, outputs[0], coord, semaphores[0], semaphores[1]));
+        workload.programs.push_back({ttnn::MeshCoordinateRange(coord), tt::tt_metal::merge_program_descriptors(parts)});
     }
     return workload;
 }
