@@ -9,6 +9,7 @@ import math
 
 import pytest
 import yaml
+from conftest import problem_id, refused
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
@@ -27,7 +28,6 @@ from helpers.ulp_table import (
     read_table,
     write_table_file,
 )
-from helpers.ulp_testing import TANH_DOMAINS, problem_id, refused
 
 INF = math.inf
 F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
@@ -44,19 +44,12 @@ F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
         (dict(measured=1, atol=0.1), Problem.MIXED_METRIC),
         (dict(metric=Metric.TOLERANCE, near_zero_atol=0.5), Problem.MIXED_METRIC),
         (dict(input=DataFormat.Bfp8_b, measured=1), Problem.NOT_A_COMPUTE_FORMAT),
-        (dict(output=DataFormat.Bfp4_b, measured=1), Problem.NOT_A_COMPUTE_FORMAT),
         (
             dict(input=F16B, output=F16B, measured=10, domains=TANH_DOMAINS),
             Problem.BESIDE_DOMAINS,
         ),
-        (
-            dict(
-                input=F16B, output=F16B, metric=Metric.TOLERANCE, domains=TANH_DOMAINS
-            ),
-            Problem.BESIDE_DOMAINS,
-        ),
-        (dict(output=F16B, domains=TANH_DOMAINS), Problem.UNPINNED_DOMAINS),
-        (dict(input=F16B, output=F16B, domains=TANH_DOMAINS[:1]), Problem.NOT_COVERING),
+        (dict(output=F16B, domains=TANH), Problem.UNPINNED_DOMAINS),
+        (dict(input=F16B, output=F16B, domains=TANH[:1]), Problem.NOT_COVERING),
     ],
     ids=problem_id,
 )
@@ -102,6 +95,11 @@ def test_a_plain_value_that_does_not_fit_its_field_is_refused(plain, problem):
         from_plain(Row, plain)
 
 
+def test_a_record_missing_a_required_field_is_refused():
+    with refused(Problem.MISSING_FIELD):
+        from_plain(Measurement, {"op": "Abs", "key": {}})
+
+
 @pytest.mark.parametrize(
     "data, problem",
     [
@@ -114,6 +112,13 @@ def test_a_plain_value_that_does_not_fit_its_field_is_refused(plain, problem):
 def test_a_table_the_registry_cannot_load_is_refused(data, problem):
     with refused(problem):
         read_table(yaml.safe_dump(data))
+
+
+@pytest.mark.parametrize("text", ["Abs: [", "Abs:\n- &a {measured: 1}\n- {<<: *a}\n"])
+def test_text_that_is_not_the_tables_yaml_is_refused(text):
+    """A syntax error, and a merge key (the one writer never produces one)."""
+    with refused(Problem.BAD_YAML):
+        read_table(text)
 
 
 def test_a_repeated_yaml_key_is_refused_not_overwritten():

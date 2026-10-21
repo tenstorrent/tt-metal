@@ -31,7 +31,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -64,6 +64,7 @@ from helpers.test_variant_parameters import (
     DestSync,
     generate_input_dim,
 )
+from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
 from helpers.utils import passed_test
 
 SUPPORTED_FAST_MODE_OPS = [

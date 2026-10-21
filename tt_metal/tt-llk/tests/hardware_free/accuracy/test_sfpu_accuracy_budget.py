@@ -22,6 +22,7 @@ from itertools import product
 
 import pytest
 import torch
+from conftest import refused
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
@@ -32,7 +33,6 @@ from helpers.llk_params import (
 )
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
-    DEFAULT,
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
@@ -42,7 +42,6 @@ from helpers.sfpu_accuracy_budget import (
     domains_of,
     enrolled_ops,
     resolve_contract,
-    usable_budget_ceiling,
     validate_registry,
 )
 from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
@@ -54,10 +53,9 @@ from helpers.ulp import (
     has_ulp_gate,
     ulp_dtype,
 )
-from helpers.ulp_domains import Domain, Problem
+from helpers.ulp_domains import Domain, Problem, usable_budget_ceiling
 from helpers.ulp_sweep import _verdict, sweep_cells
 from helpers.ulp_table import MEASURED_ARCH, TABLE_PATH, Row, load_table
-from helpers.ulp_testing import TANH_DOMAINS, refused
 from helpers.utils import passed_test
 
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
@@ -302,7 +300,7 @@ def test_every_budget_key_field_counts_toward_specificity():
 
 
 def test_a_key_describes_itself_for_an_error_message():
-    assert DEFAULT.describe() == "DEFAULT"
+    assert BudgetKey().describe() == "DEFAULT"
     described = BudgetKey(
         output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
     ).describe()
@@ -313,8 +311,8 @@ def test_a_key_describes_itself_for_an_error_message():
 
 
 def test_the_default_key_matches_every_variant():
-    assert DEFAULT.specificity == 0
-    assert DEFAULT.matches(
+    assert BudgetKey().specificity == 0
+    assert BudgetKey().matches(
         BudgetKey(
             approx_mode=ApproximationMode.Yes,
             input_format=DataFormat.Float32,
@@ -323,7 +321,7 @@ def test_the_default_key_matches_every_variant():
             arch=ChipArchitecture.WORMHOLE,
         )
     )
-    assert DEFAULT.matches(BudgetKey())
+    assert BudgetKey().matches(BudgetKey())
 
 
 @pytest.mark.parametrize(
@@ -339,14 +337,14 @@ def test_the_default_key_matches_every_variant():
     ids=["ulp", "tolerance"],
 )
 def test_a_more_specific_key_wins_over_the_default(broad, narrow):
-    table = {DEFAULT: broad, BudgetKey(output_format=DataFormat.Float32): narrow}
+    table = {BudgetKey(): broad, BudgetKey(output_format=DataFormat.Float32): narrow}
     for fmt, expected in ((DataFormat.Float32, narrow), (DataFormat.Float16_b, broad)):
         query = BudgetKey(output_format=fmt, arch=MEASURED_ARCH)
         assert resolve_contract(table, query) == expected, fmt.name
 
 
 def test_specificity_counts_every_set_dimension():
-    """The only comparison of two non-DEFAULT keys. The Fill rows stack 1-, 2- and
+    """The only comparison of two non-BudgetKey() keys. The Fill rows stack 1-, 2- and
     4-field keys on one op, and only an equal-specificity tie raises, so a miscount
     would silently repoint budgets."""
     table = {
@@ -363,7 +361,7 @@ def test_specificity_counts_every_set_dimension():
 def test_a_per_arch_override_beats_the_shared_entry():
     """One shared value plus per-arch overrides, rather than keying every row on arch."""
     table = {
-        DEFAULT: AccuracyContract(max_ulp=4),
+        BudgetKey(): AccuracyContract(max_ulp=4),
         BudgetKey(arch=ChipArchitecture.BLACKHOLE): AccuracyContract(max_ulp=2),
     }
     for arch, expected in (
@@ -488,7 +486,9 @@ def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
         _SFPU_ACCURACY_BUDGET,
         MathOperation.Abs,
         {
-            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.13, rtol=0.05
+            ),
             BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=3),
         },
     )
@@ -513,7 +513,9 @@ def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol
         _SFPU_ACCURACY_BUDGET,
         op,
         {
-            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.13, rtol=0.05
+            ),
             BudgetKey(
                 input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
             ): AccuracyContract(metric=Metric.TOLERANCE),

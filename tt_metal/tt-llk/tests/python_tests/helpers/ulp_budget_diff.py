@@ -37,7 +37,7 @@ from .ulp_domains import (
     partition,
     usable_budget_ceiling,
 )
-from .ulp_table import (  # not the registry: that loads the checked-out table at import
+from .ulp_table import (
     MEASURED_ARCH,
     BudgetKey,
     Measurement,
@@ -46,6 +46,7 @@ from .ulp_table import (  # not the registry: that loads the checked-out table a
     Table,
     _winner,
     load_table,
+    most_specific,
     read_measurements,
     steps_bind,
 )
@@ -74,7 +75,9 @@ def _resolve(
 ) -> Optional[Row]:
     """The row of *op* the registry would resolve *query* to, among those *only*
     admits."""
-    found = _winner({row.key: row for row in table.get(op, ()) if only(row)}, query)
+    found = most_specific(
+        {row.key: row for row in table.get(op, ()) if only(row)}, query
+    )
     return None if found is None else found[1]
 
 
