@@ -7,7 +7,7 @@ per chunk and in total (TTFT), the decode step time as tok/s per user, the gener
 retrieved (``GLM53_LONG_ASSERT=1`` makes a missing needle a failure).
 
     GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=16384 pytest models/demos/glm53_flash/tests/test_mesh_long_context.py -s
-    GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=1048576 GLM53_LONG_CHUNK=32768 pytest ... -s   # the full context
+    GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=1048576 GLM53_PARTITION_USERS=0 GLM53_LONG_B=1 pytest ... -s   # the full context, one slot per chip
 Knobs shared with the e2e test / demo: GLM53_MODEL_LAYERS (default 0-44), GLM53_MODEL_EXPERT_DTYPE /
 GLM53_MODEL_EXPERT_DOWN_DTYPE (bfp8), GLM53_MESH_CACHE (tensorbin weight cache), GLM53_MODEL_TRACE_MB.
 The DSA cache is user-partitioned over the columns (GLM53_PARTITION_USERS=1 is set here unless overridden) so a 1 M
@@ -35,7 +35,9 @@ os.environ.setdefault("GLM53_PARTITION_USERS", "1")
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 N = int(os.environ.get("GLM53_LONG_N", "16384"))  # prompt tokens (approximate: the filler is scaled to it)
-CHUNK = int(os.environ.get("GLM53_LONG_CHUNK", "32768"))
+CHUNK = int(
+    os.environ.get("GLM53_LONG_CHUNK", "16384")
+)  # 32 K chunks exceed the KDA grouped-scan owner cores on 8 rows
 GEN = int(os.environ.get("GLM53_LONG_GEN", "32"))
 DEPTH = float(os.environ.get("GLM53_LONG_NEEDLE_DEPTH", "0.5"))  # needle position as a fraction of the filler
 B = int(os.environ.get("GLM53_LONG_B", "4"))  # user slots per row (one per column with the partitioned cache)
