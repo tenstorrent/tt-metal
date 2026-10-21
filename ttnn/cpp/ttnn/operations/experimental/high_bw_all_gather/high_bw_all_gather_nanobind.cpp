@@ -29,7 +29,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
             covered by two edge-disjoint Hamiltonian cycles, so every chip uses all four neighbours;
             otherwise by a snake ring. The output is always in row-major chip order.
 
-            ``legacy=True`` selects the previous unicast program instead (deprecated).
+            Pages move whole, so a ROW_MAJOR tensor cannot be gathered along its innermost dim (every
+            output row would mix ranks); gather a TILE_LAYOUT tensor or another dim instead.
 
             Channel trimming compatibility:
                 Channel trimming is selected during Fabric initialization and is shared
@@ -100,8 +101,6 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
-                legacy: Deprecated. ``True`` runs the previous unicast program instead of the fabric
-                    program (the default). Same contract and output; it will be removed.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -120,8 +119,7 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none(),
-        nb::arg("legacy") = false);
+        nb::arg("data_valid_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
