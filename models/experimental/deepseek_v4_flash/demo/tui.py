@@ -15,11 +15,12 @@ to one stream makes each harder to read, so this splits them:
 * the **log**, timestamped, with the time in a narrow left column and the message on the
   right, scrolling under the status.
 
-Keys, while it runs: the mouse wheel, up/down (or ``k``/``j``) and page-up/page-down
+Keys, while it runs: the mouse wheel, up/down (or ``j`` for down) and page-up/page-down
 scroll the log back through what the pane holds, home jumps to the oldest line and end
 returns to following the newest; ``d`` toggles debug lines, ``p`` pauses scrolling (the
 status keeps updating), ``v`` switches logged prompts between full text and a 200-character snippet (for requests
-logged after the switch), ``c`` clears the log, ``q`` quits the server. Shift-drag still
+logged after the switch), ``c`` clears the log, ``k`` stops every running request (prefill or decode),
+``q`` quits the server. Shift-drag still
 selects text. The live view owns the alternate screen, so these, rather than the
 terminal's own scrollback, are how to read back. A scroll paints on the key itself,
 not on the status refresh, so holding a key tracks the repeat instead of sitting still
@@ -56,7 +57,8 @@ _LEVEL_STYLE = {
 }
 # Square brackets are rich markup, so the key hints spell the keys out instead.
 _HELP = (
-    "keys: wheel/up/down scroll · pgup/pgdn · end follow · d debug · v prompt full/snippet · p pause · c clear · q quit"
+    "keys: wheel/up/down scroll · pgup/pgdn · end follow · d debug · v prompt full/snippet · p pause · c clear"
+    " · k stop all · q quit"
 )
 
 # Log lines below which the status pane gives up its per-slot table: a short window
@@ -184,10 +186,13 @@ class ServerConsole:
         debug: bool = False,
         on_toggle_prompt=None,
         full_prompt: bool = True,
+        on_stop_all=None,
     ):
         from rich.console import Console
 
         self.stats = stats
+        # Stops every running turn and returns how many there were. None (the demo) leaves the key inert.
+        self.on_stop_all = on_stop_all
         # Flips how the server logs prompts and returns whether they are now full. None
         # (the demo) leaves the key inert.
         self.on_toggle_prompt = on_toggle_prompt
@@ -765,6 +770,8 @@ class ServerConsole:
         elif key == "v" and self.on_toggle_prompt is not None:
             self.full_prompt = bool(self.on_toggle_prompt())
             self._note(f"prompts logged {'in full' if self.full_prompt else 'as 200-character snippets'} from now on")
+        elif key == "k" and self.on_stop_all is not None:
+            self._note(f"stopping {self.on_stop_all()} running turn(s)")
         elif key == "p":
             self.paused = not self.paused
             self._note(f"log {'paused' if self.paused else 'resumed'}")
@@ -774,7 +781,7 @@ class ServerConsole:
             self._dropped = 0
             with self._scroll_lock:
                 self._scroll = 0
-        elif key in ("up", "k", "wheelup"):
+        elif key in ("up", "wheelup"):
             with self._scroll_lock:
                 self._scroll += 1 if key != "wheelup" else _WHEEL_LINES
         elif key in ("down", "j", "wheeldown"):
@@ -814,6 +821,7 @@ def console(
     debug: bool = False,
     on_toggle_prompt=None,
     full_prompt: bool = True,
+    on_stop_all=None,
 ):
     """Route ``logger`` into a live :class:`ServerConsole` for the duration of the block.
 
@@ -829,7 +837,12 @@ def console(
         return
 
     view = ServerConsole(
-        stats, on_quit=on_quit, debug=debug, on_toggle_prompt=on_toggle_prompt, full_prompt=full_prompt
+        stats,
+        on_quit=on_quit,
+        debug=debug,
+        on_toggle_prompt=on_toggle_prompt,
+        full_prompt=full_prompt,
+        on_stop_all=on_stop_all,
     )
     logger.remove()
     # Every level reaches the sink; the ``d`` key filters DEBUG at display time, so
