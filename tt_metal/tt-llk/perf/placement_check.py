@@ -215,10 +215,22 @@ def decide(
     return results
 
 
-def _row(r):
+def _fixed(results):
+    """{module: parameters with one value in all of the module's results}, left out of the tables."""
+    values = collections.defaultdict(lambda: collections.defaultdict(set))
+    for r in results:
+        for k, v in r["config"]:
+            values[r["module"]][k].add(v)
+    return {
+        m: {k for k, vs in params.items() if len(vs) == 1}
+        for m, params in values.items()
+    }
+
+
+def _row(r, hidden=()):
     positions = " / ".join(f"{d:+.1f}%" for d in r["deltas"]) or "—"
     return (
-        f"| {r['module']} | {_params(r['config']) or '—'} | {r['run_type']} | {positions} | "
+        f"| {r['module']} | {_params(r['config'], hidden) or '—'} | {r['run_type']} | {positions} | "
         f"{', '.join(r['threads']) or '—'} |"
     )
 
@@ -266,6 +278,7 @@ def render(results, arch):
     by = collections.defaultdict(list)
     for r in results:
         by[r["outcome"]].append(r)
+    fixed = _fixed(results)
     name = f"{arch.capitalize()} stage 2" if arch else "Stage 2"
     if by["regression"]:
         verdict = f"❌ {len(by['regression'])} confirmed regression(s)"
@@ -287,9 +300,12 @@ def render(results, arch):
         "",
         f"- {len(results)} stage-1 regression(s)",
     ]
+    note = "The configuration column leaves out the parameters that are the same in all of a test's rows; `stage2.json` has every parameter."
     lines += [f"- {title}: {len(by[key])}" for key, title, _, _ in _SECTIONS if by[key]]
     unmeasured = collections.Counter(r["why"] for r in by["unmeasured"])
     lines += [f"  - {why}: {n}" for why, n in unmeasured.most_common()]
+    if results:
+        lines += ["", note]
     for key, title, text, folded in _SECTIONS:
         rows = by[key]
         if not rows:
@@ -301,7 +317,7 @@ def render(results, arch):
         table = (
             ([text, ""] if text else [])
             + [head, rule]
-            + [_row(r) for r in rows[:_TOP_N]]
+            + [_row(r, fixed.get(r["module"], ())) for r in rows[:_TOP_N]]
         )
         if folded:
             lines += ["", "<details>", f"<summary>{caption}</summary>", ""] + table
