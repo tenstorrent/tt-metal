@@ -11,10 +11,10 @@
 // block while compute works through another, from inputs staged by the reader that owns the block
 // (even blocks the first, odd the second), and handed back to it, which keeps it for every pass.
 // For each (pass, block) the reader's four corners are tilized on the unpacker, multiplied by their
-// scalar columns and summed in L1, which gives the block's columns of that pass's chunk; a matmul
-// with the pass's chunk x C_out slice of the weight then accumulates into the block's output tiles,
-// in fp32 dest within the pass and in bfloat16 L1 across passes. After the last pass the bias is
-// added, the ReLU applied, and the bfloat16 output handed to the block's reader.
+// scalar columns and summed in fp32 dest, which gives the block's columns of that pass's chunk; a
+// matmul with the pass's chunk x C_out slice of the weight then accumulates into the block's output
+// tiles, in fp32 dest within the pass and in bfloat16 L1 across passes. After the last pass the
+// bias is added, the ReLU applied, and the bfloat16 output handed to the block's reader.
 
 #include <cstdint>
 
@@ -76,6 +76,7 @@ constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 constexpr uint32_t WEIGHT_SLICE_TILES = channel_tiles * OUT_TILES;
 // Output tiles per dest pass: full-sync dest holds eight fp32 tiles.
 constexpr uint32_t OUT_CHUNK = 8;
+static_assert(channel_tiles <= OUT_CHUNK, "a block's columns of one pass fit dest at once");
 
 // Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in the reader's order.
 constexpr uint32_t IN_DY = 0;
@@ -326,26 +327,25 @@ void kernel_main() {
             corner_block_cb.pop_front(BLOCK_TILES);
             tilize_uninit(corner_cb_index, tiled_cb_index);
 
+            // The four corners' products sum in dest: ELWMUL adds into dest, which every acquire
+            // starts at zero, so each column tile is packed once.
             bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_index);
             tiled_cb.wait_front(BLOCK_TILES);
-            // The four corners accumulate into these tiles in L1, so they stay reserved throughout.
             column_cb.reserve_back(channel_tiles);
+            tile_regs_acquire();
             for (uint32_t corner = 0; corner < CORNERS; ++corner) {
-                pack_reconfig_l1_acc(corner == 0 ? 0 : 1);
                 scalar_cb.wait_front(1);
                 for (uint32_t t = 0; t < channel_tiles; ++t) {
-                    tile_regs_acquire();
-                    mul_tiles_bcast<BroadcastType::COL>(tiled_cb_index, scalar_index, corner * channel_tiles + t, 0, 0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    // Packs to slot t explicitly; the default would advance the write
-                    // pointer past the reserved tiles after the first corner.
-                    pack_tile<true>(0, column_cb_index, t);
-                    tile_regs_release();
+                    mul_tiles_bcast<BroadcastType::COL>(tiled_cb_index, scalar_index, corner * channel_tiles + t, 0, t);
                 }
                 scalar_cb.pop_front(1);
             }
-            pack_reconfig_l1_acc(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t t = 0; t < channel_tiles; ++t) {
+                pack_tile(t, column_cb_index);
+            }
+            tile_regs_release();
             column_cb.push_back(channel_tiles);
             tiled_cb.pop_front(BLOCK_TILES);
 
