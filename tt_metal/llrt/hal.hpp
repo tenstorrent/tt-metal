@@ -431,6 +431,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
+    uint32_t noc_stream_remote_dest_words_free_width_{};
     uint32_t noc_stream_remote_src_reg_index_{};
     uint32_t operand_start_stream_{};
     uint32_t risc_soft_reset_addr_{};
@@ -554,6 +555,7 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
+    uint32_t get_noc_stream_remote_dest_words_free_width() const { return noc_stream_remote_dest_words_free_width_; }
     uint32_t get_noc_stream_remote_src_reg_index() const { return noc_stream_remote_src_reg_index_; }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
     uint32_t get_risc_soft_reset_addr() const { return risc_soft_reset_addr_; }

@@ -491,6 +491,7 @@ void Hal::initialize_bh(
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->noc_stream_remote_dest_words_free_width_ = REMOTE_DEST_WORDS_FREE_WIDTH;
     this->noc_stream_remote_src_reg_index_ = STREAM_REMOTE_SRC_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
