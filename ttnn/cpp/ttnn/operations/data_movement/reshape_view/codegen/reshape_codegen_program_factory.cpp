@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -34,8 +35,6 @@ constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
 constexpr uint32_t kCbZero = tt::CBIndex::c_3;
-// Datums per face row; a tile-row run never crosses a face boundary, so the writer copies face rows.
-constexpr uint32_t kFaceWidth = 16;
 constexpr uint32_t kCbMap = tt::CBIndex::c_0;
 constexpr uint32_t kCbMappedInput = tt::CBIndex::c_1;
 constexpr uint32_t kCbScratch = tt::CBIndex::c_2;
@@ -91,7 +90,7 @@ ProgramDescriptor build_tile_rows(
     writer.core_ranges = all_cores;
     writer.compile_time_args = {
         tile_bytes,
-        kFaceWidth * static_cast<uint32_t>(input.element_size()),
+        tt::constants::FACE_WIDTH * static_cast<uint32_t>(input.element_size()),
         kCbPlan,
         kCbStaged,
         kCbRing,
