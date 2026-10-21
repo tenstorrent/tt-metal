@@ -68,7 +68,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // Quasar tilizes the whole row of `block` tiles in one MOP run per tilize_block call (#42757); math and pack
     // below stay per tile, as on BH/WH.
     UNPACK((llk_unpack_tilize_init(icb, block)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(icb)));
     // Quasar llk_pack packs through the buffer descriptor programmed by the last llk_pack_init, so
     // re-point the packer at ocb here; otherwise tilize_block writes into the previous output DFB.
     PACK((llk_pack_init(ocb)));
@@ -165,13 +169,14 @@ ALWI void tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
+        MATH((llk_math_eltwise_unary_datacopy<
+              DataCopyType::A2D,
+              is_fp32_dest_acc_en,
+              BroadcastType::NONE,
+              UnpackToDestEn>(0 /*dst index*/, icb)));
 #ifndef ARCH_QUASAR
-        // Datacopy
-        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-            0 /*dst index*/, icb)));
         PACK((llk_pack<is_fp32_dest_acc_en, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
-        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
 #endif
         // Release dest
