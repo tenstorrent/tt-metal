@@ -2721,6 +2721,13 @@ tasks:
     kind: op
     layer: 2
     stateful: true
+  frozen:
+    at: '2026-10-21T22:15:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py: 1bcc2153a3821ba860c9d9a3a125beec467ea2df0c6df55f00121edd04d02774
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: f916835e51950704cf2377b10739cf1ab8fee0590ebf753643f7c6a601de55e2
 - id: S.enc_source.06
   title: 'enc_source block with steps 1-6 on device (last: compressor)'
   step: implement
