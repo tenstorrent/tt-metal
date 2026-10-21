@@ -35,8 +35,11 @@ and what word are in this image? Answer in one sentence." --generate 16`: the sa
 prompt (286 tokens: 256 image tokens at rows 11..266, `</think>` appended), the tower in fp32 on the CPU
 (`features.pt`: `fp32`, and `bf16_model` = the tower run in bf16 as the shipped model does), the scatter
 into the bf16 embeddings (`inputs_embeds.pt`), then all 45 text layers in bf16 streamed one module at a time
-per token (`generate_streaming(x0=streams)`: `generate.json`, `text.txt`). CPU time: tower seconds, prefill
-pass of 286 tokens ~10-20 min, each decode pass ~8-10 min.
+per token (`generate_streaming(x0=streams)`: `generate.json`, `text.txt`). CPU time: tower 2 s, prefill
+pass of 286 tokens 457 s, decode passes 620-1030 s (16 tokens over three host reboots, resumed from
+`generate_state.pt`). Result: `[785, 2168, 5610, 264, 2518, 12665, 11, 264, 6303, 9331, 11, 264, 6176, 21445, 11, 323]`
+= **'The image contains a red circle, a blue square, a green triangle, and'** (first token 785 'The' at logit
+21.75, runner-up 19.0): the model reads the image correctly through this prompt.
 
 ## Validation
 
