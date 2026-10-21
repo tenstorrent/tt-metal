@@ -143,18 +143,21 @@ def image_to_uint8_on_device(image: ttnn.Tensor) -> ttnn.Tensor:
     untilize.
 
     The result is ``[1, H, W * 3]``, one image row per page: a row-major page is the last dim, and the ``[1, H, W, 3]``
-    form read 3-byte pages (0.63 s for the 50 MB of a 4096x4096 image, 0.17 s for 12.6 MB at 2048x2048; the uint8
-    conversion itself is 0.15 / 0.04 s). The reshape runs on the fp32 row-major tensor because the reshape op has no
-    uint8 path; with it the whole conversion-plus-read is 0.19 s at 4096x4096 and 0.05 s at 2048x2048, bit-identical
-    (bin/probes/probe_readback_pages.py, 2026-10-21). ``image_rows_to_hwc`` restores ``[H, W, 3]`` on the host."""
+    form read 3-byte pages (0.63 s for the 50 MB of a 4096x4096 image, 0.17 s for 12.6 MB at 2048x2048). The bf16
+    image is untilized FIRST (dropping the TILE padding of the 3 channels to 32) and reshaped to ``[1, H, W * 3]``
+    before the fp32 arithmetic, so the fp32 temporary is 200 MB per chip at 4096x4096 instead of the 2 GiB a typecast
+    of the padded ``[1, 4096, 4096, 32]`` tensor took (that allocation is what ran the two-model sweep out of DRAM at
+    4096x4096 + 6 references). Conversion plus read: 0.16 s at 4096x4096 and 0.04 s at 2048x2048, bit-identical to
+    the padded-first order and to ``to_pil`` (bin/probes/probe_readback_pages.py, probe_readback_mem.py, 2026-10-21).
+    ``image_rows_to_hwc`` restores ``[H, W, 3]`` on the host."""
     n, h, w, c = (int(d) for d in image.shape)
-    x = ttnn.typecast(image, ttnn.float32)
+    x = ttnn.to_layout(image, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (n, h, w * c))
+    x = ttnn.typecast(x, ttnn.float32)
     x = ttnn.add(x, 1.0)
     x = ttnn.multiply(x, 127.5)
     x = ttnn.clamp(x, min=0.0, max=255.0)
     x = ttnn.floor(x)
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    x = ttnn.reshape(x, (n, h, w * c))
     return ttnn.typecast(x, ttnn.uint8)
 
 
