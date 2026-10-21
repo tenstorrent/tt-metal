@@ -43,6 +43,89 @@ with it. A fabric change falls into one of three cases:
    [ROUTES.md](docs/ROUTES.md) lists each rule with the code it mirrors, so a fabric change to that code can update the
    rule with it.
 
+## The decoded file
+
+There is one decoded file per snapshot, `fabric_decoded_rank_<r>_of_<n>_<UTC>.json`, named after its snapshot.
+[`fabric_decoded_schema.json`](fabric_decoded_schema.json) is its JSON Schema.
+
+```json
+{
+  "kind": "fabric_decoded",
+  "decoded_version": 1,
+  "decoded_at": "2026-10-21T12:00:00Z",
+  "decoder": { "git_sha": "...", "git_dirty": false },
+  "sources": [
+    {
+      "snapshot": { "file": "/.../fabric_snapshot_rank_1_of_1_20261021T120000Z.json", "sha256": "..." },
+      "manifest": { "file": "/.../fabric_manifest_rank_1_of_1.json", "sha256": "...", "run": { ... } },
+      "capture": { "host": "...", "started_at": "...", ... },
+      "warnings": ["the run was built from aaaaaaaaaa; decode is at bbbbbbbbbb"]
+    }
+  ],
+  "routers": {
+    "M0/C0/E1": {
+      "source": 0,
+      "error": null,
+      "areas": { "routing_table": { "my_mesh_id": 0, "state_manager": { "state": { "raw": 1, "name": "running" }, ... }, ... }, ... },
+      "regions": {
+        "fields/edm_status": { "raw": 2746467283, "name": "ready_for_traffic" },
+        "channels/senders/vc0/ch0/ring_buffer": [{ "bytes": { "offset": 4028, "size": 4448 } }, ...]
+      },
+      "streams": {
+        "channels/senders/vc0/ch0/fields/free_slots": { "stream_id": 0, "register": "buf_space_available", "before": 14, "after": 14 }
+      },
+      "elements": {
+        "channels/senders/vc0/ch0/credits/completed": { "array": "credit_counters/to_sender_completion", "index": 0, "value": 1234 }
+      },
+      "health": { "t_ns": [...], "eriscs": { ... }, "wall_clock": { ... }, "heartbeat": { ... } }
+    }
+  }
+}
+```
+
+- **Sources.** Each source is a snapshot with the manifest it was taken with:
+  - their files and sha256s, and the manifest's `run`;
+  - the snapshot's `capture` block (host, times, liveness settings);
+  - the warnings [INPUTS.md](docs/INPUTS.md) describes.
+
+  A router's `source` is its source's index. A decode of one snapshot has one source; the list is there so that every
+  rank of a fabric can share one file.
+- **Keys.** A router is keyed by its path (`M<mesh>/C<chip>/<router>`) and an area by its name. Regions, streams and
+  elements are keyed by their path in the router, by the path rule in the [capture README](../capture/README.md).
+- **Values.** An area's or region's value takes the shape of its manifest type ([TYPE_PARSER.md](docs/TYPE_PARSER.md)):
+  - an int;
+  - `{raw, name}` for an enum value;
+  - an object for a struct, and a list for an array;
+  - `{bytes: {offset, size}}` for bytes, which points into the snapshot's `.bin` rather than copying it. A ring buffer
+    is a list of its slots.
+- **Streams.** There is one entry per stream reference, keyed by the reference's own path. Each has its stream id, its
+  register, and the words read before and after the router's L1, each decoded by the reference's schema as the whole
+  register. Streams 30 and 31 each serve two references, and each reference gets its own entry.
+- **Elements.** There is one entry per `{array, index}` reference: the element of the decoded array it names. Each one
+  the manifest writes is a credit on a VC whose credits use L1 counters.
+- **Health.** The router's liveness facts, described in [HEALTH.md](docs/HEALTH.md).
+- **A router capture stopped part way through.** Its `error` is capture's `{stage, path, message}`. Everything read
+  before the error is decoded. A value never read is null: a stream word, an element of an array that wasn't read, or a
+  sample's value in `health`. An area or region never read is absent.
+
+## Decoding a snapshot
+
+Decode needs only the snapshot, its `.bin` and its manifest, so it runs anywhere, including on a laptop. From the repo
+root:
+
+```bash
+python3 -m tt_metal.fabric.debug.visualizer.decode generated/fabric
+```
+
+- **Inputs.** Pass snapshot files or directories; a directory stands for the `fabric_snapshot_*.json` files in it.
+- **Output.** Each decoded file is written next to its snapshot, or into `-o DIR`, replacing one of the same name.
+- **The manifest.** A snapshot is decoded with the manifest it names, or with a file of that name beside it. For a
+  snapshot whose manifest has moved, pass `--manifest` with manifests or directories of them; decode takes the one with
+  the snapshot's sha256 ([INPUTS.md](docs/INPUTS.md)).
+- **What it prints.** One line per decoded file, then its warnings and router errors.
+- **Exit status.** Non-zero when a snapshot is refused or its decoded file can't be written. A router that capture
+  couldn't fully read isn't a failure: it is recorded in the file.
+
 ## Components
 
 | File | What it does |
@@ -52,13 +135,18 @@ with it. A fabric change falls into one of three cases:
 | [`inputs.py`](inputs.py) | Loads a snapshot, its `.bin` and the manifest it was taken with, refuses them when they don't belong together, and warns when the run's build and decode's checkout may differ. In depth: [INPUTS.md](docs/INPUTS.md) |
 | [`routers.py`](routers.py) | `decode_router`: decodes one router's part of a snapshot, its areas and regions and each stream and element reference, keyed by its path in the router. It puts the path rule, the type parser and `inputs.py` together, and has no rules of its own |
 | [`health.py`](health.py) | `get_health`: a router's liveness samples and main pass as facts: whether each ERISC is held in reset, how the wall clock moves, and whether the heartbeat moves. In depth: [HEALTH.md](docs/HEALTH.md) |
+| [`decoded.py`](decoded.py) | `decode_snapshot`: puts a snapshot's sources, decoded routers and health facts into the decoded file, and `write_decoded` writes it |
+| [`__main__.py`](__main__.py) | The command line: decodes each snapshot given |
+| [`fabric_decoded_schema.json`](fabric_decoded_schema.json) | The decoded file's JSON Schema |
 | [`tests/test_routes.py`](tests/test_routes.py) | Hand-written cases for each rule |
 | [`tests/test_type_parser.py`](tests/test_type_parser.py) | Hand-written cases for every schema form, and for each check of the layouts |
 | [`tests/test_inputs.py`](tests/test_inputs.py) | Cases for loading, pairing and refusing snapshots, and for the build identity warnings |
 | [`tests/test_routers.py`](tests/test_routers.py) | Cases for decoding one router, including one capture stopped part way through, and snapshots that disagree with the manifest |
 | [`tests/test_health.py`](tests/test_health.py) | Cases for each health fact: reset bits by physical ERISC, the wall clock's join and wrap, and heartbeat words from other writers |
+| [`tests/test_decoded.py`](tests/test_decoded.py) | Cases for the decoded file and the command line, from a snapshot written to a temporary directory |
 | [`tests/check_manifest_routes.py`](tests/check_manifest_routes.py) | Checks that `routes.py` can read the manifests CI writes |
 | [`tests/test_check_manifest_routes.py`](tests/test_check_manifest_routes.py) | Cases for the check's `--expect-z-peers` |
+| [`tests/check_decode.py`](tests/check_decode.py) | Decodes each manifest's types, and a snapshot of each manifest CI writes taken with a fake device, and checks the decoded file |
 | [`../common/manifest_lookup.py`](../common/manifest_lookup.py) | `lookup`, which reads a manifest value and checks its JSON type, and `ManifestError`. Shared with the visualizer's other Python packages |
 | [`../common/router_paths.py`](../common/router_paths.py) | The path rule: every region, stream reference and element reference under a router, and the node at a path. Shared with capture |
 
@@ -78,4 +166,16 @@ key, when a fabric change renames or removes a key or name `routes.py` reads, ch
 
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes generated/fabric
+```
+
+Last, the script runs `tests/check_decode.py` on every manifest it writes. The check decodes every struct in the
+manifest's types from zeros and from random bytes, and every tagged union under each value of its tag and under one that
+names no member, checking that the union picks the member it says. It then takes a snapshot through capture with a fake
+device that returns random bytes, and decodes it. It checks that the decoded file has a value for each area, region,
+stream reference and element reference of every router, has health with a sample per liveness round and one for the
+main pass, and matches the schema. Like capture's check, it needs `jsonschema`, and it deletes each snapshot and decoded
+file once checked:
+
+```bash
+python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_decode generated/fabric
 ```

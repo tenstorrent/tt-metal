@@ -73,6 +73,7 @@ class LoadInputTest(unittest.TestCase):
             "snapshot_version": 1,
             "manifest": {"file": str(self.manifest_path), "sha256": sha256(MANIFEST), "run": {}},
             "raw": {"file": self.bin_path.name, "size": len(RAW), "sha256": sha256(RAW)},
+            "capture": {"host": "test"},
             "routers": {"M0/C0/E0": router_entry()},
         }
         if change is not None:
