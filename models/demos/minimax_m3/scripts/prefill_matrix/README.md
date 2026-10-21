@@ -142,7 +142,8 @@ How it differs from `run_matrix.sh`:
   the placement it found. If a runner has to be killed (it did not exit on the SHUTDOWN sentinel), the remaining rows
   are skipped: there is no galaxy reset in the CI script.
 * It currently runs a reduced 3x3 table: cached 0 / 143360 / 552960 x new 640 / 5120 / 51200, 3 idle iterations,
-  4 users x 240 chunks loaded. The full table uses the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
+  4 users x 240 chunks loaded, in config C of #57827 (`CHUNK=2048`, `LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4`).
+  The full table uses the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
   the job's `cmd`.
 * Perf is reported, not gated. The tables go to the job summary. The JSONL, CSV, runner/producer/rank logs and timing
   CSVs are uploaded as the `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run
