@@ -1011,10 +1011,15 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
-    // Quasar takes the Quasar-native matmul wherever it runs; the legacy picker covers the rest.
+    // Quasar takes the Quasar-native matmul wherever it runs, fusing user_fused_activation as the legacy auto config
+    // for a user grid does; the legacy picker covers the rest.
     if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
         std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
-            input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, {});
+            input_tensor_a,
+            input_tensor_b,
+            bias_single_tile_size,
+            attributes,
+            MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation});
         if (unified.has_value()) {
             return unified.value();
         }

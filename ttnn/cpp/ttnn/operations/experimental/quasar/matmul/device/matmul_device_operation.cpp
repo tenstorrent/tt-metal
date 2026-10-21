@@ -1878,6 +1878,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 // Any memory layout on any operand: the kernels address tiles by page id through the
                 // tensor accessor. Geometry, blocking, buffer fit and sharded-output constraints are
                 // all checked by the plan (shared with the factory and compute_output_specs).
+                TT_FATAL(
+                    !optional_bias.has_value() || optional_bias->logical_shape()[-2] == 1,
+                    "MatmulUnifiedProgramConfig fuses a bias of one row, broadcast down M (got {} rows); ttnn.linear "
+                    "adds a taller one separately",
+                    optional_bias.has_value() ? optional_bias->logical_shape()[-2] : 0);
                 (void)plan_unified_matmul(
                     input_tensor_a,
                     input_tensor_b,

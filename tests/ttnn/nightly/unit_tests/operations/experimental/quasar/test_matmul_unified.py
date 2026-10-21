@@ -934,6 +934,26 @@ def test_fused_bias_bfp8(device):
     _check(out, _golden(a, b) + _quantized(bias, ttnn.bfloat8_b).to(torch.float32))
 
 
+@pytest.mark.parametrize(
+    "bias_rows,fp32_dest_acc_en", [(1, True), (16, False)], ids=["fp32_dest_acc", "several_bias_rows"]
+)
+def test_activation_follows_a_bias_added_separately(device, bias_rows, fp32_dest_acc_en):
+    # ttnn.linear adds this bias after the op, every row of it, and the fused activation moves after the add:
+    # relu(A @ B + bias), not relu(A @ B) + bias.
+    M, K, N = 16, 2 * TILE, 4 * TILE
+    torch.manual_seed(9)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    bias = (torch.rand(1, 1, bias_rows, N) * 8 - 4).to(torch.bfloat16)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0),
+        C_slice_M_tiles=1,
+        C_slice_N_tiles=2,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+    )
+    out = _run_linear(device, a, b, bias, config, fp32_dest_acc_en=fp32_dest_acc_en)
+    _check(out, torch.relu(_golden(a, b) + bias.to(torch.float32)), pcc=0.999)
+
+
 ACTIVATIONS = [
     ("relu", ttnn.UnaryOpType.RELU, torch.relu, 0.02),
     ("gelu", ttnn.UnaryOpType.GELU, torch.nn.functional.gelu, 0.03),
@@ -1322,9 +1342,13 @@ def test_auto_placement_keeps_explicit_fields(device):
     _check(_run(device, a, b, config), _golden(a, b))
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fused_bias", "bias_added_separately"])
 @pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
-def test_auto_placement_linear_bias_and_activation(device, auto):
-    M, K, N = 2 * TILE, 4 * TILE, 8 * TILE
+def test_auto_placement_linear_bias_and_activation(device, auto, fp32_dest_acc_en):
+    if auto == "none" and not _on_quasar(device):
+        pytest.skip("without a program config only Quasar takes the unified matmul")
+    # One K tile with a 32-bit DST: craq-sim hangs on a 32-bit DST over several K chunks.
+    M, K, N = 2 * TILE, (TILE if fp32_dest_acc_en else 4 * TILE), 8 * TILE
     torch.manual_seed(34)
     a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
@@ -1339,6 +1363,27 @@ def test_auto_placement_linear_bias_and_activation(device, auto):
         bias=bias_t,
         program_config=config,
         activation=None if config is not None else "relu",
+        compute_kernel_config=_hifi4(device, fp32_dest_acc_en),
+    )
+    _check(ttnn.to_torch(out), torch.relu(_golden(a, b) + bias.to(torch.float32)))
+
+
+def test_auto_placement_on_a_core_grid(device):
+    """A core grid without a program config: on Quasar the unified matmul is placed on that grid."""
+    if not _on_quasar(device):
+        pytest.skip("without a program config only Quasar takes the unified matmul")
+    M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
+    torch.manual_seed(37)
+    a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.linear(
+        a_t,
+        b_t,
+        bias=bias_t,
+        core_grid=ttnn.CoreGrid(y=2, x=2),
+        activation="relu",
         compute_kernel_config=_hifi4(device),
     )
     _check(ttnn.to_torch(out), torch.relu(_golden(a, b) + bias.to(torch.float32)))
