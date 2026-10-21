@@ -167,7 +167,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::CONSUMER},
             },
-        .compile_time_args = {{"Vt", Vt}},
+        .compile_time_args = {{"Vt", Vt}, {"bf16_gate", static_cast<uint32_t>(attrs.bf16_gate)}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };

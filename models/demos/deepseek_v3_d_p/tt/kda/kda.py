@@ -341,7 +341,8 @@ class ttKDA:
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+            # BF16-grade sigmoid (param1 2): the decay gate is stored in BF16.
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 0.0, 2.0) if self._bounded_gate else None,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
@@ -545,6 +546,8 @@ class ttKDA:
             compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
+            # A BF16 output needs only a BF16-grade gate.
+            bf16_gate=self.gated_rms_output_dtype == ttnn.bfloat16,
         )
 
     def _project_output(

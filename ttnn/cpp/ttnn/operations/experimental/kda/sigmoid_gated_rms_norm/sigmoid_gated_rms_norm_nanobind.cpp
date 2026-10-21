@@ -43,6 +43,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
             gate_column_offset (int): Tile-aligned first gate column; the gate is read from
                 columns ``[offset, offset + H*V)``, so a fused projection's gate columns need not
                 be sliced out first. Defaults to 0.
+            bf16_gate (bool): Take the gate's sigmoid at BF16 grade (exp_21f with one Newton step)
+                rather than FP32-accurate, for a gate that multiplies into a BF16 output. Defaults to False.
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
@@ -61,7 +63,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
-        nb::arg("gate_column_offset") = 0);
+        nb::arg("gate_column_offset") = 0,
+        nb::arg("bf16_gate") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail

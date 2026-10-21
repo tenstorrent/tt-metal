@@ -173,7 +173,8 @@ KDA_PREP_HELPER void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
 // Mode and Iterations restrict the exponential to a row vector for row-replicated inputs: VectorMode::R visits faces 0
 // and 1, and two of a face's eight SFPU iterations span its first rows, row 0 included. The rest of each output tile
 // is then unspecified.
-template <VectorMode Mode = VectorMode::RC, int Iterations = 8, typename DFB0, typename DFB1>
+// Bf16Grade takes the exp_21f exponential (~1 BF16 ULP) instead of the FP32-accurate one; its init must match.
+template <VectorMode Mode = VectorMode::RC, int Iterations = 8, bool Bf16Grade = false, typename DFB0, typename DFB1>
 KDA_PREP_HELPER void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
@@ -181,13 +182,14 @@ KDA_PREP_HELPER void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
     o.reserve_back(n);
     reconfig_data_format_srca(in_id);  // unary: in_id->srcA
     copy_init(in_id);
-    exp_tile_init();
+    constexpr bool fp32_math = DST_ACCUM_MODE && !Bf16Grade;
+    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative, fp32_math>();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
-            exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
+            exp_tile<false, false, InputClamping::ClampToNegative, Iterations, fp32_math>(tile, Mode);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -518,8 +520,8 @@ KDA_PREP_HELPER void normalize_l2_rows(
     input.pop_front(matrix_tiles);
 }
 
-// beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
-// accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
+// beta = sigmoid(logits), from the BF16 logits the reader moved into column 0: only the left faces (VectorMode::C)
+// are computed, with the BF16-grade sigmoid (exp_21f, one Newton step; beta scales BF16-precision terms).
 template <uint32_t Ct, typename DFB0, typename DFB1>
 KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta) {
     beta.reserve_back(Ct);
@@ -530,7 +532,7 @@ KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta) {
     for (uint32_t tile = 0; tile < Ct; ++tile) {
         tile_regs_acquire();
         copy_tile(logits.get_id(), tile, 0);
-        sigmoid_tile<VectorMode::RC, false>(0);
+        sigmoid_tile<VectorMode::C, false, false>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, beta.get_id(), tile);
@@ -587,7 +589,9 @@ KDA_PREP_HELPER void prepare_gate_factors(
         elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
         centered_g.wait_front(chunk_key_tiles);
         centered_decay.pop_front(chunk_key_tiles);
-        exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
+        // The anchored pairwise factor at BF16 grade: it scales k and q into BF16-precision terms. The anchor's own
+        // exponential (the chunk's state decay, which compounds across chunks) stays FP32-accurate.
+        exponential_tiles<VectorMode::RC, 8, true>(centered_g, centered_decay, chunk_key_tiles);
         centered_decay.wait_front(chunk_key_tiles);
         reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
         centered_inverse_decay.wait_front(chunk_key_tiles);

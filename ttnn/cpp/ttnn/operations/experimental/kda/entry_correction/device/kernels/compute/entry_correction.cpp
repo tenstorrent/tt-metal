@@ -36,14 +36,9 @@ void kernel_main() {
     const uint32_t first_row = read_tile_value(cb_ctl, 0, 6);
     const uint32_t row_stride = read_tile_value(cb_ctl, 0, 7);
     cb_pop_front(cb_ctl, 1);
-    if (need_group) {
-        cb_wait_front(cb_seed, state_tiles);
-    }
-    if (need_tail) {
-        cb_wait_front(cb_tail, state_tiles);
-    }
-    // output_c = F0_c + (FI_c - F0_c) @ seed. The differences first, for all of this core's chunks; then per chunk
-    // F0's row is copied into DST and the K-sum accumulates on top of it.
+    // output_c = F0_c + (FI_c - F0_c) @ seed. The differences first, for all of this core's chunks (they need no
+    // seed, so they run while the seeds arrive); then per chunk F0's row is copied into DST and the K-sum accumulates
+    // on top of it.
     if (chunks != 0) {
         cb_wait_front(cb_m, chunks * kt);
         cb_wait_front(cb_base, chunks * kt);
@@ -66,6 +61,12 @@ void kernel_main() {
         cb_push_back(cb_diff, chunks * kt);
         cb_wait_front(cb_diff, chunks * kt);
         pack_reconfig_data_format(cb_out);
+    }
+    if (need_group) {
+        cb_wait_front(cb_seed, state_tiles);
+    }
+    if (need_tail) {
+        cb_wait_front(cb_tail, state_tiles);
     }
     for (uint32_t c = 0; c < chunks; ++c) {
         const uint32_t seed = c < group_chunks ? cb_seed : cb_tail;
