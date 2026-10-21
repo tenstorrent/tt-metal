@@ -251,6 +251,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     KernelSpec::CompilerOptions::Defines compute_defines;
+    compute_defines.insert({"LLK_PACK_ADDR_RMW", "1"});
     if (input_data_format == tt::DataFormat::Int32 || input_data_format == tt::DataFormat::UInt32 ||
         input_data_format == tt::DataFormat::Float32) {
         compute_defines.insert({"DST_ACCUM_MODE", "1"});

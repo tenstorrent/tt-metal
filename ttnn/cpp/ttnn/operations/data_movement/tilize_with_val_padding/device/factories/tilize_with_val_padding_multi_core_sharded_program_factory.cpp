@@ -181,7 +181,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
         // O3 explicitly: the legacy ComputeConfigDescriptor set no opt_level and so resolved to O3,
         // but Metal 2.0's type-agnostic CompilerOptions defaults to O2. Leaving it unset would drop
         // a level on this kernel's compile and link.
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = {{"LLK_PACK_ADDR_RMW", "1"}}, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = STAGE,

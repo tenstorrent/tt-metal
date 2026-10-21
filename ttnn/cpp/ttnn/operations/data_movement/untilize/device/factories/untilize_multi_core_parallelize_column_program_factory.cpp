@@ -128,6 +128,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     };
 
     KernelSpec::CompilerOptions::Defines compute_defines;
+    compute_defines.insert({"LLK_PACK_ADDR_RMW", "1"});
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
         compute_defines.insert({"DST_ACCUM_MODE", "1"});
     }

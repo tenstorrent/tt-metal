@@ -183,7 +183,7 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
         return KernelSpec{
             .unique_id = id,
             .source = kComputeSource,
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = {{"LLK_PACK_ADDR_RMW", "1"}}, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{

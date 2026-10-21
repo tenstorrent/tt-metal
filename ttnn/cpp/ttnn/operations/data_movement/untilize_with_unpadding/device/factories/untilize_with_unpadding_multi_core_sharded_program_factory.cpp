@@ -328,6 +328,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     /** compute
      */
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
+    compute_kernel_defines.emplace("LLK_PACK_ADDR_RMW", "1");
     if (input_dfb_data_format == tt::DataFormat::Int32 || input_dfb_data_format == tt::DataFormat::UInt32 ||
         input_dfb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");

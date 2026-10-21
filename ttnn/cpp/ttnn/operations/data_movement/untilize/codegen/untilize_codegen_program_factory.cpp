@@ -97,6 +97,7 @@ KernelDescriptor make_compute(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = {per_core_block_cnt, wt, kCbIn, kCbOut, max_bct};
+    compute.defines = {{"LLK_PACK_ADDR_RMW", "1"}};
     compute.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32};
     return compute;
 }

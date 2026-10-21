@@ -169,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp",
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = {{"LLK_PACK_ADDR_RMW", "1"}}, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = INPUT_DFB,

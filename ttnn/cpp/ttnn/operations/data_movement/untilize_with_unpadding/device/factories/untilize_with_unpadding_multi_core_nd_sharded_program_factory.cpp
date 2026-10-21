@@ -227,6 +227,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     // Compute kernel
     // Note: This condition is always true for sharded input
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
+    compute_kernel_defines.emplace("LLK_PACK_ADDR_RMW", "1");
     if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32) {
         compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
