@@ -55,6 +55,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     constexpr const char* READER_SHARDED_SRC =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp";
     constexpr const char* READER_INTERLEAVED_SRC =
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_start_id_metal2.cpp";
+    constexpr const char* READER_INTERLEAVED_RUNTIME_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "reader_unary_start_id_runtime_rows.cpp";
     constexpr const char* WRITER_SRC =
@@ -100,9 +102,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
          num_rows_per_full_core,
          num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
 
-    // Interleaved input: the program owns the full grid and every core derives its row range on
-    // device from the common row count, so one program serves every height.
-    const bool runtime_rows = !input_is_sharded;
+    // Interleaved input and output: the program owns the full grid and every core derives its row
+    // range on device from the common row count, so one program serves every height.
+    const bool runtime_rows = !input_is_sharded && !output.is_sharded();
     if (runtime_rows) {
         num_compute_cores = grid_size.x * grid_size.y;
         compute_core_range = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
@@ -151,10 +153,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     bool double_buffer;
     if (runtime_rows) {
         // The row count is not known at build time: double-buffer whenever two rows of input and
-        // output tiles fit beside the rest of the program, otherwise stream one row at a time.
+        // output tiles fit the static L1 budget (not the live occupancy, which the hash ignores).
         const uint64_t double_buffer_bytes =
             2ull * num_tiles_per_input_block * (input_single_tile_size + output_single_tile_size);
-        double_buffer = double_buffer_bytes <= ttnn::operations::data_movement::get_max_l1_space(a);
+        double_buffer = double_buffer_bytes <= ttnn::operations::data_movement::get_static_l1_space(a);
     } else {
         double_buffer = num_input_blocks_per_full_core != 1;
     }
@@ -209,11 +211,15 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         // Even sharding: DFB borrowed from the input buffer; reader only pushes the readiness handshake.
         reader_spec.source = std::filesystem::path{READER_SHARDED_SRC};
         reader_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}};
-    } else {
-        reader_spec.source = std::filesystem::path{READER_INTERLEAVED_SRC};
+    } else if (runtime_rows) {
+        reader_spec.source = std::filesystem::path{READER_INTERLEAVED_RUNTIME_SRC};
         reader_spec.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}};
         reader_spec.compile_time_args = {{"tiles_per_row", num_tiles_per_input_block}, {"num_cores", num_compute_cores}};
         reader_spec.runtime_arg_schema = split_runtime_arg_schema;
+    } else {
+        reader_spec.source = std::filesystem::path{READER_INTERLEAVED_SRC};
+        reader_spec.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}};
+        reader_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}};
     }
 
     // Writer kernel.
@@ -454,15 +460,15 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// A hit re-binds the two tensors and, with an interleaved input, rewrites the common row count the
-// three kernels derive their per-core ranges from (the hash leaves the row count out).
+// A hit re-binds the two tensors and, with interleaved input and output, rewrites the common row
+// count the three kernels derive their per-core ranges from (the hash leaves the row count out).
 tt::tt_metal::experimental::ProgramRunArgs UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     const UntilizeOperationAttributes& /*operation_attributes*/,
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     ProgramRunArgs params;
-    if (!tensor_args.input.is_sharded()) {
+    if (!tensor_args.input.is_sharded() && !output.is_sharded()) {
         const uint32_t num_tile_rows = untilize_num_tile_rows(tensor_args.input);
         for (const char* kernel : {"reader", "writer", "compute_full"}) {
             params.kernel_run_args.push_back(KernelRunArgs{

@@ -293,8 +293,8 @@ ttsl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     constexpr uint64_t kSalt = 0x756e74696c697a65ULL;  // "untilize"
     const auto factory = select_program_factory(operation_attributes, tensor_args);
-    const bool row_free =
-        std::holds_alternative<UntilizeMultiCoreProgramFactory>(factory) && !tensor_args.input.is_sharded();
+    const bool row_free = std::holds_alternative<UntilizeMultiCoreProgramFactory>(factory) &&
+                          !tensor_args.input.is_sharded() && !operation_attributes.output_mem_config.is_sharded();
     const auto input_hash = row_free
                                 ? ttnn::operations::common::hash_spec_without_rows(tensor_args.input, kSalt)
                                 : ttsl::hash::hash_objects_with_default_seed(kSalt, tensor_args.input.tensor_spec());

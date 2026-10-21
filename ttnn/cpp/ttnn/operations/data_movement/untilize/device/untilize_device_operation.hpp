@@ -54,8 +54,8 @@ struct UntilizeDeviceOperation {
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    // Attributes + the selected factory + the input spec; the multi-core factory with an interleaved
-    // input derives its per-core rows on device, so its spec is hashed without the row count.
+    // Attributes + the selected factory + the input spec; the multi-core factory with interleaved
+    // input and output derives its per-core rows on device, so its spec is hashed without the row count.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
