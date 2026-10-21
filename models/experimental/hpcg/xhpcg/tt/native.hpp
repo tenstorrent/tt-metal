@@ -1,0 +1,127 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// The compiled setup helper (models/experimental/hpcg/host/native_setup.cpp), linked into xhpcg: the planners the
+// Python package calls through ctypes. Arguments as documented there.
+#pragma once
+#include <cstdint>
+
+extern "C" {
+void hpcg_set_threads(int32_t n);
+void hpcg_ownership(
+    int32_t NB,
+    const int64_t* s,
+    const int64_t* e,
+    const int64_t* cuts,
+    const int64_t* cat,
+    int32_t nc,
+    int64_t align,
+    int64_t* own);
+int64_t hpcg_plan_windows_stencil(
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int32_t gran,
+    int32_t wgap,
+    int64_t ng,
+    int64_t empty_lo,
+    int64_t max_pieces,
+    int64_t* piece_lo,
+    int64_t* piece_ln,
+    int64_t* piece_l1,
+    int64_t* npieces,
+    int64_t* own_l1);
+int64_t hpcg_plan_windows_transfer(
+    int32_t kind,
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t cnx,
+    int32_t cnbands,
+    int32_t cnl,
+    const int32_t* cline_band,
+    const int32_t* cband_y0,
+    const int32_t* cband_ny,
+    const int64_t* cband_start,
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int32_t gran,
+    int32_t wgap,
+    int64_t ng,
+    int64_t empty_lo,
+    int64_t max_pieces,
+    int64_t* piece_lo,
+    int64_t* piece_ln,
+    int64_t* piece_l1,
+    int64_t* npieces);
+void hpcg_transfer_pad(
+    int32_t kind,
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t cnx,
+    int32_t cnbands,
+    int32_t cnl,
+    const int32_t* cline_band,
+    const int32_t* cband_y0,
+    const int32_t* cband_ny,
+    const int64_t* cband_start,
+    int32_t NB,
+    int64_t* pad);
+int64_t hpcg_plan_exchange_grouped(
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int64_t max_pieces,
+    const int64_t* piece_lo,
+    const int64_t* piece_ln,
+    const int64_t* piece_l1,
+    const int64_t* npieces,
+    const int64_t* noc_xy,
+    int64_t cap,
+    int64_t* rows,
+    int64_t* at,
+    int64_t* nbr,
+    int64_t* nat);
+int64_t hpcg_plan_meta_into(
+    int32_t nc,
+    int32_t NB,
+    int32_t nph,
+    const int64_t* phases,
+    int64_t max_pieces,
+    const int64_t* plo,
+    const int64_t* pln,
+    const int64_t* pl1,
+    const int64_t* npieces,
+    const int64_t* nat,
+    const int64_t* nbr,
+    const int64_t* noc_xy,
+    const int64_t* own,
+    const int64_t* own_l1,
+    const int64_t* xat,
+    const int64_t* xrows,
+    int64_t tpw,
+    int64_t align,
+    int64_t cap,
+    int32_t* m,
+    int64_t* nseg,
+    int64_t* nseg_gs,
+    int64_t* nseg_r);
+}
