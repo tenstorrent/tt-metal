@@ -397,6 +397,14 @@ class PupTimings:
     finish: str = ""
     """``"stop"`` (a stop id) or ``"length"`` (the new-token budget of :func:`new_token_budget`: ``max_tokens``, or
     the context cap for a long prompt)."""
+    step_submit_ms: float = 0.0
+    """Steady-state per-step host input build + H2D + trace enqueue (R1 phase split; ms, mean over steps 2..n)."""
+    step_wait_ms: float = 0.0
+    """Steady-state per-step blocking logit readback = device step + D2H of the full-vocab row."""
+    step_convert_ms: float = 0.0
+    """Steady-state per-step host reshape / fp32 / NaN check."""
+    step_sample_ms: float = 0.0
+    """Steady-state per-step host ``presence_greedy``."""
     trace_captured: bool = False
     """Whether this request captured the prefill trace (the first request of a process, or after a release)."""
     vision_compiled: bool = False
@@ -646,22 +654,36 @@ class Flux3KleinUpsampler:
             raise RuntimeError("NaN in the prefill logits")
         return row
 
-    def _decode_step(self, token: int, position: int) -> torch.Tensor:
-        out = self._generator.decode_forward(
+    def _decode_step(self, token: int, position: int, phases: dict[str, float] | None = None) -> torch.Tensor:
+        """One decode step in three timed phases (R1 of docs/UPSAMPLER_PERF_RESEARCH.md): ``submit`` = host input
+        build + H2D copies + the (non-blocking) trace enqueue, ``wait`` = the device step as seen by the blocking
+        logit readback (device time + D2H of the 248K-wide row), ``convert`` = the host reshape / fp32 / NaN check.
+        ``phases`` accumulates seconds per phase."""
+        t0 = time.perf_counter()
+        tt_out = self._generator.decode_forward(
             torch.tensor([[token]], dtype=torch.long),
             torch.tensor([position]),
             page_table=self.page_table,
             kv_cache=None,
             enable_trace=self.use_trace,
-            read_from_device=True,
+            read_from_device=False,
             reload_inputs=True,
             reload_page_table=False,
             reload_sampling_params=False,
             reset_sampling_state=False,
         )
+        t1 = time.perf_counter()
+        to_host = self._generator.read_decode_output(tt_out)
+        out = self._generator.process_decode_output_host(to_host, is_tokens=False)
+        t2 = time.perf_counter()
         row = (out[0] if isinstance(out, tuple) else out).reshape(-1).float()
         if torch.isnan(row).any():
             raise RuntimeError("NaN in the decode logits")
+        t3 = time.perf_counter()
+        if phases is not None:
+            phases["submit"] = phases.get("submit", 0.0) + (t1 - t0)
+            phases["wait"] = phases.get("wait", 0.0) + (t2 - t1)
+            phases["convert"] = phases.get("convert", 0.0) + (t3 - t2)
         return row
 
     def _start_decode(self, first_token: int, position: int) -> None:
@@ -711,11 +733,21 @@ class Flux3KleinUpsampler:
             generated.append(token)
             self._start_decode(token, position)
             t_decode = time.time()
+            phases: dict[str, float] = {}
+            first_step: dict[str, float] | None = None
             while len(generated) < max_new_tokens:
                 t_step = time.time()
-                logits = self._decode_step(token, position)
+                step_phases: dict[str, float] = {}
+                logits = self._decode_step(token, position, step_phases)
                 decode_times.append(time.time() - t_step)
+                t_s = time.perf_counter()
                 token = presence_greedy(logits, generated, penalty)
+                step_phases["sample"] = time.perf_counter() - t_s
+                if first_step is None:
+                    first_step = step_phases  # the first step is excluded from the steady-state means
+                else:
+                    for k, v in step_phases.items():
+                        phases[k] = phases.get(k, 0.0) + v
                 position += 1
                 if token in self.stop_ids:
                     timings.finish = "stop"
@@ -726,6 +758,19 @@ class Flux3KleinUpsampler:
             ttnn.deallocate(vision_tokens)
         steady = decode_times[1:] if len(decode_times) > 1 else decode_times
         timings.decode_tok_s = (len(steady) / sum(steady)) if steady and sum(steady) > 0 else 0.0
+        if len(decode_times) > 1:
+            n = len(decode_times) - 1
+            timings.step_submit_ms = 1000.0 * phases.get("submit", 0.0) / n
+            timings.step_wait_ms = 1000.0 * phases.get("wait", 0.0) / n
+            timings.step_convert_ms = 1000.0 * phases.get("convert", 0.0) / n
+            timings.step_sample_ms = 1000.0 * phases.get("sample", 0.0) / n
+            logger.info(
+                f"RECORD pup decode step split (steady, {n} steps): submit {timings.step_submit_ms:.1f} ms, wait "
+                f"{timings.step_wait_ms:.1f} ms, convert {timings.step_convert_ms:.1f} ms, sample {timings.step_sample_ms:.1f} ms "
+                f"(sum {timings.step_submit_ms + timings.step_wait_ms + timings.step_convert_ms + timings.step_sample_ms:.1f} ms "
+                f"vs measured {1000.0 / timings.decode_tok_s if timings.decode_tok_s else 0:.1f} ms/step); first step "
+                f"{ {k: round(1000 * v, 1) for k, v in (first_step or {}).items()} }"
+            )
         timings.generated_tokens = len(generated)
         timings.total_s = time.time() - t_total
         timings.dram = _dram_per_bank(self._device)
