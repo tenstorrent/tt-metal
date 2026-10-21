@@ -888,3 +888,12 @@ tok/s per user) and traced TTFT 149 ms (the a2a branch is taken; the 8-chip gene
 latency-serialized, ~1.1 ms per MoE layer, hence not the predicted 90-100 ms). Next in the ledger's order: A3
 (sharded multicore mHC norm, -3.4 ms), B7 (TP all-reduce as all-gather + fast_reduce_nc, -1.5 ms), B5 (DSA fused
 state + folds, 50 -> 14 attention ops), then A1 (fused mHC pre-block) after its NOC audit.
+
+**One-run re-measures with distinct tokens (22:47-23:05).** EP32 op combine, 256 users: 139.2 ms (7.2 tok/s per
+user), traced TTFT 171 ms, 128-token first token still wrong (39030, PCC 0.788: EP32's own prefill path, open).
+Hybrid, 32 users (4/row): **83.1 ms** per step = 12.0 tok/s per user (385 aggregate) against 69.8 ms with the same
+token on every slot (the stream expert op was flattered by one shared top-8); traced TTFT 266 ms at 128 tokens;
+first token == HF (0.900901) with the router fix. README rows updated. MTP step 1b (`_agents/mtp_head/STATUS.md`):
+level-1 draft acceptance 0.55 on an off-policy paragraph, 0.91 on an answer-like region, 0.66 over 393 rows, half of
+the misses main-head near-ties (gap < 1 logit); TT block `tt/mtp.py` + `tests/test_mtp.py` committed untested
+(03990ef08f4), first chip-0 run queued (`sched_mtp_test.sh`).
