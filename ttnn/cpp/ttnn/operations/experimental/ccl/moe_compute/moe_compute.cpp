@@ -48,7 +48,10 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
-    const std::optional<uint32_t>& num_shared_experts_per_device) {
+    const std::optional<uint32_t>& num_shared_experts_per_device,
+    const std::optional<float>& activation_limit,
+    const tt::tt_metal::MathFidelity math_fidelity,
+    const bool fp32_dest_acc_en) {
     // bh_ring_size is intentionally not exposed on the public API; it remains a tunable knob on
     // the ttnn::prim::moe_compute entry point. The matmul ring is auto-detected from the live
     // DRAM-bank count (12 on WH, 7/8 on BH).
@@ -74,7 +77,10 @@ std::vector<ttnn::Tensor> moe_compute(
         activation_type,
         compute_only,
         bh_ring_size,
-        num_shared_experts_per_device);
+        num_shared_experts_per_device,
+        activation_limit,
+        math_fidelity,
+        fp32_dest_acc_en);
 }
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
