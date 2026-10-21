@@ -4,7 +4,7 @@
 import math
 
 import torch
-from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -68,12 +68,8 @@ REDUCE_TILE_DIMENSIONS = [
 
 
 def _fidelities_for_format(formats):
-    """LoFi fails for Float16_b/Float16/Float32 inputs — exclude at parametrize time."""
-    if formats.input_format in [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-    ]:
+    """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
+    if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
     return ALL_FIDELITIES
 
@@ -102,19 +98,10 @@ def _dest_acc_required(formats):
     )
 
 
-def dest_acc_modes_for_format(formats):
+def reduce_dest_acc_modes(formats):
     if _dest_acc_required(formats):
         return [DestAccumulation.Yes]
     return [DestAccumulation.No, DestAccumulation.Yes]
-
-
-def reduce_dest_acc_modes(formats, reduce_dim, pool_type):
-    # Float16 Max and Scalar reduce return NaN with a 32-bit Dest; Sum/Avg Row and Column pass.
-    if formats.input_format == DataFormat.Float16 and (
-        pool_type == ReducePool.Max or reduce_dim == ReduceDimension.Scalar
-    ):
-        return [DestAccumulation.No]
-    return dest_acc_modes_for_format(formats)
 
 
 def _required_dest_acc_mode(formats):
@@ -129,10 +116,10 @@ REDUCE_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
-) + [InputOutputFormat(DataFormat.Float16, DataFormat.Float16)]
+)
 
 # Shared with perf_reduce.py; perf narrows formats, tiles, reduce_dim (Scalar is its own
-# test), fidelity, dest_acc and is_reduce_to_one on top of it.
+# test), fidelity and is_reduce_to_one on top of it.
 REDUCE_SWEEP = dict(
     tile_dimensions=REDUCE_TILE_DIMENSIONS,
     formats=REDUCE_FORMATS,

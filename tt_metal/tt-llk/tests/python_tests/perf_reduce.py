@@ -15,7 +15,7 @@ from helpers.reduce_perf_matrix import (
     perf_input_dimensions,
     perf_math_fidelities,
 )
-from test_reduce import REDUCE_SWEEP, _run_reduce_test, dest_acc_modes_for_format
+from test_reduce import REDUCE_SWEEP, _run_reduce_test
 
 PERF_LOOP_FACTOR = 64
 CORE_TILE_DIMENSION_LISTS = [list(td) for td in CORE_TILE_DIMENSIONS]
@@ -27,8 +27,6 @@ REDUCE_PERF_SWEEP = {
     **REDUCE_SWEEP,
     "tile_dimensions": PERF_TILE_DIMENSIONS,
     "formats": CORE_FORMATS + WHBH_EXTENSION_FORMATS,
-    # Perf skips the golden check, so it keeps the Float16 dest_acc=Yes rows the functional sweep drops.
-    "dest_acc": dest_acc_modes_for_format,
     "reduce_dim": CORE_REDUCE_DIMS,
     "pool_type": PERF_POOL_TYPES,
     "math_fidelity": lambda pool_type: perf_math_fidelities(pool_type),

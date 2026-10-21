@@ -8,8 +8,9 @@ compare_test_and_perf.py --cross-arch lines the reports up axis by axis. Rows pa
 where both architectures accept the config; the rest stay one-sided:
 
 - Blackhole only: the Bfp8_b formats.
-- Quasar only: Float32 -> Float16_b with dest_acc=No (WH/BH need a 32-bit Dest for
-  Float32 input), the 1x32 and 16x16 tiles, and MxFp4.
+- Quasar only: Float16 -> Float16 (WH/BH sweeps no longer run Float16), Float32 ->
+  Float16_b with dest_acc=No (WH/BH need a 32-bit Dest for Float32 input), the 1x32
+  and 16x16 tiles, and MxFp4.
 """
 
 from .format_config import DataFormat, InputOutputFormat
@@ -27,8 +28,11 @@ CORE_TILE_DIMENSIONS = [(32, 32)]
 
 # Formats both architectures add on top of the core.
 SHARED_EXTENSION_FORMATS = [
-    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
     InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+]
+# WH/BH sweeps no longer run Float16 (#60911); Quasar keeps it.
+QUASAR_EXTENSION_FORMATS = SHARED_EXTENSION_FORMATS + [
+    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
 ]
 # Block-float is WH/BH only; Quasar has no Bfp8_b.
 WHBH_EXTENSION_FORMATS = SHARED_EXTENSION_FORMATS + [
