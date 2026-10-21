@@ -508,7 +508,7 @@ void kernel_main() {
     // ragged block moves the full width and computes only its `m_eff` prefix. Only the LAST block of
     // an expert is ragged — and there are experts after it now.
     constexpr uint32_t GU_FULL = M_BLOCK * HN_PAD;
-    constexpr uint32_t SLICE_FULL = GU_FULL / KGROUPS;
+    constexpr uint32_t SLICE_FULL = GATHER_PAGES / KGROUPS;
     constexpr uint32_t OUT_FULL =
         (WD_MGROUPS && MGROUP_ROWS * EC_GROUP_MAX > M_BLOCK * EC_MAX) ? MGROUP_ROWS * EC_GROUP_MAX : M_BLOCK * EC_MAX;
     // cb_h's physical capacity. The reader realigns cb_h to its base at every expert boundary — the
