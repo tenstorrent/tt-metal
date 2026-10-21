@@ -53,7 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_comp.h"
 
 using namespace ckernel;
 
