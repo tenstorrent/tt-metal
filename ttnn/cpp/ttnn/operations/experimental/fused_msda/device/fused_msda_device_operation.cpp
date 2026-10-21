@@ -278,7 +278,21 @@ void FusedMSDAOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attrs.output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "fused_msda: output_memory_config memory_layout must be INTERLEAVED");
-    (void)derive_shapes(attrs, args);
+    const auto s = derive_shapes(attrs, args);
+    if (!attrs.num_valid_queries.empty()) {
+        TT_FATAL(
+            attrs.num_valid_queries.size() == s.batch,
+            "fused_msda: num_valid_queries needs one count per batch ({}), got {}",
+            s.batch,
+            attrs.num_valid_queries.size());
+        uint32_t total = 0;
+        for (const uint32_t n : attrs.num_valid_queries) {
+            TT_FATAL(
+                n <= s.num_queries, "fused_msda: num_valid_queries entry {} exceeds num_queries {}", n, s.num_queries);
+            total += n;
+        }
+        TT_FATAL(total > 0, "fused_msda: num_valid_queries leaves no query to compute");
+    }
 }
 
 void FusedMSDAOperation::validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& args) {
@@ -379,7 +393,8 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
@@ -391,6 +406,14 @@ ttnn::Tensor fused_msda_from_offsets(
         .from_offsets = true,
         .reference_mode = reference_mode,
     };
+    if (num_valid_queries.has_value()) {
+        // An empty list would read as "every query"; reject it instead of guessing.
+        TT_FATAL(
+            !num_valid_queries->empty(),
+            "fused_msda: num_valid_queries needs one count per batch, got an empty list; pass None to compute every "
+            "query");
+        attrs.num_valid_queries.assign(num_valid_queries->begin(), num_valid_queries->end());
+    }
     auto args = OperationType::tensor_args_t{
         .value = value,
         .attention_weights = attention_weights,

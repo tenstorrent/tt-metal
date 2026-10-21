@@ -34,7 +34,8 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode,
     bool align_corners,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
     return ttnn::prim::fused_msda_from_offsets(
         value,
         reference_points,
@@ -43,7 +44,8 @@ ttnn::Tensor fused_msda_from_offsets(
         spatial_shapes,
         reference_mode,
         align_corners,
-        memory_config);
+        memory_config,
+        num_valid_queries);
 }
 
 bool can_use_fused_msda_from_offsets_l1_value(
