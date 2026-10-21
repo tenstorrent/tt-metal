@@ -55,7 +55,7 @@ while read -r tag X rts; do
   for L in ${SCHED:-S Q N1 N2 N3 N3 N2 N1 Q S}; do k=$((k+1)); run $tag $L $k $L $rts || { stop=1; break; }; done
 done < ${LINES:-$S/lines.txt}
 
-if [[ -z ${NOBITS:-1} ]]; then
+if [[ ${BITS:-0} == 1 ]]; then
 # bits stage: functional ids on y0 y1 y2 yp, result hashes via the bitdump plugin (BITDUMP_FILE), compared after the job
 for L in ${ARMS:-S Q N1 N2 N3}; do
   D=$SL/$L; mkdir -p $SL/builds/${L}_bits
@@ -68,7 +68,7 @@ for L in ${ARMS:-S Q N1 N2 N3}; do
       timeout -s INT -k 60 3000 $PY -m pytest --compile-consumer -p no:cacheprovider -p bitdump --override-ini=log_cli=false -q -o timeout_method=thread --timeout 120 "${N[@]}" < /dev/null > $SL/out/runb_$L.log 2>&1
     echo "== bits $L rc=$? $(grep -aE '[0-9]+ (passed|failed|error)' $SL/out/runb_$L.log | tail -1) hashes=$(wc -l < $SL/out/bits_$L.txt)" )
 done
-for L in Q; do cmp -s $SL/out/bits_S.txt $SL/out/bits_$L.txt && echo "== BITS $L identical to S" || echo "== BITS $L DIFFER from S"; done
+for L in ${ARMS/S/}; do cmp -s $SL/out/bits_S.txt $SL/out/bits_$L.txt && echo "== BITS $L identical to S" || echo "== BITS $L DIFFER from S"; done
 fi
 for L in ${ARMS:-S Q N1 N2 N3}; do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
 tar -czf $SL/ra_out.tgz -C $SL perf_data/runs out
