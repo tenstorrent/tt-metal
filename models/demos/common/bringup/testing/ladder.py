@@ -150,25 +150,30 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         print(f"final hidden pcc {p:.6f} top1 {top1:.4f} top5 {top5:.4f}")
         E.check(drift, "top5_overlap", top5, out["failed"])
 
-    # F99: float states by PCC; integer states (top-k index lists) by the selection overlap, not the PCC of the ids
+    check_states(state, g, layers, rung["seq"], drift, out["failed"])
+    return out
+
+
+def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, failed: list[str]) -> None:
+    """Every layer's state after the rung vs the golden, each with its drift limit (F128). F99: float states by PCC;
+    integer states (top-k index lists) by the selection overlap, not the PCC of the ids."""
     worst, worst_ov = 1.0, 1.0
     for i in layers:
-        got = state.to_torch(i, rung["seq"])
+        got = state.to_torch(i, seq)
         for name, want in g.state(i).items():
             if want.is_floating_point():
                 p = metrics.pcc(got[name].float(), want.float())
                 metrics.record(f"pcc_state_{name}_L{i:02d}", p)
                 worst = min(worst, p)
-                E.check(drift, f"pcc_state_{name}_L{i:02d}", p, out["failed"])
+                E.check(drift, f"pcc_state_{name}_L{i:02d}", p, failed)
             else:
                 ov = index_overlap(got[name], want)
                 metrics.record(f"overlap_state_{name}_L{i:02d}", ov)
                 worst_ov = min(worst_ov, ov)
-                E.check(drift, f"overlap_state_{name}_L{i:02d}", ov, out["failed"])
+                E.check(drift, f"overlap_state_{name}_L{i:02d}", ov, failed)
     metrics.record("pcc_state_min", worst)
     metrics.record("overlap_state_min", worst_ov)
     print(f"worst state pcc {worst:.6f}, worst index-state overlap {worst_ov:.6f}")
-    return out
 
 
 def index_overlap(got: torch.Tensor, want: torch.Tensor) -> float:

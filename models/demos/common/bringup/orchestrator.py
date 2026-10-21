@@ -209,6 +209,40 @@ AB_ROWS = (  # (row, ladder metric); pcc_layer_* is the minimum over the layers
 )
 
 
+def ab_limits(got: dict) -> dict:
+    """F131: {metric: [value, limit]} of every metric the run recorded a limit for."""
+    return {k[: -len("_limit")]: [got.get(k[: -len("_limit")]), v] for k, v in got.items() if k.endswith("_limit")}
+
+
+def margin_used(metric: str, v, lim) -> float | None:
+    """The share of the margin a value uses (> 1 fails): (1 - v) / (1 - limit) for a score, v / limit for an error."""
+    if v is None or lim is None:
+        return None
+    if metric.startswith("err_"):
+        return v / lim if lim else float("inf") if v else 0.0
+    return (1 - v) / (1 - lim) if lim < 1 else float("inf") if v < 1 else 0.0
+
+
+def limits_table(runs: list[tuple[str, dict]]) -> list[str]:
+    """F131: value / limit (share of the margin used) per metric, for each (column, result) that recorded limits;
+    worst first."""
+    runs = [(c, r.get("limits") or {}) for c, r in runs]
+    keys = list(dict.fromkeys(k for _, lim in runs for k in lim))
+    if not keys:
+        return []
+    worst = lambda k: max((margin_used(k, *lim[k]) or 0) for _, lim in runs if k in lim)  # noqa: E731
+    out = ["", "## Accuracy vs the recorded limits (value / limit, share of the margin used; > 1 fails)", ""]
+    out += ["| metric | " + " | ".join(c for c, _ in runs) + " |", "|---|" + "---|" * len(runs)]
+    for k in sorted(keys, key=worst, reverse=True):
+        cells = []
+        for _, lim in runs:
+            v, lm = lim.get(k, (None, None))
+            u = margin_used(k, v, lm)
+            cells.append("-" if u is None else f"{v:.5f} / {lm:.5f} ({u:.2f})")
+        out.append(f"| {k} | " + " | ".join(cells) + " |")
+    return out
+
+
 def now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -1428,7 +1462,7 @@ class Orchestrator:
             if kind == "test":
                 result = {"rc": rc, "checks": [m.strip() for m in FAILED_CHECK.findall(text)][:12]}
             elif kind == "ladder":
-                result = dict(self.ab_summary(got), rc=rc)
+                result = dict(self.ab_summary(got), rc=rc, limits=ab_limits(got))
             elif kind == "quick":
                 lay = {k: v for k, v in got.items() if k.startswith("pcc_layer_L")}
                 worst = min(lay, key=lay.get) if lay else None
@@ -1441,6 +1475,7 @@ class Orchestrator:
                     "pcc_chunk_out": got.get("pcc_chunk_out"),
                     "host_transfers_per_layer": got.get("host_transfers_per_layer"),
                     "rc": rc,
+                    "limits": ab_limits(got),
                 }
             else:
                 keys = ["device_ms_total", "chunk_wall_ms", "profiled_programs", "pcc_chunk_out"] + [
@@ -1522,6 +1557,7 @@ class Orchestrator:
             ):
                 vals = [rec["quick"].get(s, {}).get(k) for s, _ in sides]
                 out.append(f"| {'exit code' if k == 'rc' else k} | " + " | ".join(fmt(v) for v in vals) + " |")
+            out += limits_table([(lbl, rec["quick"].get(s) or {}) for s, lbl in sides])
             out += [
                 "",
                 "Frozen tests, every ladder rung and the per-section profile run once, before the final task "
@@ -1549,6 +1585,7 @@ class Orchestrator:
                     ok = label == "min layer PCC" and v is not None
                     cells.append(f"{v:.4f} ({row.get('min layer')})" if ok else fmt(v))
             out.append(f"| {label} | " + " | ".join(cells) + " |")
+        out += limits_table([(f"{r} {lbl}", rec["ladder"].get(r, {}).get(s) or {}) for r in rungs for s, lbl in sides])
         if rec["profile"]:
             gate = task["gate"].get("metrics") or {}
             out += ["", "## Device time, one plain profile per config (ms per chunk)", ""]

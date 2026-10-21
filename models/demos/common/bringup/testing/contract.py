@@ -154,6 +154,39 @@ def device_map(mesh) -> dict:
     return out
 
 
+# F131: the producer's read-back keys -> golden state names; an adapter's kv_state_names() or the hooks' (spec) override
+KV_STATE_NAMES = {"k": "key", "v": "value", "kvpe": "kv_latent"}
+
+
+def kv_state_names(s, adapter) -> dict:
+    names = dict(KV_STATE_NAMES)
+    names.update(getattr(adapter, "kv_state_names", dict)())
+    hooks = s.hooks()
+    if hasattr(hooks, "kv_state_names"):
+        names.update(hooks.kv_state_names(s))
+    return names
+
+
+def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str]) -> None:
+    """F128 / F131: each producer key's ``pcc_producer_kv_<key>_limit`` from the drift of the golden state it reads
+    back. A key that is a state name maps to itself; one that maps to no state with a drift is a failure, never a
+    skipped check."""
+    names = kv_state_names(s, adapter)
+    states = {m.group(1) for m in map(E.STATE_KEY.match, drift) if m}
+    for k, v in mins.items():
+        name = k if k in states else names.get(k)
+        if name not in states:
+            failed.append(
+                f"producer KV key {k!r} maps to no golden state with a drift ({sorted(states)}): give the adapter "
+                "kv_state_names() -> {producer key: state name} (testing/contract.py, F131)"
+            )
+            continue
+        lim = E.state_limit(drift, name)
+        metrics.record(f"pcc_producer_kv_{k}_limit", lim)
+        if v < lim:
+            failed.append(f"producer read-back PCC {k} ({name}) {v:.5f} < limit {lim:.5f}")
+
+
 def run_contract_test(s, mesh) -> list[str]:
     import ttnn
     from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
@@ -261,11 +294,7 @@ def run_contract_test(s, mesh) -> list[str]:
         if gap > 1e-4:
             failed.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
     drift = E.load(g.dir)  # F128: each state's limit = calib x the reference's own drift on its worst layer
-    for k, v in mins.items():
-        lim = E.state_limit(drift, k)
-        metrics.record(f"pcc_producer_kv_{k}_limit", lim)
-        if v < lim:
-            failed.append(f"producer read-back PCC {k} {v:.5f} < limit {lim:.5f}")
+    producer_limits(s, adapter, mins, drift, failed)
     if s.state_fixed:
         if not hasattr(hooks, "contract_state_pcc"):
             failed.append(f"fixed-size state {s.state_fixed} unchecked: hooks.contract_state_pcc is missing")
@@ -275,7 +304,7 @@ def run_contract_test(s, mesh) -> list[str]:
                 failed.append("fixed-size state read-back: hooks.contract_state_pcc returned nothing")
             for k, v in fixed.items():
                 metrics.record(f"pcc_contract_state_{k}", v)
-                lim = E.state_limit(drift, k)  # F128: keyed by state name, like the producer's
+                lim = E.state_limit(drift, k)  # F128: the hook's keys are golden state names
                 metrics.record(f"pcc_contract_state_{k}_limit", lim)
                 if v < lim:
                     failed.append(f"fixed-size state read-back PCC {k} {v:.5f} < limit {lim:.5f}")
