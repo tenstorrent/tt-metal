@@ -240,7 +240,7 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
     // output_cores_all is the bounding box of the output_tensor_cores but respecting boundaries of subdevice grids
     CoreRangeSet output_cores_all(output_cores);
 
-    CoreRangeSet reserved_cores = output_cores_all;
+    const auto& reserved_cores = output_cores_all;
     auto available_cores = sub_device_cores.subtract(reserved_cores);
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
