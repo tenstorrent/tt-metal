@@ -55,6 +55,7 @@ from ._mesh import (
     maybe_mesh,
     mesh,
     sync_gradients,
+    data_parallel_size,
 )
 
 from . import fsdp

@@ -76,6 +76,8 @@ void py_module(nb::module_& m) {
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
         py_tensor.def(
+            "reset_grad", [](Tensor& self) { self.set_grad(ttnn::Tensor()); }, "Drop the gradient (uninitialized)");
+        py_tensor.def(
             "set_grad_from_tensor",
             [](Tensor& self, const TensorPtr& grad_tensor) { self.set_grad(grad_tensor->get_value()); },
             nb::arg("grad_tensor"),
@@ -354,6 +356,7 @@ void py_module(nb::module_& m) {
             "Get TP axis (mesh dimension for tensor parallelism)");
         py_parallelism_context.def("get_ddp_size", &ParallelismContext::get_ddp_size, "Get number of DDP devices");
         py_parallelism_context.def("get_tp_size", &ParallelismContext::get_tp_size, "Get number of TP devices");
+        py_parallelism_context.def("get_cp_size", &ParallelismContext::get_cp_size, "Get number of CP devices");
         py_parallelism_context.def("is_ddp_enabled", &ParallelismContext::is_ddp_enabled, "Check if DDP is enabled");
         py_parallelism_context.def("is_tp_enabled", &ParallelismContext::is_tp_enabled, "Check if TP is enabled");
     }

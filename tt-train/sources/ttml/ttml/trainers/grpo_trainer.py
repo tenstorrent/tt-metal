@@ -922,8 +922,8 @@ class GRPOTrainer:
         """Compute the clipped GRPO surrogate loss.
 
         ``completions_batch_len`` is the *global* number of completions in the
-        optimizer step. Under DDP, ``ttml.core.distributed.synchronize_gradients``
-        *averages* (not sums) the per-device gradients, so normalising the loss
+        optimizer step. ``ttml.sync_gradients`` *averages* (not sums) the
+        per-device gradients over ``ttml.data_parallel_size()`` ranks, so normalising the loss
         by the global count would leave an extra ``1 / ddp_world_size`` factor
         after that averaging. To keep gradients invariant to the device count we
         normalise by the *per-device* completion count instead
@@ -959,99 +959,19 @@ class GRPOTrainer:
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         base_lr = optimizer.get_lr()
 
-        # Device-parallelism state. The trainer currently only handles either
-        # single-device or DDP; tensor parallelism is not supported here. We
-        # gate the multi-device sharding paths on ``ddp_enabled`` rather than
-        # ``num_devices > 1`` so this assumption is explicit at the call sites.
+        # Device-parallelism state. The trainer handles single-device and data parallelism (DDP, FSDP, HSDP), not
+        # tensor parallelism: with more than one data-parallel rank the batch is split across the whole mesh.
+        # ``ttml.sync_gradients`` averages each gradient over those ranks, so ``_compute_grpo_loss`` normalizes per
+        # device to leave the global mean.
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         device = autograd_ctx.get_device()
         num_devices: int = device.get_num_devices()
-        mesh = ttml.maybe_mesh()
-        # ttml has two coexisting distributed backends, and DDP can be signalled
-        # through EITHER, so both must count here:
-        #   * Parallelism-context DDP — set up with
-        #     ``initialize_parallelism_context`` and synced with
-        #     ``synchronize_gradients``. This is the general-purpose DDP/TP
-        #     mechanism used across ttml (the shared trainer, the non-GRPO qwen3
-        #     examples, etc.); the Llama GRPO completer initializes it.
-        #   * Named-mesh DDP — the completer opened a named mesh (via
-        #     ``ttml.open_device_mesh``) with a "dp" axis of size > 1 and synced
-        #     with ``sync_gradients`` over that axis. This is the FSDP-oriented
-        #     backend; the Qwen3 GRPO completer takes ONLY this route and never
-        #     initializes a parallelism context.
-        # Checking the context alone (as the code originally did) leaves
-        # ``ddp_enabled`` False on the Qwen3 path — which then trips
-        # ``num_devices = 1`` below while the completer still shards the batch
-        # across the whole mesh, blowing up with "batch N must be divisible by
-        # num_devices". Detecting the "dp" axis mirrors the exact DDP signal the
-        # completer uses (``mesh.has_axis("dp")``).
-        ddp_context_enabled: bool = (
-            autograd_ctx.is_parallelism_context_initialized()
-            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-        )
-        ddp_enabled: bool = ddp_context_enabled or (
-            mesh is not None and mesh.has_axis("dp") and mesh.axis_size("dp") > 1
-        )
-        # FSDP is configured through a named mesh (axis "fsdp"), opened via
-        # ``ttml.open_device_mesh`` by the completer — not the parallelism
-        # context that context-based DDP uses. When an "fsdp" axis is present the
-        # batch is sliced across the whole mesh (dim 0) exactly like DDP, and
-        # gradients are synchronised with ``ttml.sync_gradients`` over the
-        # ("dp", "fsdp") axes (FSDP-managed params are skipped per-axis because
-        # the FSDP backward hook already reduce-scattered them).
-        fsdp_enabled: bool = mesh is not None and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
-        fsdp_sync_axes: Tuple[str, ...] = (
-            tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)
-            if mesh is not None
-            else ()
-        )
-        batch_sharded: bool = ddp_enabled or fsdp_enabled
+        grad_sync_world_size: int = ttml.data_parallel_size()
+        batch_sharded: bool = grad_sync_world_size > 1
         dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if batch_sharded else None
         dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if batch_sharded else None
         if not batch_sharded:
             num_devices = 1
-
-        # World size for the loss normalization. ``synchronize_gradients`` /
-        # ``sync_gradients`` all-reduce (sum) each replicated gradient and then
-        # divide by the product of the sizes of the axes they reduce over,
-        # leaving the mean. ``_compute_grpo_loss`` must divide the loss by that
-        # SAME factor (see its docstring) so the two cancel to the intended
-        # global-mean gradient. Derive it from the exact axes each branch syncs,
-        # rather than blanket ``get_num_devices()``, so the normalization stays
-        # correct even on a mesh whose reduced axes don't span every device
-        # (e.g. a "dp" axis narrower than the full mesh).
-        if fsdp_enabled:
-            # sync_gradients over fsdp_sync_axes -> divide by their size product.
-            grad_sync_world_size = 1
-            for _name in fsdp_sync_axes:
-                grad_sync_world_size *= mesh.axis_size(_name)
-        elif ddp_context_enabled:
-            # C++ synchronize_gradients reduces each replicated grad over ONLY
-            # the context's DDP axis (and CP, if enabled) — never TP: TP-sharded
-            # params hold per-shard-correct grads and TP-replicated params
-            # already match across TP ranks. So the divisor is the DDP-axis
-            # device count, NOT get_num_devices(). Using the whole-mesh count
-            # would over-divide by the TP factor on a DP+TP mesh and normalize
-            # the loss incorrectly. Read the exact DDP size from the context.
-            #
-            # NOTE (CP / forward-looking correctness): the C++ divisor is
-            # ddp_size * cp_size (synchronize_gradients pushes BOTH the CP and
-            # DDP axes into cluster_axes — see core/distributed/distributed.cpp).
-            # get_ddp_size() alone is the *complete* divisor here ONLY because CP
-            # cannot currently be turned on from Python: the DistributedConfig
-            # nanobind binding exposes just enable_ddp / enable_tp (no enable_cp
-            # ctor arg or settable field — see nanobind/nb_autograd.cpp), so
-            # is_cp_enabled() is always false on any Python-driven run and no CP
-            # axis is ever reduced. If enable_cp is ever bound to Python, this
-            # line must become get_ddp_size() * get_cp_size() (and a get_cp_size
-            # accessor would need binding), or the loss will silently mis-
-            # normalize by the CP factor — the same bug this branch fixes for TP.
-            grad_sync_world_size = autograd_ctx.get_parallelism_context().get_ddp_size()
-        elif ddp_enabled:
-            # sync_gradients over ("dp",) -> divide by the "dp" axis size.
-            grad_sync_world_size = mesh.axis_size("dp")
-        else:
-            grad_sync_world_size = 1
 
         # Derive the across-mesh micro-batch size (in completions), the per
         # micro-batch prompt count, and the generation (effective) batch size up
@@ -1184,23 +1104,7 @@ class GRPOTrainer:
                 warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
                 optimizer.set_lr(base_lr * warmup_factor)
 
-                if fsdp_enabled:
-                    ttml.sync_gradients(tt_model.parameters())
-                elif ddp_context_enabled:
-                    # Parallelism-context DDP (Llama completer): a parallelism
-                    # context is initialized, so use its gradient sync.
-                    # ``sync_gradients`` would be a silent no-op here — it reduces
-                    # over named mesh axes, and this path opens no named mesh
-                    # (``maybe_mesh()`` is None), so it would leave gradients
-                    # un-averaged.
-                    ttml.core.distributed.synchronize_gradients(tt_model.parameters())
-                elif ddp_enabled:
-                    # Named-mesh DDP (Qwen3 completer): no parallelism context
-                    # exists, so all-reduce + average grads over the "dp" mesh
-                    # axis — the same primitive FSDP uses. The loss normalization
-                    # divides by ``grad_sync_world_size`` (= the "dp" axis size
-                    # here), matched to this reduction.
-                    ttml.sync_gradients(tt_model.parameters())
+                ttml.sync_gradients(tt_model.parameters())
 
                 # Reset per-step callback timings before firing the first hook
                 # of this optimizer step. ``on_before_optimizer_step``,

@@ -250,6 +250,23 @@ def mesh() -> Mesh:
     return _mesh
 
 
+def data_parallel_size() -> int:
+    """The number of ranks :func:`sync_gradients` averages each gradient over: the product of the data axes' sizes.
+
+    A loss normalized by a global count (tokens, completions) is divided by this per device instead, so that the
+    average restores the global mean.
+    """
+    m = maybe_mesh()
+    if m is not None:
+        data = ttml.core.distributed.AxisKind.Data
+        return prod(size for size, kind in zip(m.shape, m.axis_kinds) if kind == data)
+    ctx = ttml.autograd.AutoContext.get_instance()
+    if not ctx.is_parallelism_context_initialized():
+        return 1
+    pctx = ctx.get_parallelism_context()
+    return pctx.get_ddp_size() * pctx.get_cp_size()
+
+
 def sync_gradients(parameters) -> None:
     """Turn each device's local gradient into the global one; call once per optimizer step.
 

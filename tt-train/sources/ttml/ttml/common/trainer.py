@@ -116,9 +116,7 @@ def train(
             # Accumulate loss
             accum_loss += train_loss
 
-        # Synchronize gradients for DDP
-        if use_ddp:
-            ttml.core.distributed.synchronize_gradients(model.parameters())
+        ttml.sync_gradients(model.parameters())
 
         optim.step()
 
