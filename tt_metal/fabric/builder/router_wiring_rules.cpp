@@ -35,36 +35,36 @@ constexpr std::array<RoutingDirection, 4> k_cardinal_directions = {
 
 // What the turn matrix keys on, per port: the reduction of the (direction, capability) pair.
 // Computed from both, substituting for neither -- direction and capability stay independent axes.
-// Named by leg under dimension order (Y first, then X), not by the producer's hardware: what
-// matters here is which egresses a producer may take, and a chord is a producer of whichever leg
-// its axis belongs to.
+// Named by the turn restriction, not by the producer's hardware: a chord takes the role of
+// whichever axis its chords run along.
 enum class TurnRole : uint8_t {
-    FIRST_LEG,           // Y-axis producer (N/S, or Z when the chords run along Y), or an intermesh
-                         // landing: a route root that restarts dimension order. May stay on Y or
-                         // turn onto X.
-    SECOND_LEG_ONLY,     // X-axis producer (E/W, or Z when the chords run along X): may only
-                         // continue on X, never re-enter protected Y.
+    UNRESTRICTED,        // Y-axis producer (N/S, or Z when the chords run along Y), or an intermesh
+                         // landing: no dimension-order limit, so it may stay on Y or turn onto X
+    X_RING_ONLY,         // X-axis producer (E/W, or Z when the chords run along X): may only
+                         // continue on X, never re-enter protected Y
     INTERMESH_BOUNDARY,  // Z crossing a mesh boundary: carries no intramesh routing direction
 };
 
 // Total over both enums; establishment validates whether a pair can describe a real chip. Folding
 // impossible pairs here preserves their structurally implied roles without duplicating validation:
-// (Z, INTRAMESH_CARDINAL) folds into the first-leg chord role and (E/W, INTRAMESH_EXPRESS) into
-// SECOND_LEG_ONLY because those reproduce the implied wiring answers.
+// (Z, INTRAMESH_CARDINAL) is read as a same-mesh chord, so it takes the chord axis's role --
+// UNRESTRICTED when the chords run along Y, X_RING_ONLY when they run along X -- and
+// (E/W, INTRAMESH_EXPRESS) is read as an X-axis producer, so X_RING_ONLY, because those reproduce
+// the implied wiring answers.
 TurnRole turn_role(RoutingDirection dir, EdgeCapability cap, ExpressAxis express_axis) {
-    // Z carries a routing direction unless its edge crosses a mesh boundary, and is a producer of
-    // the leg its chords run along.
+    // Z carries a routing direction unless its edge crosses a mesh boundary, and takes the role of
+    // the axis its chords run along.
     if (dir == RoutingDirection::Z) {
         if (cap == EdgeCapability::INTERMESH) {
             return TurnRole::INTERMESH_BOUNDARY;
         }
-        return is_x_axis_direction(dir, express_axis) ? TurnRole::SECOND_LEG_ONLY : TurnRole::FIRST_LEG;
+        return is_x_axis_direction(dir, express_axis) ? TurnRole::X_RING_ONLY : TurnRole::UNRESTRICTED;
     }
-    // A landing is a route root, not a packet mid-X-phase, so it restarts at the first leg.
+    // A landing is a route root, not a packet mid-X-phase, so it is exempt from dimension order.
     if (is_x_axis_direction(dir, express_axis)) {
-        return cap == EdgeCapability::INTERMESH ? TurnRole::FIRST_LEG : TurnRole::SECOND_LEG_ONLY;
+        return cap == EdgeCapability::INTERMESH ? TurnRole::UNRESTRICTED : TurnRole::X_RING_ONLY;
     }
-    return TurnRole::FIRST_LEG;  // Y cardinal, any capability
+    return TurnRole::UNRESTRICTED;  // Y cardinal, any capability
 }
 
 // Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
@@ -175,10 +175,10 @@ bool wires_into(
     }
 
     switch (producer_role) {
-        case TurnRole::FIRST_LEG:  // no dimension-order limit applies to this producer; its feed
-                                   // rides every carrier VC
+        case TurnRole::UNRESTRICTED:  // no dimension-order limit applies to this producer; its feed
+                                      // rides every carrier VC
             return true;
-        case TurnRole::SECOND_LEG_ONLY:
+        case TurnRole::X_RING_ONLY:
             // X producers cannot re-enter protected Y. Capability matters: an intermesh egress
             // leaves the mesh rather than entering Y, so E/W exit routers remain wired to it. When
             // the chords run along X, Z is not protected Y, so E/W can continue onto a chord.

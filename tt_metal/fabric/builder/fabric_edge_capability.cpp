@@ -124,10 +124,12 @@ ExpressAxis express_axis_of(const ControlPlane& control_plane, MeshId mesh_id) {
     }
     const auto* express_rings = control_plane.ring_for_direction(mesh_id, RoutingDirection::Z);
     TT_FATAL(express_rings != nullptr, "Mesh {} reports express routing but has no express rings", *mesh_id);
-    if (express_rings->axis_dim == 0) {
-        return ExpressAxis::Y;
-    }
-    return ExpressAxis::X;
+    TT_FATAL(
+        express_rings->axis_dim == 0 || express_rings->axis_dim == 1,
+        "Mesh {} express rings have axis_dim {}, expected 0 (Y) or 1 (X)",
+        *mesh_id,
+        express_rings->axis_dim);
+    return express_rings->axis_dim == 0 ? ExpressAxis::Y : ExpressAxis::X;
 }
 
 bool is_y_axis_direction(RoutingDirection direction, ExpressAxis express_axis) {
