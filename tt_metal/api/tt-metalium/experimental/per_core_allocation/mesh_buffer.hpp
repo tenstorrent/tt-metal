@@ -10,13 +10,12 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
-// Creates a non-owning view. The caller must retain backing storage until all uses finish.
-// The caller must supply every tensor core on each selected device and validate backing bounds.
-std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
+// Owns only the buffer wrapper; the caller retains SRAM storage and validates backing bounds.
+// Placements must cover exactly the configured data cores on each selected local device.
+std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
