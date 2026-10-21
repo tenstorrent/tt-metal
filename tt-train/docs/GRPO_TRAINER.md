@@ -269,8 +269,7 @@ and a captured decode trace. One tt-transformers call serves
 `slots_per_call = max_batch_size * data_parallel` completions; `generate` splits
 a batch into as many calls as it needs and pads the per-token log-probs to
 `[B, max_completion_length]`. It boots with the HF weights of `model_source`
-at version 0, or with dummy weights at version -1. Temperature, `top_k`, `top_p` and `seed` are baked into the trace
-at construction.
+at version 0, or with dummy weights at version -1. Temperature, `top_k` and `top_p` are fixed at construction.
 
 ---
 
@@ -299,7 +298,7 @@ from ttml.trainers import GRPOConfig
 | `clip_grad_norm_max_norm` | `float` | `1.0` | `max_grad_norm` | Maximum gradient norm when `use_clip_grad_norm` is set. |
 | `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"` or `"ttt_remote_sync"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
 | `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank every *N* optimizer steps. |
-| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `seed`, `top_k` (default 32), `top_p` (default 1.0). |
+| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |

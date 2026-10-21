@@ -6,15 +6,12 @@
 import argparse
 import logging
 import os
-import random
 from datetime import datetime, timezone
 
-import numpy as np
-import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
-from ttml.common.utils import get_tt_metal_runtime_root
+from ttml.common.utils import get_tt_metal_runtime_root, set_seed
 from ttml.trainers import GRPOTrainer, get_grpo_config
 
 DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
@@ -66,12 +63,6 @@ def parse_args():
             "the model_type / runner_type of its model_config select the model family and runner."
         ),
     )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="RNG seed for reproducible runs. If omitted, seed defaults to 42.",
-    )
     args, _ = parser.parse_known_args()
     return args
 
@@ -85,14 +76,11 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-
     tt_metal_root = get_tt_metal_runtime_root()
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
+    set_seed(training_config.seed)
     device_config = DeviceConfig(raw)
     logging.info(
         "Loaded config %s | enable_ddp=%s mesh_shape=%s (total_devices=%s)",
@@ -114,7 +102,7 @@ if __name__ == "__main__":
     def make_dataset():
         return (
             load_dataset("google/boolq", split="train")
-            .shuffle(seed=args.seed)
+            .shuffle(seed=training_config.seed)
             .map(make_format_boolq(tokenizer, is_qwen3))
         )
 

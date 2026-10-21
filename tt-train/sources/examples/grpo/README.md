@@ -161,7 +161,7 @@ so no initial weight push is needed.
 | `remote_rollout_config.mesh_shape` | Rank 1's parent mesh `[rows, cols]`, split into `rows * cols` `[1, 1]` submeshes that generate data-parallel. |
 | `remote_rollout_config.max_batch_size` | Per-submesh decode capacity. One tt-transformers call serves `max_batch_size * num_submeshes` completions; larger batches are split into several calls. |
 | `remote_rollout_config.max_seq_len` | Max prompt + completion length. A prompt longer than `max_seq_len - max_completion_length` raises `ValueError`; prompts are never truncated. |
-| `remote_rollout_config.seed` / `top_k` / `top_p` | On-device sampling settings (defaults `None` / 32 / 1.0). |
+| `remote_rollout_config.top_k` / `top_p` | On-device sampling settings (defaults 32 / 1.0). |
 
 ### Adapting the rank bindings to other hardware
 
