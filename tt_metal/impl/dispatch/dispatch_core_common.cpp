@@ -6,8 +6,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal::detail {
 CoreType resolve_dispatch_core_type(

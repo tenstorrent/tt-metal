@@ -178,6 +178,7 @@ Dram open_dram() {
             control_tables_addr + (ct.dispatch_group_size + 1) * ct.num_routed_experts * 4),
         ct.num_routed_experts,
         ct.dispatch_group_size,
+        ct.dispatch_capacity,
 #ifdef CMBF2D_OVERLAPPED
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_addr),
         ids_stride / 4,
@@ -672,13 +673,12 @@ void kernel_main() {
     // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
     reader.wait_for_final_writes();
 
-    // Subtract what this launch consumed instead of zeroing: the upstream chip may already be bumping for the
-    // next launch, and zeroing would drop those bumps and hang it. The sender counts every forwarded page and
-    // always bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed` and what is left
-    // belongs to the next launch. The NoC only has an atomic add, so this adds the two's complement.
-    //
-    // This keeps the count right, nothing more. The upstream chip never waits for us to read a page before
-    // writing that page again, so a chip far enough ahead can still overwrite pages we have not read.
+    // Subtract what this launch consumed rather than zeroing. The sender counts every forwarded page and always
+    // bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed`. The upstream sender's launch
+    // credit (sender_combine_fabric2d.cpp) keeps its next launch's bumps, and its writes into our forwarding
+    // region, out until this chip has started that launch; subtracting stays right without relying on it. The
+    // overlapped op has no launch credit, so there a chip far enough ahead can still overwrite pages we have
+    // not read. The NoC only has an atomic add, so this adds the two's complement.
     noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
     // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();

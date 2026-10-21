@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mcast_host_test_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace ttnn::kernel_lib::host::test {
 TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePrefixes) {
@@ -252,7 +253,7 @@ void run_spec_device_contract(
     // the final named-argument offset, preserving both the caller prefix and helper slices.
     spec.kernels.front().runtime_arg_schema.runtime_arg_names = {"seed", "report_addr"};
     auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
-    auto* physical = device.get_devices().front();
+    auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         const uint32_t seed = 19 + run * 173;
         const uint32_t report_addr = 100 * 1024 + run * sizeof(uint32_t);

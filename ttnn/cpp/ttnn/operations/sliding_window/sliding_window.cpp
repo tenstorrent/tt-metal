@@ -1321,6 +1321,9 @@ uint32_t align_buffer(uint32_t size) {
 };
 
 std::string SlidingWindowConfig::to_string() const {
+    // Key the effective ceil padding rather than the raw ceil_pad_hw override: the override is ignored outside ceil
+    // mode, and when unset the padding is derived from fields already in this string.
+    const auto [ceil_pad_h, ceil_pad_w] = get_ceil_pad_hw();
     return "batch=" + std::to_string(batch_size) + "_ch=" + std::to_string(channels) +
            "_in_h=" + std::to_string(std::get<0>(input_hw)) + "_in_w=" + std::to_string(std::get<1>(input_hw)) +
            "_win_h=" + std::to_string(std::get<0>(window_hw)) + "_win_w=" + std::to_string(std::get<1>(window_hw)) +
@@ -1334,7 +1337,8 @@ std::string SlidingWindowConfig::to_string() const {
            "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
            (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") +
-           (padding_mode == PaddingMode::Replicate ? "_replicate_pad" : "");
+           (padding_mode == PaddingMode::Replicate ? "_replicate_pad" : "") +
+           "_ceil_pad_h=" + std::to_string(ceil_pad_h) + "_ceil_pad_w=" + std::to_string(ceil_pad_w);
 }
 
 }  // namespace ttnn::operations::sliding_window

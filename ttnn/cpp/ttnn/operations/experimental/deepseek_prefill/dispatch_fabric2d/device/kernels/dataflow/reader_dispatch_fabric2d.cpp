@@ -527,9 +527,10 @@ void kernel_main() {
         queue.flush_publish();
 
         noc_async_atomic_barrier();
-        // Subtract what this launch consumed instead of zeroing: the upstream chip may already be signalling
-        // for the next launch, and zeroing would drop those signals and hang it. The NoC only has an atomic
-        // add, so this adds the two's complement; both counts are bounded by the section, so the wrap is exact.
+        // Subtract what this launch consumed rather than zeroing. The upstream sender's launch credit
+        // (sender_dispatch_fabric2d.cpp) keeps its next launch's signals out until this chip has started that
+        // launch; subtracting stays right without relying on it. The NoC only has an atomic add, so this adds the
+        // two's complement; both counts are bounded by the section, so the wrap is exact.
         noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), (uint32_t)(0u - consumed));
         noc_async_atomic_barrier();
         if constexpr (ct.untilize_tile_rows > 0) {
