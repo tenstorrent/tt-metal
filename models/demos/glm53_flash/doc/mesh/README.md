@@ -656,3 +656,14 @@ Reading: the partitioned cache without the scratch slot is the envelope (32 user
 the stacked-expert decode copy is a 9.5 GiB trade against it (fine up to ~512 K at one user per row, or 11 users per
 row at 64 K). The decode-speed work therefore has two regimes: few users at very long context (the sparse DSA decode
 and the per-layer fixed costs: mHC, router, CCL) and many users at short context (expert compute: EP32 dispatch).
+
+### Optimization-phase agents, first deliveries (2026-10-21 14:00-14:45)
+
+| track | result | state |
+|---|---|---|
+| `routerop`: fused exact-fp32 router top-8 (`custom_ops/router_topk`, one program, one token row per core) | single chip, layer 4, 32 users: the 14-op / 142 us composite -> 1 op / 13.2 us; ids bit-exact vs the composite on real inputs (stable lowest-index tie-break vs `ttnn.topk`'s bitonic network; no exact ties on real inputs), weights 1.9e-7 rel vs the golden, decoder-layer and decode-trace tests green with the knob on | merged (b5d0352b988) behind `GLM53_ROUTER_FUSED=1` (default off until the 8x4 A/B) |
+| `ep32l1`: EP32 L1 clash on the 8x4 | root cause: `TtEPExperts.combine_rows` kept a persistent per-layer zero constant in L1 (one per MoE layer: 24 KB per core at 32 users per row, 8 KB at 4; 42 layers add up to the 216 / 336 KB gaps of the two failures; the block never ran more than one EP layer); fix: the constant in DRAM, shared through the mesh. Block (rows 6-7, EP=8): pre-fix clash reproduced, post-fix layers 0-21 at 32 users per row 47.7 ms per step (21.0 tok/s per user, 64 users), 4 per row 31.6 ms, chain PCC 0.942 both | on `arg/glm53_ep32l1` (835a23dc959 + c0a1d410676); 8x4 e2e at 4 and 32 users per row queued |
+| `mu1m`: multi-user 1 M prefill (heads -> users) | `GLM53_PREFILL_PARTITION=heads2users`: all-gather of the 16-head q over the columns, every column attends over its own slot, dummy blocks for the non-owner columns, no scratch slot; layer-3 A/B bit-exact; 16 K and 64 K at 4 users per row partitioned on the rows 0-1 block: needles found for the users, TTFT 11.8 s per 16 K user after the first | on `arg/glm53_mu1m` (ecc2ef47d27 + 5ea13946500); 1 M x 4 users per row (32 users at 1 M) on the 8x4 queued |
+
+The fused mHC pre-block (`GLM53_MHC_PRE_BLOCK=1`) had never run on a mesh: its norm-weight read-back assumed one
+device (fixed d83e20b2094, shard 0 through `ttnn.get_device_tensors`); the block A/B is queued after the 8x4 windows.
