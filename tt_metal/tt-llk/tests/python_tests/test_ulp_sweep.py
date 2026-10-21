@@ -31,6 +31,7 @@ from helpers.ulp_sweep import (
     AmbiguousCollapse,
     IncompleteGrid,
     SessionNotClean,
+    UnloadableRewrite,
     UnplacedMeasurements,
     WrongArch,
     _known_lanes,
@@ -123,7 +124,7 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     whole op block from a partial session."""
     record("Gelu", _CELL, 5)
     report = write_table(table, _RUN)
-    assert (set(report.written), report.kept, report.unplaced) == ({"Gelu"}, {}, [])
+    assert (set(report.written), report.kept) == ({"Gelu"}, {})
 
     after = BudgetTable.load(table)
     gelu = after.row("Gelu", in_="Float16", out="Float16")
@@ -1310,7 +1311,7 @@ def test_emit_writes_on_a_clean_wormhole_session(table):
     report = finish_emit(
         ChipArchitecture.WORMHOLE, 0, table, exitstatus=pytest.ExitCode.OK
     )
-    assert (set(report.written), report.kept, report.unplaced) == ({"Gelu"}, {}, [])
+    assert (set(report.written), report.kept) == ({"Gelu"}, {})
     (row,) = [r for r in report.written["Gelu"] if r.provenance.run == date.today()]
     assert (row.key, row.max_ulp, row.provenance.measured) == (
         (("in", "Float16"), ("out", "Float16")),
@@ -1361,7 +1362,6 @@ def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch
     finally:
         MEASURED.clear()
     _load_table(path)  # what the next import of the table does
-    assert report.unplaced == []
     assert set(report.written) | set(report.kept) == {op.name for op in ops}
     assert not set(report.written) & set(report.kept)
 
@@ -1861,6 +1861,37 @@ def test_an_anchored_key_line_keeps_its_anchor_when_its_op_is_emitted(table):
     assert BudgetTable.load(table).rows_of("Neg")[0].max_ulp == 3
 
 
+def test_a_row_ending_in_a_nested_block_mapping_ends_on_its_own_last_line(table):
+    """A block row whose last value is a nested block mapping (a trailing `<<:`) ended
+    where that mapping's end event sits: on the next op's key. Re-emitting Abs then
+    swallowed `Neg:` and attached Neg's row to Abs, in a table that still loaded."""
+    text = (
+        "Abs:\n"
+        "  - in: Float16\n"
+        "    out: Float16\n"
+        "    measured: 1\n"
+        "    run: 2026-10-19\n"
+        "    <<:\n"
+        "      max_ulp: 2\n"
+        "Neg:  # its own header\n"
+        "  - {in: Float32, out: Float32, max_ulp: 2, measured: 1, run: 2026-10-19}\n"
+    )
+    table.write_text(text, encoding="utf-8")
+    before = BudgetTable(text)
+    (abs_row,) = before.rows_of("Abs")
+    assert (abs_row.first_line, abs_row.last_line) == (1, 6)
+    _record_grid("Abs", "Float16", "Float16", 2)
+    write_table(table, _RUN)
+    after = BudgetTable.load(table)
+    assert after.blocks["Neg"].header == "its own header"
+    assert [r.fields for r in after.rows_of("Neg")] == [
+        r.fields for r in before.rows_of("Neg")
+    ]
+    assert [r.key for r in after.rows_of("Abs")] == [
+        (("in", "Float16"), ("out", "Float16"))
+    ]
+
+
 def test_a_rewrite_that_would_not_load_leaves_the_table_as_it_was(table):
     """A row anchor inside an emitted block is gone from the rewrite while `Neg`'s alias
     still names it. The table was written first and loaded after, so the refusal left
@@ -1874,17 +1905,21 @@ def test_a_rewrite_that_would_not_load_leaves_the_table_as_it_was(table):
     )
     table.write_text(text, encoding="utf-8")
     _record_grid("Abs", "Float16", "Float16", 2)
-    with _refuses(ValueError) as caught:
+    with _refuses(UnloadableRewrite) as caught:
         write_table(table, _RUN)
-    assert "left as it was: found undefined alias" in str(caught.value)
-    assert isinstance(caught.value.__cause__, yaml.YAMLError)
+    assert caught.value.path == table
+    assert isinstance(caught.value.error, yaml.YAMLError)
+    assert caught.value.__cause__ is caught.value.error
     assert table.read_text(encoding="utf-8") == text
 
 
-def test_a_cell_that_ranked_no_lane_stays_without_a_figure_when_a_number_arrives(table):
+def test_a_cell_that_ranked_no_lane_is_written_without_a_figure_when_a_number_arrives(
+    table,
+):
     """A no-lane verdict (`nonfinite == 0`) given a later reading's figure was written as
     `{metric: tolerance, measured: N}` with no `nonfinite`: an ordinary demotion to every
-    reader, held to N by the headroom report. It stays not measurable, with no figure.
+    reader, held to N by the headroom report. Its row stays not measurable, with no
+    figure; the figure is kept underneath, for a non-finite verdict arriving later.
     """
     from helpers.ulp_sweep import Unmeasurable, record_unmeasurable
 
@@ -1896,7 +1931,47 @@ def test_a_cell_that_ranked_no_lane_stays_without_a_figure_when_a_number_arrives
         ]
         for step in steps[::order]:
             step()
-        assert MEASURED["Gelu"][_CELL] == Unmeasurable(why="no lane"), order
+        assert MEASURED["Gelu"][_CELL].nonfinite == 0, order
+        write_table(table, _RUN)
+        row = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
+        assert (row.metric, row.provenance) == (
+            "tolerance",
+            Provenance(run=_RUN),
+        ), order
+
+
+def test_three_readings_of_one_cell_merge_alike_in_any_order(table):
+    """9, then a no-lane verdict, then an overflow verdict with a figure of its own, 2:
+    the no-lane verdict dropped the 9, so the overflow won with its 2, while in the
+    other order the cell kept 9. The order the workers' readings arrived in picked the
+    baseline. Every order now gives the overflow verdict with the worst figure, read in
+    one process or each in a worker of its own and merged by the controller."""
+    from itertools import permutations
+
+    from helpers.ulp_sweep import Unmeasurable, record_unmeasurable
+
+    readings = (
+        lambda: record("Gelu", _CELL, 9),
+        lambda: record_unmeasurable("Gelu", _CELL, Unmeasurable(why="no lane")),
+        lambda: record_unmeasurable(
+            "Gelu", _CELL, Unmeasurable(why="overflow", nonfinite=3, measured=2)
+        ),
+    )
+    worst = Unmeasurable(why="overflow", nonfinite=3, measured=9)
+    for order in permutations(range(len(readings))):
+        MEASURED.clear()
+        for i in order:
+            readings[i]()
+        assert MEASURED["Gelu"][_CELL] == worst, order
+        exported = []
+        for i in order:
+            MEASURED.clear()
+            readings[i]()
+            exported.append(export_measured())
+        MEASURED.clear()
+        for rows in exported:
+            merge_measured(rows)
+        assert MEASURED["Gelu"][_CELL] == worst, order
 
 
 def test_a_cell_whose_every_claimed_lane_is_non_finite_records_no_figure():

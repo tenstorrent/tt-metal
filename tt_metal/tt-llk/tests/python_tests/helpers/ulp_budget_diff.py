@@ -547,6 +547,12 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
             # collapsed row replacing N keyed rows of one budget is one line marked xN.
             ident = (op, kind, deciding.key, was.describe(), now.describe())
             found = grouped.get(ident)
+            remeasured = _remeasured(base, now.row, kind, was.row)
+            if found is not None:
+                # `_remeasured` reads `was.row`, which can differ between the variants
+                # of one group: the group is n/a only if every variant is, and not
+                # re-measured if any variant is not.
+                remeasured = _combined_remeasured(found.remeasured, remeasured)
             grouped[ident] = Change(
                 (op, deciding.key),
                 kind,
@@ -555,9 +561,16 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
                 variants=found.variants + 1 if found else 1,
                 held_before=was.describe(),
                 held_after=now.describe(),
-                remeasured=_remeasured(base, now.row, kind, was.row),
+                remeasured=remeasured,
             )
     return sorted(grouped.values(), key=lambda c: (_KIND_ORDER.index(c.kind), c.cell))
+
+
+def _combined_remeasured(a: Optional[bool], b: Optional[bool]) -> Optional[bool]:
+    """Two variants' :func:`_remeasured`, for the one ``Change`` they share."""
+    if a is None and b is None:
+        return None
+    return a is not False and b is not False
 
 
 def _remeasured(

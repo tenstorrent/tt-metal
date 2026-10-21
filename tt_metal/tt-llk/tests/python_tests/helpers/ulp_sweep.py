@@ -1101,9 +1101,7 @@ def record(
     keep whichever arrived last, which is the polarity that can hide error; ``max`` is
     the one that cannot. For the same reason a cell already recorded unmeasurable
     (:func:`record_unmeasurable`) stays so: a number arriving later does not rescue it,
-    though its worst lane still counts -- except against a verdict of no rankable lane
-    and no non-finite one (``nonfinite == 0``), which takes no figure
-    (:func:`_with_measured`). A floor is derived from one reading's lanes, so
+    though its worst lane still counts (:func:`_with_measured`). A floor is derived from one reading's lanes, so
     two readings that differ keep the worst lane with no floor, which can demote the cell
     but cannot hide error.
     """
@@ -1145,14 +1143,13 @@ def record_unmeasurable(
 
 
 def _with_measured(verdict: Unmeasurable, measured: Optional[int]) -> Unmeasurable:
-    """*verdict* with *measured* as its finite-lane figure, if that is worse."""
-    if (
-        measured is None
-        or verdict.nonfinite == 0
-        or (verdict.measured is not None and verdict.measured >= measured)
+    """*verdict* with *measured* as its finite-lane figure, if that is worse. Kept on a
+    verdict of no rankable lane too, though its row will not write it (:func:`_decide`):
+    dropped here, a later non-finite verdict would win with only its own figure, and the
+    cell's worst lane would depend on the order the workers' readings arrived in."""
+    if measured is None or (
+        verdict.measured is not None and verdict.measured >= measured
     ):
-        # A verdict that ranked no lane records no figure: one attached here would be
-        # written without `nonfinite`, and the row would read as an ordinary demotion.
         return verdict
     return replace(verdict, measured=measured)
 
@@ -1301,6 +1298,10 @@ def _decide(
     for key, v in cells.items():
         exact = op_name is not None and _is_exact(op_name, key[0], key[1], key[3])
         if isinstance(v, Unmeasurable):
+            if v.nonfinite == 0:
+                # A verdict that ranked no lane records no figure: one written here would
+                # sit without `nonfinite`, and the row would read as an ordinary demotion.
+                v = replace(v, measured=None)
             decided[key] = (("unmeasurable", v), v.measured, None)
         elif isinstance(v, Floored):
             plain = _verdict(v.max_ulp, key[1], key[0], exact)
@@ -1377,7 +1378,9 @@ class WriteReport:
     #: ``_render`` cannot put back (``atol``, ``rtol``), or ``alias`` for a row whose
     #: fields live on an anchor.
     kept: Dict[str, str]
-    #: Ops measured with no key line to write into.
+    #: Ops measured with no key line to write into. ``write_table`` raises
+    #: :class:`UnplacedMeasurements` instead of returning a report with any, so this is
+    #: non-empty only on that exception's ``.report``.
     unplaced: List[str]
 
     def summary(self) -> str:
@@ -1488,6 +1491,19 @@ class UnplacedMeasurements(EmitRefused):
             f"{', '.join(report.unplaced)} and the "
             "table has no key line for them, so they were not written. Give an op its "
             "block first (SFPU_ULP.md, step 2) to enrol it."
+        )
+
+
+class UnloadableRewrite(EmitRefused):
+    """The rewritten table would not load -- a row anchor gone from an emitted block
+    while an alias elsewhere still names it -- so nothing was written. *error* is the
+    loader's refusal."""
+
+    def __init__(self, path: Path, error: Exception):
+        self.path, self.error = path, error
+        super().__init__(
+            f"{path}: the rewritten table would not load, so it was left as it was: "
+            f"{error}"
         )
 
 
@@ -1737,10 +1753,7 @@ def write_table(path, run: date) -> WriteReport:
     try:
         after = BudgetTable(text)
     except (ValueError, yaml.YAMLError) as error:
-        raise ValueError(
-            f"{path}: the rewritten table would not load, so it was left as it was: "
-            f"{error}"
-        ) from error
+        raise UnloadableRewrite(path, error) from error
     path.write_text(text, encoding="utf-8")
     report = WriteReport(
         path=path,

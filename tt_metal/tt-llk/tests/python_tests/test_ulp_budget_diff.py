@@ -559,10 +559,7 @@ def test_the_guard_refuses_provenance_the_registry_refuses(tmp_path, row, proble
     with _refuses(ValueError) as caught:
         parse_table(text)
     assert problem in str(caught.value)
-    base, head = tmp_path / "base.yaml", tmp_path / "head.yaml"
-    base.write_text(_BASE, encoding="utf-8")
-    head.write_text(text, encoding="utf-8")
-    assert main(["diff", "--base", str(base), "--head", str(head)]) == 2
+    assert _diff_main(tmp_path, _BASE, text) == 2
 
 
 def test_a_base_from_before_the_provenance_fields_is_refused_not_misjudged(
@@ -572,16 +569,9 @@ def test_a_base_from_before_the_provenance_fields_is_refused_not_misjudged(
     `measured` the head adds would be a raised baseline and every tolerance figure that
     rose across the migration invisible. The base is refused, by name, as a table the
     registry cannot load: no verdict across the migration means anything."""
-    base, head = tmp_path / "base.yaml", tmp_path / "head.yaml"
-    base.write_text(
-        _HEADER + "\n  - {in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP\n",
-        encoding="utf-8",
-    )
-    head.write_text(_BASE, encoding="utf-8")
-    assert (
-        main(["diff", "--base", str(base), "--head", str(head), "--allow-raises"]) == 2
-    )
-    assert f"the base table ({base})" in capsys.readouterr().out
+    base = _HEADER + "\n  - {in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP\n"
+    assert _diff_main(tmp_path, base, _BASE, "--allow-raises") == 2
+    assert f"the base table ({tmp_path / 'base.yaml'})" in capsys.readouterr().out
 
 
 def test_a_merge_key_row_is_read_through():
@@ -1007,6 +997,21 @@ def _write(tmp_path, name, text):
     return str(path)
 
 
+def _diff_main(tmp_path, base, head, *flags):
+    """The guard's `diff` command over *base* and *head*, written to ``base.yaml`` and
+    ``head.yaml`` in *tmp_path*; its exit status."""
+    return main(
+        [
+            "diff",
+            "--base",
+            _write(tmp_path, "base.yaml", base),
+            "--head",
+            _write(tmp_path, "head.yaml", head),
+            *flags,
+        ]
+    )
+
+
 _RAISED = _edited(
     0, f"{{in: Float16_b, out: Float16_b, max_ulp: 9, measured: 1, {_RUN}}}"
 )
@@ -1034,17 +1039,7 @@ def test_diff_exit_status(tmp_path, capsys, head, flags, status, says):
     """Under --allow-raises the exit status fails only a table the registry refuses:
     the flag admits a loosened gate, not a table no gate can be read from."""
     out = tmp_path / "report.md"
-    argv = [
-        "diff",
-        "--base",
-        _write(tmp_path, "base.yaml", _BASE),
-        "--head",
-        _write(tmp_path, "head.yaml", head),
-        "--out",
-        str(out),
-        *flags,
-    ]
-    assert main(argv) == status
+    assert _diff_main(tmp_path, _BASE, head, "--out", str(out), *flags) == status
     assert says in out.read_text(encoding="utf-8")
     assert says in capsys.readouterr().out
 
@@ -1256,19 +1251,14 @@ def test_the_spelled_out_sets_are_the_registrys():
         f"{{in: Float16_b, out: Float16_b, metric: ulps, max_ulp: 1, measured: 1, {_RUN}}}",
         f"{{in: Float16_b, out: Float16_b, approx: Maybe, max_ulp: 1, measured: 1, {_RUN}}}",
         f"{{in: Float16_b, in: Float16, out: Float16_b, max_ulp: 1, measured: 1, {_RUN}}}",
+        # Doubled braces, pasted from an f-string, and a row containing itself: the walk
+        # over the node tree raised TypeError and RecursionError, not a refusal.
+        f"{{{{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, {_RUN}}}}}",
+        "&row [*row]",
     ],
 )
 def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, capsys, row):
-    head = _head(row)
-    argv = [
-        "diff",
-        "--base",
-        _write(tmp_path, "base.yaml", _BASE),
-        "--head",
-        _write(tmp_path, "head.yaml", head),
-        "--allow-raises",
-    ]
-    assert main(argv) == 2
+    assert _diff_main(tmp_path, _BASE, _head(row), "--allow-raises") == 2
     assert "cannot load" in capsys.readouterr().out
 
 
@@ -1404,24 +1394,14 @@ def test_a_widened_bound_that_cannot_record_a_measurement_reads_n_a(tmp_path, ca
     hold it to a rule it cannot meet. It reads "n/a" and stays out of that list; a bound
     that *ungates* a cell is still held to the rule."""
     base = _head(
-        f"{{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, {_RUN}}}",
-        "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.13}",
+        _BASE_ROWS[0], "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.13}"
     )
     head = _head(
-        f"{{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, {_RUN}}}",
-        "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.5}",
+        _BASE_ROWS[0], "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.5}"
     )
     (change,) = _changes(base, head)
     assert (change.kind, change.remeasured) == ("tolerance_widened", None)
-    argv = [
-        "diff",
-        "--base",
-        _write(tmp_path, "base.yaml", base),
-        "--head",
-        _write(tmp_path, "head.yaml", head),
-        "--allow-raises",
-    ]
-    assert main(argv) == 0
+    assert _diff_main(tmp_path, base, head, "--allow-raises") == 0
     out = capsys.readouterr().out
     assert "| n/a |" in out and "carry no fresh measurement" not in out
     ungated = _head(
@@ -1442,6 +1422,19 @@ def test_a_widened_bound_that_cannot_record_a_measurement_reads_n_a(tmp_path, ca
             if c.before is not None and c.before.provenance != Provenance()
         ]
         assert dropped.remeasured is False, (bound, dropped.kind)
+    # One group, two variants: `out: Float16` resolved to a recorded figure in the base,
+    # the wildcard to nothing. Rebuilt per variant, the wildcard ran last and the group
+    # read n/a; any variant held to the rule holds the group to it.
+    base = _head(
+        f"{{out: Float16, metric: tolerance, measured: 384, {_RUN}}}",
+        "{metric: tolerance, atol: 0.13}",
+    )
+    grouped = [
+        c
+        for c in _changes(base, _head("{metric: tolerance, atol: 0.2}"))
+        if c.kind == "tolerance_widened"
+    ]
+    assert [(c.variants > 1, c.remeasured) for c in grouped] == [(True, False)]
 
 
 def test_a_budget_raised_inside_a_root_merge_is_refused_not_compared_clean(tmp_path):
@@ -1454,12 +1447,4 @@ def test_a_budget_raised_inside_a_root_merge_is_refused_not_compared_clean(tmp_p
             f"{budget}, measured: 2, {_RUN}}}]}}\n"
         )
 
-    argv = [
-        "diff",
-        "--base",
-        _write(tmp_path, "base.yaml", merged(2)),
-        "--head",
-        _write(tmp_path, "head.yaml", merged(9)),
-        "--allow-raises",
-    ]
-    assert main(argv) == 2
+    assert _diff_main(tmp_path, merged(2), merged(9), "--allow-raises") == 2

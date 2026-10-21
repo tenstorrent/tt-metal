@@ -43,7 +43,8 @@ so both write nothing and say so. An op whose block it cannot regenerate (an op-
 `atol`/`rtol` row on a measured cell, or an alias) is kept verbatim and named in the
 summary with why; the session still passes, so a whole-table emit can end green. Each
 refusal is its own exception type (`WrongArch`, `SessionNotClean`, `IncompleteGrid`,
-`AmbiguousCollapse`, `UnplacedMeasurements`), and a successful emit returns a
+`AmbiguousCollapse`, `UnplacedMeasurements`, and `UnloadableRewrite` for a rewrite
+that would not load, which leaves the table as it was), and a successful emit returns a
 `WriteReport` that the one-line summary is rendered from.
 
 ## Why a step budget rather than a tolerance

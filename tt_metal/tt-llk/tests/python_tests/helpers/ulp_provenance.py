@@ -40,27 +40,44 @@ _LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 _MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
-def refuse_duplicate_keys(node: yaml.Node, where: str) -> None:
+def refuse_duplicate_keys(
+    node: yaml.Node, where: str, _open: frozenset = frozenset()
+) -> None:
     """PyYAML keeps the last of two identical mapping keys without a word, so a
     copy-pasted op name would drop the earlier op's whole table. Checked on the composed
     node tree, before anything is constructed. ``<<`` merge keys are skipped: overriding
-    a merged field is what they are for."""
+    a merged field is what they are for.
+
+    Also refuses what no walk over the tree can read, so the walks after this one need
+    not: a key that is not a scalar (``- {{in: Float16_b, ...}}``, pasted from a test's
+    f-string, has a mapping for its key), and an anchor that contains itself."""
+    if id(node) in _open:
+        raise ValueError(
+            f"{where} line {node.start_mark.line + 1}: an anchor that contains itself "
+            "through an alias."
+        )
+    _open = _open | {id(node)}
     if isinstance(node, yaml.MappingNode):
         seen = set()
         for key, value in node.value:
-            if key.tag == _MERGE_TAG:
-                continue
-            if key.value in seen:
+            if not isinstance(key, yaml.ScalarNode):
                 raise ValueError(
-                    f"{where} line {key.start_mark.line + 1}: duplicate entry for "
-                    f"{key.value!r}. YAML keeps only the "
-                    "last, so the earlier one would vanish with nothing to catch it."
+                    f"{where} line {key.start_mark.line + 1}: a key that is a "
+                    f"{'list' if isinstance(key, yaml.SequenceNode) else 'mapping'}, "
+                    "not a name. Doubled braces `{{...}}` read as a mapping inside one."
                 )
-            seen.add(key.value)
-            refuse_duplicate_keys(value, where)
+            if key.tag != _MERGE_TAG:
+                if key.value in seen:
+                    raise ValueError(
+                        f"{where} line {key.start_mark.line + 1}: duplicate entry for "
+                        f"{key.value!r}. YAML keeps only the "
+                        "last, so the earlier one would vanish with nothing to catch it."
+                    )
+                seen.add(key.value)
+            refuse_duplicate_keys(value, where, _open)
     elif isinstance(node, yaml.SequenceNode):
         for item in node.value:
-            refuse_duplicate_keys(item, where)
+            refuse_duplicate_keys(item, where, _open)
 
 
 def _merged_keys(node: yaml.Node) -> set:
@@ -418,19 +435,10 @@ class BudgetTable:
                 while not isinstance(events[i], yaml.SequenceEndEvent):
                     start = events[i]
                     end_index = _skip_node(events, i)
-                    end = events[end_index - 1]
-                    if (
-                        isinstance(start, yaml.MappingStartEvent)
-                        and not start.flow_style
-                        and end_index - 2 > i
-                    ):
-                        # A block-style row's MappingEnd sits at the next token, the
-                        # next row's line; its last value is where the row ends.
-                        end = events[end_index - 2]
                     positions.append(
                         (
                             start.start_mark,
-                            end.end_mark,
+                            _content_end(events, i, end_index),
                             isinstance(start, yaml.AliasEvent),
                         )
                     )
@@ -490,6 +498,23 @@ def _skip_node(events: list, i: int) -> int:
             depth -= 1
         if depth == 0:
             return i
+
+
+def _content_end(events: list, i: int, end: int):
+    """The end mark of the last text the node *events[i:end]* holds. A block
+    collection's end event sits at the next token -- the next row's line, or the next
+    op's key after a trailing nested ``<<:`` mapping -- so only scalars, aliases and a
+    flow collection's closing bracket count."""
+    mark, flow = events[i].end_mark, []
+    for event in events[i:end]:
+        if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+            flow.append(event.flow_style)
+        elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+            if flow.pop():
+                mark = event.end_mark
+        else:
+            mark = event.end_mark
+    return mark
 
 
 def render_row(row_fields: Dict[str, Any], comment: str = "") -> str:

@@ -977,6 +977,9 @@ def test_arch_must_be_passed_explicitly():
             "cannot be below it",
         ),
         ("Abs:\n  - {metric: tolerance, sampled: 2026-01-01}\n", "without the"),
+        # Doubled braces, pasted from an f-string: the row's one key is a mapping.
+        ("Abs:\n  - {{max_ulp: 1}}\n", "a key that is a mapping"),
+        ("Abs: &rows\n  - *rows\n", "contains itself"),
     ],
     ids=[
         "repeated-op",
@@ -1003,6 +1006,8 @@ def test_arch_must_be_passed_explicitly():
         "measured-all-with-a-null-floor",
         "measured-all-below-measured",
         "sampled-without-measured",
+        "doubled-braces",
+        "self-containing-anchor",
     ],
 )
 def test_the_loader_refuses_what_it_cannot_represent(tmp_path, text, match):
@@ -1916,8 +1921,7 @@ def test_a_demoted_row_measured_past_the_ceiling():
         p, fields = row.provenance, row.pinned
         if row.metric != "tolerance" or not p.swept or p.unmeasurable:
             continue
-        out_fmt = DataFormat[fields["out"]]
-        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
+        if not _step_gateable_output(DataFormat[fields["out"]]):
             continue  # block-quantized: never enrolled from this sweep
         verdict = _verdict(
             p.measured,
