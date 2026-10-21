@@ -229,6 +229,31 @@ inline void _llk_math_set_dvalid_()
         // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
         TTI_CLEARDVALID(0, 0, 0, SET_DEST_DVALID, SET_DEST_DVALID, 0);
     }
+    else
+    {
+        math::_update_clear_dest_bank_id_();
+    }
+}
+
+/**
+ * @brief Zeroes the dest bank an accumulating op (matmul, reduce) is about to write.
+ *
+ * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
+ * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ * @param bank: bank to zero in SyncHalf, @ref math::clear_dest_bank_id when @ref _llk_math_set_dvalid_ ends the sections
+ * @note Call after the dest handshake admits the FPU and before the first accumulating call of the section.
+ */
+template <DstSync DST, bool EN_32BIT_DEST>
+inline void _llk_math_dest_clear_(const std::uint32_t bank)
+{
+    if constexpr (DST == DstSync::SyncFull)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_0, 0);
+    }
+    else
+    {
+        TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_0, bank);
+    }
 }
 
 // All the following functions are added to enable Math <-> Pack synchronization

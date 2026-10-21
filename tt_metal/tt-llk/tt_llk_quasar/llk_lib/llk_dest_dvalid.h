@@ -76,6 +76,25 @@ constexpr std::uint32_t ctrl_word(const std::uint32_t wait_mask, const std::uint
 
 constexpr std::uint32_t PULSE_STALL = p_stall::STALL_THREAD;
 
+// Semaphore that carries "the previous section on this bank is finished" to a section head, per head unit and bank.
+// PACK never heads a section. 0 and 3 are the unpack to dest semaphores, unused by a chain kernel.
+constexpr std::uint8_t TOKEN_SEMS[4][2] = {{12, 13}, {14, 15}, {0, 3}, {0, 0}};
+
+constexpr std::uint8_t token_sem(const dest_dvalid_client head, const std::uint32_t bank)
+{
+    return TOKEN_SEMS[static_cast<int>(head)][bank];
+}
+
+constexpr std::uint32_t sem_bank(const std::uint8_t sem)
+{
+    return sem >> 3;
+}
+
+constexpr std::uint32_t sem_sel(const std::uint8_t sem)
+{
+    return 1u << (sem & 7);
+}
+
 } // namespace dest_dvalid
 
 /**
@@ -107,15 +126,51 @@ inline void _llk_dest_dvalid_write_release_()
 }
 
 /**
- * @brief Admit UNIT on its own ownership bit without programming an unknown successor.
+ * @brief Gate UNIT's dest accesses for its turn and preset the toggle of its section end pulse.
+ *
+ * A head is admitted by its token semaphore, never sets its own bit, and so ends with an empty toggle.
+ * A unit admitted by a signal waits for its own bit and clears that bit when it ends the section.
  */
-template <dest_dvalid_client UNIT>
-inline void _llk_dest_dvalid_write_wait_()
+template <dest_dvalid_client UNIT, bool HEAD, DstSync DST>
+inline void _llk_dest_dvalid_admit_()
 {
-    constexpr dest_dvalid::UnitInfo INFO = dest_dvalid::info_of(UNIT);
-    constexpr std::uint32_t OWN          = dest_dvalid::bit_of(UNIT);
-    TTI_RMWCIB0(INFO.ctrl_addr32, 0xFF, dest_dvalid::ctrl_word(OWN, OWN, 0, false));
-    TTI_STALLWAIT(INFO.stall_class, p_stall::NOTHING, p_stall::NOTHING, p_stall::CFGEXU);
+    constexpr std::uint32_t OWN = HEAD ? 0 : dest_dvalid::bit_of(UNIT);
+    _llk_dest_dvalid_write_ctrl_<UNIT, dest_dvalid::ctrl_word(OWN, OWN, OWN, DST == DstSync::SyncFull)>();
+}
+
+/**
+ * @brief Block UNIT's thread until the previous section on `bank` has finished, then consume the token.
+ */
+inline void _llk_dest_dvalid_token_wait_(const std::uint8_t sem)
+{
+    TT_SEMWAIT(p_stall::STALL_THREAD, p_stall::STALL_ON_ZERO, dest_dvalid::sem_bank(sem), dest_dvalid::sem_sel(sem));
+    TT_SEMGET(dest_dvalid::sem_bank(sem), dest_dvalid::sem_sel(sem));
+}
+
+/**
+ * @brief Hand the token of a finished bank to the head that actually starts the next section on it.
+ * @note Runs on the thread of the unit the token was posted to, so its wait orders the post after the finish.
+ */
+inline void _llk_dest_dvalid_token_forward_(const std::uint8_t from_sem, const std::uint8_t to_sem)
+{
+    TT_SEMWAIT(p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO, dest_dvalid::sem_bank(from_sem), dest_dvalid::sem_sel(from_sem));
+    TT_SEMGET(dest_dvalid::sem_bank(from_sem), dest_dvalid::sem_sel(from_sem));
+    TT_SEMPOST(dest_dvalid::sem_bank(to_sem), dest_dvalid::sem_sel(to_sem));
+}
+
+/**
+ * @brief Seed every token semaphore. For firmware boot, from one thread, when no section is active.
+ */
+inline void _llk_dest_dvalid_token_init_()
+{
+    for (std::uint32_t head = 0; head < 3; ++head)
+    {
+        for (std::uint32_t bank = 0; bank < 2; ++bank)
+        {
+            const std::uint8_t sem = dest_dvalid::TOKEN_SEMS[head][bank];
+            TT_SEMINIT(1 /*max_value*/, 0 /*init_value*/, dest_dvalid::sem_bank(sem), dest_dvalid::sem_sel(sem));
+        }
+    }
 }
 
 /**
@@ -150,53 +205,31 @@ inline void _llk_dest_dvalid_leave_()
 }
 
 /**
- * @brief PACK zeroes the bank it has just read, once its reads are done. Only PACK clears dest.
- */
-template <DstSync DST, bool EN_32BIT_DEST>
-inline void _llk_dest_dvalid_pack_clear_(const std::uint32_t bank)
-{
-    TTI_STALLWAIT(dest_dvalid::PULSE_STALL, p_stall::NOTHING, p_stall::CFGEXU, p_stall::PACK);
-    if constexpr (DST == DstSync::SyncFull)
-    {
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_0, 0);
-    }
-    else
-    {
-        TT_ZEROACC(p_zeroacc::CLR_HALF, EN_32BIT_DEST, 0, ADDR_MOD_0, bank);
-    }
-}
-
-/**
  * @brief Hand dest to NEXT after UNIT finishes, doing nothing when UNIT already owns it.
+ * @tparam HEAD: true when UNIT holds dest as the section head, so it has no own bit to clear
  */
-template <dest_dvalid_client UNIT, dest_dvalid_client NEXT, DstSync DST>
+template <dest_dvalid_client UNIT, dest_dvalid_client NEXT, DstSync DST, bool HEAD>
 inline void _llk_dest_dvalid_signal_()
 {
     static_assert(UNIT != dest_dvalid::NONE && NEXT != dest_dvalid::NONE, "a signal needs an owner and a successor");
     if constexpr (UNIT != NEXT)
     {
-        _llk_dest_dvalid_write_release_<UNIT, dest_dvalid::bit_of(UNIT) ^ dest_dvalid::bit_of(NEXT), DST == DstSync::SyncFull>();
+        constexpr std::uint32_t OWN = HEAD ? 0 : dest_dvalid::bit_of(UNIT);
+        _llk_dest_dvalid_write_release_<UNIT, OWN ^ dest_dvalid::bit_of(NEXT), DST == DstSync::SyncFull>();
         _llk_dest_dvalid_pulse_<UNIT>();
     }
 }
 
 /**
- * @brief Finish a section with no ownership bit set, ready for its next head's publication.
- * @param bank: bank UNIT is on, the one PACK zeroes in SyncHalf
+ * @brief Finish a section once UNIT's reads are done: clear UNIT's bit, then post the token the next head waits for.
+ * @param token_sem: semaphore of this section's head, see @ref dest_dvalid::token_sem
+ * @note The pulse uses the toggle preset by @ref _llk_dest_dvalid_admit_, so no control write is needed here.
  */
-template <dest_dvalid_client UNIT, DstSync DST, bool EN_32BIT_DEST>
-inline void _llk_dest_dvalid_finish_(const std::uint32_t bank)
+template <dest_dvalid_client UNIT>
+inline void _llk_dest_dvalid_finish_(const std::uint8_t token_sem)
 {
-    _llk_dest_dvalid_write_release_<UNIT, dest_dvalid::bit_of(UNIT), DST == DstSync::SyncFull>();
-    if constexpr (UNIT == dest_dvalid_client::PACK)
-    {
-        _llk_dest_dvalid_pack_clear_<DST, EN_32BIT_DEST>(bank);
-        TTI_CLEARDVALID(0, 0, 0, 0, dest_dvalid::bit_of(UNIT), 0);
-    }
-    else
-    {
-        _llk_dest_dvalid_pulse_<UNIT>();
-    }
+    _llk_dest_dvalid_pulse_<UNIT>();
+    TT_SEMPOST(dest_dvalid::sem_bank(token_sem), dest_dvalid::sem_sel(token_sem));
 }
 
 /**

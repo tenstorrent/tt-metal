@@ -41,6 +41,8 @@ class Fpu:
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
     supports_dest_offset: bool = True
+    # True for ops that accumulate into dest and need it zeroed once per block.
+    clears_dest: bool = False
 
     def init(
         self,

@@ -17,6 +17,7 @@ from helpers.llk_params import ReduceDimension, ReducePool
 
 class ReduceFpu(Fpu):
     granularity = InvocationGranularity.TILE
+    clears_dest = True
     golden_fn = staticmethod(reduce_golden)
 
     def __init__(self, reduce_dim: ReduceDimension, reduce_pool: ReducePool):

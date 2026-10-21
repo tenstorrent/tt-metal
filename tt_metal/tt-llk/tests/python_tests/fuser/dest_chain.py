@@ -65,6 +65,14 @@ def init(config: "GlobalConfig", operation: "L1Operation") -> str:
     )
 
 
+def clear_dest(config: "GlobalConfig", operation: "L1Operation", node) -> str:
+    if not active(config) or not node.fpu.clears_dest:
+        return ""
+    dest_sync = operation.dest_sync.cpp_enum_value
+    dest_acc = config.dest_acc.cpp_enum_value
+    return f"_llk_math_dest_clear_<{dest_sync}, {dest_acc}>(_llk_dest_chain_bank_());\n"
+
+
 class Section:
 
     def __init__(self, config: "GlobalConfig", operation: "L1Operation"):
@@ -73,9 +81,6 @@ class Section:
             f"{operation.dest_sync.cpp_enum_value}, {config.dest_acc.cpp_enum_value}"
         )
 
-    def begin(self) -> str:
-        return "_llk_dest_chain_section_begin_();\n" if self.on else ""
-
     def take(self, node) -> str:
         if not self.on:
             return ""
@@ -83,6 +88,3 @@ class Section:
 
     def takes(self, nodes) -> str:
         return "".join(self.take(node) for node in nodes)
-
-    def end(self) -> str:
-        return f"_llk_dest_chain_section_end_<{self.args}>();\n" if self.on else ""

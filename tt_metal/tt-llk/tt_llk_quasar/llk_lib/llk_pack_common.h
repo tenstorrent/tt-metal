@@ -125,42 +125,23 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format,
 }
 
 /**
- * @brief Clears the dest register data valid after Packer 0 finishes packing and zeroes the dest bank(s) it used.
+ * @brief Clears the dest register data valid after Packer 0 finishes packing.
  *
- * Uses ADDR_MOD_0 from the math thread, but since ZEROACC here only does CLR_HALF or CLR_ALL mode the
- * addr_mod should not matter; it is the duty of the math operation to clear the counters set by addrmods
- * before using the cleared bank. This function uses the dest data-valid client synchronization scheme and
- * updates the dest register address offset accordingly. Only one sync scheme may be used at a time (data
- * valids or semaphores), so do not mix this with the semaphore variant @ref _llk_pack_dest_semaphore_section_done_.
+ * Uses the dest dvalid scheme, so do not mix with @ref _llk_pack_dest_semaphore_section_done_.
  *
  * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
- * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ * @tparam EN_32BIT_DEST: Unused, kept for the callers
  */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_dvalid_section_done_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::PACK);
-
-    constexpr std::uint32_t ZEROACC_CLR_MODE = (DST == DstSync::SyncHalf) ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL;
-    if constexpr (DST == DstSync::SyncFull)
-    {
-        TTI_ZEROACC(ZEROACC_CLR_MODE, EN_32BIT_DEST, 0, ADDR_MOD_0, 0);
-    }
-    else
-    {
-        TT_ZEROACC(ZEROACC_CLR_MODE, EN_32BIT_DEST, 0, ADDR_MOD_0, ckernel::pack::clear_dest_bank_id);
-    }
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK);
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::PACK, 0);
     if constexpr (DST == DstSync::SyncFull)
     {
         // For DstSync::SyncFull issue a CLEARDVALID instruction for dest bank1 as well in order to use full dest register
         // Reset dest bank id to 0 for the given dest client to ensure SyncFull starts from bank0
         TTI_CLEARDVALID(0, 0, 0, p_cleardvalid::PACK, p_cleardvalid::PACK, 0);
-    }
-
-    if constexpr (DST == DstSync::SyncHalf)
-    {
-        ckernel::pack::_update_clear_dest_bank_id_();
     }
 }
 

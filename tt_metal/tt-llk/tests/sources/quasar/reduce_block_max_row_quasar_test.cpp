@@ -79,6 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
 
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(TILE_CNT, tensor_shape_A);
+    _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
     _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /*dst_index*/, tensor_shape_A);
 
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();

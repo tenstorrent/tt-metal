@@ -35,20 +35,6 @@ union pack_untilize_stride_cfg_u
 };
 
 constexpr static std::uint32_t PACR_STRIDE_OFFSET_ROWS = 8;
-// Dest bank cleared by the dvalid pack section-done (SyncHalf), toggles 0/1 per section.
-// thread_local so each pack TRISC (one per Neo) has its own toggle (tt-llk#1678). Mirrors dest_register_offset:
-// ENV_LLK_INFRA uses a plain static; the metal build defines it in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
-#ifdef ENV_LLK_INFRA
-static std::uint32_t clear_dest_bank_id = 0;
-#else
-extern thread_local std::uint32_t clear_dest_bank_id;
-#endif
-
-inline void _update_clear_dest_bank_id_()
-{
-    clear_dest_bank_id = 1 - clear_dest_bank_id;
-}
-
 // Edge Mask configs for pack reduce
 constexpr std::uint32_t EDGE_MASK_MODE_ZERO    = 0x0; // masked datums -> 0
 constexpr std::uint32_t EDGE_MASK_MODE_NEG_INF = 0x1; // masked datums -> -inf

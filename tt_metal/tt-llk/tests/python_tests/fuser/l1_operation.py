@@ -170,7 +170,7 @@ class L1Operation:
 
         def batch_body(planned: PlannedBlock, constants):
             chain = dest_chain.Section(config, self)
-            body = chain.begin()
+            body = ""
             for cu in self.math_nodes:
                 body += chain.take(cu)
                 if not isinstance(cu, FpuNode):
@@ -194,7 +194,6 @@ class L1Operation:
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
             body += chain.takes(self.pack_nodes)
-            body += chain.end()
             return body
 
         code += self._zone_loop(
@@ -243,7 +242,7 @@ class L1Operation:
 
         def batch_body(planned: PlannedBlock, constants):
             chain = dest_chain.Section(config, self)
-            body = chain.begin()
+            body = ""
             body += fpu_common.math_wait_for_dest(config, self)
             previous = None
             for cu in self.math_nodes:
@@ -252,6 +251,7 @@ class L1Operation:
                 if isinstance(cu, SfpuNode) and isolate_sfpu:
                     body += self._math_sfpu_handoff(config, cu, previous)
                 elif isinstance(cu, FpuNode):
+                    body += dest_chain.clear_dest(config, self, cu)
                     if not hoist_reconfig and not config.skip_math_init:
                         body += config.sentinel.configure_math(config, self, cu)
                     if not hoist:
@@ -277,7 +277,6 @@ class L1Operation:
                 body += config.sentinel.configure_math(config, self, fpu_ops[0])
             body += fpu_common.math_dest_section_done(config, self)
             body += chain.takes(self.pack_nodes)
-            body += chain.end()
             return body
 
         code += self._zone_loop(
@@ -318,7 +317,7 @@ class L1Operation:
 
         def batch_body(planned: PlannedBlock, constants):
             chain = dest_chain.Section(config, self)
-            body = chain.begin()
+            body = ""
             previous = None
             for cu in self.math_nodes:
                 body += chain.take(cu)
@@ -339,7 +338,6 @@ class L1Operation:
                 body += sfpu_common.sfpu_signal_math(config, self)
             body += sfpu_common.sfpu_dest_section_done(config, self)
             body += chain.takes(self.pack_nodes)
-            body += chain.end()
             return body
 
         code += self._zone_loop(
@@ -381,7 +379,7 @@ class L1Operation:
 
         def batch_body(planned: PlannedBlock, constants):
             chain = dest_chain.Section(config, self)
-            body = chain.begin()
+            body = ""
             body += chain.takes(self.math_nodes)
             body += pack_common.packer_wait_for_math(config, self)
             if not hoist_reconfig:
@@ -413,7 +411,6 @@ class L1Operation:
                         body += pack_node.uninit(self, config)
                     prev_was_pack = True
             body += pack_common.packer_dest_section_done(config, self)
-            body += chain.end()
             return body
 
         code += self._zone_loop(

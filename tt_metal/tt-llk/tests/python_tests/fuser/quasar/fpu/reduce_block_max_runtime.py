@@ -17,6 +17,7 @@ from helpers.llk_params import ReduceDimension
 class ReduceBlockMaxRuntimeFpu(Fpu):
     granularity = InvocationGranularity.ROW
     per_block_init = True
+    clears_dest = True
     reduce_dim = ReduceDimension.Row
     golden_fn = staticmethod(reduce_block_max_row_golden)
 

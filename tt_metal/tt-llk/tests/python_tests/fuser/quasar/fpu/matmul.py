@@ -18,6 +18,7 @@ class MatmulFpu(Fpu):
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
     supports_dest_offset = False
+    clears_dest = True
     golden_fn = staticmethod(matmul_golden)
 
     def get_headers(self) -> List[str]:

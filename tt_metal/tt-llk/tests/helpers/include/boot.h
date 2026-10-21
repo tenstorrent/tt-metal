@@ -131,6 +131,7 @@ TT_ALWAYS_INLINE void device_setup()
 
 #if defined(ARCH_QUASAR)
     ckernel::_llk_dest_dvalid_boot_reset_();
+    ckernel::_llk_dest_dvalid_token_init_();
     volatile std::uint32_t* dvalid_cfg                      = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
     dvalid_cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
     dvalid_cfg[MATH_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;

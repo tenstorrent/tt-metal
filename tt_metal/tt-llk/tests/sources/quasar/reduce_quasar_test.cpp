@@ -159,6 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
                         {
                             const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                            _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                             for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                             {
                                 _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(block_tile, tensor_shape_A);
@@ -178,6 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
                     {
                         const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                        _llk_math_dest_clear_<dest_sync, is_fp32_dest_acc_en>(ckernel::math::clear_dest_bank_id);
                         for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                         {
                             _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(block_tile, tensor_shape_A);
