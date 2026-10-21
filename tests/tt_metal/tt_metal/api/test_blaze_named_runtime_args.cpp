@@ -764,6 +764,46 @@ TEST(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
     }
 }
 
+TEST(RuntimeArgCountCacheHit, CPU_TrailingEmptyDuplicateReusesCachedCount) {
+    // SetRuntimeArgs skips an empty list, so a trailing empty duplicate keeps the earlier count.
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{0, 1};
+    const std::vector<uint32_t> core0_args{1u, 2u};
+    const std::vector<uint32_t> core1_args{5u, 6u, 7u, 8u};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+            .runtime_args = {{core0, core0_args}, {core0, {}}, {core1, core1_args}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), core0_args.size());
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), core1_args.size());
+
+    apply_descriptor_runtime_args(program, desc);
+    for (uint32_t i = 0; i < core0_args.size(); ++i) {
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[i], core0_args[i]);
+    }
+
+    ProgramDescriptor same_count = desc;
+    same_count.kernels[0].runtime_args[0].second = {9u, 10u};
+    apply_descriptor_runtime_args(program, same_count);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], 10u);
+
+    ProgramDescriptor grown = same_count;
+    grown.kernels[0].runtime_args[0].second = {9u, 10u, 11u};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, grown), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], 10u);
+
+    ProgramDescriptor emptied = desc;
+    emptied.kernels[0].runtime_args = {{core0, {}}, {core1, core1_args}};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, emptied), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
+}
+
 TEST(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{0, 1};

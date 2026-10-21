@@ -69,12 +69,19 @@ std::vector<uint32_t> merge_common_runtime_args(const KernelDescriptor& kernel_d
     return merged;
 }
 
-// Same layout as merge_per_core_runtime_args, recording lengths instead of values.
+// Lengths of the positional-then-named layout. Empty lists are skipped unless named per-core args are merged.
 std::map<CoreCoord, std::size_t> merged_per_core_runtime_arg_counts(const KernelDescriptor& kernel_descriptor) {
     const auto& named_args = kernel_descriptor.blaze_named_args;
     std::map<CoreCoord, std::size_t> core_to_count;
+    // SetRuntimeArgs skips an empty list, so it must not replace the last nonempty positional count.
+    const bool merges_named_per_core_args =
+        !named_args.named_per_core_runtime_args.empty() || !named_args.named_per_core_runtime_arg_arrays.empty();
     for (const auto& [core, positional] : kernel_descriptor.runtime_args) {
-        core_to_count[core] = positional.size();
+        if (!merges_named_per_core_args && positional.empty()) {
+            core_to_count.try_emplace(core, 0);
+        } else {
+            core_to_count[core] = positional.size();
+        }
     }
     for (const auto& arg : named_args.named_per_core_runtime_args) {
         for (const auto& core_value : arg.core_values) {
