@@ -44,6 +44,13 @@ def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
     return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP", False)
 
 
+def routed_expert_combine_overlap_arg(model_cfg):
+    """TtMoe's overlap_routed_expert_with_combine for ``model_cfg``: None (on wherever it fits) for a model that
+    opts in, False (the separate ops) for every other. Every TtMoe builder passes this, tests included, so a model
+    is measured the way it runs."""
+    return None if routed_expert_combine_overlap_enabled(model_cfg) else False
+
+
 def moe_fabric_payload_size(model_cfg) -> int:
     """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
 
