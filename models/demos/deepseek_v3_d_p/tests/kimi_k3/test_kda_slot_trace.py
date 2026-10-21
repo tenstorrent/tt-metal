@@ -14,6 +14,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     build_layer,
     mla_row_permutation,
@@ -43,9 +44,22 @@ def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1)], ids=["sp1tp8", "sp2tp4"], indirect=["mesh_device"]
+    "mesh_device,sp_axis,tp_axis,device_params",
+    [
+        pytest.param((1, 8), 0, 1, fabric_1d_plain_device_params(), id="sp1tp8"),
+        pytest.param((2, 4), 0, 1, fabric_1d_plain_device_params(), id="sp2tp4"),
+        # Galaxy runs only the production 8x4 TorusXY mesh.
+        pytest.param(
+            (8, 4),
+            0,
+            1,
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="sp8tp4-torus-xy",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_params):
     mesh_shape = tuple(mesh_device.shape)
     sp = mesh_shape[sp_axis]
