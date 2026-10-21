@@ -135,7 +135,7 @@ std::vector<tt::tt_metal::TensorTopology> LlamaAllGatherMatmulAsyncDeviceOperati
     const std::vector<std::reference_wrapper<const TensorTopology>> operands{
         std::cref(aggregated_topology), std::cref(tensor_args.input1.tensor_topology())};
     return {
-        ttnn::device_operation::detail::union_topology(operands, tensor_args.input0.tensor_topology().mesh_coords()),
+        ttnn::operations::ccl::common::union_topology(operands, tensor_args.input0.tensor_topology().mesh_coords()),
         aggregated_topology};
 }
 

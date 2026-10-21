@@ -18,6 +18,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/config.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::operations::ccl::common {
 
@@ -675,6 +676,38 @@ std::optional<TensorTopology> all_to_all_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t out_dim) {
     return all_to_all_output_topology(
         input.tensor_topology(), cluster_axis, input.device()->shape(), input.logical_shape().rank(), out_dim);
+}
+
+tt::tt_metal::TensorTopology union_topology(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords) {
+    TT_FATAL(!operands.empty(), "Cannot compute the union label of no operands");
+    const auto fully_replicated = [](const tt::tt_metal::TensorTopology& label) {
+        for (const auto& placement : label.placements()) {
+            if (std::holds_alternative<Shard>(placement)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const tt::tt_metal::TensorTopology& primary = operands.front().get();
+    if (fully_replicated(primary)) {
+        auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
+        return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
+    }
+    // The first operand's rank is the result's; a sharded operand of another rank would have one side of the union
+    // dropped (the union keeps the highest rank), so it is left out. Fully replicated operands never decide the rank
+    // while something is sharded and are kept as they are.
+    const size_t rank = primary.distribution_shape().dims();
+    std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>> same_rank;
+    same_rank.reserve(operands.size());
+    for (const auto& operand : operands) {
+        if (fully_replicated(operand.get()) || operand.get().distribution_shape().dims() == rank) {
+            same_rank.push_back(operand);
+        }
+    }
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(same_rank);
+    return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
 }
 
 }  // namespace ttnn::operations::ccl::common

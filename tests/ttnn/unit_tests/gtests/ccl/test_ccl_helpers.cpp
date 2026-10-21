@@ -1829,7 +1829,7 @@ TEST(TopologyUnion, UnionTopologyKeepsTheRankOfAShardedFirstOperand) {
     const auto coords = row_major_coords(mesh);
     const auto union_topology = [&](const std::vector<TensorTopology>& labels) {
         std::vector<std::reference_wrapper<const TensorTopology>> refs(labels.begin(), labels.end());
-        return ttnn::device_operation::detail::union_topology(refs, coords);
+        return ttnn::operations::ccl::common::union_topology(refs, coords);
     };
 
     // A whole-mesh reduce_scatter result ({N}, [Shard{3}]: every device holds a distinct piece) with two N-D

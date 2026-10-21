@@ -11,6 +11,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation_detail.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
@@ -131,7 +132,7 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMatmulAsyncDeviceOperation::c
     }
     return {
         gathered.front(),
-        ttnn::device_operation::detail::union_topology(
+        ttnn::operations::ccl::common::union_topology(
             operands, tensor_args.input_tensor.tensor_topology().mesh_coords())};
 }
 

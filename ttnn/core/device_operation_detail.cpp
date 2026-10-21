@@ -156,30 +156,6 @@ compute_output_placements_and_shape(
     return {std::move(result_placements), tt::tt_metal::distributed::MeshShape(std::move(result_strides))};
 }
 
-tt::tt_metal::TensorTopology union_topology(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
-    std::vector<MeshCoordinate> mesh_coords) {
-    TT_FATAL(!operands.empty(), "Cannot compute the union label of no operands");
-    const tt::tt_metal::TensorTopology& primary = operands.front().get();
-    if (is_fully_replicated(primary)) {
-        auto [placements, shape] = compute_output_placements_and_shape(operands);
-        return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
-    }
-    // See the header: the first operand's rank is the result's; a sharded operand of another rank would have one
-    // side of the union dropped (the union keeps the highest rank), so it is left out. Fully replicated operands
-    // never decide the rank while something is sharded and are kept as they are.
-    const size_t rank = primary.distribution_shape().dims();
-    std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>> same_rank;
-    same_rank.reserve(operands.size());
-    for (const auto& operand : operands) {
-        if (is_fully_replicated(operand.get()) || operand.get().distribution_shape().dims() == rank) {
-            same_rank.push_back(operand);
-        }
-    }
-    auto [placements, shape] = compute_output_placements_and_shape(same_rank);
-    return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
-}
-
 // Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
 static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
     MeshCoordinateRangeSet a_set;

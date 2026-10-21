@@ -469,7 +469,7 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
         operands.emplace_back(tensor_args.fused_ternary_input_a->tensor_topology());
         operands.emplace_back(tensor_args.fused_ternary_input_b->tensor_topology());
     }
-    const TensorTopology matmul_topology = ttnn::device_operation::detail::union_topology(
+    const TensorTopology matmul_topology = ttnn::operations::ccl::common::union_topology(
         operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
 
     const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();

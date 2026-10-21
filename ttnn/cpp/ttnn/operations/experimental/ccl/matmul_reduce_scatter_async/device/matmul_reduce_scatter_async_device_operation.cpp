@@ -102,7 +102,7 @@ std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperatio
     if (tensor_args.bias.has_value()) {
         operands.emplace_back(tensor_args.bias->tensor_topology());
     }
-    TensorTopology mm_topology = ttnn::device_operation::detail::union_topology(operands, input_topology.mesh_coords());
+    TensorTopology mm_topology = ttnn::operations::ccl::common::union_topology(operands, input_topology.mesh_coords());
 
     auto reduce_scatter_topology = ttnn::operations::ccl::common::over_storage_ring_order(
         ttnn::operations::ccl::common::reduce_scatter_output_topology(

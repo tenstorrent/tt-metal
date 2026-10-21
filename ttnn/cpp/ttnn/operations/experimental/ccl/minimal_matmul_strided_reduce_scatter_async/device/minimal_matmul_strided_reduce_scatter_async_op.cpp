@@ -377,7 +377,7 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
     if (tensor_args.mm_optional_input_tensor.has_value()) {
         operands.emplace_back(tensor_args.mm_optional_input_tensor->tensor_topology());
     }
-    TensorTopology mm_topology = ttnn::device_operation::detail::union_topology(operands, input_topology.mesh_coords());
+    TensorTopology mm_topology = ttnn::operations::ccl::common::union_topology(operands, input_topology.mesh_coords());
 
     TensorTopology rs_output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
                                             ttnn::operations::ccl::common::reduce_scatter_output_topology(
@@ -390,7 +390,7 @@ std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync
                                             attributes.cluster_axis)
                                             .value_or(mm_topology);
     if (tensor_args.addcmul_input_tensor1.has_value() && tensor_args.addcmul_input_tensor2.has_value()) {
-        rs_output_topology = ttnn::device_operation::detail::union_topology(
+        rs_output_topology = ttnn::operations::ccl::common::union_topology(
             {std::cref(rs_output_topology),
              std::cref(tensor_args.addcmul_input_tensor1->tensor_topology()),
              std::cref(tensor_args.addcmul_input_tensor2->tensor_topology())},

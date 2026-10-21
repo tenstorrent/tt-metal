@@ -129,7 +129,7 @@ std::vector<tt::tt_metal::TensorTopology> Matmul_RS::compute_output_topologies(
     const auto& input_topology = tensor_args.matmul.input_tensor.tensor_topology();
     const auto& mesh_coords = input_topology.mesh_coords();
     const auto union_with = [&](const TensorTopology& weight_topology) {
-        return ttnn::device_operation::detail::union_topology(
+        return ttnn::operations::ccl::common::union_topology(
             {std::cref(input_topology), std::cref(weight_topology)}, mesh_coords);
     };
     const TensorTopology mm_topology = union_with(tensor_args.matmul.weight_tensor.tensor_topology());
