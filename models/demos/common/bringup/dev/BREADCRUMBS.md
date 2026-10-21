@@ -1484,3 +1484,24 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   - Selftests: test_noise_floor.py::test_an_fp32_steps_golden_limit_is_one_fp32_rounding_not_bf16,
     test_e2e_limits.py::test_the_drift_floor_is_one_rounding_in_the_stored_dtype_and_one_miss_per_selection.
   - Existing drift.json files keep their old floors until regenerated (`reference.drift --rung R`).
+- F134 (overseer, 2026-10-21; audit V5, V26): the drift is measured on the comparison it gates.
+  - reference/drift.py replays the official reference (numerics official at reference.shipped_dtype) the way the
+    ladder feeds the device on each rung: a prefix_from_golden rung loads the golden's state prefix and runs the last
+    chunk; a gapped subset starts each run from the golden block input of its first layer (written into the block
+    input forward_chunk records, which run_block hands to the steps; a forward that copies it stops, checked on the
+    first step). Was the official golden's own full propagation: prefix and gap drift the device never has (too loose
+    for X.3's last-chunk rungs, Z.1, DeepSeek's 0-3,14,20,21,24).
+  - One file per rung, `drift-<rung>.json` in the golden it reads (E.load(dir, rung)); the G task writes every reader
+    rung's (`generate_golden --set`); the -official golden is no longer made (`--numerics official` still exists).
+  - A prefix rung's states are compared over the positions the device computed: the entry's `region` (the axis
+    state_tensors slices), applied by the ladder and the quick profile too.
+  - The contract rung adds `contract_state_<name>_L<i>`: growing states over [0, seq - tail_pad rounded down to 32)
+    (what the producer reads back), fixed ones after the last chunk ending there; the contract's limits use them.
+  - Pinned: a G task's pass writes every drift file's sha into the frozen block of each device task gated on an
+    end-to-end `limit` (drift.pin, core/gate); a drift changed outside its G task fails those gates. (The report
+    proposed freeze_extra; the e2e tasks have no frozen tests, the frozen block is what the gate checks.)
+  - Not done: the state PCC over [0, seq) of a full rung keeps the prefix computed by the device itself (nothing to
+    exclude); the DeepSeek / Xing runner contract tests keep the rung's pcc_state limits (their chunk plans are their
+    own, not the contract rung's tail).
+  - Selftests: test_drift_matched.py (prefix seeding and region, gap feed, a forward that ignores the feed stops,
+    contract entries, per-reader files and the pin), test_e2e_limits.py (entries()).

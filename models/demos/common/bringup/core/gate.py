@@ -470,6 +470,11 @@ def run_gate(
         reason=[] if verdict == "PASS" else res.lines,
         history_add={"t": now(), "status": verdict, "s": round(dur, 1)},  # every gate run's time (F70)
     )
+    if verdict == "PASS" and task.get("step") == "goldens":  # F134: a drift changes only through its G task
+        from models.demos.common.bringup.reference.drift import pin
+
+        pinned = pin(spec, ledger)
+        res.lines.append(f"  drift files pinned in {len(pinned)} end-to-end gates: {', '.join(pinned) or '-'}")
     if commit and verdict == "PASS":
         try:
             with ledger.locked():

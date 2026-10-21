@@ -16,7 +16,7 @@ from models.demos.common.bringup.testing import contract, harness
 ROOT = Path(contract.__file__).resolve().parents[1]
 MODELS = ROOT.parents[1]
 DRIFT = {
-    f"pcc_state_{n}_L{i:02d}": {"drift": d, "res": 0.99999}
+    f"contract_state_{n}_L{i:02d}": {"drift": d, "res": 0.99999}
     for n, d in (("key", 0.999), ("value", 0.998), ("index_key", 0.99))
     for i in (0, 1)
 }

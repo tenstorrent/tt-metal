@@ -85,7 +85,9 @@ def main(argv=None):
         help="native (full precision, the target) | official (the margin's source); F128",
     )
     ap.add_argument(
-        "--set", action="store_true", help="F128: the target golden, the official one and their drift (a G task)"
+        "--set",
+        action="store_true",
+        help="F128 / F134: the target golden and the drift of every rung reading it (a G task)",
     )
     a = ap.parse_args(argv)
     if a.set:
@@ -93,11 +95,15 @@ def main(argv=None):
 
         spec_args = ["--spec", a.spec] if a.spec else []
         main(spec_args + ["--rung", a.rung])
-        rung = load_spec(a.spec).rung(a.rung)
-        if rung.get("golden"):
+        spec = load_spec(a.spec)
+        if spec.rung(a.rung).get("golden"):
             return
-        main(spec_args + ["--rung", a.rung, "--numerics", "official"])
-        drift.main(spec_args + ["--rung", a.rung])
+        # F134: the margin of every rung that reads this golden, the official reference fed as the device is
+        n = 0
+        for r in drift.readers(spec, a.rung):
+            drift.main(spec_args + ["--rung", r])
+            n += len(json.loads(drift.drift_path(rung_dir(spec, spec.rung(r)), r).read_text()))
+        metrics.record("drift_metrics", n)
         return
     torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
