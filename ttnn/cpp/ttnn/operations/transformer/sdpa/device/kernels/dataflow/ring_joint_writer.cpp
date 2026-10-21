@@ -914,9 +914,9 @@ void kernel_main() {
             // Sol resident mode: compute keeps every resident Q chunk's accumulators in L1 for the whole op, so
             // there is no save/restore and no per-chunk signal. On the last active ring iteration compute leaves
             // the normalized output of each resident chunk in cb_out, in Q-chunk order; write them out.
-            const bool resident_last_ring_iter =
-                packed_sources ? ring_iter + 1 == sdpa_ring_iterations
-                               : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+            const bool resident_last_ring_iter = packed_sources
+                                                     ? ring_iter + 1 == sdpa_ring_iterations
+                                                     : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             if (resident_last_ring_iter) {
                 for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                     const auto decoded_q =
