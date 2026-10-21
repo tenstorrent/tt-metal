@@ -41,9 +41,10 @@ TILE = 32
 # so the only parallelism is over K; 32 batches of 512 put it on 32 cores
 KS_DECODE = 32
 # "fast" (TtMHCFast, this module) | "wrap" (the DeepSeek composite TtMHCWrap, the reference path)
-MHC_IMPL = os.environ.get(
-    "GLM53_MHC_IMPL", "wrap"
-)  # fast fails the 22-layer prefill chain gate (first token); wrap until the exact custom-op path matches
+# fast (the exact custom-op decode path; default since 2026-10-21: on the 8x4 it halves the decode step, 75.5 vs
+# 144.1 ms at 32 users, at the same 45-layer chain PCC, and the 16 K / 64 K needle runs stay token-identical to HF)
+# with the composite wrap on the prefill rows (MHC_PREFILL_IMPL); wrap = the composite everywhere (A/B)
+MHC_IMPL = os.environ.get("GLM53_MHC_IMPL", "fast")
 # TtMHCFast residual update: 0 = one HiFi4 matmul (bf16-rounded operands, ~1e-3 rel rms per wrap); 3 (or 1) =
 # exact: both operands split into 3 bf16 parts, the 6 significant products in one stacked-K matmul (3e-9);
 # 2 = the cheaper 2-way split, 3 products (3e-6). See TtMHCFast._exact_mm.
@@ -52,7 +53,7 @@ MHC_EXACT = {"0": 0, "1": 3, "2": 2, "3": 3}[os.environ.get("GLM53_MHC_EXACT", "
 # replacing the coefficient extraction, the block-diagonal matmul and the addcmul; exact like the composite
 # chain); 2 = the v2 kernel (resident operands, x8 coefficient tiles, SFPU FMAs) reading the bf16 sublayer output
 # directly, so the post-block is the single op
-MHC_POST_KERNEL = int(os.environ.get("GLM53_MHC_POST_KERNEL", "0"))
+MHC_POST_KERNEL = int(os.environ.get("GLM53_MHC_POST_KERNEL", "2"))
 # prefill (T > 32) pre-block: 1 = the composite's projection and exact fp32 mix, op for op (default; the
 # accuracy gate); 0 = the earlier stream-major n-split matmul + fast_reduce_nc path (A/B only)
 MHC_PREFILL_EXACT = os.environ.get("GLM53_MHC_PREFILL_EXACT", "1") == "1"
@@ -67,7 +68,7 @@ MHC_DECODE_EXACT = os.environ.get("GLM53_MHC_DECODE_EXACT", "1") == "1"
 MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "0"))
 # GLM53_MHC_PREFILL_IMPL=wrap (with GLM53_MHC_IMPL=fast): the composite wrap serves the prefill rows, the fast path
 # the decode tile (A/B of the prefill numerics; see TtMHCSplit)
-MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "")
+MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "wrap" if MHC_IMPL == "fast" else "")
 
 
 @dataclass(frozen=True)
