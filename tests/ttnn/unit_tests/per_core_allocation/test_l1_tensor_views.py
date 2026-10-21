@@ -42,7 +42,7 @@ def _view(mesh, spec, owner, placements):
     addresses = [
         (ttnn.MeshCoreCoord(coord, core), _address(owner, coord, core) + offset) for coord, core, offset in placements
     ]
-    return ttnn.experimental_create_l1_tensor_view(mesh, spec, addresses)
+    return ttnn.experimental_create_sram_tensor_view(mesh, spec, addresses)
 
 
 def _address(tensor, coord, core):
@@ -90,7 +90,7 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
     if bad == "duplicate":
         placements.append(placement)
     with expect_error(RuntimeError, "L1 view"):
-        ttnn.experimental_create_l1_tensor_view(mesh, spec, placements)
+        ttnn.experimental_create_sram_tensor_view(mesh, spec, placements)
 
 
 def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
@@ -116,7 +116,7 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
     view = _view(mesh, spec, owner, [(coord, core, 0) for core in cores])
     assert view.buffer_address() == owner.buffer_address()
     with expect_error(RuntimeError, "Lockstep tensor view requires one address"):
-        ttnn.experimental_create_l1_tensor_view(
+        ttnn.experimental_create_sram_tensor_view(
             mesh,
             spec,
             [(ttnn.MeshCoreCoord(coord, core), owner.buffer_address() + i * 256) for i, core in enumerate(cores)],

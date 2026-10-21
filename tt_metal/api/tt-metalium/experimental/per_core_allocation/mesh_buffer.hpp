@@ -13,9 +13,9 @@
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
-// Owns only the buffer wrapper; the caller retains SRAM storage and validates backing bounds.
+// Return a movable view; the caller retains SRAM storage and validates backing bounds.
 // Placements must cover exactly the configured data cores on each selected local device.
-std::shared_ptr<distributed::MeshBuffer> create_l1_buffer_view(
+distributed::MeshBuffer create_sram_buffer_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
