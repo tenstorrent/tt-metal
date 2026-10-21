@@ -1,0 +1,48 @@
+# dropout at p = 1 drops every datum whatever the PRNG draws: golden all zeros. The result does not
+# depend on the seed; it is set only to exercise dropout_seed. Seeding is covered by test_dropout_reseed_quasar.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [-8.0, -2.01]
+        - [-1.99, -1.01]
+        - [-0.99, -0.51]
+        - [-0.49, -0.01]
+        - [0.0101, 0.49]
+        - [0.51, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 8.0]
+        - -8000.0
+        - -100.0
+        - -2.0
+        - -1.0
+        - -0.5
+        - 0.0
+        - 1.0e-40
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 2.0
+        - 100.0
+        - 8000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Dropout]
+        approximation_mode: false
+        iterations: 32
+        dropout_probability: 1
+        dropout_seed: 0x1234ABCD
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

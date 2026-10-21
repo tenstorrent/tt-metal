@@ -224,6 +224,7 @@ enum class SfpuType : std::uint32_t
     unary_min,
     unary_max_int32,
     unary_min_int32,
+    dropout,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

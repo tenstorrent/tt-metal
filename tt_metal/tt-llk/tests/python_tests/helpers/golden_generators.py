@@ -37,6 +37,8 @@ from helpers.sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
     CLAMPED_SILU_GLU_LIMIT,
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
     EMA_ALPHA,
     EMA_BETA,
     EXP_WITH_BASE_SCALE,
@@ -2445,6 +2447,7 @@ class UnarySFPUGolden:
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Cumsum: self._cumsum,
             MathOperation.Ema: self._ema,
+            MathOperation.Dropout: self._dropout,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
             MathOperation.LeftShift: self._left_shift,
@@ -2538,6 +2541,8 @@ class UnarySFPUGolden:
         max_min_scalar=None,
         tile_dimensions: tuple[int, int] = TILE_DIMENSIONS,
         polygamma_order: int = 1,
+        dropout_probability: int = 0,
+        dropout_scale: float = DROPOUT_SCALE,
     ):
         self.data_format = data_format
         self.dst_format = data_format
@@ -2558,6 +2563,9 @@ class UnarySFPUGolden:
         self._int_maxmin_scalar = (
             INT_MAXMIN_SCALAR if max_min_scalar is None else int(max_min_scalar)
         )
+        # Mirror the dropout probability (p * INT_MAX) and scale operands; only dropout reads them.
+        self._dropout_probability = dropout_probability
+        self._dropout_scale = dropout_scale
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -3365,6 +3373,16 @@ class UnarySFPUGolden:
 
     def _neg(self, x):
         return -x
+
+    def _dropout(self, x):
+        # Only the endpoints are deterministic: p = 1 drops every datum, p = 0 keeps x * scale.
+        if self._dropout_probability == DROPOUT_PROBABILITY_MAX:
+            return 0.0
+        if self._dropout_probability != 0:
+            raise ValueError(
+                f"dropout golden needs p = 0 or p = 1, got operand {self._dropout_probability:#x}"
+            )
+        return x * self._dropout_scale
 
     def _typecast(self, x):
         # Typecast is an elementwise identity at the value level; the src->dst format

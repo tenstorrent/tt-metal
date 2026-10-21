@@ -59,3 +59,7 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]
+  # ttsim: tensix_cfg_wr32 reg=82 (PRNG_SEED_OVERRIDE_CTRL, dropout's seeding) is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
