@@ -4145,6 +4145,9 @@ def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype, per_core_
     grid = device.compute_with_storage_grid_size()
     m_size, n_size = 32 * grid.y * per_core_m, 32 * grid.x
     expected = _default_dram_in0_block_w(k_size // 32, grid.x, per_core_m)
+    # A different valid block, whose program must differ from the default's: one tile, or the next divisor of Kt
+    # when the expected block is one tile itself.
+    other = 1 if expected != 1 else next(w for w in range(2, k_size // 32 + 1) if (k_size // 32) % w == 0)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -4184,16 +4187,16 @@ def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype, per_core_
         )
         if device.num_program_cache_entries() != entries:
             entries = device.num_program_cache_entries()
-            ttnn.matmul(input_a, input_b, program_config=config(1), compute_kernel_config=compute_kernel_config)
+            ttnn.matmul(input_a, input_b, program_config=config(other), compute_kernel_config=compute_kernel_config)
             assert (
                 device.num_program_cache_entries() != entries
-            ), f"the default config for Kt={k_size // 32} on a {grid.x}-column grid takes in0_block_w=1, not {expected}"
+            ), f"the default config for Kt={k_size // 32} on a {grid.x}-column grid takes in0_block_w={other}, not {expected}"
             pytest.skip(
                 f"the default config on a {grid.x}x{grid.y} grid is not the 2D multicast program this test checks"
             )
         assert torch.equal(default_output, explicit_output)
 
-        ttnn.matmul(input_a, input_b, program_config=config(1), compute_kernel_config=compute_kernel_config)
+        ttnn.matmul(input_a, input_b, program_config=config(other), compute_kernel_config=compute_kernel_config)
         assert device.num_program_cache_entries() == entries + 1
     finally:
         device.disable_and_clear_program_cache()
