@@ -73,7 +73,8 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0,
-    bool dense = false>
+    bool dense = false,
+    bool next_block_follows_in_row = false>
 inline void llk_pack_untilize_impl(
     const std::uint32_t block_rt_dim,
     const std::uint32_t base_addr,
@@ -112,6 +113,28 @@ inline void llk_pack_untilize_impl(
         StateDiscard<std::uint32_t>(block_c_index),
         StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
 
+    // An odd block of an 8-bit output packs as one stream when a later block of the row overwrites its padding.
+    if constexpr (
+        next_block_follows_in_row &&
+        _llk_pack_untilize_odd_block_form_<block_ct_dim, full_ct_dim, narrow_row, dense>()) {
+        if (IS_8BIT_FORMAT(pack_dst_format)) {
+            for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
+                _llk_pack_untilize_<
+                    block_ct_dim,
+                    full_ct_dim,
+                    narrow_row,
+                    tile_dst_ct_offset,
+                    dense,
+                    0,
+                    0,
+                    DST_ACCUM_MODE,
+                    true>(pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
+
+                pack_tile_addr += page_stride;
+            }
+            return;
+        }
+    }
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, 0, 0, DST_ACCUM_MODE>(
             pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
@@ -184,6 +207,8 @@ inline void llk_pack_untilize_uninit(std::uint32_t output) {
  * @tparam row_num_datums     Number of datums per row (unused on Blackhole).
  * @tparam tile_dst_ct_offset Compile-time column offset of the tile in the destination register.
  * @tparam dense              Pack two 2-face tiles into a single 4-face region.
+ * @tparam blocks_ascend      The caller packs the blocks of a row from the first column to the last, which lets an odd
+ *                            block of an 8-bit output take one stream.
  * @param  block_rt_dim       Height of the block in tiles (number of rows to pack).
  * @param  output             Output circular buffer / operand index.
  * @param  block_c_index      Block column index (used when full_ct_dim > block_ct_dim).
@@ -196,7 +221,8 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM /* unused */,
     std::uint32_t tile_dst_ct_offset = 0,
-    bool dense = false>
+    bool dense = false,
+    bool blocks_ascend = false>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
@@ -209,6 +235,28 @@ inline void llk_pack_untilize(
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
+    if constexpr (blocks_ascend) {
+        if ((block_c_index + 1) * block_ct_dim < full_ct_dim) {
+            llk_pack_untilize_impl<
+                block_ct_dim,
+                full_ct_dim,
+                narrow_row,
+                row_num_datums,
+                tile_dst_ct_offset,
+                dense,
+                true>(
+                block_rt_dim,
+                get_local_cb_interface(output_id).fifo_wr_ptr - 1,
+                pack_src_format[output_id],
+                pack_dst_format[output_id],
+                full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+                face_r_dim,
+                num_faces,
+                block_c_index,
+                tile_dst_rt_offset);
+            return;
+        }
+    }
     llk_pack_untilize_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim,
         get_local_cb_interface(output_id).fifo_wr_ptr - 1,
@@ -233,14 +281,30 @@ inline void llk_pack_untilize_at_col(std::uint32_t output, const std::uint32_t f
             pack_dst_format[output_id], first_col * ((num_faces > 2) ? num_faces / 2 : num_faces) * FACE_C_DIM) /
         16;
 
-    llk_pack_untilize_impl<block_ct_dim, full_ct_dim>(
-        1 /* block_rt_dim */,
-        get_local_cb_interface(output_id).fifo_wr_ptr - 1 + col_offset,
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
-        0 /* block_c_index */,
-        0 /* tile_dst_rt_offset */);
+    const std::uint32_t base_addr = get_local_cb_interface(output_id).fifo_wr_ptr - 1 + col_offset;
+    const std::uint32_t page_stride = full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
+    // The blocks of a split row are packed from its first column to its last.
+    if (first_col + block_ct_dim < full_ct_dim) {
+        llk_pack_untilize_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, 0, false, true>(
+            1 /* block_rt_dim */,
+            base_addr,
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            page_stride,
+            face_r_dim,
+            num_faces,
+            0 /* block_c_index */,
+            0 /* tile_dst_rt_offset */);
+    } else {
+        llk_pack_untilize_impl<block_ct_dim, full_ct_dim>(
+            1 /* block_rt_dim */,
+            base_addr,
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            page_stride,
+            face_r_dim,
+            num_faces,
+            0 /* block_c_index */,
+            0 /* tile_dst_rt_offset */);
+    }
 }

@@ -343,7 +343,7 @@ ALWI void untilize(uint32_t num_blocks) {
             } else {
                 for (uint32_t b = 0; b < dispatch::num_sub_blocks; ++b) {
                     untilize_wait_for_block<wait_mode>(in_dfb, dispatch::sub_block_width);
-                    pack_untilize_block<dispatch::sub_block_width, block_width_tiles, DST_ACCUM_MODE, math_clears_dest>(
+                    pack_untilize_block<dispatch::sub_block_width, block_width_tiles, DST_ACCUM_MODE, math_clears_dest, true>(
                         input_dfb, 1, output_dfb, b);
                     in_dfb.pop_front(dispatch::sub_block_width);
                 }

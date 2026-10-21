@@ -215,16 +215,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<
-                BLOCK_CT_DIM,
-                FULL_CT_DIM,
-                false /* diagonal */,
-                NARROW_ROW,
-                ROW_NUM_DATUMS,
-                TILE_DST_CT_OFFSET,
-                false /* dense */,
-                PACK_UNTILIZE_SRC_DATUM_SIZE,
-                PACK_UNTILIZE_DST_DATUM_SIZE>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+            if (block_num + 1 < num_blocks_per_col)
+            {
+                _llk_pack_untilize_wrapper_<
+                    BLOCK_CT_DIM,
+                    FULL_CT_DIM,
+                    false /* diagonal */,
+                    NARROW_ROW,
+                    ROW_NUM_DATUMS,
+                    TILE_DST_CT_OFFSET,
+                    false /* dense */,
+                    PACK_UNTILIZE_SRC_DATUM_SIZE,
+                    PACK_UNTILIZE_DST_DATUM_SIZE,
+                    true /* next_block_follows */>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+            }
+            else
+            {
+                _llk_pack_untilize_wrapper_<
+                    BLOCK_CT_DIM,
+                    FULL_CT_DIM,
+                    false /* diagonal */,
+                    NARROW_ROW,
+                    ROW_NUM_DATUMS,
+                    TILE_DST_CT_OFFSET,
+                    false /* dense */,
+                    PACK_UNTILIZE_SRC_DATUM_SIZE,
+                    PACK_UNTILIZE_DST_DATUM_SIZE>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+            }
 #ifdef ARCH_BLACKHOLE
             if (math_clears_dest(formats.unpack_A_src))
             {
