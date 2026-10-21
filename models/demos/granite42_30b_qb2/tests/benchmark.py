@@ -11,7 +11,6 @@ import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 
@@ -39,7 +38,7 @@ def load_gpqa():
     # Choice permutations must come from this seed, not a previous map cache.
     datasets.disable_caching()
     random.seed(42)
-    path = TaskManager().task_index["gpqa_diamond_cot_zeroshot"]["yaml_path"]
+    path = TaskManager().task_index["r1_gpqa_diamond"]["yaml_path"]
     config = load_yaml_config(path)
     config["dataset_kwargs"] = {"revision": DATASET_REVISION}
     task = ConfigurableTask(config=config)
@@ -149,11 +148,8 @@ def response_metrics(response):
 
 
 def score_answer(task, doc, text):
-    """Apply the task's named answer filter before its exact-match metric."""
-    instance = SimpleNamespace(doc=doc, resps=[text], filtered_resps={})
-    answer_filter = next(item for item in task._filters if item.name == "flexible-extract")
-    answer_filter.apply([instance])
-    return task.process_results(doc, [instance.filtered_resps["flexible-extract"]])["exact_match"]
+    """Use r1_gpqa_diamond's own final-answer extraction and exact-match scorer."""
+    return task.process_results(doc, [text])["exact_match"]
 
 
 async def run_gpqa(client, output_dir, task, cases):
@@ -283,7 +279,7 @@ async def main(args):
     (args.output_dir / "inputs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in manifest))
     protocol = {
         "model": MODEL,
-        "task": "gpqa_diamond_cot_zeroshot",
+        "task": "r1_gpqa_diamond",
         "prompt_mode": "chat",
         "performance_prompt_mode": "raw token continuation stress",
         "server_capacity": args.server_capacity,
