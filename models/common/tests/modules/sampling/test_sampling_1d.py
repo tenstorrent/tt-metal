@@ -1497,11 +1497,12 @@ def test_sampling1d_argmax_never_emits_logprobs(ttnn_mesh_device):
 def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     """enable_log_probs=True on the top-k path.
 
-    The old single-token logprob path only computes on multi-device shards with
-    num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
-    On 1×8, the returned logprob must match torch.log_softmax(logits)[sampled_token] within
-    bf16 reduction tolerance. PCC is intentionally not used here because the k=1 random-bf16 case
-    is near-constant and can degenerate to zero variance on device.
+    The old single-token logprob path computes on a complete vocabulary on 1 device
+    and on tensor-parallel vocabularies with num_devices ∈ {8, 32} (T3K 1×8). On 1×2
+    the calculator returns None even when enabled (TP sharding without TP partners).
+    On supported meshes the returned logprob must match torch.log_softmax(logits)[sampled_token]
+    within bf16 reduction tolerance. PCC is intentionally not used here because the k=1
+    random-bf16 case is near-constant and can degenerate to zero variance on device.
     """
     torch.manual_seed(42)
     B = 32
@@ -1519,11 +1520,11 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     tokens_tt, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp, enable_log_probs=True)
 
     num_devices = max(cluster_shape)
-    if num_devices not in (8, 32):
+    if num_devices not in (1, 8, 32):
         assert log_probs is None, f"logprobs unsupported on {num_devices} devices → expected None"
         return
 
-    assert log_probs is not None, "logprobs must be computed on a 1×8 mesh when enabled"
+    assert log_probs is not None, f"logprobs must be computed on a {num_devices}-device mesh when enabled"
 
     # output_tensor shape (1,1,1,B), replicated across devices — match test_sampling.py read path
     mesh_composer = ttnn.ConcatMeshToTensor(ttnn_mesh_device, dim=3)
@@ -1535,6 +1536,58 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
     max_abs_error = torch.max(torch.abs(ref_lp - lp_host)).item()
     assert max_abs_error <= 5e-2, f"logprobs max abs error {max_abs_error:.6f} exceeds bf16 tolerance"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 8)], ids=["1x1", "1x8"], indirect=True)
+def test_sampling1d_topk_logprobs_match_valid_vocab_slice(ttnn_mesh_device):
+    """Padded-vocab regression at the Sampling1D.decode_forward callsite.
+
+    valid_vocab_size < vocab_size with -10 in the valid prefix and 0 in the padded tail:
+    without passing the already-masked x_bf16 into _log_probs_calculator (sampling_1d.py:460),
+    the padded zeros dominate sum(exp) and the returned logprob is off by ~log(ratio) >> bf16
+    tolerance. See PR #57765 review (Copilot, Codex, mtairum).
+    """
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 32768
+    valid_vocab_size = 32000  # tile-aligned 768-column padded tail
+
+    sampler = Sampling1D(vocab_size=vocab_size, valid_vocab_size=valid_vocab_size, mesh_device=ttnn_mesh_device)
+
+    logits_host = torch.full((1, 1, B, vocab_size), 0.0, dtype=torch.bfloat16)
+    logits_host[..., :valid_vocab_size] = torch.randn(1, 1, B, valid_vocab_size, dtype=torch.bfloat16) - 10.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+    tokens_tt, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp, enable_log_probs=True)
+
+    num_devices = max(cluster_shape)
+    if num_devices not in (1, 8, 32):
+        assert log_probs is None, f"logprobs unsupported on {num_devices} devices → expected None"
+        return
+
+    assert log_probs is not None, f"logprobs must be computed on a {num_devices}-device mesh"
+
+    # Tokens must land inside the valid prefix (padded tail is masked to -inf by the sampler).
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+    assert torch.all(
+        tokens_host < valid_vocab_size
+    ), f"sampled tokens must stay inside valid vocab; got max={tokens_host.max().item()}"
+
+    mesh_composer = ttnn.ConcatMeshToTensor(ttnn_mesh_device, dim=3)
+    lp_host = ttnn.to_torch(log_probs, mesh_composer=mesh_composer)[:, :, 0, :B].reshape(-1).float()
+
+    # Reference: log_softmax restricted to the VALID prefix only. Padded entries are not real tokens.
+    ref_log_softmax = torch.log_softmax(logits_host[..., :valid_vocab_size].float().squeeze(), dim=-1)  # [B, V_valid]
+    ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
+    max_abs_error = torch.max(torch.abs(ref_lp - lp_host)).item()
+    assert max_abs_error <= 5e-2, (
+        f"padded-tail logprob error {max_abs_error:.4f} exceeds bf16 tolerance; "
+        f"a value near log(normalizer-ratio) ~6-13 indicates the padded tail leaked into sum(exp)."
+    )
 
 
 # ==============================================================================

@@ -254,10 +254,10 @@ int __attribute__((noinline)) main(void) {
     DEVICE_PRINT_INITIALIZE_LOCK();
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    // Add an invalidate before the first read of mailboxes->go_messages[0].signal
+    // Add an invalidate before the first read of mailboxes->go_messages[0].slot[0].signal
     invalidate_l1_cache();
 
     DeviceProfilerInit();
@@ -266,7 +266,7 @@ int __attribute__((noinline)) main(void) {
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
+        while ((go_message_signal = mailboxes->go_messages[0].slot[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
 
             // While the go signal for kernel execution is not sent, check if the worker was signalled
@@ -337,10 +337,10 @@ int __attribute__((noinline)) main(void) {
             }
 
             wait_subordinate_eriscs();
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
             // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance.
-            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
+            // Slow (host) dispatch polls go_messages[0].slot[0].signal and manages the read pointer itself.
         }
     }
 

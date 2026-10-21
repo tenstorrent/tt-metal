@@ -69,15 +69,18 @@
 #include <map>
 #include <set>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -376,7 +379,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
-    local_devices_ = view_->get_devices();
+    local_devices_ = view_->impl().get_devices();
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
@@ -502,7 +505,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     const auto root_devices = scoped_devices->root_devices();
 
     // Build into locals first so a failed construction never yields a MeshDevice with a null pimpl_.
-    auto mesh_device_view = std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids);
+    auto mesh_device_view = std::make_unique<MeshDeviceView>(
+        std::make_unique<MeshDeviceViewImpl>(mesh_shape, root_devices, fabric_node_ids));
     auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
     auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
@@ -615,8 +619,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     const auto root_devices = scoped_devices->root_devices();
 
-    auto mesh_device_view =
-        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids);
+    auto mesh_device_view = std::make_unique<MeshDeviceView>(
+        std::make_unique<MeshDeviceViewImpl>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids));
     auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
         std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
     auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
@@ -757,7 +761,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
     }
 
-    auto submesh_view = std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids);
+    auto submesh_view = std::make_unique<MeshDeviceView>(
+        std::make_unique<MeshDeviceViewImpl>(submesh_shape, submesh_devices, submesh_fabric_node_ids));
     auto submesh_impl =
         std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh, metal_context());
     auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(submesh_impl)));
@@ -777,7 +782,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         allocator_config.l1_bank_remap);
 
     // TODO #20966: Remove these calls
-    if (!submesh->pimpl_->get_view().get_devices().empty()) {
+    if (!submesh->pimpl_->get_device_ids().empty()) {
         for (auto* device : submesh->pimpl_->get_devices()) {
             dynamic_cast<Device*>(device)->set_mesh_device(submesh);
         }
@@ -785,7 +790,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
-    if (!submesh->pimpl_->get_view().get_devices().empty()) {
+    if (!submesh->pimpl_->get_device_ids().empty()) {
         log_trace(
             LogMetal,
             "Submesh {} instantiated with {} devices",
@@ -1015,9 +1020,10 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
         }
         new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);
     }
-    auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
+    auto new_view = std::make_unique<MeshDeviceView>(
+        std::make_unique<MeshDeviceViewImpl>(new_shape, new_device_order, new_fabric_node_ids));
     view_ = std::move(new_view);
-    local_devices_ = view_->get_devices();
+    local_devices_ = view_->impl().get_devices();
     local_devices_by_range_.clear();
     establish_device_property_caches();
 }
@@ -1771,6 +1777,15 @@ bool MeshDeviceImpl::initialize_impl(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+#ifdef TT_METAL_USE_EMULE
+            // Emulated devices have no dispatch firmware or sysmem command rings; tt-emule's queue gives the
+            // fast-dispatch semantics instead.
+            if (metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+                mesh_command_queues_.push_back(emule::create_mesh_command_queue(
+                    pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                continue;
+            }
+#endif
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,
                 cq_id,
