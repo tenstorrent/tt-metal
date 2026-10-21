@@ -50,8 +50,6 @@ EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
-# Set by a model whose traced runner holds only one slot (K3, until #60496): more slots run eager.
-EAGER_IF_MULTI_SLOT=0
 
 case "${MODEL}" in
   llama31)
@@ -83,7 +81,6 @@ case "${MODEL}" in
     SC1_NUM_LAYERS=24
     # sc1 is sc4's stage 0, so it opens sc4's slots.
     SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
-    EAGER_IF_MULTI_SLOT=1
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -145,9 +142,6 @@ fi
 if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
-fi
-if [ "${EAGER_IF_MULTI_SLOT}" = 1 ] && [ "${NUM_USERS}" -gt 1 ]; then
-  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_USE_TRACE=0;"
 fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
