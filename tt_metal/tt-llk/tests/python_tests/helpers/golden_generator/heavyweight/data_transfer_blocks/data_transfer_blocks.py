@@ -251,17 +251,19 @@ class DataTransferBlocks:
 
 
 # ----------------------------------------------------------------------
-# Architecture factories.
+# Architecture factories, under the names the architecture classes used to
+# have, so callers construct blocks the same way they always did.
 #
-# Kept under the original names so `blocks_class = Quasar...` and
-# `self.blocks_class()` in the operations layer keep working unchanged.
+# Deliberately not subclasses: a subclass would reintroduce somewhere to
+# override a transfer, which is the thing this structure exists to remove.
 #
-# ``partial`` rather than a plain function, and deliberately not a subclass.
-# A plain function assigned to a class attribute becomes a *method*: functions
-# are descriptors, so ``self.blocks_class()`` would pass ``self`` as the arch
-# and raise. ``partial`` is not a descriptor, so it survives the assignment
-# intact. A subclass would work too, but it would reintroduce somewhere to
-# override a transfer -- the thing this structure exists to remove.
+# ``partial`` rather than a plain function. Not strictly required today -- the
+# operations layer holds these in an ``ArchProfile`` dataclass *field*, which
+# stores on the instance, so the descriptor protocol never fires. It matters
+# the moment one is assigned as a **class attribute**: a plain function is a
+# descriptor and would bind as a method, passing ``self`` as the architecture.
+# ``partial`` is not, so it survives either way, and it takes the ``__name__``
+# and ``__doc__`` set below.
 # ----------------------------------------------------------------------
 
 QuasarDataTransferBlocks = partial(DataTransferBlocks, QuasarArch())
