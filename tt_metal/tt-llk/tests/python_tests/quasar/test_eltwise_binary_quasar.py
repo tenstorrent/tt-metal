@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+from helpers.golden_generator.heavyweight.operations import (
     QuasarEltwiseBinaryGolden,
 )
 from helpers.llk_params import (
