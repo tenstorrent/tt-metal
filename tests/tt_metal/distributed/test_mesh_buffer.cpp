@@ -154,8 +154,9 @@ std::vector<uint32_t> expected_shard_host_layout_after_filtered_write(
 // Reject incomplete, inconsistent and invalid addresses through the Metal API itself.
 TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
     using namespace tt::tt_metal::experimental::per_core_allocation;
+    // Leave room for unequal addresses so that case tests equality rather than SRAM bounds.
     DeviceLocalShardedBufferTestConfig config{
-        .num_pages_per_core = {1, 1}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+        .num_pages_per_core = {1, 3}, .num_cores = {2, 1}, .page_shape = {1, 256}};
     const DeviceLocalBufferConfig local{
         .page_size = config.page_size(),
         .buffer_type = BufferType::L1,
