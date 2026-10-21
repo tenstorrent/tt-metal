@@ -23,12 +23,12 @@ RawAllocationImpl& RawAllocation::impl() { return *pimpl_; }
 
 const RawAllocationImpl& RawAllocation::impl() const { return *pimpl_; }
 
-RawAllocation allocate_l1(distributed::MeshDevice& device, LockstepAllocationProperties properties) {
-    return RawAllocation(RawAllocationImpl::allocate_l1(device, properties));
+RawAllocation allocate_on_sram(distributed::MeshDevice& device, LockstepAllocationProperties properties) {
+    return RawAllocation(RawAllocationImpl::allocate_on_sram(device, properties));
 }
 
-RawAllocation allocate_l1(distributed::MeshDevice& device, RangeLockstepAllocationProperties properties) {
-    return RawAllocation(RawAllocationImpl::allocate_l1(device, std::move(properties)));
+RawAllocation allocate_on_sram(distributed::MeshDevice& device, RangeLockstepAllocationProperties properties) {
+    return RawAllocation(RawAllocationImpl::allocate_on_sram(device, std::move(properties)));
 }
 
 }  // namespace tt::tt_metal::experimental

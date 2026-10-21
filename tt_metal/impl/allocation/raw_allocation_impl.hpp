@@ -34,13 +34,11 @@ struct LockstepAllocation {
 };
 
 // // Represent per-node allocation on a subset of available banks,
-// // with potentially different starting addresses and a common extent.
+// // with potentially different starting addresses and potentially different extent.
 // struct PerNodeAllocation {
-//     PerNodeAllocation(std::unordered_map<CoreCoord, DeviceAddr> addrs, uint32_t size) :
-//         addr_per_node(std::move(addrs)), size(size) {}
-//
 //     std::unordered_map<CoreCoord, DeviceAddr> addr_per_node;
-//     uint32_t size;
+//     // contains size per node.
+//     PerNodeAllocationProperties config;
 // };
 
 // Represent range lockstep allocation on a subset of available banks,
@@ -69,8 +67,9 @@ struct RawAllocationImpl {
     // Release allocation
     ~RawAllocationImpl() = default;
 
-    static RawAllocationImpl allocate_l1(distributed::MeshDevice& device, LockstepAllocationProperties properties) {
-        TT_FATAL(properties.per_bank_size > 0, "allocate_l1 requires a non-zero per-bank size");
+    static RawAllocationImpl allocate_on_sram(
+        distributed::MeshDevice& device, LockstepAllocationProperties properties) {
+        TT_FATAL(properties.per_bank_size > 0, "allocate_on_sram requires a non-zero per-bank size");
 
         auto num_banks = device.allocator()->get_num_banks(BufferType::L1);
         auto total_size = properties.per_bank_size * num_banks;
@@ -90,12 +89,12 @@ struct RawAllocationImpl {
         return RawAllocationImpl(LockstepAllocation(addr, properties), std::move(*buffer_ptr));
     }
 
-    static RawAllocationImpl allocate_l1(
+    static RawAllocationImpl allocate_on_sram(
         distributed::MeshDevice& device, RangeLockstepAllocationProperties properties) {
-        TT_FATAL(properties.per_bank_size > 0, "allocate_l1 requires a non-zero per-bank size");
+        TT_FATAL(properties.per_bank_size > 0, "allocate_on_sram requires a non-zero per-bank size");
 
         auto num_banks = properties.banks_to_be_allocated_on.num_cores();
-        TT_FATAL(num_banks > 0, "allocate_l1 requires a non-empty bank set");
+        TT_FATAL(num_banks > 0, "allocate_on_sram requires a non-empty bank set");
         const DeviceAddr total_size = DeviceAddr{properties.per_bank_size} * num_banks;
 
         // One page on each bank
