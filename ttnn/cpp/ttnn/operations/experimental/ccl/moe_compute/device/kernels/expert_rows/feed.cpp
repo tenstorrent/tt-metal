@@ -18,6 +18,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "expert_rows_common.h"
 
 namespace {
 
@@ -40,13 +41,14 @@ constexpr uint32_t scratch_stage =
 constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 constexpr uint32_t shard_row_bytes = shard_width_tiles * tile_width_bytes;
 
-// The feeder's output columns [first_tile, first_tile + tiles) in at most three width-shard pieces: offset in the
-// staged slice, width shard, offset in that shard's row, bytes.
+// The feeder's output columns [first_tile, first_tile + tiles) in at most max_slice_shards width-shard pieces (the
+// host checks every feeder's slice): offset in the staged slice, width shard, offset in that shard's row, bytes.
 struct SlicePieces {
-    uint32_t slice_offset[3], shard[3], shard_offset[3], bytes[3];
+    static constexpr uint32_t max_pieces = expert_rows::max_slice_shards;
+    uint32_t slice_offset[max_pieces], shard[max_pieces], shard_offset[max_pieces], bytes[max_pieces];
     uint32_t count = 0;
     FORCE_INLINE SlicePieces(uint32_t first_tile, uint32_t tiles) {
-        for (uint32_t tile = first_tile, done = 0; done < tiles && count < 3; ++count) {
+        for (uint32_t tile = first_tile, done = 0; done < tiles && count < max_pieces; ++count) {
             const uint32_t in_shard = tile % shard_width_tiles;
             const uint32_t n =
                 shard_width_tiles - in_shard < tiles - done ? shard_width_tiles - in_shard : tiles - done;
@@ -133,7 +135,7 @@ FORCE_INLINE void write_batch(
             const uint32_t shard = cursor.shard * width_shards + pieces.shard[p];
             const uint32_t x = combine_core_x(combine_cores_arg, shard);
             const uint32_t y = combine_core_y(combine_cores_arg, shard);
-            // dataflow_api write: Noc::async_write in this loop makes the program 5-6 % slower
+            // dataflow_api write: with Noc::async_write (either endpoint) this per-row loop runs slower
             noc_async_write(
                 staged + i * slice_stride + pieces.slice_offset[p],
                 get_noc_addr(x, y, double_buffer + half + cursor.row * shard_row_bytes + pieces.shard_offset[p]),

@@ -44,8 +44,8 @@ constexpr uint32_t kTileBytesBf16 = tt::constants::TILE_HW * kBf16Bytes;
 constexpr uint32_t kTileRowBytesBf16 = tt::constants::TILE_WIDTH * kBf16Bytes;
 constexpr uint32_t kJobRows = expert_rows::tile_rows;  // rows per row tile of a job
 constexpr uint32_t kGroupTiles = expert_rows::group_tiles;
-constexpr uint32_t kColumnsPerGroup = 2;  // a W0/W1 column group is a column pair; each column gives one activated tile
-constexpr uint32_t kMaxTopK = 32;         // rows_reader keeps one u16 per k of a token on its stack (its static_assert)
+constexpr uint32_t kColumnsPerGroup = expert_rows::group_columns;  // each column gives one activated tile
+constexpr uint32_t kMaxTopK = 32;  // rows_reader keeps one u16 per k of a token on its stack (its static_assert)
 // the routing table holds rows and tokens in u16
 constexpr uint32_t kMaxRoutedRows = std::numeric_limits<uint16_t>::max();
 constexpr std::array<uint32_t, 3> kBlockSlots = {8, 6, 4};  // weight blocks per reader core, tried in order
