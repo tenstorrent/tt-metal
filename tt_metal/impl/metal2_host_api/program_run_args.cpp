@@ -893,6 +893,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Bind PrefetcherPipe objects to their parameters' slots (per node; a relay DFB over them is
     // pointed at the pipe ring here). Sticky across calls.
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
+    for (const auto& [param_name, tensor] : tensor_by_param) {
+        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+    }
     program_impl.mark_program_run_args_initialized();
 }
 
@@ -964,6 +967,9 @@ void UpdateTensorArgs(
 
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    for (const auto& [param_name, tensor] : tensor_by_param) {
+        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+    }
 }
 
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
@@ -1366,6 +1372,9 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
         AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
+        for (const auto& [param_name, tensor] : tensor_by_param) {
+            program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+        }
     }
 
     // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
