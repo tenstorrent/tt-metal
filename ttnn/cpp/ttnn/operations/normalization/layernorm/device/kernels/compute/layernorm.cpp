@@ -109,7 +109,7 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_in(dfb_in_id);
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    DataflowBuffer& dfb_xmm = dfb_in;
+    auto& dfb_xmm = dfb_in;
 #else
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #endif
@@ -160,7 +160,7 @@ void kernel_main() {
 #ifndef RMSNORM
     DataflowBuffer dfb_x(dfb_x_id);
 #elif defined(FUSE_PRE_ADD)
-    DataflowBuffer& dfb_x = dfb_xmm;
+    auto& dfb_x = dfb_xmm;
 #endif
 
 #ifdef TILIZE_IN
@@ -179,10 +179,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out_id = dfb_fusion_id;
-    DataflowBuffer& dfb_im_or_out = dfb_fusion;
+    auto& dfb_im_or_out = dfb_fusion;
 #else
     constexpr auto dfb_im_or_out_id = dfb_out_id;
-    DataflowBuffer& dfb_im_or_out = dfb_out;
+    auto& dfb_im_or_out = dfb_out;
 #endif
 
     // Intermediate buffers need to be reserved/pushed/popped
@@ -338,7 +338,7 @@ void kernel_main() {
 #endif
 #ifdef FUSE_GAMMA
             constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
-            DataflowBuffer& dfb_outg = do_beta ? dfb_fusion : dfb_out;
+            auto& dfb_outg = do_beta ? dfb_fusion : dfb_out;
             if constexpr (!do_beta) {
                 pack_reconfig_data_format(dfb_out_id);
 #ifdef ARCH_QUASAR

@@ -75,8 +75,22 @@ a new path in an existing one (for example a config option that changes which te
   bf16 parameters.
 - Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
   the low bits that rounding would lose, so it is updated without it.
-- Loading values into an existing tensor keeps its dtype: `Tensor.assign()` (used by the checkpoint and safetensors
-  loaders) and the in-place initializers in `ttml.init` cast the new values to the dtype the tensor is stored in.
+
+## Loading values into a tensor
+
+The checkpoint loaders and `Tensor.assign()` keep the precision a tensor is stored in: the model decides it, not the
+file.
+
+- `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32.
+  A value of the stored dtype, an empty value, or any value for an empty tensor is taken as is; any other dtype
+  mismatch is an error. The Python `Tensor.assign()` calls it, so the safetensors loaders and the in-place
+  initializers in `ttml.init` keep each tensor's dtype, and so does `ttml.checkpointing`, which loads parameters and
+  optimizer state into the live tensors.
+- C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
+  optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
+  way round, and the AdamW moments follow the parameters, as the fused kernel requires.
+- `SocketManager::recv_value()` receives a tensor's value, which is sent as its bf16 view (`get_value()`): a bf16
+  tensor receives it in place, any other tensor through `assign()`. `RemoteOptimizer` receives its weights with it.
 
 ## Why this design
 
