@@ -864,3 +864,27 @@ slabs) never took the fused path, hence the bit-identical block A/B. Fix 6e5d736
 from the decoder layer's prefill wrap keeps the composite router on prompt slabs; decode keeps the fused op (its
 ids are bit-exact there). The EP32 builds' wrong first tokens (39030 / 3147, PCC 0.79-0.82) predate the fix; the
 EP e2e re-measures that follow run with it and report whether EP32's own prefill path is also off.
+
+### Optimization phase kick-off (22:30-22:50): decode ledger, MTP head, first two items
+
+Agent deliveries: `_agents/decode_ledger/LEDGER.md` + `ops_per_layer.csv` (per-op decode ledger of a KDA+MoE and a
+DSA+MoE layer from the tracy profiles and the code: 65 / 108 ops per layer, already at the DeepSeek-V3 Galaxy
+reference's op count, so the gap to 0.67 / 1.17 ms per layer is per-op time: single-core mHC pre-block ops, the
+2-core combine, 8-row serialized collectives, 64 us/layer of dispatch gaps from generic ops built with one
+CoreRange per core); `_agents/mtp_head/PLAN.md` + `mtp_reference.py` (layer 45 = a DSA layer with its own MoE and
+indexer, enorm/hnorm/eh_proj glue, plain residuals; CPU reference verified against HF's own layer-45 forward:
+block PCC 0.99979, top-1 127/128; draft levels appended to the traced decode graph, verify as one B*(K+1)-row step,
+KDA state recomputed from cached projections on accept; gain model 1.5-2x at <= 32 users, off at 256).
+
+Implemented (3cfcdc399f5, validation queued at the chain's end, `sched_ledger_validate.sh`):
+
+| item | change | expected |
+|---|---|---|
+| B6 rectangular core ranges | `custom_ops/core_ranges.rect_core_ranges` (CPU-tested) in `kda_decode` and `paged_pool_gather` | 34 + 15 us of dispatch gap per layer -> < 1 us: ~1.3 ms per step at 32 users |
+| C1 EP combine as reduce-scatter | `GLM53_EP_COMBINE=rs`: `reduce_scatter_rows(out, dim=2)` on the zero-padded expert output (T % 32 == 0) | 338-892 us combine -> ~130-144 us per MoE layer: -13..-22 ms at 256 users |
+
+Measured tonight for the record: EP32 with the a2a combine at 256 users, distinct ids: 126.3 ms per step (7.9
+tok/s per user) and traced TTFT 149 ms (the a2a branch is taken; the 8-chip generic all-to-all is itself
+latency-serialized, ~1.1 ms per MoE layer, hence not the predicted 90-100 ms). Next in the ledger's order: A3
+(sharded multicore mHC norm, -3.4 ms), B7 (TP all-reduce as all-gather + fast_reduce_nc, -1.5 ms), B5 (DSA fused
+state + folds, 50 -> 14 attention ops), then A1 (fused mHC pre-block) after its NOC audit.
