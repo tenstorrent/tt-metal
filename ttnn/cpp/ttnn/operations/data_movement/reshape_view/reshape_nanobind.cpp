@@ -113,7 +113,9 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("skip_padding_fill") = false));
 
-    // Plain mod.def: ttnn::bind_function also registers the function into the ttnn.* namespace.
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See reshape_force.hpp.
     mod.def(
         "reshape_force_native",
         &reshape_force_native,
@@ -127,7 +129,24 @@ void bind_reshape_view_operation(nb::module_& mod) {
         nb::arg("skip_padding_fill") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
-            Reshape that always runs the existing implementation. Same arguments as ``ttnn.reshape``.
+            Verification only: runs the native reshape implementation unconditionally. Not part of the ttnn
+            API; use ttnn.reshape, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                shape (List[int]): the output shape; one dimension may be -1.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which matches the input.
+                pad_value (number, optional): value for the output tile padding. Defaults to `None`, which is 0.
+                reshape_tile_mode (ttnn.TileReshapeMapMode): as for ttnn.reshape. Defaults to `CACHE`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on.
+                    Defaults to `None`.
+                skip_padding_fill (bool): as for ttnn.reshape. Defaults to `False`.
+
+            Returns:
+                ttnn.Tensor: the output tensor with the new shape.
         )doc");
 
     mod.def(
@@ -143,8 +162,26 @@ void bind_reshape_view_operation(nb::module_& mod) {
         nb::arg("skip_padding_fill") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
-            Reshape that always runs the codegen implementation. Raises for inputs it does not support
-            instead of falling back. Same arguments as ``ttnn.reshape``.
+            Verification only: runs the codegen reshape implementation, raising for a case outside its
+            support scope rather than falling back to native, and ignoring the perf demotions. The view
+            and same-shape shortcuts are not applied; reshape_tile_mode and skip_padding_fill are ignored.
+            Not part of the ttnn API; use ttnn.reshape, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                shape (List[int]): the output shape; one dimension may be -1.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which matches the input.
+                pad_value (number, optional): value for the output tile padding. Defaults to `None`, which is 0.
+                reshape_tile_mode (ttnn.TileReshapeMapMode): as for ttnn.reshape. Defaults to `CACHE`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on.
+                    Defaults to `None`.
+                skip_padding_fill (bool): as for ttnn.reshape. Defaults to `False`.
+
+            Returns:
+                ttnn.Tensor: the output tensor with the new shape.
         )doc");
 }
 

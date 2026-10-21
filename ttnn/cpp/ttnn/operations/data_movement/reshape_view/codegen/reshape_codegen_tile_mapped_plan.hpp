@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::reshape_codegen {
@@ -20,7 +21,7 @@ namespace ttnn::operations::data_movement::reshape_codegen {
 // tile. Entries with num_elements == 0 are skipped. A sliced map splits each output tile into disjoint byte ranges
 // spread over cores; its rows lead with a header entry [output_page, range_start_bytes, range_bytes, 0] and the
 // writer stores only that range.
-constexpr uint32_t kMappedEntryWords = 4;
+constexpr uint32_t kMappedEntryWords = ttnn::prim::detail::SegmentMapData::size;
 
 // Geometry of a mapped plan; everything the program depends on besides the table contents.
 struct TileMappedLayout {

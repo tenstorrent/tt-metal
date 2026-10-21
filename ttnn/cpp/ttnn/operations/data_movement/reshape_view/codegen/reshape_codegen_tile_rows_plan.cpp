@@ -6,11 +6,8 @@
 
 #include <algorithm>
 #include <array>
-#include <deque>
 #include <iterator>
 #include <limits>
-#include <map>
-#include <mutex>
 #include <numeric>
 
 #include <tt-metalium/hal.hpp>
@@ -24,15 +21,12 @@ namespace ttnn::operations::data_movement::reshape_codegen {
 // Named rather than anonymous: TileRowsSchedule, declared in the header, holds these types.
 namespace tile_rows_planner {
 
-constexpr uint64_t kFaceRows = 16;
 // Source caps tried, largest first, when the full plan does not fit.
 constexpr std::array<uint32_t, 6> kMaxInSteps = {kTileRowsMaxIn, 16, 8, 4, 2, 1};
 // Smaller output batches until there are enough batches to spread over cores; small batches re-read shared
 // sources, so stop at 8.
 constexpr std::array<uint32_t, 3> kMaxOutSteps = {32, 16, 8};
 constexpr uint32_t kMinBatches = 32;
-// Planning walks every output tile row on the host; above this many tiles it costs seconds and hundreds of MB.
-constexpr uint64_t kMaxOutTiles = 128 * 1024;
 constexpr uint64_t kMaxTableBytes = 32 * 1024 * 1024;
 // Every output tile has at least one run in each 16-row half.
 constexpr uint64_t kMinRunsPerTile = 2;
@@ -120,8 +114,8 @@ void add_tile(PlanInputs& p, const TileRowSources& s) {
 
     const size_t first_run = f.run_word.size();
     for (uint32_t r = 0; r < kTileDim; ++r) {
-        const bool start = r == 0 || s.tile[r] != s.tile[r - 1] || s.row[r] != s.row[r - 1] + 1 || r % kFaceRows == 0 ||
-                           s.row[r] % kFaceRows == 0;
+        const bool start = r == 0 || s.tile[r] != s.tile[r - 1] || s.row[r] != s.row[r - 1] + 1 || r % kFaceDim == 0 ||
+                           s.row[r] % kFaceDim == 0;
         if (start) {
             f.run_source.push_back(s.tile[r]);
             f.run_word.push_back((s.row[r] << kRunSrcRowShift) | (r << kRunDstRowShift));
@@ -195,7 +189,7 @@ TileRowsLayout layout_of(const PlanInputs& p, const std::vector<Batch>& batches)
 bool exceeds_caps(const Shape3& out) {
     const uint64_t out_pages = tile_pages(out);
     const uint64_t lower_bound_bytes = out_pages * (kTileRowsEntryHeaderWords + kMinRunsPerTile) * sizeof(uint32_t);
-    return out_pages == 0 || out_pages > kMaxOutTiles || lower_bound_bytes > kMaxTableBytes;
+    return out_pages == 0 || out_pages > kMaxPlannedOutTiles || lower_bound_bytes > kMaxTableBytes;
 }
 
 std::optional<std::pair<Shape3, Shape3>> permutation_shapes(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
@@ -253,16 +247,11 @@ std::optional<TileRowsChoice> choose(std::shared_ptr<const PlanInputs> inputs, u
 std::optional<TileRowsChoice> memoized_choice(
     const Shape3& in, const Shape3& out, uint32_t max_in, std::shared_ptr<const PlanInputs>& prepared) {
     using Key = std::array<uint64_t, 8>;
-    static std::mutex mutex;
-    static std::map<Key, std::optional<TileRowsChoice>> memo;
-    static std::deque<Key> insertion_order;
+    static PlanMemo<Key, std::optional<TileRowsChoice>> memo(kChoiceMemoEntries);
 
     const Key key{in.c, in.h, in.w, out.c, out.h, out.w, max_in, page_align_words()};
-    {
-        std::lock_guard lock(mutex);
-        if (auto it = memo.find(key); it != memo.end()) {
-            return it->second;
-        }
+    if (auto hit = memo.find(key)) {
+        return std::move(*hit);
     }
     if (!prepared) {
         prepared = std::make_shared<const PlanInputs>(prepare(in, out));
@@ -272,14 +261,7 @@ std::optional<TileRowsChoice> memoized_choice(
     if (entry) {
         entry->schedule.reset();
     }
-    std::lock_guard lock(mutex);
-    if (memo.emplace(key, std::move(entry)).second) {
-        insertion_order.push_back(key);
-        if (insertion_order.size() > kChoiceMemoEntries) {
-            memo.erase(insertion_order.front());
-            insertion_order.pop_front();
-        }
-    }
+    memo.insert(key, std::move(entry));
     return choice;
 }
 

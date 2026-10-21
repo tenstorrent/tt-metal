@@ -36,18 +36,18 @@ struct ArgsNonaligned {
 };
 
 void kernel_main() {
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
-    constexpr bool NONALIGNED = get_compile_time_arg_val(3) != 0;
+    constexpr uint32_t cb_id = get_named_compile_time_arg_val("cb_id");
+    constexpr uint32_t stick_bytes = get_named_compile_time_arg_val("stick_bytes");
+    constexpr uint32_t aligned_page_size = get_named_compile_time_arg_val("aligned_page_size");
+    constexpr bool NONALIGNED = get_named_compile_time_arg_val("nonaligned") != 0;
     // Sticks the non-aligned path gathers per NOC barrier.
-    constexpr uint32_t NABATCH = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(5);
+    constexpr uint32_t NABATCH = get_named_compile_time_arg_val("nonaligned_batch");
+    constexpr uint32_t cb_scratch_id = get_named_compile_time_arg_val("cb_scratch_id");
     // Pitch of the repacked new-stick pages in the output CB.
-    constexpr uint32_t cb_page_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_page_bytes = get_named_compile_time_arg_val("cb_page_bytes");
     // Slack each scratch slot carries beyond the aligned page: one NOC read-alignment unit, a power of two.
-    constexpr uint32_t READ_ALIGNMENT = get_compile_time_arg_val(7);
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr uint32_t READ_ALIGNMENT = get_named_compile_time_arg_val("read_alignment");
+    constexpr auto src_args = TensorAccessorArgs<0>();
     const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
 
     // Reads num_reads work units of sticks_per_read sticks each; the CB push count can differ from the read count.
@@ -77,7 +77,7 @@ void kernel_main() {
         CircularBuffer cb(cb_id);
         CircularBuffer cb_scratch(cb_scratch_id);
 
-        cb_scratch.reserve_back(1);
+        // Private scratch that is never pushed, so the write pointer stays at the buffer base.
         uint32_t scratch_addr = cb_scratch.get_write_ptr();
         uint32_t i_stick = a->start_stick;
         // A NOC read requires source and local-L1 destination addresses to have

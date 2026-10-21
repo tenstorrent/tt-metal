@@ -40,14 +40,14 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(0);
     const uint32_t end_row = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t max_entries = get_compile_time_arg_val(1);
-    constexpr uint32_t element_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t map_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t input_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t output_cb = get_compile_time_arg_val(5);
-    constexpr bool sliced = get_compile_time_arg_val(6) != 0;
-    constexpr auto output_args = TensorAccessorArgs<7>();
+    constexpr uint32_t tile_bytes = get_named_compile_time_arg_val("tile_bytes");
+    constexpr uint32_t max_entries = get_named_compile_time_arg_val("max_entries");
+    constexpr uint32_t element_bytes = get_named_compile_time_arg_val("element_bytes");
+    constexpr uint32_t map_cb = get_named_compile_time_arg_val("map_cb");
+    constexpr uint32_t input_cb = get_named_compile_time_arg_val("input_cb");
+    constexpr uint32_t output_cb = get_named_compile_time_arg_val("output_cb");
+    constexpr bool sliced = get_named_compile_time_arg_val("sliced") != 0;
+    constexpr auto output_args = TensorAccessorArgs<0>();
     constexpr uint32_t first_entry = sliced ? 1 : 0;
     static_assert(max_entries >= first_entry, "sliced map rows lead with a header entry");
 
@@ -56,7 +56,7 @@ void kernel_main() {
     CircularBuffer output_scratch(output_cb);
     CircularBuffer map_buffer(map_cb);
     CircularBuffer input_buffer(input_cb);
-    output_scratch.reserve_back(1);
+    // Private scratch that is never pushed, so the write pointer stays at the buffer base.
     const uint32_t output_l1 = output_scratch.get_write_ptr();
     const CoreLocalMem<uint8_t> output_mem(output_l1);
 
@@ -122,5 +122,4 @@ void kernel_main() {
     if (have_input) {
         input_buffer.pop_front(1);
     }
-    output_scratch.push_back(1);
 }

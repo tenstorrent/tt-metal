@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -45,8 +46,6 @@ constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
 constexpr uint32_t kCbZero = tt::CBIndex::c_3;
-// Datums per face row; a tile-row run never crosses a face boundary, so the writer copies face rows.
-constexpr uint32_t kFaceWidth = 16;
 constexpr uint32_t kCbMap = tt::CBIndex::c_0;
 constexpr uint32_t kCbMappedInput = tt::CBIndex::c_1;
 constexpr uint32_t kCbScratch = tt::CBIndex::c_2;
@@ -148,25 +147,30 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
     reader.core_ranges = all_cores;
     // The scratch layout and the repacked page pitch come from the plan, so the reader fills exactly the CBs sized
     // for it.
-    reader.compile_time_args = {
-        kCbIn,
-        p.old_stick,
-        p.old_aligned,
-        p.can_coalesce ? 0u : 1u,
-        rcg::kRmScratchSticks,
-        kCbMid,
-        p.cb_page,
-        rcg::kRmScratchSlackBytes};
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"cb_id", kCbIn},
+        {"stick_bytes", p.old_stick},
+        {"aligned_page_size", p.old_aligned},
+        {"nonaligned", p.can_coalesce ? 0u : 1u},
+        {"nonaligned_batch", rcg::kRmScratchSticks},
+        {"cb_scratch_id", kCbMid},
+        {"cb_page_bytes", p.cb_page},
+        {"read_alignment", rcg::kRmScratchSlackBytes},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_rm.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kCbIn, p.new_stick, p.new_aligned};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
-    writer.compile_time_args.push_back(tt::tt_metal::hal::get_noc_max_burst_size_bytes());
+    writer.named_compile_time_args = {
+        {"cb_out0", kCbIn},
+        {"new_stick_size", p.new_stick},
+        {"aligned_page_size", p.new_aligned},
+        {"noc_max_burst_bytes", tt::tt_metal::hal::get_noc_max_burst_size_bytes()},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf});
@@ -213,28 +217,37 @@ ProgramDescriptor build_rm_arbitrary(
     reader.kernel_source = op_kernel("reader_reshape_rm_arbitrary.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    reader.compile_time_args = {
-        kCbIn,
-        kCbMid,
-        p.old_stick,
-        p.old_page,
-        p.new_stick,
-        p.slab,
-        p.slot,
-        p.slabs_per_stick,
-        p.in_alignment,
-        tt::tt_metal::hal::get_noc_max_burst_size_bytes(),
-        p.batch,
-        p.region_stride};
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"cb_out", kCbIn},
+        {"cb_scratch", kCbMid},
+        {"old_stick_bytes", p.old_stick},
+        {"old_page_bytes", p.old_page},
+        {"new_stick_bytes", p.new_stick},
+        {"slab_bytes", p.slab},
+        {"slot_bytes", p.slot},
+        {"slabs_per_stick", p.slabs_per_stick},
+        {"input_alignment", p.in_alignment},
+        {"noc_max_burst_bytes", tt::tt_metal::hal::get_noc_max_burst_size_bytes()},
+        {"batch", p.batch},
+        {"region_stride", p.region_stride},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_rm_arbitrary.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kCbIn, p.new_stick, p.new_page, p.slab, p.slot, p.slabs_per_stick, p.batch};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.named_compile_time_args = {
+        {"cb_out", kCbIn},
+        {"new_stick_bytes", p.new_stick},
+        {"new_page_bytes", p.new_page},
+        {"slab_bytes", p.slab},
+        {"slot_bytes", p.slot},
+        {"slabs_per_stick", p.slabs_per_stick},
+        {"batch", p.batch},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf});
@@ -345,34 +358,41 @@ ProgramDescriptor build_tile_rows(
     reader.kernel_source = op_kernel("reader_reshape_tile_rows.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    reader.compile_time_args = {
-        layout.page_bytes(), tile_bytes, kCbPlan, kCbStaged, layout.in_slots, rcg::kTileRowsHeaderWords};
     TensorAccessorArgs(*plan_buf).append_to(reader.compile_time_args);
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"plan_page_bytes", layout.page_bytes()},
+        {"tile_bytes", tile_bytes},
+        {"plan_cb", kCbPlan},
+        {"input_cb", kCbStaged},
+        {"in_slots", layout.in_slots},
+        {"header_words", rcg::kTileRowsHeaderWords},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_tile_rows.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {
-        tile_bytes,
-        kFaceWidth * static_cast<uint32_t>(input.element_size()),
-        kCbPlan,
-        kCbStaged,
-        kCbRing,
-        kCbZero,
-        layout.in_slots,
-        layout.entry_words(),
-        rcg::kTileRowsWriteGroup,
-        rcg::kTileRowsHeaderWords,
-        rcg::kTileRowsEntryHeaderWords,
-        rcg::kZeroSlot,
-        rcg::kRunSlotShift,
-        rcg::kRunSrcRowShift,
-        rcg::kRunDstRowShift,
-        rcg::kRunRowMask};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.named_compile_time_args = {
+        {"tile_bytes", tile_bytes},
+        {"face_row_bytes", tt::constants::FACE_WIDTH * static_cast<uint32_t>(input.element_size())},
+        {"plan_cb", kCbPlan},
+        {"input_cb", kCbStaged},
+        {"ring_cb", kCbRing},
+        {"zero_cb", kCbZero},
+        {"in_slots", layout.in_slots},
+        {"entry_words", layout.entry_words()},
+        {"write_group", rcg::kTileRowsWriteGroup},
+        {"header_words", rcg::kTileRowsHeaderWords},
+        {"entry_header_words", rcg::kTileRowsEntryHeaderWords},
+        {"zero_slot", rcg::kZeroSlot},
+        {"slot_shift", rcg::kRunSlotShift},
+        {"src_row_shift", rcg::kRunSrcRowShift},
+        {"dst_row_shift", rcg::kRunDstRowShift},
+        {"row_mask", rcg::kRunRowMask},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf, plan_buf});
@@ -414,25 +434,32 @@ ProgramDescriptor build_tile_mapped(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     // Half-depth batches keep a slot free for the tile the writer still holds across rows.
-    reader.compile_time_args = {
-        layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput, std::max<uint32_t>(1, input_depth / 2), input_depth};
     TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"map_page_bytes", layout.page_bytes()},
+        {"tile_bytes", tile_bytes},
+        {"map_cb", kCbMap},
+        {"input_cb", kCbMappedInput},
+        {"read_batch", std::max<uint32_t>(1, input_depth / 2)},
+        {"input_cb_depth", input_depth},
+    };
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
     writer.kernel_source = op_kernel("writer_reshape_tile_mapped.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {
-        tile_bytes,
-        layout.entries_per_page,
-        static_cast<uint32_t>(input.element_size()),
-        kCbMap,
-        kCbMappedInput,
-        kCbScratch,
-        static_cast<uint32_t>(layout.sliced)};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.named_compile_time_args = {
+        {"tile_bytes", tile_bytes},
+        {"max_entries", layout.entries_per_page},
+        {"element_bytes", static_cast<uint32_t>(input.element_size())},
+        {"map_cb", kCbMap},
+        {"input_cb", kCbMappedInput},
+        {"output_cb", kCbScratch},
+        {"sliced", static_cast<uint32_t>(layout.sliced)},
+    };
     writer.config = WriterConfigDescriptor{};
 
     reader.emplace_common_runtime_args({in_buf, map_buf});
@@ -497,17 +524,10 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
             "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below "
             "the lowest L1 allocation; free L1 tensors or use the native reshape",
             ttnn::operations::data_movement::get_max_l1_space(input));
-        TT_FATAL(
-            tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes,
-            "Reshape output page {} differs from the page the plan assumed",
-            tensor_return_value.buffer()->aligned_page_size());
+        TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes);
         return build_tile(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
     }
-    const uint32_t out_aligned_page = static_cast<uint32_t>(tensor_return_value.buffer()->aligned_page_size());
-    TT_FATAL(
-        out_aligned_page == plan.out_aligned_page,
-        "Reshape output page {} differs from the page the plan assumed",
-        out_aligned_page);
+    TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == plan.out_aligned_page);
 
     const auto chosen = rcg::live_rm_choice(
         input,
@@ -548,11 +568,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
         ttnn::operations::data_movement::get_max_l1_space(input));
     auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
     const rcg::TileRowsLayout layout = plan.layout;
-    TT_FATAL(
-        tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
-        "Reshape output has {} tiles, the tile-row plan expects {}",
-        tensor_return_value.buffer()->num_pages(),
-        layout.num_output_pages);
+    TT_ASSERT(tensor_return_value.buffer()->num_pages() == layout.num_output_pages);
 
     const auto plan_owner = upload_table(std::move(plan.table), layout.num_batches, layout.page_words, input);
     return table_workload(
@@ -583,11 +599,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_
         "tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
     const rcg::TileMappedLayout& layout = mapped->layout;
-    TT_FATAL(
-        tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
-        "Reshape output has {} tiles, the segment map expects {}",
-        tensor_return_value.buffer()->num_pages(),
-        layout.num_output_pages);
+    TT_ASSERT(tensor_return_value.buffer()->num_pages() == layout.num_output_pages);
 
     auto plan = rcg::build_tile_mapped_plan(
         input.logical_shape(),

@@ -14,11 +14,11 @@ void kernel_main() {
     uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(2);
     uint32_t start_stick = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t new_stick_size = get_compile_time_arg_val(1);
-    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
-    constexpr auto dst_args = TensorAccessorArgs<3>();
-    constexpr uint32_t noc_max_burst_bytes = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_out0 = get_named_compile_time_arg_val("cb_out0");
+    constexpr uint32_t new_stick_size = get_named_compile_time_arg_val("new_stick_size");
+    constexpr uint32_t aligned_page_size = get_named_compile_time_arg_val("aligned_page_size");
+    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr uint32_t noc_max_burst_bytes = get_named_compile_time_arg_val("noc_max_burst_bytes");
 
     const auto s = TensorAccessor(dst_args, dst_addr, aligned_page_size);
 

@@ -70,6 +70,16 @@ std::optional<Shape3> normalize(const ttnn::Shape& shape) {
     return out;
 }
 
+std::optional<TileRowsChoice> fit_tile_rows(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned, uint64_t free_l1) {
+    const uint32_t tile_bytes = tile_bytes_of(input);
+    const auto fits = [&](const TileRowsChoice& choice) { return tile_rows_l1_bytes(choice, tile_bytes) <= free_l1; };
+    if (fits(planned)) {
+        return planned;
+    }
+    return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
+}
+
 }  // namespace
 
 std::optional<std::pair<Shape3, Shape3>> normalize_pair(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
@@ -149,13 +159,7 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
 
 std::optional<TileRowsChoice> live_tile_rows_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned) {
-    const uint32_t tile_bytes = tile_bytes_of(input);
-    const uint64_t free_l1 = get_max_l1_space(input);
-    const auto fits = [&](const TileRowsChoice& choice) { return tile_rows_l1_bytes(choice, tile_bytes) <= free_l1; };
-    if (fits(planned)) {
-        return planned;
-    }
-    return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
+    return fit_tile_rows(input, logical_output_shape, planned, get_max_l1_space(input));
 }
 
 bool lcm_bit_exact(tt::tt_metal::DataType dtype) {
@@ -244,7 +248,7 @@ std::optional<TileChoice> live_tile_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned) {
     const uint64_t free_l1 = get_max_l1_space(input);
     if (planned.tile_route == TileRoute::TileRows) {
-        if (auto rows = live_tile_rows_choice(input, logical_output_shape, planned.tile_rows)) {
+        if (auto rows = fit_tile_rows(input, logical_output_shape, planned.tile_rows, free_l1)) {
             return TileChoice{std::move(*rows)};
         }
     } else if (planned.tile_route == TileRoute::Lcm && planned.lcm.has_value()) {
