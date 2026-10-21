@@ -7,6 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_sfpu_unary_max_min.h"
 #include "cmath_common.h"
+#include "sfpi.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel::sfpu {
 
@@ -17,12 +19,14 @@ inline void clamp_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 // out = min(max(x, min_val), max_val)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_clamp(uint min_val, uint max_val) {
-    // SFPU microcode
+    sfpi::vFloat lo = Converter::as_float(min_val);
+    sfpi::vFloat hi = Converter::as_float(max_val);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        load_value_param_float(min_val);
-        calculate_unary_max_min_float_body<Max>();
-        load_value_param_float(max_val);
-        calculate_unary_max_min_float_body<Min>();
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        // A NaN input is left in place; clamp would return one of the bounds.
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(v, 0)) <= 0x7f800000) { sfpi::dst_reg[0] = sfpi::clamp(v, lo, hi); }
+        v_endif;
         sfpi::dst_reg++;
     }
 }
