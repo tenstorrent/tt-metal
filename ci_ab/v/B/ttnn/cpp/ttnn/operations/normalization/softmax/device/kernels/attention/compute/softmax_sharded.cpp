@@ -1,0 +1,211 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+
+#define SS_V 2
+#if SS_V == 1 || SS_V == 3
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
+#endif
+#if SS_V == 2 || SS_V == 3
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#endif
+
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+template <
+    std::uint32_t block_w,
+    std::uint32_t subblock_w,
+    std::uint32_t dfb_in_id,
+    std::uint32_t dfb_max_scaler_id,
+    std::uint32_t dfb_max_id,
+    std::uint32_t dfb_out_id>
+ALWI void calc_numeric_stable(
+    DataflowBuffer& dfb_in_obj,
+    DataflowBuffer& dfb_max_scaler_obj,
+    DataflowBuffer& dfb_max_obj,
+    DataflowBuffer& dfb_out_obj) {
+    // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
+    // Note: The library handles waiting for scaler tile internally
+    compute_kernel_lib::reduce<
+        PoolType::MAX,
+        ReduceDim::REDUCE_ROW,
+        dfb_in_id,
+        dfb_max_scaler_id,
+        dfb_max_id,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
+
+    // calculate x-max(x)
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+        ckl::BinaryFpu<
+            ckl::BinaryFpuOp::Sub,
+            ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb_max_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
+            dfb_in_obj, dfb_max_obj},
+        ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
+    dfb_out_obj.wait_front(block_w);
+}
+
+void kernel_main() {
+    constexpr std::uint32_t block_h = get_arg(args::block_h);
+    constexpr std::uint32_t block_w = get_arg(args::block_w);
+    constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
+    constexpr bool causal_mask = get_arg(args::causal_mask);
+    constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask);
+#ifdef NUMERIC_STABLE
+    constexpr bool numeric_stable = true;
+#else
+    constexpr bool numeric_stable = false;
+#endif
+
+#ifdef NUMERIC_STABLE
+    constexpr auto dfb_x_id = dfb::x;
+#else
+    // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse).
+    constexpr auto dfb_x_id = dfb::exps;
+#endif
+
+    compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
+
+    DataflowBuffer dfb_exps_obj(dfb::exps);
+    DataflowBuffer dfb_x_obj(dfb_x_id);
+    DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_recip_sum_exps_obj(dfb::recip_sum_exps);
+    DataflowBuffer dfb_out0_obj(dfb::out0);
+#ifdef NUMERIC_STABLE
+    DataflowBuffer dfb_max_obj(dfb::max);
+#endif
+
+#ifdef FUSED_SCALE_MASK
+    DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
+    DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
+    DataflowBuffer dfb_scale_mask_obj(dfb::scale_mask);
+    constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
+    constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
+    constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
+#endif
+
+    for (std::uint32_t i = 0; i < block_h; i++) {
+#ifdef FUSED_SCALE_MASK
+        ckl::mul<
+            ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
+            ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            dfb_in0_obj,
+            dfb_fused_scale_obj,
+            dfb_scale_mask_obj);
+
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(
+                    dfb::scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_attn, mask_bcast, mask_wait, mask_pop, ckl::InputTileMapping::Block)>{
+                dfb_scale_mask_obj, dfb_fused_attn_obj},
+            // Exp dropped when NUMERIC_STABLE (it is fused into calc_numeric_stable below).
+            ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+            ckl::PackTile<ckl::output(
+                dfb_x_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{
+                dfb_x_obj});
+
+// add numeric_stable
+// fuse exp with sub tiles
+#ifdef NUMERIC_STABLE
+        dfb_x_obj.wait_front(block_w);
+        calc_numeric_stable<block_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>(
+            dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
+#endif
+
+        reconfig_data_format(dfb::exps, dfb::sum_scaler);
+
+#else
+
+#ifdef NUMERIC_STABLE
+        calc_numeric_stable<block_w, subblock_w, dfb::in0, dfb::max_scaler, dfb::max, dfb::exps>(
+            dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
+#else
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            ckl::CopyTile<
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::Dst::D0>{dfb_in0_obj},
+            ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{dfb_exps_obj});
+#endif
+#endif  // FUSED_SCALE_MASK
+
+        // SUM reduce with reciprocal operation using PRELOADED mode
+        // PRELOADED is correct for sharded - all tiles loaded at once
+        // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
+        dfb_exps_obj.wait_front(block_w);
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            dfb::exps,
+            dfb::sum_scaler,
+            dfb::recip_sum_exps,
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            compute_kernel_lib::ReduceInputBlockShape::row(block_w),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            [](std::uint32_t) {
+                // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
+                if constexpr (DST_ACCUM_MODE) {
+                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
+                    recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
+                } else {
+                    recip_tile_init();
+                    recip_tile(0);
+                }
+            });
+
+        ckl::mul<
+            ckl::input(dfb::exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+            ckl::input(dfb::recip_sum_exps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+            ckl::IterationShape::tiles(block_w).block_size(subblock_w),
+            dfb_exps_obj,
+            dfb_recip_sum_exps_obj,
+            dfb_out0_obj);
+    }
+#ifdef FUSED_SCALE_MASK
+    // The fused-scale scalar is a single tile pushed once by the reader and re-waited on every row
+    // of the block; pop it once here so the buffer is left balanced.
+    dfb_fused_scale_obj.pop_front(1);
+    // A non-causal attention mask is one row of block_w tiles that every row of the block re-waits
+    // and reuses, so it is popped once here rather than per row. The causal paths set mask_pop to
+    // AtEnd and so pop it inside the loop instead, so don't pop here in that case.
+    if constexpr (!causal_mask) {
+        dfb_fused_attn_obj.pop_front(block_w);
+    }
+#endif  // FUSED_SCALE_MASK
+    // compute_kernel_lib::reduce waits the buffer it is given as the scaler and never pops it, so
+    // one pushed tile serves every reduce call. Pop each scaler here, under the same condition that
+    // gated its reductions, so the buffers are left balanced.
+#ifdef NUMERIC_STABLE
+    dfb_max_scaler_obj.pop_front(1);
+#endif
+    dfb_sum_scaler_obj.pop_front(1);
+}
