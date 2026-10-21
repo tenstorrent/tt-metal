@@ -93,12 +93,12 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     TensorAccessorArgs(*backing_buffer).append_to(ct_args);
     TensorAccessorArgs(*tokens_buffer).append_to(ct_args);
     TensorAccessorArgs(*(has_overhang ? overhang_buffer : tokens_buffer)).append_to(ct_args);
-    // Extra segments: count, then per segment [page_size] + backing + output accessors.
+    // Extra segments: count, then one accessor block shared by every extra backing and
+    // output. They are all DRAM interleaved, so only the base address and page size differ,
+    // and those go in the runtime args.
     ct_args.push_back(static_cast<uint32_t>(num_extra));
-    for (size_t s = 0; s < num_extra; ++s) {
-        ct_args.push_back(args.extra_page_sizes[s]);
-        TensorAccessorArgs(*tensor_args.extra_backings[s].buffer()).append_to(ct_args);
-        TensorAccessorArgs(*outputs[first_extra_output + s].buffer()).append_to(ct_args);
+    if (num_extra > 0) {
+        TensorAccessorArgs(*tensor_args.extra_backings[0].buffer()).append_to(ct_args);
     }
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);
@@ -146,11 +146,15 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
         } else {
             rt_args.emplace_back(uint32_t{0});
         }
-        // 9 + 4*s: extra segment s [backing base, output base, start_page, end_page].
+        // 9 + 6*s: extra segment s [backing base, output base, page size, aligned page size,
+        // start_page, end_page].
         for (size_t s = 0; s < num_extra; ++s) {
             const auto [seg_start, seg_end] = worker_slice(args.extra_num_pages[s], i);
-            rt_args.emplace_back(tensor_args.extra_backings[s].buffer());
+            Buffer* seg_backing = tensor_args.extra_backings[s].buffer();
+            rt_args.emplace_back(seg_backing);
             rt_args.emplace_back(outputs[first_extra_output + s].buffer());
+            rt_args.emplace_back(args.extra_page_sizes[s]);
+            rt_args.emplace_back(static_cast<uint32_t>(seg_backing->aligned_page_size()));
             rt_args.emplace_back(seg_start);
             rt_args.emplace_back(seg_end);
         }

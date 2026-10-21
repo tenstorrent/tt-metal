@@ -402,6 +402,12 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const std::vector<Tens
             i,
             buf->aligned_page_size(),
             l1_alignment);
+        // The kernels drive every extra segment with one shared accessor block, which only
+        // holds when all of them are DRAM interleaved.
+        TT_FATAL(
+            i == 0 || (buf->is_dram() && buf->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED),
+            "D2DStreamService: extra tensor {} must be DRAM interleaved",
+            i - 1);
         segments.push_back(
             SegmentPlan{
                 .page_size = static_cast<uint32_t>(buf->aligned_page_size()),
@@ -1057,7 +1063,8 @@ Program build_receiver_program(
 }
 
 // One extra (non-primary) segment streamed after the primary tensor in the same
-// handshake. Each segment carries its own page size and accessor.
+// handshake. Each segment carries its own page size; all of them share one accessor
+// block, since they are DRAM interleaved.
 struct SenderExtraSegment {
     const Buffer* input_buffer;
     uint32_t page_size;
@@ -1176,8 +1183,9 @@ Program build_sender_program(
             ct_args.push_back(static_cast<uint32_t>(seg.input_buffer->address()));
             ct_args.push_back(seg_start);
             ct_args.push_back(seg_end);
-            const auto seg_accessor_ct = TensorAccessorArgs(*seg.input_buffer).get_compile_time_args();
-            ct_args.insert(ct_args.end(), seg_accessor_ct.begin(), seg_accessor_ct.end());
+        }
+        if (!extra_segments.empty()) {
+            TensorAccessorArgs(*extra_segments.front().input_buffer).append_to(ct_args);
         }
 
         auto kernel = CreateKernel(

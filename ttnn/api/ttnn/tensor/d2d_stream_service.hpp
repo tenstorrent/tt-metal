@@ -88,6 +88,8 @@ struct D2DStreamConfig {
     // Further tensors shipped in the same transfer as the primary one (segment 0),
     // in this order, with their own dtype / layout / shape. They share the socket,
     // the worker handshake, the lease and the metadata blob of the primary tensor.
+    // Each must map to DRAM interleaved shards: the kernels drive all of them with one
+    // shared accessor block.
     std::vector<D2DStreamTensorConfig> extra_tensors;
 
     // Forwarded (mostly verbatim) to MeshSocket::create_socket_pair. Controls

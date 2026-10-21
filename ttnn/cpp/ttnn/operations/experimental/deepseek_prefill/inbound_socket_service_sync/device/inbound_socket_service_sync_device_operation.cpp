@@ -44,6 +44,11 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
                 args.extra_num_pages[i] > 0,
             "inbound_socket_service_sync: backing tensor {} must be allocated and have pages",
             i + 1);
+        const auto* extra_buffer = tensor_args.extra_backings[i].buffer();
+        TT_FATAL(
+            extra_buffer->is_dram() && extra_buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "inbound_socket_service_sync: backing tensor {} must be DRAM interleaved",
+            i + 1);
     }
     if (args.metadata_size_bytes > 0) {
         TT_FATAL(

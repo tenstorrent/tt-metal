@@ -57,6 +57,12 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             extra_input.tensor_spec() == extra_backing.tensor_spec(),
             "outbound_socket_service_sync: input tensor {} spec must match the sender backing per-shard spec",
             i + 1);
+        const auto* extra_buffer = extra_backing.buffer();
+        TT_FATAL(
+            extra_buffer != nullptr && extra_buffer->is_dram() &&
+                extra_buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "outbound_socket_service_sync: backing tensor {} must be DRAM interleaved",
+            i + 1);
         TT_FATAL(
             args.extra_page_sizes[i] > 0 && args.extra_num_pages[i] > 0,
             "outbound_socket_service_sync: backing tensor {} has no pages",

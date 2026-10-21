@@ -319,7 +319,7 @@ void py_module_types(nb::module_& mod) {
                 Build a sender+receiver pair in a SINGLE process (both meshes owned here).
 
                 `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
-                socket after the primary tensor, one backing tensor each, any dtype/layout.
+                socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
                 Both endpoints must pass the same list.
 
                 Returns:
@@ -379,7 +379,7 @@ void py_module_types(nb::module_& mod) {
                 cross-process socket rendezvous.
 
                 `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
-                socket after the primary tensor, one backing tensor each, any dtype/layout.
+                socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
                 Both endpoints must pass the same list.
 
                 Returns:
@@ -438,7 +438,7 @@ void py_module_types(nb::module_& mod) {
                 cross-process socket rendezvous.
 
                 `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
-                socket after the primary tensor, one backing tensor each, any dtype/layout.
+                socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
                 Both endpoints must pass the same list.
 
                 Returns:

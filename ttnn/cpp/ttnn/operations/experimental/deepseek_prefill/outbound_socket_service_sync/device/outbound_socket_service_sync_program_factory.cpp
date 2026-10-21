@@ -81,8 +81,9 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
 
     // CT args (uniform across workers). Base addresses are NOT here -- they are runtime
     // BufferBindings. input and backing share the spec, so ONE accessor block describes
-    // both. Then the extra-segment count and, per extra segment, its page size + its
-    // shared input/backing accessor; the metadata accessor (if any) goes last.
+    // both. Then the extra-segment count and one accessor block shared by every extra
+    // input and backing (all DRAM interleaved; base address and page size go in the
+    // runtime args); the metadata accessor (if any) goes last.
     std::vector<uint32_t> ct_args = {
         page_size,
         args.scratch_cb_index,
@@ -94,9 +95,8 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
     };
     TensorAccessorArgs(input_buffer).append_to(ct_args);
     ct_args.push_back(static_cast<uint32_t>(num_extra));
-    for (size_t s = 0; s < num_extra; ++s) {
-        ct_args.push_back(args.extra_page_sizes[s]);
-        TensorAccessorArgs(tensor_args.extra_inputs[s].buffer()).append_to(ct_args);
+    if (num_extra > 0) {
+        TensorAccessorArgs(tensor_args.extra_inputs[0].buffer()).append_to(ct_args);
     }
     if (has_metadata) {
         TensorAccessorArgs(metadata_buffer).append_to(ct_args);
@@ -142,11 +142,15 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
             rt_args.push_back(0u);
             rt_args.push_back(0u);
         }
-        // 10 + 4*s: extra segment s [input base, backing base, start_page, end_page].
+        // 10 + 6*s: extra segment s [input base, backing base, page size, aligned page size,
+        // start_page, end_page].
         for (size_t s = 0; s < num_extra; ++s) {
             const auto [seg_start, seg_end] = worker_slice(args.extra_num_pages[s], i);
+            Buffer* seg_backing = tensor_args.extra_backings[s].buffer();
             rt_args.push_back(tensor_args.extra_inputs[s].buffer());
-            rt_args.push_back(tensor_args.extra_backings[s].buffer());
+            rt_args.push_back(seg_backing);
+            rt_args.push_back(args.extra_page_sizes[s]);
+            rt_args.push_back(static_cast<uint32_t>(seg_backing->aligned_page_size()));
             rt_args.push_back(seg_start);
             rt_args.push_back(seg_end);
         }

@@ -49,41 +49,49 @@ constexpr uint32_t metadata_ring_slots = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_slot_stride = get_compile_time_arg_val(5);
 constexpr uint32_t metadata_data_offset = get_compile_time_arg_val(6);
 // Shared input/backing TensorAccessorArgs (same per-shard spec). Then the extra-segment
-// count and, per extra segment, [page_size] + its shared input/backing accessor. The
-// metadata accessor, when enabled, is packed last.
+// count and, when there are extra segments, one accessor block shared by all of their
+// inputs and backings. The metadata accessor, when enabled, is packed last.
 constexpr auto tensor_accessor_args = TensorAccessorArgs<7>();
 constexpr uint32_t num_extra_segments_ct_offset = tensor_accessor_args.next_compile_time_args_offset();
 constexpr uint32_t num_extra_segments = get_compile_time_arg_val(num_extra_segments_ct_offset);
+// RT args of extra segment s start at kExtraSegmentsRtBase + kExtraSegmentRtArgs * s:
+// [input base, backing base, page size, aligned page size, start_page, end_page].
 constexpr uint32_t kExtraSegmentsRtBase = 10;
+constexpr uint32_t kExtraSegmentRtArgs = 6;
 
-template <uint32_t Remaining, uint32_t CtOffset>
+template <uint32_t NumExtra, uint32_t AccessorOffset>
 constexpr uint32_t extra_segments_ct_end() {
-    if constexpr (Remaining == 0) {
-        return CtOffset;
+    if constexpr (NumExtra == 0) {
+        return AccessorOffset;
     } else {
-        return extra_segments_ct_end<Remaining - 1, TensorAccessorArgs<CtOffset + 1>::next_compile_time_args_offset()>();
+        return TensorAccessorArgs<AccessorOffset>::next_compile_time_args_offset();
     }
 }
 
 // Copy this worker's slice of each extra segment input -> backing, same scheme as the
-// primary tensor.
-template <uint32_t Remaining, uint32_t CtOffset>
-inline void copy_extra_segments(const Noc& noc, CircularBuffer& scratch_cb, uint32_t rt_idx) {
-    if constexpr (Remaining > 0) {
-        constexpr uint32_t seg_page_size = get_compile_time_arg_val(CtOffset);
-        constexpr auto seg_accessor_args = TensorAccessorArgs<CtOffset + 1>();
-        auto input = TensorAccessor(seg_accessor_args, get_arg_val<uint32_t>(rt_idx));
-        auto backing = TensorAccessor(seg_accessor_args, get_arg_val<uint32_t>(rt_idx + 1));
-        const uint32_t start_page = get_arg_val<uint32_t>(rt_idx + 2);
-        const uint32_t end_page = get_arg_val<uint32_t>(rt_idx + 3);
-        for (uint32_t p = start_page; p < end_page; ++p) {
-            noc.async_read(input, scratch_cb, seg_page_size, {.page_id = p}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            noc.async_write(scratch_cb, backing, seg_page_size, {.offset_bytes = 0}, {.page_id = p});
-            noc.async_write_barrier();
+// primary tensor. Every extra segment is DRAM interleaved (the service enforces it), so one
+// accessor block serves all of them with a runtime base address and page size, and the loop
+// body exists once however many segments there are.
+template <uint32_t NumExtra, uint32_t AccessorOffset>
+inline void copy_extra_segments(const Noc& noc, CircularBuffer& scratch_cb) {
+    if constexpr (NumExtra > 0) {
+        constexpr auto seg_accessor_args = TensorAccessorArgs<AccessorOffset>();
+        for (uint32_t s = 0; s < NumExtra; ++s) {
+            const uint32_t rt_idx = kExtraSegmentsRtBase + (kExtraSegmentRtArgs * s);
+            const uint32_t seg_page_size = get_arg_val<uint32_t>(rt_idx + 2);
+            const uint32_t seg_aligned_page_size = get_arg_val<uint32_t>(rt_idx + 3);
+            auto input = TensorAccessor(seg_accessor_args, get_arg_val<uint32_t>(rt_idx), seg_aligned_page_size);
+            auto backing =
+                TensorAccessor(seg_accessor_args, get_arg_val<uint32_t>(rt_idx + 1), seg_aligned_page_size);
+            const uint32_t start_page = get_arg_val<uint32_t>(rt_idx + 4);
+            const uint32_t end_page = get_arg_val<uint32_t>(rt_idx + 5);
+            for (uint32_t p = start_page; p < end_page; ++p) {
+                noc.async_read(input, scratch_cb, seg_page_size, {.page_id = p}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                noc.async_write(scratch_cb, backing, seg_page_size, {.offset_bytes = 0}, {.page_id = p});
+                noc.async_write_barrier();
+            }
         }
-        copy_extra_segments<Remaining - 1, seg_accessor_args.next_compile_time_args_offset()>(
-            noc, scratch_cb, rt_idx + 4);
     }
 }
 
@@ -172,7 +180,7 @@ inline void forward_metadata(
 void kernel_main() {
     // RT args (per coord, per worker). Base addresses come first so the host can
     // register them as BufferBindings at fixed positions 0/1, 7 (metadata) and
-    // 10+4s / 11+4s (extra segment s).
+    // 10+6s / 11+6s (extra segment s).
     const uint32_t input_tensor_addr = get_arg_val<uint32_t>(0);
     const uint32_t backing_tensor_addr = get_arg_val<uint32_t>(1);
     const uint32_t data_ready_counter_addr = get_arg_val<uint32_t>(2);
@@ -199,8 +207,7 @@ void kernel_main() {
             noc.async_write(scratch_cb, backing, page_size, {.offset_bytes = 0}, {.page_id = p});
             noc.async_write_barrier();
         }
-        copy_extra_segments<num_extra_segments, num_extra_segments_ct_offset + 1>(
-            noc, scratch_cb, kExtraSegmentsRtBase);
+        copy_extra_segments<num_extra_segments, num_extra_segments_ct_offset + 1>(noc, scratch_cb);
     }
 
     // 2. (Optional) forward inline metadata to the sender service core.
