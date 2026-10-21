@@ -74,7 +74,8 @@ inline void llk_math_reduce_block(
     const std::uint32_t operandB,
     const std::uint32_t dst_index,
     const std::uint32_t num_tiles,
-    const std::uint32_t dst_stride) {
+    const std::uint32_t dst_stride,
+    const bool scalar_pair = false) {
     LLK_ASSERT(
         (num_tiles == 0) || (dst_index + (num_tiles - 1) * dst_stride <
                              get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
@@ -95,7 +96,7 @@ inline void llk_math_reduce_block(
         StateDiscard<bool>(is_int_fpu_en)));
 
     _llk_math_reduce_block_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(
-        dst_index, num_tiles, dst_stride, tensor_shape);
+        dst_index, num_tiles, dst_stride, tensor_shape, scalar_pair);
 }
 
 // Unified init core (explicit shape), shared by the CB-id API and the LLKOperand API (experimental/2_0/).

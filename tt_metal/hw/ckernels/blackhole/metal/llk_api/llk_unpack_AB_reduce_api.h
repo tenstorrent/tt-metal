@@ -87,7 +87,8 @@ inline void llk_unpack_AB_reduce_block(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
-    const std::uint32_t num_tiles) {
+    const std::uint32_t num_tiles,
+    const bool scalar_pair = false) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t page_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
@@ -124,6 +125,7 @@ inline void llk_unpack_AB_reduce_block(
         num_tiles,
         page_size_a,
         unpack_src_format[operandA_id],
-        get_operand_tensor_shape(operandA_id));
+        get_operand_tensor_shape(operandA_id),
+        scalar_pair);
     WAYPOINT("UABD");
 }
