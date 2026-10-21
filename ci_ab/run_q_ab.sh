@@ -28,8 +28,8 @@ for L in ${ARMS:-S Q N1 N2 N3}; do
   tar -C $R -cf - $P | tar -C $D -xf -
   (cd $S/variants/$L/tree && find . -type f) | while read -r f; do mkdir -p "$(dirname "$D/$f")"; cp "$S/variants/$L/tree/$f" "$D/$f"; done
   ln -sfn $SF $D/tt_metal/tt-llk/tests/sfpi; rm -rf $D/tt_metal/tt-llk/perf_data; ln -sfn $SL/perf_data $D/tt_metal/tt-llk/perf_data
-  rts=$(awk '{print $3}' $S/lines.txt | tr ',' '\n' | sort -u | paste -sd,)
-  cat $(awk -v s=$S '{print s"/ids/"$1".txt"}' $S/lines.txt) | sort -u > $SL/ids_$L.txt
+  rts=$(awk '{print $3}' ${LINES:-$S/lines.txt} | tr ',' '\n' | sort -u | paste -sd,)
+  cat $(awk -v s=$S '{print s"/ids/"$1".txt"}' ${LINES:-$S/lines.txt}) | sort -u > $SL/ids_$L.txt
   X=(); AO=1; [[ $L == *_wc ]] && X=(--dump-perf-counters); [[ $L == *_fn ]] && AO=0
   ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $SL/ids_$L.txt
     env CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=$AO TMPDIR=$SL/builds/$L LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
@@ -53,7 +53,7 @@ while read -r tag X rts; do
   [[ -z $tag || $tag == \#* || $stop == 1 ]] && continue
   echo "== $tag ($rts) $(date -u +%T)"; k=0
   for L in ${SCHED:-S Q N1 N2 N3 N3 N2 N1 Q S}; do k=$((k+1)); run $tag $L $k $L $rts || { stop=1; break; }; done
-done < $S/lines.txt
+done < ${LINES:-$S/lines.txt}
 
 if [[ -z ${NOBITS:-1} ]]; then
 # bits stage: functional ids on y0 y1 y2 yp, result hashes via the bitdump plugin (BITDUMP_FILE), compared after the job

@@ -1,0 +1,4 @@
+perf_math_matmul X L1_TO_L1
+perf_matmul X L1_TO_L1
+perf_reduce X L1_TO_L1
+perf_eltwise_binary_sfpu X L1_TO_L1
