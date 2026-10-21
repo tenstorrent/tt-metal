@@ -1,6 +1,7 @@
 # scratchpad_spec invariant tests
 
-Local invariants of `ScratchpadSpec` (`scratchpad_spec.hpp`). Binding rules are in `../kernel_spec/`. The rules that
+Invariants of `ScratchpadSpec` (`scratchpad_spec.hpp`) and its `ScratchpadAdvancedOptions`
+(`advanced_options.hpp`), including the borrowed-memory constraints below. Binding rules are in `../kernel_spec/`. The rules that
 every scratchpad is bound and every binding names a declared spec are structural, and the rule of at most one
 binding kernel per node (unless multi-kernel binding is enabled) is local to `WorkUnitSpec`; both live in `../program_spec/`.
 
@@ -25,5 +26,24 @@ struct ScratchpadSpec {
 
     // Invariant: on Gen2 (Quasar), multi-binding on a node is permitted only between DM kernels.
     ScratchpadAdvancedOptions advanced_options;
+};
+
+struct ScratchpadAdvancedOptions {
+    bool allow_instance_multi_binding = false;
+
+    struct RawAllocationBorrowing {
+        // Invariant: Names a RawAllocationParameter declared in
+        // ProgramAdvancedOptions::raw_allocation_parameters.
+        RawAllocationParamName allocation;
+
+        // Invariant: Must be a multiple of the L1 alignment.
+        uint32_t offset = 0;  // in bytes
+    };
+
+    // Invariant: When set:
+    // - The supplied RawAllocation must cover every node occupied by the scratchpad.
+    // - borrowed_from->offset + ScratchpadSpec::size_per_node must not exceed
+    //   the RawAllocation's per-node size on any occupied node.
+    std::optional<RawAllocationBorrowing> borrowed_from = std::nullopt;
 };
 ```

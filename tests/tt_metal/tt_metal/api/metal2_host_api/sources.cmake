@@ -42,12 +42,15 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_relays.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_roles.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/program_spec_fields.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/raw_allocation_references.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/references.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/semaphores.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/valid_program_specs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_capacity.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_spec.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/raw_allocation_parameter/raw_allocation_parameter.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/scratchpad_spec/borrowed_memory.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/scratchpad_spec/scratchpad_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/dataflow_buffer_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/kernel_advanced_options.cpp
