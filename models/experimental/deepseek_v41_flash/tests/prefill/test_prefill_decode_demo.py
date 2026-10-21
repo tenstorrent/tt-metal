@@ -55,7 +55,7 @@ Knobs (environment), as in the V4 demo: ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (16384), 
 chunk), ``DEEPSEEK_V4_E2E_TEXT``, ``DEEPSEEK_V4_DECODE_LAYERS``, ``DEEPSEEK_V4_E2E_MAX_INPUT``,
 ``DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS``, ``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only,
 before its prefill, and compare the next-token logits -- the check that the commit is right),
-``DEEPSEEK_V4_PREFILL_TIER_FACTOR``, ``DEEPSEEK_V4_PREFILL_MAX_LEN``, ``DEEPSEEK_V4_TRACE_REGION_SIZE``,
+``DEEPSEEK_V4_PREFILL_MAX_LEN``, ``DEEPSEEK_V4_TRACE_REGION_SIZE``,
 ``DEEPSEEK_V4_L1_SMALL_SIZE``, ``DEEPSEEK_V4_PREFETCHER``, ``DEEPSEEK_V4_GCB_HEADROOM``, ``DEEPSEEK_V4_LONGBENCH``,
 ``DEEPSEEK_V4_DEMO_COUNT``, ``DEEPSEEK_V4_LONGBENCH_INDICES``, ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 +
 ``DEEPSEEK_V4_MAX_NEW_TOKENS``, prompt + new tokens), and ``DEEPSEEK_V4_NUM_STAGES`` (8; how many ``1 x 4``
@@ -380,7 +380,7 @@ def _run(
         prefetcher.callback(prefill.release_traced_prefill)
 
         # --- prefill capture, before decode's: stopping the prefetcher would drop the decode traces' requests -- #
-        progress.step("[4/6] prefill capture: one trace per stage and position tier (decode's L1 still released)")
+        progress.step("[4/6] prefill capture: one trace per stage (decode's L1 still released)")
         t0 = time.perf_counter()
         prefill.capture_traced_prefill()
         capture_seconds = time.perf_counter() - t0
