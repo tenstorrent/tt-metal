@@ -56,7 +56,13 @@ static constexpr ckernel::TensorShape CI_SHAPE = {
 static constexpr std::uint32_t CI_FACES = CI_NF_R * CI_NF_C;
 static constexpr bool CI_FULL_TILE      = CI_FACE_R == FACE_R_DIM && CI_FACES == 4;
 static constexpr bool ROW_SUM_FULL      = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (POOL_TYPE != PoolType::MAX) && CI_FULL_TILE;
-static constexpr std::uint32_t DVALIDS  = ROW_SUM_FULL ? 1 : CI_FACES;
+// The COL pair layout (the side's col_pair opt-in, HiFi) unpacks and releases a face row per valid: 2 per tile, not 1 per face
+#ifdef CI_REDUCE_FKEY
+static constexpr bool COL_PAIRED = (REDUCE_DIM == ReduceDim::REDUCE_COL) && (POOL_TYPE != PoolType::MAX) && CI_FULL_TILE && MATH_FIDELITY != MathFidelity::LoFi;
+#else
+static constexpr bool COL_PAIRED = false;
+#endif
+static constexpr std::uint32_t DVALIDS  = ROW_SUM_FULL ? 1 : (COL_PAIRED ? 2 : CI_FACES);
 
 static inline std::uint32_t out_dst(std::uint32_t call, std::uint32_t section)
 {
