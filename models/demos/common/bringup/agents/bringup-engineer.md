@@ -116,7 +116,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    Maximum precision means the device's full precision for the reference's own dtypes (its native numerics, rule
    17: no parity-only rounding), never more: no fp32 where the reference computes in bf16, no exact or emulated
    paths to beat a limit. The target of every check is the full-precision reference (F128: goldens and per-step
-   references at `numerics: native`); the reference at its own shipped precision only sets the margin. Every accuracy
+   references at `numerics: native`); the reference at its own shipped precision only sets the margin. Matching an
+   older device path bit for bit is never a requirement and never a reason to reject an op or a fusion (owner): a
+   change is judged by its speed and those metrics only. Every accuracy
    limit is 2 x the noise floor
    of those dtypes (the gate prints it as `limit ... = 2.0 x the precision model's miss`). When a check fails at the
    reference's precision, find the device error that exceeds the noise floor (a truncation, a bias, a wrong dtype);
