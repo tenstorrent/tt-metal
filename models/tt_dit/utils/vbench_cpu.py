@@ -119,9 +119,12 @@ def temporal_video(path, max_width):
         yield reduced
 
 
-def score_clip_ci(path, *, prompt, temporal_width=960):
-    scores = score_vbench(str(path), prompt=prompt, dimensions=APPEARANCE_METRICS)
+def score_clip_ci(path, *, prompt, dimensions, temporal_width=960):
+    appearance = [metric for metric in APPEARANCE_METRICS if metric in dimensions]
+    scores = score_vbench(str(path), prompt=prompt, dimensions=appearance) if appearance else {}
     with temporal_video(path, temporal_width) as reduced:
-        scores.update(score_vbench(str(reduced), prompt=prompt, dimensions=["motion_smoothness"]))
-        scores["dynamic_degree"] = dynamic_degree(reduced)
+        if "motion_smoothness" in dimensions:
+            scores.update(score_vbench(str(reduced), prompt=prompt, dimensions=["motion_smoothness"]))
+        if "dynamic_degree" in dimensions:
+            scores["dynamic_degree"] = dynamic_degree(reduced)
     return scores

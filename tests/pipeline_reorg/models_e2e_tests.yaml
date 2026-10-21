@@ -1631,6 +1631,9 @@
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
+    # The perf test renders the VBench gate (2 prompts x 4 seeds) into the shared NFS staging dir;
+    # it is scored on CPU after the devices are closed, so the pipeline test skips its single-clip gate.
+    export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1638,7 +1641,8 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v"
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v" || exit $?
+    export RUN_VBENCH=0
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1646,12 +1650,17 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p" || exit $?
+    mpirun -np 1 --host "${RESOLVED_HOSTS%%,*}" --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
+        --bundle "${VBENCH_EXPORT_DIR}"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
     bh_sc4:
-      timeout: 80
+      # 8 traced gate clips (~11 min) plus CPU scoring (~25-30 min) replace the pipeline test's ~25 min
+      # single-clip VBench; unmeasured, so +15 min until the first run sizes it.
+      timeout: 95
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
@@ -1674,6 +1683,9 @@
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
+    # The perf test renders the VBench gate (2 prompts x 4 seeds) into the shared NFS staging dir;
+    # it is scored on CPU after the devices are closed, so the pipeline test skips its single-clip gate.
+    export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1681,7 +1693,8 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v"
+      python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v" || exit $?
+    export RUN_VBENCH=0
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1689,12 +1702,17 @@
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       -- \
-      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+      python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p" || exit $?
+    mpirun -np 1 --host "${RESOLVED_HOSTS%%,*}" --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
+        --bundle "${VBENCH_EXPORT_DIR}"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
     bh_sc4:
-      timeout: 80
+      # 8 traced gate clips (~11 min) plus CPU scoring (~25-30 min) replace the pipeline test's ~25 min
+      # single-clip VBench; unmeasured, so +15 min until the first run sizes it.
+      timeout: 95
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

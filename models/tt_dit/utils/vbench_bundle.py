@@ -1,167 +1,153 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export five equal-length LTX clips, score on the same host, and enforce their mean quality."""
+"""VBench gate over N prompts x M seeds: each prompt's mean over its seeds must clear that prompt's floors.
+
+A single clip at a single seed is too noisy to gate on (a numeric perturbation reshuffles the whole
+video, and dynamic_degree is binary per clip), so a test renders every (prompt, seed) clip into a
+fresh bundle directory with ``clip_path`` and then calls ``write_manifest``. The bundle is scored by
+``evaluate``: in-process for a local run, or in CI by a separate step after pytest has closed the
+devices::
+
+    python3 -m models.tt_dit.utils.vbench_bundle evaluate --bundle DIR
+
+The manifest names the scoring function, so a model with its own scoring policy (e.g. reduced-
+resolution temporal metrics) sets it from its test and the CI command stays the same.
+"""
 
 import argparse
-import hashlib
+import importlib
 import json
 import math
 import multiprocessing
 import os
-import shutil
-import tempfile
+import socket
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-METRICS = {"subject_consistency", "background_consistency", "motion_smoothness", "dynamic_degree", "imaging_quality"}
+DEFAULT_SCORER = "models.tt_dit.utils.vbench:score_vbench"
 
 
-def digest(path):
-    result = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            result.update(block)
-    return result.hexdigest()
+def create_bundle(bundle):
+    """Create an empty bundle directory; an existing one is refused so stale clips can't be scored."""
+    bundle = Path(bundle)
+    bundle.mkdir(parents=True, exist_ok=False)
+    return bundle
 
 
-def export_bundle(source, destination, *, prompt, thresholds, temporal_width=0, clip_shape=(145, 1088, 1920)):
-    """Copy the five seed clips into ``destination`` with a manifest.
+def clip_path(bundle, prompt_index, seed):
+    return Path(bundle) / f"p{prompt_index}_s{seed}.mp4"
 
-    ``clip_shape`` is the ``[frames, height, width]`` the pipeline was asked to render; every clip
-    must match it exactly, so a wrong render (or a stale clip from another configuration) is
-    rejected here rather than scored. The shape is recorded in the manifest and re-checked by
-    ``read_manifest``.
+
+def write_manifest(bundle, *, prompts, seeds, scorer=DEFAULT_SCORER, scorer_kwargs=None):
+    """Record the gate once every clip is rendered.
+
+    ``prompts`` is a list of ``{"text": str, "thresholds": {metric: floor}}``; each prompt is scored
+    on its own threshold metrics only.
     """
-    import cv2
-
-    clip_shape = [int(v) for v in clip_shape]
-    if len(clip_shape) != 3 or min(clip_shape) <= 0:
-        raise ValueError(f"clip_shape must be [frames, height, width], got {clip_shape}")
-
-    source, destination = Path(source), Path(destination)
-    clips = sorted(source.glob("*.mp4"))
-    if len(clips) != 5 or set(thresholds) != METRICS:
-        raise ValueError("LTX CI requires all five seeds and all five VBench metrics")
-    destination.mkdir(parents=True, exist_ok=False)
     manifest = {
-        "prompt": prompt,
-        "thresholds": thresholds,
-        "temporal_width": temporal_width,
-        "clip_shape": clip_shape,
-        "clips": [],
+        "prompts": prompts,
+        "seeds": list(seeds),
+        "scorer": scorer,
+        "scorer_kwargs": scorer_kwargs or {},
+        "host": socket.gethostname(),
     }
-    for index, clip in enumerate(clips):
-        cap = cv2.VideoCapture(str(clip))
-        try:
-            shape = [
-                int(cap.get(prop))
-                for prop in (cv2.CAP_PROP_FRAME_COUNT, cv2.CAP_PROP_FRAME_HEIGHT, cv2.CAP_PROP_FRAME_WIDTH)
-            ]
-        finally:
-            cap.release()
-        # Equal frame counts make the mean of per-clip scores identical to VBench's
-        # directory aggregation (subject/background consistency weight by frame).
-        if shape != clip_shape:
-            raise ValueError(f"Unexpected VBench clip shape: {clip}: {shape}, expected {clip_shape}")
-        name = f"seed_{index}.mp4"
-        shutil.copyfile(clip, destination / name)
-        manifest["clips"].append({"name": name, "sha256": digest(destination / name), "shape": shape})
-    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    validate(bundle, manifest)
+    (Path(bundle) / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
 
 def read_manifest(bundle):
     manifest = json.loads((Path(bundle) / "manifest.json").read_text())
-    width = manifest.get("temporal_width", 0)
-    if type(width) is not int or width < 0 or width > 1920 or width % 2:
-        raise ValueError("Invalid VBench temporal width")
-    if len(manifest["clips"]) != 5 or set(manifest["thresholds"]) != METRICS:
-        raise ValueError("Incomplete VBench manifest")
-    # Bundles written before the shape was recorded carry the original 145f 1080p clips.
-    clip_shape = manifest.get("clip_shape", [145, 1088, 1920])
-    if type(clip_shape) is not list or len(clip_shape) != 3 or any(type(v) is not int or v <= 0 for v in clip_shape):
-        raise ValueError("Invalid VBench clip shape")
-    for index, clip in enumerate(manifest["clips"]):
-        if clip["name"] != f"seed_{index}.mp4" or clip["shape"] != clip_shape:
-            raise ValueError("Invalid VBench clip identity or shape")
+    validate(bundle, manifest)
     return manifest
 
 
-def score_clip(bundle, index, output):
+def validate(bundle, manifest):
+    if not manifest["prompts"] or not manifest["seeds"]:
+        raise ValueError("VBench gate needs at least one prompt and one seed")
+    if len(set(manifest["seeds"])) != len(manifest["seeds"]):
+        raise ValueError("VBench gate seeds must be distinct")
+    if not manifest["scorer"].startswith("models.tt_dit."):
+        raise ValueError(f"VBench scorer must live under models.tt_dit: {manifest['scorer']}")
+    for index, prompt in enumerate(manifest["prompts"]):
+        if not prompt["text"] or not prompt["thresholds"]:
+            raise ValueError(f"VBench prompt {index} needs text and thresholds")
+        for seed in manifest["seeds"]:
+            if not clip_path(bundle, index, seed).is_file():
+                raise ValueError(f"Missing VBench clip: {clip_path(bundle, index, seed)}")
+
+
+def load_scorer(name):
+    module, function = name.split(":")
+    return getattr(importlib.import_module(module), function)
+
+
+def score_clip(bundle, prompt_index, seed):
     import torch
 
-    from models.tt_dit.utils.vbench import score_vbench
-
     torch.set_num_threads(4)
-    bundle = Path(bundle)
     manifest = read_manifest(bundle)
-    clip = manifest["clips"][index]
-    path = bundle / clip["name"]
-    if digest(path) != clip["sha256"]:
-        raise ValueError(f"VBench clip checksum mismatch: {path}")
-    if manifest.get("temporal_width", 0):
-        from models.tt_dit.utils.vbench_cpu import score_clip_ci
-
-        scores = score_clip_ci(path.resolve(), prompt=manifest["prompt"], temporal_width=manifest["temporal_width"])
-    else:
-        scores = score_vbench(str(path.resolve()), prompt=manifest["prompt"], dimensions=list(manifest["thresholds"]))
-    Path(output).write_text(
-        json.dumps({"index": index, "manifest_sha256": digest(bundle / "manifest.json"), "scores": scores})
+    prompt = manifest["prompts"][prompt_index]
+    score = load_scorer(manifest["scorer"])
+    return score(
+        str(clip_path(bundle, prompt_index, seed).resolve()),
+        prompt=prompt["text"],
+        dimensions=list(prompt["thresholds"]),
+        **manifest["scorer_kwargs"],
     )
 
 
-def aggregate(bundle, results):
+def aggregate(manifest, scores):
+    """Average each prompt's scores over the seeds and enforce that prompt's floors.
+
+    ``scores`` maps ``(prompt_index, seed)`` to a ``{metric: score}`` dict. A missing or non-finite
+    score makes that prompt's mean non-finite, which fails the gate.
+    """
     from models.tt_dit.utils.vbench import assert_scores
 
-    bundle = Path(bundle)
-    manifest = read_manifest(bundle)
-    manifest_hash = digest(bundle / "manifest.json")
-    rows = [json.loads(path.read_text()) for path in Path(results).glob("score_*.json")]
-    if len(rows) != 5 or sorted(row["index"] for row in rows) != list(range(5)):
-        raise ValueError("Missing or duplicate VBench seed results; all five are required")
-    for row in rows:
-        if row["manifest_sha256"] != manifest_hash or set(row["scores"]) != METRICS:
-            raise ValueError("VBench results do not match the complete exported gate")
-        if not all(math.isfinite(value) for value in row["scores"].values()):
-            raise ValueError("Non-finite VBench score")
-    means = {metric: sum(row["scores"][metric] for row in rows) / 5 for metric in METRICS}
-    print(json.dumps(means, indent=2))
-    assert_scores(means, manifest["thresholds"])
+    seeds = manifest["seeds"]
+    means = []
+    failures = []
+    for index, prompt in enumerate(manifest["prompts"]):
+        thresholds = prompt["thresholds"]
+        for seed in seeds:
+            row = scores[(index, seed)]
+            print(f"prompt {index} seed {seed}: " + ", ".join(f"{m}={row.get(m, math.nan):.4f}" for m in thresholds))
+        mean = {m: sum(scores[(index, seed)].get(m, math.nan) for seed in seeds) / len(seeds) for m in thresholds}
+        print(f"prompt {index} mean over {len(seeds)} seeds: " + ", ".join(f"{m}={v:.4f}" for m, v in mean.items()))
+        means.append(mean)
+        try:
+            assert_scores(mean, thresholds)
+        except AssertionError as error:
+            failures.append(f"prompt {index} ({prompt['text'][:60]!r}): {error}")
+
+    if failures:
+        raise AssertionError("\n".join(failures))
     return means
 
 
-def evaluate(bundle):
-    """Run all five seeds concurrently, propagate worker failures, then enforce the mean."""
+def evaluate(bundle, *, workers=None):
+    """Score every clip in parallel CPU processes, then enforce each prompt's mean."""
     bundle = Path(bundle).resolve()
     manifest = read_manifest(bundle)
-    available = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 4)
-    workers = min(5, max(1, available // 4))
-    print(f"VBench: five seeds, {workers} CPU workers, temporal width={manifest.get('temporal_width', 0)}", flush=True)
-    with tempfile.TemporaryDirectory(prefix="vbench-results-") as results:
-        with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
-            futures = [
-                pool.submit(score_clip, bundle, index, Path(results) / f"score_{index}.json") for index in range(5)
-            ]
-            for future in futures:
-                future.result()
-        return aggregate(bundle, results)
+    clips = [(index, seed) for index in range(len(manifest["prompts"])) for seed in manifest["seeds"]]
+    if workers is None:
+        available = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 4)
+        workers = min(len(clips), max(1, available // 4))
+    print(
+        f"VBench: {len(manifest['prompts'])} prompts x {len(manifest['seeds'])} seeds rendered on "
+        f"{manifest['host']}, {workers} CPU workers, scorer {manifest['scorer']} {manifest['scorer_kwargs']}",
+        flush=True,
+    )
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+        futures = {clip: pool.submit(score_clip, bundle, *clip) for clip in clips}
+        scores = {clip: future.result() for clip, future in futures.items()}
+    return aggregate(manifest, scores)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["score", "aggregate", "evaluate"])
+    parser.add_argument("mode", choices=["evaluate"])
     parser.add_argument("--bundle", required=True)
-    parser.add_argument("--index", type=int, choices=range(5))
-    parser.add_argument("--output")
-    parser.add_argument("--results")
     args = parser.parse_args()
-    if args.mode == "evaluate":
-        evaluate(args.bundle)
-    elif args.mode == "score":
-        if args.index is None or not args.output:
-            parser.error("score requires --index and --output")
-        score_clip(args.bundle, args.index, args.output)
-    else:
-        if not args.results:
-            parser.error("aggregate requires --results")
-        aggregate(args.bundle, args.results)
+    evaluate(args.bundle)
