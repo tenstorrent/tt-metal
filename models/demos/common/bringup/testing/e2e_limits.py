@@ -14,15 +14,18 @@ from pathlib import Path
 from models.demos.common.bringup.core import defaults, metrics
 
 CALIB = float(defaults.get("e2e.calib"))
-STATE_KEY = re.compile(r"^pcc_state_(.+)_L\d+$")
+STATE_KEY = re.compile(r"^(pcc_state|contract_state)_(.+)_L\d+$")
 
 
-def load(golden_dir: Path) -> dict:
-    p = Path(golden_dir) / "drift.json"
+def load(golden_dir: Path, rung: str) -> dict:
+    """The rung's drift (reference/drift.py: the official reference fed as the device is on that rung, F134)."""
+    from models.demos.common.bringup.reference.drift import drift_path
+
+    p = drift_path(golden_dir, rung)
     if not p.exists():
         raise FileNotFoundError(
-            f"{p}: no end-to-end margin; generate the rung's official golden and its drift "
-            "(reference.generate_golden --numerics official, then reference.drift; F128)"
+            f"{p}: no end-to-end margin for rung {rung}; its golden's G task makes it (reference.generate_golden "
+            f"--rung <the golden's rung> --set), or reference.drift --rung {rung} (F128, F134)"
         )
     return json.loads(p.read_text())
 
@@ -42,9 +45,10 @@ def check(drift: dict, metric: str, value: float, failed: list[str]) -> bool:
     return True
 
 
-def state_limit(drift: dict, name: str) -> float:
-    """The limit of a state tensor's worst layer (the contract's KV read-back reports each state's worst layer)."""
-    keys = [k for k in drift if (m := STATE_KEY.match(k)) and m.group(1) == name]
+def state_limit(drift: dict, name: str, kind: str = "pcc_state") -> float:
+    """The limit of a state tensor's worst layer (the contract's KV read-back reports each state's worst layer); kind
+    contract_state: the state as the contract reads it back (F134)."""
+    keys = [k for k in drift if (m := STATE_KEY.match(k)) and m.group(1) == kind and m.group(2) == name]
     if not keys:
-        raise KeyError(f"no drift for state {name!r} (F128)")
+        raise KeyError(f"no {kind} drift for state {name!r} (F128)")
     return min(limit(drift, k) for k in keys)

@@ -37,6 +37,11 @@ from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
+def rung_layers(s, rung: dict, g: Golden) -> list[int]:
+    """The layers a rung stacks: its own ``layers`` or the spec's subset, those the golden holds."""
+    return [i for i in (s.layers() if "layers" not in rung else rung["layers"]) if i in g.layers]
+
+
 def sampled_rows(chunk: int) -> torch.Tensor:
     return torch.unique(torch.cat([torch.arange(0, chunk, 16), torch.arange(chunk - 32, chunk)]))
 
@@ -44,7 +49,7 @@ def sampled_rows(chunk: int) -> torch.Tensor:
 def run_ladder(s, rung_name: str, mesh) -> dict:
     rung = s.rung(rung_name)
     g = Golden.for_rung(s, rung_name)
-    layers = [i for i in (s.layers() if "layers" not in rung else rung["layers"]) if i in g.layers]
+    layers = rung_layers(s, rung, g)
     starts = set(run_starts(layers))
     full_stack = layers == list(range(s.num_layers))
     ends_at_last = layers[-1] == s.num_layers - 1  # final norm, logits and top-k are only meaningful then
@@ -123,7 +128,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         )
 
     out = {"trail": {}, "failed": []}
-    drift = E.load(g.dir)  # F128: every limit below is calib x the reference's own drift from full precision
+    drift = E.load(g.dir, rung_name)  # F128 / F134: calib x the reference's drift, fed as the device is on this rung
     for i in layers:
         p = metrics.pcc(trail[i], g.layer(last, i)["out"].float())
         metrics.record(f"pcc_layer_L{i:02d}", p)
@@ -155,19 +160,26 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
 
 
 def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, failed: list[str]) -> None:
-    """Every layer's state after the rung vs the golden, each with its drift limit (F128). F99: float states by PCC;
-    integer states (top-k index lists) by the selection overlap, not the PCC of the ids."""
+    """Every layer's state after the rung vs the golden, each with its drift limit (F128), over the positions the
+    device computed (the drift entry's region, F134). F99: float states by PCC; integer states (top-k index lists) by
+    the selection overlap, not the PCC of the ids."""
+    from models.demos.common.bringup.reference.drift import narrow
+
     worst, worst_ov = 1.0, 1.0
     for i in layers:
         got = state.to_torch(i, seq)
         for name, want in g.state(i).items():
+            kind = "pcc" if want.is_floating_point() else "overlap"
+            region = (drift.get(f"{kind}_state_{name}_L{i:02d}") or {}).get("region")  # F134: the positions computed
+            o = got[name].reshape(want.shape) if got[name].numel() == want.numel() else got[name]
+            o, want = narrow(o, region), narrow(want, region)
             if want.is_floating_point():
-                p = metrics.pcc(got[name].float(), want.float())
+                p = metrics.pcc(o.float(), want.float())
                 metrics.record(f"pcc_state_{name}_L{i:02d}", p)
                 worst = min(worst, p)
                 E.check(drift, f"pcc_state_{name}_L{i:02d}", p, failed)
             else:
-                ov = index_overlap(got[name], want)
+                ov = index_overlap(o, want)
                 metrics.record(f"overlap_state_{name}_L{i:02d}", ov)
                 worst_ov = min(worst_ov, ov)
                 E.check(drift, f"overlap_state_{name}_L{i:02d}", ov, failed)
