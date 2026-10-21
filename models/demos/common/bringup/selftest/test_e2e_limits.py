@@ -82,10 +82,10 @@ def test_no_hook_without_a_numerics_switch_falls_back_to_rounded_arithmetic():
         def get(self, key, default=None):
             return self.data.get(key, default)
 
-    with pytest.raises(SystemExit, match="numerics"):
-        G.reference_at(S({}), "native", layers=None)
+    for numerics in ("native", "official"):  # F132: either way the arithmetic is unknown
+        with pytest.raises(SystemExit, match="numerics"):
+            G.reference_at(S({}), numerics, layers=None)
     assert G.reference_at(S({"reference.no_rounding": True}), "native", layers=None) == "official only"
-    assert G.reference_at(S({}), "official", layers=None) == "official only"
 
 
 ACCURACY = re.compile(r"^(pcc_|overlap_|top1|top5|err_)")
@@ -123,5 +123,6 @@ def test_the_end_to_end_tests_use_no_fixed_threshold():
 def test_goldens_and_per_step_references_default_to_full_precision():
     from models.demos.common.bringup.core import defaults
 
-    assert defaults.get("golden.numerics") == "native" and defaults.get("tests.step_numerics") == "native"
+    assert G.TARGET_NUMERICS == "native"  # F132: a constant, not a switch
+    assert defaults.get("golden.numerics", None) is None and defaults.get("tests.step_numerics", None) is None
     assert json.dumps(defaults.get("thresholds")).find("state_overlap") < 0

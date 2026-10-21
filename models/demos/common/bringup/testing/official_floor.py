@@ -35,6 +35,7 @@ import os
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, reference_at
 
 
 def _stats(got: torch.Tensor, want: torch.Tensor) -> dict:
@@ -77,7 +78,7 @@ def generate(s, write: bool = True) -> dict:
     g, c = component_golden(s)
     layers = list(g.layers)
     taps = hooks.official_taps(s, layers, g.tokens(), c, g.chunk)
-    ref = hooks.reference(s, layers=layers, dtype=torch.float32)
+    ref = reference_at(s, TARGET_NUMERICS, layers=layers)  # F132: vs the step the tests compare with
     k = CC.limits(s)["component_calib"]
     out, errors, unmapped, n = {}, [], [], 0
     for L in layers:

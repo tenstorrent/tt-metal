@@ -8,6 +8,7 @@ import json
 import pytest
 import torch
 
+from models.demos.common.bringup.reference.golden import reference_at
 from models.demos.common.bringup.selftest.conftest import got
 from models.demos.common.bringup.selftest.test_device_side import gspec  # noqa: F401 (fixture)
 from models.demos.common.bringup.testing import noise_floor as NF
@@ -183,7 +184,7 @@ def _fake_official(s, wrong: str | None = None, skip: str | None = None, state: 
         from models.demos.common.bringup.testing.harness import component_golden
 
         g, c = component_golden(spec)
-        ref = spec.hooks().reference(spec, layers=layers, dtype=torch.float32)
+        ref = reference_at(spec, "official", layers=layers)  # the fixture's official code
         out = {}
         for L in layers:
             gl, out[L] = g.layer(c, L), {}
