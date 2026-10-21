@@ -125,8 +125,15 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }}},
     });
 
-    // c_1: the writer reads all of a token's weights under one barrier; two tokens deep.
-    uint32_t weight_cb_size = 2 * num_experts * tile_size;
+    // c_1: the same rule for the weights, one tile per expert. The writer reads all of a token's
+    // weights under one barrier, two tokens deep, only when that fits in C1_BATCH_BUDGET_BYTES (up to
+    // 8 bf16 experts per token, every model today); a wider top-k streams one weight at a time in a
+    // single tile, as before, so L1 does not grow with the expert count.
+    constexpr uint32_t C1_BATCH_BUDGET_BYTES = 32 * 1024;
+    const uint32_t token_weights_bytes = num_experts * tile_size;
+    const bool batch_weights = 2 * token_weights_bytes <= C1_BATCH_BUDGET_BYTES;
+    const uint32_t weights_per_batch = batch_weights ? num_experts : 1;
+    uint32_t weight_cb_size = batch_weights ? 2 * token_weights_bytes : tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = weight_cb_size,
         .core_ranges = core_range_set,
@@ -294,6 +301,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
     writer_compile_time_args.push_back(static_cast<uint32_t>(weights_per_token ? 1 : 0));
     writer_compile_time_args.push_back(weights_aligned_page_size);
+    writer_compile_time_args.push_back(weights_per_batch);
 
     // Build kernel descriptors and push them onto desc.kernels.  Stable indices
     // (0=reader, 1=compute, 2=writer) below let emplace_runtime_args identify
