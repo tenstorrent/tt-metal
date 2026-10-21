@@ -151,9 +151,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         x = column_parallel_input(x, self.cluster_axis, self.sequence_parallel)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            base = ttml.ops.distributed.all_gather(
-                base, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            base = ttml.ops.distributed.all_gather(base, 3, self.cluster_axis)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(
                 lora_input, self.dropout_prob, use_per_device_seed=self.sequence_parallel
@@ -164,9 +162,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         # whenever the base path is gathered.
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
-            lora_update = ttml.ops.distributed.all_gather(
-                lora_update, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            lora_update = ttml.ops.distributed.all_gather(lora_update, 3, self.cluster_axis)
         return base + lora_update * self.scaling
 
 
@@ -206,7 +202,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         if not self.input_is_parallel:
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        base = row_parallel_output(base, self.cluster_axis, self.sequence_parallel, self.input_is_parallel)
+        base = row_parallel_output(base, self.cluster_axis, self.sequence_parallel)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
         # lora_A is row-sharded (each device sees a slice of in_features), so its partial
@@ -215,7 +211,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
-        h = row_parallel_output(h, self.cluster_axis, self.sequence_parallel, self.input_is_parallel)
+        h = row_parallel_output(h, self.cluster_axis, self.sequence_parallel)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         return base + lora_update * self.scaling
 

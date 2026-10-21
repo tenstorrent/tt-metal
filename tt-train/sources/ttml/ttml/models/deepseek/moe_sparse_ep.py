@@ -86,7 +86,7 @@ class SparseMoEEP(MoE):
             and mesh.axis_index("dp") == self.cluster_axis
         )
         if dp_gather:
-            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED)
+            x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis)
 
         B, _, S, _dim = list(x.get_value().shape)
         x = self._memory_snapshot(x, "START")
@@ -154,12 +154,11 @@ class SparseMoEEP(MoE):
         output = self._memory_snapshot(output, "AFTER_UNGROUP")
 
         # ── all_reduce across EP axis to combine partial sums ──
-        # noop_backward=True: each chip's partial contributes equally to the
-        # replicated output, so dL/d(partial_chip) = dL/d(output) flows back
-        # identically to every chip — no second collective in backward.
+        # Each chip's partial contributes equally to the replicated output, so
+        # dL/d(partial_chip) = dL/d(output) flows back to every chip.
         # At EP size 1 this chip already holds the complete sum over all experts.
         if self.ep_size > 1:
-            output = ttml.ops.distributed.all_reduce(output, noop_backward=True, cluster_axis=self.cluster_axis)
+            output = ttml.ops.distributed.all_reduce(output, cluster_axis=self.cluster_axis)
             output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
         # Shared experts: not EP-sharded by default — they replicate work and
@@ -172,8 +171,7 @@ class SparseMoEEP(MoE):
             pre_add_output = output
             output = ttml.ops.binary.add(pre_add_output, shared_out)
             # binary.add's backward is just d_a = d_b = d_out (no read of inputs);
-            # the all_reduce above has noop_backward (identity), so its forward
-            # output is never read in bwd either; shared_out's parent linear (w2)
+            # the all_reduce above never reads its forward output in bwd either; shared_out's parent linear (w2)
             # also doesn't read shared_out itself for its weight grad (it reads w2's
             # input, which is saved separately). All three sources confirm these
             # two tensor values are not needed downstream — release them now.

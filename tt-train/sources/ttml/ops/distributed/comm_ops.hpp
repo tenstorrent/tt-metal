@@ -8,24 +8,22 @@
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
-enum class GradOutputType { REPLICATED, SHARDED };
 
 // dim: tensor dimension to scatter/gather/reduce across (which tensor dimension will change after the operation)
 // cluster_axis: mesh device shape axis to scatter/gather/reduce across (which parts of the tensor participate in the
 // operation), default is none (all axes)
+//
+// all_reduce, broadcast and all_gather output a tensor replicated across `cluster_axis`: one logical value. In the
+// backward pass its gradient is whole where the ranks' gradients agree and partial where they differ (read from the
+// gradient's TensorTopology), and partial gradients are summed.
 autograd::TensorPtr reduce_scatter(
     const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr scatter(
     const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr all_reduce(
-    const autograd::TensorPtr& tensor,
-    const bool noop_backward = false,
-    const std::optional<uint32_t> cluster_axis = std::nullopt);
+    const autograd::TensorPtr& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr all_gather(
-    const autograd::TensorPtr& tensor,
-    const int dim,
-    const std::optional<uint32_t> cluster_axis = std::nullopt,
-    const GradOutputType grad_output_type = GradOutputType::SHARDED);
+    const autograd::TensorPtr& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr broadcast(
     const autograd::TensorPtr& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
 autograd::TensorPtr ring_shift(

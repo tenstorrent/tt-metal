@@ -27,6 +27,9 @@ protected:
     }
 };
 
+// The gradient set on a replicated output below is replicated too: every device holds the one logical tensor's whole
+// gradient, which flows back unscaled (all_reduce) or sliced (all_gather). The *PartialGradient tests set a gradient
+// that differs across devices, whose sum is the gradient.
 TEST_F(Mesh1x2CommOpsTest, TestAllReduceNotFullyTiled) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
@@ -68,17 +71,15 @@ TEST_F(Mesh1x2CommOpsTest, TestAllReduceNotFullyTiled) {
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
-
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        grad_data * num_devices_scale,
+        grad_data,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        grad_data * num_devices_scale,
+        grad_data,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -126,16 +127,15 @@ TEST_F(Mesh1x2CommOpsTest, TestAllReduceNanoGPT) {
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        grad_data * num_devices_scale,
+        grad_data,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 2e-2));
     EXPECT_TRUE(xt::allclose(
-        grad_data * num_devices_scale,
+        grad_data,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 2e-2));
@@ -182,16 +182,15 @@ TEST_F(Mesh1x2CommOpsTest, TestAllReduceFullyTiled) {
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        grad_data * num_devices_scale,
+        grad_data,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        grad_data * num_devices_scale,
+        grad_data,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -232,16 +231,15 @@ TEST_F(Mesh1x2CommOpsTest, TestAllGatherNotFullyTiled) {
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * num_devices_scale,
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * num_devices_scale,
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)),
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -280,16 +278,15 @@ TEST_F(Mesh1x2CommOpsTest, TestAllGatherFullyTiled) {
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto num_devices_scale = static_cast<float>(ttml::autograd::ctx().get_device().num_devices());
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * num_devices_scale,
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * num_devices_scale,
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)),
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -617,4 +614,72 @@ TEST_F(Mesh1x2CommOpsTest, GradientReductionsRefuseAVaryingGradientOnAnAxisWithN
         std::runtime_error);
     EXPECT_THROW(
         ttml::core::distributed::gradient_reductions(parameter, AxisKinds{AxisKind::Data}), std::runtime_error);
+}
+
+namespace {
+
+// Each device's [1, 1, rows, cols] gradient is a different slice of `grad_data` ([2, 1, rows, cols]), labelled
+// [Replicate, Shard{0}]: the partial sums behind a sharded matmul.
+ttnn::Tensor partial_gradient(const xt::xarray<float>& grad_data) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto mapper = ttnn::distributed::create_mesh_mapper(
+        *device, MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{0}}});
+    return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        grad_data, device, ttnn::Layout::TILE, mapper.get());
+}
+
+ttml::autograd::TensorPtr replicated_input(std::size_t cols) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> value = xt::zeros<float>(std::array<std::size_t, 4>{1U, 1U, 32U, cols});
+    return ttml::autograd::create_tensor(
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(value, device, ttnn::Layout::TILE),
+        /* requires_grad */ true);
+}
+
+}  // namespace
+
+TEST_F(Mesh1x2CommOpsTest, AllReduceSumsAPartialGradient) {
+    const auto grad_data = two_random_slices();
+    auto input = replicated_input(32U);
+    auto output = ttml::ops::distributed::all_reduce(input, 1U);
+    output->set_grad(partial_gradient(grad_data));
+    output->backward();
+    expect_on_both_devices(input->get_grad(), sum_of_the_two_slices(grad_data));
+}
+
+TEST_F(Mesh1x2CommOpsTest, BroadcastSumsAPartialGradient) {
+    // The input of a column-parallel matmul: each device's gradient covers its own output features only.
+    const auto grad_data = two_random_slices();
+    auto input = replicated_input(32U);
+    auto output = ttml::ops::distributed::broadcast(input, 1U);
+    output->set_grad(partial_gradient(grad_data));
+    output->backward();
+    expect_on_both_devices(input->get_grad(), sum_of_the_two_slices(grad_data));
+}
+
+TEST_F(Mesh1x2CommOpsTest, AllGatherReduceScattersAPartialGradient) {
+    // Sequence parallelism's column-parallel input: each device gets its slice of the summed gradient.
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto& rng = ttml::autograd::ctx().get_generator();
+    xt::xarray<float> value = xt::zeros<float>({1U, 1U, 32U, 64U});
+    const auto shard_mapper = ttnn::distributed::create_mesh_mapper(
+        *device, MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}}});
+    auto input = ttml::autograd::create_tensor(
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            value, device, ttnn::Layout::TILE, shard_mapper.get()),
+        /* requires_grad */ true);
+    auto output = ttml::ops::distributed::all_gather(input, 3, 1U);
+    const xt::xarray<float> grad_data =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2U, 1U, 32U, 64U}, 0.0F, 1.0F, rng());
+    output->set_grad(partial_gradient(grad_data));
+    output->backward();
+
+    const xt::xarray<float> sum = sum_of_the_two_slices(grad_data);
+    auto shards = ttml::core::to_xtensor<float>(input->get_grad(), ttml::core::IdentityComposer{});
+    ASSERT_EQ(shards.size(), 2U);
+    for (std::size_t device_index = 0; device_index < 2U; ++device_index) {
+        const xt::xarray<float> expected =
+            xt::view(sum, xt::all(), xt::all(), xt::all(), xt::range(32U * device_index, 32U * (device_index + 1U)));
+        EXPECT_TRUE(xt::allclose(expected, shards[device_index], /* rtol */ 1e-2, /* atol */ 1e-2));
+    }
 }

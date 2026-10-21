@@ -17,17 +17,15 @@ from .parameter import Parameter
 def column_parallel_input(x, cluster_axis: int, sequence_parallel: bool):
     """The input of a column-parallel matmul: the full sequence, replicated on every TP rank."""
     if sequence_parallel:
-        return ttml.ops.distributed.all_gather(
-            x, SEQUENCE_DIM, cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
-        )
+        return ttml.ops.distributed.all_gather(x, SEQUENCE_DIM, cluster_axis)
     return ttml.ops.distributed.broadcast(x, cluster_axis)
 
 
-def row_parallel_output(x, cluster_axis: int, sequence_parallel: bool, input_is_parallel: bool):
+def row_parallel_output(x, cluster_axis: int, sequence_parallel: bool):
     """The output of a row-parallel matmul: the partial products summed across TP ranks."""
     if sequence_parallel:
         return ttml.ops.distributed.reduce_scatter(x, SEQUENCE_DIM, cluster_axis)
-    return ttml.ops.distributed.all_reduce(x, input_is_parallel, cluster_axis)
+    return ttml.ops.distributed.all_reduce(x, cluster_axis)
 
 
 class LinearLayer(AbstractModuleBase):
@@ -152,7 +150,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
             # Reconstitute the full output across TP devices (dim 3 = last feature dim).
-            x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+            x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis)
         return x
 
 
@@ -199,7 +197,6 @@ class RowParallelLinear(AbstractModuleBase):
 
         self.in_features = in_features
         self.out_features = out_features
-        # TODO: use ttnn.Tensor.tensor_topology() once CCL ops will properly update this property
         self.input_is_parallel = input_is_parallel
         self.sequence_parallel = sequence_parallel
         self.axis_name = axis_name
@@ -227,7 +224,7 @@ class RowParallelLinear(AbstractModuleBase):
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        x = row_parallel_output(x, self.cluster_axis, self.sequence_parallel, self.input_is_parallel)
+        x = row_parallel_output(x, self.cluster_axis, self.sequence_parallel)
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x

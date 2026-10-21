@@ -168,11 +168,7 @@ void py_module(nb::module_& m) {
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def(
-            "all_reduce",
-            &ttml::ops::distributed::all_reduce,
-            nb::arg("tensor"),
-            nb::arg("noop_backward") = false,
-            nb::arg("cluster_axis") = nb::none());
+            "all_reduce", &ttml::ops::distributed::all_reduce, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
             "reduce_scatter",
             &ttml::ops::distributed::reduce_scatter,
@@ -185,16 +181,12 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
-        nb::enum_<ttml::ops::distributed::GradOutputType>(py_distributed, "GradOutputType")
-            .value("REPLICATED", ttml::ops::distributed::GradOutputType::REPLICATED)
-            .value("SHARDED", ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "all_gather",
             &ttml::ops::distributed::all_gather,
             nb::arg("tensor"),
             nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
+            nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
         py_distributed.def(

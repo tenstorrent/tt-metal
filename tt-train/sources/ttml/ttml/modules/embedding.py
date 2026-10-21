@@ -197,7 +197,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         if self.sequence_parallel:
             # Same sum, landing sequence-sharded for the first block.
             return ttml.ops.distributed.reduce_scatter(emb, SEQUENCE_DIM, self.cluster_axis)
-        return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
+        return ttml.ops.distributed.all_reduce(emb, cluster_axis=self.cluster_axis)
 
 
 class FeatureParallelEmbedding(AbstractModuleBase):
@@ -299,12 +299,4 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         if not self.gather_output:
             return emb
 
-        # GradOutputType.REPLICATED divides the backward reduce_scatter by tp_size
-        # (output is replicated, consumed replicated), matching
-        # ColumnParallelLinear(gather_output=True).
-        return ttml.ops.distributed.all_gather(
-            emb,
-            3,
-            self.cluster_axis,
-            ttml.ops.distributed.GradOutputType.REPLICATED,
-        )
+        return ttml.ops.distributed.all_gather(emb, 3, self.cluster_axis)

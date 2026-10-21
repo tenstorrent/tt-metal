@@ -434,9 +434,7 @@ TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto output = layer(tensor);
-    auto ones_grad = ttnn::ones_like(output->get_value());
-    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
-    output->set_grad(ones_grad);
+    output->set_grad(ttnn::ones_like(output->get_value()));
     output->backward();
 
     auto row_parallel_output_xtensor =
@@ -457,10 +455,8 @@ TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor, /* requires_grad */ true);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
-    // Use unscaled ones_grad for replicate layer because row parallel's all_reduce backward
-    // does all_reduce on grad (noop_backward=false), effectively multiplying by num_devices
-    auto replicate_ones_grad = ttnn::ones_like(replicate_layer_output->get_value());
-    replicate_layer_output->set_grad(replicate_ones_grad);
+    // The row-parallel output is replicated and so is its gradient: the same gradient as the single layer's.
+    replicate_layer_output->set_grad(ttnn::ones_like(replicate_layer_output->get_value()));
     replicate_layer_output->backward();
     auto replicate_output_xtensor =
         ttml::core::to_xtensor<float>(replicate_layer_output->get_value(), ttml::core::IdentityComposer{});

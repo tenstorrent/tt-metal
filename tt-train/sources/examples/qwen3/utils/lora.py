@@ -188,7 +188,7 @@ class LoRARowParallelLinear(AbstractModuleBase):
     def forward(self, x):
         base_out = self.base_layer(x)
         h = ttml.ops.linear.linear(x, self.lora_A.tensor, None)
-        h = ttml.ops.distributed.all_reduce(h, True, self.shard_dim)
+        h = ttml.ops.distributed.all_reduce(h, self.shard_dim)
         lora_out = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.scaling != 1.0:
             lora_out = lora_out * self.scaling
