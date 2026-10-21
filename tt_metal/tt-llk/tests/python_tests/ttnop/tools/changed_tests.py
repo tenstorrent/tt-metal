@@ -7,10 +7,10 @@
 import argparse
 import io
 import json
+import logging
 import os
 import re
 import subprocess
-import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -19,6 +19,10 @@ from pathlib import Path
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
 TEST_GLOB = "test_*.py"
+# Every TTNOP sweep runs on this fixed number of shards.
+SHARDS = 15
+
+logger = logging.getLogger(__name__)
 
 
 def _run(repo: Path, *args: str) -> str:
@@ -170,10 +174,20 @@ def _last_failed_tests(repo: Path, base: str, arch: str) -> tuple[str, list[str]
     artifacts = json.loads(
         _github(f"{api}/runs/{runs[0]['id']}/artifacts?per_page=100")
     )["artifacts"]
+    artifacts = [
+        artifact
+        for artifact in artifacts
+        if artifact["name"].startswith(f"ttnop-junit-{arch}-")
+    ]
+    if len(artifacts) < SHARDS:
+        # A shard without junit never finished, so keep sweeping from base.
+        logger.warning(
+            f"::warning::ttnop run {runs[0]['id']} has {len(artifacts)} of "
+            f"{SHARDS} {arch} junit artifacts; keeping base {base}"
+        )
+        return base, []
     files = set()
     for artifact in artifacts:
-        if not artifact["name"].startswith(f"ttnop-junit-{arch}-"):
-            continue
         with zipfile.ZipFile(
             io.BytesIO(_github(f"{api}/artifacts/{int(artifact['id'])}/zip"))
         ) as archive:
@@ -196,7 +210,7 @@ def _weekly(repo: Path, base: str, arch: str) -> tuple[str, list[str]]:
         return _last_failed_tests(repo, base, arch)
     except Exception as error:
         # Without the failed list, sweep everything since the given base.
-        print(f"::warning::ttnop retry lookup failed: {error}", file=sys.stderr)
+        logger.warning(f"::warning::ttnop retry lookup failed: {error}")
         return base, []
 
 
@@ -206,10 +220,13 @@ def main() -> None:
     parser.add_argument("--base", required=True)
     parser.add_argument("--arch", choices=("wormhole", "blackhole"), required=True)
     parser.add_argument("--paths", action="store_true")
+    # Comma-separated retry files that select-tests already resolved.
+    parser.add_argument("--retry", default="")
     args = parser.parse_args()
+    logging.basicConfig(format="%(message)s")
 
     repo = args.repo.resolve()
-    base, retry = args.base, []
+    base, retry = args.base, [path for path in args.retry.split(",") if path]
     if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GH_TOKEN"):
         base, retry = _weekly(repo, base, args.arch)
     changed = _changed_paths(repo, base)
@@ -218,6 +235,7 @@ def main() -> None:
     result["reasons"] += [
         f"Run {path} on {args.arch}: failed in the last scheduled run" for path in retry
     ]
+    result["base"], result["retry"] = base, retry
     if args.paths:
         print("\n".join(result["tests"]))
     else:
