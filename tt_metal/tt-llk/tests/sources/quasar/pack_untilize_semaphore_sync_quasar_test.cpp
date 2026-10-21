@@ -139,7 +139,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        // Seed the Src row counter and row mask a 1x32/2x32 strided pack leaves behind, so each case checks the init's reset on its own.
+        // Fault injection, not setup: recreate the Src row counter and row mask a preceding 2x32 strided pack leaves behind,
+        // so every case checks that _llk_pack_untilize_strided_init_ clears them, whichever variant ran before.
         TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_pacr::PACK0, 16);
         cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
         cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xC);
