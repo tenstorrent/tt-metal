@@ -1408,3 +1408,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   `overlap_state_min_waived`; a wrong selector still fails. Origin: DeepSeek-V4.1 X.3, native numerics (F112) at 55k gave
   L24 overlap 0.695 vs goldens whose selection used the reference's fp4 index q-dq (NUMERICS=official: 0.875, PASS); every
   layer PCC >= 0.9944. Proper fix: F118 (goldens follow NUMERICS). Selftest: test_ladder_states.py.
+- F125 (overseer, 2026-10-21): X.3 asks for `prefill_ms_full` only when the run's layers are a stack from layer 0 with no
+  gaps (the condition `profile.full_prefill` times it under); a gapped subset (DeepSeek-V4.1's 0-3,14,20,21,24) could never
+  record it, so X.3 failed MISSING after every test passed. Selftest: test_plan.py.

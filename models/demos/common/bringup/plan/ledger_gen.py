@@ -439,7 +439,10 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "op_rows": ">= 1",  # the per-op breakdown (F43) and the pipelined timeline (F44) behind the dashboard
         "timeline_ok": "== 1",
     }
-    if max(full.get("layers") or spec.layers()) == spec.num_layers - 1:
+    run_layers = full.get("layers") or spec.layers()
+    if run_layers != list(range(len(run_layers))):  # F125: the warm full prefill needs a stack from layer 0, no gaps
+        del fm["prefill_ms_full"]
+    if max(run_layers) == spec.num_layers - 1:
         fm.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))
     add(
         "X.3",
