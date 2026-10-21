@@ -276,8 +276,7 @@ inline void calculate_sfpu_binary_div(
             // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
             v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
                 sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
-                sfpi::vFloat nan_divisor = sfpi::vFloat(__builtin_rvtt_sfpgt(
-                    sfpi::setsgn(in1, 0).get(), sfpi::vFloat(std::numeric_limits<float>::infinity()).get(), 8));
+                sfpi::vFloat nan_divisor = sfpi::as<sfpi::vFloat>(sfpi::mask(sfpi::setsgn(in1, 0) > std::numeric_limits<float>::infinity()));
                 // Inverting in1 also inverts the scale's sign, so negate the product.
                 result = nan_divisor - in0 * scale;
             }
