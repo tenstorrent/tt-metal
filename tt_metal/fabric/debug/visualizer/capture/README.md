@@ -143,3 +143,12 @@ run it on other manifests, pass their files or directories:
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.capture.tests.check_capture generated/fabric
 ```
+
+## Future work
+
+**Tests on hardware.** No test checks capture on real chips yet. The plan is pytest tests that bring a fabric up the way
+fabric jobs do, through conftest's `mesh_device` fixture with a `fabric_config`, then run capture against it while its
+owner holds it, after the owner is killed and after it exits, and check that the owner's next op still gives the right
+result. Each snapshot would be checked using only its manifest: every router read without an error and, while the
+routers run, each routing table naming its router's mesh and chip, `edm_status` at `ready_for_traffic`, the ERISCs out
+of reset and the wall clock rising. They would run in CI on N300, T3K and Blackhole machines.
