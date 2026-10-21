@@ -1,0 +1,287 @@
+{
+ "hf_model": "google/gemma-4-12B-it",
+ "hf_revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+ "hf_advertised_context": 262144,
+ "hf_context_field": "text_config.max_position_embeddings",
+ "sliding_window": 1024,
+ "layer_kinds": {
+  "sliding_attention": {
+   "representative_layer": 0,
+   "count": 40
+  },
+  "full_attention": {
+   "representative_layer": 5,
+   "count": 8
+  }
+ },
+ "functional_decoder": {
+  "supported_context": 262144,
+  "construction_setting": "FunctionalDecoder.from_state_dict(max_context=None) -> hf_config.max_position_embeddings",
+  "tested_prefill_max_tokens": 262140,
+  "tested_prefill_note": "fresh 131136-token request plus an explicit continuation from 131136 to 262140 (non-aligned tail), both layer kinds, real weights",
+  "tested_decode_max_position": 262143,
+  "tested_decode_max_attended_tokens": 262144,
+  "tested_decode_note": "4 traced decode steps at positions 262140..262143 after the 262140-token prefill, both layer kinds",
+  "test": "models/autoports/google_gemma_4_12b_it/tests/test_functional_decoder.py::test_full_context",
+  "capability_reduction": null,
+  "per_layer_dram_at_full_context_bytes": {
+   "sliding_attention_bf16_kv_cache": 2147483648,
+   "full_attention_bf16_kv_cache": 536870912,
+   "note": "one request, one layer, unbounded paged cache; fits a 34.2 GB Blackhole p300c chip with the BF16 layer weights (~0.45 GB)"
+  }
+ },
+ "fused_decoder": {
+  "supported_context": 262144,
+  "construction_setting": "FusedDecoder.from_state_dict(max_context=None, prefill_chunk_size=8192) -> hf_config.max_position_embeddings",
+  "tested_prefill_max_tokens": 262140,
+  "tested_prefill_note": "same as functional: fresh 131136-token request plus an explicit continuation from 131136 to 262140 (non-aligned tail), both layer kinds, real weights, at the fused default 8192-row chunk with window-bounded sliding attention",
+  "tested_decode_max_position": 262143,
+  "tested_decode_max_attended_tokens": 262144,
+  "tested_decode_note": "4 traced decode steps at positions 262140..262143 after the 262140-token prefill, both layer kinds",
+  "test": "models/autoports/google_gemma_4_12b_it/tests/test_fused_decoder.py::test_full_context",
+  "capability_reduction": null,
+  "kv_cache": "per-layer paged [num_blocks, kv_heads, block_size, head_dim] BF16 TILE in DRAM, same size as functional; sliding layers store K with each head's columns in interleaved-pair (Meta RoPE) order (an internal layout; capacity and dtype unchanged), full layers store K as in functional",
+  "per_layer_dram_at_full_context_bytes": "unchanged from functional_decoder: same cache dtype/shape and the same BF16 weights (sliding Q/K weights are column-permuted, not duplicated; the full-layer QKV weight still duplicates K as V). Shared RoPE tables: the sliding kind stores interleaved-order tables instead of HF-order ones (same size).",
+  "prefill_transient_note": "the default 8192-row chunk holds about 0.75 GB of transient MLP activations (gate, up, product at 8192 x 15360 BF16) versus about 0.19 GB at the functional 2048 chunk; prefill_chunk_size remains a constructor argument"
+ },
+ "optimized_decoder": {
+  "supported_context": 262144,
+  "construction_setting": "OptimizedDecoder.from_state_dict(max_context=None, prefill_chunk_size=8192, policy=None) -> hf_config.max_position_embeddings; per-layer precision from layer_policy(layer_idx)",
+  "tested_prefill_max_tokens": 262140,
+  "tested_prefill_note": "test_optimized_decoder.py::test_full_context: fresh 131136-token request plus an explicit continuation from 131136 to 262140 (non-aligned tail), both layer kinds, real weights, default 8192-row chunk",
+  "tested_decode_max_position": 262143,
+  "tested_decode_max_attended_tokens": 262144,
+  "tested_decode_note": "4 traced decode steps at positions 262140..262143 after the 262140-token prefill, both layer kinds",
+  "test": "models/autoports/google_gemma_4_12b_it/tests/test_optimized_decoder.py::test_full_context",
+  "capability_reduction": null,
+  "kv_cache": "per-layer paged [num_blocks, kv_heads, block_size, head_dim] BFLOAT8_B TILE in DRAM (was BF16): same shape and paging, 1088 bytes per 1024 values instead of 2048. Sliding layers keep the interleaved-pair (Meta RoPE) K column order of the fused decoder. Prefill casts K/V to BFP8 before paged_fill_cache; decode updates take BF16.",
+  "per_layer_dram_at_full_context_bytes": {
+   "sliding_attention_bfp8_kv_cache": 1140850688,
+   "full_attention_bfp8_kv_cache": 285212672,
+   "note": "KV cache capacity per byte of DRAM is 1.88x the fused decoder's; one request, one layer, unbounded paged cache, as before"
+  },
+  "per_layer_weight_bytes": {
+   "sliding_bfp8": 238141440,
+   "full_bfp8": 259031040,
+   "note": "one DRAM width-sharded copy per projection serves prefill and decode (fused: BF16, 448 MB sliding / 488 MB full). Per-layer dtypes (tt/optimized_decoder.py layer_policy): BFP4 gate/up/down on 13-24, BFP4 gate/up on 25, 26, 35-39; BFP4 QKV+o_proj on 13-20, 22, 23, 25; BFP4 QKV only on 24, 36, 37; BFP8 elsewhere. Examples: layer 21 = BFP4 MLP + BFP8 attention, layer 24 = BFP4 MLP + BFP4 QKV + BFP8 o_proj, layer 25 = BFP4 gate/up + BFP8 down + BFP4 attention.",
+   "all_bfp4_sliding_layers_13_14_15_16_18_19_20_22": 126074880,
+   "all_bfp4_full_layers_17_23": 137134080
+  },
+  "l1_headroom": "every prefill/decode program leaves >= 128 KB of L1 per core free for persistent tensors (test_l1_headroom); the fused decoder's own prefill fails with 192 KB held",
+  "prefill_transient_note": "unchanged chunking: default 8192-row chunk. Its transient MLP activations (gate, up, product at 8192 x 15360) are BFP8 on the minimal_matmul path, ~0.40 GB (BF16 ~0.75 GB on layers 10, 11, which keep BF16 intermediates). Chunks of <= 1280 rows (<= 1024 on BFP4-MLP layers) use the 2D-multicast matmul path with BF16 intermediates (<= 0.12 GB)"
+ },
+ "multichip_decoder": {
+  "target_mesh": "QB2 (ttnn.cluster.ClusterType.P300_X2): 4 Blackhole p300c chips as a [1, 4] mesh, FABRIC_1D_RING, ttnn.Topology.Ring, 2 links; tensor parallel 4",
+  "supported_context": 262144,
+  "construction_setting": "MultichipDecoder.from_state_dict(max_context=None, prefill_chunk_size=8192, policy=None) -> hf_config.max_position_embeddings; per-layer precision from multichip_layer_policy(layer_idx)",
+  "tested_prefill_max_tokens": 262140,
+  "tested_prefill_note": "test_multichip_decoder.py::test_full_context: fresh 131136-token request plus an explicit continuation from 131136 to 262140 (non-aligned tail), both layer kinds, real weights, default 8192-row chunk; HF-checked windows worst row 0.99641 (sliding) / 0.99723 (full)",
+  "tested_decode_max_position": 262143,
+  "tested_decode_max_attended_tokens": 262144,
+  "tested_decode_note": "4 traced decode steps at positions 262140..262143 after the 262140-token prefill, both layer kinds, worst row >= 0.99749",
+  "test": "models/autoports/google_gemma_4_12b_it/tests/test_multichip_decoder.py::test_full_context",
+  "capability_reduction": null,
+  "kv_cache": "per layer and chip: sliding [num_blocks, 2, block_size, 256] (local KV heads 2d, 2d+1 of chip d), full [num_blocks, 1, block_size, 512] (the one KV head, same values on every chip); BFP8 TILE in DRAM; page tables and positions replicated (same physical block ids on every chip)",
+  "per_chip_dram_bytes": {
+   "chip_dram_total": 34178731008,
+   "sliding_kv_cache_per_layer_full_context": 285212672,
+   "full_kv_cache_per_layer_full_context": 285212672,
+   "kv_cache_48_layers_full_context": 13690208256,
+   "weights_48_layers": 2471362560,
+   "weights_per_layer": {
+    "sliding_bfp8": 59535360,
+    "full_bfp8": 67891200,
+    "layer13_sliding_bfp4": 31518720,
+    "layer17_full_bfp4": 35942400
+   },
+   "shared_rope_tables_both_kinds": "about 1.6e9 (cos/sin, TILE and ROW_MAJOR copies, 262144 positions, head_dim 256 and 512; replicated)",
+   "measured_48_layers_with_full_context_caches_allocated": 18955337728,
+   "measured_free_after_build": 15223393280,
+   "measured_after_stack_prefill_and_traced_decode": 18961220096,
+   "measurement": "doc/multichip_decoder/scripts/capacity_stack.py -> doc/multichip_decoder/logs/capacity_stack.json (all 48 layers built on the mesh with 4097 blocks of 64 tokens each, 1000-token stack prefill, traced 48-layer decode step); final run on the final code (logs/final_code_sha256_tested.txt)",
+   "reserved_trace_activation_estimate": "prefill transients per chip < 0.3 GB at the 8192-row chunk (gathered input 63 MB, BFP8 MLP intermediates 3 x 33 MB); decode trace buffers and L1 activations are small; persistent decode all-reduce scratch 2 x 34 KB L1 per residual core (once per mesh); embedding + LM head (262144 x 3840) 1.07 GB at BFP8 in total, about 0.27 GB per chip if sharded 4 ways -- all inside the measured 15.2 GB free",
+   "single_chip_equivalent": "one chip would need about 59 GB (KV 47.9 GB + weights 9.9 GB) for the same 48 layers at 262144 tokens; it does not fit a 34.2 GB chip",
+   "prefill_only_packed_gate_up_copies": "about 1.41e9 (46 layers with the BFP8 long-chunk MLP branch; [3840, 7680] per chip at the layer's gate/up dtype), used by the fused all-gather + gate/up prefill matmul"
+  },
+  "l1": "persistent decode all-reduce scratch 2 x 34 KB per core on the 15 residual cores, created at construction and shared per mesh; every prefill/decode program leaves >= 128 KB of L1 per core free on top of it (test_l1_headroom[0, 5, 13, 17, 24, 25])",
+  "non_aligned_lengths": "public API unchanged: any S >= 1 and continuation starts that are multiples of block_size; prefill takes the per-chip [1, 1, S, 960] residual slice (prefill_input_mesh_mapper) and pads chunks to a block internally; tested at 1, 17, 65, 100, 1000, 1025, 1344, 2049, 4097, 8193, continuations at 1088/3200/8256 and 262140"
+ },
+ "optimized_multichip_decoder": {
+  "target_mesh": "QB2 (ttnn.cluster.ClusterType.P300_X2): 4 Blackhole p300c chips as a [1, 4] mesh, FABRIC_1D_RING, ttnn.Topology.Ring, 2 links; tensor parallel 4",
+  "supported_context": 262144,
+  "construction_setting": "MultichipDecoder.from_state_dict(max_context=None, prefill_chunk_size=8192, policy=None) -> hf_config.max_position_embeddings; per-layer precision from multichip_layer_policy(layer_idx) plus this stage's MULTICHIP_POLICY defaults (decode_user_split_min_batch 8, prefill_norm_dtype {qkv: None, gate_up: bfp8}, decode in0_block_w down 8, decode_split_ag_buffers 'barrier')",
+  "tested_prefill_max_tokens": 262140,
+  "tested_prefill_note": "test_multichip_decoder.py::test_full_context on the final code (logs/full_suite.log): fresh 131136-token request plus an explicit continuation to 262140 (non-aligned tail), both layer kinds, real weights, default 8192-row chunk",
+  "tested_decode_max_position": 262143,
+  "tested_decode_max_attended_tokens": 262144,
+  "tested_decode_note": "4 traced decode steps at positions 262140..262143 after the 262140-token prefill, both layer kinds (B=1, unsplit path). The full-layer user split (default at B >= 8; any multiple of 4 via decode_forward(user_split=...)) is tested by traced_L5_b8/b12/b16/b32, traced_L5_b4_split, traced_L5_b32_unsplit (the override), stress_L5_b32, stack_3-4-5-6_b32 and stack_11-17_b16_shared",
+  "test": "models/autoports/google_gemma_4_12b_it/tests/test_multichip_decoder.py::test_full_context",
+  "capability_reduction": null,
+  "kv_cache": "unchanged from multichip_decoder: sliding [num_blocks, 2, block_size, 256] per chip (local KV heads), full [num_blocks, 1, block_size, 512] replicated on every chip, BFP8, replicated page tables and positions. The user-split decode attention only changes which chip reads which users' pages of the replicated full-layer cache (chip d: users [dB/4, (d+1)B/4)); every chip still writes every user's K/V",
+  "per_chip_dram_bytes": {
+   "chip_dram_total": 34178731008,
+   "measured_48_layers_with_full_context_caches_allocated": 18964811776,
+   "measured_after_stack_prefill_and_traced_decode": 18978034176,
+   "measured_free_final": 15200696832,
+   "largest_free_block_per_bank_final": 1896611648,
+   "change_vs_multichip_decoder": "+9,474,048 bytes per chip after build vs the multichip stage's measured 18,955,337,728: user-split persistent decode state shared by the 8 full layers of a mesh, for every batch size 4..32 step 4 (zero K/V-pad columns [1,1,32,1024], per-chip user offset, persistent all-gather outputs [1,1,32,8192] and [1,B,16,512], all BF16 DRAM). The BFP8 gate/up gather halves a prefill transient instead of adding one",
+   "measurement": "doc/optimized_multichip_decoder/scripts/capacity_stack.py --context 262144 --prefill 1000,4096 --prefill_reps 10 -> doc/optimized_multichip_decoder/logs/capacity_stack_r1.json and _r2.json (final code, logs/final_code_sha256_tested.txt). The before-policy runs (capacity_stack_before_r*.json) use the same final code and therefore also allocate the split state; the multichip stage's own measurement is doc/multichip_decoder/logs/capacity_stack.json"
+  },
+  "l1": "unchanged: decode all-reduce scratch 2 x 34 KB per residual core per mesh; the user-split path keeps its persistent tensors in DRAM; every prefill/decode program leaves >= 128 KB of L1 per core free (test_l1_headroom[0, 5, 13, 17, 24, 25] passes on the final code, including B=32 user-split decode on layers 5 and 17)",
+  "non_aligned_lengths": "public API unchanged (any S >= 1, continuation starts multiples of block_size); internal 64-row chunk padding and output slicing unchanged; tested at 1, 17, 65, 100, 1000, 1025, 1344, 2049, 4097, 8193, continuations at 1088/3200/8256 and 262140 on the final code",
+  "decode_user_split": "Generator contract: full layers attend by user (chip d: users [dB/4, (d+1)B/4), all 16 Q heads) when decode_forward(user_split=True) or, by default, at B >= 8 (multiple of 4). use_user_split(batch, max_position) returns the measured break-even (decode_user_split_min_position {4: 8192, 8: 4096, 16: 2048, 32: 1280}); a generator captures both variants per batch and replays the chosen one. current_pos and page_table must have exactly B rows on the split path. No effect on the KV cache layout or capacity"
+ },
+ "supported_context": 262144,
+ "supported_context_note": "full-model stage (doc/full_model): one request of up to 262144 tokens (prompt + generated) through the public generator; no capability reduction",
+ "full_model": {
+  "target_mesh": "QB2 [1, 4] Blackhole p300c ring (FABRIC_1D_RING, 2 links), tensor parallel 4",
+  "supported_context": 262144,
+  "construction_setting": "tt/generator.py::build_generator(model_dir, mesh) -> Gemma4Model(max_context=None -> text_config.max_position_embeddings = 262144, num_blocks=None -> 262144 / 64 + 2 = 4098 KV blocks per layer: one full-context request plus the reserved canary (0) and padding-scratch (1) blocks); num_blocks is a build kwarg for larger pools",
+  "capability_reduction": null,
+  "tested_max_request": "tests/full_context.py: one 262110-token chat prompt (not a multiple of any chunk, page or tile; prefill = 32 chunks of <= 8192 tokens, the last one bucket-padded) with a pass key near its start, then 6 traced token-out decode steps at positions 262110..262115; the answer '68395<turn|>' is correct; run under TT_METAL_TRACE_ALLOC_TRACKING=1 (logs/full_context_final.json); repeated with a 7800-block pool (logs/full_context_blocks7800.json)",
+  "prompt_lengths": "any 1 <= prompt <= 262144 - generated tokens; non-aligned lengths tested through the public generator at 1, 2, 127, 128, 129, 1000, 1024, 1281, 8191, 8192, 8193, 16385 (tests/test_full_model.py), 8293 (HF long reference) and 262110; continuations (prefill start_pos > 0) start on a prefill-chunk (8192) boundary",
+  "kv_cache": "unchanged from the optimized multichip decoder: per layer and chip sliding [num_blocks, 2, 64, 256] / full [num_blocks, 1, 64, 512] BFP8 TILE in DRAM; page tables [B, 4096] int32 and positions replicated; block 0 = zero canary (every unused page-table entry), block 1 = scratch for bucket-padding rows and warmup writes",
+  "per_chip_dram_bytes": {
+   "chip_dram_total": 34178731008,
+   "kv_bytes_per_block_all_48_layers": 3342336,
+   "kv_bytes_per_block_note": "69632 bytes per layer per block (K + V, BFP8 1088 B per 1024 values: sliding 2 x 64 x 256, full 1 x 64 x 512) x 48 layers",
+   "kv_cache_default_4098_blocks": 13696892928,
+   "decoder_weights_48_layers": 2471362560,
+   "prefill_only_packed_gate_up": "about 1.41e9 (unchanged, multichip README)",
+   "rope_tables": "about 1.6e9 (unchanged)",
+   "embedding_hidden_sharded_bf16": 503316480,
+   "lm_head_vocab_sharded_bfp8": 267386880,
+   "generator_persistent": "logits buffer 4 MB, suppress mask 4 MB, token / row-id / sampler tensors, per-bucket positions and page tables (buckets 1, 4, 8, 16, 32: 61 x 4096 int32 = 1.0 MB): about 10 MB",
+   "measured_after_build_4098_blocks": 19748656128,
+   "measured_after_prepare_4098_blocks": 19933844480,
+   "measured_free_after_prepare_4098_blocks": 14244886528,
+   "traces_and_programs_after_prepare": 185188352,
+   "measured_after_262110_token_request": 19933844480,
+   "largest_tested_pool": {
+    "num_blocks": 7800,
+    "tokens_per_layer": 499200,
+    "measured_after_prepare": 32307172352,
+    "measured_free_after_prepare": 1871558656,
+    "full_context_request": "passed (pass key retrieved)",
+    "evidence": "logs/full_context_blocks7800.json"
+   },
+   "single_request_needs": "4096 blocks (262144 tokens) + 2 reserved = 4098, about 13.7 GB per chip of KV next to 6.2 GB of weights, embedding, LM head, tables and traces",
+   "measurement": "tests/full_context.py (ttnn.get_memory_view per chip) -> doc/full_model/logs/full_context_final.json"
+  },
+  "batch": "decode buckets 1, 4, 8, 16, 32 (fixed slots, position -1 = inactive row); batch 32 tested (tests/test_full_model.py::test_batch32_identical_rows, test_user_split_traces[32-1300], tests/perf_full_model.py); the KV pool is shared by the slots (default 4098 blocks = 262144 tokens in total)",
+  "decode_user_split": "both full-layer attention placements are captured per bucket that is a multiple of 4; the generator replays use_user_split(bucket, max position)'s choice every step (test_user_split_traces covers B = 4 / 8 / 16 / 32 beyond each break-even)"
+ },
+ "optimized_full_model": {
+  "target_mesh": "QB2 [1, 4] Blackhole p300c ring (FABRIC_1D_RING, 2 links), tensor parallel 4",
+  "supported_context": 262144,
+  "capability_reduction": null,
+  "construction_setting": "unchanged: tt/generator.py::build_generator(model_dir, mesh) (max_context 262144, num_blocks 4098 by default; num_blocks build kwarg for larger pools)",
+  "changes_affecting_persistent_allocations": "7 prefill traces (buckets 128..8192, single-chunk requests at position 0) with persistent [1, L] uint32 token buffers per bucket and one [1, 4096] int32 prefill page-table row; sampler: level-1 index offsets and two suppressed-id tensors [1, 16, 32, 64] int32; the full-model stage's 4 MB logits mask is gone; the decoder's user-split gathers no longer keep persistent outputs (decode_split_ag_buffers 'none'); KV cache, weights, page tables and positions unchanged",
+  "tested_max_request": "tests/full_context.py on the final code under TT_METAL_TRACE_ALLOC_TRACKING=1: 262110-token chat prompt (32 prefill chunks, eager: multi-chunk), pass key '68395' retrieved, traced token-out decode at depth 19.494 ms per token (doc/optimized_full_model/logs/full_context_final.json); repeated with a 7800-block pool (logs/full_context_blocks7800.json)",
+  "prompt_lengths": "any 1 <= prompt <= 262144 - generated tokens through the public generator; traced prefill covers every single-chunk prompt (1..8192 tokens: bucket-padded inside the trace path, last-token row selected at runtime), longer prompts and continuations run the eager chunk-major path; tested at 1, 2, 127, 128, 129, 1000, 1024, 1025, 1281, 4096, 8191, 8192, 8193, 16385, 8293 and 262110",
+  "per_chip_dram_bytes": {
+   "measured_after_build_4098_blocks": 19736593408,
+   "measured_after_prepare_4098_blocks": 20001997824,
+   "measured_free_after_prepare_4098_blocks": 14176733184,
+   "traces_and_programs_after_prepare": 265404416,
+   "delta_after_prepare_vs_full_model_stage": 68153344,
+   "measured_after_262110_token_request": 20001997824,
+   "largest_tested_pool": {
+    "num_blocks": 7800,
+    "tokens_per_layer": 499200,
+    "measured_after_prepare": 32375325696,
+    "measured_free_after_prepare": 1803405312,
+    "full_context_request": "passed (pass key retrieved)",
+    "evidence": "doc/optimized_full_model/logs/full_context_blocks7800.json"
+   }
+  },
+  "rejected_for_capacity": "DRAM-interleaved copies of the gate / up / down weights for a faster 128-row prefill MLP (about 3 ms of the 128-token TTFT) would cost about 1.84 GB per chip (about 550 KV blocks); not adopted (doc/optimized_full_model/README.md 'Optimization audit', work log 10)"
+ },
+ "datatype_sweep": {
+  "target_mesh": "QB2 [1, 4] Blackhole p300c ring (FABRIC_1D_RING, 2 links), tensor parallel 4",
+  "selected_precision_config": "doc/datatype_sweep/selected_precision_config.json (b0_lmh4_lofi since the stage-9 re-selection; stage-8 selection gu4all_down4_13_46_o4in_lmh4 superseded: fails the chunked-prefill recall set), loaded by default by tt/model.py Gemma4Model (tt/precision.py) and verified against the built model",
+  "supported_context": 262144,
+  "capability_reduction": null,
+  "kv_cache_dtype": "bfp8 (unchanged): per layer and chip sliding [num_blocks, 2, 64, 256] / full [num_blocks, 1, 64, 512] BFLOAT8_B TILE in DRAM; same shape, paging, page tables and chunking as the optimized full model, 3342336 bytes per block over the 48 layers",
+  "construction_setting": "tt/generator.py::build_generator(model_dir, mesh) -> Gemma4Model(precision=None -> selected config, max_context 262144, num_blocks 4098 by default)",
+  "weights_change": "b0_lmh4_lofi = the stage-7 policy (BFP4 gate/up 13-26 / 35-39, down 13-24, o 13-20 / 22 / 23 / 25, qkv 13-20 / 22-25 / 36 / 37, BFP8 elsewhere) + BFP4 LoFi LM head (DRAM-sharded, columns padded to 66048 per chip): -0.125 GB per chip after prepare vs the stage-7 policy",
+  "per_chip_dram_bytes": {
+   "measured_after_build_4098_blocks": 19611870208,
+   "measured_after_prepare_4098_blocks": 19877323776,
+   "measured_free_after_prepare_4098_blocks": 14301407232,
+   "stage7_policy_after_prepare_4098_blocks": 20001997824,
+   "measured_after_262110_token_request": 19877323776,
+   "evidence": "doc/datatype_sweep/logs/stage9/full_context_b0_lmh4_lofi.json",
+   "largest_tested_pool": {
+    "num_blocks": 7837,
+    "tokens_per_layer": 501568,
+    "measured_after_prepare": 32374318080,
+    "measured_free_after_prepare": 1804412928,
+    "full_context_request": "passed (262110 tokens, '68395<turn|>', token-out at depth 19.24 ms)",
+    "evidence": "doc/datatype_sweep/logs/stage9/full_context_pool7837_b0_lmh4_lofi.json",
+    "note": "7837 blocks keep the 1.80 GB free of the stage-7 largest tested pool (7800 blocks); the vLLM-owned pool is sized separately (vllm_integration.kv_pool)"
+   }
+  },
+  "tested_max_request": "tests/full_context.py on the selected b0_lmh4_lofi through the default path (TT_METAL_TRACE_ALLOC_TRACKING=1, 0 unsafe allocations): 262110-token chat prompt, 32 prefill chunks, answer '68395<turn|>' (direct), token-out at depth 19.34 ms per token (doc/datatype_sweep/logs/stage9/full_context_b0_lmh4_lofi.json); repeated with a 7837-block pool ('68395<turn|>'). Seven needle variants (scripts/fullctx_variants.py: 262K with the needle at 0 / 25 / 50 / 75% and a filler offset, 131K at 0 / 50%): 7/7 keys, 7 direct answers, 0 extra thought blocks, min decision margin 3.25 logits (doc/datatype_sweep/results/fullctx_variants/b0_lmh4_lofi.json). Chunked-prefill recall set (14 chat needle prompts, 8K-25K tokens): 14/14 (doc/vllm_integration/logs/recall_set/b0_lmh4_lofi.json)",
+  "prompt_lengths": "unchanged chunking and trace buffers (KV dtype / layout unchanged): any 1 <= prompt <= 262144 - generated tokens; on b0_lmh4_lofi: tests/test_full_model.py::test_non_aligned_prompt_lengths at 1, 2, 127, 128, 129, 1000, 1024, 1281, 8191, 8192, 8193, 16385 (v5 screen, doc/datatype_sweep/results/screen/b0_lmh4_lofi__screen.json; full suite: doc/vllm_integration/logs/full_model_tests_48L_b0_lmh4_lofi.log), 8293 (long 8k reference) and 262110",
+  "kv_dtype_candidates": {
+   "bfp8": "selected (unchanged capacity)",
+   "bfp4": "evaluated (b0_kv4) and rejected on accuracy (AIME24 top-1 0.85 / 0.86, top-5 0.99); halves KV bytes per block (measured after prepare 13556433920 bytes per chip at 4098 blocks vs 20001997824 with BFP8); not adopted",
+   "bf16": "not evaluated as a selection candidate: BFP8 already passes, BF16 would double KV bytes per block (the 262144-token default pool would need about 27.4 GB of KV per chip next to the weights) and is slower at long context"
+  },
+  "full_context_screen": "long-context retrieval is part of the datatype-sweep acceptance: 7 needle variants, every key retrieved and no extra thought block. Configs with BFP4 down projections on layers 0-12 (mlp4lofi_all, gu4all_down4_1_24 / 7_46 / 10_46, the a4_* families) retrieve 4-5 of 7 and are rejected; BFP4 o_proj on 1-46 or all layers keeps 7 / 7 (doc/datatype_sweep/results/fullctx_variants/); since stage 9 also the chunked-prefill recall set (14 prompts, every passphrase, no extra thought block; doc/vllm_integration/logs/recall_set/)",
+  "stage9_reselection": "doc/datatype_sweep/README.md 'Stage-9 re-selection': b0_lmh4_lofi = stage-7 policy + BFP4 LoFi LM head; full-context variants 7/7 direct (results/fullctx_variants/b0_lmh4_lofi.json); 262000-token request through vLLM recalled (doc/vllm_integration/alloc_tracking_run/full_context_262000.json); context 262144 unchanged",
+  "superseded_stage8_selection": {
+   "weights_change": "BFP4 gate/up on all 48 layers, BFP4 down on 13-46 and BFP4 o_proj on 1-46 (stage 7: gate/up 13-26 / 35-39, down 13-24, o 13-20 / 22 / 23 / 25), BFP4 LM head (DRAM-sharded, columns padded to 66048 per chip); qkv as stage 7: -1.194 GB per chip after prepare vs the stage-7 policy",
+   "per_chip_dram_bytes": {
+    "measured_after_build_4098_blocks": 18545271808,
+    "measured_after_prepare_4098_blocks": 18807710720,
+    "measured_free_after_prepare_4098_blocks": 15371020288,
+    "stage7_policy_after_prepare_4098_blocks": 20001997824,
+    "measured_after_262110_token_request": 18807710720,
+    "largest_tested_pool": {
+     "num_blocks": 8158,
+     "tokens_per_layer": 522112,
+     "measured_after_prepare": 32377594880,
+     "measured_free_after_prepare": 1801136128,
+     "full_context_request": "passed (pass key retrieved)",
+     "evidence": "doc/datatype_sweep/logs/final/full_context_pool_selected.json",
+     "note": "8158 blocks keep the same 1.80 GB free as the stage-7 largest tested pool (7800 blocks)"
+    }
+   },
+   "tested_max_request": "tests/full_context.py on the selected config through the default path (TT_METAL_TRACE_ALLOC_TRACKING=1): 262110-token chat prompt, 32 prefill chunks, answer '68395<turn|>' (direct, as stage 7), traced token-out at depth 18.2 ms per token; repeated with an 8158-block pool ('68395<turn|>'). Seven needle variants (scripts/fullctx_variants.py: 262K with the needle at 0 / 25 / 50 / 75% and a filler offset, 131K at 0 / 50%): 7/7 keys, 7 direct answers, 0 extra thought blocks, min decision margin 2.0 logits (stage-7 policy: 7/7, 3.25) (doc/datatype_sweep/results/final/fullctx_variants_selected.json)",
+   "prompt_lengths": "unchanged chunking and trace buffers (KV dtype / layout unchanged): any 1 <= prompt <= 262144 - generated tokens; non-aligned lengths rerun on the selected config: tests/test_full_model.py::test_non_aligned_prompt_lengths at 1, 2, 127, 128, 129, 1000, 1024, 1281, 8191, 8192, 8193, 16385 and test_traced_prefill_matches_eager at 1 ... 8192 (all pass, doc/datatype_sweep/logs/final/test_full_model_selected.log), 8293 (long 8k reference) and 262110",
+   "note": "stage-8 selection gu4all_down4_13_46_o4in_lmh4, superseded in stage 9 (fails the chunked-prefill recall set 11/14); values measured on that config"
+  }
+ },
+ "vllm_integration": {
+  "target_mesh": "QB2 [1, 4] Blackhole p300c ring (FABRIC_1D_RING with 8192-byte router packets from the adapter's model_capabilities['fabric_config']), tensor parallel 4",
+  "serving_stack": "tenstorrent/vllm-tt-plugin 366a7ae7cc9a68f975324ddeab0ef04a732b6018 + upstream vLLM 0.30.0 (VLLM_TARGET_DEVICE=empty, the version pinned by the plugin's docs/install-vllm-tt.sh)",
+  "supported_context": 262144,
+  "served_max_model_len": 262144,
+  "capability_reduction": null,
+  "construction_setting": "tt/generator_vllm.py::Gemma4AutoportForCausalLM.initialize_vllm_model -> Gemma4Model(num_blocks=0, max_context=ceil(max_model_len / 8192) * 8192 = 262144, selected precision config); vLLM-owned KV caches attached by allocate_kv_cache_per_layer",
+  "kv_cache": "vLLM hybrid KV groups (5 sliding-window groups of 8 layers, SlidingWindowSpec 1024, and 1 full-attention group of 8 layers, FullAttentionSpec with 4 = TP head copies), block 64, one block pool shared by the groups; per vLLM tensor_idx one BFP8 K and V buffer [n + 1, 2, 64, 256] per chip shared by the 6 layers of that position (full layers through a zero-copy [n + 1, 1, 64, 512] view), the extra block is the padding scratch block",
+  "kv_pool": {
+   "get_max_tokens_all_users": 1048576,
+   "num_blocks": 20512,
+   "bytes_per_block_per_chip": 557056,
+   "kv_bytes_per_chip": 11426332672,
+   "vllm_reported_capacity_tokens": 984636,
+   "vllm_max_concurrency_at_262144": 3.76,
+   "dram_allocated_per_chip_after_warmup": 17613874176
+  },
+  "chunked_prefill": "--enable-chunked-prefill --max-num-batched-tokens 8192 with additional_config tt prefill_chunk_alignment 8192: partial chunks end on the model's 8192-token chunk grid, so every continuation starts at a multiple of 8192 (observed starts 0, 8192, ..., 253952); final chunks of any length",
+  "tested_max_request": "doc/vllm_integration/alloc_tracking_run/full_context_262000.json: one 262000-token chat pass-key prompt (needle at 50%) through /v1/completions on the selected config, 32 prefill chunks, answer '68395', TTFT 71.3 s (alloc tracking on); no recapture, no program compile after capture",
+  "non_aligned_prompt_lengths": "served requests of 7, 129, 130, 131, 1000, 4097, 8193, 9000, 11069, 20000, 33000, 33214 and 262000 tokens (readiness_vllm/mixed_shape_check.json, doc/vllm_integration/alloc_tracking_run/*)",
+  "precision_config": "b0_lmh4_lofi (stage-9 re-selection)"
+ },
+ "optimized_vllm": {
+  "supported_context": 262144,
+  "served_max_model_len": 262144,
+  "capability_reduction": null,
+  "persistent_allocation_changes": "none on the device: the stage changes only host-side token readback (device 0's replica of the token buffer, deferred enqueue of the async decode copy) and queues per-row prefill token copies; KV pool, traces, CCL buffers and activations are unchanged (DRAM 17.614 GB allocated per chip before and after the mixed-shape workload, doc/optimized_vllm/readiness_vllm/mixed_shape_check.json)",
+  "context_evidence": "262000-token chat pass-key request recalled on the final code with trace-allocation tracking on (doc/optimized_vllm/alloc_tracking_run/full_context_262000.json, TTFT 71.1 s); chunked-prefill recall prompts of 11069-33219 tokens recalled (alloc_tracking_run/chunked_recall_chat.json)",
+  "serving_config": "doc/optimized_vllm/scripts/serve.sh: --max-model-len 262144, --max-num-seqs 32, --max-num-batched-tokens 8192, TT config {trace_region_size 0, FABRIC_1D_RING, prefill_chunk_alignment 8192}, identical to stage 9"
+ }
+}
