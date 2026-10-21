@@ -13,6 +13,11 @@ Everything runs in fp32 on dequantized weights. Each user keeps its own KV histo
 import torch
 import torch.nn.functional as F
 
+# Attention runs this many queries at a time. Scores for all queries at once are [64, S, T] fp32,
+# 275 GB at S = T = 32K, plus a full-size copy per mask/softmax step. One block of 1024 queries
+# against 32K keys is 8.6 GB.
+QUERY_BLOCK = 1024
+
 
 def rms_norm(x, weight, eps):
     xf = x.float()
@@ -80,23 +85,38 @@ def attention(x, w, dims, v_scale, positions, history: KVHistory | None = None):
     groups = dims.num_heads // dims.num_kv_heads
     k_rep = k_all.repeat_interleave(groups, dim=0)
     v_rep = v_all.repeat_interleave(groups, dim=0)
-    scores = (q @ k_rep.transpose(1, 2)) * dims.scaling  # [heads, S, T]
+    sinks = w["attention_sink_bias"].reshape(-1, 1, 1) if dims.has_sink else None
+
+    out = torch.empty(dims.num_heads, S, dims.v_head_dim, dtype=torch.float32)
+    for q0 in range(0, S, QUERY_BLOCK):
+        q1 = min(q0 + QUERY_BLOCK, S)
+        out[:, q0:q1] = _attend(q[:, q0:q1], positions[q0:q1], k_rep, v_rep, k_pos, dims, sinks)
+    return out.transpose(0, 1).reshape(S, dims.num_heads * dims.v_head_dim) @ w["o_proj"].T
+
+
+def _attend(q, positions, k_rep, v_rep, k_pos, dims, sinks):
+    """Softmax attention for one block of queries: q [heads, s, head_dim] at ``positions`` [s].
+
+    Keys no query in the block can see (after its last position, or before its window on SWA layers)
+    are left out. They would get probability exactly 0, so the result is the same."""
+    keep = k_pos <= positions.max()
+    if dims.sliding_window is not None:
+        keep &= k_pos > positions.min() - dims.sliding_window
+    k_rep, v_rep, k_pos = k_rep[:, keep], v_rep[:, keep], k_pos[keep]
+    scores = (q @ k_rep.transpose(1, 2)) * dims.scaling  # [heads, s, t]
 
     allowed = k_pos[None, :] <= positions[:, None]
     if dims.sliding_window is not None:
         allowed &= (positions[:, None] - k_pos[None, :]) < dims.sliding_window
     scores = scores.masked_fill(~allowed[None], float("-inf"))
 
-    if dims.has_sink:
-        sinks = w["attention_sink_bias"].reshape(-1, 1, 1).expand(-1, S, 1)
-        scores = torch.cat((scores, sinks), dim=-1)
+    if sinks is not None:
+        scores = torch.cat((scores, sinks.expand(-1, q.shape[1], 1)), dim=-1)
     scores = scores - scores.max(dim=-1, keepdim=True).values
     probs = F.softmax(scores, dim=-1, dtype=torch.float32)
-    if dims.has_sink:
+    if sinks is not None:
         probs = probs[..., :-1]
-
-    out = (probs @ v_rep).transpose(0, 1).reshape(S, dims.num_heads * dims.v_head_dim)
-    return out @ w["o_proj"].T
+    return probs @ v_rep
 
 
 def dense_mlp(x, w):

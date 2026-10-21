@@ -54,6 +54,12 @@ from .rope import permute_heads_for_rope
 MLA_RUNTIME_START = "chunk_start_idx_tensor" in (ttnn.transformer.chunked_flash_mla_prefill.__doc__ or "")
 
 
+def page_table_width(blocks):
+    """Width in blocks of a page table that covers ``blocks``: padded to whole SwaDecodeQkv.TABLE_READ pieces (int32
+    entries). The entries past ``blocks`` are never read."""
+    return pad_to(blocks, SwaDecodeQkv.TABLE_READ // 4)
+
+
 class SwaDecodeQkv:
     """SWA decode, users in rows 0-3: the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
     the height-sharded layout paged SDPA decode reads ([1, 32, nh, D], one [32, D] shard per user) and the RoPE'd key
@@ -66,6 +72,7 @@ class SwaDecodeQkv:
 
     CB_X, CB_COS, CB_SIN, CB_TRANS, CB_TMP, CB_ROT, CB_CACHE, CB_C16, CB_SIG, CB_OUT8, CB_META = range(11)
     ROLE_Q, ROLE_K, ROLE_V = 0, 1, 2
+    TABLE_READ = 64  # bytes of a page table row the reader fetches around a user's entry (page_table_width)
 
     def __init__(self, plan, num_heads, head_dim, users, block_size, trans_mat, sample_qkv):
         """``trans_mat``: the decode RoPE transformation tile (torch [32, 32]); ``sample_qkv``: a fused qkv tensor of
@@ -164,7 +171,7 @@ class SwaDecodeQkv:
         cache_tile = ttnn.Tile([TILE, TILE]).get_tile_size(cache_dtype)
         pos_page = pos.shape[-1] * 4
         pt_page = page_table.shape[-1] * 4
-        assert pt_page % 64 == 0, "the reader fetches the 64 B of the page table row that holds the entry"
+        assert pt_page % self.TABLE_READ == 0, "the reader fetches the 64 B of the page table row that holds the entry"
         n = self.d_tiles
         kernels = []
         roles = (
