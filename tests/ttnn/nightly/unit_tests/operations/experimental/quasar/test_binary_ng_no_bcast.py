@@ -29,15 +29,15 @@ add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run)
 """
 
 import pytest
-
+import torch
 import ttnn
+
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _on_quasar,
+    _act,
+    _block_sharded_config,
+    _height_sharded_config,
     _run,
     _run_mixed,
-    _act,
-    _height_sharded_config,
-    _block_sharded_config,
     _width_sharded_config,
 )
 
@@ -272,6 +272,32 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
         mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
         shape = _HEIGHT_SHAPE
     _run(device, "divide", mem_config, dtype_tt, shape, pcc=0.99)
+
+
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_sfpu_unchanged_after_gelu_program(device, dtype_tt):
+    # A GELU program leaves its LUT table in the SFPU constants. The SFPU multiply, SQUARE and divide programs
+    # that run after it on the same device must give the same bits as before it.
+    torch.manual_seed(0)
+    cfg = dict(dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    a = ttnn.from_torch(torch.randn(32, 256) * torch.logspace(-3, 1, 256), **cfg)
+    b = ttnn.from_torch(torch.randn(32, 256), **cfg)
+    programs = {
+        "multiply": lambda: ttnn.experimental.quasar.multiply(a, b),
+        "square": lambda: ttnn.experimental.quasar.multiply(a, b, activations=_act(ttnn.UnaryOpType.SQUARE)),
+        "divide": lambda: ttnn.experimental.quasar.divide(a, b),
+    }
+
+    def bits(t):
+        # Raw bits, so a NaN quotient that repeats counts as unchanged.
+        return t.view({2: torch.int16, 4: torch.int32}[t.element_size()])
+
+    before = {name: bits(ttnn.to_torch(program())) for name, program in programs.items()}
+    ttnn.experimental.quasar.multiply(a, b, activations=_act(ttnn.UnaryOpType.GELU))
+    for name, program in programs.items():
+        after = bits(ttnn.to_torch(program()))
+        changed = int((after != before[name]).sum())
+        assert changed == 0, f"{name}: {changed} of {after.numel()} elements changed after a GELU program"
 
 
 # (a_mem, b_mem, out_mem) permutations beyond the uniform III / SSS already covered by

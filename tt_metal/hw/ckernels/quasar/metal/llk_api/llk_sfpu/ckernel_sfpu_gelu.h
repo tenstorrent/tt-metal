@@ -27,20 +27,12 @@ namespace ckernel::sfpu {
 // differs. Quasar's SFPLUTFP32 reads the table from the constant LRegs 9-14 and the looked-up value
 // from LReg3, where WH/BH read the table from LReg0-2/LReg4-6.
 //
-// So gelu_init loads the table with _sfpu_load_config32_ rather than sfpi: vCReg assignment reaches
-// SFPCONFIG, but the assembler rejects dests 9 and 10 ("permitted mask is 0xf9ff"), which is two of
-// the six table words. See tt-metal issue #51346.
-//
-// The loop below is still plain sfpi. lut2_sign() wants six LReg operands because that is where WH/BH
-// keep the table, and it pins the looked-up value to LReg3, which is what this hardware wants anyway.
-// The LUT ignores those six registers here, so reading them back through l_reg[] (no instructions
-// emitted) is enough to satisfy the intrinsic. Loading the table into them, the way Blackhole's init
-// does, is what miscompares.
+// gelu_init loads the table with sfpi::lut_init, and the loop uses the table-less lut<Fp16x6_HWM3>.
 //
 // Two things to avoid: vConstFloatPrgm0 for the 0.5 (that is LReg12, a table intercept word; an
 // SFPMULI immediate is free), and any sfpi code between this init and the loop, since the table
-// overwrites the SFPU constants 0.0/1.0/-1.0 in LReg9/10/11. Each op's init restores them via
-// _init_sfpu_config_reg_, so a following op is unaffected.
+// overwrites the SFPU constants 0.0/1.0/-1.0 in LReg9/10/11. _init_sfpu_config_reg_, which every
+// SFPU op's init runs, reloads all three, so a following op is unaffected.
 // =============================================================================
 
 template <int ITERATIONS = SFPU_ITERATIONS>

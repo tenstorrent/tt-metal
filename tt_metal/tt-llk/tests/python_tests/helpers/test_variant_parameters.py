@@ -199,17 +199,11 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
     constants = []
 
     if mathop in SFPU_UNARY_OPERATIONS:
-        constants.append(
-            f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
-        )
+        constants.append(f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};")
     elif mathop in SFPU_BINARY_OPERATIONS:
-        constants.append(
-            f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
-        )
+        constants.append(f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};")
     elif mathop in FPU_BINARY_OPERATIONS:
-        constants.append(
-            f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
-        )
+        constants.append(f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};")
 
     return constants
 
@@ -228,21 +222,15 @@ class MATH_OP(TemplateParameter):
 
             # Handle reduce operations
             if self.mathop in REDUCE_OPERATIONS:
-                temp_header.append(
-                    f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};"
-                )
+                temp_header.append(f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};")
                 if self.pool_type:
-                    temp_header.append(
-                        f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
-                    )
+                    temp_header.append(f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};")
 
         # Optional extra unary operation (used when both a binary and unary op
         # need to be present in the same kernel, e.g. binary-eltwise followed by
         # SFPU unary).  If 'unary_op' exists, append its constant.
         # Only add if we haven't already added a unary operation from the main mathop
-        if self.unary_extra and (
-            self.mathop is None or self.mathop not in SFPU_UNARY_OPERATIONS
-        ):
+        if self.unary_extra and (self.mathop is None or self.mathop not in SFPU_UNARY_OPERATIONS):
             temp_header.extend(
                 [
                     "\n// Additional SFPU unary operation",
@@ -444,6 +432,18 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
 
 
 @dataclass
+class SFPU_STALE_APPROX_GELU_LUT(TemplateParameter):
+    """Quasar unary SFPU: load the approximate-GELU LUT table before the op's init, as a previous program leaves it."""
+
+    stale_approx_gelu_lut: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.stale_approx_gelu_lut:
+            return ""
+        return "#define SFPU_STALE_APPROX_GELU_LUT 1"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
@@ -496,9 +496,7 @@ class SFPU_DROPOUT_PARAMS(TemplateParameter):
         assert (
             0 <= self.dropout_probability <= DROPOUT_PROBABILITY_MAX
         ), f"dropout probability {self.dropout_probability:#x} outside 0 .. {DROPOUT_PROBABILITY_MAX:#x}"
-        assert (
-            0 <= self.dropout_seed <= 0xFFFFFFFF
-        ), f"dropout seed {self.dropout_seed:#x} is not 32-bit"
+        assert 0 <= self.dropout_seed <= 0xFFFFFFFF, f"dropout seed {self.dropout_seed:#x} is not 32-bit"
 
     def convert_to_cpp(self) -> str:
         scale_bits = struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
@@ -766,8 +764,7 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
                 f"constexpr std::uint32_t RMSNORM_NUM_TILES = {self.rmsnorm_num_tiles}u;",
                 f"constexpr std::uint32_t RMSNORM_NUM_FACES = {self.rmsnorm_num_faces}u;",
                 f"constexpr bool RMSNORM_CLEAR_DEST = {str(self.clear_dest).lower()};",
-                "constexpr bool RMSNORM_UNPACK_FULL_TRANSPOSE = "
-                f"{str(self.unpack_full_transpose).lower()};",
+                "constexpr bool RMSNORM_UNPACK_FULL_TRANSPOSE = " f"{str(self.unpack_full_transpose).lower()};",
             ]
         )
 
@@ -790,9 +787,7 @@ class REDUCE_BLOCK_CT_DIM(TemplateParameter):
     reduce_block_ct_dim: int
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.reduce_block_ct_dim};"
-        )
+        return f"constexpr std::uint32_t REDUCE_BLOCK_CT_DIM = {self.reduce_block_ct_dim};"
 
 
 @dataclass
@@ -905,9 +900,7 @@ class DEST_SYNC(TemplateParameter):
     dest_sync: DestSync = DestSync.Half
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr auto dest_sync = ckernel::DstSync::Sync{self.dest_sync.name};"
-        )
+        return f"constexpr auto dest_sync = ckernel::DstSync::Sync{self.dest_sync.name};"
 
 
 @dataclass
@@ -923,9 +916,7 @@ class ENABLE_2X_FORMAT(TemplateParameter):
     enable_2x_format: bool = False
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
-        )
+        return f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
 
 
 @dataclass
@@ -957,9 +948,7 @@ class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
-        )
+        return f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
 
 
 @dataclass
@@ -1306,17 +1295,12 @@ class TOP32_RM(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         if self.row_elements % 32 != 0:
-            raise ValueError(
-                f"row_elements must be a multiple of 32, got {self.row_elements}"
-            )
+            raise ValueError(f"row_elements must be a multiple of 32, got {self.row_elements}")
         if self.top32_mode not in (0, 1):
-            raise ValueError(
-                f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}"
-            )
+            raise ValueError(f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}")
         if self.top32_mode == 1 and self.row_elements < 1024:
             raise ValueError(
-                "the pre-sorted mode needs at least one whole 1024-element chunk, got "
-                f"{self.row_elements}"
+                "the pre-sorted mode needs at least one whole 1024-element chunk, got " f"{self.row_elements}"
             )
         return "\n".join(
             [
@@ -1655,9 +1639,7 @@ class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
     sign_magnitude: bool = False
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
-        )
+        return f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
 
 
 @dataclass
@@ -1675,9 +1657,7 @@ class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr int L1_ACC = {1 if self.l1_acc == L1Accumulation.Yes else 0};"
-        )
+        return f"constexpr int L1_ACC = {1 if self.l1_acc == L1Accumulation.Yes else 0};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int L1_ACC;", "i"
@@ -1732,9 +1712,7 @@ class REDUCE_TO_ONE(RuntimeParameter):
     is_reduce_to_one: bool = False
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool IS_REDUCE_TO_ONE = {str(self.is_reduce_to_one).lower()};"
-        )
+        return f"constexpr bool IS_REDUCE_TO_ONE = {str(self.is_reduce_to_one).lower()};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool IS_REDUCE_TO_ONE;", "?"
@@ -1890,16 +1868,8 @@ class NUM_FACES_R_DIM(RuntimeParameter):
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
-            (
-                f"constexpr int num_faces_r_dim_A = {self.num_faces_r_dim_A};"
-                if self.num_faces_r_dim_A
-                else ""
-            ),
-            (
-                f"constexpr int num_faces_r_dim_B = {self.num_faces_r_dim_B};"
-                if self.num_faces_r_dim_B
-                else ""
-            ),
+            (f"constexpr int num_faces_r_dim_A = {self.num_faces_r_dim_A};" if self.num_faces_r_dim_A else ""),
+            (f"constexpr int num_faces_r_dim_B = {self.num_faces_r_dim_B};" if self.num_faces_r_dim_B else ""),
         ]
         return "\n".join(lines)
 
@@ -1918,16 +1888,8 @@ class NUM_FACES_C_DIM(RuntimeParameter):
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
-            (
-                f"constexpr int num_faces_c_dim_A = {self.num_faces_c_dim_A};"
-                if self.num_faces_c_dim_A
-                else ""
-            ),
-            (
-                f"constexpr int num_faces_c_dim_B = {self.num_faces_c_dim_B};"
-                if self.num_faces_c_dim_B
-                else ""
-            ),
+            (f"constexpr int num_faces_c_dim_A = {self.num_faces_c_dim_A};" if self.num_faces_c_dim_A else ""),
+            (f"constexpr int num_faces_c_dim_B = {self.num_faces_c_dim_B};" if self.num_faces_c_dim_B else ""),
         ]
         return "\n".join(lines)
 
@@ -2334,9 +2296,7 @@ class SDPA_REDUCE_ROW_POOL(TemplateParameter):
         try:
             value = pool_to_int[self.reduce_pool]
         except KeyError:
-            raise ValueError(
-                f"sdpa_reduce_row supports only MAX and SUM pools, got {self.reduce_pool}"
-            )
+            raise ValueError(f"sdpa_reduce_row supports only MAX and SUM pools, got {self.reduce_pool}")
         return f"constexpr int SDPA_REDUCE_POOL = {value};"
 
 
@@ -2425,10 +2385,7 @@ class GATED_REDUCE_SCALARS(RuntimeParameter):
     gated_alpha_bits: int
 
     def convert_to_cpp(self) -> str:
-        return "\n".join(
-            f"constexpr std::uint32_t {name.upper()} = {value}u;"
-            for name, value in vars(self).items()
-        )
+        return "\n".join(f"constexpr std::uint32_t {name.upper()} = {value}u;" for name, value in vars(self).items())
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return (

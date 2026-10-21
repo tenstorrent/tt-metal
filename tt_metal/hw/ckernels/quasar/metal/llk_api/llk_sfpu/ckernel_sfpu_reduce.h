@@ -400,9 +400,8 @@ inline void reduce_row_load_reciprocal(const std::uint32_t num_cols) {
  * a programmable constant register or a replay slot, so this cannot disturb a neighbouring op's
  * setup.
  *
- * The reverse is not guaranteed. The folds read LCONST_0 / LCONST_1 (LREG9/10) at their reset
- * defaults, and SFPCONFIG can overwrite those - gelu_init in approximate mode does - while
- * @c _init_sfpu_config_reg_ restores only SFPU_CTRL and LREG11.
+ * The folds read LCONST_0 / LCONST_1 (LREG9/10) as 0.0 / 1.0. A LUT init (approximate GELU)
+ * overwrites them, and @c _init_sfpu_config_reg_ reloads them before this init runs.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam FORMAT: Math-side data format of the operand
