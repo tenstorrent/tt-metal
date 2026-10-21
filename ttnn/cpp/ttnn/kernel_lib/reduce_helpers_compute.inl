@@ -178,7 +178,7 @@ template <
     typename AccumulateT,
     typename PostReduceOp,
     ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
-    uint32_t reduce_factor = 1>
+    uint32_t scale_bits = REDUCE_UNIT_SCALE_BITS>
 ALWI void reduce_tile_sum(
     ReduceInputBlockShape shape,
     ReduceInputMemoryLayout input_memory_layout,
@@ -217,7 +217,7 @@ ALWI void reduce_tile_sum(
     const uint32_t stride = is_col ? row_pitch : 1u;  // COL steps down a column by the row pitch
     const uint32_t n_out = is_row ? (Ht * NC) : (is_col ? (Wt * NC) : NC);
 
-    // AVG scales by the caller's compile-time 1/reduce_factor, never by this call's tile count.
+    // The caller's compile-time scale covers the whole reduction, never just this call's tiles.
     ASSERT(partial_mode == ReducePartialMode::None || partial_mode == ReducePartialMode::Mask);
     const bool has_partial = partial_mode == ReducePartialMode::Mask;
     // Each additive auxiliary slice contains an optional mask, then a required zero.
@@ -343,12 +343,11 @@ ALWI void reduce_tile_sum(
                 sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(dst_idx, 1, 1);
             }
         }
-        if constexpr (reduce_factor != 1) {
-            constexpr uint32_t inv_bits = __builtin_bit_cast(uint32_t, 1.0f / static_cast<float>(reduce_factor));
+        if constexpr (scale_bits != REDUCE_UNIT_SCALE_BITS) {
             if constexpr (within_tile == ReduceWithinTile::Skip) {
                 binop_with_scalar_tile_init();
             }
-            mul_unary_tile(dst_idx, inv_bits);
+            mul_unary_tile(dst_idx, scale_bits);
         }
         post_reduce_op(dst_idx);
     };
@@ -778,7 +777,7 @@ template <
     ReduceFp32Mode fp32_mode,
     ReduceAlgorithm algorithm,
     ReduceWithinTile within_tile,
-    uint32_t reduce_factor,
+    uint32_t scale_bits,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -803,10 +802,6 @@ ALWI void reduce(
         "Int32 MAX/SUM REDUCE_SCALAR is not supported (host decomposes Int32 HW reduce into W-then-H)");
     static_assert(
         reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32, "Int32 AVG (mean) is not supported");
-    static_assert(reduce_factor != 0, "reduce_factor must not be zero");
-    static_assert(
-        reduce_factor == 1 || reduce_type == PoolType::AVG,
-        "A non-default reduce_factor is only valid with PoolType::AVG");
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
         "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, bf16 only on Quasar, on REDUCE_ROW/COL. "
@@ -841,13 +836,16 @@ ALWI void reduce(
     static_assert(
         has_auxiliary || algorithm == ReduceAlgorithm::TileSum || is_sfpu,
         "Native reduction requires an auxiliary scaler CB");
+    static_assert(
+        scale_bits == REDUCE_UNIT_SCALE_BITS || algorithm == ReduceAlgorithm::TileSum || is_sfpu,
+        "ReduceAlgorithm::Native carries its scale in the scaler tile, so scale_bits must be 1.0f");
     if constexpr (!has_auxiliary) {
         ASSERT(partial_mode == ReducePartialMode::None);
     }
     if constexpr (algorithm == ReduceAlgorithm::TileSum) {
         static_assert(
             reduce_type == PoolType::SUM || reduce_type == PoolType::AVG,
-            "ReduceAlgorithm::TileSum computes SUM or AVG. AVG uses the caller-supplied compile-time reduce_factor; "
+            "ReduceAlgorithm::TileSum computes SUM or AVG. AVG is the sum times the caller's scale_bits; "
             "MAX/MIN are not expressible via additive accumulate, so use ReduceAlgorithm::Native.");
         static_assert(
             reduce_format != DataFormat::Int32,
@@ -881,12 +879,39 @@ ALWI void reduce(
             AccumulateT,
             PostReduceOp,
             within_tile,
-            reduce_factor>(
+            scale_bits>(
             input_block_shape,
             input_memory_layout,
             partial_mode,
             accumulate,
             post_reduce_op,
+            output_group,
+            auxiliary_tile_offset);
+        return;
+    }
+
+    if constexpr (is_sfpu && scale_bits != REDUCE_UNIT_SCALE_BITS) {
+        // The SFPU fold reads no scaler, so the scale multiplies each finished output before the caller's op.
+        reduce<
+            reduce_type,
+            reduce_dim,
+            input_dfb_id,
+            auxiliary_dfb_id,
+            output_dfb_id,
+            input_policy,
+            reconfig_mode,
+            fp32_mode,
+            algorithm,
+            within_tile,
+            REDUCE_UNIT_SCALE_BITS>(
+            input_block_shape,
+            input_memory_layout,
+            accumulate,
+            [&](uint32_t dst) {
+                detail::reduce_post_mul_tile<reduce_format>(dst, scale_bits);
+                post_reduce_op(dst);
+            },
+            partial_mode,
             output_group,
             auxiliary_tile_offset);
         return;

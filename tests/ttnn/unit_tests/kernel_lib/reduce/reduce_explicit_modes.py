@@ -128,8 +128,9 @@ class ReduceCase:
         return per_call * self.calls
 
     @property
-    def reduce_factor(self) -> int:
-        return self.average_divisor if self.pool == "AVG" and self.additive else 1
+    def scale_bits(self) -> int:
+        scale = 1.0 / self.average_divisor if self.pool == "AVG" and self.additive else 1.0
+        return struct.unpack("<I", struct.pack("<f", scale))[0]
 
     @property
     def output_tiles(self) -> int:
@@ -666,7 +667,7 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
         ("REDUCE_FP32_MODE", f"ReduceFp32Mode::{case.fp32_mode}"),
         ("REDUCE_ALGORITHM", f"compute_kernel_lib::ReduceAlgorithm::{case.algorithm}"),
         ("REDUCE_WITHIN_TILE", f"compute_kernel_lib::ReduceWithinTile::{case.within_tile}"),
-        ("REDUCE_FACTOR", str(case.reduce_factor)),
+        ("REDUCE_SCALE_BITS", hex(case.scale_bits)),
         ("REDUCE_PARTIAL_MODE", f"compute_kernel_lib::ReducePartialMode::{case.partial_mode}"),
         ("REDUCE_RELOAD_MODE", f"compute_kernel_lib::AccumulateReloadMode::{case.reload}"),
         ("REDUCE_OUTPUT_GROUP", str(case.output_group)),

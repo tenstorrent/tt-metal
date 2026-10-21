@@ -154,8 +154,8 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @tparam input_dfb_id, scaler_dfb_id, output_dfb_id CB ids. Formats are deduced from them: Int32, bf16 MIN and
  *         Accurate fp32 use the SFPU path (ROW/COL only), where scaler_dfb_id may be REDUCE_NO_AUXILIARY_CB.
  * @tparam input_policy, reconfig_mode, fp32_mode, algorithm, within_tile See their enums in reduce_types.hpp.
- * @tparam reduce_factor Element count of an AVG. Required for AVG on TileSum and SFPU paths; Native may keep 1
- *         because its scaler tile already carries 1/N.
+ * @tparam scale_bits float32 bits of the factor each finished output is multiplied by before post_reduce_op, on the
+ *         TileSum and SFPU paths (1/N for an AVG). Native requires 1.0f: its scaler tile carries the scale.
  * @param input_memory_layout Strides of a resident input (NoWaitNoPop / WaitUpfrontNoPop).
  * @param accumulate NoAccumulation or Accumulate.
  * @param post_reduce_op Called with each output's DST index before packing; with Accumulate, only on at_last.
@@ -181,7 +181,7 @@ template <
     ReduceAlgorithm algorithm = ReduceAlgorithm::Native,
     // Precedes the deduced parameters so callers passing a lambda can still set it.
     ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
-    std::uint32_t reduce_factor = 1,
+    std::uint32_t scale_bits = REDUCE_UNIT_SCALE_BITS,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(

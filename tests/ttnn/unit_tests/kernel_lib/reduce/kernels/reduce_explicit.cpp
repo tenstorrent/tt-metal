@@ -67,7 +67,7 @@ ALWI void run_reduce_calls(
             REDUCE_FP32_MODE,
             REDUCE_ALGORITHM,
             REDUCE_WITHIN_TILE,
-            REDUCE_FACTOR>(
+            REDUCE_SCALE_BITS>(
             shape,
             layout,
             make_accumulation<call>(),

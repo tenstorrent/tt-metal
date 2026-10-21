@@ -36,6 +36,9 @@ namespace compute_kernel_lib {
 /** Auxiliary CB ID for reductions that read no auxiliary tile (the Int32 and accurate-fp32 SFPU paths). */
 inline constexpr std::uint32_t REDUCE_NO_AUXILIARY_CB = 0xFF;
 
+/** float32 bits of 1.0f, the reduce() scale that leaves outputs unscaled. */
+inline constexpr std::uint32_t REDUCE_UNIT_SCALE_BITS = 0x3F800000;
+
 /** How reduce() waits for and pops input tiles. Output tiles are always reserved and pushed one at a time. */
 enum class ReduceInputPolicy : std::uint8_t {
     // Stream input. ReduceAlgorithm::TileSum consumes pairs, so the input CB needs room for two tiles.
@@ -55,16 +58,16 @@ enum class ReduceInputPolicy : std::uint8_t {
  * every pool type, reduce dim and input policy.
  *
  * ReduceAlgorithm::TileSum: float SUM/AVG only. Adds the reduce-dim tiles pairwise into one DST register per output,
- * then collapses within the tile on the SFPU and, for AVG, multiplies by 1/reduce_factor. Not limited by DST capacity
+ * then collapses within the tile on the SFPU and multiplies by the caller's scale. Not limited by DST capacity
  * along the reduce dim; faster for wide reductions and more accurate for AVG. Streamed REDUCE_COL requires
  * output_group = 1. Across Accumulate calls the accumulator holds the raw sum, which only Accumulate::at_last
- * finalizes, so AVG uses the grand-total reduce_factor.
+ * finalizes, so an AVG scale covers the grand total.
  */
 enum class ReduceAlgorithm : std::uint8_t { Native = 0, TileSum = 1 };
 
 /**
  * Whether ReduceAlgorithm::TileSum collapses the summed tile within the tile. Skip is for inputs already collapsed
- * along the reduce dim, e.g. per-core REDUCE_ROW partials. AVG scaling and post_reduce_op still run; an SFPU
+ * along the reduce dim, e.g. per-core REDUCE_ROW partials. Scaling and post_reduce_op still run; an SFPU
  * post_reduce_op must call its own init. Skip requires ReduceAlgorithm::TileSum, SUM/AVG and ReducePartialMode::None.
  */
 enum class ReduceWithinTile : std::uint8_t { Collapse = 0, Skip = 1 };
