@@ -131,9 +131,9 @@ CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::Con
     return CbPages{.out_page = tt::round_up(std::max(out_stick, max_input_page), cb_alignment), .scratch_page = 0};
 }
 
-uint64_t cb_footprint_bytes(
-    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, const BatchPlan& batches) {
-    const CbPages pages = cb_pages(input_tensors, attrs);
+namespace {
+
+uint64_t footprint_bytes(const CbPages& pages, const BatchPlan& batches) {
     const uint64_t out_bytes =
         static_cast<uint64_t>(cb_depth(batches.read_batch, batches.write_batch)) * pages.out_page;
     if (pages.scratch_page == 0) {
@@ -145,10 +145,19 @@ uint64_t cb_footprint_bytes(
     return tt::round_up(out_bytes, cb_start_alignment) + pages.scratch_page;
 }
 
+}  // namespace
+
+uint64_t cb_footprint_bytes(
+    const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, const BatchPlan& batches) {
+    return footprint_bytes(cb_pages(input_tensors, attrs), batches);
+}
+
+// The plan runs inside the per-call program hash, so the page geometry is derived once, not per halving step.
 std::optional<BatchPlan> plan_batches(
     const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, uint64_t budget) {
+    const CbPages pages = cb_pages(input_tensors, attrs);
     BatchPlan batches{kBatch, kBatch};
-    while (cb_footprint_bytes(input_tensors, attrs, batches) > budget) {
+    while (footprint_bytes(pages, batches) > budget) {
         if (batches.read_batch == 1 && batches.write_batch == 1) {
             return std::nullopt;
         }
@@ -191,7 +200,96 @@ bool supported_by_codegen(const std::vector<Tensor>& input_tensors, const ttnn::
     return plan_batches(input_tensors, attrs, budget).has_value();
 }
 
-bool is_demoted(const std::vector<Tensor>&, const ttnn::prim::ConcatCodegenParams&) { return false; }
+namespace {
+
+using Shape = std::vector<uint32_t>;
+using Placement = std::vector<BufferType>;
+
+enum class Axis { kFirst, kLast };
+
+bool shape_matches(const Tensor& tensor, const Shape& expected) {
+    const auto& logical = tensor.logical_shape();
+    if (logical.rank() != expected.size()) {
+        return false;
+    }
+    for (size_t d = 0; d < expected.size(); ++d) {
+        if (logical[d] != expected[d]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool inputs_match(
+    const std::vector<Tensor>& input_tensors, const std::vector<Shape>& shapes, const Placement& placement) {
+    if (input_tensors.size() != shapes.size() || input_tensors.size() != placement.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        if (!shape_matches(input_tensors[i], shapes[i]) ||
+            input_tensors[i].memory_config().buffer_type() != placement[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool dtype_in(DataType dtype, std::initializer_list<DataType> dtypes) {
+    return std::find(dtypes.begin(), dtypes.end(), dtype) != dtypes.end();
+}
+
+// Exact match on the normalized attributes of one measured case: dtype, concat axis, per-input shape and buffer
+// placement, and an interleaved DRAM output.
+bool is_exact_case(
+    const std::vector<Tensor>& input_tensors,
+    const ttnn::prim::ConcatCodegenParams& attrs,
+    std::initializer_list<DataType> dtypes,
+    Axis axis,
+    const std::vector<Shape>& shapes,
+    const Placement& placement) {
+    const uint32_t dim = axis == Axis::kFirst ? 0 : static_cast<uint32_t>(shapes.front().size() - 1);
+    return attrs.dim == dim && attrs.output_mem_config.buffer_type() == BufferType::DRAM &&
+           inputs_match(input_tensors, shapes, placement) && dtype_in(input_tensors.front().dtype(), dtypes);
+}
+
+}  // namespace
+
+bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
+    constexpr auto kDram = BufferType::DRAM;
+    constexpr auto kL1 = BufferType::L1;
+    constexpr auto kBf16 = DataType::BFLOAT16;
+    constexpr auto kInt32 = DataType::INT32;
+    constexpr auto kUint32 = DataType::UINT32;
+
+    // Every measured extent is a multiple of one tile edge.
+    constexpr uint32_t kUnit = 32;
+    constexpr uint32_t kDouble = 2 * kUnit;
+    constexpr uint32_t kTriple = kUnit + kDouble;
+
+    // Unsettled: measured slower than the native path, mechanism not analyzed; matched case by case.
+    const std::vector<Shape> three_input_rank3 = {{1, kUnit, kUnit}, {1, kUnit, kDouble}, {1, kUnit, kUnit}};
+    const std::vector<Placement> placements = {{kDram, kL1, kDram}, {kL1, kDram, kL1}, {kDram, kDram, kDram}};
+    for (const Placement& placement : placements) {
+        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, Axis::kLast, three_input_rank3, placement)) {
+            return true;
+        }
+    }
+
+    // Unsettled: same as above, width concat of three rank-2 inputs.
+    const std::vector<Shape> three_input_width = {{kUnit, kUnit}, {kUnit, kDouble}, {kUnit, kTriple}};
+    for (const Placement& placement : placements) {
+        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, Axis::kLast, three_input_width, placement)) {
+            return true;
+        }
+    }
+
+    // Unsettled: only these four of the outermost-axis three-input cases were measured slower.
+    const std::vector<Shape> three_input_outer = {{kUnit, kDouble}, {kUnit, kDouble}, {kUnit, kDouble}};
+    return is_exact_case(input_tensors, attrs, {kInt32}, Axis::kFirst, three_input_outer, {kDram, kL1, kDram}) ||
+           is_exact_case(input_tensors, attrs, {kBf16}, Axis::kFirst, three_input_outer, {kL1, kDram, kL1}) ||
+           is_exact_case(input_tensors, attrs, {kBf16}, Axis::kFirst, three_input_outer, {kDram, kDram, kDram}) ||
+           is_exact_case(input_tensors, attrs, {kUint32}, Axis::kFirst, three_input_outer, {kDram, kDram, kDram});
+}
 
 bool supported_execution_controls(
     unsigned int groups, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
