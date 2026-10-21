@@ -503,8 +503,8 @@ class SocketBuffers:
         self.send_trace = None
 
     def persistent_metadata(self):
-        """The metadata destination for the drain, or None when it must allocate its own: without a
-        claimed buffer, `metadata` holds the previous chunk's tensor, which Gemma4 frees after use."""
+        """The metadata destination for the drain, or None when it must allocate its own: outside the
+        claim protocol `metadata` holds the previous chunk's tensor, which Gemma4 frees after use."""
         return self.metadata if self._metadata_is_persistent else None
 
     def release_traces(self) -> None:
@@ -524,7 +524,7 @@ def _capture_socket_ops(
     if inbound is None:
         drain_skip = "no inbound socket"
     elif sockets.tokens is None or sockets.persistent_metadata() is None:
-        drain_skip = "the drain has no persistent destinations"
+        drain_skip = "the drain is missing a persistent destination"
     elif n_mtp and sockets.overhang is None:
         drain_skip = "the MTP lookahead overhang has no persistent destination"
     else:
@@ -1075,11 +1075,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _claim_overhang = getattr(runtime, "claim_persistent_overhang", None) if traced and NUM_MTP_TOKENS else None
     tokens = _claim_input() if _claim_input is not None else None
     sockets = SocketBuffers(
+        # Keyed on the runtime having the claim protocol, not on what it claimed: the DFlash non-first
+        # rank claims no input and still replays, and a claiming runtime never frees the metadata
+        # message, so a drain-allocated one would outlive the capture and be live across the replay.
         metadata=(
             _make_socket_metadata_buffer(
                 mesh_device, CHUNK_METADATA_SIZE_BYTES if is_first_rank else D2D_METADATA_SIZE_BYTES
             )
-            if tokens is not None
+            if _claim_input is not None
             else None
         ),
         tokens=tokens,
