@@ -199,6 +199,24 @@ class Flux3KleinPromptEncoder:
 
     @staticmethod
     def to_host(encoding: Flux3KleinTextEncoding) -> tuple[torch.Tensor, torch.Tensor]:
-        """Read ``encoding.tokens`` back: the real L rows only (the DiT pad rows beyond L are dropped)."""
-        rows = tensor.to_torch(encoding.tokens, mesh_axes=[None, encoding.sp_axis, None])[0, : encoding.length]
+        """Read ``encoding.tokens`` back: the real L rows only (the DiT pad rows beyond L are dropped).
+
+        The tokens are sharded over ``sp_axis`` and REPLICATED over the other mesh axis (TP8): ``tensor.to_torch``
+        with a composer read every replica (32 shards, host untilize of each) and kept one; the per-op profile of
+        2026-10-21 put 2.3 s of a 4K render in that read. Here one shard per SP position is read (4 shards on the
+        4x8 ring) and concatenated on the host; bit-identical rows (``test_text_readback_one_replica``)."""
+        rows = read_sp_sharded_one_replica(encoding.tokens, encoding.sp_axis)[0, : encoding.length]
         return rows, encoding.ids
+
+
+def read_sp_sharded_one_replica(x: ttnn.Tensor, sp_axis: int | None) -> torch.Tensor:
+    """Host copy of a device tensor sharded over mesh axis ``sp_axis`` on tensor dim 1 and replicated over the other
+    axis: reads ONE device per SP position (the first along the replicated axis) and concatenates on dim 1.
+    ``sp_axis None``: a replicated tensor, one device read."""
+    coords = [tuple(int(v) for v in c) for c in x.tensor_topology().mesh_coords()]
+    shards = ttnn.get_device_tensors(x)
+    if sp_axis is None:
+        return ttnn.to_torch(shards[0])
+    other = 1 - sp_axis
+    picked = sorted(((c[sp_axis], i) for i, c in enumerate(coords) if c[other] == 0), key=lambda t: t[0])
+    return torch.cat([ttnn.to_torch(shards[i]) for _, i in picked], dim=1)
