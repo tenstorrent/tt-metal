@@ -197,15 +197,22 @@ def test_mesh_long_context(mesh_device):
         user_in_flight[0] = u
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        _, logits_last, owner_row = model.prefill_chunked(
+        streams_last, logits_last, owner_row = model.prefill_chunked(
             torch.tensor(ids, dtype=torch.long), user=u, chunk=CHUNK, on_chunk=on_chunk
         )
         firsts.append(model.first_token(logits_last, owner_row))
         ttfts.append(time.perf_counter() - t0)
+        # the last chunk's streams ([1,1,T_loc,16384] fp32: 128 MB per chip at 16 K chunks on 8 rows) and logits are
+        # released before the next user: kept alive they fragment the DRAM the next prompt's whole-prefix latent copy
+        # and score blocks need (the 1 M x 4-user run OOM'd on a 260 MB score block with 532 MB free in 30 MB pieces)
+        ttnn.deallocate(streams_last)
+        if logits_last is not None:
+            ttnn.deallocate(logits_last)
         logger.info(
             f"user {u}: TTFT {ttfts[-1]:.1f} s for {S} tokens ({S / ttfts[-1]:.0f} tok/s prefill); first token "
             f"{firsts[-1]} {tok.decode([firsts[-1]])!r}"
         )
+        log_dram(mesh_device, f"after the prefill of user {u}")
     log_dram(mesh_device, "after prefill")
     first, ttft_s = firsts[0], ttfts[0]
     # greedy decode: every slot runs its own chain (slot u of every row carries prompt u for u < N_USERS; the other
