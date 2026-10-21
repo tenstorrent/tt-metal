@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """DeepSeek-V4.1-Flash prefill attention, on top of the V4-Flash prefill block.
 
-V4.1 keeps V4's prefill block -- q_a -> q_b, shared-KV MQA over ``[tail | chunk | compressed entries]``
-as one dense masked SDPA, the attention sink, inverse RoPE on the output, the grouped o_a -> o_b, the
-chunk state (:class:`~models.experimental.deepseek_v4_flash.tt.prefill.attention.PrefillAttentionState`)
-and the selection folded into the additive mask -- and replaces its compressed path, as the decode block
-does (see :mod:`..decode.attention`):
+V4.1 keeps V4's prefill block -- q_a -> q_b, shared-KV MQA, the attention sink, inverse RoPE on the output, the
+grouped o_a -> o_b and the chunk state
+(:class:`~models.experimental.deepseek_v4_flash.tt.prefill.attention.PrefillAttentionState`) -- and replaces its
+compressed path, as the decode block does (see :mod:`..decode.attention`):
 
 * ``compress_ratios[i]`` is 0 (window only), 2 (softmax-gated pooling of 2 tokens, no overlap) or 1 (one
   latent per token). Only ``kv_source_layer_ids`` compress; later layers of a group read the latest source's
@@ -18,9 +17,14 @@ does (see :mod:`..decode.attention`):
   layers reuse that selection.
 * q_b's per-head RMSNorm is gone.
 
+Attention builds no mask: every layer runs ``ttnn.transformer.deepseek_v4_prefill_sdpa`` over its sliding window
+``[tail | chunk]`` and, for a compressed layer, the compressed entries its index source selected. The selection is
+each query's top-``index_topk`` entry rows (every entry while there are no more than ``index_topk``); a row the
+query has not seen yet (``w >= (position + 1) / rate``) is skipped by the op, as is a window row before position 0.
+
 Layers share state, so the layers of a chunk run in order and hand it down in a :class:`PrefillShared`:
 the latest kv source's :class:`~models.experimental.deepseek_v4_flash.tt.prefill.attention.PrefillAttentionState`
-(compressed KV and index keys) and the latest index source's selection mask.
+(compressed KV and index keys) and the latest index source's selected rows.
 
 V4.1's selection is two-level past ``candidate_topk_blocks * candidate_block_size`` compressed entries (the
 reference's ``select_candidate_blocks``). The ``candidate_source_layer_id`` (layer 20) scores each block of
@@ -33,10 +37,8 @@ candidates are built.
 
 Traced prefill (:meth:`DeepSeekV41PrefillAttention.forward_static`) runs V4's static attention over persistent
 buffers: a kv source writes its entries and index keys into front-anchored buffers at the packet's rows, and the
-layers of a stage hand them (and the selection) down in a :class:`PrefillStaticShared`. Once every query of a
-position tier sees ``index_topk`` entries and a whole window, the selection is the index source's ``topk`` rows and
-attention is ``sparse_sdpa`` over each query's selected and window rows, with no mask; earlier tiers keep the dense
-masked SDPA.
+layers of a stage hand them (and the selection) down in a :class:`PrefillStaticShared`. The chunk's start reaches
+the op as a device tensor, so one trace serves every chunk of a position tier.
 """
 
 import dataclasses
@@ -54,7 +56,6 @@ from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
     DeepSeekV4PrefillAttention,
     PrefillAttentionState,
     PrefillStaticBuffers,
-    PrefillStaticStep,
 )
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache
 
@@ -67,9 +68,9 @@ class PrefillShared:
     """What the layers of one prompt hand down to the layers after them.
 
     ``kv_source`` is the latest kv source's state: the compressed KV (``compressed_kv``) and index keys
-    (``idx_keys``) the layers of its group read. ``entry_sel`` is the latest index source's selection for the
-    current chunk: an additive TILE mask ``[1, 1, T, E]`` (0 on each query's selected entries, -inf elsewhere),
-    or ``None`` while there are no more than ``index_topk`` entries and every visible one is selected. Each
+    (``idx_keys``) the layers of its group read. ``entry_idx`` is the latest index source's selection for the
+    current chunk: uint32 ROW_MAJOR ``[1, 1, T, k]``, each query's selected entry rows (every entry row while there
+    are no more than ``index_topk``; rows the query has not seen yet are skipped by the attention op). Each
     chunk's index source replaces it, so run a chunk's layers in order.
 
     ``candidates`` is the candidate source's level-one selection for the current chunk, the additive TILE mask
@@ -79,7 +80,7 @@ class PrefillShared:
     """
 
     kv_source: Optional[PrefillAttentionState] = None
-    entry_sel: Optional[ttnn.Tensor] = None
+    entry_idx: Optional[ttnn.Tensor] = None
     candidates: Optional[ttnn.Tensor] = None
 
 
@@ -88,9 +89,9 @@ class PrefillStaticShared:
     """:class:`PrefillShared` for traced prefill: what the layers of one stage hand down within one chunk.
 
     ``entries`` / ``idx_keys`` are the current group's persistent front-anchored buffers on this stage (the kv source's
-    own, or the stage's copy of a source on an earlier stage), ``entry_sel`` the latest index source's selection
-    ``[1, 1, T, cap]`` as an additive mask, or, in a tier that attends sparsely (:attr:`V41PrefillStaticStep.sparse`),
-    ``entry_idx`` its selected entry rows (uint32 ROW_MAJOR ``[1, 1, T, index_topk]``). A kv source with
+    own, or the stage's copy of a source on an earlier stage), ``entry_idx`` the latest index source's selected
+    entry rows (uint32 ROW_MAJOR ``[1, 1, T, min(index_topk, cap)]``, as :attr:`PrefillShared.entry_idx`). A kv
+    source with
     ``keep_rows`` set also leaves copies of the rows it wrote this chunk in ``new_rows`` (``(entries, keys)``,
     ROW_MAJOR ``[1, 1, T / rate, width]``), for the next stage.
 
@@ -102,7 +103,6 @@ class PrefillStaticShared:
 
     entries: Optional[ttnn.Tensor] = None
     idx_keys: Optional[ttnn.Tensor] = None
-    entry_sel: Optional[ttnn.Tensor] = None
     entry_idx: Optional[ttnn.Tensor] = None
     keep_rows: bool = False
     new_rows: Optional[tuple] = None
@@ -112,29 +112,40 @@ class PrefillStaticShared:
 
 
 @dataclasses.dataclass
-class V41PrefillStaticStep(PrefillStaticStep):
-    """V4's :class:`PrefillStaticStep` plus the candidate source's pins.
+class V41PrefillStaticStep:
+    """The per-chunk inputs of a traced V4.1 attention layer, computed inside the trace from the chunk's packet.
+
+    As V4's :class:`~models.experimental.deepseek_v4_flash.tt.prefill.attention.PrefillStaticStep`, without masks:
+    ``rope[kind]`` = ``(cos, sin)`` ``[1, 1, T, rope_dim]`` for the chunk's tokens, ``entry_rope[rate]`` the same for
+    the chunk's new entries, ``caps[layer_type]`` the entry rows the tier reads (0 for sliding layers),
+    ``entry_rows[rate]`` (uint32 ``[T / rate]``) the rows the chunk's entries go to.
+
+    ``start`` is the chunk's start position, int32 ROW_MAJOR ``[1, 1, 1, 1]``, which the attention op reads on device.
+    ``fresh`` marks a bounded replay's first chunk: its window starts at the chunk (the tail holds no token).
+
+    ``index_cuts[layer_type]`` is the indexer's causal cut over the ``cap`` entry rows (bf16 TILE ``[1, 1, T, cap]``,
+    ``_MASK_NEG`` on rows a query has not seen) and ``index_pads[layer_type]`` its zero key pad, on stages with an
+    index source of that type.
 
     ``candidate_pins[layer_type]`` is bf16 TILE ``[1, 1, T, cap / candidate_block_size]``: ``-_MASK_NEG`` on the
     block holding each query's newest entry, 0 elsewhere (made from :func:`candidate_pin_keys` and the chunk's
     start). Present only on the candidate source's stage, in position tiers whose ``cap`` holds more blocks than
     ``candidate_topk_blocks``.
-
-    ``sparse`` holds the compressed layer types that attend through ``sparse_sdpa`` in this tier: those whose every
-    query sees at least ``index_topk`` entries and a whole window, so no selected or window row needs masking.
-    ``window_idx[cap]`` is uint32 ROW_MAJOR ``[1, 1, T, sliding_window]``: query ``i``'s window rows
-    ``cap + i + 1 .. cap + i + sliding_window`` of the keys ``[cap entry rows | tail | chunk]``. ``q_pad`` is the
-    bf16 ROW_MAJOR ``[1, pad, T, Dh]`` zero heads that round the local query heads up to a tile for the op.
     """
 
+    rope: dict
+    entry_rope: dict
+    caps: dict
+    start: ttnn.Tensor
+    fresh: bool = False
+    index_cuts: Optional[dict] = None
+    index_pads: Optional[dict] = None
+    entry_rows: Optional[dict] = None
     candidate_pins: Optional[dict] = None
-    sparse: frozenset = frozenset()
-    window_idx: Optional[dict] = None
-    q_pad: Optional[ttnn.Tensor] = None
 
 
 def ratio_layer_type(rate: int) -> str:
-    """The key a compressed layer of ``rate`` uses in a :class:`PrefillStaticStep` (masks, caps, index pads)."""
+    """The key a compressed layer of ``rate`` uses in a :class:`V41PrefillStaticStep` (caps, index cuts and pads)."""
     return f"compressed_ratio_{rate}"
 
 
@@ -177,7 +188,6 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         cache=None,
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         tp_size: int = 1,
-        maskless: bool = False,
     ):
         super().__init__(
             config,
@@ -188,28 +198,16 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
             cache=cache,
             weight_dtype=weight_dtype,
             tp_size=tp_size,
-            maskless=maskless,
         )
         cache = _as_cache(cache)
-        # V4's static step keys masks and entry caps by layer type; V4.1's two ratios share one config type.
+        # V4's static step keys entry caps by layer type; V4.1's two ratios share one config type.
         self.layer_type = ratio_layer_type(self.rate) if self.rate else SLIDING_ATTENTION
         if self.rate not in (None, 1, 2):
             raise ValueError(f"layer {layer_idx}: no compressor for ratio {self.rate}")
-        self.sparse_sinks = None  # bf16 ROW_MAJOR [1, 1, 1, H_local padded to a tile], sparse_sdpa's sink layout
-        if self.rate:
-            local = self.local_num_heads
-            sinks = ttnn.reshape(ttnn.to_layout(self.sinks, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, local])
-            pad = -local % ttnn.TILE_SIZE
-            if pad:
-                zeros = ttnn.from_torch(
-                    torch.zeros(1, 1, 1, pad),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=device,
-                    mesh_mapper=self._replicate,
-                )
-                sinks = ttnn.concat([sinks, zeros], dim=3)
-            self.sparse_sinks = sinks
+        # bf16 ROW_MAJOR [1, 1, 1, H_local]: the sinks (pre-divided by the scale) in the attention op's layout.
+        self.prefill_sinks = ttnn.reshape(
+            ttnn.to_layout(self.sinks, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, self.local_num_heads]
+        )
         self.is_kv_source = layer_idx in config.kv_source_layer_ids
         self.is_index_source = layer_idx in config.index_source_layer_ids
         # A source's new entries only reach the layers after it through its own selection.
@@ -318,15 +316,19 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         return entries, keys
 
     # ------------------------------------------------------------------ #
-    # two-level select
+    # selection
     # ------------------------------------------------------------------ #
-    def _select_from_scores(self, scores: ttnn.Tensor, cut: ttnn.Tensor) -> ttnn.Tensor:
-        """The top-``index_topk`` selection mask ``[1, 1, T, E]`` from indexer ``scores`` (``cut`` already added), as
-        V4's :meth:`~DeepSeekV4PrefillAttention._select_entries` thresholds them. ``cut`` is added back, so entries the
-        threshold keeps only because a query has fewer than ``index_topk`` reachable ones are dropped again."""
-        k = min(self.index_topk, scores.shape[3])
-        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
-        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+    def _select_rows(self, scores: ttnn.Tensor) -> ttnn.Tensor:
+        """The top-``min(index_topk, E)`` entry rows of each query, uint32 ROW_MAJOR ``[1, 1, T, k]``, from indexer
+        ``scores`` ``[1, 1, T, E]`` (causal cut added). A query that has seen fewer than ``k`` entries also gets rows
+        it has not seen (scored ``_MASK_NEG``); the attention op skips those (``compress_ratio``).
+
+        ``topk_large_indices`` rather than ``ttnn.topk``, which hands it only rows of up to 2^19 entries and
+        runs anything wider (a ratio-1 layer past 512K tokens) on a single core."""
+        flat = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
+        rows = ttnn.experimental.topk_large_indices(flat, k=min(self.index_topk, scores.shape[3]))
+        ttnn.deallocate(flat)
+        return rows
 
     def _candidate_blocks(self, scores: ttnn.Tensor, pins: ttnn.Tensor) -> ttnn.Tensor:
         """Level one of the two-level select: the 0/1 bf16 TILE mask ``[1, 1, T, E / block_size]`` of each query's
@@ -432,15 +434,26 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
                     raise ValueError(f"layer {self.layer_idx} runs before its kv source has seen this chunk")
                 entries = source.compressed_kv
             if self.is_index_source:
-                if shared.entry_sel is not None:
-                    ttnn.deallocate(shared.entry_sel)
-                shared.entry_sel = None
+                if shared.entry_idx is not None:
+                    ttnn.deallocate(shared.entry_idx)
+                shared.entry_idx = None
                 if self.is_candidate_source and shared.candidates is not None:
                     ttnn.deallocate(shared.candidates)
                     shared.candidates = None
                 num_entries = entries.shape[2]
-                # Up to index_topk entries top-k selects every visible one (the plain causal set); past it, select.
-                if num_entries > self.index_topk:
+                # Up to index_topk entries top-k selects every one a query has seen: list them all, and the
+                # attention op skips the ones it has not. Past index_topk, select.
+                if num_entries <= self.index_topk:
+                    every = torch.arange(num_entries, dtype=torch.int32).expand(num_tokens, num_entries)
+                    shared.entry_idx = ttnn.from_torch(
+                        every.reshape(1, 1, num_tokens, num_entries),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=self._replicate,
+                    )
+                else:
                     keys = dataclasses.replace(state, idx_keys=shared.kv_source.idx_keys)
                     scores, cut = self._index_scores(latent, hidden, keys, cos, sin)
                     if self.is_candidate_source and num_entries > self.max_entries:
@@ -460,14 +473,29 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
                             )
                         restricted = ttnn.add(scores, shared.candidates)
                         ttnn.deallocate(scores)
-                        scores, cut = restricted, shared.candidates
-                    shared.entry_sel = self._select_from_scores(scores, cut)
+                        scores = restricted
+                    shared.entry_idx = self._select_rows(scores)
                     ttnn.deallocate(scores)
+            elif shared.entry_idx is None:
+                raise ValueError(f"layer {self.layer_idx} runs before its index source has seen this chunk")
 
-        if self.maskless:
-            attn = self._attend_maskless(q, kv, state, cos, sin)
-        else:
-            attn = self._attend(q, kv, entries, state, cos, sin, shared.entry_sel)
+        sw = self.sliding_window
+        chunk_rm = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
+        tail = state.kv_tail if state.kv_tail is not None else self._zeros_rm(sw)
+        window = ttnn.concat([tail, chunk_rm], dim=2)  # [1, 1, sw + T, Dh]
+        ttnn.deallocate(chunk_rm)
+        state.kv_tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
+        position = ttnn.from_torch(
+            torch.tensor([[[[start]]]], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._replicate,
+        )
+        attn = self._attend_sdpa(q, window, position, cos, sin, entries, shared.entry_idx if self.rate else None)
+        ttnn.deallocate(window)
+        ttnn.deallocate(position)
         out = self._o_proj(attn)
         state.seq_len += num_tokens
         return out
@@ -504,22 +532,21 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
     ) -> ttnn.Tensor:
         """Trace-safe :meth:`forward`: no host traffic, no growing tensors.
 
-        Positions come from ``step`` (RoPE rows, the entries' RoPE and rows, masks and the tier's entry rows ``cap``),
-        this layer's state is ``bufs`` (updated in place) and the group's state ``shared``. ``hidden`` ``[1, 1, T, D]``
-        -> ``[1, 1, T, D]``.
+        Positions come from ``step`` (RoPE rows, the entries' RoPE and rows, the start, and the tier's entry rows
+        ``cap``), this layer's state is ``bufs`` (updated in place) and the group's state ``shared``. ``hidden``
+        ``[1, 1, T, D]`` -> ``[1, 1, T, D]``.
 
         The candidate source builds candidates when ``step`` carries its pins (the tier's ``cap`` holds more than
         ``candidate_topk_blocks`` blocks); a later index source restricts its scores to ``shared.candidates`` when set.
         While the real entries fit ``candidate_topk_blocks`` blocks every reachable block is kept, so a tier that
         builds candidates still selects as the plain top-k does on its early chunks.
 
-        In a tier where the layer type is in ``step.sparse``, an index source keeps its selected rows
-        (``shared.entry_idx``) instead of a mask and the layer attends through :meth:`_attend_sparse`.
+        The index source's top-k runs over the tier's ``cap`` rows, so in an early tier a query that has seen fewer
+        than ``k`` entries also lists rows it has not; the attention op skips them.
         """
         cos, sin = step.rope[self.rope_kind]
         q, latent = self._q_stem(hidden, cos, sin, return_latent=True)
         kv = self._kv_stem(hidden, cos, sin)
-        sparse = self.layer_type in step.sparse
         if self.rate:
             if self.is_kv_source:
                 entries, keys = self._pool_entries(hidden, *step.entry_rope[self.rate])
@@ -530,10 +557,9 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
                 self._write_entries(bufs.idx_keys, keys, rows, cap)
                 shared.entries, shared.idx_keys = bufs.entries, bufs.idx_keys
             if self.is_index_source:
-                for old in (shared.entry_sel, shared.entry_idx):
-                    if old is not None:
-                        ttnn.deallocate(old)
-                shared.entry_sel = shared.entry_idx = None
+                if shared.entry_idx is not None:
+                    ttnn.deallocate(shared.entry_idx)
+                shared.entry_idx = None
                 keys = dataclasses.replace(bufs, idx_keys=shared.idx_keys)
                 scores, cut = self._index_scores_static(latent, hidden, keys, step, cos, sin)
                 pins = (step.candidate_pins or {}).get(self.layer_type) if self.is_candidate_source else None
@@ -548,62 +574,12 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
                 elif self.uses_candidates and shared.candidates is not None:
                     restricted = ttnn.add(scores, shared.candidates)
                     ttnn.deallocate(scores)
-                    scores, cut = restricted, shared.candidates
-                if sparse:
-                    shared.entry_idx = self._select_rows(scores)
-                else:
-                    shared.entry_sel = self._select_from_scores(scores, cut)
+                    scores = restricted
+                shared.entry_idx = self._select_rows(scores)
                 ttnn.deallocate(scores)
-        if sparse:
-            attn = self._attend_sparse(q, kv, shared.entries, bufs, step, cos, sin, shared.entry_idx)
-        else:
-            attn = self._attend_static(
-                q,
-                kv,
-                shared.entries if self.rate else None,
-                bufs,
-                step,
-                cos,
-                sin,
-                shared.entry_sel if self.rate else None,
-            )
-        return self._o_proj(attn)
 
-    def _select_rows(self, scores: ttnn.Tensor) -> ttnn.Tensor:
-        """The top-``index_topk`` entry rows of each query, uint32 ROW_MAJOR ``[1, 1, T, index_topk]``, from indexer
-        ``scores`` (causal cut added). In a sparse tier every query sees at least ``index_topk`` entries, so every
-        row picked is a visible one. Unlike :meth:`_select_from_scores`, ties at the threshold keep exactly
-        ``index_topk`` rows."""
-        values, rows = ttnn.topk(scores, k=self.index_topk, dim=-1, largest=True, sorted=True)
-        ttnn.deallocate(values)
-        if rows.dtype != ttnn.uint32:
-            wide = ttnn.typecast(rows, ttnn.uint32)
-            ttnn.deallocate(rows)
-            rows = wide
-        out = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(rows)
-        return out
-
-    def _attend_sparse(
-        self,
-        q: ttnn.Tensor,
-        kv: ttnn.Tensor,
-        entries: ttnn.Tensor,
-        bufs: PrefillStaticBuffers,
-        step: V41PrefillStaticStep,
-        cos: ttnn.Tensor,
-        sin: ttnn.Tensor,
-        rows: ttnn.Tensor,
-    ) -> ttnn.Tensor:
-        """:meth:`_attend_static` with no mask: ``sparse_sdpa`` gathers each query's ``rows`` (its selected entries)
-        and its window rows (``step.window_idx``) out of the keys ``[the tier's cap entry rows | tail | chunk]``.
-
-        The tail rolls in place as in :meth:`_attend_static`. The op takes a tile of query heads, so the local heads
-        are padded with ``step.q_pad`` and the padding sliced off the output.
-        """
         num_tokens = q.shape[2]
         sw = self.sliding_window
-        cap = step.caps[self.layer_type]
         chunk_rm = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
         window = ttnn.concat([bufs.tail, chunk_rm], dim=2)  # [1, 1, sw + T, Dh]
         ttnn.deallocate(chunk_rm)
@@ -611,35 +587,51 @@ class DeepSeekV41PrefillAttention(DeepSeekV4PrefillAttention):
         new_tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
         self._write_rows(new_tail, bufs.tail, 0)
         ttnn.deallocate(new_tail)
-
-        head, owned = self._entry_prefix(entries, cap)
-        keys = ttnn.concat([head, window], dim=2)
+        attn = self._attend_sdpa(
+            q,
+            window,
+            step.start,
+            cos,
+            sin,
+            shared.entries if self.rate else None,
+            shared.entry_idx if self.rate else None,
+            empty_tail=step.fresh,
+        )
         ttnn.deallocate(window)
-        if owned:
-            ttnn.deallocate(head)
-        indices = ttnn.concat([rows, step.window_idx[cap]], dim=3)  # [1, 1, T, index_topk + sw]
+        return self._o_proj(attn)
+
+    def _attend_sdpa(
+        self,
+        q: ttnn.Tensor,
+        window: ttnn.Tensor,
+        start: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        entries: Optional[ttnn.Tensor] = None,
+        rows: Optional[ttnn.Tensor] = None,
+        empty_tail: bool = False,
+    ) -> ttnn.Tensor:
+        """``deepseek_v4_prefill_sdpa`` of ``q`` ``[1, H_local, T, Dh]`` over its sliding window in ``window`` (ROW_MAJOR
+        ``[tail | chunk]``) and, for a compressed layer, the rows ``rows`` (uint32 ROW_MAJOR ``[1, 1, T, k]``) of the
+        ROW_MAJOR ``entries``, then undo V's RoPE. ``start`` is the chunk's start, a 1-element device tensor. The op
+        skips entry rows a query has not seen yet and window rows before position 0 (every tail row with
+        ``empty_tail``). Returns ``[1, H_local, T, Dh]`` TILE."""
         query = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
-        if step.q_pad is not None:
-            padded = ttnn.concat([query, step.q_pad], dim=1)
-            ttnn.deallocate(query)
-            query = padded
-        out = ttnn.transformer.sparse_sdpa(
+        out = ttnn.transformer.deepseek_v4_prefill_sdpa(
             query,
-            keys,
-            indices,
-            self.head_dim,
-            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            window,
+            start,
+            cache_kv=entries,
+            cache_idx=rows,
+            window_size=self.sliding_window,
             scale=self.scaling,
             k_chunk_size=_SDPA_CHUNK,
-            attention_sink=self.sparse_sinks,
+            attention_sink=self.prefill_sinks,
+            compress_ratio=self.rate or 0,
+            empty_tail=empty_tail,
         )
         ttnn.deallocate(query)
-        ttnn.deallocate(keys)
-        ttnn.deallocate(indices)
-        if out.shape[1] != self.local_num_heads:
-            local = ttnn.slice(out, [0, 0, 0, 0], [1, self.local_num_heads, num_tokens, self.head_dim])
-            ttnn.deallocate(out)
-            out = local
         attn = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         ttnn.deallocate(out)
+        # K = V, so V carried K's RoPE on its trailing slice: rotate it back at the query's position.
         return self._rope(attn, cos, ttnn.neg(sin))

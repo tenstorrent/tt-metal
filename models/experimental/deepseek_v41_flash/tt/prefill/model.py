@@ -13,8 +13,9 @@ the host), a head on the last stage -- with what V4.1 changed:
 * Engram layers (1 and 14) take the chunk's n-gram rows from an :class:`~..engram_lookup.EngramHostLookup`, called once
   per chunk at the chunk's start position.
 * A compressed group's layers share a :class:`~.attention.PrefillShared`. A group can straddle a stage edge, so
-  crossing one copies the group's compressed KV and index keys, and the current selection and candidate masks, to
+  crossing one copies the group's compressed KV and index keys, and the current selected rows and candidate mask, to
   the next stage (through the host, like the streams); those copies live until the chunk is done.
+* Attention builds no mask: every layer runs ``deepseek_v4_prefill_sdpa`` over its window and selected entries.
 
 **KV-only prefill** (``kv_only=True``). Layers after the last kv source (``max(kv_source_layer_ids)``, layer 20) only
 read that source's compressed KV, so the first 21 layers (0-20) write all of the shared compressed KV and index keys.
@@ -25,7 +26,8 @@ which depend on the hidden state those layers compute; the caller seeds them ano
 
 Past ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the selection is two-level (see
 :mod:`.attention`): the candidate source's candidates cross stage edges to the index sources after it, like the
-selection does. Attention stays dense masked SDPA, so each chunk costs ``O(entries so far)``.
+selection does. Attention reads at most ``index_topk`` entries per query; the indexer still scores every entry, so
+each chunk costs ``O(entries so far)`` there.
 
 **Traced prefill** (:class:`DeepSeekV41TracedPrefill`, :meth:`DeepSeekV41PrefillModel.prepare_traced_prefill` /
 :meth:`~DeepSeekV41PrefillModel.prefill_traced`) is V4's: one trace per stage and position tier over fixed-size chunks,
@@ -117,7 +119,6 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         head_dtype: ttnn.DataType = ttnn.bfloat16,
         tp_size: int = 1,
         layer_devices: Optional[Sequence[ttnn.MeshDevice]] = None,
-        maskless: bool = False,
         progress: Optional[Callable[..., None]] = None,
         engram_lookup: Optional[EngramHostLookup] = None,
         experts: Optional[Sequence[DeepSeekV41PreloadedExperts]] = None,
@@ -204,7 +205,6 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                     weight_dtype=weight_dtype,
                     moe_weight_dtype=moe_weight_dtype,
                     tp_size=tp_size,
-                    maskless=maskless,
                 )
             )
             note(f"layer {i + 1}/{num_layers}: built")
@@ -373,9 +373,9 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                 on_layer(i, streams, pre_mix, dev)
         for rows in engram_rows.values():
             ttnn.deallocate(rows)
-        for mask in (shared.entry_sel, shared.candidates):
-            if mask is not None:
-                ttnn.deallocate(mask)
+        for tensor in (shared.entry_idx, shared.candidates):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
         self._free_mirror(mirror)
         return streams, pre_mix
 
@@ -386,9 +386,9 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         src: ttnn.MeshDevice,
         dst: ttnn.MeshDevice,
     ) -> tuple[PrefillShared, Optional[PrefillAttentionState]]:
-        """``shared`` for the next stage: the kv source's compressed KV and index keys, and the selection and candidate
-        masks, copied to ``dst``. ``mirror`` is the copy of a kv source on ``src`` (``None`` when the source itself ran
-        there); it and the old masks are freed, the layers' own states are not."""
+        """``shared`` for the next stage: the kv source's compressed KV and index keys, the selected rows and the
+        candidate mask, copied to ``dst``. ``mirror`` is the copy of a kv source on ``src`` (``None`` when the source
+        itself ran there); it and the old selection and candidates are freed, the layers' own states are not."""
         moved = PrefillShared()
         new_mirror = None
         source = shared.kv_source
@@ -401,9 +401,17 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                 ),
             )
             moved.kv_source = new_mirror
-        if shared.entry_sel is not None:
-            moved.entry_sel = self._carry(shared.entry_sel, src, dst, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(shared.entry_sel)
+        if shared.entry_idx is not None:
+            # Entry rows run past bf16's exact integers, so they cross as int32, not through _carry.
+            moved.entry_idx = ttnn.from_torch(
+                self.to_host(shared.entry_idx, src).to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dst,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dst) if dst.get_num_devices() > 1 else None,
+            )
+            ttnn.deallocate(shared.entry_idx)
         if shared.candidates is not None:
             moved.candidates = self._carry(shared.candidates, src, dst, ttnn.TILE_LAYOUT)
             ttnn.deallocate(shared.candidates)
@@ -554,15 +562,15 @@ def _free_distinct(*tensors: ttnn.Tensor) -> None:
 #   :class:`~.attention.PrefillStaticShared`. A group can straddle a stage edge: then the source stage also sends the
 #   chunk's new entry and key rows (``[1, 1, C / rate, width]``) down the pipeline, and a stage reading that group
 #   writes them into its own front-anchored copy (``mirrors``), at the packet's rows like the source does.
-# * Sparse attention: in a tier whose first query already sees ``index_topk`` entries and a whole window
-#   (``_sparse_tiers``, every tier after the first at the default chunk of 1024), an index source keeps its
-#   ``topk`` rows and its group's layers attend through ``sparse_sdpa`` over ``[cap entry rows | tail | chunk]``
-#   with ``[selected rows | window rows]`` per query (a persistent window table per ``cap``): no mask. Earlier tiers
-#   keep the dense masked SDPA, whose masks are small there.
-# * Selection: when a stage's first compressed layers reuse the selection of an index source on an earlier stage, that
-#   stage's predecessor sends its last selection after the carried rows: the rows ``[1, 1, C, index_topk]`` (uint32
-#   row-major, 2 MiB at C = 1024) in a sparse tier, else the mask ``[1, 1, C, cap]`` (bf16 row-major, one receive
-#   buffer per dense tier ``cap``). A stage with no index source of its own passes it on.
+# * Attention builds no mask, in any tier: every layer runs ``deepseek_v4_prefill_sdpa`` over its window
+#   ``[tail | chunk]`` and, for a compressed layer, the rows its index source selected out of the group's whole entry
+#   buffer. The chunk's start reaches the op as a device tensor (a packet slot); the op skips window rows before
+#   position 0 and entry rows a query has not seen yet, so early tiers need no special case.
+# * Selection: an index source's top-``min(index_topk, cap)`` rows over the tier's ``cap`` entry rows (uint32
+#   row-major ``[1, 1, C, k]``), its scores cut causally first (``index_cuts``, made on device from two persistent
+#   ramps and the start). When a stage's first compressed layers reuse the selection of an index source on an earlier
+#   stage, that stage's predecessor sends its last selection after the carried rows (one receive buffer per distinct
+#   ``k``). A stage with no index source of its own passes it on.
 # * Two-level select: in position tiers whose ``cap`` holds more than ``candidate_topk_blocks`` blocks, the candidate
 #   source builds its candidates from a per-chunk pin table (persistent pin keys compared with the chunk's start).
 #   For the index sources after it on later stages, the source stage sends its compact block mask
@@ -574,10 +582,9 @@ def _free_distinct(*tensors: ttnn.Tensor) -> None:
 # * ``kv_only``: no head; the last stage sends a one-page "done" token over the D2H socket instead of logits, which
 #   keeps V4's flow control (one read per chunk).
 # * Bounded replay (``bounded_replay``): every tier also has a fresh-window variant, the first chunk of a prompt
-#   resumed from its cached compressed KV alone. Its window starts at the chunk: a mask-free sliding layer attends
-#   over the chunk alone (as on tier 0), a masked layer's tail columns are cut (``tail_cut``), and a sparse one reads
-#   ``fresh_window_idx``, whose window rows run backwards so the tail's land in the sentinel tail ``sparse_sdpa``
-#   skips. The chunk's first ``sliding_window`` tokens only rebuild the window: their entries go to a scratch row.
+#   resumed from its cached compressed KV alone. Its window starts at the chunk, so the op skips every tail row
+#   (``empty_tail``). The chunk's first ``sliding_window`` tokens only rebuild the window: their entries go to a
+#   scratch row, past every row a query of the chunk has seen.
 
 _ENGRAM_SOCKET_CORE = (0, 4)  # the k-th Engram layer of a stage uses (0, 4 + k)
 # One row page per socket: the FIFO sits in L1 on a worker core whose free top of L1 the prefill ops' circular
@@ -593,22 +600,17 @@ class _V41StageIO:
     streams_in: Optional[ttnn.Tensor]  # [1, C, hc, D] bf16 ROW_MAJOR (stages after the first)
     pre_in: Optional[ttnn.Tensor]  # [1, 1, C * hc / _PRE_MIX_ROW, _PRE_MIX_ROW] bf16 ROW_MAJOR (stages after the first)
     one_hot: Optional[ttnn.Tensor]  # [1, C, 1, hc] bf16 TILE, the first pre_mix (stage 0)
-    masks: dict  # layer type -> (static, threshold), as V4's _StageIO
     index_pads: dict  # (layer type, tier cap) -> [1, 1, kv_len, index_head_dim] zero key pad
+    # Indexed layer type -> (rate * w + 1 [1, 1, 1, capacity], rate * ((i + 1) // rate) [1, 1, C, 1]), fp32 TILE: entry
+    # row w is cut from query i while the first exceeds start + the second (the start a multiple of rate).
+    cut_ramps: dict
     ramp: Optional[ttnn.Tensor]  # [1, 1, 1, C] fp32 TILE 0 .. C - 1 (last stage with a head)
     rows_in: dict  # remote kv source -> (entries, keys) [1, 1, C / rate, width] bf16 ROW_MAJOR, received
     mirrors: dict  # remote kv source -> (entries, keys) [1, 1, capacity, width] bf16 ROW_MAJOR, front-anchored
     engram_rows: dict  # Engram layer -> [1, 1, C, kin] bf16 ROW_MAJOR, received from the host
     pin_keys: Optional[ttnn.Tensor] = None  # [1, 1, C, capacity / block] fp32 TILE (candidate source's stage)
     candidates_in: dict = field(default_factory=dict)  # blocks -> [1, 1, C, blocks] bf16 ROW_MAJOR, received
-    sel_in: dict = field(default_factory=dict)  # cap -> [1, 1, C, cap] bf16 ROW_MAJOR mask, received (dense tiers)
-    idx_in: Optional[ttnn.Tensor] = None  # [1, 1, C, index_topk] uint32 ROW_MAJOR rows, received (sparse tiers)
-    window_idx: dict = field(default_factory=dict)  # cap -> [1, 1, C, sliding_window] uint32 ROW_MAJOR
-    q_pad: Optional[ttnn.Tensor] = None  # [1, pad, C, Dh] bf16 ROW_MAJOR zero query heads
-    # Bounded replay only: the fresh-window chunk's mask over the tail columns ([1, 1, C, sliding_window] bf16 TILE,
-    # all _MASK_NEG), and its sparse window rows (cap -> as window_idx, backwards, the tail's rows sentinels).
-    tail_cut: Optional[ttnn.Tensor] = None
-    fresh_window_idx: dict = field(default_factory=dict)
+    sel_in: dict = field(default_factory=dict)  # k -> [1, 1, C, k] uint32 ROW_MAJOR selected rows, received
 
 
 @dataclass
@@ -627,10 +629,6 @@ class _V41Stage(_Stage):
     sel_in: Optional[str] = None  # layer type of the selection that arrives from the previous stage
     sel_out: Optional[str] = None  # layer type of the selection that goes on to the next stage
     fresh_sigs: list = field(default_factory=list)  # tier -> signature of its fresh-window variant (bounded replay)
-
-
-# Marks a skipped row in a sparse_sdpa index list (the lists end in a contiguous run of them).
-_SPARSE_SENTINEL = -1  # 0xFFFFFFFF once uploaded as uint32
 
 
 class DeepSeekV41TracedPrefill(TracedPrefill):
@@ -656,8 +654,6 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         # Without a consumer (kv_only stops at layer 20) the candidates would go unread.
         self._candidate_attn = model.layers[sources[0]].self_attn if sources and self._candidate_consumers else None
         self._candidate_tiers: set = set()  # tiers whose cap holds more than candidate_topk_blocks blocks
-        self._sparse_tiers: dict = {}  # layer type -> tiers that attend through sparse_sdpa
-        self._sparse_floor: dict = {}  # layer type -> first position whose query sees index_topk entries and a window
         self._last_real = 0  # real tokens in the last run's last chunk
 
     # ------------------------------------------------------------------ planning
@@ -731,12 +727,10 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         return stages
 
     def _tier_sig(self, stage: _V41Stage, tier: int, fresh: bool = False) -> tuple:
-        """V4's signature, plus whether the stage builds, receives or sends the candidates in ``tier``, which of
-        its layer types attend sparsely there, and whether it is the tier's fresh-window variant (tier 0 is fresh
-        already: its chunk starts the prompt)."""
+        """V4's signature, plus whether the stage builds, receives or sends the candidates in ``tier``, and whether
+        it is the tier's fresh-window variant (tier 0 is fresh already: its chunk starts the prompt)."""
         moves = stage.candidate_source or stage.candidates_in or stage.candidates_out
-        sparse = tuple(sorted(key for key in stage.types if self._is_sparse(key, tier)))
-        return (*super()._tier_sig(stage, tier), moves and tier in self._candidate_tiers, sparse, fresh and tier > 0)
+        return (*super()._tier_sig(stage, tier), moves and tier in self._candidate_tiers, fresh and tier > 0)
 
     def _variants(self) -> list[tuple[int, bool]]:
         """``(tier, fresh)`` of the traces that differ on at least one stage from every earlier one (the ones to
@@ -750,8 +744,9 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                     out.append((tier, fresh))
         return out
 
-    def _is_sparse(self, layer_type: str, tier: int) -> bool:
-        return tier in self._sparse_tiers.get(layer_type, ())
+    def _selection_width(self, layer_type: str, tier: int) -> int:
+        """Rows per query an index source of ``layer_type`` selects in ``tier``: its top-k runs over the cap rows."""
+        return min(self.config.index_topk, self._tier_caps[tier][layer_type])
 
     def _candidate_blocks_at(self, tier: int) -> int:
         """The candidate blocks of ``tier``'s entry rows (the width of its block mask)."""
@@ -806,15 +801,6 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                 for tier in range(len(self._tiers))
                 if self._candidate_blocks_at(tier) > self._candidate_attn.candidate_topk_blocks
             }
-        # sparse_sdpa cannot mask a row in the middle of a query's list, so a tier attends sparsely only when its
-        # first query already sees index_topk entries and a whole window; earlier tiers keep the dense mask.
-        self._sparse_floor = floor = {
-            key: max(self.config.index_topk * rate, self.config.sliding_window) for key, rate in self._key_rate.items()
-        }
-        self._sparse_tiers = {
-            key: {tier for tier in range(1, len(self._tiers)) if self._tiers[tier - 1] * chunk_size >= floor[key]}
-            for key in self._key_rate
-        }
         for stage in self.stages:
             stage.tier_sigs = [self._tier_sig(stage, tier) for tier in range(len(self._tiers))]
             if self.bounded_replay:
@@ -867,20 +853,16 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             streams_in = zeros((1, t, hc, model.hidden))
             pre_in = zeros((1, 1, t * hc // _PRE_MIX_ROW, _PRE_MIX_ROW))
 
-        masks, index_pads = {}, {}
-        for key in stage.types:
+        index_pads, cut_ramps = {}, {}
+        for key in stage.indexed:
             attn = self._representative(stage, key)
-            if attn.maskless:
-                continue
-            static, threshold = attn.mask_tables_host(t, self._entry_capacity.get(key, 0))
-            masks[key] = (
-                attn._to_device(static.reshape(1, 1, t, -1)),
-                attn._to_device(threshold.reshape(1, 1, t, -1), dtype=ttnn.float32),
-            )
-            if key in stage.indexed:
-                # One pad per distinct tier cap: a pad's rows past its cap stay zero for ever.
-                for tier_cap in sorted({caps.get(key, 0) for caps in self._tier_caps}):
-                    index_pads[(key, tier_cap)] = attn._zeros_rm(_round_up(tier_cap + t, 64), config.index_head_dim)
+            # One pad per distinct tier cap: a pad's rows past its cap stay zero for ever.
+            for tier_cap in sorted({caps.get(key, 0) for caps in self._tier_caps}):
+                index_pads[(key, tier_cap)] = attn._zeros_rm(_round_up(tier_cap + t, 64), config.index_head_dim)
+            rate, capacity = attn.rate, self._entry_capacity[key]
+            entry = (rate * torch.arange(capacity, dtype=torch.float32) + 1).reshape(1, 1, 1, capacity)
+            query = (rate * ((torch.arange(t) + 1) // rate)).to(torch.float32).reshape(1, 1, t, 1)
+            cut_ramps[key] = tuple(zeros(x.shape, ttnn.TILE_LAYOUT, ttnn.float32, x) for x in (entry, query))
         ramp = None
         if stage.last and not model.kv_only:
             ramp = zeros(
@@ -904,44 +886,16 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             if stage.candidates_in:
                 for blocks in sorted({self._candidate_blocks_at(tier) for tier in self._candidate_tiers}):
                     candidates_in[blocks] = zeros((1, 1, t, blocks))
-        tiers = range(len(self._tier_caps))
-        sel_in, idx_in = {}, None
+        sel_in = {}
         if stage.sel_in:
-            key = stage.sel_in
-            for cap in sorted({self._tier_caps[tier][key] for tier in tiers if not self._is_sparse(key, tier)}):
-                sel_in[cap] = zeros((1, 1, t, cap))
-            if self._sparse_tiers[key]:
-                shape = (1, 1, t, config.index_topk)
-                idx_in = zeros(shape, dtype=ttnn.uint32, value=torch.zeros(shape, dtype=torch.int32))
-        sw = config.sliding_window
-        window_idx, fresh_window_idx, q_pad = {}, {}, None
-        sparse_types = [key for key in stage.types if key != SLIDING_ATTENTION and self._sparse_tiers[key]]
-        if sparse_types:
-            query = torch.arange(t, dtype=torch.int32).view(-1, 1)
-            offsets = torch.arange(1, sw + 1, dtype=torch.int32).view(1, -1)
-            # Window coordinate k of [tail | chunk], last first: the tail's (k < sw) end each list.
-            backwards = query + torch.arange(sw, 0, -1, dtype=torch.int32).view(1, -1)
-            for key in sparse_types:
-                for cap in sorted({self._tier_caps[tier][key] for tier in self._sparse_tiers[key]}):
-                    if cap not in window_idx:
-                        rows = (cap + query + offsets).reshape(1, 1, t, sw)
-                        window_idx[cap] = zeros(rows.shape, dtype=ttnn.uint32, value=rows)
-                        if self.bounded_replay:
-                            fresh = torch.where(backwards < sw, _SPARSE_SENTINEL, cap + backwards).reshape(1, 1, t, sw)
-                            fresh_window_idx[cap] = zeros(fresh.shape, dtype=ttnn.uint32, value=fresh.to(torch.int32))
-            attn = self._representative(stage, sparse_types[0])
-            pad = -attn.local_num_heads % ttnn.TILE_SIZE
-            if pad:
-                q_pad = zeros((1, pad, t, attn.head_dim))
-        tail_cut = None
-        if self.bounded_replay and masks:
-            tail_cut = zeros((1, 1, t, sw), ttnn.TILE_LAYOUT, value=torch.full((1, 1, t, sw), _MASK_NEG))
+            for k in sorted({self._selection_width(stage.sel_in, tier) for tier in range(len(self._tier_caps))}):
+                sel_in[k] = zeros((1, 1, t, k), dtype=ttnn.uint32, value=torch.zeros(1, 1, t, k, dtype=torch.int32))
         return _V41StageIO(
             streams_in,
             pre_in,
             one_hot,
-            masks,
             index_pads,
+            cut_ramps,
             ramp,
             rows_in,
             mirrors,
@@ -949,11 +903,6 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             pin_keys,
             candidates_in,
             sel_in,
-            idx_in,
-            window_idx,
-            q_pad,
-            tail_cut,
-            fresh_window_idx,
         )
 
     def _open_sockets(self) -> None:
@@ -1060,7 +1009,6 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         t = c = self._chunk_size
         io = stage.io
         caps = {key: self._tier_caps[tier].get(key, 0) for key in stage.types}
-        sw = self.config.sliding_window
         made: list = []
 
         def keep(tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -1090,32 +1038,21 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                 entry_rope[rate] = gather(stage.rope["compress"], slots(self._pkt_entry[rate], n), n)
             entry_rows[rate] = ttnn.reshape(slots(self._pkt_rows[rate], n), [n])  # a view: slots() frees it
 
-        masks, index_cuts, index_pads = {}, {}, {}
+        start = keep(ttnn.slice(pkt, [0, 0, 0, c], [1, 1, 1, c + 1]))  # int32 ROW_MAJOR [1, 1, 1, 1]
         start_f = None
-        if io.masks:
-            start = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, c], [1, 1, 1, c + 1]), [1, 1, 1, 1])
+        if io.cut_ramps or (stage.candidate_source and tier in self._candidate_tiers):
             start_f = keep(ttnn.typecast(ttnn.to_layout(start, ttnn.TILE_LAYOUT), ttnn.float32))
-        for key in stage.types:
-            if key not in io.masks:  # mask-free sliding layer
-                continue
+        index_cuts, index_pads = {}, {}
+        for key, (entry, query) in io.cut_ramps.items():
             cap = caps[key]
-            static, threshold = io.masks[key]
-            if cap < self._entry_capacity.get(key, 0):
-                cols = [1, 1, t, sw + t + cap]
-                static = keep(ttnn.slice(static, [0, 0, 0, 0], cols))
-                threshold = keep(ttnn.slice(threshold, [0, 0, 0, 0], cols))
-            cut = ttnn.typecast(ttnn.multiply(ttnn.gt(threshold, start_f), _MASK_NEG), ttnn.bfloat16)
-            mask = ttnn.add(static, cut)
-            ttnn.deallocate(cut)
-            if fresh:
-                rest = ttnn.slice(mask, [0, 0, 0, sw], [1, 1, t, mask.shape[3]])
-                ttnn.deallocate(mask)
-                mask = ttnn.concat([io.tail_cut, rest], dim=3)
-                ttnn.deallocate(rest)
-            masks[key] = keep(mask)
-            if key in stage.indexed:
-                index_cuts[key] = keep(ttnn.slice(masks[key], [0, 0, 0, sw + t], [1, 1, t, sw + t + cap]))
-                index_pads[key] = io.index_pads[(key, cap)]
+            if cap < entry.shape[3]:
+                entry = keep(ttnn.slice(entry, [0, 0, 0, 0], [1, 1, 1, cap]))
+            threshold = ttnn.add(query, start_f)  # [1, 1, T, 1]
+            unseen = ttnn.gt(entry, threshold, dtype=ttnn.bfloat16)  # [1, 1, T, cap]
+            ttnn.deallocate(threshold)
+            index_cuts[key] = keep(ttnn.multiply(unseen, _MASK_NEG))
+            ttnn.deallocate(unseen)
+            index_pads[key] = io.index_pads[(key, cap)]
         candidate_pins = {}
         if stage.candidate_source and tier in self._candidate_tiers:
             blocks = self._candidate_blocks_at(tier)
@@ -1130,16 +1067,13 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         step = V41PrefillStaticStep(
             rope=rope,
             entry_rope=entry_rope,
-            masks=masks,
             caps=caps,
+            start=start,
+            fresh=fresh,
             index_cuts=index_cuts,
             index_pads=index_pads,
             entry_rows=entry_rows,
-            first_chunk=tier == 0 or fresh,
             candidate_pins=candidate_pins,
-            sparse=frozenset(key for key in stage.types if self._is_sparse(key, tier)),
-            window_idx=io.fresh_window_idx if fresh else io.window_idx,
-            q_pad=io.q_pad,
         )
         return ids, step, made
 
@@ -1157,10 +1091,7 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         c, hc = self._chunk_size, model.hc
         candidates_on = tier in self._candidate_tiers
         blocks_in = io.candidates_in[self._candidate_blocks_at(tier)] if candidates_on and stage.candidates_in else None
-        sel_in, sparse_in = None, False
-        if stage.sel_in:
-            sparse_in = self._is_sparse(stage.sel_in, tier)
-            sel_in = io.idx_in if sparse_in else io.sel_in[self._tier_caps[tier][stage.sel_in]]
+        sel_in = io.sel_in[self._selection_width(stage.sel_in, tier)] if stage.sel_in else None
         if stage.first:
             ttnn.experimental.recv_async_h2d(stage.pkt, self._pkt_socket)
             if stage.device.get_num_devices() > 1:
@@ -1206,10 +1137,8 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             expander = self._representative(stage, key)
             shared.candidates = expander._expand_candidates(blocks_in, step.index_cuts[key])
         # A copy: the stage's own index source frees the selection it replaces.
-        if sel_in is not None and sparse_in:
+        if sel_in is not None:
             shared.entry_idx = ttnn.clone(sel_in)
-        elif sel_in is not None:
-            shared.entry_sel = ttnn.to_layout(sel_in, ttnn.TILE_LAYOUT)
         new_rows = {}
         for li in stage.layers:
             layer = model.layers[li]
@@ -1230,13 +1159,11 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                 ttnn.deallocate(pre_mix)
             streams, pre_mix = out, out_pre
         sel_out = None
-        if stage.sel_out and self._is_sparse(stage.sel_out, tier):
+        if stage.sel_out:
             sel_out, shared.entry_idx = shared.entry_idx, None
-        elif stage.sel_out:
-            sel_out = ttnn.to_layout(shared.entry_sel, ttnn.ROW_MAJOR_LAYOUT)
-        for mask in (shared.entry_sel, shared.entry_idx, shared.candidates):
-            if mask is not None:
-                ttnn.deallocate(mask)
+        for tensor in (shared.entry_idx, shared.candidates):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
 
         if stage.last:
             if model.kv_only:
@@ -1294,11 +1221,6 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                 raise ValueError(f"{name}={value} must be a positive multiple of {ALIGNMENT}")
         if self.prepared or self.compiled:
             raise RuntimeError("traced prefill is already prepared; another plan needs another TracedPrefill")
-        if any(layer.self_attn.maskless for layer in model.layers) and chunk_size < self.config.sliding_window:
-            raise ValueError(
-                f"mask-free traced prefill needs chunk_size >= sliding_window ({self.config.sliding_window}), "
-                f"got {chunk_size}"
-            )
         self._max_len, self._chunk_size = max_len, chunk_size
         model._tag = "traced prepare"
         model._note("traced prefill: allocating persistent buffers and sockets", important=True)
@@ -1383,9 +1305,8 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         0 when ``start`` is not a multiple of :attr:`continue_alignment`.
 
         Every chunk's tier (see :meth:`_first_chunk_index`) must exist and its real positions fit the RoPE tables
-        (``max_len``). A sparse tier needs the chunk's first query to see ``index_topk`` entries, so the run stops
-        before a chunk that would not. A bounded replay needs ``bounded_replay`` traces, ``start > 0`` and at least
-        its ``sliding_window`` window tokens.
+        (``max_len``). A bounded replay needs ``bounded_replay`` traces, ``start > 0`` and at least its
+        ``sliding_window`` window tokens.
         """
         c = self._chunk_size
         if start < 0 or start % self.continue_alignment:
@@ -1395,11 +1316,6 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         base = self._first_chunk_index(start, bounded_replay)
         room = max(0, _round_up(self._max_len, c) // c - base) * c
         n = max(0, min(n_tokens, self._max_len - start, room)) // ALIGNMENT * ALIGNMENT
-        for j in range(-(-n // c)):
-            tier, chunk_start = self._tier_of(base + j), start + j * c
-            if any(self._is_sparse(key, tier) and chunk_start < floor for key, floor in self._sparse_floor.items()):
-                n = j * c
-                break
         if bounded_replay and n < self.config.sliding_window:
             return 0
         return n
