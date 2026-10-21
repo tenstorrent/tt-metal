@@ -69,6 +69,21 @@ void convert_to_sign_mag(std::vector<int8_t>& vec) {
     }
 }
 
+// in0 x in1 for one 32x32 int8 tile in face-major order, unclamped.
+std::vector<int32_t> golden_single_tile_matmul_int8(
+    const std::vector<int8_t>& input_0, const std::vector<int8_t>& input_1) {
+    std::vector<int32_t> golden(32 * 32, 0);
+    for (int x = 0; x < 32; x++) {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                golden[byte_tile_face_major_index(x, y)] += (int32_t)input_0[byte_tile_face_major_index(z, y)] *
+                                                            (int32_t)input_1[byte_tile_face_major_index(x, z)];
+            }
+        }
+    }
+    return golden;
+}
+
 bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
 
@@ -153,18 +168,8 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<int32_t> golden_output_int32(tile_size, 0);
+    std::vector<int32_t> golden_output_int32 = golden_single_tile_matmul_int8(input_0, input_1);
     std::vector<int8_t> golden_output(tile_size, 0);
-    // matmul
-    for (int x = 0; x < 32; x++) {
-        for (int y = 0; y < 32; y++) {
-            for (int z = 0; z < 32; z++) {
-                golden_output_int32[byte_tile_face_major_index(x, y)] +=
-                    (int32_t)input_0[byte_tile_face_major_index(z, y)] *
-                    (int32_t)input_1[byte_tile_face_major_index(x, z)];
-            }
-        }
-    }
     // clamping to int8
     for (int i = 0; i < 1024; i++) {
         if (golden_output_int32[i] > 127) {
