@@ -9,9 +9,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <system_error>
 #include <thread>
 #include <vector>
+
+#include <tt_stl/span.hpp>
 
 // NFS-Specific Filesystem Utilities
 // =================================
@@ -313,5 +316,14 @@ void wait_for_pending_sync();
 // Safety: Only removes empty directories. Non-empty directories act as a barrier.
 // Does NOT remove the root of the path if it has no parent (path is at filesystem root).
 size_t remove_empty_parent_directories(const std::filesystem::path& path);
+
+// Writes `bytes` to `path + ".tmp"`, then renames it to `path`, so a reader never sees a partial file.
+void write_file_atomically(const std::string& path, ttsl::Span<const uint8_t> bytes);
+
+// Returns the contents of `path`. Fails if it can't be opened or is empty.
+std::vector<uint8_t> read_file(const std::string& path);
+
+// Waits up to `timeout_ms` for `path` to exist, then returns its contents. Fails on timeout.
+std::vector<uint8_t> wait_and_read_file(const std::string& path, uint32_t timeout_ms);
 
 }  // namespace tt::filesystem
