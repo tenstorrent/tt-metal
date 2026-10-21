@@ -137,6 +137,14 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
+// Ring joint SDPA: the per-phase zones of the inner step are compiled out unless the factory defines
+// SOL_STEP_PROFILE (TT_SOL_STEP_PROFILE=1), and they only emit under the device profiler (PROFILE_KERNEL).
+#if defined(SOL_STEP_PROFILE) && defined(PROFILE_KERNEL)
+constexpr bool kRingStepProfiling = true;
+#else
+constexpr bool kRingStepProfiling = false;
+#endif
+
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
 // llk_pack -> program_packer_destination GPR->FLOP address-programming sequence at every
@@ -3043,7 +3051,7 @@ void sdpa_ring_v2(
                     q_cur.sum = cb_sum_out;
                 }
                 sdpa_inner_loop_step<
-                    false,  // profiling_enabled
+                    kRingStepProfiling,  // profiling_enabled (SOL_STEP_PROFILE + device profiler)
                     Sq_chunk_t,
                     Sk_chunk_t,
                     Skt,
@@ -3434,7 +3442,7 @@ void sdpa_ring_v2(
                 }
 
                 sdpa_inner_loop_step<
-                    false,  // profiling_enabled
+                    kRingStepProfiling,  // profiling_enabled (SOL_STEP_PROFILE + device profiler)
                     Sq_chunk_t,
                     Sk_chunk_t,
                     Skt,

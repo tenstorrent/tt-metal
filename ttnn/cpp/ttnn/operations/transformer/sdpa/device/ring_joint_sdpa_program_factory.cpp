@@ -3348,6 +3348,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
     }
+    // Per-phase device-profiler zones inside sdpa_inner_loop_step (Q@KT, reduce, exp, V matmul, SALAD, ...). They
+    // only emit under TT_METAL_DEVICE_PROFILER=1 (PROFILE_KERNEL); this define flips the template gate that is
+    // otherwise false at the two call sites. Measurement knob, not hashed: set it for the whole process.
+    if (std::getenv("TT_SOL_STEP_PROFILE") && std::string(std::getenv("TT_SOL_STEP_PROFILE")) == "1") {
+        compute_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
