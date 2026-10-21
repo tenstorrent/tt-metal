@@ -300,18 +300,19 @@ inline void reduce_scalar_pool_faces(const std::uint32_t first, const std::uint3
 }
 
 /**
- * @brief REDUCE_SCALAR: transpose the partials of DEST row `row` into SrcA rows 16-31, so rows 0-15 keep the bank's face.
+ * @brief REDUCE_SCALAR: transpose the partials of DEST row `row` into SrcA rows [srca_row, srca_row + 16), so the rows
+ *        below keep the bank's faces.
  */
-template <std::uint32_t row, bool clear_32b>
+template <std::uint32_t row, bool clear_32b, std::uint32_t srca_row = 16>
 inline void reduce_scalar_transpose_upper()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, row);
     TTI_TRNSPSRCB;
-    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 16, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
-    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 20, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
-    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 24, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
-    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 28, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + srca_row + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + srca_row + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + srca_row + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + srca_row + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, clear_32b, 0, ADDR_MOD_0, row);
 }
 
@@ -349,6 +350,192 @@ inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool l
     reduce_scalar_transpose_upper<prev_row, is_fp32_dest_acc_en>();
     reduce_scalar_face_with_final_pool<math_fidelity, row>(last && num_faces == 2);
     reduce_scalar_pool_faces<type, math_fidelity, row>(2, num_faces, last);
+}
+
+// REDUCE_SCALAR SUM/AVG block in tile pairs: the unpacker puts one face of tiles a and b in one SrcA bank (rows 0-15, 16-31), so their
+// chains (DEST rows ra, rb) issue alternately; the previous pair's transposed partials wait in rows 32-47 for the final pools.
+template <MathFidelity math_fidelity>
+constexpr std::uint32_t reduce_pair_phases = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
+
+// One bank of a pair; final_pool also pools the previous tile's transposed partials (SrcA row 32) into row 0.
+template <MathFidelity math_fidelity, std::uint32_t ra, std::uint32_t rb, bool final_pool>
+inline void reduce_pair_bank(const bool release)
+{
+    constexpr std::uint32_t phases = reduce_pair_phases<math_fidelity>;
+    for (std::uint32_t phase = 0; phase + 1 < phases; phase++)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, ra);
+        if constexpr (final_pool)
+        {
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, rb);
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
+        }
+        else
+        {
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, rb);
+        }
+    }
+    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, ra);
+    if constexpr (final_pool)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, rb);
+    }
+    constexpr std::uint32_t last_dst = final_pool ? 0 : rb;
+    if (release)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, last_dst);
+    }
+    else
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, last_dst);
+    }
+}
+
+// The same for an odd last tile: chain a only.
+template <MathFidelity math_fidelity, std::uint32_t ra, bool final_pool>
+inline void reduce_pair_bank_a(const bool release)
+{
+    constexpr std::uint32_t phases = reduce_pair_phases<math_fidelity>;
+    for (std::uint32_t phase = 0; phase + 1 < phases; phase++)
+    {
+        if constexpr (final_pool)
+        {
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_5, p_gpool::INDEX_DIS, ra);
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
+        }
+        else
+        {
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, ra);
+        }
+    }
+    if constexpr (final_pool)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_5, p_gpool::INDEX_DIS, ra);
+    }
+    constexpr std::uint32_t last_dst = final_pool ? 0 : ra;
+    constexpr std::uint32_t last_mod = final_pool ? ADDR_MOD_4 : ADDR_MOD_0;
+    if (release)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, last_mod, p_gpool::INDEX_DIS, last_dst);
+    }
+    else
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, last_mod, p_gpool::INDEX_DIS, last_dst);
+    }
+}
+
+template <MathFidelity math_fidelity, std::uint32_t ra, std::uint32_t rb, bool final_pool>
+inline void reduce_pair_bank_of(const bool has_b, const bool release)
+{
+    if (has_b)
+    {
+        reduce_pair_bank<math_fidelity, ra, rb, final_pool>(release);
+    }
+    else
+    {
+        reduce_pair_bank_a<math_fidelity, ra, final_pool>(release);
+    }
+}
+
+// The last pair's final pools, its partials transposed over the data of the kept bank (a in rows 0-15, b in rows 16-31).
+template <MathFidelity math_fidelity, bool clear_32b, std::uint32_t ra, std::uint32_t rb>
+inline void reduce_pair_tail(const bool has_b)
+{
+    constexpr std::uint32_t phases = reduce_pair_phases<math_fidelity>;
+    reduce_scalar_transpose_upper<ra, clear_32b, 0>();
+    if (has_b)
+    {
+        reduce_scalar_transpose_upper<rb, clear_32b, 16>();
+    }
+    for (std::uint32_t phase = 0; phase + 1 < phases; phase++)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+    }
+    if (has_b)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_6, p_gpool::INDEX_DIS, 0);
+        for (std::uint32_t phase = 0; phase + 1 < phases; phase++)
+        {
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+        }
+    }
+    TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 0);
+}
+
+// One pair on DEST rows (ra, rb); (pa, pb) are the previous pair's.
+template <MathFidelity math_fidelity, bool clear_32b, std::uint32_t ra, std::uint32_t rb, std::uint32_t pa, std::uint32_t pb>
+inline void reduce_pair(const bool first, const bool has_b, const bool last)
+{
+    reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, true);
+    if (first)
+    {
+        reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, true);
+        reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, true);
+    }
+    else
+    {
+        reduce_scalar_transpose_upper<pa, clear_32b, 32>();
+        reduce_pair_bank_of<math_fidelity, ra, rb, true>(has_b, true);
+        reduce_scalar_transpose_upper<pb, clear_32b, 32>();
+        reduce_pair_bank_of<math_fidelity, ra, rb, true>(has_b, true);
+    }
+    reduce_pair_bank_of<math_fidelity, ra, rb, false>(has_b, !last);
+}
+
+template <PoolType type, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+inline void reduce_scalar_pair_block(const std::uint32_t dst_index, const std::uint32_t num_tiles)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+    // SrcA steps: +16 (next tile), row 0 with the next phase, row 0 with phase 0, +32 (to the partials), +16 with phase 0
+    addr_mod_t {
+        .srca = {.incr = 16},
+    }
+        .set(ADDR_MOD_2);
+    addr_mod_t {
+        .srca     = {.clr = 1},
+        .fidelity = {.incr = 1},
+    }
+        .set(ADDR_MOD_3);
+    addr_mod_t {
+        .srca     = {.clr = 1},
+        .fidelity = {.clr = 1},
+    }
+        .set(ADDR_MOD_4);
+    addr_mod_t {
+        .srca = {.incr = 32},
+    }
+        .set(ADDR_MOD_5);
+    addr_mod_t {
+        .srca     = {.incr = 16},
+        .fidelity = {.clr = 1},
+    }
+        .set(ADDR_MOD_6);
+
+    // Pairs alternate their DEST rows, so a pair's chains start while the previous pair's partials are being transposed
+    const std::uint32_t pairs = (num_tiles + 1) / 2;
+    for (std::uint32_t pair = 0; pair < pairs; pair++)
+    {
+        const bool first = pair == 0;
+        const bool last  = pair == pairs - 1;
+        const bool has_b = !(last && (num_tiles & 1));
+        if (pair & 1)
+        {
+            reduce_pair<math_fidelity, is_fp32_dest_acc_en, 24, 32, 8, 16>(first, has_b, last);
+        }
+        else
+        {
+            reduce_pair<math_fidelity, is_fp32_dest_acc_en, 8, 16, 24, 32>(first, has_b, last);
+        }
+    }
+    if ((pairs - 1) & 1)
+    {
+        reduce_pair_tail<math_fidelity, is_fp32_dest_acc_en, 24, 32>(!(num_tiles & 1));
+    }
+    else
+    {
+        reduce_pair_tail<math_fidelity, is_fp32_dest_acc_en, 8, 16>(!(num_tiles & 1));
+    }
 }
 
 /**
@@ -654,10 +841,15 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
-// A dst_stride of 0 accumulates the block into one tile.
+// A dst_stride of 0 accumulates the block into one tile; scalar_pair is the decision for the unpacker's pair layout (SCALAR SUM/AVG,
+// accumulating, full tiles).
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_block_(
-    const std::uint32_t dst_index, std::uint32_t num_tiles, const std::uint32_t dst_stride, const ckernel::TensorShape tensor_shape)
+    const std::uint32_t dst_index,
+    std::uint32_t num_tiles,
+    const std::uint32_t dst_stride,
+    const ckernel::TensorShape tensor_shape,
+    const bool scalar_pair = false)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_block_", tensor_shape);
 
@@ -702,6 +894,14 @@ inline void _llk_math_reduce_block_(
     {
         if (dst_stride == 0 && num_tiles > 1 && tensor_shape.total_num_faces() > 1)
         {
+            if constexpr (type != PoolType::MAX)
+            {
+                if (scalar_pair && reduce_scalar_paired<type, dim>(tensor_shape))
+                {
+                    reduce_scalar_pair_block<type, is_fp32_dest_acc_en, math_fidelity>(dst_index, num_tiles);
+                    return;
+                }
+            }
             reduce_scalar_block_accumulate<type, is_fp32_dest_acc_en, math_fidelity>(dst_index, num_tiles, tensor_shape.total_num_faces());
             return;
         }

@@ -13,6 +13,8 @@
 #include "params.h"
 #include "tensor_shape.h"
 
+constexpr bool SCALAR_PAIR = REDUCE_DIM == ckernel::ReduceDim::REDUCE_SCALAR && POOL_TYPE != ckernel::PoolType::MAX;
+
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -54,7 +56,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         const std::uint32_t n = std::min(block, tile_cnt - start);
         _llk_unpack_AB_reduce_block_<POOL_TYPE, REDUCE_DIM>(
-            L1_ADDRESS(params.buffer_A[start]), L1_ADDRESS(params.buffer_B[0]), n, stride, formats.unpack_A_src, tensor_shape);
+            L1_ADDRESS(params.buffer_A[start]),
+            L1_ADDRESS(params.buffer_B[0]),
+            n,
+            stride,
+            formats.unpack_A_src,
+            tensor_shape,
+            params.IS_REDUCE_TO_ONE && SCALAR_PAIR);
     }
 }
 
@@ -89,7 +97,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (std::uint32_t start = 0; start < tile_cnt; start += block)
         {
-            _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(0, std::min(block, tile_cnt - start), 0, tensor_shape);
+            _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                0, std::min(block, tile_cnt - start), 0, tensor_shape, SCALAR_PAIR);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

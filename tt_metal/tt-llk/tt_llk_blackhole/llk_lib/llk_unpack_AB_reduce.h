@@ -216,6 +216,108 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     switch_config_context(unp_cfg_context);
 }
 
+// SCALAR SUM/AVG block in tile pairs (reduce_scalar_paired): per face, tile a goes to SrcA rows 0-15 and tile b to rows 16-31 of one
+// bank, no clear; an odd last tile fills rows 0-15 only. The SrcA write row follows the channel 1 Z counter.
+inline void _llk_unpack_AB_reduce_scalar_pairs_(
+    std::uint32_t address_a, const std::uint32_t address_b, std::uint32_t num_tiles, const std::uint32_t tile_stride_16B, const bool contiguous)
+{
+    // Sets the data base address through the instruction stream, once the unpacker has finished the UNPACRs before it
+    auto set_data_base = [](const std::uint32_t cfg_addr, const std::uint32_t value)
+    {
+        TT_SETDMAREG(0, LOWER_HALFWORD(value), 0, LO_16(p_gpr_unpack::TMP0));
+        TT_SETDMAREG(0, UPPER_HALFWORD(value), 0, HI_16(p_gpr_unpack::TMP0));
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+        TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, cfg_addr);
+        TTI_NOP;
+    };
+
+    while (num_tiles > 0)
+    {
+        const std::uint32_t chunk = num_tiles < REDUCE_BLOCK_MAX_TILES ? num_tiles : REDUCE_BLOCK_MAX_TILES;
+
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+        const std::uint32_t context            = unp_cfg_context;
+        const std::uint32_t data_reg           = (context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+        const std::uint32_t scaler_reg         = (context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
+
+        wait_for_next_context(2);
+
+        cfg[data_reg]   = address_a;
+        cfg[scaler_reg] = address_b;
+
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+
+        for (std::uint32_t pair = 0; pair < chunk / 2; pair++)
+        {
+            if (contiguous)
+            {
+                // Tile a is faces Z 0-3 of this W, tile b faces Z 4-7
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 1, 0, 4, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 1, 0, 5, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 2, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 1, 0, 6, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 3, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 1, 0, 7, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 2, 0);
+            }
+            else
+            {
+                // The data base address is the tile's, so it is set again for every UNPACR
+                const std::uint32_t tile_a = address_a + 2 * pair * tile_stride_16B;
+                for (std::uint32_t face = 0; face < 4; face++)
+                {
+                    set_data_base(data_reg, tile_a);
+                    TT_SETADCZW(p_setadc::UNP_A, 0, 0, 0, face, 0b0101);
+                    TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    set_data_base(data_reg, tile_a + tile_stride_16B);
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 1, 0, 0, 0b0100);
+                    TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                }
+            }
+        }
+        if (chunk & 1)
+        {
+            for (std::uint32_t face = 0; face < 4; face++)
+            {
+                if (!contiguous)
+                {
+                    set_data_base(data_reg, address_a + (chunk - 1) * tile_stride_16B);
+                }
+                TT_SETADCZW(p_setadc::UNP_A, 0, 0, 0, face, 0b0101);
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            }
+        }
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+        switch_config_context(unp_cfg_context);
+
+        address_a += chunk * tile_stride_16B;
+        num_tiles -= chunk;
+    }
+}
+
 // One context acquire per chunk of REDUCE_BLOCK_MAX_TILES tiles; pair with _llk_math_reduce_block_ on the same tile count.
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_block_(
@@ -224,7 +326,8 @@ inline void _llk_unpack_AB_reduce_block_(
     std::uint32_t num_tiles,
     const std::uint32_t tile_stride_16B,
     const std::uint32_t unpack_src_format,
-    const ckernel::TensorShape tensor_shape)
+    const ckernel::TensorShape tensor_shape,
+    const bool scalar_pair = false)
 {
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_block_", tensor_shape);
 
@@ -245,6 +348,15 @@ inline void _llk_unpack_AB_reduce_block_(
     const bool holds_scaler   = reduce_block_holds_scaler<pool_type, reduce_dim>(tensor_shape);
     const std::uint32_t faces = tensor_shape.total_num_faces();
     const bool contiguous     = tile_stride_16B * 16 == SCALE_DATUM_SIZE(unpack_src_format, faces * tensor_shape.face_r_dim * FACE_C_DIM);
+
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR && pool_type != PoolType::MAX)
+    {
+        if (scalar_pair && reduce_scalar_paired<pool_type, reduce_dim>(tensor_shape))
+        {
+            _llk_unpack_AB_reduce_scalar_pairs_(address_a, address_b, num_tiles, tile_stride_16B, contiguous);
+            return;
+        }
+    }
 
     if (!contiguous)
     {

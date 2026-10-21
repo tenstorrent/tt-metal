@@ -300,13 +300,17 @@ ALWI void reduce_block(
     std::uint32_t idst_stride = 1) {
 #ifdef ARCH_BLACKHOLE
     if (!reduce_block_tile_by_tile<reduce_type, reduce_dim, pow2_scaler>(icb)) {
+        // A SCALAR SUM/AVG block that accumulates is unpacked and pooled in tile pairs
+        const bool scalar_pair =
+            reduce_dim == ReduceDim::REDUCE_SCALAR && reduce_type != PoolType::MAX && idst_stride == 0;
         MATH((llk_math_reduce_block<
               reduce_type,
               reduce_dim,
               is_fp32_dest_acc_en,
               reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
-            icb, icb_scaler, start_idst, ntiles, idst_stride)));
-        UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(icb, icb_scaler, start_itile, itile_scaler, ntiles)));
+            icb, icb_scaler, start_idst, ntiles, idst_stride, scalar_pair)));
+        UNPACK((llk_unpack_AB_reduce_block<reduce_type, reduce_dim>(
+            icb, icb_scaler, start_itile, itile_scaler, ntiles, scalar_pair)));
         return;
     }
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
