@@ -386,6 +386,17 @@ def create_kv_chunk_address_table_block_cyclic(
     )
 
 
+def _sp_row_coords(mesh_shape, sp_axis, sp_row):
+    """Mesh coordinates of the chips at SP position ``sp_row``, in TP order, for SP on ``sp_axis``."""
+    coords = []
+    for tp_idx in range(mesh_shape[1 - sp_axis]):
+        coord = [0, 0]
+        coord[sp_axis] = sp_row
+        coord[1 - sp_axis] = tp_idx
+        coords.append(tuple(coord))
+    return coords
+
+
 def populate_kv_chunk_address_table_block_cyclic(
     lookup_table,
     config,
@@ -448,7 +459,7 @@ def populate_kv_chunk_address_table_block_cyclic(
         # Per-stage device groups + host tags are built inside the stage loop below (one group per
         # (stage, SP row, TP col)); no rank-local single-stage device-group pass here — the multi-stage merge
         # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
-        rows = mesh_shape[0]
+        rows = mesh_shape[sp_axis]
 
         tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
         num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS  # number of 5k chunks in the seq len
@@ -486,7 +497,9 @@ def populate_kv_chunk_address_table_block_cyclic(
             count = stage["count"]
             stage_fnids = stage["fnids"]
             for row in range(rows):
-                row_groups = [[fid] for fid in stage_fnids[row]] if tp_axis is not None else [stage_fnids[row]]
+                # fnids are indexed by raw mesh coordinate; SP row `row` is a mesh column at sp_axis=1.
+                sp_row_fnids = [stage_fnids[r][c] for r, c in _sp_row_coords(mesh_shape, sp_axis, row)]
+                row_groups = [[fid] for fid in sp_row_fnids] if tp_axis is not None else [sp_row_fnids]
                 for col, fnids_dev in enumerate(row_groups):
                     group_idx = lookup_table.add_device_group(fnids_dev)
                     for fid in fnids_dev:
@@ -530,7 +543,7 @@ def populate_kv_chunk_address_table_block_cyclic(
 
     rank = ttnn.distributed_context_get_rank()
     size = ttnn.distributed_context_get_size()
-    total_rows = mesh_shape[0]
+    total_rows = mesh_shape[sp_axis]
     rank_row_start = int(rank) * total_rows // int(size)
     rank_row_end = rank_row_start + total_rows // int(size)
 
@@ -580,7 +593,10 @@ def populate_kv_chunk_address_table_block_cyclic(
     for row in range(rank_row_start, rank_row_end):
         for col in range(tp_factor):
             if tp_axis is None:
-                fids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, c)) for c in range(mesh_shape[1])]
+                fids = [
+                    mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+                    for coord in _sp_row_coords(mesh_shape, sp_axis, row)
+                ]
             else:
                 fids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col))]
             all_fabric_node_ids.extend(fids)
