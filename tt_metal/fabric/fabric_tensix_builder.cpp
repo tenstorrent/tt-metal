@@ -14,6 +14,7 @@
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
 #include "fabric_host_utils.hpp"
+#include "impl/device/device_impl.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include <bit>
 #include <algorithm>
