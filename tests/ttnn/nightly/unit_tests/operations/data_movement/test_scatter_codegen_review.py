@@ -6,7 +6,7 @@
 # test_scatter_codegen_routing.py does not reach: the demotion predicate's axis spelling, small
 # row-axis shapes, an output placement that differs from the input's, empty operands, the bf16
 # reduce path, the unknown reduce string, the out-of-scope clauses that stay native, the index
-# dtypes and an explicit core grid.
+# dtypes, an explicit core grid, host-resident operands and an operand padded past tile rounding.
 
 import pytest
 import torch
@@ -153,6 +153,42 @@ def test_scatter_codegen_empty_operands_stay_native(device, shape, index_shape, 
     auto_error = _error_of(lambda: ttnn.scatter(xt, -1, it, st))
     assert auto_error == native_error, "auto diverged from native on an empty operand"
     assert device.num_program_cache_entries() == entries_before, "auto routed an empty tensor to codegen"
+    with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
+        _force_codegen(xt, -1, it, st)
+
+
+def test_scatter_codegen_host_operands_raise_like_native(device, expect_error):
+    # Host-resident operands satisfy every static scope clause, and the routing helpers past the
+    # gate read L1 sizes off the operands' device, so the gate itself has to turn them away: auto
+    # must raise exactly what native raises instead of dereferencing a null device, and the forced
+    # entry refuses.
+    xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.TILE_LAYOUT, device=None)
+    assert xt.storage_type() != ttnn.StorageType.DEVICE
+    native_error = _error_of(lambda: _force_native(xt, -1, it, st))
+    assert native_error is not None, "native accepted host operands"
+    assert _error_of(lambda: ttnn.scatter(xt, -1, it, st)) == native_error, "auto diverged from native on host operands"
+    with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
+        _force_codegen(xt, -1, it, st)
+
+
+def test_scatter_codegen_over_padded_tile_operand_stays_native(device, expect_error):
+    # tilize_with_val_padding can pad a TILE operand past tile rounding. The codegen TILE factories
+    # count pages from that padded shape while the output they allocate and the page map they fold
+    # assume tile-rounded padding of the logical shape, so such an operand must stay native, whose
+    # untilize-with-unpadding bookend strips the padding before anything is scattered.
+    shape = [1, 8, 30, 30]
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    index = _unique_index(shape, 3, shape[3])
+    src = torch.rand(shape, dtype=torch.bfloat16)
+    xt = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), [1, 8, 64, 64], 0.0
+    )
+    assert list(xt.padded_shape) == [1, 8, 64, 64]
+    it = ttnn.from_torch(index, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    st = ttnn.from_torch(src, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert_equal(torch.scatter(x, 3, index.to(torch.int64), src), ttnn.to_torch(out))
+    assert added == 0, "auto routed an over-padded TILE operand to codegen; expected native"
     with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
         _force_codegen(xt, -1, it, st)
 
