@@ -45,7 +45,10 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
     }
 }
 
-void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1) {
+void prepare_ephemeral_allocation(
+    EphemeralAllocationMetadata& metadata,
+    PersistentL1Arena& persistent_l1,
+    const std::weak_ptr<PersistentL1Arena::Relocatable>& holder) {
     auto& seals = metadata.seals[&persistent_l1];
     for (auto& region : metadata.regions) {
         const CoreRangeSet cores(region.core_range);
@@ -53,7 +56,7 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
             if (seals.contains(core)) {
                 continue;
             }
-            seals.emplace(core, persistent_l1.seal(CoreRangeSet(CoreRange(core))));
+            seals.emplace(core, persistent_l1.seal(CoreRangeSet(CoreRange(core)), holder));
         }
         const uint64_t base_address = persistent_l1.high_water_mark(cores);
         if (region.l1_regions.empty()) {

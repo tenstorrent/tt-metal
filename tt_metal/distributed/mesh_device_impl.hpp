@@ -131,7 +131,7 @@ private:
     // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
-    std::mutex api_mutex_;
+    mutable std::mutex api_mutex_;
     bool command_list_builder_active_ = false;
     // Traces and command lists may both be used on a MeshDevice, but never at the same time.
     // Traces are the legacy pre-recorded dispatch path (supported today, slated for deprecation);
@@ -309,6 +309,11 @@ public:
     // Tracks live CommandLists so trace capture can be rejected while any exist; see num_command_lists_.
     void register_command_list();
     void unregister_command_list() noexcept;
+
+    // True while a trace (captured or being captured) or a CommandListBuilder / CommandList exists
+    // on this MeshDevice. Each replays commands that carry the L1 addresses in effect when they were
+    // recorded.
+    bool has_recorded_commands() const;
 
     // IDevice interface implementation
     tt::ARCH arch() const override;

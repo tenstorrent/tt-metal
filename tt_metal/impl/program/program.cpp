@@ -473,6 +473,27 @@ detail::ProgramImpl::~ProgramImpl() noexcept {
     Inspector::program_destroyed(this);
 }
 
+void detail::ProgramImpl::relocate_persistent_l1(PersistentL1Arena& arena) noexcept {
+    cb_allocation_metadata_.seals.erase(&arena);
+    dfb_allocation_metadata_.seals.erase(&arena);
+    // Locally allocated CBs, DFBs and scratchpads all stack on the arena's high-water mark, so
+    // all three are laid out again; globally allocated CBs keep their buffer's address. Setting
+    // compile_and_allocate_needed_ (both invalidations do) sends the next enqueue through the full
+    // allocate + validate path. A CB or DFB placed at a new address bumps its config generation,
+    // which refreshes the cached dispatch commands in place. allocate_scratchpads writes each new
+    // address through the kernel's CRTA view, which points into the first cached command stream
+    // once one exists; other cached streams copy from there on every enqueue.
+    invalidate_circular_buffer_allocation();
+    invalidate_dataflow_buffer_allocation();
+    for (auto& kernels_of_core_type : kernels_) {
+        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (auto& handle : kernel->scratchpad_binding_handles()) {
+                handle.allocated_address = 0;
+            }
+        }
+    }
+}
+
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
@@ -2192,8 +2213,9 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 
 void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     auto& persistent_l1 = device->allocator_impl()->persistent_l1();
-    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1);
-    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1);
+    const std::weak_ptr<PersistentL1Arena::Relocatable> holder = weak_from_this();
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1, holder);
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1, holder);
 }
 
 // Scratchpad is a Metal 2.0-only construct.
