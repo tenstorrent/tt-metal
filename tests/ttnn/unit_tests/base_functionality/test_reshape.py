@@ -1100,23 +1100,36 @@ def test_reshape_tile_after_execute_trace(device):
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
 
-    # 2. Replay trace
-    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-    ttnn.synchronize_device(device)
-    ttnn.release_trace(device, tid)
-
-    # 3. Perform tiled reshape on device; mapping tensor in L1 avoids DRAM trace collisions
-    tt_in = ttnn.from_torch(
+    # 2. Reshape immediately after end_trace_capture (cache miss: allocates op-owned mapping tensor)
+    tt_in1 = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_out = ttnn.reshape(tt_in, reshaped_shape)
+    tt_out1 = ttnn.reshape(tt_in1, reshaped_shape)
+    ttnn.synchronize_device(device)
+    assert_equal(torch_input.reshape(reshaped_shape), ttnn.to_torch(tt_out1))
+
+    # 3. Replay trace (previously overwrote DRAM mapping tensor)
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.synchronize_device(device)
+    ttnn.release_trace(device, tid)
+
+    # 4. Perform second tiled reshape (cache hit: reads op-owned mapping tensor from L1 without hang)
+    tt_in2 = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out2 = ttnn.reshape(tt_in2, reshaped_shape)
     ttnn.synchronize_device(device)
 
-    actual = ttnn.to_torch(tt_out)
+    actual = ttnn.to_torch(tt_out2)
     expected = torch_input.reshape(reshaped_shape)
     assert_equal(expected, actual)
+
 
