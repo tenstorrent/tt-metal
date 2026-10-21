@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t address = L1_ADDRESS(params.buffer_A[block * params.NUM_TILES_IN_BLOCK]);
         if (!IS_BFP_FORMAT(formats.unpack_A_src))
         {
-            _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, is_fp32_dest_acc_en, true>(
+            _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, is_fp32_dest_acc_en, true, true>(
                 address, params.NUM_TILES_IN_BLOCK, tile_stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces, params.TEST_FACE_R_DIM);
         }
         else
@@ -111,11 +111,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-        for (int tile = 0; tile < num_tiles_in_block; tile++)
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+        if constexpr (unpack_to_dest && is_fp32_dest_acc_en)
         {
-            // Standard datacopy: each tile at Tile32x32 DEST slot (sparse).
-            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math, params.num_faces);
+            // The unpack takes one DEST slot handshake per block of two or more tiles: the math thread's block call matches it.
+            _llk_math_eltwise_unary_datacopy_block_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest, true>(
+                0, num_tiles_in_block, formats.math, formats.math, params.num_faces);
+        }
+        else
+#endif
+        {
+            for (int tile = 0; tile < num_tiles_in_block; tile++)
+            {
+                // Standard datacopy: each tile at Tile32x32 DEST slot (sparse).
+                _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                    tile, formats.math, formats.math, params.num_faces);
+            }
         }
 
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

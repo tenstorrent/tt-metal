@@ -199,7 +199,7 @@ def test_pack_tiny_tile_block(
     ],
     dest_acc=get_valid_dest_accumulation_modes,
     tile_dims=[(1, 32), (2, 32), (4, 32), (8, 32), (16, 32), (16, 16)],
-    unpack_block_tiles=[0, 1, 2],
+    unpack_block_tiles=[0, 1, 2, 4],
 )
 def test_unpack_block_tiny_tile(formats, dest_acc, tile_dims, unpack_block_tiles):
     """unpack_block_tiles 0 is the per-tile unpack, the control."""

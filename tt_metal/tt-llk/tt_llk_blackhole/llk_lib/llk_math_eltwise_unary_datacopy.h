@@ -322,7 +322,13 @@ inline void _llk_math_eltwise_unary_datacopy_(
 }
 
 // On unpack to dest, four-face 32-bit tiles take one DEST slot handshake per block; the unpack thread must feed the same block.
-template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <
+    DataCopyType type,
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool unpack_to_dest            = false,
+    bool small_tile_block          = false>
 inline void _llk_math_eltwise_unary_datacopy_block_(
     const std::uint32_t start_dst_index,
     const std::uint32_t num_tiles,
@@ -335,7 +341,7 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE && unpack_to_dest && is_fp32_dest_acc_en)
     {
-        if (is_32bit_input(src_format, dst_format) && num_faces == 4)
+        if (is_32bit_input(src_format, dst_format) && (num_faces == 4 || (small_tile_block && num_tiles >= 2)))
         {
             // One DEST slot post for the block: the unpacker writes the tiles back to back from the first slot's address.
             math_unpack_to_dest_math_ready();
