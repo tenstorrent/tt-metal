@@ -5,8 +5,8 @@
 // Scatter writer – ROW_MAJOR path (BRISC).
 // Dual-RISC: loads input sticks into cb_input, writes output sticks to DRAM.
 //
-// Divergence from the prototype template: each stick ends with async_writes_flushed() and one
-// async_write_barrier() closes the kernel, instead of a barrier per stick.
+// Each stick ends with async_writes_flushed(), which is all that reclaiming its CB slot needs; one
+// async_write_barrier() closes the kernel, since nothing reads the destination before the program ends.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"

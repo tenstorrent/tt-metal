@@ -259,8 +259,8 @@ ScatterCodegenDeviceOperation::create_op_performance_model(
 namespace {
 
 // Fills either the TILE or the ROW_MAJOR geometry fields (the other side's are zero) plus the page
-// map and value_kind every factory shares. The only constructor of a ScatterCodegenParams, so the
-// page map the readers fold ordinals through is always the one the tensors describe.
+// map every factory shares. The only constructor of a ScatterCodegenParams, so the page map the
+// readers fold ordinals through is always the one the tensors describe.
 ScatterCodegenParams build_scatter_codegen_params(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
@@ -270,7 +270,6 @@ ScatterCodegenParams build_scatter_codegen_params(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     const bool tiled = input_tensor.layout() == Layout::TILE;
     const auto page_map = compute_scatter_page_map(input_tensor.logical_shape(), index_tensor.logical_shape(), tiled);
-    const uint32_t value_kind = reduction_mode != 0 ? scatter_value_kind(input_tensor.dtype()) : 0;
 
     if (tiled) {
         const auto geometry = compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
@@ -281,14 +280,12 @@ ScatterCodegenParams build_scatter_codegen_params(
             geometry.output_logical_w,
             geometry.idx_valid_h_last,
             geometry.idx_valid_w_last,
-            geometry.Ht_per_batch_input,
             geometry.Ht_per_batch_src,
             /*num_sticks=*/0,
             /*input_stick_elems=*/0,
             /*index_stick_elems=*/0,
             page_map,
             reduction_mode,
-            value_kind,
             output_mem_config,
             sub_core_grids};
     }
@@ -300,14 +297,12 @@ ScatterCodegenParams build_scatter_codegen_params(
         /*output_logical_w=*/0,
         /*idx_valid_h_last=*/0,
         /*idx_valid_w_last=*/0,
-        /*Ht_per_batch_input=*/0,
         /*Ht_per_batch_src=*/0,
         geometry.num_sticks,
         geometry.input_stick_elems,
         geometry.index_stick_elems,
         page_map,
         reduction_mode,
-        value_kind,
         output_mem_config,
         sub_core_grids};
 }
