@@ -147,10 +147,11 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-# Start, ~50k, and the midpoint + tail of each config's window. Deduped: a model with one config
-# yields the same chunk twice.
-PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \
-  "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+# Start, ~50k, ~100k, ~255k, and the midpoint + tail of each config's window. Deduped: a model with
+# one config yields the same chunk twice, and the summary drops chunks past a short window.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
+  "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
