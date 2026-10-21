@@ -210,6 +210,24 @@ class TtModelHead(LightweightModule):
         ttnn.deallocate(row)
         return out
 
+    def tile_logits(self, streams: ttnn.Tensor, tile_start: ttnn.Tensor, tile_end: ttnn.Tensor) -> ttnn.Tensor:
+        """Traced prefill: logits ``[1, 1, 32, vocab]`` of one 32-row tile of the ``T`` packed rows, the tile
+        chosen by the persistent device bounds ``tile_start`` / ``tile_end`` (``[4]`` int32:
+        ``[0, 0, tile0, 0]`` / ``[1, 1, tile0 + 32, hidden]``): the collapse and the final norm run on every
+        row (per-row ops), the tensor-argument ``ttnn.slice`` cuts the tile (the program keys on ``T``, the
+        offset is a runtime tensor: the node ``tt_transformers`` uses after its bucketed prefill traces),
+        then the same decode-shaped LM-head matmul ``last_token_logits`` runs on the tile."""
+        h = self.collapse(streams)
+        hn = self.norm(h)
+        if h is not streams:
+            ttnn.deallocate(h)
+        T = int(hn.shape[-2])
+        tile = ttnn.slice(input_tensor=hn, starts=tile_start, ends=tile_end, slice_dim=2, num_devices=T // TILE)
+        ttnn.deallocate(hn)
+        out = self.logits(tile)
+        ttnn.deallocate(tile)
+        return out
+
     def forward_greedy(self, streams: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Decode step: ``(logits [1, 1, B, vocab] bf16, ids [1, 1, B, 1] uint32)``; trace-capturable."""
         logits = self.forward(streams)

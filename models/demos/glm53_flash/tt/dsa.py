@@ -380,10 +380,21 @@ class TtLatentCache:
                 ]
         return self._prefill_views[key]
 
-    def fill(self, latent: ttnn.Tensor, user: int, start: int = 0):
+    def fill(self, latent: ttnn.Tensor, user: int, start: int = 0, slot=None):
         """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position
-        ``start`` (a block multiple): page-table view from block ``start // block_size`` on."""
+        ``start`` (a block multiple): page-table view from block ``start // block_size`` on.
+        ``slot`` (a ``trace_prefill.PrefillSlot``, start == 0 only): the slot index comes from its
+        device tensors (``batch_idx_tensor``: the same op, the user chosen on device), so the fill is
+        trace-replayable for any user; partitioned caches fill the scratch slot as well."""
         src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
+        if slot is not None:
+            if start:
+                raise ValueError("a device-slot fill starts a new prompt (start == 0)")
+            pt = self.page_table_full
+            ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.cache_idx)
+            if self.partition:
+                ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.scratch_idx)
+            return
         if start == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
             return
@@ -416,8 +427,23 @@ class TtLatentCache:
                 ttnn.deallocate(p)
         return ttnn.reshape(blocks, [1, 1, n_blocks * self.block_size, self.latent_dim])
 
-    def user_rows_rm(self, user: int, n_rows: int) -> ttnn.Tensor:
-        """``user_rows`` as a fresh ROW_MAJOR [1, 1, rows, 512] tensor (the sparse_sdpa kv contract)."""
+    # The whole-prefix copy below is bandwidth-bound (~90 GB/s: 1.5 ms at 131 K, 13 ms at 1 M positions on one chip,
+    # tests/test_prefix_rows.py), so it is a negligible part of a long-context prefill chunk; the direct untilize of the
+    # cache pages (no slice) is 1.4-1.6x cheaper from ~512 K positions on but has a ~2.7 ms floor, hence the threshold.
+    DIRECT_UNTILIZE_MIN_ROWS = 524288
+
+    def user_rows_rm(self, user: int, n_rows: int, direct: bool = True) -> ttnn.Tensor:
+        """``user_rows`` as a fresh ROW_MAJOR [1, 1, rows, 512] tensor (the sparse_sdpa kv contract). ``direct``:
+        when the user's pages are the cache's first blocks (slot 0 of an identity table, the single-slot long-context
+        state) and the prefix is long, untilize them straight out of the paged cache (``untilize_with_unpadding``
+        of the leading block range, no TILE slice copy); bit-identical to the slice + untilize path."""
+        n_blocks = min(self.blocks_per_seq, -(-n_rows // self.block_size))
+        ids = self.page_table_host[self.prefill_slot(user), :n_blocks].tolist()
+        if direct and n_blocks * self.block_size >= self.DIRECT_UNTILIZE_MIN_ROWS and ids == list(range(n_blocks)):
+            rm = ttnn.untilize_with_unpadding(
+                self.cache, [n_blocks - 1, 0, self.block_size - 1, self.latent_dim - 1]
+            )  # ROW_MAJOR [n_blocks, 1, 32, L]
+            return ttnn.reshape(rm, [1, 1, n_blocks * self.block_size, self.latent_dim])  # a row-major view
         rows = self.user_rows(user, n_rows)
         rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(rows)
@@ -743,7 +769,16 @@ class TtDSA(LightweightModule):
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
 
     def prefill_forward(
-        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0, *, slab: bool = False
+        self,
+        x: ttnn.Tensor,
+        cache: TtLatentCache,
+        user: int,
+        seq_len: int,
+        start: int = 0,
+        slot=None,
+        ring_sel: ttnn.Tensor | None = None,
+        *,
+        slab: bool = False,
     ) -> ttnn.Tensor:
         """One user, one chunk: x row i is the token at absolute position ``start + i``
         (``start % block_size == 0``; ``start == 0`` = a new prompt). x [1,1,T_pad,4096] with
@@ -753,25 +788,31 @@ class TtDSA(LightweightModule):
         chunk's tail rows, i.e. chunks of a prompt are prefilled in order). Rows at absolute positions
         < 2048 run the dense causal attention over the full prefix (K/V from the cached latent rows +
         this chunk's); rows from 2048 on use the indexer + sparse_sdpa, exactly as the single-shot path.
+        ``slot`` + ``ring_sel`` (the traced prefill, tt/trace_prefill.py): the user slot and the ring
+        rows come from device tensors and the whole padded chunk is indexed (dense range only).
         ``slab`` (multi-row mesh): ``x`` is THIS mesh row's slab [1,1,T_pad/rows,4096] of the chunk (row r
         holds chunk rows [r*T_pad/rows, (r+1)*T_pad/rows)) and the result is the slab's output only
         (``_prefill_slab``: the sequence-parallel form, no gathered hidden, no reduce-scatter)."""
         if slab and self.mesh.rows > 1:
-            return self._prefill_slab(x, cache, user, seq_len, start)
+            return self._prefill_slab(x, cache, user, seq_len, start, slot=slot, ring_sel=ring_sel)
         T = x.shape[-2]
         if start % cache.block_size:
             raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
         end = start + seq_len
         split = min(T, max(0, self.sparse_row_start - start))  # chunk rows [0, split) are dense
+        if slot is not None and (start or split != T):
+            raise ValueError(
+                f"the traced prefill covers the dense range only (start == 0, T <= {self.sparse_row_start})"
+            )
         if self.stage_timer is not None:
             self.stage_timer.start()
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,T,H*Dq]
         c = self._latent(x)  # [1,1,T,L]
         self._mark("prefill_stems")
-        cache.fill(c, user, start=start)
+        cache.fill(c, user, start=start, slot=slot)
         self._mark("cache_fill")
-        self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
+        self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start, slot=slot, ring_sel=ring_sel)
         self._mark("index_maintain")
         prefix = cache.user_rows(user, start) if start and split else None  # [1,1,start,L]
         if split == T:
@@ -803,7 +844,6 @@ class TtDSA(LightweightModule):
         # 2048 rows at 1 M positions) that the top-k reads back, so a 32 K-token chunk cannot be scored in one
         # call; one whole-prefix ROW_MAJOR kv copy (the sparse_sdpa contract) serves every sub-block of the chunk
         idx = self.indexer
-        rows_form = idx.prefill_scorer_custom  # the custom scorer's query layout (multi-row meshes; knob)
         kv_rm = cache.user_rows_rm(user, start + T)
         self._mark("kv_copy")
         qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
@@ -813,6 +853,11 @@ class TtDSA(LightweightModule):
             whole = (q0, q1) == (0, T)
             x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
             qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
+            # the scorer form of this sub-block (the custom scorer's query layout: the knob, or a multi-row
+            # superset that would start past the pooled-key allocation)
+            rows_form = idx.prefill_rows_form(
+                cache.index, query_start=start + q0, T=q1 - q0, num_pools_valid=end // idx.P
+            )
             q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
             if not whole:
                 ttnn.deallocate(x_s)
@@ -858,7 +903,9 @@ class TtDSA(LightweightModule):
         return y
 
     # ------------------------------------------------------- slab-local sequence-parallel prefill
-    def _prefill_slab(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int) -> ttnn.Tensor:
+    def _prefill_slab(
+        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int, slot=None, ring_sel=None
+    ) -> ttnn.Tensor:
         """Sequence-parallel prefill of one chunk over the mesh rows, attention computed per slab: the chunk's
         T rows are ``rows`` consecutive slabs, mesh row r holds slab r as ``x`` [1,1,T_loc,4096] (T_loc = T/rows)
         and returns the attention output of ITS slab rows only [1,1,T_loc,4096] -- the rows ``prefill_forward``
@@ -900,9 +947,11 @@ class TtDSA(LightweightModule):
         for t in (c_loc, k_loc, g_loc):
             ttnn.deallocate(t)
         self._mark("slab_gather")
-        cache.fill(c, user, start=start)
+        cache.fill(c, user, start=start, slot=slot)
         self._mark("cache_fill")
-        self.indexer.maintain_prefill(None, cache.index, user, seq_len, start=start, kg=(k_idx, g_idx))
+        self.indexer.maintain_prefill(
+            None, cache.index, user, seq_len, start=start, slot=slot, ring_sel=ring_sel, kg=(k_idx, g_idx)
+        )
         self._mark("index_maintain")
         o_dense = None
         if n_d:
@@ -929,8 +978,10 @@ class TtDSA(LightweightModule):
         # sparse rows: all T_loc slab rows in query sub-blocks (see prefill_forward); on a mixed chunk the rows
         # below 2048 are scored at the clamped position 2048 (a valid full prefix) and dropped by the select
         idx = self.indexer
-        if not idx.prefill_scorer_custom:
-            raise NotImplementedError("the slab-local prefill needs the custom scorer (GLM53_PREFILL_SCORER=custom)")
+        # the scorer form: the shared ``indexer_score_dsa`` (its per-row offset r*Sq made a superset of every slab's
+        # true start, the exact per-row bounded top-k; ``select(row_starts=...)``) or the custom scorer's query
+        # layout (GLM53_PREFILL_SCORER=custom: per-row bounds inside the scorer)
+        rows_form = idx.prefill_scorer_custom
         kv_rm = cache.user_rows_rm(user, start + T)
         self._mark("kv_copy")
         qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
@@ -940,7 +991,7 @@ class TtDSA(LightweightModule):
             whole = (q0, q1) == (0, T_loc)
             x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
             qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
-            q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=True)
+            q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
             if not whole:
                 ttnn.deallocate(x_s)
                 ttnn.deallocate(qr_s)
@@ -953,7 +1004,7 @@ class TtDSA(LightweightModule):
                 cache.index.prefill_slot(user),
                 query_start=start + q0,
                 num_pools_valid=end // idx.P,
-                q_rows_form=True,
+                q_rows_form=rows_form,
                 row_starts=row_starts,
                 pos_floor=self.sparse_row_start,
             )

@@ -515,7 +515,8 @@ def test_dsa_prefill_chunk_cost(mesh_device, monkeypatch):
     assert CURVE[0] >= COST_CHUNK
     monkeypatch.setenv("GLM53_PREFILL_QBLOCK", str(COST_QBLOCK))
     full_layer = os.environ.get("GLM53_LONGCTX_FULL_LAYER", "0") == "1"
-    n_max = CURVE[-1]
+    row_sim = int(os.environ.get("GLM53_LONGCTX_ROW_SIM", "0"))
+    n_max = CURVE[-1] + row_sim * COST_QBLOCK  # headroom for the emulated row's chunk-start offset
     raw, cfg = _load(LAYER_DSA, attn_only=not full_layer)
     x_in = torch.load(R16385 / f"layer{LAYER_DSA}_prefill.pt")["x_in"][:, :COST_CHUNK]
     rows = attention_input(raw, cfg, x_in)  # real rows for the measured chunk
@@ -535,6 +536,9 @@ def test_dsa_prefill_chunk_cost(mesh_device, monkeypatch):
         f"layer 3 {'full layer' if full_layer else 'attention only'} + 1-slot cache for {n_max + 64} positions built ({time.perf_counter() - t0:.0f} s)",
     )
     timer = StageTimer(mesh_device)
+    # GLM53_LONGCTX_ROW_SIM=r: emulate mesh row r of a multi-row mesh (the shared scorer's chunk-start offset
+    # r*Sq + the per-row bounded top-k, tests/test_select_rows.py) for the 8x4 prefill cost on one chip
+    attn.indexer.row_offset_sim = row_sim
     filled, ci = 0, 0
     table = []
     for N in CURVE:
@@ -559,7 +563,8 @@ def test_dsa_prefill_chunk_cost(mesh_device, monkeypatch):
         walls = {}
         for variant in ("compile", "timed", "free"):
             attn.set_stage_timer(timer if variant == "timed" else None)
-            timer.reset()
+            if variant == "timed":
+                timer.reset()  # (a reset on the later "free" pass would wipe the recorded stages)
             if dec is not None:
                 streams = host_streams_to_device(x_in, mesh_device)
                 dec.next_start[0] = start0

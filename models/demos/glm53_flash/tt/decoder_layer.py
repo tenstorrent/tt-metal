@@ -220,13 +220,16 @@ class TtDecoderLayer(LightweightModule):
         start: int = 0,
         actual_start: ttnn.Tensor | None = None,
         actual_end: ttnn.Tensor | None = None,
+        slot=None,
+        ring_sel: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
         """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
         ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
         KDA: ``state.kda`` is the carry after position ``start`` (zeros for a new prompt); DSA: the
         user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
         ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
-        ``seq_len`` (global positions, as ttKDA defines them)."""
+        ``seq_len`` (global positions, as ttKDA defines them). ``slot`` / ``ring_sel``: the DSA path's
+        device-side user slot and ring-row selector (the traced prefill, ``TtDSA.prefill_forward``)."""
         T = streams.shape[-2] * self.mesh.rows  # the chunk's rows (this chip holds T / rows of them)
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
@@ -243,20 +246,21 @@ class TtDecoderLayer(LightweightModule):
                     ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end
                 )
                 return ttnn.reshape(y, [1, 1, T_loc, self.hidden])
+            dsa_kw = dict(start=start, slot=slot, ring_sel=ring_sel)
             if self.mesh.rows == 1:
-                return self.attn.prefill_forward(h, state.cache, user, seq_len, start=start)
+                return self.attn.prefill_forward(h, state.cache, user, seq_len, **dsa_kw)
             if sp_attention_mode() == "slab":
                 # sequence-parallel rows, slab-local: the row attends its own slab's queries against the
                 # full prefix; only the chunk's latent and index stems are gathered over the rows
                 # (``TtDSA._prefill_slab``), the output is the slab's directly
-                return self.attn.prefill_forward(h, state.cache, user, seq_len, start=start, slab=True)
+                return self.attn.prefill_forward(h, state.cache, user, seq_len, slab=True, **dsa_kw)
             # sequence-parallel rows (v1): every row attends over the whole chunk (gathered slabs, in
             # row order), fills the replicated cache/index identically, then keeps its own slab of the
             # output: the reduce-scatter over the rows of ``rows`` identical copies is exactly
             # rows * slab (a power-of-two sum of equal bf16 values), scaled back by 1/rows.
             rows = self.mesh.rows
             h_full = self.mesh.all_gather_rows(h, dim=2)  # [1,1,T,hidden]
-            y_full = self.attn.prefill_forward(h_full, state.cache, user, seq_len, start=start)
+            y_full = self.attn.prefill_forward(h_full, state.cache, user, seq_len, **dsa_kw)
             ttnn.deallocate(h_full)
             y = self.mesh.reduce_scatter_rows(y_full, dim=2)  # [1,1,T/rows,hidden] = rows * slab
             ttnn.deallocate(y_full)
