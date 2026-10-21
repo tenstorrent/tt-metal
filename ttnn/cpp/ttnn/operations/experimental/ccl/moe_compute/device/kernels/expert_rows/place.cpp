@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows metadata and placement (data movement only). Reads the routing table the expert-row program wrote and
+// expert rows metadata and placement (data movement only). Reads the routing table the expert rows program wrote and
 // writes moe_compute's outputs:
-//   slot 0  per-expert token counts, one row in every grid core's shard (same L1 address on every core)
-//   slot 1  one activation row per token with >= 1 local expert, ascending: [token, k per expert (k + 1 = not
-//           routed), score bits per expert], then rows [-1, k + 1 .., 0 ..]
-//   slot 2  page e: expert e's tokens ascending, one u32 per 16 B entry, then -1
-//   slot 3  the last two local experts' rows in the double buffer, half e % 2, with moe_compute's geometry: expert e's
-//           rows split evenly over the height shards (earlier shards take the remainder), row i of height shard h at
-//           (e % 2) * half_bytes + i * segment_bytes, bytes [w, w + 1) * segment_bytes of the row for width shard w.
+//   output 0  per-expert token counts, one row in every grid core's shard (same L1 address on every core)
+//   output 1  one activation row per token with >= 1 local expert, ascending: [token, k per expert (k + 1 = not
+//             routed), score bits per expert], then rows [-1, k + 1 .., 0 ..]
+//   output 2  page e: expert e's tokens ascending, one u32 per 16 B entry, then end_of_list
+//   output 3  the last two local experts' rows in the double buffer, half e % 2, with moe_compute's geometry:
+//             expert e's rows split evenly over the height shards (earlier shards take the remainder), row i of height
+//             shard h at (e % 2) * half_bytes + i * segment_bytes, bytes [w, w + 1) * segment_bytes of the row for
+//             width shard w.
 // The metadata work is split over the program_cores cores of the program. ComputeOnly runs on the combine cores
 // (height_shards x width_shards, core i = shard (i / width_shards, i % width_shards)) and each core places its own
-// slot-3 shard. With the combine (place_dense = 0) it runs on the feeder cores, feed.cpp fills slot 3, and once every
-// core's writes landed core 0 increments the combine sync core's metadata semaphore once (the combine reader waits for
-// exactly 1).
+// output-3 shard. With the combine (place_dense = 0) it runs on the feeder cores, feed.cpp fills output 3, and once
+// every core's writes landed core 0 increments the combine sync core's metadata semaphore once (the combine reader
+// waits for exactly 1).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -24,6 +25,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "expert_rows_common.h"
 
 namespace {
 
@@ -44,7 +46,7 @@ constexpr bool place_dense = get_named_compile_time_arg_val("place_dense") == 1;
 constexpr uint32_t done_semaphore_id = get_named_compile_time_arg_val("done_semaphore_id");
 constexpr uint32_t metadata_semaphore_id = get_named_compile_time_arg_val("metadata_semaphore_id");
 // routing table block (rows_reader.cpp): u32 routed rows; u16 counts / first rows [local_experts]; u16 rows
-// [tokens top_k] in expert-row order; the same entries in token order: slot, token, score, k
+// [tokens top_k] in expert-row order; the same entries in token order: expert, token, score, k
 constexpr uint32_t table_counts = get_named_compile_time_arg_val("table_counts");
 constexpr uint32_t table_offsets = get_named_compile_time_arg_val("table_offsets");
 constexpr uint32_t table_rows = get_named_compile_time_arg_val("table_rows");
@@ -60,8 +62,11 @@ constexpr uint32_t scratch_e_t = get_named_compile_time_arg_val("scratch_e_t");
 constexpr uint32_t scratch_activation = get_named_compile_time_arg_val("scratch_activation");
 constexpr uint32_t scratch_count_row = get_named_compile_time_arg_val("scratch_count_row");
 constexpr uint32_t scratch_table = get_named_compile_time_arg_val("scratch_table");
-constexpr uint32_t activation_buffers = 8;  // activation rows in flight before a write barrier
 constexpr uint32_t not_routed_k = top_k + 1;
+constexpr uint32_t word_bytes = sizeof(uint32_t);
+// e_t page entry: one u32 token in e_t_entry_words words; a page ends with end_of_list
+constexpr uint32_t e_t_entry_words = 4;
+constexpr uint32_t end_of_list = 0xFFFFFFFFu;
 
 // The routing table into scratch: its head, then (with routed rows) the rows and the token-ordered entries; the
 // per-expert counts and first rows widened to u32 meanwhile. Returns the routed rows.
@@ -81,11 +86,13 @@ FORCE_INLINE uint32_t read_routing_table(
         {});
     noc.async_read_barrier();
     const uint32_t routed_rows = *reinterpret_cast<const tt_l1_ptr uint32_t*>(scratch + scratch_table);
-    const uint32_t part_bytes = (routed_rows * 2 + 63) & ~63u;
+    // every part of routed_rows u16 starts at a multiple of part_alignment
+    const uint32_t part_bytes =
+        expert_rows::align_up(routed_rows * expert_rows::u16_bytes, expert_rows::part_alignment);
     if (routed_rows) {
-        const uint32_t parts[5] = {
+        const uint32_t parts[] = {
             table_rows, table_entry_experts, table_entry_tokens, table_entry_scores, table_entry_k};
-        for (uint32_t i = 0; i < 5; ++i) {
+        for (uint32_t i = 0; i < sizeof(parts) / sizeof(parts[0]); ++i) {
             noc.async_read(
                 PrecomposedUnicastEndpoint{},
                 CoreLocalMem<uint32_t>(scratch + scratch_table + parts[i]),
@@ -106,7 +113,7 @@ FORCE_INLINE uint32_t read_routing_table(
     return routed_rows;
 }
 
-// Slot 0: the counts row to grid cores core_index, core_index + program_cores, ... of the row-major grid.
+// Output 0: the counts row to grid cores core_index, core_index + program_cores, ... of the row-major grid.
 FORCE_INLINE void write_count_rows(
     const Noc& noc,
     uint32_t scratch,
@@ -126,13 +133,13 @@ FORCE_INLINE void write_count_rows(
         noc.async_write(
             CoreLocalMem<uint32_t>(scratch + scratch_count_row),
             UnicastEndpoint{},
-            count_words * 4,
+            count_words * word_bytes,
             {},
             {.noc_x = x, .noc_y = y, .addr = counts_addr});
     }
 }
 
-// Slot 2: page e for the experts e with e % program_cores == core_index.
+// Output 2: page e for the experts e with e % program_cores == core_index.
 template <typename ETAccessor>
 FORCE_INLINE void write_e_t_pages(
     const Noc& noc,
@@ -147,12 +154,17 @@ FORCE_INLINE void write_e_t_pages(
         noc.async_write_barrier();  // the page buffer is reused per page
         const uint32_t n = expert_row_counts[e];
         for (uint32_t i = 0; i <= n; ++i) {
-            page[4 * i] = i < n ? uint32_t(row_tokens[expert_first_rows[e] + i]) : 0xFFFFFFFFu;
-            page[4 * i + 1] = 0;
-            page[4 * i + 2] = 0;
-            page[4 * i + 3] = 0;
+            page[e_t_entry_words * i] = i < n ? uint32_t(row_tokens[expert_first_rows[e] + i]) : end_of_list;
+            page[e_t_entry_words * i + 1] = 0;
+            page[e_t_entry_words * i + 2] = 0;
+            page[e_t_entry_words * i + 3] = 0;
         }
-        noc.async_write(CoreLocalMem<uint32_t>(scratch + scratch_e_t), e_t, (n + 1) * 16, {}, {.page_id = e});
+        noc.async_write(
+            CoreLocalMem<uint32_t>(scratch + scratch_e_t),
+            e_t,
+            (n + 1) * e_t_entry_words * word_bytes,
+            {},
+            {.page_id = e});
     }
 }
 
@@ -167,16 +179,16 @@ FORCE_INLINE void clear_activation_row(volatile tt_l1_ptr uint32_t* row, uint32_
         row[1 + e] = not_routed_k;
         row[1 + local_experts + e] = 0;
     }
-    for (uint32_t i = 1 + 2 * local_experts; i < activation_row_bytes / 4; ++i) {
+    for (uint32_t i = 1 + 2 * local_experts; i < activation_row_bytes / word_bytes; ++i) {
         row[i] = 0;
     }
 }
 
-// Slot 1, activated tokens ascending: row r is written by core r % program_cores. Returns the activated tokens.
+// Output 1, activated tokens ascending: row r is written by core r % program_cores. Returns the activated tokens.
 template <typename ActivationAccessor>
 FORCE_INLINE uint32_t write_activated_rows(
     const Noc& noc, const ActivationAccessor& activation, uint32_t scratch, uint32_t routed_rows, uint32_t core_index) {
-    const tt_l1_ptr uint16_t* entry_slots =
+    const tt_l1_ptr uint16_t* entry_experts =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_entry_experts);
     const tt_l1_ptr uint16_t* entry_tokens =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_entry_tokens);
@@ -199,8 +211,8 @@ FORCE_INLINE uint32_t write_activated_rows(
             volatile tt_l1_ptr uint32_t* row = activation_buffer(scratch, buffer);
             clear_activation_row(row, token);
             for (uint32_t q = first_entry; q < end_entry; ++q) {
-                row[1 + entry_slots[q]] = entry_k[q];
-                row[1 + local_experts + entry_slots[q]] = uint32_t(entry_scores[q]);
+                row[1 + entry_experts[q]] = entry_k[q];
+                row[1 + local_experts + entry_experts[q]] = uint32_t(entry_scores[q]);
             }
             noc.async_write(
                 CoreLocalMem<uint32_t>(scratch + scratch_activation + buffer * activation_row_bytes),
@@ -208,7 +220,7 @@ FORCE_INLINE uint32_t write_activated_rows(
                 activation_row_bytes,
                 {},
                 {.page_id = 0, .offset_bytes = row_index * activation_row_bytes});
-            buffer = (buffer + 1) % activation_buffers;
+            buffer = (buffer + 1) % expert_rows::activation_buffers;
         }
         ++row_index;
         first_entry = end_entry;
@@ -216,12 +228,12 @@ FORCE_INLINE uint32_t write_activated_rows(
     return row_index;
 }
 
-// Slot 1, the empty rows from `first_row` on, of this core's share.
+// Output 1, the empty rows from `first_row` on, of this core's share.
 template <typename ActivationAccessor>
 FORCE_INLINE void write_empty_activation_rows(
     const Noc& noc, const ActivationAccessor& activation, uint32_t scratch, uint32_t first_row, uint32_t core_index) {
     noc.async_write_barrier();
-    clear_activation_row(activation_buffer(scratch, 0), 0xFFFFFFFFu);
+    clear_activation_row(activation_buffer(scratch, 0), end_of_list);
     for (uint32_t row = first_row; row < tokens; ++row) {
         if (row % program_cores == core_index) {
             noc.async_write(
@@ -234,7 +246,7 @@ FORCE_INLINE void write_empty_activation_rows(
     }
 }
 
-// Slot 3: the last two experts' rows of this core's shard (height_shard, width_shard).
+// Output 3: the last two experts' rows of this core's shard (height_shard, width_shard).
 template <typename RowsAccessor>
 FORCE_INLINE void place_double_buffer_shard(
     const Noc& noc,
@@ -287,8 +299,8 @@ void kernel_main() {
     const uint32_t rows_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t e_t_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t activation_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(arg++);    // slot 0: L1 address of every grid core's shard
-    const uint32_t double_buffer = get_arg_val<uint32_t>(arg++);  // slot 3: this core's shard
+    const uint32_t counts_addr = get_arg_val<uint32_t>(arg++);    // output 0: L1 address of every grid core's shard
+    const uint32_t double_buffer = get_arg_val<uint32_t>(arg++);  // output 3: this core's shard
     const uint32_t table_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t height_shard = get_arg_val<uint32_t>(arg++);
     const uint32_t width_shard = get_arg_val<uint32_t>(arg++);
