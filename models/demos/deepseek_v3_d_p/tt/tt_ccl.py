@@ -729,6 +729,7 @@ def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            16: "BHGLX",  # one Galaxy tray half (a 4x4 prefill stage): same per-axis links as the full Galaxy
             32: "BHGLX",
         }
     elif "wormhole_b0" in arch_name:

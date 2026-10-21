@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     rotated_chip_positions,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 
 
 def prepare_prefill_input_tensor(
@@ -116,7 +117,7 @@ def _upload_ids(rows: torch.Tensor, mesh_device: ttnn.MeshDevice, mesh_shape: tu
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=mesh_shard_dims(0, sp_axis)),
     )
 
 
@@ -304,5 +305,5 @@ def _upload_sp_sharded(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=mesh_shard_dims(0, sp_axis)),
     )
