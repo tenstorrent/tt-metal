@@ -186,13 +186,14 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
         PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
-        Per KV-writing layer, call `sink.layers_completed(layer, layer + 1, slot_id, actual_start,
-        actual_end)` naming the chunk `prefill_chunk` was given -- bind it per call rather than reading
-        mutable state, since the callback fires synchronously mid-forward. The consumer retires a chunk
-        once completions cover all of its KV-writing layers.
+        As KV-writing layers finish, call `sink.layers_completed(layer_start, layer_end, slot_id,
+        actual_start, actual_end)` for the layers `[layer_start, layer_end)` (one layer, or a span), naming
+        the chunk `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
+        callback fires synchronously mid-forward. The consumer retires a chunk once completions cover all of
+        its KV-writing layers.
 
-        `layer` MUST be the layer's GLOBAL index: with rank-local indices every rank reports the same
-        layers and the chunk never retires. If your model enumerates only its own slice, add
+        Layer indices MUST be GLOBAL: with rank-local indices every rank reports the same layers and the
+        chunk never retires. If your model enumerates only its own slice, add
         `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
 ```
 
@@ -210,22 +211,24 @@ the runtime then gets `prefill_forward` instead of `prefill_chunk`:
         of every entry's rotated chunk, in entry order: `chunk_layout.pack_forward_tokens`), or the
         `[1, 1, forward_tokens, H]` activation from the previous rank. Return the forward_tokens-row
         activation on a non-last rank, None on the last. Size the non-first-rank placeholder input to
-        forward_tokens. Per KV-writing layer, call `sink.layers_completed(layer, layer + 1, slot, start, end)`
-        once for each non-empty entry, after that entry's layer ran. `request_id` is the runner's chunk
-        counter at the forward's first entry; it advances by the forward's non-empty entries."""
+        forward_tokens. Report layer completions as `prefill_chunk` does, once for each non-empty entry,
+        after that entry's layers ran. `request_id` is the runner's chunk counter at the forward's first
+        entry; it advances by the forward's non-empty entries."""
 ```
 
 Metadata (`forward_entries`), little-endian uint32: at F = 1 today's 12 B `(slot, start, end)` record; at
 F > 1 tt-d-gen's 200 B `PrefillBatchMetadata`, `{num_chunks, 0}` then 16 `(slot, start, end)` records, those
-past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. F is at most 16. `num_chunks` (1..F) is the forward's entry
-count; the runtime gets F entries, the ones past `num_chunks` empty.
+past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. F is at most 16. `num_chunks` (1..F) is the forward's non-empty
+entry count; the runtime gets F entries, the ones past `num_chunks` empty. The H2D producer must use the same F
+(tt-d-gen's `max_chunks_per_batch`); `prefill_producer.py` pushes one chunk per forward.
 `[start, end)` keeps its single-chunk meaning; `start == end` is an empty entry (no attention, no KV
 write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order contract,
 validated on the first rank (`forward_entries.validate_forward_entries`):
 
 - at least one non-empty entry; empty entries only after every non-empty one;
 - a slot's entries are one run of consecutive chunks (`start` of each = `end` of the previous), and only
-  the run's last entry may be partial;
+  the run's last entry may be partial; the exception is a last entry moved back to end at the cache end
+  (`start + chunk_size == max_seq_len`), which may start inside the previous entry and re-run its tail;
 - `start % 32 == 0`, `start < end <= start + chunk_size`, `start + chunk_size <= max_seq_len`;
 - runs of different slots may come in any order.
 
@@ -293,7 +296,7 @@ swapping the manifest. (The runner reads only the manifest's `env` block; see `_
 **Request mode + producer** — request mode is the only serving path. The runner builds the H2D service
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
-`PREFILL_CHUNK_SIZE`, `PREFILL_FORWARD_CHUNKS`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
+`PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
 both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
 must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
 

@@ -111,7 +111,7 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-# Chunk entries per forward; the H2D / D2D payload is FORWARD_TOKENS rows (metadata layout: forward_entries).
+# Chunk entries per forward; metadata layout in forward_entries.
 FORWARD_CHUNKS = int(os.environ.get("PREFILL_FORWARD_CHUNKS", 1))
 FORWARD_TOKENS = FORWARD_CHUNKS * CHUNK_SIZE
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
@@ -151,7 +151,6 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
-# Checked here, before any model load.
 check_packed_forward_support(
     FORWARD_CHUNKS,
     supports_packed_forward=ADAPTER.supports_packed_forward,
@@ -192,9 +191,10 @@ def _meta_from_words(words) -> dict:
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
     # One D2H read; the word after the chunk metadata is MTP provided_levels.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    meta = _meta_from_words(m[: CHUNK_METADATA_SIZE_BYTES // 4].tolist())
+    n = CHUNK_METADATA_SIZE_BYTES // 4
+    meta = _meta_from_words(m[:n].tolist())
     if with_provided_levels:
-        meta["provided_levels"] = max(0, int(m[CHUNK_METADATA_SIZE_BYTES // 4]))
+        meta["provided_levels"] = max(0, int(m[n]))
     return meta
 
 
@@ -313,7 +313,7 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=METADATA_SIZE_BYTES,
+            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
         )
@@ -343,7 +343,7 @@ def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
     idx_in.release_fabric_links()
     t0 = time.perf_counter()
     indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        idx_in, metadata_size_bytes=METADATA_SIZE_BYTES
+        idx_in, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
     )
     ttnn.deallocate(metadata_msg)
     logger.info(f"[pp] RECV-d2d-idx [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
@@ -552,9 +552,7 @@ def _compute_and_send(
     return t_start
 
 
-def _drain_and_log_e2e(
-    runtime, rank: int, d2d_out, first_compute_start, n_chunks: int, n_forwards: int, t0: float, idx_out=None
-) -> None:
+def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None) -> None:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     if idx_out is not None:
@@ -562,10 +560,7 @@ def _drain_and_log_e2e(
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
-    forwards = f" ({n_forwards} forwards)" if FORWARD_CHUNKS > 1 else ""
-    logger.info(
-        f"[pp rank {rank}] processed {n_chunks} chunks{forwards} in {(time.perf_counter() - t0) * 1000.0:.2f} ms"
-    )
+    logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
 
 def run_request_loop(
@@ -595,7 +590,6 @@ def run_request_loop(
     )
     t0 = time.perf_counter()
     c = 0  # chunks
-    n_forwards = 0
     first = None
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
@@ -661,10 +655,9 @@ def run_request_loop(
         if first is None:
             first = t
         c += _chunks_in(meta)
-        n_forwards += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
-    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, n_forwards, t0, idx_out)
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, idx_out)
 
 
 def _print_config() -> None:
