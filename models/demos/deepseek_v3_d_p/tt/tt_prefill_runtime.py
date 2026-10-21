@@ -1684,7 +1684,10 @@ class TtPrefillRuntime:
         # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
         # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        # Sequence (dim 2) concatenates over the SP axis and the TP replicas stack on dim 1, so the
+        # `[:, :1]` below keeps one replica whichever mesh axis SP is on.
+        composer_dims = (2, 1) if self.config.sp_axis == 0 else (1, 2)
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=composer_dims, mesh_shape=mesh_device.shape)
 
         def _slot_block(tensor, rows_per_slot: int):
             """This slot's rows of a user-major cache, gathered to host as one TP replica:
