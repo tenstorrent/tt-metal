@@ -217,15 +217,6 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
     return CausalLMDataset(tokens, seq_len), tokenizer
 
 
-# ── Data parallelism ──────────────────────────────────────────────────────────
-
-
-def resolve_data_parallel_axes(mesh: Any) -> tuple[list[str], int]:
-    """Return the mesh axes the batch is sharded over and the total data-parallel size."""
-    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
-    return data_axes, int(np.prod([mesh.axis_size(a) for a in data_axes]))
-
-
 # ── LR schedule ───────────────────────────────────────────────────────────────
 
 
@@ -525,23 +516,13 @@ def run_training(
         )
 
     mesh = ttml.mesh()
-    # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
-    # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
-    data_axes, data_parallel_size = resolve_data_parallel_axes(mesh)
-    if len(data_axes) == 1:
-        mapper = mesh.axis_mapper(data_axes[0], tdim=0)
-    elif len(data_axes) >= 2:
-        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
-            raise NotImplementedError("HSDP + TP batch sharding is not supported.")
-        if training_cfg.batch_size % data_parallel_size != 0:
-            raise ValueError(
-                f"HSDP batch sharding requires batch_size ({training_cfg.batch_size}) to be "
-                f"divisible by D*F ({data_parallel_size}); got data_axes={data_axes}."
-            )
-        device = ttml.autograd.AutoContext.get_instance().get_device()
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
-    else:
-        mapper = None
+    data_parallel_size = int(np.prod([mesh.axis_size(a) for a in mesh.batch_axes]))
+    if training_cfg.batch_size % data_parallel_size != 0:
+        raise ValueError(
+            f"batch_size ({training_cfg.batch_size}) must be divisible by the {data_parallel_size} ranks the batch is "
+            f"split across ({mesh.batch_axes})."
+        )
+    mapper = mesh.batch_mapper(tdim=0)
     collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper)
     dataloader = InMemoryDataloader(
         dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True, seed=training_cfg.seed
@@ -597,11 +578,7 @@ def run_training(
     )
 
     def _causal_lm_loss(logits, batch):
-        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
-            return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, batch.labels, cluster_axis=mesh.axis_index("tp"), reduce=ttml.ops.ReduceType.MEAN
-            )
-        return ttml.ops.loss.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
+        return ttml.parallel.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
 
     trainer = SFTTrainer(
         model=model,

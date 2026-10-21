@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, Parameter, RowParallelLinear
+from ttml.parallel import sum_partials, whole
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -23,10 +24,15 @@ class RMSNormLayer(AbstractModuleBase):
 
 
 class DeepSeekMLP(AbstractModuleBase):
-    """SwiGLU feed-forward network: w2(silu(w1(x)) * w3(x))."""
+    """SwiGLU feed-forward network: w2(silu(w1(x)) * w3(x)).
+
+    With ``tp_axis_name`` the hidden features are sharded across that mesh axis (w1, w3 by output rows, w2 by input
+    columns), and the result returns in the layout ``x`` arrived in.
+    """
 
     def __init__(self, dim: int, inter_dim: int, *, tp_axis_name: str | None = None) -> None:
         super().__init__()
+        self.tp_axis_name = tp_axis_name
         if tp_axis_name is not None:
             self.w1 = ColumnParallelLinear(
                 dim,
@@ -46,7 +52,6 @@ class DeepSeekMLP(AbstractModuleBase):
                 inter_dim,
                 dim,
                 has_bias=False,
-                input_is_parallel=True,
                 axis_name=tp_axis_name,
             )
         else:
@@ -55,12 +60,12 @@ class DeepSeekMLP(AbstractModuleBase):
             self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        return ttml.ops.swiglu.swiglu(
-            x,
-            self.w1.weight.tensor,
-            self.w2.weight.tensor,
-            self.w3.weight.tensor,
-        )
+        weights = (self.w1.weight.tensor, self.w2.weight.tensor, self.w3.weight.tensor)
+        if self.tp_axis_name is None:
+            return ttml.ops.swiglu.swiglu(x, *weights)
+        # The fused SwiGLU on this rank's slice of the hidden features gives its partial sum of the output.
+        axis = self.w1.cluster_axis
+        return sum_partials(ttml.ops.swiglu.swiglu(whole(x, axis), *weights), axis, like=x)
 
 
 def resolve_moe_ep_axis(config) -> str | None:

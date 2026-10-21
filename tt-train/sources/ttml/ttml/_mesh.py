@@ -20,6 +20,9 @@ AXIS_KINDS = {
     "tp": ttml.core.distributed.AxisKind.Model,
 }
 
+# The axes a batch is split across. cp is a data axis too, but it splits each sequence instead.
+BATCH_AXES = ("dp", "fsdp")
+
 
 class Mesh:
     """Named multi-dimensional device mesh.
@@ -80,6 +83,26 @@ class Mesh:
         dev = ttml.autograd.AutoContext.get_instance().get_device()
         cluster_axis = self.axis_index(name)
         return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, cluster_axis)
+
+    @property
+    def batch_axes(self) -> list[str]:
+        """The axes with more than one rank that the batch is split across, in mesh order."""
+        return [name for name, size in zip(self.axis_names, self.shape) if name in BATCH_AXES and size > 1]
+
+    def batch_mapper(self, tdim: int = 0) -> ttnn.CppTensorToMesh | None:
+        """Mapper splitting tensor dim ``tdim`` (the batch) across :attr:`batch_axes` and replicating it across the
+        other axes, or ``None`` when the batch is not split."""
+        axes = self.batch_axes
+        if not axes:
+            return None
+        dev = ttml.autograd.AutoContext.get_instance().get_device()
+        if len(axes) == 1:
+            return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, self.axis_index(axes[0]))
+        others = [name for name, size in zip(self.axis_names, self.shape) if name not in axes and size > 1]
+        if others:
+            raise NotImplementedError(f"splitting the batch across {axes} while {others} replicate it is not supported")
+        # Split across every axis at once: device k, in mesh row-major order, holds the k-th slice.
+        return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, None)
 
     def axis_mapper_config(self, name: str, tdim: int) -> ttnn.MeshMapperConfig:
         """Return a MeshMapperConfig that shards along ``tdim`` across the named mesh axis."""

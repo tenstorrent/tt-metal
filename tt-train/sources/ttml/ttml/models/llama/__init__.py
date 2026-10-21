@@ -207,9 +207,9 @@ class Llama(AbstractModuleBase):
         super().__init__()
 
         self.config = config
-        sequence_parallel = config.tp_strategy.sequence_parallel
+        tp_axis = "tp" if config.tp_strategy.tensor_parallel else None
 
-        if config.tp_strategy.tensor_parallel:
+        if tp_axis is not None:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
@@ -218,36 +218,32 @@ class Llama(AbstractModuleBase):
             # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
             # free to be arbitrary.
             mesh = ttml.mesh()
-            self.tp_size = mesh.axis_size("tp")
-            self._tp_axis = mesh.axis_index("tp")
+            self.tp_size = mesh.axis_size(tp_axis)
+            self._tp_axis = mesh.axis_index(tp_axis)
             align = 32 * self.tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
-            # No gather after LM head, because vocab_parallel_cross_entropy_loss
-            # expects a vocab-sharded tensor. Under SP the head input is sequence-sharded
-            # and the column-parallel input gather restores the full sequence, so the
-            # logits come out exactly as in classic TP.
+            # No gather after the LM head: the logits stay vocab-sharded for the vocab-parallel loss. Under SP the
+            # head's input gather restores the full sequence, so the logits come out exactly as in classic TP.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
                 gather_output=False,
-                sequence_parallel=sequence_parallel,
-                axis_name="tp",
+                axis_name=tp_axis,
             )
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
                 self.tok_emb = VocabParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
-                    sequence_parallel=sequence_parallel,
-                    axis_name="tp",
+                    axis_name=tp_axis,
                 )
             elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
                 self.tok_emb = FeatureParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
-                    axis_name="tp",
+                    axis_name=tp_axis,
                 )
             else:
                 self.tok_emb = Embedding(
@@ -271,10 +267,6 @@ class Llama(AbstractModuleBase):
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
-
-        # Block 0 needs a sequence-sharded residual. Embeddings that emit the full sequence
-        # on every rank are sliced locally; the vocab-parallel one already lands sharded.
-        self._slice_sequence = sequence_parallel and not isinstance(self.tok_emb, VocabParallelEmbedding)
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -317,7 +309,7 @@ class Llama(AbstractModuleBase):
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
                     rms_norm_eps=config.rms_norm_eps,
-                    tp_strategy=config.tp_strategy,
+                    tp_axis=tp_axis,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
                     use_composite_sdpa=config.use_composite_sdpa,
@@ -360,7 +352,15 @@ class Llama(AbstractModuleBase):
             input_val_padded = ttnn.pad(input.get_value(), padding=padding, value=0.0)
             input_padded = ttml.autograd.create_tensor(input_val_padded)
 
-        tok_emb_out = self.tok_emb(input_padded)
+        # The residual stream's layout across tp, which every block follows: sharded along the sequence under SP,
+        # replicated otherwise. The vocab-parallel embedding sums into it; the others emit the full sequence on every
+        # rank, which is sliced below.
+        sequence_parallel = self.config.tp_strategy.sequence_parallel
+        residual = ttnn.PlacementShard(SEQUENCE_DIM) if sequence_parallel else ttnn.PlacementReplicate()
+        if isinstance(self.tok_emb, VocabParallelEmbedding):
+            tok_emb_out = self.tok_emb(input_padded, layout=residual)
+        else:
+            tok_emb_out = self.tok_emb(input_padded)
 
         out = tok_emb_out
         if padded_seq_len != actual_seq_len:
@@ -375,7 +375,7 @@ class Llama(AbstractModuleBase):
             out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
             out = ttml.autograd.create_tensor(out_val)
 
-        if self._slice_sequence:
+        if sequence_parallel and not isinstance(self.tok_emb, VocabParallelEmbedding):
             out = ttml.ops.distributed.scatter(out, SEQUENCE_DIM, self._tp_axis)
 
         for layer_idx, block in enumerate(self.blocks):

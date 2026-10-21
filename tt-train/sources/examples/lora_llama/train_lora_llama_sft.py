@@ -217,9 +217,7 @@ def main():
 
     # ── Data mapper ───────────────────────────────────────────────────────────
 
-    mapper = None
-    if use_ddp:
-        mapper = ttml.mesh().axis_mapper("dp", tdim=0)
+    mapper = ttml.mesh().batch_mapper(tdim=0)
 
     # ── Model ─────────────────────────────────────────────────────────────────
 

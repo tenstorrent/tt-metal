@@ -13,7 +13,6 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
-from ttml.parallel import TPStrategy
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -62,27 +61,24 @@ class RMSNormLayer(AbstractModuleBase):
 
 
 class LlamaMLP(AbstractModuleBase):
-    """Llama-style MLP (feed-forward) layer."""
+    """Llama-style MLP (feed-forward) layer, tensor-parallel across mesh axis ``tp_axis`` when one is given.
+
+    Under tensor parallelism the result returns in the layout the input arrived in (see ``GroupedQueryAttention``).
+    """
 
     def __init__(
         self,
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        tp_strategy: TPStrategy = TPStrategy.NONE,
+        tp_axis: Optional[str] = None,
         down_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
-        use_tp = tp_strategy.tensor_parallel
-        sequence_parallel = tp_strategy.sequence_parallel
-
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
-        # Classic TP replicates activations across tp ranks, which must then drop the same units; one
-        # boolean cannot also decorrelate DP groups: https://github.com/tenstorrent/tt-metal/issues/55947.
-        # Under SP every rank holds different tokens.
-        self._per_device_dropout_seed = not use_tp or sequence_parallel
+        self.tp_axis = tp_axis
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -94,7 +90,7 @@ class LlamaMLP(AbstractModuleBase):
 
         # Each device's gate|up half is I/tp wide and must stay tile-aligned, or the packed
         # SwiGLU op's two halves straddle a tile boundary.
-        tp_size = ttml.mesh().axis_size("tp") if use_tp else 1
+        tp_size = ttml.mesh().axis_size(tp_axis) if tp_axis is not None else 1
         if intermediate_size % tp_size != 0:
             raise ValueError(
                 f"intermediate_size ({intermediate_size}) must be divisible by the tensor-parallel size ({tp_size})"
@@ -105,23 +101,20 @@ class LlamaMLP(AbstractModuleBase):
                 f"multiple of {ttnn.TILE_SIZE} so the packed gate|up halves stay tile-aligned"
             )
 
-        if use_tp:
+        if tp_axis is not None:
             self.w_gate_up = ColumnParallelLinear(
                 embedding_size,
                 gate_up_size,
                 has_bias=False,
                 gather_output=False,
-                sequence_parallel=sequence_parallel,
-                axis_name="tp",
+                axis_name=tp_axis,
             )
             self.w2 = RowParallelLinear(
                 intermediate_size,
                 embedding_size,
                 has_bias=False,
                 weight_init=down_proj_init,
-                input_is_parallel=True,
-                sequence_parallel=sequence_parallel,
-                axis_name="tp",
+                axis_name=tp_axis,
             )
         else:
             self.w_gate_up = LinearLayer(
@@ -147,10 +140,10 @@ class LlamaMLP(AbstractModuleBase):
         """
         gu = self.w_gate_up(input)
         h = ttml.ops.swiglu_packed.swiglu_packed(gu)
-        x = self.w2(h)
+        x = self.w2(h) if self.tp_axis is None else self.w2(h, like=input)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob)
 
         return x
 
@@ -169,7 +162,7 @@ class LlamaBlock(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
         rms_norm_eps: float = 1e-5,
-        tp_strategy: TPStrategy = TPStrategy.NONE,
+        tp_axis: Optional[str] = None,
         out_proj_init: Optional[Callable] = None,
         down_proj_init: Optional[Callable] = None,
         use_composite_sdpa: bool = False,
@@ -180,7 +173,7 @@ class LlamaBlock(AbstractModuleBase):
             hidden_size,
             intermediate_size,
             mlp_dropout,
-            tp_strategy=tp_strategy,
+            tp_axis=tp_axis,
             down_proj_init=down_proj_init,
         )
         self.attention_norm = RMSNormLayer(hidden_size, rms_norm_eps)
@@ -192,7 +185,7 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            tp_strategy=tp_strategy,
+            tp_axis=tp_axis,
             out_proj_init=out_proj_init,
             use_composite_sdpa=use_composite_sdpa,
         )

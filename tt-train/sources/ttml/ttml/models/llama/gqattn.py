@@ -11,17 +11,16 @@ from typing import Callable, Optional
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
-
-from ttml.parallel import TPStrategy
+from ttml.parallel import placement
 
 
 class GroupedQueryAttention(AbstractModuleBase):
-    """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
+    """Grouped-query attention (GQA), tensor-parallel across mesh axis ``tp_axis`` when one is given.
 
     Under tensor parallelism the fused QKV projection uses ``ColumnParallelLinear``
     (output features sharded) with ``gather_output=False``, and the output projection
-    uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
-    communication between the two matmuls.
+    ``RowParallelLinear`` sums the heads' partial products back into the layout the input arrived in:
+    replicated, or sharded along the sequence under sequence parallelism.
 
     ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite``,
     which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
@@ -35,7 +34,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
-        tp_strategy: TPStrategy = TPStrategy.NONE,
+        tp_axis: Optional[str] = None,
         out_proj_init: Optional[Callable] = None,
         use_composite_sdpa: bool = False,
     ) -> None:
@@ -47,17 +46,11 @@ class GroupedQueryAttention(AbstractModuleBase):
                 f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
             )
 
-        use_tp = tp_strategy.tensor_parallel
-        sequence_parallel = tp_strategy.sequence_parallel
-
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
         self.use_composite_sdpa = use_composite_sdpa
-        self.sequence_parallel = sequence_parallel
-        # Identical masks across tp ranks that hold identical activations,
-        # per-device masks once SP gives each rank its own tokens.
-        self._per_device_dropout_seed = not use_tp or sequence_parallel
+        self.tp_axis = tp_axis
 
         head_dim = embedding_size // num_heads
         # Fused Q+K+V: on one device the rows are [Q | K | V]. Under TP, device d takes a contiguous
@@ -67,8 +60,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         # Head/group counts stored here are LOCAL (per-device) so that splitting
         # in heads_creation matches the sharded activation width.
-        if use_tp:
-            tp_size = ttml.mesh().axis_size("tp")
+        if tp_axis is not None:
+            tp_size = ttml.mesh().axis_size(tp_axis)
             if num_heads % tp_size != 0:
                 raise ValueError(f"num_heads ({num_heads}) must be divisible by the tensor-parallel size ({tp_size})")
             if num_groups % tp_size != 0:
@@ -79,15 +72,14 @@ class GroupedQueryAttention(AbstractModuleBase):
             self.num_heads = num_heads
             self.num_groups = num_groups
 
-        if use_tp:
+        if tp_axis is not None:
             self.qkv_linear = ColumnParallelLinear(
                 embedding_size,
                 qkv_dim,
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
-                sequence_parallel=sequence_parallel,
-                axis_name="tp",
+                axis_name=tp_axis,
             )
             self.out_linear = RowParallelLinear(
                 embedding_size,
@@ -95,9 +87,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 weight_init=out_proj_init,
                 bias_init=ttml.init.zeros(),
-                input_is_parallel=True,
-                sequence_parallel=sequence_parallel,
-                axis_name="tp",
+                axis_name=tp_axis,
             )
         else:
             self.qkv_linear = LinearLayer(
@@ -129,12 +119,17 @@ class GroupedQueryAttention(AbstractModuleBase):
             attention = ttml.ops.attention.scaled_dot_product_attention(*sdpa_args)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
-        out = self.out_linear(attention)
+        out = self._project_out(attention, like=input)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
         return out
+
+    def _project_out(self, attention: ttml.autograd.Tensor, like: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        if self.tp_axis is None:
+            return self.out_linear(attention)
+        return self.out_linear(attention, like=like)
 
     def forward_kv(
         self,
@@ -179,10 +174,10 @@ class GroupedQueryAttention(AbstractModuleBase):
             attention = ttml.ops.attention.scaled_dot_product_attention(*sdpa_args)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
-        out = self.out_linear(attention)
+        out = self._project_out(attention, like=input)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
 
         return out
 
@@ -196,7 +191,9 @@ class GroupedQueryAttention(AbstractModuleBase):
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
-        if self.sequence_parallel:
+        if self.tp_axis is not None and isinstance(
+            placement(input, ttml.mesh().axis_index(self.tp_axis)), ttnn.PlacementShard
+        ):
             # Single-token decode has no sequence to shard.
             raise NotImplementedError("sequence_parallel does not support the KV-cache path")
         if layer_idx is None or new_tokens is None:

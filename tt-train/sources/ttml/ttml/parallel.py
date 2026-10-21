@@ -2,14 +2,66 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel strategy for TTML models."""
+"""Tensor parallelism: the strategy a model is built with, and the collectives at the edges of a tensor-parallel region.
+
+A tensor-parallel region computes locally with weights sharded across one mesh axis. Its input is made whole on every
+rank of the axis (:func:`whole`), whatever layout it arrives in. Its result starts as each rank's partial sum, which
+:func:`sum_partials` adds up into the layout the model keeps between regions: replicated for tensor parallelism,
+sharded along the sequence for sequence parallelism. The layout is read off the tensors, so a model chooses it once,
+where the residual stream starts, and every region follows.
+"""
 
 from __future__ import annotations
 
 from enum import Enum
 
+import ttnn
+import ttml
+
 # Activations flow as 4-D ``(B, 1, S, H)`` tensors; sequence parallelism shards dim 2 across the tp axis.
 SEQUENCE_DIM = 2
+
+
+def placement(tensor, cluster_axis: int):
+    """``tensor``'s placement on mesh axis ``cluster_axis``."""
+    return ttml.Sharding.from_tensor(tensor).placements[cluster_axis]
+
+
+def whole(x, cluster_axis: int):
+    """``x`` whole on every rank of ``cluster_axis``: gathered if sharded there, as is if replicated.
+
+    In the backward pass the gradient arrives as each rank's partial sum (the region's sharded weights each see part
+    of it), and both ways sum it.
+    """
+    p = placement(x, cluster_axis)
+    if isinstance(p, ttnn.PlacementShard):
+        return ttml.ops.distributed.all_gather(x, p.dim, cluster_axis)
+    return ttml.ops.distributed.broadcast(x, cluster_axis)
+
+
+def cross_entropy_loss(logits, targets, reduce=None):
+    """Cross-entropy of ``logits`` against ``targets``, computed across the mesh axis the logits' vocabulary (last
+    dim) is sharded on, if any: the softmax then normalizes over the whole vocabulary, not each rank's slice."""
+    if reduce is None:
+        reduce = ttml.ops.ReduceType.MEAN
+    sharding = ttml.Sharding.from_tensor(logits)
+    vocab_dim = len(logits.shape()) - 1
+    axes = [axis for axis in range(len(sharding.placements)) if sharding.shard_dim(axis) == vocab_dim]
+    if not axes:
+        return ttml.ops.loss.cross_entropy_loss(logits, targets, reduce)
+    if len(axes) > 1:
+        raise ValueError(f"the logits' vocabulary is sharded on several mesh axes {axes}; expected at most one")
+    return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, targets, cluster_axis=axes[0], reduce=reduce)
+
+
+def sum_partials(partial, cluster_axis: int, like=None):
+    """Add up the ranks' partial results across ``cluster_axis`` into the layout of ``like`` there: a placement, or a
+    tensor whose placement to match. Replicated by default."""
+    if like is not None and not isinstance(like, (ttnn.PlacementShard, ttnn.PlacementReplicate)):
+        like = placement(like, cluster_axis)
+    if isinstance(like, ttnn.PlacementShard):
+        return ttml.ops.distributed.reduce_scatter(partial, like.dim, cluster_axis)
+    return ttml.ops.distributed.all_reduce(partial, cluster_axis)
 
 
 class TPStrategy(Enum):

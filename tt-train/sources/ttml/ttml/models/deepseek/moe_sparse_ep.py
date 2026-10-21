@@ -161,20 +161,16 @@ class SparseMoEEP(MoE):
             output = ttml.ops.distributed.all_reduce(output, cluster_axis=self.cluster_axis)
             output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
-        # Shared experts: not EP-sharded by default — they replicate work and
-        # don't need an all_reduce. If a downstream change makes them EP/TP,
-        # plug in the appropriate collective.
+        # Shared experts: tensor-parallel across the EP axis (see MoE); DeepSeekMLP sums their partials itself.
         if self.shared_experts is not None:
             x_shared = self._memory_snapshot(x, "BEFORE_SHARED")
             shared_out = self.shared_experts(x_shared)
             shared_out = self._memory_snapshot(shared_out, "AFTER_SHARED")
             pre_add_output = output
             output = ttml.ops.binary.add(pre_add_output, shared_out)
-            # binary.add's backward is just d_a = d_b = d_out (no read of inputs);
-            # the all_reduce above never reads its forward output in bwd either; shared_out's parent linear (w2)
-            # also doesn't read shared_out itself for its weight grad (it reads w2's
-            # input, which is saved separately). All three sources confirm these
-            # two tensor values are not needed downstream — release them now.
+            # binary.add's backward is just d_a = d_b = d_out (no read of inputs), and neither all_reduce (the one
+            # above, and the shared experts' own) reads its forward output in bwd: these two tensor values are not
+            # needed downstream — release them now.
             pre_add_output.get_value().deallocate(force=True)
             shared_out.get_value().deallocate(force=True)
 

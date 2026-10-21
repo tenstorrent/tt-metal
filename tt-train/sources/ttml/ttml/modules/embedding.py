@@ -12,7 +12,7 @@ import numpy as np
 
 import ttnn
 import ttml
-from ttml.parallel import SEQUENCE_DIM
+from ttml.parallel import sum_partials
 
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
@@ -53,19 +53,15 @@ class VocabParallelEmbedding(AbstractModuleBase):
     """Embedding whose table is sharded along the vocabulary dimension.
 
     Each device shifts the ids into its local window,
-    looks up the ids that fall in its slice, zeroes the rest, and an all-reduce
-    then sums the per-device contributions — each token is owned by exactly one
-    device, so the sum reconstructs the full, replicated embedding.
-    With ``sequence_parallel`` the all-reduce becomes a reduce-scatter along the
-    sequence, so the first block receives a sequence-sharded residual.
+    looks up the ids that fall in its slice, zeroes the rest, and the per-device
+    contributions are summed — each token is owned by exactly one device, so the
+    sum reconstructs the full embedding, in the layout ``forward`` is asked for
+    (:func:`ttml.parallel.sum_partials`).
 
     Args:
         num_embeddings: Vocabulary size. Must be divisible by ``tp_size``.
         embedding_dim: Dimension of embeddings.
         weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
-        sequence_parallel: If ``True`` (Megatron sequence parallelism) the cross-TP sum
-            is a reduce-scatter along the sequence, so the output is
-            ``[batch, 1, seq/tp, embedding_dim]`` instead of a replicated full sequence.
         axis_name: Mesh axis used for tensor parallelism.
 
     Note:
@@ -85,7 +81,6 @@ class VocabParallelEmbedding(AbstractModuleBase):
         num_embeddings: int,
         embedding_dim: int,
         weight_init: Optional[Callable] = None,
-        sequence_parallel: bool = False,
         axis_name: str = "tp",
     ) -> None:
         super().__init__()
@@ -94,7 +89,6 @@ class VocabParallelEmbedding(AbstractModuleBase):
         self.axis_name = axis_name
         self.cluster_axis = mesh.axis_index(axis_name)
         self.tp_size = mesh.axis_size(axis_name)
-        self.sequence_parallel = sequence_parallel
 
         if num_embeddings % self.tp_size != 0:
             raise ValueError(
@@ -153,17 +147,17 @@ class VocabParallelEmbedding(AbstractModuleBase):
                 f"offset masking to be correct."
             )
 
-    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+    def forward(self, x: ttml.autograd.Tensor, layout=None) -> ttml.autograd.Tensor:
         """Forward pass of the vocab-parallel embedding.
 
         Args:
             x: Token indices, shape ``[batch_size, 1, 1, seq_len]`` (uint32,
                 row-major), replicated across the TP axis.
+            layout: The output's placement on the TP axis: replicated by default,
+                ``ttnn.PlacementShard(SEQUENCE_DIM)`` for a sequence-sharded residual stream.
 
         Returns:
-            Embeddings ``[batch_size, 1, seq_len, embedding_dim]`` replicated across the TP
-            axis, or ``[batch_size, 1, seq_len / tp_size, embedding_dim]`` sequence-sharded
-            across it under ``sequence_parallel``.
+            Embeddings ``[batch_size, 1, seq_len, embedding_dim]``, in ``layout`` across the TP axis.
         """
         self._check_tp_replicated(x)
 
@@ -194,10 +188,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
         # Each token is nonzero on exactly one device, so summing across TP reconstructs it.
-        if self.sequence_parallel:
-            # Same sum, landing sequence-sharded for the first block.
-            return ttml.ops.distributed.reduce_scatter(emb, SEQUENCE_DIM, self.cluster_axis)
-        return ttml.ops.distributed.all_reduce(emb, cluster_axis=self.cluster_axis)
+        return sum_partials(emb, self.cluster_axis, layout)
 
 
 class FeatureParallelEmbedding(AbstractModuleBase):

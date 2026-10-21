@@ -276,9 +276,7 @@ def main():
         os.makedirs(args.save_dir, exist_ok=True)
 
     # ── Data mapper ────────────────────────────────────────────────────────────
-    mapper = None
-    if use_ddp:
-        mapper = ttml.mesh().axis_mapper("dp", tdim=0)
+    mapper = ttml.mesh().batch_mapper(tdim=0)
 
     # ── Data chunks ─────────────────────────────────────────────────────────
     n_chunks = (len(train_ids) - 1) // seq_len
@@ -315,14 +313,7 @@ def main():
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
-        # When TP is enabled the LoRA-wrapped Llama LM head returns vocab-sharded
-        # logits ([B,1,S,padded_V/tp_size] per device).
-        if use_tp:
-            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, tt_y, cluster_axis=mesh.axis_index("tp")
-            )
-        else:
-            loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
+        loss = ttml.parallel.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)
 
         # The loss lives on every device; under TP each holds the same value.
         if use_ddp or use_tp:
