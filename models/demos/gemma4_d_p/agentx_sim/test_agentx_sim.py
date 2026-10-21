@@ -128,6 +128,15 @@ def test_main_request_joins_only_sub_agents_that_ended_before_it(tmp_path):
     assert sorted(nodes[mains[2]]["deps"]) == sorted([mains[1], sub_node])
 
 
+def test_resume_rewinds_so_the_last_padded_chunk_fits_the_slot():
+    """B has 15 of its 16 blocks cached in a 16-block slot: resuming at block 15 would pad its 8-block chunk past the
+    slot, which the runtime rejects, so it resumes at block 8 and its last chunk ends at the slot's end."""
+    session = [_node(15 * BLOCK, list(range(1, 16))), _node(16 * BLOCK, list(range(1, 17)), deps=[0])]
+    res = run(_OneSecondSteps(), [session], 8 * BLOCK, 8 * BLOCK, "fcfs", 1, align="resume", max_seq_len=16 * BLOCK)
+    b = next(x for x in res["_stats"] if x.n_in == 16 * BLOCK)
+    assert b.start == 8 * BLOCK and b.start + b.rows <= 16 * BLOCK
+
+
 def test_ttft_exports_from_before_mid_cost_plot_with_new_ones(tmp_path):
     """An export without mid_cost loads as no cost, so it plots beside a run that has one."""
     res = run(_OneSecondSteps(), [[_node(BLOCK, [1])]], BLOCK, BLOCK, "fcfs", 1)

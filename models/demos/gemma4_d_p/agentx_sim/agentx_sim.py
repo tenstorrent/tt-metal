@@ -288,6 +288,7 @@ def run(
     seed=0,
     max_sessions=None,
     calibrated=True,
+    max_seq_len=262144,
 ):
     rng = random.Random(seed)
     order = list(range(len(sessions)))[:max_sessions]
@@ -354,6 +355,9 @@ def run(
         start = min(cached, cap)
         step = resume_step(C, align)
         start = start // step * step
+        # The runtime rejects a padded chunk that runs past the slot: near the end, resume earlier.
+        while start and start + math.ceil((n["in"] - start) / C) * C > max_seq_len:
+            start -= step
         need = math.ceil((n["in"] - start) / C) * C
         req[g] = [Stat(send, None, n["in"], cached, start, need, ideal_hit), 0]
         if policy == "fcfs":
