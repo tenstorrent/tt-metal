@@ -41,6 +41,7 @@ import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -53,6 +54,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     gate_up_stream_layout,
     stream_memory_config,
 )
+from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
@@ -245,7 +247,44 @@ class TtRouter(LightweightModule):
         self.fused_sigmoid = os.environ.get("GLM53_ROUTER_FUSED_SIGMOID", "1") == "1"
         self.lin_gate_sig = DecodeLinear(device, self.w_gate, activation=ttnn.UnaryOpType.SIGMOID)
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
+        # decode (T <= 32): ONE generic op after the gate matmul (custom_ops/router_topk) instead of the 16-op
+        # composite; same outputs. GLM53_ROUTER_FUSED=1 (default off); ``topk`` tie-break semantics (see README)
+        self.fused = os.environ.get("GLM53_ROUTER_FUSED", "0") == "1"
+        self.fused_op = RouterTopk(device, E=self.E, k=self.k, scale=cfg.routed_scaling_factor) if self.fused else None
+        if self.fused:
+            logger.info("TtRouter: fused decode router (custom_ops/router_topk, GLM53_ROUTER_FUSED=1)")
         self._const: dict[tuple, ttnn.Tensor] = {}
+
+    def _scores(self, x: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """The fp32 sigmoid scores [1,1,T,E] of x (sigmoid fused into the gate matmul for decode shapes)."""
+        if self.fused_sigmoid and T <= TILE:
+            return self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+        logits = self.lin_gate(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+        scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
+        ttnn.deallocate(logits)
+        return scores
+
+    def _forward_fused(self, x: ttnn.Tensor, T: int, dense_only: bool = False, ep_rows: bool = False):
+        """The fused path: gate matmul (sigmoid fused) + ONE ``RouterTopk`` program writing exactly the tensors
+        ``_forward_topk`` returns for the mode (outputs allocated per call: inside the trace under capture)."""
+        if self.fused_op is None:
+            self.fused_op = RouterTopk(self.device, E=self.E, k=self.k, scale=self.cfg.routed_scaling_factor)
+        op = self.fused_op
+        scores = self._scores(x, T)
+        if ep_rows:  # bf16 weights + uint32 ids, no dense matrix
+            w16, idx = op.allocate_w(T, ttnn.bfloat16), op.allocate_idx(T, ttnn.uint32)
+            op(scores, self.bias, T, w=w16, idx=idx)
+            ttnn.deallocate(scores)
+            return w16, idx, None
+        dense = op.allocate_dense(T)
+        if dense_only:
+            op(scores, self.bias, T, dense=dense)
+            ttnn.deallocate(scores)
+            return None, None, dense
+        w, idx32 = op.allocate_w(T, ttnn.float32), op.allocate_idx(T, ttnn.float32)
+        op(scores, self.bias, T, dense=dense, w=w, idx=idx32)
+        ttnn.deallocate(scores)
+        return w, idx32, dense
 
     def _forward_topk(self, scores, choice, T, dense_only=False, ep_rows=False):
         """One fp32 ``ttnn.topk`` (stable bitonic network: exact fp32 ranking, lowest index on ties) over the
@@ -304,6 +343,8 @@ class TtRouter(LightweightModule):
         biased scores), which swaps the 8th expert on ~20% of real tokens; the composite is exact.
         """
         T = x.shape[-2]
+        if self.fused and T <= TILE and self.tie_break == "topk":
+            return self._forward_fused(x, T, dense_only=dense_only, ep_rows=ep_rows)
         if self.fused_sigmoid and T <= TILE and self.tie_break == "topk":
             scores = self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # sigmoid fused
         else:
