@@ -95,6 +95,9 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 GLM_L1_SMALL_SIZE = 1536
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
+# Kimi-K2.7 rows. Keep in sync with the kimi_k2_7 runner adapter.
+KIMI_K27_L1_SMALL_SIZE = 1024
+
 
 def _resolve_trace_dir(variant) -> Path:
     """Golden chunked-prefill trace dir for `variant`: PREFILL_TRACE_DIR overrides the variant's
@@ -1262,7 +1265,7 @@ _PADDED_MODES = ["notrace", "traced"]
             # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(KimiK27Config),
-                l1_small_size=768,
+                l1_small_size=KIMI_K27_L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
@@ -1319,7 +1322,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores; GLM needs 1536, not Kimi-K2.7's 1024 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
@@ -2703,7 +2706,7 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
             (8, 4),
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(KimiK27Config),
-                l1_small_size=768,
+                l1_small_size=KIMI_K27_L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
@@ -2797,7 +2800,7 @@ def test_kimi_prefill_transformer_chunked_perf(
             (8, 4),
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(KimiK27Config),
-                l1_small_size=768,
+                l1_small_size=KIMI_K27_L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
