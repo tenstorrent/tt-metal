@@ -182,6 +182,7 @@ class TtCombine2dModule(LightweightModule):
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
+        fwd_reduction: int,
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
@@ -195,6 +196,10 @@ class TtCombine2dModule(LightweightModule):
             experts_per_chip: Number of experts hosted on each device.
             num_experts_per_tok: Number of experts each token is routed to (top-k).
             seq_len_per_chip: Number of tokens on each source device (output token dimension size).
+            fwd_reduction: Divisor on the op's forwarding region, from the model's
+                COMBINE_FWD_REDUCTION. No value can deadlock the ring, so this trades DRAM against
+                throughput and nothing else; where that curve bends is what differs per model, which
+                is why it is passed in rather than fixed in the op.
             cluster_axis: Mesh axis the ring runs along (0 = SP/dispatch axis).
             num_links: Number of fabric links per chip-to-chip connection. Each (link, direction)
                 pair is one stream, so the op runs 2 * num_links streams per chip.
@@ -209,6 +214,7 @@ class TtCombine2dModule(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.fwd_reduction = fwd_reduction
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
@@ -258,6 +264,7 @@ class TtCombine2dModule(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
+            fwd_reduction=self.fwd_reduction,
             topology=self.topology,
             memory_config=self.memory_config,
         )

@@ -44,6 +44,12 @@ CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 
+# These cases are synthetic rather than any one model, so they take the middle of the range the models
+# use for COMBINE_FWD_REDUCTION rather than a model's value. Correctness does not depend on it -- the
+# forwarding region is split by movement class, so no size can deadlock the ring -- which is exactly
+# why one value serves every case here.
+FWD_REDUCTION = 8
+
 # The production Galaxy row and its 8x1 TorusY LoudBox proxy. The proxy is one dispatch group on a
 # single-axis ring, so it covers neither cross-group routing nor the 2D torus.
 _MESH_IDS = (
@@ -328,6 +334,7 @@ class _Fixture:
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=cluster_axis,
             num_links=num_links,
+            fwd_reduction=FWD_REDUCTION,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

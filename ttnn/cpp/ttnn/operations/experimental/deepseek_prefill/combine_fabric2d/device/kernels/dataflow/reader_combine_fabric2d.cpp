@@ -394,11 +394,13 @@ struct Reader {
                slice_begin(begin, n, desc.split_idx, desc.split_count);
     }
 
-    // Point one slot at the next page of the downstream chip's channel `vc`.
-    void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t vc) {
+    // Point one slot at page `page` of the downstream chip's channel `vc`. Claiming that page is the
+    // caller's -- `out_page[vc]` is what the downstream chip's credit accounting is read against, so the
+    // step that consumes it stays visible at the call site rather than hiding inside an aim.
+    void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t vc, uint32_t page) {
         metadata->cmd = ::cmbf2d::CMD_FORWARD;
         metadata->vc = vc;
-        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(vc, out_page[vc]++));
+        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(vc, page));
     }
 
     // Free space in the downstream chip's channel `vc`, in pages.
@@ -489,8 +491,7 @@ struct Reader {
             const uint32_t slot = claim_slot();
             // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
             // metadata, because the page layout was chosen to match the slot layout exactly.
-            noc_async_read(
-                dram.fwd.get_noc_addr(fwd_page(v, consumed[v] + j)), slot_addr_of(slot), fwd_read_bytes);
+            noc_async_read(dram.fwd.get_noc_addr(fwd_page(v, consumed[v] + j)), slot_addr_of(slot), fwd_read_bytes);
         }
         noc_async_read_barrier();
         for (uint32_t j = 0; j < k; j++) {
@@ -499,7 +500,7 @@ struct Reader {
                 metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
                 metadata->this_addr = metadata->final_addr;
             } else {
-                aim_at_downstream(metadata, next);
+                aim_at_downstream(metadata, next, out_page[next]++);
             }
         }
         publish_n(k);
@@ -531,7 +532,7 @@ struct Reader {
         } else {
             metadata->final_addr = final_addr;
             metadata->dst_chip = (uint64_t)dst_chip_id;
-            aim_at_downstream(metadata, own_vc);
+            aim_at_downstream(metadata, own_vc, out_page[own_vc]++);
         }
     }
 

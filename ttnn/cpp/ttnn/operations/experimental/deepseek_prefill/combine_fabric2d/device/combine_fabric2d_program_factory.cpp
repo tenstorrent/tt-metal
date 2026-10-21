@@ -12,7 +12,6 @@
 #include "kernels/dataflow/combine_fabric2d_untilizer_ct_args.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <map>
 #include <optional>
 #include <set>
@@ -60,9 +59,10 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-// How much smaller than the dense buffer this op used to allocate. A FACTOR rather than a page count,
-// so it means the same thing for every model: the dense size scaled with num_experts_per_tok and the
-// experts a chip hosts, so a fixed page count would be a different reduction for each of them.
+// How much smaller than the dense buffer this op used to allocate is args.fwd_reduction, a FACTOR rather
+// than a page count so it means the same thing for every model: the dense size scaled with
+// num_experts_per_tok and the experts a chip hosts, so a fixed page count would be a different reduction
+// for each of them.
 //
 // Reducing it is free of correctness risk, which is the point of splitting the region by movement class:
 // every chain of classes ends in one that delivers to the next chip's output and so needs no space
@@ -70,17 +70,7 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // channel notes in combine_fabric2d_assignments.hpp.
 //
 // What it costs is throughput, and where that curve bends is a measurement, not a derivation -- which is
-// why it belongs to the op's caller, who alone knows whether DRAM or microseconds is the scarcer thing.
-constexpr uint32_t DEFAULT_FWD_REDUCTION = 8;
-
-uint32_t fwd_reduction_factor() {
-    static const uint32_t value = [] {
-        const char* env = std::getenv("CMBF2D_FWD_REDUCTION");
-        const uint32_t v = env != nullptr ? static_cast<uint32_t>(std::strtoul(env, nullptr, 10)) : 0u;
-        return v == 0 ? DEFAULT_FWD_REDUCTION : v;
-    }();
-    return value;
-}
+// why it is an op parameter carried in the model's config, not a constant here.
 
 // What the dense region cost per stream, which is what the factor divides. Kept verbatim from the
 // version this replaces so "8x smaller" is measured against the thing it actually replaced: a
@@ -100,7 +90,7 @@ uint32_t dense_pages_per_stream(const CombineFabric2dParams& args) {
 constexpr uint32_t MIN_VC_PAGES = 4;
 
 uint32_t fwd_vc_pages(const CombineFabric2dParams& args) {
-    const uint32_t per_stream = dense_pages_per_stream(args) / fwd_reduction_factor();
+    const uint32_t per_stream = dense_pages_per_stream(args) / args.fwd_reduction;
     const uint32_t pages = per_stream / num_vcs(ring_extent(args));
     return pages < MIN_VC_PAGES ? MIN_VC_PAGES : pages;
 }
@@ -482,18 +472,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
-        rdr.compile_time_args =
-            cmbf2d::ReaderCtArgs(
-                args,
-                tensor_args,
-                coord,
-                self,
-                opposite,
-                work,
-                l1,
-                plan,
-                untilizers_for_stream(groups, stream, sems, l1))
-                .to_ct_word_arr();
+        rdr.compile_time_args = cmbf2d::ReaderCtArgs(
+                                    args,
+                                    tensor_args,
+                                    coord,
+                                    self,
+                                    opposite,
+                                    work,
+                                    l1,
+                                    plan,
+                                    untilizers_for_stream(groups, stream, sems, l1))
+                                    .to_ct_word_arr();
         for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
         }
