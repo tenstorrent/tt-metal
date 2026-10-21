@@ -25,7 +25,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "impl/threading/thread_pool.hpp"
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <atomic>

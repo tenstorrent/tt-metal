@@ -44,6 +44,7 @@ struct ReduceScatterDeviceOperation {
 
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
 
     struct ReduceScatterProgram {
         struct shared_variables_t {
@@ -81,6 +82,7 @@ struct ReduceScatterDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };

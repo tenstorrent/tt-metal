@@ -680,6 +680,35 @@ def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
     assert rows[0]["arch"] == MEASURED_ARCH.name
     # A max of 0 means something only over lanes that were measured.
     assert (rows[0]["lanes"], rows[0]["unmeasurable"]) == (32, 0)
+    assert rows[0]["nonfinite"] == 0
+
+
+def test_the_measure_recorder_writes_the_nonfinite_count_the_headroom_report_reads(
+    tmp_path, monkeypatch
+):
+    """The count is the sweep's only link to the headroom report's non-finite check,
+    which reads it back by name; renamed on one side, the check reads 0 for every cell
+    and passes. Written through the recorder and read through the report's own reader.
+    """
+    from helpers.ulp import ulp_distance
+    from helpers.ulp_budget_diff import _nonfinite_cells
+    from helpers.utils import _record_ulp_measurement
+
+    read = _measure_rows(tmp_path, monkeypatch)
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    accuracy_contract(
+        MathOperation.Abs,
+        output_format=DataFormat.Float16_b,
+        input_format=DataFormat.Float16_b,
+        arch=MEASURED_ARCH,
+    )
+    _record_ulp_measurement(
+        ulp_distance(golden, golden.clone()),
+        mask=torch.ones(32, dtype=torch.bool),
+        nonfinite=7,
+    )
+    (row,) = read()
+    assert list(_nonfinite_cells([row]).values()) == [7]
 
 
 def _measure_rows(tmp_path, monkeypatch):
@@ -981,25 +1010,26 @@ def test_enrolled_ops_is_sorted_and_stable():
 
 
 #: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, five transcendentals whose *best*
-#: cell is already past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b) -- the
-#: measurements are on their rows, not repeated here to drift -- and Expm1Cw, which
-#: returns -1 where expm1 overflows (x past ~88.7) on every cell, so no cell has a lane
-#: count a step budget can describe. Recorded, not fixed; tracked: Erfc #51137, Digamma
-#: #51128, Softplus #51866 (input clamps, under #52178), Lgamma #55356 and Polygamma
-#: #52278.
+#: whose per-format tolerances moved into the table, and three transcendentals whose
+#: *best* cell is still past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b)
+#: once the near-zero floor the emitter grants (up to 1e-3) is applied -- the
+#: measurements are on their rows, not repeated here to drift. Softplus answers 0 below
+#: x = -5, a 0.0065 cut-off a 1e-3 floor cannot cover; Digamma and Lgamma are wrong for
+#: negative and small positive x. Recorded, not fixed; tracked: Digamma #51128, Softplus
+#: #51866 (input clamps, under #52178) and Lgamma #55356.
 #:
-#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul are not here: per
-#: variant, some of their cells are inside the ceiling, and the rest fall
-#: through to tolerance.
+#: Erfc and Polygamma left this set with the claim applied to the ranking, the
+#: Dest-capacity rule and the emitted floor: each has cells inside the ceiling now and
+#: the rest fall through to tolerance, like Sign, Heaviside, GeluTanh, Tanhshrink,
+#: Xielu, I1 and SfpuElwmul. Expm1Cw stays: its only gateable cells were Float16 at
+#: dest_acc=No, where it answers the golden's overflow stand-in negated (-130560 for
+#: 130560, -131008 for 131008: #54770), the op's sign flip and not the Dest's overflow.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.Erfc,
-        MathOperation.Polygamma,
         MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
@@ -1936,62 +1966,8 @@ def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_pat
 #: on, each with that cause. A cell whose disagreeing lanes are a tracked defect on a
 #: handful of inputs does not belong here: name the inputs in
 #: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
-_GOLDEN_IN_INPUT_FORMAT = (
-    "the golden is tilized and untilized in the input format, so an fp16 input's "
-    "reference overflows at 65504 where the kernel's 32-bit Dest holds the answer "
-    "(exp2(16) reads inf against an exact 65536); #58590 fixes the golden"
-)
-_NO_INFINITY_IN_A_16BIT_DEST = (
-    "a 16-bit Dest has no infinity: where the answer overflows, the kernel's result "
-    "reads as the Dest's largest magnitude (-130560 for sinh(-65504)), a finite answer "
-    "to an infinite golden"
-)
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
-    **{
-        (MathOperation.Tan, DataFormat.Float16, out, None, None): (
-            _GOLDEN_IN_INPUT_FORMAT
-            + "; tan(177.5) is -66347, which fp16 has no room for"
-        )
-        for out in (DataFormat.Float16_b, DataFormat.Float32)
-    },
-    # -- the golden, not the kernel -----------------------------------------------
-    **{
-        (
-            op,
-            DataFormat.Float16,
-            out,
-            None,
-            DestAccumulation.Yes,
-        ): _GOLDEN_IN_INPUT_FORMAT
-        for op in (
-            MathOperation.Cosh,
-            MathOperation.Exp,
-            MathOperation.Exp2,
-            MathOperation.ExpWithBase,
-            MathOperation.Expm1,
-            MathOperation.Selu,
-            MathOperation.Sinh,
-            MathOperation.Square,
-            MathOperation.UnaryPower,
-            MathOperation.Xielu,
-        )
-        for out in (DataFormat.Float16_b, DataFormat.Float32)
-    },
-    (
-        MathOperation.Cbrt,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        None,
-        DestAccumulation.Yes,
-    ): (
-        "the golden is rounded to the bfloat16 input format, so cbrt(2.8e14) = 65439 "
-        "reads 65536 -> inf against the kernel's correct 65440; #58590 fixes the golden"
-    ),
-    # -- the store or the Dest, not the op ------------------------------------------
-    (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): (
-        _NO_INFINITY_IN_A_16BIT_DEST
-    ),
-    # -- the approximation's own shortfall at the fp16 overflow edge ----------------
+    # -- the approximation's own shortfall at the fp16 and fp32 overflow edges -----
     (
         MathOperation.Exp,
         DataFormat.Float16,
@@ -2011,6 +1987,16 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         None,
     ): ("the same shortfall from a strided Float32 input, one lane"),
     (
+        MathOperation.Exp,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        ApproximationMode.Yes,
+        DestAccumulation.Yes,
+    ): (
+        "the same shortfall at fp32's overflow edge: exp(88.75) is 3.497e38, past "
+        "FLT_MAX, and the approximation answers 3.396e38, one lane"
+    ),
+    (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
         DataFormat.Float16,
@@ -2028,6 +2014,16 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         None,
     ): (
         "the same shortfall through the 0.5 scale from a strided Float32 input, one lane"
+    ),
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        ApproximationMode.Yes,
+        DestAccumulation.Yes,
+    ): (
+        "the same shortfall at fp32's overflow edge through the 0.5 scale: exp(0.5 * "
+        "177.5) is past FLT_MAX, and the approximation answers 3.396e38, one lane"
     ),
     # -- kernel behaviour over a wide band of the format -----------------------------
     # Each is what the sweep found and the row records; none is a golden or store
@@ -2084,142 +2080,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 #: makes a newly demoted cell a change someone has to read: the table moved, the cause
 #: must be looked at, and the number here bumped on purpose. Exact-cell keys need no pin.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
-    (MathOperation.Tan, DataFormat.Float16, DataFormat.Float16_b, None, None): 2,
-    (MathOperation.Tan, DataFormat.Float16, DataFormat.Float32, None, None): 2,
-    (
-        MathOperation.Cosh,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Cosh,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Exp,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 2,
-    (
-        MathOperation.Exp,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 2,
-    (
-        MathOperation.Exp2,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Exp2,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Expm1,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Expm1,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Selu,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Selu,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Sinh,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Sinh,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Square,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Square,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.UnaryPower,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.UnaryPower,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Xielu,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Xielu,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (
-        MathOperation.Cbrt,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        None,
-        DestAccumulation.Yes,
-    ): 1,
-    (MathOperation.Sinh, DataFormat.Float16, None, None, DestAccumulation.No): 2,
     (
         MathOperation.Exp,
         DataFormat.Float16,
@@ -2234,21 +2094,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         ApproximationMode.Yes,
         None,
     ): 2,
-    (MathOperation.Digamma, None, None, None, None): 22,
-    (
-        MathOperation.ExpWithBase,
-        DataFormat.Float16,
-        DataFormat.Float16_b,
-        None,
-        DestAccumulation.Yes,
-    ): 2,
-    (
-        MathOperation.ExpWithBase,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        None,
-        DestAccumulation.Yes,
-    ): 2,
+    (MathOperation.Digamma, None, None, None, None): 6,
     (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
@@ -2265,10 +2111,10 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
-    (MathOperation.I1, None, None, None, None): 20,
-    (MathOperation.Lgamma, None, None, None, None): 19,
-    (MathOperation.Polygamma, None, None, None, None): 50,
-    (MathOperation.Rpow, None, None, None, None): 22,
+    (MathOperation.I1, None, None, None, None): 18,
+    (MathOperation.Lgamma, None, None, None, None): 3,
+    (MathOperation.Polygamma, None, None, None, None): 15,
+    (MathOperation.Rpow, None, None, None, None): 20,
 }
 
 
@@ -2340,9 +2186,10 @@ def _acknowledges(key, cell) -> bool:
 
 #: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
 #: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
-#: grids, so a hole can only open where it keeps a block verbatim (a floor row) and the
-#: sweep's format set then grows -- the cell is measured, resolves to the global default,
-#: and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
+#: grids, so a hole can only open where it keeps a block verbatim (an op-wide
+#: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
+#: resolves to the global default, and nothing holds it. A cell listed here is a
+#: decision, with its reason, not a gap.
 _UNRESOLVED_SWEPT_CELLS: dict = {}
 
 
@@ -2410,7 +2257,9 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
         if not any(_acknowledges(key, cell) for cell in cells)
     ]
     assert not stale, "acknowledgements no row needs any more: " + ", ".join(
-        f"{op.name} {i.name}->{o.name}" for op, i, o, _, _ in stale
+        f"{op.name} {i and i.name}->{o and o.name} approx={a and a.name} "
+        f"dest={d and d.name}"
+        for op, i, o, a, d in stale
     )
     wildcard = [
         k for k in _UNMEASURABLE_CELLS_ACKNOWLEDGED if any(v is None for v in k[1:])

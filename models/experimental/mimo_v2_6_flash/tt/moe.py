@@ -43,6 +43,12 @@ from .moe_stream import (
 from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
 
+# Longest prefill chunk one MoE call takes; forward runs longer chunks in slices. The router's prefill program block
+# (_router_program) grows with the rows: at 8192 its static circular buffers end at 1.32 MB, past the L1 buffers decode
+# keeps allocated (from 1.21 MB), so after decode only 4096 fits. Without decode it fits to 8192, and the expert plan's
+# row buffers (moe_prefill.DevicePlan) outgrow L1 a little above that. vLLM's chunks are 4096.
+PREFILL_MAX_TOKENS = 4096
+
 
 def expert_quant(expert_dtype):
     """How bfloat4_b experts are prepared: "mse" (default, bfp_mse_prepare), "gptq" (tests/perf/gptq_experts.py,
@@ -454,6 +460,14 @@ class TtMiMoMoE:
     def forward(self, x, token_mask=None, decode=False):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
         assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
+        if decode or x.shape[-2] <= PREFILL_MAX_TOKENS:
+            out = self._partial(x, token_mask, decode)
+        else:
+            out = self._partial_slices(x, token_mask)
+        return self.plan.all_reduce(out)
+
+    def _partial(self, x, token_mask, decode=False):
+        """This chip's share of the routed-expert output [1, 1, T, hidden], before the row all-reduce."""
         logits = self._router_logits(x, prefill=not decode)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
@@ -464,4 +478,28 @@ class TtMiMoMoE:
         out = self.prefill_experts(x, indices, weights)
         indices.deallocate(True)
         weights.deallocate(True)
-        return self.plan.all_reduce(out)
+        return out
+
+    def _partial_slices(self, x, token_mask):
+        """_partial of a prefill chunk longer than PREFILL_MAX_TOKENS, in slices of at most that many tokens. Each
+        token's partial is the same as in one call: the router's K blocking does not change with T, and the experts
+        work per token. The caller all-reduces the whole chunk once, so the reduce sees the same rows as without
+        slicing (MeshPlan.prefill_reduce)."""
+        T, H = x.shape[-2], x.shape[-1]
+        outs = []
+        for s in range(0, T, PREFILL_MAX_TOKENS):
+            e = min(T, s + PREFILL_MAX_TOKENS)
+            xs = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ms = None
+            if token_mask is not None:
+                ms = ttnn.slice(
+                    token_mask, [0, 0, s, 0], [1, 1, e, token_mask.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            outs.append(self._partial(xs, ms))
+            xs.deallocate(True)
+            if ms is not None:
+                ms.deallocate(True)
+        out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for o in outs:
+            o.deallocate(True)
+        return out

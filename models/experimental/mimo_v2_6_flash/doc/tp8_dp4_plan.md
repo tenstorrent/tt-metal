@@ -375,6 +375,36 @@ carried most of it.
 | vLLM, c=1 | TTFT 176 ms, TPOT 13.1 ms |
 | vLLM, other checks | HTTP suite 78 passed, 1 skipped; served greedy == standalone 16/16; 0 decode-trace recaptures |
 
+## Long context, 2026-10-21 (#61416, on `mimo-v2.6/dev`, MOPD)
+
+Chunked prefill stays correct at 32K and 128K on the decode cache layout (128-wide global V, SWA paged by absolute
+position). Measured on one BH Galaxy with the default MSE experts:
+
+| Test | What it runs | Result |
+|---|---|---|
+| `test_chunked_prefill_tp8_dp4.py` short (layers 0, 1, 5) | 4 prompts of 200-1333 tokens, chunks of 64-512 | chunked vs reference >= 0.99892 (delta >= 0.9937), vs one shot >= 0.99932, written K / V >= 0.99993, decode >= 0.99978 (delta >= 0.9981) |
+| `test_chunked_prefill_tp8_dp4.py` 32k (layers 0, 1, 5) | one 32768-token prompt per row, chunks of 1024 / 2048 / 4096 / 8192, vs the fp32 reference (attention in query blocks); 32 decode steps | chunked vs reference >= 0.99843 (delta >= 0.9969), vs one shot >= 0.99973 (delta >= 0.9993), written K / V >= 0.99993, decode >= 0.99997 (delta >= 0.9990) |
+| `test_model_long_tp8_dp4.py` 32k | 48 layers, 4 users per row; per row a passkey prompt one shot and in chunks of 1K-8K, plus a shared prompt | same next token for both cuts on every row, logits PCC 0.9948-0.9972; pass key found at 10 / 35 / 65 / 90% depth by both cuts; shared prompt identical on all 4 rows (PCC 1.000000) |
+| `test_model_long_tp8_dp4.py` 128k | as 32k, baseline in 16K chunks | same next token everywhere, logits PCC 0.9930-0.9948; every pass key found; shared prompt identical on all 4 rows |
+| vLLM, `--max-model-len 40000` (625 blocks) | DP=4 x 4 seqs, a 35K-token needle at 30% depth and a short request | page tables 640 wide; needle recalled, first token after 8.0 s; short request correct |
+
+| | 32K | 128K |
+|---|---|---|
+| Prefill, 3 prompts per row on 4 rows at once | 64 s | 355 s |
+| DRAM per chip: weights / + KV for 4 users / total | 24.24 / 24.50 / 34.18 GB | 24.24 / 25.10 / 34.18 GB |
+| Prefill chunks that run after decode (probe from 4096 up) | every size to 32768, the whole prompt (5 s) | every size to 131072, the whole prompt (38 s) |
+
+Fixes that came out of these runs:
+
+- **MoE prefill in 4K slices.** The router's prefill program blocks a whole chunk per core. A 32K chunk needed about
+  4.9 MB of L1, and after decode even 8K did not fit: its static circular buffers end at 1.32 MB, past the L1 buffers
+  decode keeps allocated (from 1.21 MB). `TtMiMoMoE.forward` runs chunks longer than 4096 tokens through the router and
+  experts in 4K slices and all-reduces the whole chunk once; each token's output is unchanged. vLLM sends 4K chunks and
+  was not affected.
+- **Page table width.** `SwaDecodeQkv` reads a page table row in 64 B pieces, so `attention.page_table_width` pads the
+  width to 16 blocks, for the standalone tables and for vLLM's. A `max_seq_len` or `--max-model-len` that was not a
+  multiple of 1024 tokens failed on the first decode step.
+
 ## Long context: 8 users x 1M (branch `mimo-v2.6/long-ctx`, 2026-10-20)
 
 Goal: 8 users (2 per lane) with 1M context each under vLLM, prefix caching (APC) correct, and the per-user decode
