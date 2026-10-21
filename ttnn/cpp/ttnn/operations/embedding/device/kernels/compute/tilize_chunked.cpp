@@ -10,6 +10,8 @@
 //   dfb::in  — row-major weights staging DFB, bound CONSUMER
 //   dfb::out — tiled output DFB, bound PRODUCER
 //   args::per_core_block_cnt, args::tiles_per_chunk, args::num_chunks, args::last_chunk_tiles — compile-time args
+//   Under RUNTIME_SPLIT the block count is derived instead from args::core_idx (per-core) and the common
+//   args::blocks_per_batch, with args::batch and args::num_cores compile-time.
 
 #include <cstdint>
 
@@ -20,9 +22,21 @@
 #include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/dataflow/dataflow_buffer.h"
 #endif
+#ifdef RUNTIME_SPLIT
+#include "ttnn/operations/embedding/device/kernels/embeddings_fused_split.hpp"
+#endif
 
 void kernel_main() {
+#ifdef RUNTIME_SPLIT
+    const uint32_t core_idx = get_arg(args::core_idx);
+    const uint32_t blocks_per_batch = get_arg(args::blocks_per_batch);
+    constexpr uint32_t batch = get_arg(args::batch);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
+    const uint32_t per_core_block_cnt = end_block - start_block;
+#else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+#endif
     constexpr uint32_t tiles_per_chunk = get_arg(args::tiles_per_chunk);
     constexpr uint32_t num_chunks = get_arg(args::num_chunks);
     constexpr uint32_t last_chunk_tiles = get_arg(args::last_chunk_tiles);

@@ -903,3 +903,83 @@ def test_embedding_tiled_input_index_dtypes_and_types(
 
     expected = torch.nn.functional.embedding(indices, torch_weights)
     assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
+def _h3_embedding_lengths():
+    # Per-chip packed rows served by the MiniMax-H3 DiT on 4x8 (74..470 tile rows), 148 as the warm point.
+    return [148 * 32, 74 * 32, 287 * 32, 427 * 32, 470 * 32]
+
+
+def _run_fused_gather(device, indices, torch_weights, embeddings_type=ttnn.EmbeddingsType.GENERIC, pad_token=None):
+    input_tensor = ttnn.from_torch(indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output = ttnn.embedding(
+        input_tensor, weights, padding_idx=pad_token, embeddings_type=embeddings_type, layout=ttnn.TILE_LAYOUT
+    )
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED])
+def test_embedding_fused_dynamic_index_length_flat_cache(device, batch_size, embeddings_type):
+    """Fused tilized gather: the index length is a runtime word, so every served length hits one program."""
+    torch.manual_seed(0)
+    vocabulary_size, hidden_embedding_dim = 4096, 1344
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(sentence_size):
+        indices, _, pad_token = _embedding_indices((batch_size, sentence_size), vocabulary_size, embeddings_type)
+        _run_fused_gather(device, indices, torch_weights, embeddings_type, pad_token)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, _h3_embedding_lengths())
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("hidden_embedding_dim", [96, 32])
+def test_embedding_fused_dynamic_table_rows_flat_cache(device, hidden_embedding_dim):
+    """The H3 output select: a capacity-sized index over a table whose row count follows the request."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    capacity = 4096
+
+    def run(table_rows):
+        torch_weights = torch_random((table_rows, hidden_embedding_dim), -1.0, 1.0, dtype=torch.bfloat16)
+        indices = torch.randint(0, table_rows, (1, capacity))
+        _run_fused_gather(device, indices, torch_weights)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, [rows * 8 for rows in _h3_embedding_lengths()])
+    assert device.num_program_cache_entries() == 1
+
+
+def test_embedding_fused_width_or_dtype_change_misses(device):
+    """Only the lengths are runtime: a new table width, index dtype or batch needs its own program."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(variant):
+        batch, sentence_size, width, index_dtype = variant
+        torch_weights = torch_random((512, width), -0.1, 0.1, dtype=torch.bfloat16)
+        indices = torch.randint(0, 512, (batch, sentence_size))
+        input_tensor = _indices_to_device(indices, index_dtype, ttnn.ROW_MAJOR_LAYOUT, device)
+        weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        output = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT)
+        expected = torch.nn.functional.embedding(indices, torch_weights)
+        assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
+
+    variants = [
+        (1, 256, 128, ttnn.uint32),
+        (1, 1024, 128, ttnn.uint32),
+        (1, 256, 64, ttnn.uint32),  # table width: new program
+        (1, 256, 128, ttnn.bfloat16),  # index dtype: new program
+        (2, 256, 128, ttnn.uint32),  # batch: new program
+    ]
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, variants, miss_indices=(2, 3, 4))
