@@ -255,7 +255,7 @@ def component_error(s, block_type: str, step: str, layer: int) -> float | None:
 
 
 def _rows(t: torch.Tensor, shape) -> torch.Tensor:
-    t = t.float().reshape(shape)
+    t = t.double().reshape(shape)
     return t.reshape(shape[0], -1) if len(shape) >= 2 else t.reshape(1, -1)
 
 
@@ -400,7 +400,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         mv = min(NF.value(mode, o, want) for o in floor_outs)
         if arith_pcc is not None and mode == "pcc":
             mv = min(mv, arith_pcc)
-        # the resolution floor from the fp32 CPU step's output (the golden is already bf16: its own rounding is 0)
+        # the resolution floor: one rounding of the fp32 CPU step's output to its official dtype (F133)
         v = NF.gate_limit(mode, mv, NF.bf16_res(mode, cpu, res_dtype), k, want.numel())
         metrics.record(f"{name}_limit", v)
         return v
@@ -409,7 +409,8 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         ok = compare(f"{tag}_vs_cpu", got, cpu, mode, lim(f"{tag}_vs_cpu", outs, cpu, res_dtype=out_dtype))[1] and ok
         if golden is not None:
             ag = (ar.get("vs_golden") or {}).get("pcc_vs_golden")
-            ok = compare(f"{tag}_vs_golden", got, golden, mode, lim(f"{tag}_vs_golden", chain, golden, ag))[1] and ok
+            lv = lim(f"{tag}_vs_golden", chain, golden, ag, res_dtype=out_dtype)
+            ok = compare(f"{tag}_vs_golden", got, golden, mode, lv)[1] and ok
     else:
         # F81: a float output is gated by its rel error (PCC is blind to a scale or an offset): vs the CPU step by
         # the per-statistic checks below, vs the golden here (calib x the nudged block's rel vs the golden)
@@ -423,7 +424,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             if chain:
                 fl = max(CC.rel(cc, golden) for cc in chain)
                 ag = (ar.get("vs_golden") or {}).get("rel") or 0.0
-                gl_lim = k * max(fl, ag, CC.rel(NF.round_to(cpu, "bf16"), cpu))
+                gl_lim = k * max(fl, ag, CC.rel(NF.round_to(cpu, out_dtype), cpu))
                 how = f"{k} x the nudged block's rel vs the golden {max(fl, ag):.3g}"
             else:
                 gl_lim, how = math.inf, "no noise floor: not gated"
@@ -464,7 +465,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
     fl = None
     if outs and all(isinstance(o, torch.Tensor) and o.is_floating_point() for o in outs):
         # F80: every limit is calib x the floor's statistic on the same inputs: the larger of the input nudge and
-        # the official arithmetic (cached; its golden-input statistics), never below the bf16 rounding
+        # the official arithmetic (cached; its golden-input statistics), never below one rounding to the output dtype
         me = NF.merge_float(ar.get("vs_step"), NF.worst_float(outs, cpu, step_errors))
         dev = lambda e_: max(1 - e_["ratio_min"], e_["ratio_max"] - 1)  # noqa: E731
         rel_lim = k * max(me["rel"], res_e["rel"])
