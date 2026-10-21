@@ -74,12 +74,6 @@ using namespace tt::tt_metal;
 namespace ttnn::tensor {
 using tt::tt_metal::experimental::per_core_allocation::SRAMTensorViewAddress;
 
-struct L1TensorGeometry {
-    DeviceAddr packed_size, page_size, aligned_shard_size;
-    DeviceAddr page_alignment;
-    std::vector<CoreCoord> cores;
-    bool per_core;
-};
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
@@ -233,7 +227,8 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
             tensor_spec.logical_shape(),
             tensor_spec.padded_shape()));
     auto logical_data =
-        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec).to_vector<float>();
+        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec)
+            .to_vector<float>();
     return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
 }
 
@@ -272,7 +267,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
-        auto logical_data = HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
+        auto logical_data =
+            HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
@@ -436,6 +432,18 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
+namespace {
+// Binding-only result describing tensor data, without allocating or retaining SRAM.
+struct L1TensorGeometry {
+    DeviceAddr packed_size = 0;
+    DeviceAddr page_size = 0;
+    DeviceAddr aligned_shard_size = 0;
+    DeviceAddr page_alignment = 0;
+    std::vector<CoreCoord> cores;
+    bool per_core = false;
+};
+}  // namespace
+
 void pytensor_module_types(nb::module_& mod) {
     nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Tensor data cores and page-aligned footprint.")
         .def_ro("packed_size", &L1TensorGeometry::packed_size)
@@ -493,26 +501,24 @@ void pytensor_module(nb::module_& mod) {
                 "L1 tensor geometry requires a local device and L1 TensorSpec");
             const auto args = spec.compute_buffer_sharding_args();
             TT_FATAL(is_sharded(args.buffer_layout()), "L1 tensor geometry requires sharded memory");
-            L1TensorGeometry geometry{};
-            geometry.packed_size = spec.compute_packed_buffer_size_bytes();
-            geometry.page_size = spec.compute_page_size_bytes();
-            geometry.per_core = tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(args);
+            const auto packed_size = spec.compute_packed_buffer_size_bytes();
+            const auto page_size = spec.compute_page_size_bytes();
+            const bool per_core = tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(args);
+            std::vector<CoreCoord> cores;
             size_t pages;
             if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
-                geometry.cores = distribution->cores_with_data();
+                cores = distribution->cores_with_data();
                 pages = distribution->max_num_dev_pages_per_core();
             } else {
                 TT_FATAL(args.shard_spec().has_value(), "L1 tensor geometry requires a shard specification");
                 const auto& shard = *args.shard_spec();
-                geometry.cores =
+                cores =
                     corerange_to_cores(shard.grid(), std::nullopt, shard.orientation() == ShardOrientation::ROW_MAJOR);
                 pages = shard.num_pages();
             }
-            geometry.page_alignment = device->allocator()->get_alignment(BufferType::L1);
-            const auto aligned_page = ((geometry.page_size + geometry.page_alignment - 1) / geometry.page_alignment) *
-                                      geometry.page_alignment;
-            geometry.aligned_shard_size = pages * aligned_page;
-            return geometry;
+            const auto page_alignment = device->allocator()->get_alignment(BufferType::L1);
+            const auto aligned_page = ((page_size + page_alignment - 1) / page_alignment) * page_alignment;
+            return L1TensorGeometry{packed_size, page_size, pages * aligned_page, page_alignment, std::move(cores), per_core};
         },
         nb::arg("mesh_device").noconvert(),
         nb::arg("device_coord"),
@@ -1643,7 +1649,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_unique_id",
             [](const Tensor& self) -> std::optional<size_t> {
-                if (!is_device_tensor(self) || !self.is_allocated() || !self.device_storage().is_root_allocated()) {
+                if (!is_device_tensor(self) || !self.is_allocated() ||
+                    !self.device_storage().is_root_allocated()) {
                     return std::nullopt;
                 }
                 auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
