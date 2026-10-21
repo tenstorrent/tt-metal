@@ -2950,6 +2950,11 @@ FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
     RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_WITH_TRID, false, noc);
+    // Order the counter poll after the write command reaches the NIU. The read-back value must be used.
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    if constexpr (write_reg_cmd_buf != write_cmd_buf) {
+        while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+    }
     while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
         continue;
     }
@@ -2975,6 +2980,11 @@ FORCE_INLINE
 void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID, false, noc);
     WAYPOINT("NFTW");
+    // Order the counter poll after the write command reaches the NIU. The read-back value must be used.
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    if constexpr (write_reg_cmd_buf != write_cmd_buf) {
+        while (!noc_cmd_buf_ready(noc, write_reg_cmd_buf));
+    }
     while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
         continue;
     }
