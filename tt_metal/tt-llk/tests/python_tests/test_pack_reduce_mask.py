@@ -30,7 +30,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, skip_ttsim_partial_face_bfp_zero_write
 
 mathop_mapping = {
     ReduceDimension.Row: MathOperation.ReduceRow,
@@ -81,6 +81,9 @@ def test_pack_reduce_mask(formats, reduce_dim, tile_dimensions):
     fails to drop reaches L1 instead of hiding behind a zero that the reduction left in DEST.
     """
     tile_shape = construct_tile_shape(tile_dimensions)
+    skip_ttsim_partial_face_bfp_zero_write(
+        tile_shape, formats.output_format, reduce_dim
+    )
     input_dimensions = [4 * tile_dimensions[0], tile_dimensions[1]]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
