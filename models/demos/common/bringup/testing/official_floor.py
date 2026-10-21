@@ -20,9 +20,10 @@ For every tapped step this runs the fp32 CPU step on the official inputs and rec
 (official_floor.json, read by noise_floor.arith):
 - vs_step: the official output vs the fp32 step on the same inputs (rel, worst row, row-norm ratios, median bias);
 - vs_golden: the official output vs the golden (the same, plus pcc_vs_golden).
-It also checks the tap map: the fp32 step on the official inputs must give the official output within calib x the
-step's input-nudge floor (a mis-mapped input or output is far outside it), unless official_taps.yaml explains why the
-official code rounds more inside the step (`explained`, with the evidence; the overseer reviews each). Gate metrics: official_taps_steps (>= 1),
+The tap map is checked by official_vs_taps (F136): the reference at its official numerics on the tapped inputs must
+reproduce each tapped output; a mis-mapped input or output is far outside it. The official output's distance from the
+full-precision step (F132) is the step's margin, recorded, never an error (F145: steps whose official code rounds to
+fp8 / fp4 inside are 1-5 % away by design). Gate metrics: official_taps_steps (>= 1),
 official_taps_errors (== 0), official_taps_unmapped (== 0: every step of every golden layer is tapped),
 official_ref_vs_taps_errors (== 0, F136: the reference's own official numerics reproduce each tapped step).
 """
@@ -158,11 +159,12 @@ def generate(s, write: bool = True) -> dict:
                     f"({k} x the input nudge), explained: {why[:200]}"
                 )
             elif not rec["vs_step"]["rel"] <= lim:
-                errors.append(
-                    f"L{L:02d}.{st.name}: official output vs the fp32 step on the official inputs rel "
-                    f"{rec['vs_step']['rel']:.3g} > {lim:.3g} ({k} x the input nudge {nud:.3g}): a mis-mapped input "
-                    "or output, or the official code rounds inside the step more than its inputs' nudge shows; if "
-                    "so, say why with the evidence in official_taps.yaml (`explained`)"
+                # F145: against the full-precision step (F132) this is the official code's in-step rounding, i.e.
+                # the step's margin; the tap map is checked by official_vs_taps (the official numerics reproduce it)
+                rec["check"]["in_step_rounding"] = True
+                print(
+                    f"note L{L:02d}.{st.name}: official vs full-precision step rel {rec['vs_step']['rel']:.3g} > "
+                    f"{lim:.3g} ({k} x the input nudge): the official code rounds inside the step (its margin)"
                 )
             out[f"L{L:02d}.{st.name}"] = {str(c): rec}
             pending.append((L, st, t, lim))
