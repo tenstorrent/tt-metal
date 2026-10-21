@@ -22,7 +22,8 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size, agmm_pin
 
-# Ring SDPA chunk pair of the dynamic-length path: one program for every per-device length.
+# Ring SDPA chunk pair of the dynamic-length path: one program for every per-device length. Measured per
+# block on 4x8: 5 % faster than (320, 384) at 13664 rows/chip, 5 % slower at 4736 (the swept 5 s pair).
 DYNAMIC_RING_SDPA_CHUNKS = (256, 512)
 
 
