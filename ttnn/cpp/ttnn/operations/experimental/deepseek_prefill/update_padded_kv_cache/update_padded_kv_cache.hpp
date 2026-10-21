@@ -45,7 +45,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // unmapped and its rows are not written; neither is an entry outside the pool, which is invalid. The tensor form does
 // not check `slot_idx` against the table's rows: a row past them is read from beyond the table, and its writes land on
 // arbitrary pool pages. The table's width is part of the program key, so a workload keeps one fixed-width table. The
-// page is a multiple of 32 dividing the per-chip input seq. Plain copy path only (no rope, scales or tp_axis), with an
+// page is a multiple of 32 dividing the per-chip chunk (`input_rows` with a window, else the per-chip input seq).
+// Plain copy path only (no rope, scales or tp_axis), with an
 // explicit `cluster_axis`; zero_padded_kv_cache takes no page table, so with `valid_global` a pool keeps the input's
 // pad rows in the last real token's block.
 //

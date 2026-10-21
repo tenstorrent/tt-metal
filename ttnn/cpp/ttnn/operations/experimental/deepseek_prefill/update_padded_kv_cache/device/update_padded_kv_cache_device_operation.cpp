@@ -118,7 +118,7 @@ void validate_paged(
     const uint32_t chunk_local = written_input_rows(args, tensor_args.input.padded_shape()[-2]);
     TT_FATAL(
         chunk_local % page_size == 0,
-        "per-chip input seq ({}) must be a whole number of {}-token pages",
+        "per-chip chunk ({}) must be a whole number of {}-token pages",
         chunk_local,
         page_size);
 }

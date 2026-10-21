@@ -99,14 +99,15 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     SDPA ``page_table`` format). ``cache`` is then, on every chip, its own pool of single-head
                     pages ``[num_pages * num_layers, 1, page, head_dim]`` (replicate it, or shard a
                     ``[.., sp * page, ..]`` tensor along ``cluster_axis``) whose per-chip seq dim is the page size (a
-                    multiple of 32 dividing the per-chip input seq); page ``p`` of layer ``l`` is entry
+                    multiple of 32 dividing ``chunk_local``); page ``p`` of layer ``l`` is entry
                     ``p * num_layers + l``.
                     ``page_table`` is an INT32 ROW_MAJOR DRAM tensor ``[rows, width]`` replicated across the
                     mesh, and ``slot_idx`` selects the request's row, which holds at most ``width * page`` tokens:
                     the scalar form rejects a longer write, the tensor form writes only the row's pages.
                     Entry ``q`` names the physical page holding global positions ``[q * page, (q + 1) * page)``
                     in the pool of the chip at SP coordinate ``(q * page // chunk_local) % sp`` with
-                    ``chunk_local`` the per-chip input seq and ``sp`` the mesh extent along ``cluster_axis``: every
+                    ``chunk_local`` the per-chip chunk (``input_rows`` with a window, else the per-chip input seq) and
+                    ``sp`` the mesh extent along ``cluster_axis``: every
                     write of a request must use the same ``chunk_local``. -1 is unmapped and its rows are not
                     written; neither is an entry outside the pool, which is invalid. The tensor form does not check
                     ``slot_idx`` against the table's rows: a row past them is read from beyond the table, and its
