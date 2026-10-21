@@ -211,6 +211,12 @@ def infer_unpack_out(
             )
         return register_format_hint
 
+    # Int4/UInt4 are L1-only; the unpacker widens them to Int8/UInt8.
+    if input_format == DataFormat.Int4:
+        return DataFormat.Int8
+    if input_format == DataFormat.UInt4:
+        return DataFormat.UInt8
+
     # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
     # it can also unpack into float16 and TF32 but bfloat16 is the default for MX inputs and default in metal in general.
     if input_format.is_mx_format():
@@ -453,6 +459,11 @@ def infer_data_formats(
 
     if chip_arch is None:
         chip_arch = get_chip_architecture()
+
+    if output_format.is_4bit_integer():
+        raise ValueError(
+            f"{output_format.name} is an L1 input-only format; the packer cannot output it"
+        )
 
     # On Quasar the math and SFPU data formats can differ. Quasar has only one 16-bit integer HW
     # encoding, Int16 -- the unpacker, the SrcA/SrcB/dest register files, and the packer all lack a

@@ -24,6 +24,7 @@ from .pack import (
     pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
+    pack_int4,
     pack_int8,
     pack_int16,
     pack_int32,
@@ -33,6 +34,7 @@ from .pack import (
     pack_mxint2,
     pack_mxint4,
     pack_mxint8,
+    pack_uint4,
     pack_uint8,
     pack_uint16,
     pack_uint32,
@@ -413,6 +415,8 @@ class StimuliConfig:
             DataFormat.UInt16: pack_uint16,
             DataFormat.Int8: pack_int8,
             DataFormat.UInt8: pack_uint8,
+            DataFormat.Int4: pack_int4,
+            DataFormat.UInt4: pack_uint4,
         }
         return packers.get(data_format)
 
@@ -508,7 +512,13 @@ class StimuliConfig:
                     face_r_dim=face_r_dim,
                     use_srcs=use_srcs,
                 )
-            if pack_function in (pack_bfp8_b, pack_bfp4_b, pack_bfp2_b):
+            if pack_function in (
+                pack_bfp8_b,
+                pack_bfp4_b,
+                pack_bfp2_b,
+                pack_int4,
+                pack_uint4,
+            ):
                 return pack_function(
                     buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim
                 )
@@ -572,7 +582,13 @@ class StimuliConfig:
                     face_r_dim=face_r_dim,
                     use_srcs=use_srcs,
                 )
-            if pack_function in (pack_bfp8_b, pack_bfp4_b, pack_bfp2_b):
+            if pack_function in (
+                pack_bfp8_b,
+                pack_bfp4_b,
+                pack_bfp2_b,
+                pack_int4,
+                pack_uint4,
+            ):
                 return pack_function(
                     buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim
                 )
