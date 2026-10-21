@@ -1021,7 +1021,8 @@ slices`, `input-infeasible`, `no-cycle-of-length-N` (with achievable lengths),
 
 #### Examples
 
-All on two 4x2-slice meshes, as in the running examples.
+A to E are on two 4x2-slice meshes, as in the running examples. F is one galaxy whose
+ranks own 4x1 columns, with stages wider than a rank.
 
 **A. One loop, no branch slices** (`mixed4`, cables A0–B0 and A2–B2; seating (P, R)).
 
@@ -1142,6 +1143,75 @@ If Y also returned over fabric, the router would need four neighbours. No slice 
 than three, so it fails with `no slice has the 4 fabric neighbours this fork needs ... the
 best any slice has is 3`.
 
+**F. Stages wider than a rank, on one mesh** (`galaxy4x1`, a separate setup). One Blackhole
+galaxy: a 4x8 mesh with `host_topology [1, 8]` and both axes RING, as in blaze's
+`single_bh_galaxy_4x1_slices` MGD. Each rank owns one full-height 4x1 column, C0..C7 for ranks
+0–7. The row wrap stays inside each column, so the only links between slices are column
+neighbours, with the column wrap closing C7–C0. The slice graph is a single 8-cycle. The ring
+is `s0 Embed 4x1 → s1 4x2 → s2 4x2 → s3 4x2 → s4 Head 4x1 → s0`, so each 4x2 stage is two
+ranks.
+
+```
+   C0 ── C1 ── C2 ── C3 ── C4 ── C5 ── C6 ── C7
+   r0    r1    r2    r3    r4    r5    r6    r7
+    └──────────────── column wrap ───────────┘
+
+path      one mesh, but s1..s3 are joint stages: build_pipeline sets multi_mesh and passes
+          no submesh_shape, so this is the planned carve, not single-mesh tiling (3.4)
+phase 0   slices all 4x1; stage_counts = [1, 2, 2, 2, 1]; need = 8 <= 8; stage 0 is 1 slice
+phase 2   every column has exactly 2 neighbours: nothing pruned, no branch slices
+phase 3   _cycles_no_branch: one loop C0 C1 ... C7, length 8 == need
+phase 4   canonical walk: anchor C0; C1 (0,0,1) < C7 (0,0,7), so step toward C1
+          forward, offset 0:
+            s0 <- [C0]      col 0      4x1   ok
+            s1 <- [C1 C2]   cols 1-2   4x2   ok
+            s2 <- [C3 C4]   cols 3-4   4x2   ok
+            s3 <- [C5 C6]   cols 5-6   4x2   ok
+            s4 <- [C7]      col 7      4x1   ok
+phase 5   slots 4x1@(0,0), 4x2@(0,1), 4x2@(0,3), 4x2@(0,5), 4x1@(0,7); no fillers
+ring      C0 -> C1+C2 -> C3+C4 -> C5+C6 -> C7 -> column wrap -> C0
+```
+
+The 4x2 stages start on odd columns (1–2, 3–4, 5–6), not on the even pairs that tiling the
+mesh by 4x2 would give. s0 takes column 0 by itself, and the planner cuts the walk wherever
+the stage counts fall.
+
+Sixteen alignments exist (eight starts, two directions) and ten work. The six that fail all
+put a 4x2 stage on {C7, C0}: the columns are fabric neighbours through the wrap, but columns
+{0, 7} are not contiguous, so `_as_rectangle` rejects the group.
+
+| Alignment | s0 | s1 | s2 | s3 | s4 | Result |
+|---|---|---|---|---|---|---|
+| forward, start C0 (returned) | C0 | C1+C2 | C3+C4 | C5+C6 | C7 | ok; the loopback rides the wrap |
+| forward, start C1 | C1 | C2+C3 | C4+C5 | C6+C7 | C0 | ok; s3 → s4 rides the wrap, the loopback is C0 → C1 |
+| forward, start C2 | C2 | C3+C4 | C5+C6 | C7+C0 | | fails: s3 is not a rectangle |
+| reverse, start C0 | C0 | C7+C6 | C5+C4 | C3+C2 | C1 | ok; s0 → s1 rides the wrap |
+| reverse, start C1 | C1 | C0+C7 | | | | fails: s1 is not a rectangle |
+
+After the carve, `_collect_submeshes` finds ranks 1 and 2 both in slot 4x2@(0,1) and collapses
+them into one 8-chip submesh co-owned by two ranks; likewise ranks 3+4 and 5+6. In each 4x2
+stage one co-owner is the entry rank and the other the exit rank; for each hop, the co-owner
+that is not its endpoint builds no socket (`is_non_endpoint_coowner`). No rank idles.
+
+What Tier B and Tier C see here. With one mesh there are no crossings, so Tier B's per-mesh
+carve check (2.2, "Each mesh's segment can be carved") already runs the whole ring over the declared adjacency, RING wraps included,
+and gives the verdict. Tier C reruns the same search over the mapped intra-mesh links (section
+4, step 3), which are the same pairs, so it agrees. Its value on this MGD is the resolver
+step, not the carve.
+
+| Case on this galaxy | Phase | Result |
+|---|---|---|
+| ring of 4x1, 4x2, 4x2, 4x1 (need 6) | 3 | `no-cycle-of-length-6`, achievable [8]: the 8-cycle is the only simple cycle. Blaze pads such rings with 4x1 passthrough stages up to 8 |
+| s0 declared 4x2 | 0 | `input-infeasible`: one rank must drive stage 0 |
+| a stage declared 2x2 | 0 | `not a whole number of 4x1 host slices` |
+| a 4x2 stage on {C7, C0} | 4 | `_as_rectangle` rejects it; this is why 6 of the 16 alignments fail |
+| the column axis is LINE, not RING | 2 | C0 and C7 have one neighbour each; leaf pruning removes every column (`only 0 slices can lie on any cycle`) |
+| a ring needing 9 slices | 0 | `input-infeasible`: the run has only 8 |
+
+Blaze runs close versions of this on hardware and in unit tests:
+`test_gemma_mixed_carve_ring_single_galaxy` (4x1, 4x2, 4x1, 4x4) and
+`test_carve_planner_places_the_ring_on_a_galaxy`.
+
 **Other edge cases.**
 
 | Case | Phase | Result |
@@ -1209,12 +1279,20 @@ This section reads tt-blaze `origin/main` (34e783a631). An older checkout (45d3b
 
 | Step | Multi-mesh, planned carve | Multi-mesh, per-rank tiling | Single mesh |
 |---|---|---|---|
-| when | no `submesh_shape` | `submesh_shape` given | one mesh in the MGD |
+| when | `multi_mesh`, no `submesh_shape` | `multi_mesh`, `submesh_shape` given | not `multi_mesh` |
 | 1. slots | `plan_carve` → one `create_submesh(shape, offset)` per slot on this rank's mesh | `create_submeshes(submesh_shape)` on this rank's mesh | `create_submeshes(shape)`; every stage must have the same shape |
 | 2. this rank's slot | the one slot holding its chips (exactly one) | first tile whose `(0,0)` chip is local, else first tile with any local chip | n/a (all tiles are local) |
 | 3. global list | allgather each rank's slot chips | same | every tile, no allgather |
 | 4. joint stages | ranks with identical chip sets collapse into one submesh, ordered by first rank | same | n/a |
 | 5. layout | `resolve_graph_layout` (links from the control plane) | same | same |
+
+`multi_mesh` does not mean "more than one mesh". `build_pipeline` (`blaze/stages/stage.py`)
+sets it when the MGD has more than one mesh **or** any stage spans more than one rank
+(`has_joint_stage`: the stages' rank counts add up to more than the number of stages). For a
+joint stage it passes no `submesh_shape`, so the carve is planned. A single mesh with a joint
+stage therefore takes the planned carve: for example a galaxy whose ranks own 4x1 columns,
+running 4x2 stages (3.2, example F). Single-mesh tiling is only for a single mesh where every
+stage sits on one rank's slice or less.
 
 `create_submeshes` (`MeshDeviceImpl::create_submeshes`, `tt_metal/distributed/mesh_device.cpp`)
 stamps the shape in row-major order and fails unless it divides the mesh in both dims.
@@ -1232,7 +1310,7 @@ Per seating, after intra-mesh completion (section 4):
      included;
    - *per-rank tiling:* for each mesh, a tile shape (below), stamped row-major over the mesh
      exactly like `create_submeshes`;
-   - *single mesh:* the one stage shape stamped over the mesh.
+   - *single mesh, no joint stage:* the one stage shape stamped over the mesh.
 2. **Each rank's slot.** For each mesh and host rank, `MeshGraph::get_coord_range(mesh,
    host_rank)` gives its chips. Apply blaze's step-2 rule to pick its slot.
 3. **Submesh list.** Build each picked slot's chip tuples and collapse identical chip sets
@@ -1246,8 +1324,8 @@ blaze could build some way:
 
 | MGD | STRICT | FLEXIBLE |
 |---|---|---|
-| one mesh | single-mesh tiling | single-mesh tiling |
-| several meshes | planned carve or per-rank tiling | flexible placement; if a fork raises `ForkShapeUnsupported`, the STRICT paths |
+| one mesh, every stage on one rank | single-mesh tiling | single-mesh tiling |
+| one mesh with a joint stage, or several meshes | planned carve or per-rank tiling | flexible placement; if a fork raises `ForkShapeUnsupported`, the STRICT paths |
 
 A mapping is accepted if any allowed path succeeds. A FLEXIBLE ring whose planner fails
 (for example non-uniform host slices) is rejected, because blaze raises there rather than
@@ -1400,6 +1478,10 @@ result    cover 2 wins: one cut, and it is the loopback. s3 -> s0 becomes HOST.
 
 - **GPT-OSS single galaxy:** one 8x4 mesh, four 4x2 stages. Single-mesh tiling gives four
   4x2 tiles; the resolver places the ring on them. The planner is never used, as at runtime.
+- **`galaxy4x1` (3.2, example F):** also one mesh, but its ranks own 4x1 columns and three
+  stages are 4x2, so they are joint. That makes it a planned carve: five slots, three of
+  them co-owned by two ranks. Single-mesh tiling by 4x2 would give four tiles on even column
+  pairs, which cannot hold the 4x1 stages or the odd-column 4x2s.
 - **`llama_8b_pod`:** M0 gets 4x2 tiles (its slice), M1 gets 1x2 tiles (its slice): 8 + 32
   submeshes, one rank each, and the resolver places all 40 stages, matching stage chip counts
   to submeshes. The planned carve rejects this MGD up front because the host slices are not
@@ -1502,15 +1584,15 @@ two declared M0–M1 connections.
    `HostSlice(mesh_id, row0, col0, nrows, ncols)`. Two slices are adjacent when a step-3 link
    joins them, matching blaze's `discover_slice_adjacency`.
 5. **Carve.** Produce slots for each carve path blaze has for this MGD (3.4):
-   - *Planned carve* (several meshes): `plan_ring_carve` (or `plan_fork_carve`) finds a
+   - *Planned carve* (several meshes, or one mesh with a joint stage): `plan_ring_carve` (or `plan_fork_carve`) finds a
      cycle of slices and cuts it into stage rectangles, joint stages included. Here:
      `s0 → M0@(0,0)`, `s1 → M0@(0,2)`, `s2 → M1@(0,2)`, `s3 → M1@(0,0)`.
-   - *Per-rank tiling* (several meshes): each mesh tiled by one shape, each rank keeps its
+   - *Per-rank tiling* (several meshes, or one mesh with a joint stage): each mesh tiled by one shape, each rank keeps its
      tile, identical tiles collapse into joint stages, and the resolver in step 6 assigns
      stages to tiles. Here: 4x2 tiles, two per mesh, one per rank. This covers what the
      planner rejects up front: host slices of different shapes across meshes
      (`llama_8b_pod`), and graphs with no loopback (open chains).
-   - *Single-mesh tiling* (one mesh): every tile of the one stage shape.
+   - *Single-mesh tiling* (one mesh, no joint stage): every tile of the one stage shape.
    - *Flexible placement* (FLEXIBLE descriptors): `plan_ring_placement` (or
      `plan_fork_placement`) picks host cuts, then the plan's carve or tiling by the uniform
      stage shape, then one resolve per fabric chain (3.4).

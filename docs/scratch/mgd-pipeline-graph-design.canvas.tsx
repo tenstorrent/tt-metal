@@ -804,7 +804,7 @@ function CarvePaths() {
             </Row>
             <Text size="small" tone="secondary">
               Search the slice graph for a cycle of exactly the ring's length, then cut it into stage rectangles. Handles joint
-              stages (a 4x4 stage = 2 slices). Needs uniform slices, stage 0 on one slice, and a loopback.
+              stages (a 4x4 stage = 2 slices), also on one mesh. Needs uniform slices, stage 0 on one slice, and a loopback.
             </Text>
             <Text size="small" tone="tertiary">
               plan_ring_carve / plan_fork_carve
@@ -2100,6 +2100,66 @@ function SliceMap(props: {
   );
 }
 
+/** One galaxy as eight 4x1 rank columns on a column ring; stages are boxes over whole columns. */
+function ColumnRing(props: {
+  stages: Array<{ from: number; to: number; label: string; bad?: boolean }>;
+  caption: string;
+  verdict: { ok: boolean; text: string };
+}) {
+  const t = useHostTheme();
+  const cw = 56;
+  const ch = 70;
+  const x0 = 14;
+  const y0 = 28;
+  const W = x0 * 2 + 8 * cw;
+  const H = 172;
+  const cx = (i: number) => x0 + i * cw + cw / 2;
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ maxWidth: W, minWidth: 0.8 * W }}>
+      <text x={x0} y={14} fontSize={11} fill={t.text.secondary}>
+        {props.caption}
+      </text>
+      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+        <g key={i}>
+          <rect x={x0 + i * cw} y={y0} width={cw} height={ch} fill={t.fill.quaternary} stroke={t.stroke.secondary} strokeDasharray="3 3" />
+          <text x={cx(i)} y={y0 + ch + 14} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
+            C{i} · r{i}
+          </text>
+        </g>
+      ))}
+      {props.stages.map((s) => (
+        <g key={`${s.from}-${s.label}`}>
+          <rect
+            x={x0 + s.from * cw + 3}
+            y={y0 + 3}
+            width={(s.to - s.from + 1) * cw - 6}
+            height={ch - 6}
+            rx={5}
+            fill={s.bad ? "none" : t.fill.secondary}
+            stroke={s.bad ? t.category.red : t.accent.primary}
+            strokeDasharray={s.bad ? "4 3" : undefined}
+          />
+          <text x={(cx(s.from) + cx(s.to)) / 2} y={y0 + ch / 2 + 4} textAnchor="middle" fontSize={12} fontWeight={600} fill={s.bad ? t.category.red : t.text.primary}>
+            {s.label}
+          </text>
+        </g>
+      ))}
+      <path
+        d={`M ${cx(7)} ${y0 + ch + 20} C ${cx(7)} ${H - 26}, ${cx(0)} ${H - 26}, ${cx(0)} ${y0 + ch + 20}`}
+        fill="none"
+        stroke={t.text.secondary}
+        strokeWidth={1.4}
+      />
+      <text x={(cx(0) + cx(7)) / 2} y={H - 4} textAnchor="middle" fontSize={10} fill={t.text.tertiary}>
+        column wrap C7 to C0 (RING)
+      </text>
+      <text x={W - x0} y={14} textAnchor="end" fontSize={11} fontWeight={600} fill={props.verdict.ok ? t.category.green : t.category.red}>
+        {props.verdict.text}
+      </text>
+    </svg>
+  );
+}
+
 /** Three pods as SAT seats, with the seat-graph link counts between them. */
 function SeatGraph() {
   const t = useHostTheme();
@@ -2439,6 +2499,25 @@ plan        R A2 | X A3 B3 B2 | Y A1 | fillers A0 B0 B1
 if Y also returned over fabric: need_edges 4, best any slice has is 3
   -> no slice has the 4 fabric neighbours this fork needs`;
 
+const CARVE_F = `
+galaxy    one 4x8 mesh, host_topology [1, 8], both axes RING
+          ranks own 4x1 columns C0..C7; slice graph is one 8-cycle
+ring      s0 4x1, s1 4x2, s2 4x2, s3 4x2, s4 4x1, loopback s4 -> s0
+path      one mesh, but s1..s3 are joint: build_pipeline sets multi_mesh
+          and passes no submesh_shape -> planned carve, not tiling
+phase 0   slices all 4x1; stage_counts [1, 2, 2, 2, 1]; need 8 <= 8
+phase 2   every column has 2 neighbours: nothing pruned, no branch slices
+phase 3   _cycles_no_branch: C0 C1 ... C7, length 8 == need
+phase 4   canonical walk: anchor C0; C1 (0,0,1) < C7 (0,0,7) -> toward C1
+          forward, offset 0:
+            s0 <- [C0]      col 0      4x1   ok
+            s1 <- [C1 C2]   cols 1-2   4x2   ok
+            s2 <- [C3 C4]   cols 3-4   4x2   ok
+            s3 <- [C5 C6]   cols 5-6   4x2   ok
+            s4 <- [C7]      col 7      4x1   ok
+phase 5   4x1@(0,0) 4x2@(0,1) 4x2@(0,3) 4x2@(0,5) 4x1@(0,7); no fillers
+collect   ranks 1+2, 3+4, 5+6 each collapse into one co-owned submesh`;
+
 const COLLECT = `
 M0 slots in plan order: 4x2@(0,0), 4x4@(0,2), 4x2@(0,6)
   rank 0 -> 4x2@(0,0)   rank 1 -> 4x4@(0,2)   rank 2 -> 4x4@(0,2)   rank 3 -> filler
@@ -2684,6 +2763,77 @@ function MapperExamples() {
         />
         <CodeCard path="plan_fork_carve, router plus two branches" mode="plain" language="text" src={CARVE_E} />
       </Grid>
+
+      <H3>F. Stages wider than a rank, on one mesh</H3>
+      <Text tone="secondary">
+        A separate setup, galaxy4x1, as in blaze's single_bh_galaxy_4x1_slices MGD. Each rank owns a full-height 4x1 column,
+        and each 4x2 stage is two ranks. The stages start on odd columns because s0 takes column 0 by itself.
+      </Text>
+      <Grid columns={fit(420)} gap={20} align="start">
+        <Stack gap={12}>
+          <ColumnRing
+            caption="forward, start C0 (returned)"
+            verdict={{ ok: true, text: "ok" }}
+            stages={[
+              { from: 0, to: 0, label: "s0" },
+              { from: 1, to: 2, label: "s1" },
+              { from: 3, to: 4, label: "s2" },
+              { from: 5, to: 6, label: "s3" },
+              { from: 7, to: 7, label: "s4" },
+            ]}
+          />
+          <ColumnRing
+            caption="forward, start C1"
+            verdict={{ ok: true, text: "ok" }}
+            stages={[
+              { from: 0, to: 0, label: "s4" },
+              { from: 1, to: 1, label: "s0" },
+              { from: 2, to: 3, label: "s1" },
+              { from: 4, to: 5, label: "s2" },
+              { from: 6, to: 7, label: "s3" },
+            ]}
+          />
+          <ColumnRing
+            caption="forward, start C2"
+            verdict={{ ok: false, text: "s3 = {C7, C0}: not a rectangle" }}
+            stages={[
+              { from: 0, to: 0, label: "s3?", bad: true },
+              { from: 2, to: 2, label: "s0" },
+              { from: 3, to: 4, label: "s1" },
+              { from: 5, to: 6, label: "s2" },
+              { from: 7, to: 7, label: "s3?", bad: true },
+            ]}
+          />
+        </Stack>
+        <CodeCard path="plan_ring_carve, 4x2 stages on 4x1 ranks" mode="plain" language="text" src={CARVE_F} />
+      </Grid>
+      <Table
+        headers={["Alignment", "s0", "s1", "s2", "s3", "s4", "Result"]}
+        rows={[
+          ["forward, start C0 (returned)", "C0", "C1+C2", "C3+C4", "C5+C6", "C7", "ok; the loopback rides the wrap"],
+          ["forward, start C1", "C1", "C2+C3", "C4+C5", "C6+C7", "C0", "ok; s3 to s4 rides the wrap"],
+          ["forward, start C2", "C2", "C3+C4", "C5+C6", "C7+C0", "", "fails: s3 is not a rectangle"],
+          ["reverse, start C0", "C0", "C7+C6", "C5+C4", "C3+C2", "C1", "ok; s0 to s1 rides the wrap"],
+          ["reverse, start C1", "C1", "C0+C7", "", "", "", "fails: s1 is not a rectangle"],
+        ]}
+        rowTone={["success", "success", "danger", "success", "danger"]}
+      />
+      <Text tone="secondary">
+        Sixteen alignments, ten work. The six that fail all put a 4x2 stage on C7 and C0: fabric neighbours through the wrap,
+        but not one rectangle. With one mesh there are no crossings, so Tier B's per-mesh carve check already runs the whole
+        ring and gives the verdict; Tier C agrees.
+      </Text>
+      <Table
+        headers={["Case on this galaxy", "Phase", "Result"]}
+        rows={[
+          ["ring of 4x1, 4x2, 4x2, 4x1 (need 6)", "3", "no-cycle-of-length-6, achievable [8]; blaze pads with 4x1 passthroughs"],
+          ["s0 declared 4x2", "0", "input-infeasible: one rank must drive stage 0"],
+          ["a stage declared 2x2", "0", "not a whole number of 4x1 host slices"],
+          ["a 4x2 stage on C7 and C0", "4", "_as_rectangle rejects it"],
+          ["column axis LINE, not RING", "2", "leaf pruning removes every column"],
+          ["a ring needing 9 slices", "0", "input-infeasible: only 8 slices"],
+        ]}
+      />
       <Table
         headers={["Other planner edge case", "Phase", "Result"]}
         rows={[
@@ -3142,10 +3292,18 @@ function MapperTab() {
         <Table
           headers={["MGD", "STRICT", "FLEXIBLE"]}
           rows={[
-            ["one mesh", "single-mesh tiling", "single-mesh tiling"],
-            ["several meshes", "planned carve, then per-rank tiling", "flexible placement; a fork it cannot handle falls back to STRICT"],
+            ["one mesh, every stage on one rank", "single-mesh tiling", "single-mesh tiling"],
+            [
+              "one mesh with a joint stage, or several meshes",
+              "planned carve, then per-rank tiling",
+              "flexible placement; a fork it cannot handle falls back to STRICT",
+            ],
           ]}
         />
+        <Text size="small" tone="tertiary">
+          Blaze's multi_mesh flag is set for more than one mesh or any stage spanning several ranks, so a galaxy with 4x1 rank
+          columns and 4x2 stages takes the planned carve (carver example F).
+        </Text>
       </Stack>
 
       <Stack gap={10}>
