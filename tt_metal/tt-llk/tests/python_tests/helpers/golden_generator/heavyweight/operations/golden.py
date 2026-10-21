@@ -128,26 +128,38 @@ def check_pack_effects(pack_effects: Dict) -> Dict:
 class Golden:
     """An operation, expressed as a chain of data-transfer blocks."""
 
-    #: The architecture's blocks. Set by each architecture's subclass, so
-    #: constructing a golden needs no arguments.
-    blocks_class: Optional[type] = None
-
     op_name: str = "golden"
 
-    def __init__(self, blocks: Optional[DataTransferBlocks] = None):
-        if blocks is None:
-            if self.blocks_class is None:
-                raise TypeError(
-                    f"{type(self).__name__} has no architecture. Use an "
-                    f"architecture's golden (e.g. QuasarDataCopyGolden) or pass "
-                    f"blocks explicitly."
-                )
-            blocks = self.blocks_class()
-        self.blocks = blocks
+    def __init__(self, arch=None, blocks: Optional[DataTransferBlocks] = None):
+        """Bind the architecture this golden runs on.
+
+        `arch` is an :class:`.arch.ArchProfile` -- the blocks to use and the
+        FPU's mantissa split. Use one of the factories in :mod:`.arch` rather
+        than passing it by hand. `blocks` overrides the profile's blocks, which
+        a test uses to drive one architecture's op through another's blocks.
+        """
+        if arch is None and blocks is None:
+            raise TypeError(
+                f"{type(self).__name__} has no architecture. Use an "
+                f"architecture's factory (e.g. QuasarDataCopyGolden) or pass "
+                f"arch= / blocks= explicitly."
+            )
+        self.arch = arch
+        self.blocks = blocks if blocks is not None else arch.blocks()
         # Set here so reading them before a run gives None rather than
         # AttributeError -- mismatch.py reaches for both when a test fails.
         self.last_chain: Optional[Chain] = None
         self.last_dest_format: Optional[DataFormat] = None
+
+    @property
+    def mantissa_split(self) -> Optional[Tuple[int, int]]:
+        """The FPU's per-phase mantissa split, or ``None`` if unmodelled.
+
+        Comes from the architecture rather than being restated on each
+        operation: it is a property of the FPU, and three ops used to carry
+        identical copies of it.
+        """
+        return self.arch.mantissa_split if self.arch is not None else None
 
     # ------------------------------------------------------------------
     # What an operation declares

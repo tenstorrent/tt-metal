@@ -4,7 +4,7 @@
 """Element-wise binary operations."""
 
 from functools import partial
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 from helpers.format_config import DataFormat
@@ -32,18 +32,14 @@ class EltwiseBinaryGolden(Golden):
 
     op_name = "eltwise"
 
-    #: Explicit mantissa bits the multiplier takes from each operand per phase,
-    #: as (srcA, srcB). ``None`` means this architecture's split is not modelled
-    #: and a multiply is computed exactly, at Dest precision.
-    MANTISSA_SPLIT: Optional[Tuple[int, int]] = None
-
     def __init__(
         self,
         operation: MathOperation = MathOperation.Elwadd,
         math_fidelity: MathFidelity = MathFidelity.HiFi4,
+        arch=None,
         blocks=None,
     ):
-        super().__init__(blocks)
+        super().__init__(arch, blocks)
         self.operation = operation
         self.math_fidelity = math_fidelity
         self.op_name = f"eltwise:{operation.name.lower()}"
@@ -54,7 +50,7 @@ class EltwiseBinaryGolden(Golden):
     def models_fidelity(self) -> bool:
         """Whether this op runs the multiply as accumulated partial products."""
         return (
-            self.operation is MathOperation.Elwmul and self.MANTISSA_SPLIT is not None
+            self.operation is MathOperation.Elwmul and self.mantissa_split is not None
         )
 
     def build_chain(self, cfg: OpConfig) -> Chain:
@@ -109,7 +105,7 @@ class EltwiseBinaryGolden(Golden):
         :func:`.fidelity.flush_pre_carry_denormals` for the rule and why a
         matmul is exempt. Pass `dest_format` to model it; ``None`` skips it.
         """
-        a, b = operand_halves(regs["srcA"], regs["srcB"], self.MANTISSA_SPLIT, phase)
+        a, b = operand_halves(regs["srcA"], regs["srcB"], self.mantissa_split, phase)
         a, b = resolve_non_finite(a, b, regs["srcA"], regs["srcB"], phase)
         product = a * b
         if dest_format is None:
