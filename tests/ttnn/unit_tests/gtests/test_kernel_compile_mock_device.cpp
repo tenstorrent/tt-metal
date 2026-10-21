@@ -17,6 +17,7 @@
 #include <exception>
 #include <functional>
 #include <initializer_list>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -565,6 +566,13 @@ protected:
     }
 
     void TearDown() override {
+        if (HasFailure()) {
+            const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
+            std::cerr << "Reproduce without hardware:\n  TT_METAL_CACHE=$(mktemp -d) tt-nn-validation-smoke "
+                      << "--gtest_filter='" << info->test_suite_name() << "." << info->name() << "'\n"
+                      << "If your change makes the op reject this config on purpose, update the case in\n"
+                      << "  tests/ttnn/unit_tests/gtests/test_kernel_compile_mock_device.cpp\n";
+        }
         device_.reset();
         env_.reset();
     }
