@@ -1,0 +1,9 @@
+{
+  "utc": "2026-10-21T05:13:28.994981+00:00",
+  "status": "DONE",
+  "job_id": 140369,
+  "active_queue": "",
+  "scontrol": "JobId=140369 JobName=no-shell\n   UserId=divanovic(4225) GroupId=divanovic(4225) MCS_label=N/A\n   Priority=1 Nice=0 Account=(null) QOS=(null)\n   JobState=CANCELLED Reason=None Dependency=(null)\n   Requeue=1 Restarts=0 BatchFlag=0 Reboot=0 ExitCode=0:0\n   RunTime=03:36:51 TimeLimit=09:00:00 TimeMin=N/A\n   SubmitTime=2026-10-21T01:34:23 EligibleTime=2026-10-21T01:34:23\n   AccrueTime=Unknown\n   StartTime=2026-10-21T01:34:23 EndTime=2026-10-21T05:11:14 Deadline=N/A\n   PreemptEligibleTime=2026-10-21T01:34:23 PreemptTime=None\n   SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-10-21T01:34:23 Scheduler=Main\n   Partition=bh_sc36_2 AllocNode:Sid=localhost:2312720\n   ReqNodeList=bh-glx-120-c02u02,bh-glx-120-c06u14 ExcNodeList=(null)\n   NodeList=bh-glx-120-c02u02,bh-glx-120-c06u14\n   BatchHost=bh-glx-120-c02u02\n   NumNodes=2 NumCPUs=2 NumTasks=2 CPUs/Task=1 ReqB:S:C:T=0:0:*:*\n   ReqTRES=cpu=2,mem=2M,node=2,billing=2\n   AllocTRES=cpu=2,node=2,billing=2\n   Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=*\n   MinCPUsNode=1 MinMemoryNode=0 MinTmpDiskNode=0\n   Features=(null) DelayBoot=00:00:00\n   OverSubscribe=NO Contiguous=0 Licenses=(null) Network=(null)\n   Command=(null)\n   WorkDir=/home/divanovic\n   Power=\n   \n\n",
+  "accounting": "Slurm accounting storage is disabled\n",
+  "detail": "Both task hosts released: Slurm 140369 absent from active queue after scancel; task processes and device holders verified empty before release. Slurm accounting is disabled."
+}
