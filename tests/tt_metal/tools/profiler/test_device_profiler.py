@@ -295,11 +295,7 @@ def test_custom_cycle_count():
     _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
-# Regression test for #61816: the host profile buffer is (bank size x DRAM banks) bytes, and that product used to be
-# formed in 32-bit, so a large program support count wrapped it to a fraction of the device data and the read at device
-# close overran it. A Blackhole bank holds 48 B x 5 RISCs x profiler cores per bank x N, so the product passes
-# UINT32_MAX above N = 142,029 on p100a (18 cores x 7 banks) and lower on 8-bank parts; 150,000 wraps on all of them.
-# Wormhole runs out of device DRAM before its own wrap point (N = 186,413), so it cannot reach this path.
+# At this support count the host profiler buffer (bank size x DRAM banks) exceeds 4 GiB on every Blackhole part.
 def test_large_program_support_count():
     WRAPPING_PROGRAM_SUPPORT_COUNT = 150000
     REF_CYCLE_COUNT = 52 * 2000
