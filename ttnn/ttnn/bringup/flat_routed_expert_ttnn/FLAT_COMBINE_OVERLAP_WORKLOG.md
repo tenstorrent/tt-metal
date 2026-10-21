@@ -1707,3 +1707,27 @@ exchange buffer S = N PPO + 1 pages per chip (S = 32 put all of an owner's reque
 masks 45 -> 23 us). No gain: unrolling the bucket loop (~27 instructions per index, issue bound). Open: route
 imbalance from clustered rows (max / mean rows per core 1.9 at 64 cores), the bucket loop's instruction count.
 Her plan for comparison: sparse_push_plan 0.73-0.80 ms on 120 cores + table gather 0.06 ms per full layer.
+
+### GLM-5.3 in the fused flat + combine harness (2026-10-21, LoudBox 2 x 4, bh-lb-09 12 x 10, 200G, uniform, fake weights)
+Shape: E 256 (32 per chip), top-8, H 6144, I 2048, SiLU, bf4 weights. Recipe (scratch_flat_combine_rf.py):
+`FC_H=6144 FC_I=2048 FC_EPC=32 FC_K=8 FC_ACT=silu FC_L1=1 FC_DEVPLAN=1 FC_PIPE=1 SPC_PIECE=12288 FC_PAYLOAD=12352
+MIMO_FL_CMB_DRISC=1 MIMO_FL_DRISC_DUAL=0 MIMO_FL_DRISC_PURE=1 MIMO_FL_ND=32 MIMO_FL_RDOWN=0 FC_DET_REPEAT=0` + the
+device profiler (TT_METAL_DEVICE_PROFILER / PROFILER_MID_RUN_DUMP / PROFILER_CPP_POST_PROCESS, needed for the timings).
+What it took (each a setup failure, nothing hung):
+- **One piece per row:** the L1 hand-off needs a whole row per fabric packet; 12288 B rows -> piece 12288, payload
+  12352 (BH max 15232: K2.7's 14336 B rows fit too).
+- **Cells:** the default plan for this shape (dual DRISC, reader down columns) is 64 gate/up + 36 down + 16 Tensix
+  readers + 4 relays = all 120 cells, none left for the combine. Pure DRISC, no reader down columns, 32 down: 64 + 32
+  + 1 launcher + 4 relays = 101, 19 cells for the combine.
+- **Accumulator L1:** each accumulator keeps its home tokens' fp32 sums resident (tokens / A x row tiles x 4 KB): at
+  S 640 with 15 accumulators 43 x 6 x 4 KB = 1.06 MB of the 1376 KB arena, no room for one landing slot per source.
+  The ring knobs (ring_depth / pool_slots, inj_slots, n_acc, acc_on_ports) do not shrink that; the planner caps A at
+  16. S 320: separate layout (7 ports + FC_NACC=12) fits at ring depth 4.
+- The harness's determinism repeat (ttnn.sum, ~225 KB static CBs) clashes with the arena: FC_DET_REPEAT=0.
+| S / chip | layout | ring depth | flat alone | combine alone | fused | fused / flat |
+| 320 | 7 ports + 12 accumulators | 4 | 1665 | 908 | 1680 | 1.009 (98% hidden) |
+| 640 | 16 accumulators on ports, inj_slots 8 | 1 | 1807 | - | 2769 | 1.533 |
+First fused call exact (worst per-token rel err 0) at both. Flat alone at S 320: 32 x 21.2 MB of bf4 weights = 680 MB,
+floor 1328 us at 512 GB/s: 80%. Next for S 640 (LoudBox only; a Galaxy chip at chunk 5120 holds 160 tokens, ~270 KB
+of sums per accumulator): bf16 sums or flushing finished tokens, so the rings get the L1; and the combine sizing its
+accumulators / rings from the shape instead of harness knobs (consolidation).

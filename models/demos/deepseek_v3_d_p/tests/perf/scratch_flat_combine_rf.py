@@ -192,6 +192,11 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
     rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
     taken = {tuple(c) for k in ("arena_cores", "gu", "down", rd_key, "relays", "coords") for c in plan[k]}
     cells = CELLS or [(x_, y_) for y_ in range(grid0.y) for x_ in range(grid0.x) if (x_, y_) not in taken]
+    logger.info(
+        f"{routing}: flat roles "
+        + ", ".join(f"{k} {len(plan[k])}" for k in ("gu", "down", rd_key, "relays", "arena_cores") if k in plan)
+        + f"; {len(cells)} cells left for the combine"
+    )
     shard = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     dram = ttnn.DRAM_MEMORY_CONFIG
     rm = lambda t, d: ttnn.from_torch(  # noqa: E731
