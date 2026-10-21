@@ -1227,6 +1227,16 @@ targets:
             accuracy:
               top1: 87
               top5: 97
+      bh_p150:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              # Base model measured top-1 97.80 / top-5 100.00 on one Blackhole chip (2026-10-21); Instruct not yet measured on P150.
+              top1: 89
+              top5: 98
   llama3.3-70b:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
     skus:
