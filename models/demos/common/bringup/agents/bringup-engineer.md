@@ -61,8 +61,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    at their normal settings, a high-precision variant only when a measured end-to-end gap needs it; cross-chip sums
    in bf16. Reference point: GLM-5.3's production settings (attention HiFi2, experts LoFi with fp32 accumulation, bf16
    reduce-scatter). Never above the reference, never a parity-only rounding (rule 17). Every such choice is a
-   `Setting` whose `max_precision` value is the exact / highest one (HiFi4, fp32 accumulation, the exact wider weight
-   format): the per-step tests run there to catch logic bugs (rule 14); it is never the shipped default.
+   `Setting` in tt/settings.py with its realistic default, and every test (component, swap, ladder, contract, fork)
+   runs the defaults. No device run at max precision, ever, and no max-precision device path (owner, F137): a separate
+   path means ops, options or fork variants kept only for tests, which is debt. One may be added only if a concrete
+   case proves that the CPU diagnosis (rule 14) cannot separate a logic bug from a precision gap, and then only as an
+   owner decision, never as a default.
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
@@ -76,8 +79,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    implementation choice, a fork option) is a `Setting` in the model's `tt/settings.py`
    (`models/demos/common/bringup/core/model_settings.py`), read with `settings.get(...)`. Never read an environment
    variable elsewhere in the model's code; in a fork, take behaviour as an op argument (an environment knob only for
-   diagnostics, marked `diagnostic` on its line). The orchestrator checks the files you change. Every precision
-   switch (fidelity, accumulation, KV dtype) also names its full-precision value in the table's `max_precision`.
+   diagnostics, marked `diagnostic` on its line). The orchestrator checks the files you change. A choice that only
+   emulates a reference format is declared in `Setting(emulation=...)` and is never a default (rule 17, F137).
 11. If you hit something that is in neither known-issues file, add one bullet to the model's
    `bringup/known_issues.md` (create it with a `# Known issues: <model>` heading if absent), in the form
    `- **[<ID>] <title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`, where `<ID>` is the next free id of
@@ -109,28 +112,23 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    step that is only hard, or that an existing op, a composition or a fork could do, is cheating.
 12. Do not commit. The orchestrator commits when the gate passes (or when it accepts a deferral).
 13. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
-14. Precision checks. The shipped defaults are realistic (rule 7). Component and swap tests always run at the model's
-   `max_precision` (testing/model_precision.py): tight per-step limits catch logic bugs (a wrong index, a missing
-   scale); the realistic defaults are judged end to end (ladder, contract tests, the quick A/B), never by the
-   component limits.
-   Maximum precision means the device's full precision for the reference's own dtypes (its native numerics, rule
-   17: no parity-only rounding), never more: no fp32 where the reference computes in bf16, no exact or emulated
-   paths to beat a limit. The target of every check is the full-precision reference (F128: goldens and per-step
-   references at `numerics: native`); the reference at its own shipped precision only sets the margin. Matching an
-   older device path bit for bit is never a requirement and never a reason to reject an op or a fusion (owner): a
-   change is judged by its speed and those metrics only. Every accuracy
-   limit is 2 x the noise floor
-   of those dtypes (the gate prints it as `limit ... = 2.0 x the precision model's miss`). When a check fails at the
-   reference's precision, find the device error that exceeds the noise floor (a truncation, a bias, a wrong dtype);
-   if there is none, stop and report the check, its value and its limit (answer `disagree` on a note asking for it)
-   instead of raising the precision. The owner rejects a model made accurate above its reference to pass a test.
-   Numerics that cannot be fixed (owner's general guidance): when a step misses its noise floor and you find no bug
-   and no lower-precision choice to undo at the device's normal settings (HiFi4, fp32 accumulation, approximations
-   off, TF32 weight rounding at load), never emulate: no multi-pass or split (hi + lo) matmuls, no exact kernels, no
-   CPU-side arithmetic. No production run would allow them. Leave the step as it is, write a known_issues entry with
-   the evidence (the stage, its numbers vs the floor), say so in your summary (answer `disagree` on a note or fix
-   that asks for more), and stop: the owner waives it (`tests.waivers`) and it is debugged once the model produces
-   output tokens.
+14. Precision checks (owner). Every device test (component, swap, ladder, contract, fork) runs the shipped realistic
+   settings and compares the device with the full-precision CPU reference (`numerics: native`). Its limit is calib x
+   how far the reference at its own real precision (its real dtypes, roundings and accumulation, e.g. fp32
+   accumulation wherever the reference accumulates in fp32) lands from full precision on the same comparison (per
+   step: the larger of the official arithmetic and the input nudge; end to end: the official reference's drift on the
+   rung, fed as the device is), never below one rounding of the output to the reference's dtype for that output. The
+   gate prints the limit and its source. When a per-step check fails, the test also runs the step's CPU reference at
+   the device's real formats on the same inputs (testing/devfmt.py; the model's `devfmt_component` hook: weights
+   through their stored block formats, bf16 activations where the device keeps bf16) and prints a diagnosis that never
+   gates: far from it means a bug (a wrong index, scale, dtype, truncation): fix it; close to it means a precision
+   gap: write a known_issues entry with the numbers (value, limit, the device-format CPU value) and stop. Never raise
+   the shipped precision above the reference to pass, never emulate (no split or multi-pass matmuls, no exact
+   kernels, no CPU arithmetic, no TF32 or fp8 rounding the device does not compute in). Bit-identity with an older
+   device path is never a criterion and never a reason to reject an op or a fusion (owner); a change is judged by
+   speed and these limits only. Determinism (the same path, same inputs, same bytes) is still required. The owner may
+   waive a step whose target is right but which the device's formats cannot reach (`tests.waivers`); a waiver never
+   covers a wrong target.
 15. Every box. When the brief has a "Boxes" section, the code must run on every box it lists, not only on this run's:
    read chip counts and the mesh shape from the mesh, never from constants that fit this box; size anything that
    depends on the chip count (cache stripes, a chip's share of a chunk, alignment) for every listed box (e.g. the least

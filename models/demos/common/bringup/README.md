@@ -87,10 +87,10 @@ Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything 
   `<PREFIX><NAME>` environment variables override it for experiments and A/B reports. The orchestrator fails an agent
   step that reads the environment anywhere else in the model's code (`testing/settings_lint.py`); Z.1 moves anything
   left over. A value a gate checks (`serving.kv_dtype`) lives in the spec.
-- **Precision rule**: component and swap tests always run at maximum precision (each precision switch's
-  `max_precision` value in `tt/settings.py`, applied by `testing/model_precision.py`; switch
-  `tests.component_max_precision`). Shipped precision, lowered by perf picks, is judged end to end by the ladder and
-  the contract tests only.
+- **Precision rule** (owner): the model ships realistic precision from its first step and every device test runs it;
+  there is no device run at max precision, ever (F137). Limits are calib x the reference's own distance from full
+  precision (F80 per step, F128 / F134 end to end). A failing per-step test is diagnosed on the CPU at the device's
+  formats (`testing/devfmt.py`), never by a higher-precision device run.
 - **Forks** (`ttnn/ttnn/bringup`): behaviour comes in as op arguments set from the model's settings; an environment
   knob only for diagnostics, marked `diagnostic` on its line.
 

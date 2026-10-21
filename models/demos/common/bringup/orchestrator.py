@@ -830,6 +830,9 @@ class Orchestrator:
                 [p for p in self.last_changed if p.endswith((".py", ".cpp", ".hpp", ".h"))],
             )
         ]
+        if f"{rel(self.spec, self.spec.model_dir)}/tt/settings.py" in self.last_changed:  # F137: no emulation default
+            sets = model_precision.model_settings(self.spec, fresh=True)
+            problems += [f"settings: {v}" for v in settings_lint.emulation_violations(sets)]
         # F113: bring-up ops before stock TTNN (a listed stock op needs a BREADCRUMBS reason); a changed op folder keeps
         # its README.md and INDEX.md entry
         problems += [
@@ -1349,30 +1352,15 @@ class Orchestrator:
             sides = []
         code = self.ab_code_key(task)
         kinds = {n: k for n, k, _, _ in self.ab_items(task)}
-        # F121: when max precision pins every switch to one side's values, the gate's frozen tests are that side's:
-        # they run once, there, and the other side shows the same result (they cannot see the change)
-        quick = self.ab_quick(task)
-        shared = self.gate_tests_side(task) if len(sides) == 2 and not quick and self.switches_pinned(task) else None
         try:
-            for side, env in sides:
-                parts = None
-                if shared and side != shared:
-                    parts = [n for n, k in kinds.items() if k != "test"]
-                for n, r in self.ab_measure(task, side, env, base, code, only=parts).items():
+            for side, env in sides:  # F137: every run at the shipped settings, the switch as each side sets it
+                for n, r in self.ab_measure(task, side, env, base, code).items():
                     if kinds[n] == "quick":
                         rec["quick"][side] = r
                     elif kinds[n] == "profile":
                         rec["profile"][side] = r
                     else:
                         rec["tests" if kinds[n] == "test" else "ladder"].setdefault(n, {})[side] = r
-            if shared:
-                other = "new" if shared == "old" else "old"
-                for n, r in rec["tests"].items():
-                    if shared in r:
-                        r[other] = dict(r[shared], shared=f"the {shared} side's run: max precision pins every switch")
-                rec["note"] = (rec["note"] + "; " if rec["note"] else "") + (
-                    f"frozen tests ran once ({shared} side): max precision pins every switch, so they cannot see the change"
-                )
         except InfraStop as e:
             rec["note"] = f"stopped early: {e.sig} (reset the board; `decide --task {tid} --rerun` measures again)"
         same = [
@@ -1647,17 +1635,6 @@ class Orchestrator:
             return {"metrics": got, "source": f"quick A/B {side / 'quick'}; full gate pending", "partial": True}
         kept = json.loads(stamp_file.read_text())
         code = self.ab_code_key(task)
-        tests_side = self.gate_tests_side(task)  # F120: the side whose switch values the gate's frozen tests run at
-        if tests_side == "old" and kept.get("version") == 2:
-            old_f = self.run_dir / "ab" / tid / "old" / "side.json"
-            old = json.loads(old_f.read_text()) if old_f.exists() else {}
-            if old.get("version") != 2:
-                return None
-            for n, it in old.get("items", {}).items():
-                if it.get("kind") == "test":
-                    kept.setdefault("items", {})[n] = dict(it, side="old")
-        elif tests_side is None or (tests_side == "old" and kept.get("version") != 2):
-            return None
         if kept.get("version") == 2:  # F116: per-run stamps; every run of the report's 'on' side, on this code
             items = kept.get("items", {})
             want = [n for n, _, _, _ in self.ab_items(task)]
@@ -1686,38 +1663,11 @@ class Orchestrator:
             if d.is_dir() and (d.name in kept["tests"] or d.name in kept["ladder"] or d.name == "profile")
         ]
         ladder = set(kept.get("ladder", {}))
-        tests_from = side.parent / ("old" if tests_side == "old" else "new")
-        names = sorted(set(names) | ({n for n in kept["tests"]} if tests_side == "old" else set()))
         for name in sorted(names, key=lambda n: (n in ladder, n == "profile")):  # tests, then the gate's rung, profile
             if name in ladder and name != rung:
                 continue
-            src = tests_from if name in kept["tests"] else side
-            metrics.update({k: v["value"] for k, v in M.load(tid, src / name).items()})
-        how = f"frozen tests from {tests_from}, ladder and profile from {side}" if tests_side == "old" else str(side)
-        return {"metrics": metrics, "source": how}
-
-    def switches_pinned(self, task: dict) -> bool:
-        """F121: max precision names a value for every switch of the pick (the frozen tests cannot see the change)."""
-        ab = task.get("ab") or {}
-        names = set(model_precision.switch_env(self.spec, ab.get("env") or {})[0])
-        names |= set(model_precision.switch_env(self.spec, ab.get("change") or {})[0])
-        mp = dict(model_precision.overrides(self.spec)) if self.spec.get("tests.component_max_precision") else {}
-        return bool(names) and names <= set(mp)
-
-    def gate_tests_side(self, task: dict) -> str | None:
-        """F120: the gate's frozen tests run at the model's max precision, and after the accept the switch's 'on' values
-        are the defaults: per switch the max-precision value if it has one, else the 'on' value. 'old' or 'new' when
-        that is exactly one side's switch, else None (no side measured the gate's tests)."""
-        ab = task.get("ab") or {}
-        off, _ = model_precision.switch_env(self.spec, ab.get("env") or {})
-        on, _ = model_precision.switch_env(self.spec, ab.get("change") or {})
-        mp = dict(model_precision.overrides(self.spec)) if self.spec.get("tests.component_max_precision") else {}
-        want = {k: mp.get(k, on.get(k)) for k in set(off) | set(on)}
-        if want == on:
-            return "new"
-        if want == off:
-            return "old"
-        return None
+            metrics.update({k: v["value"] for k, v in M.load(tid, side / name).items()})
+        return {"metrics": metrics, "source": str(side)}
 
     def perf_reject(self, task: dict, rec: dict) -> int:
         """The owner declines the change: the agent's files under the task's paths go back to HEAD, the task is
