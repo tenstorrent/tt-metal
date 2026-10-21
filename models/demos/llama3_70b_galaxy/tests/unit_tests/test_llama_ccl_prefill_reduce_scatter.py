@@ -20,6 +20,11 @@ RING_SIZE = 4
 WIDTH = 8 * RING_SIZE
 
 
+@pytest.fixture(autouse=True)
+def ensure_devices():
+    """Skip the parent Galaxy device-count check: this test opens no device."""
+
+
 def _bh_no_prefetcher_prefill_ccl():
     ccl = TT_CCL.__new__(TT_CCL)
     ccl.mode = "prefill"
