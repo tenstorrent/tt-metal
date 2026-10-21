@@ -1247,3 +1247,13 @@ bit-exact against the default at both levels.
 - On the real path it buys nothing: as with UB 2 (1617 -> 1561 with x vs 1608 -> 1412 without), once the DRISC gets
   faster the x traffic against the DRISC tiles takes over. That conflict is now what gates the real path.
 Kept as a probe (not the default: no gain where it matters; level 2 is not safe).
+
+### x vs the weight stream on GLM-5.3's real path: the known knobs (2026-10-21)
+Real path (x, y), M 80 / 160 us: default 1667 / 1926; UB 2 1672 / 2116; GDDR port weights 1,1,5 (MIMO_FL_DRISC_MPFE,
+GLM-Flash's best at M 145 with UB 2) 1703 / 2007; UB 2 + 1,1,5 1746 / 2060; + LEAN 1 1751 / 2057. All worse. With
+the earlier no-gain list (x reads on NOC0: hang or no help; MPFE alone; relay RM_CHUNKS / x ring depth / XRD_BATCH;
+DMA caps; free-on-sent; drain) the knob space is exhausted: the x gathers (row reads into a saturated GDDR, ~7% of
+the bytes) queue behind the bulk streams whatever the NoC, port weight or depth. Gap to the floor: 217 / 353 us
+(1450 / 1573 with x and y at 512 GB/s). What is left is structural: x not read from DRAM in the experts window (the
+dispatch lands rows in L1 in the experts' order), or x read as bulk (expert-contiguous, pre-tilized bfp8 from the
+dispatch; possibly by the DRISC in the same queue as the weights) instead of row gathers.
