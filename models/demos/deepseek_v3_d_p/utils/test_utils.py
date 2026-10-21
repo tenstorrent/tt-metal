@@ -38,12 +38,13 @@ def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
     return torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(-1, d)
 
 
-def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
-    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2, TP-replicated) to host float32, keeping
-    TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+def gather_cache_tp0(tt_cache, mesh_device, sp_axis: int = 0) -> torch.Tensor:
+    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2 over ``sp_axis``, TP-replicated) to host
+    float32, keeping TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+    dims = (2, 1) if sp_axis == 0 else (1, 2)
     cache_full = ttnn.to_torch(
         tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=mesh_device.shape),
     ).to(torch.float32)[
         :, :1
     ]  # [num_slots, 1, seq_len_cache, head_dim]
