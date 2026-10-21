@@ -43,7 +43,7 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31.8 s | 9.8 | 60 | 79 | one prompt, replicated to the 8 rows; 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
 | 32  | Galaxy 8x4 (Blackhole) | 65 493 | 27.3 s | 6.7 | 33 | 216 | one run: every slot populated (4 prompts per row prefilled one after another at 2400 tok/s on the MoE regions prefill path), needle retrieved by all 32 slots, users of a row bit-identical; decode step 148.2 ms through the regions expert kernel (the stacked block op decodes at 90 ms when its copy fits: one-run re-measure queued) |
 | 8   | Galaxy 8x4 (Blackhole) | 1 047 612 | 460 s | 6.4 | 33 | 51 | one run (needle depth 0.56, retrieved by all 8 slots): one prompt, replicated to the 8 rows; 2276 tok/s prefill; decode step 156.0 ms through the regions expert path (the stacked expert copy does not fit beside the 1 M caches) |
-| 32  | Galaxy 8x4 (Blackhole) | 1 047 526 (user-partitioned cache) | 462-495 s | 6.2 | 33 | 199 | 4 prompts prefilled one after another (each replicated to the 8 rows, 31 min to fill the 32 slots) at 2118-2269 tok/s; decode step 160.8 ms; the column-3 users' output diverges from the other columns' (under investigation; needle at depth 0.5 not retrieved by any slot, as in the single-user run) |
+| 32  | Galaxy 8x4 (Blackhole) | 1 047 612 (user-partitioned cache) | 456-489 s | 6.6 | 33 | 210 | one run (needle depth 0.56, gen 160): 4 prompts per row prefilled one after another (each replicated to the 8 rows, 31 min to fill the 32 slots) at 2142-2296 tok/s; needle retrieved by all 32 slots, the 32 chains bit-identical over 160 tokens; decode step 152.1 ms through the regions expert path |
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1.2 s | 6.9 | - | 14 | one run (multimodal demo): eager vision tower 90 ms + prefill; decode step 145 ms; 45 layers bfp4 experts; answer identical to HF (one-run re-measure with today's defaults queued) |
 
 Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no
@@ -51,7 +51,7 @@ long-context prefill path yet, so not the default): traced decode step 58.1 ms a
 551 aggregate) and 135.8 ms at 256 users (7.4 tok/s per user, 1885), same chain PCC and greedy ids.
 
 Accuracy on the same stack: the 16 K and 64 K needle prompts generate 8/8 greedy tokens identical to the HF CPU
-reference (`reference/compare_to_tt.py`); the needle is retrieved at 1 M for distances up to ~460 K tokens; the
+reference (`reference/compare_to_tt.py`); the needle is retrieved at 1 M for distances up to ~460 K tokens (32 of 32 slots in the 32-user run; a needle placed 523 K tokens before the question is missed, and on that prompt one slot per row also flipped its first token, under investigation); the
 image demo's 16 greedy tokens match HF. Targets are the design goals of `~/ashai/GLM_5.3_DESIGN.md` (19 / 33 / 60
 tok/s per user at 256 / 32 / 8 users); the optimization phase is in progress (fused mHC pre-block, the EP32 exchange,
 the sparse decode at long context).
