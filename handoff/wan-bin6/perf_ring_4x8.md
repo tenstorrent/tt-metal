@@ -171,6 +171,25 @@ The cost of chunking is about the same in seconds at both power levels (+0.18 s 
 
 Chunking adds about 0.18 s (+52%) to the VAE and nothing to denoise. The work is about the same (the same causal convolutions, run on 21 latent frames in pieces of 1, 7, 7 and 6 with a cache passed between them), so the extra time is probably per-chunk op and dispatch overhead plus the `concat` that joins the chunks. The branch chunks at every resolution on 7-bank DRAM. Chunking only at 720p, where full-T runs out of memory, would get the 480p time back.
 
+## Repeat runs (n=3 per config)
+
+Run on 2026-10-21 on b10u20 with the same build. Each config got 3 separate pytest runs (fresh process each, weights from cache), round-robin over config and power so drift spreads evenly. Every run's timed pass uses the same prompt (the butterfly prompt, `prompts[1]`), with the same fractal conditioning image for I2V. All 32 chips logged 130 W or 75 W in every run (`TT_METAL_TDP_LIMIT_WATTS=130` or `0`; `0` returns to the 75 W bh-mod override). Seconds, mean ± sample std dev, with min–max in brackets.
+
+| Config | Power | Image enc | Denoise | VAE | Total |
+|---|---|---|---|---|---|
+| T2V 480p | 130 W | – | 41.10 ± 0.39 [40.65–41.39] | 0.496 ± 0.002 | 41.67 ± 0.39 [41.23–41.97] |
+| T2V 480p | 75 W | – | 55.76 ± 0.05 [55.73–55.82] | 0.520 ± 0.002 | 56.36 ± 0.05 [56.33–56.42] |
+| T2V 720p | 130 W | – | 128.45 ± 0.19 [128.25–128.62] | 1.020 ± 0.012 | 129.56 ± 0.19 [129.35–129.73] |
+| T2V 720p | 75 W | – | 154.95 ± 0.08 [154.87–155.02] | 1.087 ± 0.010 | 156.12 ± 0.08 [156.04–156.19] |
+| I2V 480p | 130 W | 0.766 ± 0.002 | 41.31 ± 0.11 [41.25–41.43] | 0.482 ± 0.009 | 42.63 ± 0.09 [42.57–42.74] |
+| I2V 480p | 75 W | 0.881 ± 0.010 | 55.78 ± 0.06 [55.74–55.85] | 0.517 ± 0.009 | 57.24 ± 0.06 [57.21–57.31] |
+| I2V 720p | 130 W | 0.905 ± 0.018 | 128.34 ± 0.66 [127.58–128.79] | 1.024 ± 0.010 | 130.34 ± 0.64 [129.60–130.75] |
+| I2V 720p | 75 W | 0.950 ± 0.005 | 154.76 ± 0.10 [154.66–154.85] | 1.085 ± 0.007 | 156.86 ± 0.10 [156.76–156.95] |
+
+- **Run-to-run spread is small:** at most 0.9% in denoise and total. 75 W is tighter (≤0.1%) than 130 W (0.1–0.9%), probably because at 75 W the chips sit at the power limit the whole run.
+- **The earlier single runs above fall inside these ranges or within 0.2 s of them,** so the earlier tables stand.
+- **The gap to the 8-bank CI Galaxy (PR #61784, 130 W) is well outside the noise.** With these means, b10u20 is +2.02 s (+5.2%) at T2V 480p, +4.59 s (+3.7%) at T2V 720p and +4.14 s (+3.3%) at I2V 720p in denoise, against a standard deviation of at most 0.66 s. The CI side is one run per config, but the `d07` nightlies agree with it within about 1%.
+
 ## Notes
 
 - The perf test asserts on its targets after printing the results table. For these runs the assert was changed locally to a warning so that all 8 configs would report (not committed).
