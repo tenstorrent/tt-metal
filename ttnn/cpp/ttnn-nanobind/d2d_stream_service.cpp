@@ -38,6 +38,7 @@ namespace {
 using tt::tt_metal::distributed::PCIeCoreLocation;
 using tt::tt_metal::distributed::SocketMemoryConfig;
 using tt::tt_metal::distributed::multihost::Rank;
+using ttnn::D2DBoundaryDescriptor;
 using ttnn::D2DEndpointConfig;
 using ttnn::D2DPipelineDescriptor;
 using ttnn::D2DRankDescriptor;
@@ -139,10 +140,17 @@ void py_module_types(nb::module_& mod) {
         .def_ro("coords", &D2DReceiverDescriptor::coords)
         .def(nb::self == nb::self);
 
+    nb::class_<D2DBoundaryDescriptor>(mod, "D2DBoundaryDescriptor", R"doc(
+        Every receiver across one pipeline-stage boundary. They carry the same chunk, so a reader
+        ungates all of them together.
+    )doc")
+        .def_ro("receivers", &D2DBoundaryDescriptor::receivers)
+        .def(nb::self == nb::self);
+
     nb::class_<D2DRankDescriptor>(mod, "D2DRankDescriptor")
         .def_ro("rank", &D2DRankDescriptor::rank)
         .def_ro("host_name", &D2DRankDescriptor::host_name)
-        .def_ro("receivers", &D2DRankDescriptor::receivers)
+        .def_ro("boundaries", &D2DRankDescriptor::boundaries)
         .def(nb::self == nb::self);
 
     nb::class_<D2DPipelineDescriptor>(mod, "D2DPipelineDescriptor", R"doc(
@@ -474,17 +482,20 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def_static(
             "export_pipeline_descriptor",
-            [](const std::string& service_id, const std::vector<const D2DStreamServiceReceiver*>& receivers, int root) {
+            [](const std::string& service_id,
+               const std::vector<std::vector<const D2DStreamServiceReceiver*>>& boundaries,
+               int root) {
                 // Waits on the other ranks; let other Python threads run meanwhile.
                 nb::gil_scoped_release release;
-                return D2DStreamService::export_pipeline_descriptor(service_id, receivers, Rank{root});
+                return D2DStreamService::export_pipeline_descriptor(service_id, boundaries, Rank{root});
             },
             nb::arg("service_id"),
-            nb::arg("receivers"),
+            nb::arg("boundaries"),
             nb::arg("root") = 0,
             R"doc(
                 Collective over the current distributed world: every rank calls it with the receivers
-                it owns, one per pipeline stage it receives into (empty list if none). `root` gathers
+                it owns, grouped by boundary: one list per pipeline stage it receives into, holding
+                every receiver across that boundary (empty list if none). `root` gathers
                 them and writes d2d_pipeline_descriptor_path(service_id). Returns a
                 D2DPipelineDescriptorFile on `root`, None elsewhere. Keep it alive for as long as
                 readers need the file: it removes the file when garbage-collected.

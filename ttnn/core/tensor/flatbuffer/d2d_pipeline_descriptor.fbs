@@ -34,10 +34,16 @@ table D2DReceiver {
   stage_gate_stride_bytes: uint32;
 }
 
+// Every receiver across one pipeline-stage boundary. They carry the same chunk, so a reader
+// ungates all of them together.
+table D2DBoundary {
+  receivers: [D2DReceiver];
+}
+
 table D2DRank {
   rank: int32;
   host_name: string;
-  receivers: [D2DReceiver];  // one per pipeline stage this rank receives into
+  boundaries: [D2DBoundary];  // one per pipeline stage this rank receives into
 }
 
 table D2DPipelineDescriptor {

@@ -118,11 +118,15 @@ std::vector<uint8_t> D2DPipelineDescriptor::serialize() const {
     std::vector<flatbuffers::Offset<fb::D2DRank>> rank_offsets;
     for (const auto& r : ranks) {
         const auto host_name = builder.CreateString(r.host_name);
-        std::vector<flatbuffers::Offset<fb::D2DReceiver>> receivers;
-        for (const auto& rx : r.receivers) {
-            receivers.push_back(to_flatbuffer(builder, rx));
+        std::vector<flatbuffers::Offset<fb::D2DBoundary>> boundaries;
+        for (const auto& b : r.boundaries) {
+            std::vector<flatbuffers::Offset<fb::D2DReceiver>> receivers;
+            for (const auto& rx : b.receivers) {
+                receivers.push_back(to_flatbuffer(builder, rx));
+            }
+            boundaries.push_back(fb::CreateD2DBoundary(builder, builder.CreateVector(receivers)));
         }
-        rank_offsets.push_back(fb::CreateD2DRank(builder, r.rank, host_name, builder.CreateVector(receivers)));
+        rank_offsets.push_back(fb::CreateD2DRank(builder, r.rank, host_name, builder.CreateVector(boundaries)));
     }
     builder.Finish(fb::CreateD2DPipelineDescriptor(builder, kVersion, builder.CreateVector(rank_offsets)));
     return {builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize()};
@@ -144,9 +148,15 @@ D2DPipelineDescriptor D2DPipelineDescriptor::deserialize(const std::vector<uint8
     }
     for (const auto* fr : *root->ranks()) {
         D2DRankDescriptor r{.rank = fr->rank(), .host_name = fr->host_name() ? fr->host_name()->str() : ""};
-        if (fr->receivers() != nullptr) {
-            for (const auto* rx : *fr->receivers()) {
-                r.receivers.push_back(from_flatbuffer(*rx));
+        if (fr->boundaries() != nullptr) {
+            for (const auto* fb_boundary : *fr->boundaries()) {
+                D2DBoundaryDescriptor b;
+                if (fb_boundary->receivers() != nullptr) {
+                    for (const auto* rx : *fb_boundary->receivers()) {
+                        b.receivers.push_back(from_flatbuffer(*rx));
+                    }
+                }
+                r.boundaries.push_back(std::move(b));
             }
         }
         desc.ranks.push_back(std::move(r));

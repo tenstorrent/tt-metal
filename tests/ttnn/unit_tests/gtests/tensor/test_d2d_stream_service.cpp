@@ -2885,13 +2885,17 @@ TEST(D2DPipelineDescriptorTest, RoundTrip) {
                 .stage_gate_base_addr = with_extras ? 0x2000u : 0u,
                 .metadata_core = with_extras ? std::optional(metadata_core) : std::nullopt}}};
     };
-    // Rank 0 receives nothing, rank 1 receives from rank 0, and rank 2 hosts two stages, so it
-    // has two receivers.
+    // Rank 0 receives nothing. Rank 1 receives from rank 0 over two channels, so its one boundary
+    // has two receivers. Rank 2 hosts two stages, so it has two boundaries.
     desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 0, .host_name = "host0"});
-    desc.ranks.push_back(
-        ttnn::D2DRankDescriptor{.rank = 1, .host_name = "host1", .receivers = {receiver(0, 7, 1, true)}});
     desc.ranks.push_back(ttnn::D2DRankDescriptor{
-        .rank = 2, .host_name = "host2", .receivers = {receiver(1, 2, 2, true), receiver(2, 3, 3, false)}});
+        .rank = 1,
+        .host_name = "host1",
+        .boundaries = {{.receivers = {receiver(0, 7, 1, true), receiver(0, 7, 1, false)}}}});
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{
+        .rank = 2,
+        .host_name = "host2",
+        .boundaries = {{.receivers = {receiver(1, 2, 2, true)}}, {.receivers = {receiver(2, 3, 3, false)}}}});
     EXPECT_EQ(ttnn::D2DPipelineDescriptor::deserialize(desc.serialize()), desc);
 
     const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_round_trip_" + std::to_string(getpid()));
@@ -2902,8 +2906,9 @@ TEST(D2DPipelineDescriptorTest, RoundTrip) {
 }
 
 // describe() reports the receiver's own addresses, and a single-rank export round-trips through the file.
-// With `second_sender_mesh`/`second_receiver_mesh` set, a second pair on those chips stands in for a
-// second pipeline stage on this rank.
+// A second pair on the same chips is a second channel across the same boundary. With
+// `second_sender_mesh`/`second_receiver_mesh` set, a pair on those chips stands in for a second
+// pipeline stage on this rank.
 void verify_pipeline_descriptor_export(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
@@ -2940,36 +2945,45 @@ void verify_pipeline_descriptor_export(
             rc.backing_tensor_addr, receiver->get_backing_tensor().mesh_buffer().get_device_buffer(coord)->address());
     }
 
-    std::vector<const D2DStreamServiceReceiver*> receivers = {receiver.get()};
-    std::vector<ttnn::D2DReceiverDescriptor> expected = {rd};
-    std::unique_ptr<D2DStreamServiceSender> second_sender;
-    std::unique_ptr<D2DStreamServiceReceiver> second_receiver;
-    if (second_sender_mesh) {
-        // No metadata and no gates, so their fields come out empty.
-        std::tie(second_sender, second_receiver) = D2DStreamService::create_pair(
-            second_sender_mesh, second_receiver_mesh, make_config(second_sender_mesh, ttnn::Shape({1, 1, 32, 512})));
-        const auto second = second_receiver->describe();
-        EXPECT_EQ(second.metadata_addr, 0u);
-        EXPECT_EQ(second.stage_gate, ttnn::D2DStageGateConfig{});
-        EXPECT_EQ(second.stage_gate_stride_bytes, 0u);
-        for (const auto& rc : second.coords) {
+    // No metadata and no gates, so their fields come out empty.
+    const auto expect_plain = [](const ttnn::D2DReceiverDescriptor& d) {
+        EXPECT_EQ(d.metadata_addr, 0u);
+        EXPECT_EQ(d.stage_gate, ttnn::D2DStageGateConfig{});
+        EXPECT_EQ(d.stage_gate_stride_bytes, 0u);
+        for (const auto& rc : d.coords) {
             EXPECT_FALSE(rc.metadata_core.has_value());
             EXPECT_EQ(rc.stage_gate_base_addr, 0u);
         }
-        receivers.push_back(second_receiver.get());
-        expected.push_back(second);
+    };
+    auto [side_sender, side_receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, ttnn::Shape({1, 1, 32, 512})));
+    const auto side = side_receiver->describe();
+    expect_plain(side);
+    EXPECT_NE(side.coords.at(0).service_core, rd.coords.at(0).service_core);
+
+    std::vector<std::vector<const D2DStreamServiceReceiver*>> boundaries = {{receiver.get(), side_receiver.get()}};
+    std::vector<ttnn::D2DBoundaryDescriptor> expected = {{.receivers = {rd, side}}};
+    std::unique_ptr<D2DStreamServiceSender> second_sender;
+    std::unique_ptr<D2DStreamServiceReceiver> second_receiver;
+    if (second_sender_mesh) {
+        std::tie(second_sender, second_receiver) = D2DStreamService::create_pair(
+            second_sender_mesh, second_receiver_mesh, make_config(second_sender_mesh, ttnn::Shape({1, 1, 32, 512})));
+        const auto second = second_receiver->describe();
+        expect_plain(second);
+        boundaries.push_back({second_receiver.get()});
+        expected.push_back({.receivers = {second}});
     }
 
     // A file left by an earlier run is replaced, and the export's handle removes the file.
     const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_export_" + std::to_string(getpid()));
     ttnn::D2DPipelineDescriptor{}.write_to_file(path);
-    auto file = D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), receivers);
+    auto file = D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), boundaries);
     ASSERT_NE(file, nullptr);
     EXPECT_EQ(file->path(), path);
     const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(path);
     ASSERT_EQ(desc.ranks.size(), 1u);
     EXPECT_FALSE(desc.ranks[0].host_name.empty());
-    EXPECT_EQ(desc.ranks[0].receivers, expected);
+    EXPECT_EQ(desc.ranks[0].boundaries, expected);
     file.reset();
     EXPECT_FALSE(std::filesystem::exists(path));
 }
