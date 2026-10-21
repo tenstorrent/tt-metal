@@ -51,6 +51,7 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
+class MeshTensor;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -205,6 +206,18 @@ public:
 
     bool contains(IDevice* device);
 };
+
+// The device memory a bound TensorParameter occupies, whether or not an allocation backs it.
+struct BoundTensorFootprint {
+    BufferType buffer_type = BufferType::DRAM;
+    DeviceAddr address = 0;
+    DeviceAddr size_per_bank = 0;
+    // Buffer::unique_id() of the allocation that backed the tensor when it was bound. Empty when the tensor does not
+    // own its allocation.
+    std::optional<size_t> buffer_id;
+};
+
+BoundTensorFootprint make_bound_tensor_footprint(const MeshTensor& tensor);
 
 // The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
 class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
@@ -614,6 +627,10 @@ public:
     // name is unknown; the caller validates known-ness separately).
     experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
+    // the getter returns nullptr if no tensor has been bound.
+    void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
+    const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
     // bound to `tensor_parameter_name`.
@@ -741,6 +758,7 @@ private:
         struct RegisteredTensorParameter {
             TensorSpec spec;
             experimental::TensorSpecRelaxations relaxations;
+            std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
