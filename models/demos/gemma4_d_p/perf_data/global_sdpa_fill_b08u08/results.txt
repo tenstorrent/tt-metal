@@ -1,0 +1,165 @@
+02:52:20 START base_layer64 kind=layer arg=64 branch=main patch=- env=
+03:00:18 END base_layer64 rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3504.5 us over 41 ops; SDPA min/med/max 2551.0/2666.9/2737.4 us
+03:00:18 START base_layer_ci kind=layer arg=ci branch=main patch=- env=
+03:07:20 END base_layer_ci rc=0
+gemma4-layer-global-sz2048-chunk0: layer sum 979.0 us over 41 ops; SDPA min/med/max 144.3/145.5/146.7 us
+gemma4-layer-global-sz2048-chunk1: layer sum 982.5 us over 41 ops; SDPA min/med/max 151.8/154.5/161.7 us
+gemma4-layer-global-sz2048-chunk63: layer sum 3487.3 us over 41 ops; SDPA min/med/max 2440.4/2652.3/2725.5 us
+gemma4-layer-global-sz2048-chunk127: layer sum 6099.6 us over 41 ops; SDPA min/med/max 4941.4/5253.7/5382.6 us
+03:07:21 START base_e2e_2k kind=e2e arg=2048 branch=main patch=- env=
+03:10:51 END base_e2e_2k rc=0
+   DEVICE 262144 tokens in 10310.8ms (25424 tok/s) | staging 320.3ms | wall 10686.4ms
+   ring-depth cost: first=53.6ms -> last=107.6ms = 2.01x over 127 extra chunks of history
+03:10:51 START base_acc kind=acc arg=gemma4_global branch=main patch=- env=
+03:40:57 END base_acc rc=124
+  Config{cache_path=/home/mmanzoor/.cache/ttnn,model_cache_path=/home/mmanzoor/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fall
+03:40:57 HANG on base_acc -> runner stopped; board likely needs reset
+03:41:37 START base_acc2 kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy branch=main patch=- env=
+03:50:19 END base_acc2 rc=0
+  2026-10-20 03:49:05.134 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  3 [ 24576,  32768) logical_n=32768: PCC=0.9993552639481916 RMSE=0.030428 -
+  2026-10-20 03:49:19.031 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  4 [ 32768,  40960) logical_n=40960: PCC=0.9992820459794002 RMSE=0.031972 -
+  2026-10-20 03:49:33.244 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  5 [ 40960,  49152) logical_n=49152: PCC=0.9992525796919709 RMSE=0.032712 -
+  2026-10-20 03:49:49.833 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  6 [ 49152,  57344) logical_n=57344: PCC=0.9992221782045082 RMSE=0.033383 -
+  2026-10-20 03:50:06.473 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  7 [ 57344,  65536) logical_n=65536: PCC=0.9991954698482705 RMSE=0.033945 -
+  ================ 7 passed, 404 deselected in 516.14s (0:08:36) =================
+03:50:20 START base_kvpcc_2k kind=kvpcc arg=2048 branch=main patch=- env=
+03:54:48 END base_kvpcc_2k rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.941301
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.941301 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.982643 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.186612 │ PASS   │
+  ======================== 1 passed in 263.49s (0:04:23) =========================
+03:54:48 START b2_acc kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:55:15   built branch mmanzoor/gemma4-gsdpa-v-from-k at 62657a9465e
+04:03:27 END b2_acc rc=0
+  2026-10-20 04:02:16.455 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  3 [ 24576,  32768) logical_n=32768: PCC=0.9993552639481916 RMSE=0.030428 -
+  2026-10-20 04:02:29.003 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  4 [ 32768,  40960) logical_n=40960: PCC=0.9992820459794002 RMSE=0.031972 -
+  2026-10-20 04:02:41.819 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  5 [ 40960,  49152) logical_n=49152: PCC=0.9992525796919709 RMSE=0.032712 -
+  2026-10-20 04:03:00.562 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  6 [ 49152,  57344) logical_n=57344: PCC=0.9992221782045082 RMSE=0.033383 -
+  2026-10-20 04:03:15.296 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  7 [ 57344,  65536) logical_n=65536: PCC=0.9991954698482705 RMSE=0.033945 -
+  ================ 7 passed, 404 deselected in 485.55s (0:08:05) =================
+04:03:27 START b1_layer64 kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:03:57   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at f9313cfff66
+04:09:22 END b1_layer64 rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3205.2 us over 41 ops; SDPA min/med/max 2351.4/2364.0/2372.0 us
+04:09:22 START b1_layer_ci kind=layer arg=ci branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:15:00 END b1_layer_ci rc=0
+gemma4-layer-global-sz2048-chunk0: layer sum 1038.7 us over 41 ops; SDPA min/med/max 207.7/213.4/218.4 us
+gemma4-layer-global-sz2048-chunk1: layer sum 1050.0 us over 41 ops; SDPA min/med/max 216.6/218.7/222.4 us
+gemma4-layer-global-sz2048-chunk63: layer sum 3194.7 us over 41 ops; SDPA min/med/max 2335.9/2356.8/2375.2 us
+gemma4-layer-global-sz2048-chunk127: layer sum 5460.8 us over 41 ops; SDPA min/med/max 4586.8/4611.7/4627.8 us
+04:15:01 START b1_e2e_2k kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:18:19 END b1_e2e_2k rc=0
+   DEVICE 262144 tokens in 9906.1ms (26463 tok/s) | staging 259.9ms | wall 10212.7ms
+   ring-depth cost: first=54.2ms -> last=100.5ms = 1.86x over 127 extra chunks of history
+04:18:19 START b1_acc kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:32:20 END b1_acc rc=1
+  2026-10-20 04:28:49.958 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  3 [ 24576,  32768) logical_n=32768: PCC=0.9993552639481916 RMSE=0.030428 -
+  2026-10-20 04:29:04.312 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  4 [ 32768,  40960) logical_n=40960: PCC=0.9992820459794002 RMSE=0.031972 -
+  2026-10-20 04:29:19.645 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  5 [ 40960,  49152) logical_n=49152: PCC=0.9992525796919709 RMSE=0.032712 -
+  2026-10-20 04:29:38.176 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  6 [ 49152,  57344) logical_n=57344: PCC=0.9992221782045082 RMSE=0.033383 -
+  2026-10-20 04:29:57.907 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  7 [ 57344,  65536) logical_n=65536: PCC=0.9991954698482705 RMSE=0.033945 -
+  =========== 1 failed, 8 passed, 404 deselected in 834.57s (0:13:54) ============
+  2026-10-20 04:20:00.213 | critical |          Always | TT_THROW: trisc2 build failed. Log: /home/mmanzoor/compiler/tt-metal/runtime/sfpi/compiler/bin/../lib/gcc/riscv-tt-elf/15.1.0/../../../../riscv-tt-elf/bin/ld: final 
+  2026-10-20 04:20:00.927 | critical |          Always | TT_THROW: Failed to generate binaries for ring_joint_sdpa filesystem error: cannot rename: No such file or directory [/data/mmanzoor/tt-metal-cache/tt-metal-cache153
+04:32:20 START b1_kvpcc_2k kind=kvpcc arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:36:19 END b1_kvpcc_2k rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.943989
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.943989 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.983214 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.183518 │ PASS   │
+  ======================== 1 passed in 234.42s (0:03:54) =========================
+04:36:19 START b2_layer64 kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+04:36:49   built branch mmanzoor/gemma4-gsdpa-v-from-k at 62657a9465e
+04:45:34 END b2_layer64 rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3295.7 us over 41 ops; SDPA min/med/max 2408.8/2459.7/2497.0 us
+04:45:34 START b2_layer_ci kind=layer arg=ci branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+04:52:08 END b2_layer_ci rc=0
+gemma4-layer-global-sz2048-chunk0: layer sum 969.5 us over 41 ops; SDPA min/med/max 137.4/140.5/143.4 us
+gemma4-layer-global-sz2048-chunk1: layer sum 977.4 us over 41 ops; SDPA min/med/max 145.5/148.7/161.2 us
+gemma4-layer-global-sz2048-chunk63: layer sum 3276.1 us over 41 ops; SDPA min/med/max 2333.3/2439.5/2489.5 us
+gemma4-layer-global-sz2048-chunk127: layer sum 5664.0 us over 41 ops; SDPA min/med/max 4679.4/4826.7/4931.2 us
+04:52:09 START b2_e2e_2k kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+04:53:49 END b2_e2e_2k rc=0
+   DEVICE 262144 tokens in 10019.8ms (26163 tok/s) | staging 292.2ms | wall 10364.1ms
+   ring-depth cost: first=53.5ms -> last=103.3ms = 1.93x over 127 extra chunks of history
+04:53:49 START b2_kvpcc_2k kind=kvpcc arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+04:57:12 END b2_kvpcc_2k rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.941301
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.941301 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.982643 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.186612 │ PASS   │
+  ======================== 1 passed in 199.02s (0:03:19) =========================
+04:57:12 START b1_acc_rerun kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and chunk2048-q64-unsplit-packed_kv branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:57:42   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at f9313cfff66
+04:58:15 END b1_acc_rerun rc=0
+  2026-10-20 04:58:05.008 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q64-k256 chunk  0 [     0,   2048) logical_n=2048: PCC=0.9997269559744059 RMSE=0.004716 ->
+  2026-10-20 04:58:06.544 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q64-k256 chunk  1 [  2048,   4096) logical_n=4096: PCC=0.999736376741805 RMSE=0.005713 -> 
+  2026-10-20 04:58:08.037 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q64-k256 chunk  2 [  4096,   6144) logical_n=6144: PCC=0.9997152799609178 RMSE=0.006702 ->
+  2026-10-20 04:58:09.600 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q64-k256 chunk  3 [  6144,   8192) logical_n=8192: PCC=0.9996862509353653 RMSE=0.007666 ->
+  2026-10-20 04:58:11.253 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q64-k256 chunk  4 [  8192,  10240) logical_n=10240: PCC=0.9996533210423996 RMSE=0.008511 -
+  ====================== 1 passed, 412 deselected in 26.87s ======================
+04:58:15 START b3_acc kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:58:45   built branch mmanzoor/gemma4-gsdpa-v-from-k-overlap at 5cf3fa467c3
+05:07:41 END b3_acc rc=0
+  2026-10-20 05:06:21.245 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  3 [ 24576,  32768) logical_n=32768: PCC=0.9993552639481916 RMSE=0.030428 -
+  2026-10-20 05:06:35.219 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  4 [ 32768,  40960) logical_n=40960: PCC=0.9992820459794002 RMSE=0.031972 -
+  2026-10-20 05:06:49.438 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  5 [ 40960,  49152) logical_n=49152: PCC=0.9992525796919709 RMSE=0.032712 -
+  2026-10-20 05:07:05.812 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  6 [ 49152,  57344) logical_n=57344: PCC=0.9992221782045082 RMSE=0.033383 -
+  2026-10-20 05:07:22.530 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  7 [ 57344,  65536) logical_n=65536: PCC=0.9991954698482705 RMSE=0.033945 -
+  ================ 7 passed, 404 deselected in 530.32s (0:08:50) =================
+05:07:41 START b3_layer64 kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+05:13:00 END b3_layer64 rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3319.3 us over 41 ops; SDPA min/med/max 2462.5/2487.3/2522.9 us
+05:13:00 START b3_layer_ci kind=layer arg=ci branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+05:18:49 END b3_layer_ci rc=0
+gemma4-layer-global-sz2048-chunk0: layer sum 970.2 us over 41 ops; SDPA min/med/max 139.9/142.8/145.6 us
+gemma4-layer-global-sz2048-chunk1: layer sum 983.2 us over 41 ops; SDPA min/med/max 147.6/149.6/161.3 us
+gemma4-layer-global-sz2048-chunk63: layer sum 3303.2 us over 41 ops; SDPA min/med/max 2361.9/2464.1/2512.1 us
+gemma4-layer-global-sz2048-chunk127: layer sum 5739.5 us over 41 ops; SDPA min/med/max 4741.5/4899.7/4983.0 us
+05:18:50 START b3_e2e_2k kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+05:20:29 END b3_e2e_2k rc=0
+   DEVICE 262144 tokens in 10058.1ms (26063 tok/s) | staging 373.8ms | wall 10488.8ms
+   ring-depth cost: first=53.5ms -> last=103.8ms = 1.94x over 127 extra chunks of history
+05:20:29 START b3_kvpcc_2k kind=kvpcc arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+05:23:55 END b3_kvpcc_2k rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.941301
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.941301 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.982643 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.186612 │ PASS   │
+  ======================== 1 passed in 201.07s (0:03:21) =========================
+05:23:55 START b1_zring kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=zring_b1.patch env=
+05:24:25   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at f9313cfff66
+05:32:22 END b1_zring rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3196.5 us over 41 ops; SDPA min/med/max 2347.0/2363.5/2379.3 us
+05:32:22 START b2_zring kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=zring_b3.patch env=
+05:32:52   built branch mmanzoor/gemma4-gsdpa-v-from-k at 62657a9465e
+05:39:09 END b2_zring rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3291.7 us over 41 ops; SDPA min/med/max 2410.8/2457.7/2493.3 us
+05:39:10 START b2_zreader kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=zreader_b2.patch env=
+05:44:57 END b2_zreader rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3295.9 us over 41 ops; SDPA min/med/max 2407.4/2462.2/2502.5 us
+05:44:58 START b2_gacc kind=layer arg=64 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=gacc.patch env=
+05:50:18 END b2_gacc rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3288.9 us over 41 ops; SDPA min/med/max 2410.4/2459.1/2502.2 us
+05:50:18 START base_e2e_4k kind=e2e arg=4096 branch=main patch=- env=
+05:50:46   built branch main at 909748641c1
+05:52:36 END base_e2e_4k rc=0
+   DEVICE 262144 tokens in 7211.0ms (36353 tok/s) | staging 170.8ms | wall 7411.1ms
+   ring-depth cost: first=76.0ms -> last=151.1ms = 1.99x over 63 extra chunks of history
+05:52:36 START base_e2e_8k kind=e2e arg=8192 branch=main patch=- env=
+05:54:30 END base_e2e_8k rc=0
+   DEVICE 262144 tokens in 6404.2ms (40933 tok/s) | staging 78.1ms | wall 6495.5ms
+   ring-depth cost: first=114.0ms -> last=291.5ms = 2.56x over 31 extra chunks of history
+05:54:30 START b1_e2e_4k kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+05:55:00   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at f9313cfff66
+05:55:06 END b1_e2e_4k rc=1
+05:55:06 START b1_e2e_8k kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+05:55:13 END b1_e2e_8k rc=1
+05:55:13 START b2_e2e_4k kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+05:55:23 runner stopped by me: another user (zbaczewski) began a galaxy reset at 05:55; remaining queue not run

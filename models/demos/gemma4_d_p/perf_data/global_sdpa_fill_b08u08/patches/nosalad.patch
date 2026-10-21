@@ -1,0 +1,12 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+index d3483576000..ee826ee4f00 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -745,6 +745,7 @@ void salad_correct_fused(
+     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
+     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
+     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
++    if (true) { return; }  // ABLATION nosalad: timing only, wrong numerics
+ 
+     constexpr uint32_t last_batch_rem = tiles_per_column % col_batch;
+     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {

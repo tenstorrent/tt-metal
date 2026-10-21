@@ -1,0 +1,34 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
+index d2d3ccb624d..17b69507054 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
+@@ -592,6 +592,7 @@ void kernel_main() {
+         const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
+ 
+         if constexpr (use_streaming_compute) {
++            { DeviceZoneScopedN("C-KLOOP");
+             sdpa_ring_v2<
+                 Sq_chunk_t,
+                 Sk_chunk_t,
+@@ -685,7 +686,7 @@ void kernel_main() {
+                 packed_sources ? packed_source_ids : nullptr,
+                 packed_sources ? source_group_size : 0,
+                 packed_schedule.rows(ring_iter),
+-                padded_q_slots);
++                padded_q_slots); }
+             if constexpr (has_sliding_window && ksplit_enabled) {
+                 // Sliding bands split the unit's work plan, which can be shorter than the band count near the
+                 // sequence start: an empty band stages no state.
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
+index 27dd66f8d12..8c9c9238083 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
+@@ -893,7 +893,7 @@ void kernel_main() {
+ #ifdef RING_PARTIAL_READINESS
+                       fused_op_receiver.get_next_ring_id_deferred(),
+ #else
+-                      fused_op_receiver.get_next_ring_id_and_sync(),
++                      [&] { DeviceZoneScopedN("RING-WAIT"); return fused_op_receiver.get_next_ring_id_and_sync(); }(),
+ #endif
+                       mesh_rows,
+                       mesh_cols,

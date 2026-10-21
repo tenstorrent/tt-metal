@@ -1,0 +1,38 @@
+2026-10-20 05:54:18.497 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 1/32 [0, 8192) device=114.0ms (71875 tok/s) | total device=114.0ms wall=115.5ms
+2026-10-20 05:54:18.619 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 2/32 [8192, 16384) device=119.0ms (68833 tok/s) | total device=233.0ms wall=236.8ms
+2026-10-20 05:54:18.747 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 3/32 [16384, 24576) device=124.2ms (65977 tok/s) | total device=357.2ms wall=364.5ms
+2026-10-20 05:54:18.879 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 4/32 [24576, 32768) device=129.6ms (63214 tok/s) | total device=486.7ms wall=496.8ms
+2026-10-20 05:54:19.016 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 5/32 [32768, 40960) device=134.7ms (60815 tok/s) | total device=621.4ms wall=633.6ms
+2026-10-20 05:54:19.159 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 6/32 [40960, 49152) device=140.5ms (58304 tok/s) | total device=762.0ms wall=776.6ms
+2026-10-20 05:54:19.308 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 7/32 [49152, 57344) device=145.2ms (56407 tok/s) | total device=907.2ms wall=925.6ms
+2026-10-20 05:54:19.461 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 8/32 [57344, 65536) device=150.6ms (54409 tok/s) | total device=1057.7ms wall=1078.9ms
+2026-10-20 05:54:19.620 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 9/32 [65536, 73728) device=156.6ms (52319 tok/s) | total device=1214.3ms wall=1238.1ms
+2026-10-20 05:54:19.785 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 10/32 [73728, 81920) device=162.3ms (50475 tok/s) | total device=1376.6ms wall=1403.0ms
+2026-10-20 05:54:19.955 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 11/32 [81920, 90112) device=166.9ms (49078 tok/s) | total device=1543.5ms wall=1572.7ms
+2026-10-20 05:54:20.130 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 12/32 [90112, 98304) device=172.8ms (47405 tok/s) | total device=1716.3ms wall=1748.2ms
+2026-10-20 05:54:20.311 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 13/32 [98304, 106496) device=178.2ms (45963 tok/s) | total device=1894.6ms wall=1929.1ms
+2026-10-20 05:54:20.498 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 14/32 [106496, 114688) device=184.0ms (44517 tok/s) | total device=2078.6ms wall=2115.8ms
+2026-10-20 05:54:20.690 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 15/32 [114688, 122880) device=189.5ms (43232 tok/s) | total device=2268.1ms wall=2308.0ms
+2026-10-20 05:54:20.888 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 16/32 [122880, 131072) device=195.2ms (41958 tok/s) | total device=2463.3ms wall=2505.9ms
+2026-10-20 05:54:21.092 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 17/32 [131072, 139264) device=201.3ms (40692 tok/s) | total device=2664.6ms wall=2710.0ms
+2026-10-20 05:54:21.305 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 18/32 [139264, 147456) device=206.5ms (39668 tok/s) | total device=2871.2ms wall=2922.7ms
+2026-10-20 05:54:21.521 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 19/32 [147456, 155648) device=213.3ms (38400 tok/s) | total device=3084.5ms wall=3138.7ms
+2026-10-20 05:54:21.745 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 20/32 [155648, 163840) device=219.7ms (37295 tok/s) | total device=3304.1ms wall=3363.3ms
+2026-10-20 05:54:21.974 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 21/32 [163840, 172032) device=224.9ms (36430 tok/s) | total device=3529.0ms wall=3591.9ms
+2026-10-20 05:54:22.208 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 22/32 [172032, 180224) device=231.3ms (35412 tok/s) | total device=3760.4ms wall=3826.0ms
+2026-10-20 05:54:22.448 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 23/32 [180224, 188416) device=236.7ms (34609 tok/s) | total device=3997.1ms wall=4066.4ms
+2026-10-20 05:54:22.696 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 24/32 [188416, 196608) device=241.9ms (33868 tok/s) | total device=4238.9ms wall=4313.6ms
+2026-10-20 05:54:22.948 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 25/32 [196608, 204800) device=250.1ms (32756 tok/s) | total device=4489.0ms wall=4566.4ms
+2026-10-20 05:54:23.206 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 26/32 [204800, 212992) device=255.7ms (32041 tok/s) | total device=4744.7ms wall=4823.9ms
+2026-10-20 05:54:23.470 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 27/32 [212992, 221184) device=262.7ms (31181 tok/s) | total device=5007.4ms wall=5088.3ms
+2026-10-20 05:54:23.739 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 28/32 [221184, 229376) device=267.2ms (30659 tok/s) | total device=5274.6ms wall=5357.2ms
+2026-10-20 05:54:24.014 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 29/32 [229376, 237568) device=272.9ms (30013 tok/s) | total device=5547.6ms wall=5631.9ms
+2026-10-20 05:54:24.296 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 30/32 [237568, 245760) device=280.2ms (29235 tok/s) | total device=5827.8ms wall=5913.9ms
+2026-10-20 05:54:24.583 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 31/32 [245760, 253952) device=284.9ms (28751 tok/s) | total device=6112.7ms wall=6200.6ms
+2026-10-20 05:54:24.877 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:292 - [traced_perf] chunk 32/32 [253952, 262144) device=291.5ms (28103 tok/s) | total device=6404.2ms wall=6495.0ms
+2026-10-20 05:54:24.942 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:306 - [traced_perf] DEVICE 262144 tokens in 6404.2ms (40933 tok/s) | staging 78.1ms | wall 6495.5ms
+2026-10-20 05:54:24.942 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:310 - [traced_perf] staging breakdown: tokens=35.0ms (1ms/chunk), metadata=27.7ms (1ms/chunk), rope=17.6ms (1ms/chunk)
+2026-10-20 05:54:24.942 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:314 - [traced_perf] TOTAL 262144 tokens in 6495.5ms (40357 tok/s)
+2026-10-20 05:54:24.942 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:317 - [traced_perf] ring-depth cost: first=114.0ms -> last=291.5ms = 2.56x over 31 extra chunks of history
+2026-10-20 05:54:24.942 | INFO     | gemma4_d_p.demo.text_demo_prefill:_measure_traced:333 - [traced_perf] context wall and device times (chunk_size=8192, 1k=1024 tokens; rounded up to whole chunks; N/A = context not reached):
+================== 1 passed, 2 warnings in 105.89s (0:01:45) ===================

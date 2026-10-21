@@ -1,0 +1,32 @@
+base_layer64|layer|64|main|-|
+base_layer_ci|layer|ci|main|-|
+base_e2e_2k|e2e|2048|main|-|
+base_acc2|acc|test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy|main|-|
+base_kvpcc_2k|kvpcc|2048|main|-|
+b2_acc|acc|test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy|mmanzoor/gemma4-gsdpa-v-from-k|-|
+b1_layer64|layer|64|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b1_layer_ci|layer|ci|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b1_e2e_2k|e2e|2048|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b1_acc|acc|test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b1_kvpcc_2k|kvpcc|2048|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b2_layer64|layer|64|mmanzoor/gemma4-gsdpa-v-from-k|-|
+b2_layer_ci|layer|ci|mmanzoor/gemma4-gsdpa-v-from-k|-|
+b2_e2e_2k|e2e|2048|mmanzoor/gemma4-gsdpa-v-from-k|-|
+b2_kvpcc_2k|kvpcc|2048|mmanzoor/gemma4-gsdpa-v-from-k|-|
+b1_acc_rerun|acc|test_ring_joint_attention_gemma4_global_ksplit_accuracy and chunk2048-q64-unsplit-packed_kv|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b3_acc|acc|test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy|mmanzoor/gemma4-gsdpa-v-from-k-overlap|-|
+b3_layer64|layer|64|mmanzoor/gemma4-gsdpa-v-from-k-overlap|-|
+b3_layer_ci|layer|ci|mmanzoor/gemma4-gsdpa-v-from-k-overlap|-|
+b3_e2e_2k|e2e|2048|mmanzoor/gemma4-gsdpa-v-from-k-overlap|-|
+b3_kvpcc_2k|kvpcc|2048|mmanzoor/gemma4-gsdpa-v-from-k-overlap|-|
+b1_zring|layer|64|mmanzoor/gemma4-gsdpa-ksplit8-q128|zring_b1.patch|
+b2_zring|layer|64|mmanzoor/gemma4-gsdpa-v-from-k|zring_b3.patch|
+b2_zreader|layer|64|mmanzoor/gemma4-gsdpa-v-from-k|zreader_b2.patch|
+b2_gacc|layer|64|mmanzoor/gemma4-gsdpa-v-from-k|gacc.patch|
+base_e2e_4k|e2e|4096|main|-|
+base_e2e_8k|e2e|8192|main|-|
+b1_e2e_4k|e2e|4096|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b1_e2e_8k|e2e|8192|mmanzoor/gemma4-gsdpa-ksplit8-q128|-|
+b2_e2e_4k|e2e|4096|mmanzoor/gemma4-gsdpa-v-from-k|-|
+b2_e2e_8k|e2e|8192|mmanzoor/gemma4-gsdpa-v-from-k|-|
+STOP

@@ -1,0 +1,48 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+index d3483576000..b58431668aa 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -1474,6 +1474,7 @@ static void sdpa_inner_loop_step(
+     [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {}) {
+     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
+     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
++    DeviceZoneScopedN("IN-STEP");
+     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+     constexpr uint32_t in0_block_w = DHt;
+     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
+@@ -1501,7 +1502,8 @@ static void sdpa_inner_loop_step(
+     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
+     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
+     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
+-    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
++    { DeviceZoneScopedN("IN-WAIT-KT");
++    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride); }
+ 
+     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
+         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+@@ -1734,6 +1736,7 @@ static void sdpa_inner_loop_step(
+     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
+     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
+     {
++        DeviceZoneScopedN("IN-P2");
+         constexpr uint32_t qktv_h =
+             ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
+         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
+@@ -1795,7 +1798,8 @@ static void sdpa_inner_loop_step(
+                     }
+                     if (kt_sub == 0) {
+                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+-                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
++                        { DeviceZoneScopedN("IN-WAIT-V");
++                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t); }
+                     }
+                     if (kt_sub > 0) {
+                         PACK((llk_pack_reconfig_l1_acc(1)));
+@@ -1934,6 +1938,7 @@ static void sdpa_inner_loop_step(
+         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
+         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
+         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
++            DeviceZoneScopedN("IN-SALAD");
+             PACK((llk_pack_reconfig_l1_acc(1)));
+             {
+                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");

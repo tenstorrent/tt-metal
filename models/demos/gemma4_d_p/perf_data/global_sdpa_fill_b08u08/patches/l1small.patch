@@ -1,0 +1,20 @@
+diff --git a/models/demos/gemma4_d_p/demo/text_demo_prefill.py b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+index 2ed0341bbdd..f86c48af533 100644
+--- a/models/demos/gemma4_d_p/demo/text_demo_prefill.py
++++ b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+@@ -450,7 +450,14 @@ def _perf_signposts(layer_type, chunk_size, chunk_idx):
+ 
+ @torch.no_grad()
+ @pytest.mark.timeout(7200)
+-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
++@parametrize_mesh_with_fabric(
++    [(8, 4), (4, 8)],
++    device_params_extra={
++        "trace_region_size": TRACE_REGION_SIZE,
++        # TEMP experiment: an L1_SMALL region keeps op-allocated CCL semaphores out of the main L1 pool.
++        **({"l1_small_size": int(os.environ["GEMMA4_L1_SMALL_SIZE"])} if os.environ.get("GEMMA4_L1_SMALL_SIZE") else {}),
++    },
++)
+ @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
+ @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
+ @pytest.mark.parametrize("layer_type", ["global", "local", "both"])

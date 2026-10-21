@@ -1,0 +1,2 @@
+E       RuntimeError: Query mappings failed on device 0: No such device
+ERROR models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-ctx_256k-chunk8192-text-8x4] - RuntimeError: Query mappings failed on device 0: No such device

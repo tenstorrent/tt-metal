@@ -1,0 +1,4 @@
+gemma4-layer-global-sz2048-chunk0: layer sum 1038.7 us over 41 ops; SDPA min/med/max 207.7/213.4/218.4 us
+gemma4-layer-global-sz2048-chunk1: layer sum 1050.0 us over 41 ops; SDPA min/med/max 216.6/218.7/222.4 us
+gemma4-layer-global-sz2048-chunk63: layer sum 3194.7 us over 41 ops; SDPA min/med/max 2335.9/2356.8/2375.2 us
+gemma4-layer-global-sz2048-chunk127: layer sum 5460.8 us over 41 ops; SDPA min/med/max 4586.8/4611.7/4627.8 us

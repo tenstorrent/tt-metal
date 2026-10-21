@@ -1,0 +1,23 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
+index 27dd66f8d12..1a84a001c7b 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
+@@ -1459,17 +1459,7 @@ void kernel_main() {
+                                 v_tile_bytes,
+                                 false /*transpose*/);
+                         };
+-                        fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+-                            kv_chunk_is_joint,
+-                            joint_chunk_is_local,
+-                            source_is_local ? 0 : 1,
+-                            joint_v_addr,
+-                            gathered_joint_v_addr,
+-                            v_generators.local,
+-                            v_generators.gathered,
+-                            joint_q_input_tile_logical,
+-                            joint_input_tile_logical,
+-                            fetch_v);
++                        /* ABLATION nodram_v */ (void)0;
+                     }
+ 
+                     // Forward V to next core(s) before push_back — prevents compute from

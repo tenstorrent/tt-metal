@@ -1,0 +1,109 @@
+diff --git a/models/demos/gemma4_d_p/demo/text_demo_prefill.py b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+index 2ed0341bbdd..f86c48af533 100644
+--- a/models/demos/gemma4_d_p/demo/text_demo_prefill.py
++++ b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+@@ -450,7 +450,14 @@ def _perf_signposts(layer_type, chunk_size, chunk_idx):
+ 
+ @torch.no_grad()
+ @pytest.mark.timeout(7200)
+-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
++@parametrize_mesh_with_fabric(
++    [(8, 4), (4, 8)],
++    device_params_extra={
++        "trace_region_size": TRACE_REGION_SIZE,
++        # TEMP experiment: an L1_SMALL region keeps op-allocated CCL semaphores out of the main L1 pool.
++        **({"l1_small_size": int(os.environ["GEMMA4_L1_SMALL_SIZE"])} if os.environ.get("GEMMA4_L1_SMALL_SIZE") else {}),
++    },
++)
+ @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
+ @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
+ @pytest.mark.parametrize("layer_type", ["global", "local", "both"])
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
+index 27dd66f8d12..2f049fc85e6 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp
+@@ -1248,12 +1248,14 @@ void kernel_main() {
+                 }();
+                 // Padded slots push like real ones, so a multicast always targets this core's write pointer.
+                 CircularBuffer cb_k(cb_k_in);
+-                cb_k.reserve_back(k_chunk_tiles);
++                { DeviceZoneScopedN("R-KRES");
++                cb_k.reserve_back(k_chunk_tiles); }
+                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
+                 bool received_k_from_chain = false;
+                 if constexpr (!has_sliding_window) {
+                     if (k_chain.should_receive(k_chain_head)) {
+-                        k_chain.receive(noc);
++                        { DeviceZoneScopedN("R-KRECV");
++                        k_chain.receive(noc); }
+                         received_k_from_chain = true;
+                     }
+                 }
+@@ -1310,6 +1312,7 @@ void kernel_main() {
+                             k_tile_bytes,
+                             true /*transpose*/);
+                     };
++                    { DeviceZoneScopedN("R-KDRAM");
+                     fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+                         kv_chunk_is_joint,
+                         joint_chunk_is_local,
+@@ -1322,13 +1325,14 @@ void kernel_main() {
+                         gathered_k_generator,
+                         joint_q_input_tile_logical,
+                         joint_input_tile_logical,
+-                        fetch_k);
++                        fetch_k); }
+                 }
+ 
+                 // Forward K chunk via chain (uses K's data size explicitly)
+                 if constexpr (!has_sliding_window) {
+                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
+-                        k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
++                        { DeviceZoneScopedN("R-KFWD");
++                        k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes); }
+                     }
+                 }
+ 
+@@ -1439,12 +1443,14 @@ void kernel_main() {
+                     const Slice v_slice(
+                         k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
+                     CircularBuffer cb_v(cb_v_in);
+-                    cb_v.reserve_back(v_cb_entry_tiles);
++                    { DeviceZoneScopedN("R-VRES");
++                    cb_v.reserve_back(v_cb_entry_tiles); }
+                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
+                     bool received_v_from_chain = false;
+                     if constexpr (!has_sliding_window) {
+                         if (v_chain.should_receive(nv)) {
+-                            v_chain.receive(noc);
++                            { DeviceZoneScopedN("R-VRECV");
++                            v_chain.receive(noc); }
+                             received_v_from_chain = true;
+                         }
+                     }
+@@ -1459,6 +1465,7 @@ void kernel_main() {
+                                 v_tile_bytes,
+                                 false /*transpose*/);
+                         };
++                        { DeviceZoneScopedN("R-VDRAM");
+                         fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+                             kv_chunk_is_joint,
+                             joint_chunk_is_local,
+@@ -1469,14 +1476,15 @@ void kernel_main() {
+                             v_generators.gathered,
+                             joint_q_input_tile_logical,
+                             joint_input_tile_logical,
+-                            fetch_v);
++                            fetch_v); }
+                     }
+ 
+                     // Forward V to next core(s) before push_back — prevents compute from
+                     // popping the buffer while the mcast is still reading from it.
+                     if constexpr (!has_sliding_window) {
+                         if (v_chain.should_forward(nv, q_iter_local)) {
+-                            v_chain.forward(noc, cb_v_start_address);
++                            { DeviceZoneScopedN("R-VFWD");
++                            v_chain.forward(noc, cb_v_start_address); }
+                         }
+                     }
+ 

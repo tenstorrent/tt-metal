@@ -1,0 +1,140 @@
+diff --git a/models/demos/gemma4_d_p/demo/text_demo_prefill.py b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+index 2ed0341bbdd..f86c48af533 100644
+--- a/models/demos/gemma4_d_p/demo/text_demo_prefill.py
++++ b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+@@ -450,7 +450,14 @@ def _perf_signposts(layer_type, chunk_size, chunk_idx):
+ 
+ @torch.no_grad()
+ @pytest.mark.timeout(7200)
+-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
++@parametrize_mesh_with_fabric(
++    [(8, 4), (4, 8)],
++    device_params_extra={
++        "trace_region_size": TRACE_REGION_SIZE,
++        # TEMP experiment: an L1_SMALL region keeps op-allocated CCL semaphores out of the main L1 pool.
++        **({"l1_small_size": int(os.environ["GEMMA4_L1_SMALL_SIZE"])} if os.environ.get("GEMMA4_L1_SMALL_SIZE") else {}),
++    },
++)
+ @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
+ @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
+ @pytest.mark.parametrize("layer_type", ["global", "local", "both"])
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+index d3483576000..92b2986b548 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -1399,6 +1399,30 @@ inline bool sdpa_packed_first_half_unmasked(
+  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
+  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
+  */
++// EXPERIMENT gacc: per-step cycle accumulators over ALL steps (no profiler-buffer limit), emitted at kernel end.
++// Index: 0 step, 1 wait K^T, 2 phase 2, 3 wait V, 4 rescale; late set = steps after the first kGaccWarmSteps.
++namespace gacc {
++constexpr uint32_t kGaccWarmSteps = 40;
++inline uint64_t sum_all[5];
++inline uint64_t sum_late[5];
++inline uint32_t n_all = 0, n_late = 0;
++inline bool late = false;
++inline __attribute__((always_inline)) uint64_t now() {
++    volatile tt_reg_ptr uint32_t* p = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
++    return ((uint64_t)p[kernel_profiler::WALL_CLOCK_HIGH_INDEX] << 32) | p[kernel_profiler::WALL_CLOCK_LOW_INDEX];
++}
++template <int I>
++struct Acc {
++    uint64_t t0;
++    inline __attribute__((always_inline)) Acc() : t0(now()) {}
++    inline __attribute__((always_inline)) ~Acc() {
++        const uint64_t d = now() - t0;
++        sum_all[I] += d;
++        if (late) sum_late[I] += d;
++    }
++};
++}  // namespace gacc
++
+ template <
+     bool profiling_enabled,
+     uint32_t Sq_chunk_t,
+@@ -1443,6 +1467,7 @@ template <
+     bool circular_kv_cache = false,
+     // Split-KV grouped sources; off for every other caller, so its branches compile out.
+     bool packed_kv_enabled = false>
++
+ static void sdpa_inner_loop_step(
+     AccumulatorHalf& prev,
+     AccumulatorHalf& cur,
+@@ -1474,6 +1499,10 @@ static void sdpa_inner_loop_step(
+     [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {}) {
+     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
+     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
++    gacc::n_all++;
++    gacc::late = gacc::n_all > gacc::kGaccWarmSteps;
++    if (gacc::late) gacc::n_late++;
++    gacc::Acc<0> gacc_step;
+     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+     constexpr uint32_t in0_block_w = DHt;
+     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
+@@ -1501,7 +1530,7 @@ static void sdpa_inner_loop_step(
+     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
+     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
+     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
+-    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
++    { gacc::Acc<1> gacc_wkt; CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride); }
+ 
+     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
+         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+@@ -1734,6 +1763,7 @@ static void sdpa_inner_loop_step(
+     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
+     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
+     {
++        gacc::Acc<2> gacc_p2;
+         constexpr uint32_t qktv_h =
+             ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
+         constexpr uint32_t qktv_remainder_h = Sq_chunk_t % qktv_h;
+@@ -1795,7 +1825,7 @@ static void sdpa_inner_loop_step(
+                     }
+                     if (kt_sub == 0) {
+                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+-                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
++                        { gacc::Acc<3> gacc_wv; CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t); }
+                     }
+                     if (kt_sub > 0) {
+                         PACK((llk_pack_reconfig_l1_acc(1)));
+@@ -1934,6 +1964,7 @@ static void sdpa_inner_loop_step(
+         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
+         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
+         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
++            gacc::Acc<4> gacc_salad;
+             PACK((llk_pack_reconfig_l1_acc(1)));
+             {
+                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
+index 882afcb35bd..d2a3411b09a 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
+@@ -34,6 +34,9 @@ constexpr void assert_kv_pad_rotation_streaming_only() {
+ }
+ 
+ void kernel_main() {
++    for (int i = 0; i < 5; ++i) { gacc::sum_all[i] = 0; gacc::sum_late[i] = 0; }  // EXPERIMENT gacc reset per launch
++    gacc::n_all = gacc::n_late = 0;
++    gacc::late = false;
+     constexpr uint32_t NH = get_compile_time_arg_val(0);
+     constexpr uint32_t DHt = get_compile_time_arg_val(1);
+     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
+@@ -865,4 +868,17 @@ void kernel_main() {
+             }
+         }
+     }
++    // EXPERIMENT gacc emission (cycles; n = step counts)
++    DeviceTimestampedData("GACC-N-ALL", (uint64_t)gacc::n_all);
++    DeviceTimestampedData("GACC-N-LATE", (uint64_t)gacc::n_late);
++    DeviceTimestampedData("GACC-STEP-ALL", gacc::sum_all[0]);
++    DeviceTimestampedData("GACC-WKT-ALL", gacc::sum_all[1]);
++    DeviceTimestampedData("GACC-P2-ALL", gacc::sum_all[2]);
++    DeviceTimestampedData("GACC-WV-ALL", gacc::sum_all[3]);
++    DeviceTimestampedData("GACC-SALAD-ALL", gacc::sum_all[4]);
++    DeviceTimestampedData("GACC-STEP-LATE", gacc::sum_late[0]);
++    DeviceTimestampedData("GACC-WKT-LATE", gacc::sum_late[1]);
++    DeviceTimestampedData("GACC-P2-LATE", gacc::sum_late[2]);
++    DeviceTimestampedData("GACC-WV-LATE", gacc::sum_late[3]);
++    DeviceTimestampedData("GACC-SALAD-LATE", gacc::sum_late[4]);
+ }

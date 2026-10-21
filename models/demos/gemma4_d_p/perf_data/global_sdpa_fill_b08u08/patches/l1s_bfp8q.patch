@@ -1,0 +1,35 @@
+diff --git a/models/demos/gemma4_d_p/demo/text_demo_prefill.py b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+index 2ed0341bbdd..f86c48af533 100644
+--- a/models/demos/gemma4_d_p/demo/text_demo_prefill.py
++++ b/models/demos/gemma4_d_p/demo/text_demo_prefill.py
+@@ -450,7 +450,14 @@ def _perf_signposts(layer_type, chunk_size, chunk_idx):
+ 
+ @torch.no_grad()
+ @pytest.mark.timeout(7200)
+-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
++@parametrize_mesh_with_fabric(
++    [(8, 4), (4, 8)],
++    device_params_extra={
++        "trace_region_size": TRACE_REGION_SIZE,
++        # TEMP experiment: an L1_SMALL region keeps op-allocated CCL semaphores out of the main L1 pool.
++        **({"l1_small_size": int(os.environ["GEMMA4_L1_SMALL_SIZE"])} if os.environ.get("GEMMA4_L1_SMALL_SIZE") else {}),
++    },
++)
+ @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
+ @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
+ @pytest.mark.parametrize("layer_type", ["global", "local", "both"])
+diff --git a/models/demos/gemma4_d_p/tt/attention/__init__.py b/models/demos/gemma4_d_p/tt/attention/__init__.py
+index ec1ce23f960..ec2ed4c3850 100644
+--- a/models/demos/gemma4_d_p/tt/attention/__init__.py
++++ b/models/demos/gemma4_d_p/tt/attention/__init__.py
+@@ -216,6 +216,10 @@ class Gemma4Attention:
+             k_unrotated.deallocate(True)
+         sliding_window_size = self.config.sliding_window_size
+         if is_global:
++            # TEMP experiment: GEMMA4_GLOBAL_Q_BFP8=1 feeds the global ring SDPA a bfp8 Q (dig-base 356bad58f4e).
++            if __import__("os").environ.get("GEMMA4_GLOBAL_Q_BFP8"):
++                q_bf16, tt_q = tt_q, ttnn.typecast(tt_q, ttnn.bfloat8_b)
++                q_bf16.deallocate(True)
+             packed_q = tt_q
+             packed_kv = pack_global_kv_device(
+                 tt_v,
