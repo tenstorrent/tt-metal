@@ -870,9 +870,6 @@ int main(int argc, char **argv) {
                 ttml::autograd::ctx().get_profiler().read_results(device, "gradient_sync_done");
 
                 if (training_config.use_clip_grad_norm) {
-                    if (device_config.enable_tp) {
-                        throw std::logic_error("Clip grad norm is not supported with TP");
-                    }
                     ttml::core::clip_grad_norm(parameters, training_config.clip_grad_norm_max_norm);
                 }
                 optimizer->step();

@@ -299,6 +299,39 @@ def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis, what: st
     )
 
 
+def _assert_clips_by_the_global_norm(params, mesh) -> None:
+    """``clip_grad_norm`` on synchronized gradients scales every gradient on every device by one coefficient, computed
+    from the norm of the full gradients: each shard counted once, each replicated copy once in total."""
+    shape = tuple(mesh.shape)
+    before, squares = {}, 0.0
+    for name, t in params.items():
+        grad = t.get_grad()
+        before[name] = _shards(grad)
+        replicated = [axis for axis in range(len(shape)) if not is_sharded_on_axis(grad, axis)]
+        for coord, shard in zip(np.ndindex(shape), before[name]):
+            if all(coord[axis] == 0 for axis in replicated):
+                squares += float(np.square(shard.astype(np.float64)).sum())
+    norm = np.sqrt(squares)
+    max_norm = norm / 4
+
+    total = ttml.core.clip_grad_norm(params, max_norm, 2.0, True)
+
+    for got in _shards(total.get_value(NATIVE)):
+        np.testing.assert_allclose(got.reshape(-1)[0], norm, rtol=2e-2, err_msg="total norm")
+    coefficient = max_norm / (norm + 1e-6)
+    for name, t in params.items():
+        grad = t.get_grad()
+        after = _shards(grad)
+        for b, a in zip(before[name], after):
+            np.testing.assert_allclose(a, b * coefficient, rtol=3e-2, atol=1e-5, err_msg=name)
+        for axis in range(len(shape)):
+            if not is_sharded_on_axis(grad, axis):
+                grid = np.stack(after).reshape(shape + after[0].shape)
+                copies = np.moveaxis(grid, axis, 0)
+                for copy in copies[1:]:
+                    np.testing.assert_array_equal(copy, copies[0], err_msg=f"{name}: replicas on axis {axis} differ")
+
+
 def _assert_per_axis_labels(params, n_axes: int) -> None:
     """Every parameter carries one placement per mesh axis: none of them is a collapsed 1-D label."""
     wrong = {name: _placements(t.get_value(NATIVE)) for name, t in params.items()}
@@ -329,6 +362,12 @@ class TestTP:
             assert not is_sharded_on_axis(t.get_grad(), tp) or tp_sharded, name
             assert _reduce_set(t) == set(), name
             assert len(_placements(t.get_grad())) == 2, f"{name}: gradient label is not per axis"
+
+    def test_clip_grad_norm(self, tp_mesh):
+        model = TPBlock()
+        _backward(model, _input((1, 1, DIM, DIM)))
+        ttml.sync_gradients(model.parameters())
+        _assert_clips_by_the_global_norm(model.parameters(), tp_mesh)
 
     def test_collapsed_shard_label_reads_as_shard_on_the_tp_axis(self, tp_mesh, expect_error):
         """Negative control. ``{2}, [Shard(2)]`` from the whole-mesh 1-D mapper reads as Shard on the tp axis (axis 1)
@@ -372,6 +411,19 @@ class TestFSDP:
             assert _reduce_set(t) == (set() if managed else {fsdp}), name
             # The reduce-scattered gradient of a managed parameter is labelled Shard on "fsdp" by the collective.
             assert is_sharded_on_axis(t.get_grad(), fsdp) == managed, name
+
+    def test_clip_grad_norm(self, fsdp_mesh):
+        model = _build_fsdp_model("eager")
+        _backward(model, _input((2, 1, DIM, DIM), fsdp_mesh.axis_mapper("fsdp", tdim=0)))
+        ttml.sync_gradients(model.parameters())
+        _assert_clips_by_the_global_norm(model.parameters(), fsdp_mesh)
+
+    def test_clip_grad_norm_refuses_unsynchronized_gradients(self, fsdp_mesh, expect_error):
+        """The replicated head's gradient still differs across "fsdp" before the sync: its norm cannot be read yet."""
+        model = _build_fsdp_model("eager")
+        _backward(model, _input((2, 1, DIM, DIM), fsdp_mesh.axis_mapper("fsdp", tdim=0)))
+        with expect_error(RuntimeError, "synchronize the gradients before clipping them"):
+            ttml.core.clip_grad_norm(model.parameters(), 1.0, 2.0, False)
 
     def test_forged_shard_label_drops_the_axis_from_the_reduce_set(self, fsdp_mesh):
         """Negative control: the reader trusts the label. Forging Shard on the fsdp axis of the replicated head empties
@@ -498,6 +550,12 @@ class TestDPxTP:
                 before[name], _shards(grad), dp_tp_mesh.shape, dp, f"{name} (links per axis {links})"
             )
 
+    def test_clip_grad_norm(self, dp_tp_mesh):
+        model = TPBlock()
+        _backward(model, _input((dp_tp_mesh.axis_size("dp"), 1, DIM, DIM), dp_tp_mesh.axis_mapper("dp", tdim=0)))
+        ttml.sync_gradients(model.parameters())
+        _assert_clips_by_the_global_norm(model.parameters(), dp_tp_mesh)
+
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
 
@@ -548,6 +606,13 @@ class TestHSDP:
             _assert_mean_over_axis(
                 before[name], _shards(grad), hsdp_mesh.shape, axes, f"{name} (links per axis {links})"
             )
+
+    def test_clip_grad_norm(self, hsdp_mesh):
+        D, F = hsdp_mesh.axis_size("dp"), hsdp_mesh.axis_size("fsdp")
+        model = _build_fsdp_model("eager")
+        _backward(model, _input((D * F, 1, DIM, DIM), self._batch_mapper(hsdp_mesh)))
+        ttml.sync_gradients(model.parameters())
+        _assert_clips_by_the_global_norm(model.parameters(), hsdp_mesh)
 
     def test_causal_lm_collate_hsdp(self, hsdp_mesh):
         """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh

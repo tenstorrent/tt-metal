@@ -6,7 +6,7 @@ training_config:
   batch_size: 2  # = dp_size; 1 sample per DP shard per microbatch
   gradient_accumulation_steps: 2  # effective global batch = batch_size * grad_acc = 4 (matches DP=4 numerics)
   max_steps: 5000
-  use_clip_grad_norm: false  # TP-incompatible; both trainers reject use_clip_grad_norm=true under TP
+  use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   data_path: "data/tokenized_shakespeare_tinyllama.yaml"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b.yaml"

@@ -186,7 +186,6 @@ class SFTTrainer:
         self.eval_dataloader = eval_dataloader
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
-        self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
@@ -541,15 +540,3 @@ class SFTTrainer:
         if cfg is None or not hasattr(cfg, "runner_type"):
             return
         target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
-
-    def _validate_clip_grad_norm(self) -> None:
-        """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
-        when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
-        clipping by a wrong per-shard norm."""
-        if self.config.max_grad_norm <= 0:
-            return
-        if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for _, p in self.model.parameters().items()):
-            raise ValueError(
-                "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
-                "only a shard, so the per-shard norm is wrong"
-            )
