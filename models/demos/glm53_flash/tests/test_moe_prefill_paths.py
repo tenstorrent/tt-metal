@@ -109,3 +109,41 @@ def test_moe_prefill_paths(mesh_device):
         lines.append(f"| {path} | {walls[path] * 1e3:.1f} | {TT / walls[path]:.0f} | {p_hf:.6f} | {p_b:.6f} |")
         assert p_hf > PCC_BAR, (path, p_hf)
     logger.info("MoE prefill paths, layer %d, %d tokens on %s:\n%s" % (LAYER, TT, MESH, "\n".join(lines)))
+
+
+def test_region_bookkeeping_host():
+    """Host golden of ``_forward_regions``' routing math (no device): random top-8 routing of T tokens over E experts
+    with E_loc local experts; the slots computed as the device path does (one-hot x mask, cumsum ranks, tile-aligned
+    exclusive cumsum offsets, dummy slot for the non-local picks) must be unique inside every region, lie in
+    ``[offset_e, offset_e + count_e)``, keep the regions tile-aligned and disjoint, and never reach the dummy slot."""
+    T, E, E_loc, k, TILE = 8192, 288, 72, 8, 32
+    g = torch.Generator().manual_seed(0)
+    idx = torch.stack([torch.randperm(E, generator=g)[:k] for _ in range(T)])  # [T, k] distinct experts per token
+    dense = torch.zeros(T, E)
+    dense.scatter_(1, idx, torch.rand(T, k, generator=g) + 0.01)
+    mask = torch.zeros(E)
+    mask[:E_loc] = 1.0
+    onehot = (dense != 0).float() * mask
+    counts = onehot.sum(0)
+    rank = onehot.cumsum(0)
+    aligned = torch.floor((counts + TILE - 1) / TILE) * TILE
+    offsets = aligned.cumsum(0) - aligned
+    max_buf = T * k + E_loc * TILE
+    pos = (rank - 1 + offsets) * onehot + (1 - onehot) * (max_buf - 1)
+    pos_tk = pos.gather(1, idx)
+    loc_tk = onehot.gather(1, idx)
+    local = loc_tk.bool()
+    slots = pos_tk[local].long()
+    assert slots.numel() == int(counts.sum()) and slots.unique().numel() == slots.numel(), "slots not unique"
+    assert (pos_tk[~local] == max_buf - 1).all(), "non-local picks must land on the dummy slot"
+    for e in range(E_loc):
+        sl = pos[:, e][onehot[:, e] > 0].long()
+        assert (
+            sl.numel() == int(counts[e]) and sl.min() == int(offsets[e]) and sl.max() == int(offsets[e] + counts[e] - 1)
+        )
+        assert int(offsets[e]) % TILE == 0
+    assert int(offsets[E_loc - 1] + aligned[E_loc - 1]) <= max_buf - TILE, "regions must stay below the dummy slot"
+    logger.info(
+        f"region bookkeeping: {int(counts.sum())} routed rows over {E_loc} local experts (max {int(counts.max())} per expert), "
+        f"regions end at {int(offsets[E_loc - 1] + aligned[E_loc - 1])} of max_buf {max_buf}"
+    )

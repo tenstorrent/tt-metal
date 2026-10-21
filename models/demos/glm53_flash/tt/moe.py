@@ -1009,8 +1009,10 @@ class TtRoutedExperts(LightweightModule):
             activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         )  # [max_buf, H] bf8 TILE
         ttnn.deallocate(buf)
-        y_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)  # the gather table [max_buf, H]
+        out16 = ttnn.typecast(out, ttnn.bfloat16)
         ttnn.deallocate(out)
+        y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
+        ttnn.deallocate(out16)
         comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, T*k, H]: every pick's output row
         ttnn.deallocate(y_rm)
         ttnn.deallocate(pos_rm)
