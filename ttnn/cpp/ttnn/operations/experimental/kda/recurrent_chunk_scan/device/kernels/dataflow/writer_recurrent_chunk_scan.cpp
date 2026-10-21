@@ -15,9 +15,16 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
-template <uint32_t Rows, uint32_t Vt, uint32_t RowStride, uint32_t PacketRows, bool Consume = true, typename Accessor>
+template <
+    uint32_t Rows,
+    uint32_t Vt,
+    uint32_t RowStride,
+    uint32_t PacketRows,
+    bool Consume = true,
+    typename Accessor,
+    typename DFB>
 FORCE_INLINE void write_value_slice(
-    const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t row_base, uint32_t column_base) {
+    const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t row_base, uint32_t column_base) {
     static_assert(PacketRows > 0 && Rows % PacketRows == 0);
     static_assert(Consume || PacketRows == Rows, "Retained writes require one complete buffer packet");
     constexpr uint32_t packet_tiles = PacketRows * Vt;
@@ -43,8 +50,8 @@ FORCE_INLINE void write_value_slice(
 }
 
 // Consume a published matrix this mode does not emit.
-template <uint32_t Rows, uint32_t Vt>
-FORCE_INLINE void drain(DataflowBuffer& buffer) {
+template <uint32_t Rows, uint32_t Vt, typename DFB>
+FORCE_INLINE void drain(DFB& buffer) {
     buffer.wait_front(Rows * Vt);
     buffer.pop_front(Rows * Vt);
 }
@@ -52,9 +59,9 @@ FORCE_INLINE void drain(DataflowBuffer& buffer) {
 // A rank with no head contributes the affine identity (I, 0): this value block writes its columns of I and of 0
 // into the packed [A | B] rows. One BF16 scratch tile is zeroed, written to every off-diagonal tile, then given
 // its diagonal and written to the diagonal tiles.
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, typename Accessor>
+template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
 FORCE_INLINE void write_identity_summary(
-    const Accessor& packed, DataflowBuffer& scratch, Noc& noc, uint32_t head, uint32_t value_block) {
+    const Accessor& packed, DFB& scratch, Noc& noc, uint32_t head, uint32_t value_block) {
     constexpr uint32_t row_stride = Kt + VtFull;
     constexpr uint16_t bf16_one_bits = 0x3F80;
     constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
@@ -185,7 +192,7 @@ FORCE_INLINE void write_recurrent(
         }
         const auto publish = [&](uint32_t chunk) {
             const uint32_t head_chunk = head * num_chunks + chunk;
-            kda::SharedInput inputs[2] = {
+            kda::SharedInput<decltype(k_decay_transposed)> inputs[2] = {
                 {&k_decay_transposed,
                  key_chunk_tiles,
                  sender ? kda::stage_contiguous_tiles(

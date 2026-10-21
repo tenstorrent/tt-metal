@@ -91,8 +91,8 @@ constexpr uint32_t dst_acc = 0;
 // The reduce drains `cb_tmp`, so the same buffer carries both transforms of the
 // row: fill it, reduce it, fill it again. `init` re-establishes the unpack and
 // pack configuration the previous reduce left changed.
-template <typename Init, typename TransformOne>
-ALWI void reduce_transformed_row(DataflowBuffer& tmp_buf, Init init, TransformOne transform_one) {
+template <typename DFB, typename Init, typename TransformOne>
+ALWI void reduce_transformed_row(DFB& tmp_buf, Init init, TransformOne transform_one) {
     init();
     tmp_buf.reserve_back(Wt);
     constexpr uint32_t transform_block = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -123,8 +123,8 @@ ALWI void reduce_transformed_row(DataflowBuffer& tmp_buf, Init init, TransformOn
 // over. The row is packed twice out of one dest register: a circular buffer has a single
 // consumer, and the sum is wanted both by the two reduces here and by the writer that
 // parks it as the stream the caller carries forward.
-ALWI void settle_row(
-    DataflowBuffer& prefix_buf, DataflowBuffer& pending_buf, DataflowBuffer& total_buf, DataflowBuffer& total_out_buf) {
+template <typename PrefixDFB, typename PendingDFB, typename TotalDFB, typename TotalOutDFB>
+ALWI void settle_row(PrefixDFB& prefix_buf, PendingDFB& pending_buf, TotalDFB& total_buf, TotalOutDFB& total_out_buf) {
     prefix_buf.wait_front(Wt);
     pending_buf.wait_front(Wt);
     total_buf.reserve_back(Wt);

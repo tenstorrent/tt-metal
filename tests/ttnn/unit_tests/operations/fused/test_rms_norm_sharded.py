@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_watcher_enabled
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled
 
 pytestmark = pytest.mark.use_module_device
 

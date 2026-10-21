@@ -92,6 +92,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
+template <bool row_mop>
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -128,7 +129,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init(
+    matmul_block_init<row_mop>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -208,6 +209,25 @@ void kernel_main() {
     constexpr uint32_t in1_dfb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_dfb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_dfb_id = get_named_compile_time_arg_val("cb_intermed0");
+#ifdef ARCH_BLACKHOLE
+    // MATH_FIDELITY exists on the math thread only, the one thread that reads row_mop; a Float32 pack from a 16-bit
+    // DEST needs the DEST read cycles the tile MOP leaves free
+#if defined(UCK_CHLKC_MATH)
+    constexpr bool row_mop_fidelity = MATH_FIDELITY != ckernel::MathFidelity::LoFi;
+#else
+    constexpr bool row_mop_fidelity = true;
+#endif
+    // the CCL decode matmuls that build this kernel read slower with the row MOP below 4-tile sub blocks or with
+    // 16-bit weights
+    constexpr DataFormat in1_format = static_cast<DataFormat>(unpack_src_format[in1_dfb_id]);
+    constexpr bool row_mop =
+        (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
+        (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
+                            unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32)) &&
+        out_subblock_num_tiles >= 4 && (is_bfp8_b_format(in1_format) || is_bfp4_b_format(in1_format));
+#else
+    constexpr bool row_mop = false;
+#endif
     // CB view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the partials
     // CB when it is also read as an FPU operand (fused bias), otherwise the partials CB itself.
 #ifdef MM_PARTIALS_RELOAD_ALIAS_CB
@@ -277,7 +297,7 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
-    matmul_block_init(
+    matmul_block_init<row_mop>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
@@ -318,7 +338,7 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
-                        matmul_block_init(
+                        matmul_block_init<row_mop>(
                             in0_dfb_id,
                             in1_dfb_id,
                             static_cast<uint32_t>(in1_transpose_tile),
@@ -355,7 +375,7 @@ void kernel_main() {
 
                             tile_regs_acquire();
                             if (enable_reload) {
-                                reload_from_cb_to_dst(
+                                reload_from_cb_to_dst<row_mop>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     mm_partials_dfb_id,
@@ -379,7 +399,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                matmul_block(
+                                matmul_block<row_mop>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -624,7 +644,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init(
+                    matmul_block_init<row_mop>(
                         in0_dfb_id,
                         in1_dfb_id,
                         static_cast<uint32_t>(in1_transpose_tile),
