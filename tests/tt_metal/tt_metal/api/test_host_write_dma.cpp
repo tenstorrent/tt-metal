@@ -23,17 +23,19 @@ struct HostWriteCase {
     std::string name;
     HalMemType mem_type;
     uint32_t size_bytes;
+    uint32_t address_offset = 0;
 };
 
 namespace {
 
 // On Wormhole and Blackhole, Cluster::write_core sends Strict writes of 2 KiB or more and Relaxed writes of 64 KiB
-// or more through PCIe DMA, and everything else, including sizes that are not a multiple of 4, through MMIO. L1
-// writes default to Strict and DRAM writes to Relaxed, so these sizes land on both sides of each threshold.
+// or more through PCIe DMA, and everything else, including sizes or addresses that are not a multiple of 4, through
+// MMIO. L1 writes default to Strict and DRAM writes to Relaxed, so these cases land on both sides of each threshold.
 const std::vector<HostWriteCase> kHostWriteCases = {
     {"L1Mmio1KiB", HalMemType::L1, 1024},
     {"L1Dma2KiB", HalMemType::L1, 2048},
     {"L1Mmio2KiBPlus2", HalMemType::L1, 2050},
+    {"L1Mmio2KiBAtUnalignedAddress", HalMemType::L1, 2048, 2},
     {"L1Dma256KiB", HalMemType::L1, 256 * 1024},
     {"DramMmio32KiB", HalMemType::DRAM, 32 * 1024},
     {"DramDma64KiB", HalMemType::DRAM, 64 * 1024},
@@ -48,7 +50,8 @@ class HostWriteDmaTest : public UnitMeshFixture, public ::testing::WithParamInte
 TEST_P(HostWriteDmaTest, WriteReadsBack) {
     auto& mesh_device = *this->devices_[0];
     const HostWriteCase& test_case = GetParam();
-    const uint32_t address = mesh_device.allocator()->get_base_allocator_addr(test_case.mem_type);
+    const uint32_t address =
+        mesh_device.allocator()->get_base_allocator_addr(test_case.mem_type) + test_case.address_offset;
 
     std::vector<uint8_t> pattern(test_case.size_bytes);
     for (uint32_t i = 0; i < test_case.size_bytes; ++i) {
@@ -74,7 +77,8 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<HostWriteCase>& info) { return info.param.name; });
 
 // A 256 KiB L1 write goes through the DMA window and a 1 KiB one through the MMIO window. Strict orders writes
-// within one window only, so these check that back-to-back writes to the same bytes still land in issue order.
+// within one window only, so these check the ordering Cluster::write_core promises across transports. They have no
+// barrier between the writes on purpose, since a barrier would make them pass regardless.
 constexpr uint32_t kDmaWriteBytes = 256 * 1024;
 constexpr uint32_t kMmioWriteBytes = 1024;
 constexpr int kOrderingIterations = 1000;
