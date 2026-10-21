@@ -181,6 +181,7 @@ def run_model(
     hybrid_token_threshold_model_config=None,
     overlap_shared_expert_with_dispatch=True,
     traced_replays=0,
+    eager_repeat_check=False,
     dispatch_wire="bf16",
     fp8_scale_block=32,
     combine_wire="bf16",
@@ -225,6 +226,10 @@ def run_model(
     two run the same programs. It needs overlap_shared_expert_with_dispatch off, whose sub-device swaps split a
     capture into segments that replay with a sync each, and an eager forward that overlaps whatever the trace
     does.
+
+    ``eager_repeat_check`` runs the eager forward a second time and compares its shared_output and final_output with
+    the first bit for bit, logging where they differ. The same programs on the same input must produce the same bits,
+    so a difference is run-to-run nondeterminism, with no trace involved. The test fails on one after its PCC checks.
 
     ``measure`` is a perf hook, called as ``measure(forward, tt_moe, tt_x)``; it must return a
     forward's result and owns the device sync. ``forward(x)`` runs the MoE on ``x`` (default ``tt_x``)
@@ -662,15 +667,86 @@ def run_model(
         tt_output, tt_intermediates = measure(forward, tt_moe, tt_x)
     signpost(header="tt_forward_END")
 
+    def _bit_diff(name, first, second, what):
+        """None when `first` and `second` are bit-identical, else a message; logs where they differ."""
+        differs = first.view(torch.int16) != second.view(torch.int16)
+        mismatched = int(differs.sum())
+        if not mismatched:
+            logger.info(f"[{name}] {what}: bit for bit identical")
+            return None
+        message = f"{name}: {what}: differs in {mismatched} of {first.numel()} elements"
+        # A race leaves a few late rows garbage; a different summation order moves many rows a little. Rows are
+        # tokens in SP order, so each seq_len_per_chip block is one SP chip.
+        _, pcc = comp_pcc(first.float(), second.float())
+        abs_diff = (second.float() - first.float()).abs()
+        row_differs = differs.reshape(-1, differs.shape[-1]).any(dim=-1)
+        per_chip = (
+            row_differs.reshape(-1, seq_len_per_chip).sum(dim=-1).tolist()
+            if row_differs.numel() % seq_len_per_chip == 0
+            else f"n/a (shape {tuple(first.shape)})"
+        )
+        logger.error(
+            f"[{name}] {message}: PCC {pcc:.6f}, max |diff| {abs_diff.max().item():.4g}, mean |diff| "
+            f"{abs_diff.mean().item():.4g} (mean |first| {first.float().abs().mean().item():.4g}); rows differing "
+            f"{int(row_differs.sum())} of {row_differs.numel()}, per {seq_len_per_chip}-row SP block {per_chip}"
+        )
+        return message
+
+    eager_repeat_mismatches = []
+    repeat_shared_host = None
+    if eager_repeat_check:
+        tp_composer = get_tp_mesh_composer(mesh_device)
+
+        def to_host(t):
+            return ttnn.to_torch(t, mesh_composer=tp_composer, dtype=torch.bfloat16)
+
+        first_final, first_shared = to_host(tt_output), to_host(tt_intermediates.shared_output)
+        # The first forward freed tt_x, so the repeat gets a fresh upload of the same input.
+        repeat_output, repeat_intermediates = forward(upload_tt_x())
+        ttnn.synchronize_device(mesh_device)
+        repeat_shared_host = to_host(repeat_intermediates.shared_output)
+        for name, first, second in (
+            ("eager_repeat_shared_output", first_shared, repeat_shared_host),
+            ("eager_repeat_final_output", first_final, to_host(repeat_output)),
+        ):
+            message = _bit_diff(name, first, second, "second eager forward vs the first")
+            if message:
+                eager_repeat_mismatches.append(message)
+        del repeat_output, repeat_intermediates
+
+    traced_mismatch = None
     if traced_final is not None:
         eager_final = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
         # By bit pattern: the same programs must produce the same bits, and torch.equal treats -0 and +0 as equal.
-        mismatched = int((traced_final.view(torch.int16) != eager_final.view(torch.int16)).sum())
-        assert mismatched == 0, (
-            f"the last of {traced_replays} back-to-back trace replays differs from the eager forward in "
-            f"{mismatched} of {eager_final.numel()} elements"
-        )
-        logger.info(f"the last of {traced_replays} back-to-back trace replays matches the eager forward bit for bit")
+        differs = traced_final.view(torch.int16) != eager_final.view(torch.int16)
+        mismatched = int(differs.sum())
+        if mismatched:
+            traced_mismatch = (
+                f"the last of {traced_replays} back-to-back trace replays differs from the eager forward in "
+                f"{mismatched} of {eager_final.numel()} elements"
+            )
+            # How far apart, and where: a race leaves a few late rows garbage, a different computation moves
+            # every row a little. Rows are tokens, in SP order, so each seq_len_per_chip block is one SP chip.
+            _, traced_vs_eager_pcc = comp_pcc(eager_final.float(), traced_final.float())
+            abs_diff = (traced_final.float() - eager_final.float()).abs()
+            row_differs = differs.reshape(-1, differs.shape[-1]).any(dim=-1)
+            per_chip = (
+                row_differs.reshape(-1, seq_len_per_chip).sum(dim=-1).tolist()
+                if row_differs.numel() % seq_len_per_chip == 0
+                else f"n/a (shape {tuple(eager_final.shape)})"
+            )
+            logger.error(
+                f"[traced_vs_eager] {traced_mismatch}: PCC {traced_vs_eager_pcc:.6f}, max |diff| "
+                f"{abs_diff.max().item():.4g}, mean |diff| {abs_diff.mean().item():.4g} (mean |eager| "
+                f"{eager_final.float().abs().mean().item():.4g}); rows differing {int(row_differs.sum())} of "
+                f"{row_differs.numel()}, per {seq_len_per_chip}-row SP block {per_chip}"
+            )
+            # Without a PCC check there is nothing more to learn here.
+            assert run_pcc_check, traced_mismatch
+        else:
+            logger.info(
+                f"the last of {traced_replays} back-to-back trace replays matches the eager forward bit for bit"
+            )
 
     profiler.end("tt_forward")
     logger.debug(f"  tt_forward: {profiler.get('tt_forward') * 1000:.2f} ms")
@@ -784,6 +860,18 @@ def run_model(
         else:
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
+
+    if repeat_shared_host is not None:
+        _, repeat_pcc = comp_pcc(torch_intermediates.shared_output.float(), repeat_shared_host.float())
+        log = logger.info if repeat_pcc >= shared_output_pcc else logger.error
+        log(f"[eager_repeat_shared_output] PCC: {repeat_pcc:.6f} (threshold: {shared_output_pcc})")
+
+    # The traced forward's own accuracy, when it is not the eager forward's: the same reference and bar as final_output.
+    if traced_mismatch is not None:
+        _, traced_pcc = comp_pcc(torch_output.float(), traced_final.float())
+        status = "PASSED" if traced_pcc >= final_output_pcc else "FAILED"
+        log = logger.info if status == "PASSED" else logger.error
+        log(f"[traced_final_output] {status} - PCC: {traced_pcc:.6f} (threshold: {final_output_pcc})")
 
     del torch_moe
     gc.collect()
@@ -945,6 +1033,8 @@ def run_model(
     profiler.end("reference")
 
     assert all_passed, "One or more comparisons failed. See logs for details."
+    assert traced_mismatch is None, traced_mismatch
+    assert not eager_repeat_mismatches, "; ".join(eager_repeat_mismatches)
 
     profiler.end("test_ttnn_moe")
     logger.debug(f"\n{'='*60}")
@@ -1588,6 +1678,59 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
     )
 
 
+# test_kimi_moe_fabric2d on the fp8 dispatch wire at Kimi K2.7's model payload: Q1 before dispatch_fabric2d and DQ1
+# into the overlapped routed expert. dispatch-only leaves combine_fabric2d on the bf16 wire; both-wires also runs Q2
+# in combine's untilizers and DQ2 in post_combine_reduce.
+@pytest.mark.parametrize("combine_wire", ["bf16", "fp8"], ids=["dispatch-only", "both-wires"])
+@pytest.mark.parametrize("traced_replays", [0, 8], ids=["overlapped", "traced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), trace_region_size=_MOE_TRACE_REGION_SIZE
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="kimi_k2_7-torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_kimi_moe_fabric2d_fp8_dispatch(
+    variant, config_only, mesh_device, device_params, num_links, request, traced_replays, combine_wire
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=KimiK27Config.EMB_SIZE,
+        hidden_dim=KimiK27Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=KimiK27Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK27Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=5,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="fabric2d",
+        combine_impl="fabric2d",
+        overlap_routed_expert_with_combine=True,
+        overlap_routed_expert_with_combine_eager=True,
+        overlap_shared_expert_with_dispatch=not traced_replays,
+        traced_replays=traced_replays,
+        dispatch_wire="fp8",
+        fp8_scale_block=128,
+        combine_wire=combine_wire,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Kimi-K3 LatentMoE
 # ---------------------------------------------------------------------------
@@ -1730,6 +1873,129 @@ def test_kimi_k3_moe_fabric2d(variant, config_only, mesh_device, device_params, 
         request=request,
         dispatch_impl="direct",
         combine_impl="fabric2d",
+        **_KIMI_K3_RUN_MODEL_KWARGS,
+    )
+
+
+# Kimi K3 on the fp8 dispatch wire only, at its model payload: Q1 packs each 3584-wide latent row, dispatch_fabric2d
+# moves it at top-16 and DQ1 feeds the overlapped routed expert. dispatch-only leaves combine_fabric2d on the bf16
+# wire; both-wires also quantizes combine's rows (Q2) and dequantizes them in post_combine_reduce (DQ2).
+# bf16-control runs the same case with both wires bf16, to tell a fault of the fp8 wire from one of the K3 path.
+@pytest.mark.parametrize(
+    "dispatch_wire, combine_wire",
+    [("fp8", "bf16"), ("fp8", "fp8"), ("bf16", "bf16")],
+    ids=["dispatch-only", "both-wires", "bf16-control"],
+)
+# traced-1 replays once, synced on both sides, so no launch can overlap another: a mismatch there is not a race
+# between back-to-back launches.
+@pytest.mark.parametrize("traced_replays", [0, 1, 8], ids=["overlapped", "traced-1", "traced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK3Config), trace_region_size=_MOE_TRACE_REGION_SIZE
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="kimi_k3-torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_kimi_k3_moe_fabric2d_fp8_dispatch(
+    variant, config_only, mesh_device, device_params, num_links, request, traced_replays, dispatch_wire, combine_wire
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=KimiK3Config.EMB_SIZE,
+        hidden_dim=KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=5,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="fabric2d",
+        combine_impl="fabric2d",
+        overlap_routed_expert_with_combine=True,
+        overlap_routed_expert_with_combine_eager=True,
+        overlap_shared_expert_with_dispatch=not traced_replays,
+        traced_replays=traced_replays,
+        dispatch_wire=dispatch_wire,
+        fp8_scale_block=128,
+        combine_wire=combine_wire,
+        **_KIMI_K3_RUN_MODEL_KWARGS,
+    )
+
+
+# Kimi K3's shared expert, when it did not overlap dispatch on its sub-device, returned shared_output at 0.55-0.73 PCC
+# on every MoE forward after the first: a chip running ahead into a later op wrote into addresses a lagging chip's
+# shared expert still used (see TtSharedExpert.forward, step 4). This runs the eager forward twice with both wires
+# bf16 and compares the two runs bit for bit, so no trace and no fp8 is involved; overlap-on is the control.
+# no-overlap-direct-dispatch runs the same with the direct dispatch, so the check does not lean on dispatch_fabric2d.
+@pytest.mark.parametrize(
+    "overlap_shared_expert_with_dispatch, dispatch_impl",
+    [(False, "fabric2d"), (True, "fabric2d"), (False, "direct")],
+    ids=["shared-no-overlap", "shared-overlap", "no-overlap-direct-dispatch"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="kimi_k3-torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_kimi_k3_moe_shared_expert_repeat(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    num_links,
+    request,
+    overlap_shared_expert_with_dispatch,
+    dispatch_impl,
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=KimiK3Config.EMB_SIZE,
+        hidden_dim=KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=5,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl=dispatch_impl,
+        combine_impl="fabric2d",
+        # The overlapped combine needs dispatch_fabric2d's output; with the direct dispatch combine runs alone.
+        overlap_routed_expert_with_combine=dispatch_impl == "fabric2d",
+        overlap_routed_expert_with_combine_eager=dispatch_impl == "fabric2d",
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        eager_repeat_check=True,
         **_KIMI_K3_RUN_MODEL_KWARGS,
     )
 

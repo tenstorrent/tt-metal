@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.tt_transformers.tt.ccl import get_num_links
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 
 @contextmanager
@@ -276,3 +276,82 @@ def test_shared_expert_pcc(
         assert pcc_passed, f"PCC test failed: {pcc_message}"
 
         logger.debug("PCC test passed!")
+
+
+# TtMoe runs Kimi K3's shared expert on the full grid whenever it does not overlap dispatch, which is every traced
+# forward. There its first MoE forward scored shared_output 0.9996 and its second 0.59, on the same input. This runs
+# the expert alone, three forwards each on a fresh input, on the full grid and on the sub-device, and grades every
+# forward: a program-cache hit that kept stale state shows up from the second forward on. The SiLU case at the same
+# shape tells a fault of SiTU-GLU from one of the 6144-wide expert.
+@pytest.mark.parametrize("placement", ["full-grid", "sub-device"])
+@pytest.mark.parametrize("activation", [ACTIVATION_SITU, ACTIVATION_SILU], ids=["situ", "silu"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU needs ttnn.softcap, which is Blackhole-only")
+def test_shared_expert_k3_repeat(mesh_device, device_params, num_links, activation, placement):
+    emb_dim, hidden_dim = KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE
+    situ_betas = dict(
+        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+    )
+    torch.manual_seed(0)
+    torch_model = TorchExpert(emb_dim, hidden_dim, activation=activation, **situ_betas)
+    torch_weights = {
+        "gate_proj": torch_model.gate_proj.data,
+        "up_proj": torch_model.up_proj.data,
+        "down_proj": torch_model.down_proj.data,
+    }
+    dispatch_group_size = mesh_device.shape[0]
+
+    def forwards(subdevice_id, subdevice_cores):
+        tt_model = TtSharedExpert(
+            mesh_device=mesh_device,
+            emb_dim=emb_dim,
+            hidden_dim=hidden_dim,
+            torch_weights=torch_weights,
+            num_links=num_links,
+            topology=per_axis_topology(device_params["fabric_config"])[1],
+            activations_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat8_b,
+            activation=activation,
+            subdevice_id=subdevice_id,
+            subdevice_cores=subdevice_cores,
+            **situ_betas,
+        )
+        pccs = []
+        for i in range(3):
+            torch_input = torch.randn(dispatch_group_size, PREFILL_CHUNK_TOKENS_PER_CHIP, emb_dim)
+            tt_input = ttnn.from_torch(
+                torch_input,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+            )
+            tt_output = ttnn.to_torch(
+                tt_model(tt_input),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            )
+            _, pcc = comp_pcc(torch_model(torch_input).float(), tt_output.float())
+            pccs.append(pcc)
+            logger.info(f"[shared_expert {activation} {placement}] forward {i}: PCC {pcc:.6f}")
+        return pccs
+
+    if placement == "sub-device":
+        with shared_expert_sub_device(mesh_device) as (subdevice_id, subdevice_cores):
+            pccs = forwards(subdevice_id, subdevice_cores)
+    else:
+        pccs = forwards(None, None)
+    bad = [i for i, p in enumerate(pccs) if p < 0.999]
+    assert not bad, f"forwards {bad} below PCC 0.999: {pccs}"
