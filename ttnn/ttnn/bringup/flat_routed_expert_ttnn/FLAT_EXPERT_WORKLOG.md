@@ -1171,7 +1171,7 @@ Not yet measured beside the DRISC weight stream (NOC1 = the DRISC tile 1 port; t
   take S 256 -3% and leave S 640.
 
 ### Per-expert weight layout is independent of experts-per-chip (2026-10-21)
-For a per-expert weight cache (moe_knowledge_dump.md section 15): `zz_scratch_flat_epc_layout.py` plans each model's
+For a per-expert weight cache (moe_knowledge_dump.md section 14): `zz_scratch_flat_epc_layout.py` plans each model's
 shape on bh-lb-09 (12 x 10 grid, pure DRISC, MIMO_FL_RDOWN=0: no Tensix readers) at two experts-per-chip values and
 lays out the same two random experts with `flat_weight_regions`. K3 28 / 56, K2.7 12 / 24, GLM-5.3 8 / 16, M3 4 / 8,
 GLM-5.3-Flash 9 / 18: every layout field equal (np, rg, nu, nk_gu, nd, pcds, col0s, banks, dw_rot, ...), the experts'

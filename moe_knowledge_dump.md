@@ -511,7 +511,7 @@ section "With measured efficiencies".
   rows. L4 MoE block 4058 -> 2811 us (chunk 5120), 2423 -> 1791 (2048). Details: FLAT_COMBINE_OVERLAP_WORKLOG.md.
   Next: the fused shared expert and its overlap with the dispatch - ttnn/ttnn/bringup/combine_rf/FUSED_SHARED_EXPERT_PLAN.md.
 
-## 15. Weight cache keying (decided 2026-10-21)
+## 14. Weight cache keying (decided 2026-10-21)
 
 The MoE block's weight cache is keyed on what the device layout depends on, never on the mesh topology.
 
