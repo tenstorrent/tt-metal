@@ -149,6 +149,49 @@ drain any in-flight work, and reset both semaphore values to zero before reuse.
 Omitting both handles preserves the existing behavior: the op allocates its
 own semaphores on a cache miss and performs one readiness `Synchronize`.
 
+## Data flow
+
+```text
+own shard (input DRAM)                forwarded shards (this chip's output DRAM)
+      |                                          |
+      +--------------------+---------------------+
+                           |
+                           | link worker reader (NCRISC, NoC0): one fabric chunk =
+                           | consecutive pages of one DRAM bank, one DRAM read
+                           v
+                 chunk CB (two CB batches)
+                           |
+                           | link worker sender (BRISC, NoC1): one chunk per packet,
+                           | direct fabric connection (no mux)
+                           v
+                     adjacent ERISC
+                           |
+                           | terminal one-hop packet; a shard's last packet
+                           | increments the neighbour's shards-arrived counter
+                           v
+                  neighbour output DRAM
+                           |
+                           | next hop: forwarded once the whole shard has arrived
+                           v
+                neighbour link worker reader
+
+own shard (input DRAM) --> local copy cores --> this chip's output DRAM
+```
+
+Forward and backward directions run concurrently, and on a torus with both sides >= 3 so do the two Hamiltonian
+cycles. A shard reaches a distant logical rank through store-and-forward hops: each transfer is terminal at the
+adjacent physical device, and the next device rereads the received pages from its persistent output before sending
+the next hop. This avoids multi-hop Fabric2D packets, corner forwarding, dateline handling, and router-side terminal
+delivery changes.
+
+Pages are dealt to the link workers as fabric chunks: up to one packet of consecutive pages of one DRAM page lane
+(pages k, k + B, k + 2B, ... for B banks), numbered by row block and lane and dealt round robin, so the workers stay
+balanced for any bank count. Each chunk is one DRAM read and one full Fabric packet rather than many small scatter
+packets. Two L1-small counters per link worker order the protocol: the downstream-started counter fences each call
+(no chip writes into a neighbour's output before the neighbour has started the same call), and the shards-arrived
+counter gates forwarding and records completion. Both return to zero at the end of every call, and the persistent
+output removes any separate allocation-readiness handshake.
+
 ## Minimal Fabric requirements
 
 ### One-hop validation
