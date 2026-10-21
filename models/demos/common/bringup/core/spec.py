@@ -43,6 +43,12 @@ from models.demos.common.bringup.core import defaults
 FRAMEWORK = Path(__file__).resolve().parents[1]
 CODE_ROOT = FRAMEWORK.parents[3]
 
+# Spec keys that no longer exist, and why: a spec that sets one is refused (the target is never a switch)
+REFUSED = {
+    "golden.numerics": "F132: goldens are always the full-precision reference (native)",
+    "tests.step_numerics": "F132: per-step checks always compare with the full-precision reference (native)",
+}
+
 REQUIRED = {
     "model": str,
     "hf_id": str,
@@ -168,6 +174,15 @@ class Spec:
                 return defaults.get(key, default)
             cur = cur[k]
         return cur
+
+    def has(self, key: str) -> bool:
+        """Whether the spec itself sets ``key`` (not the framework default)."""
+        cur = self.data
+        for k in key.split("."):
+            if not isinstance(cur, dict) or k not in cur:
+                return False
+            cur = cur[k]
+        return True
 
     # ---- identity and paths
     @property
@@ -427,6 +442,9 @@ class Spec:
             errs.append(self.scaled_problem)
         if errs:
             return errs
+        for k, why in REFUSED.items():
+            if self.has(k):
+                errs.append(f"'{k}' is not a spec key any more ({why})")
         for k, t in REQUIRED.items():
             if k not in self.data:
                 errs.append(f"missing '{k}'")

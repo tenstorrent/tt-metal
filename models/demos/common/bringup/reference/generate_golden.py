@@ -36,9 +36,9 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.metrics import cpu_threads
 from models.demos.common.bringup.reference.golden import (
     LOGITS_TAIL,
+    TARGET_NUMERICS,
     TOPK,
     content_hash,
-    golden_numerics,
     load_spec,
     official_dir,
     reference_at,
@@ -80,7 +80,9 @@ def main(argv=None):
     ap.add_argument("--spec")
     ap.add_argument("--rung", required=True)
     ap.add_argument(
-        "--numerics", default=None, help="native (full precision, the target) | official (the margin's source); F128"
+        "--numerics",
+        choices=("native", "official"),
+        help="native (full precision, the target) | official (the margin's source); F128",
     )
     ap.add_argument(
         "--set", action="store_true", help="F128: the target golden, the official one and their drift (a G task)"
@@ -104,8 +106,8 @@ def main(argv=None):
         print(f"rung {a.rung} reuses the golden of rung {rung['golden']}; nothing to generate")
         return
     seq, chunk = rung["seq"], rung["chunk"]
-    numerics = a.numerics or golden_numerics(spec)
-    target = numerics == golden_numerics(spec)
+    numerics = a.numerics or TARGET_NUMERICS
+    target = numerics == TARGET_NUMERICS
     out = rung_dir(spec, rung) if target else official_dir(spec, rung)
     if (out / "manifest.json").exists():  # goldens are generated once; one that matches the rung is reused (F75)
         return reuse(spec, rung, out, numerics)

@@ -1457,3 +1457,17 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
     first).
   - Selftests: test_e2e_runtime.py (key map, unmapped stop, removed thresholds, no threshold() in any model's contract
     tests, quick profile limits), test_perf_ab.py::test_a_quick_ab_judges_limit_gates_on_the_limits_it_recorded.
+- F132 (overseer, 2026-10-21; audit V6, V11, V12): one entry point into the CPU reference.
+  - reference.golden.reference_at(spec, numerics, *, layers, dtype) is the only caller of hooks.reference; the hook
+    must name a `numerics` parameter (a `**kw`-only hook stops: it would take the switch and may ignore it). A hook
+    without one stops for either numerics unless `reference.no_rounding: true` (F136 checks such a model has a margin).
+  - The target is a constant (golden.TARGET_NUMERICS = native): `golden.numerics` and `tests.step_numerics` are gone
+    from defaults.yaml and Spec.validate refuses them (core/spec.REFUSED). `official` is reached only from
+    generate_golden --numerics official (the G task's --set) and its drift.
+  - official_floor (R.5) compares the official output with the native step (was the hook's default arithmetic, not
+    the step the tests use); op_request's golden function is native; ledger_gen / check_plan read the native graph.
+  - R.2 (check_hf) gates the official numerics against HF (the HF code is the official arithmetic) and records the
+    native target beside it (native_pcc_hidden_L*, ...); R.3 (check_reference) checks both (plain names native,
+    official_ prefix; ledger_gen gates both).
+  - Selftests: test_step_numerics.py (rewritten: native always, **kw stops, spec keys refused, AST: no `.reference(`
+    call anywhere in the framework), test_e2e_limits.py.

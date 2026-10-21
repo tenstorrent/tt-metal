@@ -11,6 +11,7 @@ import torch
 
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.runs import IMPL_ENV
+from models.demos.common.bringup.reference.golden import reference_at
 from models.demos.common.bringup.selftest import fixture_model
 from models.demos.common.bringup.selftest.conftest import got
 from models.demos.common.bringup.selftest.test_device_side import _load, gspec, noise  # noqa: F401 (fixtures)
@@ -165,7 +166,7 @@ def test_selection_rows_that_move_support_are_counted_not_scored():
 
 def test_isolated_context_owns_its_state(gspec):
     s = gspec()
-    ref = s.hooks().reference(s, layers=[0])
+    ref = reference_at(s, "native", layers=[0])
     from models.demos.common.bringup.reference.interface import Ctx
 
     ctx = Ctx(0, 0, 4, ref.new_state(8), {"a": 1})

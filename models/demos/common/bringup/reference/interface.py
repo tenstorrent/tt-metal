@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The interface every model's CPU reference implements, and the block-graph runner built on it.
 
-A model's ``hooks.reference(spec, layers=None, dtype=torch.float32)`` returns an object with:
+A model's ``hooks.reference(spec, layers=None, dtype=torch.float32, numerics="native")`` returns an object with:
 
     layer_ids: list[int]
     new_state(max_seq) -> state                      per-layer chunked-prefill state (KV cache, recurrent state, ...)
@@ -33,11 +33,10 @@ ladder tests read them.
 The reference's own forward should run each block through ``run_block`` so the graph is the code, not a
 description of it. The reference gate replays the graph from recorded boundaries and requires an exact match.
 
-Numerics (F112, owner rule: no parity-only rounding). ``hooks.reference`` may take ``numerics``: "official" (the
-default: the released code's arithmetic, used for the goldens) or "native" (every rounding that only emulates the
-reference hardware's formats is off: activation quant-dequant kept in a wider dtype, input rounding to the GPU's
-internal formats; weights keep their checkpoint values). Per-step checks compare the device against the native
-reference (``step_reference``); the goldens stay official.
+Numerics (F112, F128, F132). ``hooks.reference`` takes ``numerics``: "native" (the target of every check: fp32, every
+rounding that only emulates the reference hardware's formats off; weights keep their checkpoint values) or "official"
+(the released code's arithmetic at ``reference.shipped_dtype``, used only for the margin: the -official golden and its
+drift). Call it only through ``reference.golden.reference_at``.
 """
 
 from __future__ import annotations
@@ -121,9 +120,7 @@ def boundary_names(steps: list[Step]) -> list[str]:
 
 
 def step_reference(spec, layers, dtype):
-    """The CPU reference per-step checks compare against: ``tests.step_numerics`` (defaults.yaml, native = full
-    precision; F112, F128)."""
-    from models.demos.common.bringup.reference.golden import reference_at
+    """The CPU reference per-step checks compare against: always the full-precision one (F112, F128, F132)."""
+    from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, reference_at
 
-    # F128: no silent fallback to the rounded arithmetic (reference_at refuses a hook without the switch)
-    return reference_at(spec, spec.get("tests.step_numerics") or "native", layers=layers, dtype=dtype)
+    return reference_at(spec, TARGET_NUMERICS, layers=layers, dtype=dtype)
