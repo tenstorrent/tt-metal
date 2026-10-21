@@ -70,6 +70,8 @@ def test_traced_generate_does_not_fatal_on_first_call():
 
         assert len(completions) == 1, f"expected 1 completion, got {len(completions)}"
     finally:
+        if sampler is not None:
+            sampler.close()
         sampler = None
         gc.collect()
         ttnn.close_mesh_device(mesh_device)

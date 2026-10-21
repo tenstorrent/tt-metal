@@ -466,7 +466,9 @@ class TTTRolloutSampler(RolloutSampler):
         self._weight_version = version
 
     def close(self) -> None:
-        """Drop the generator, models and KV caches (and their traces); the mesh stays open."""
+        """Release the traces, then drop the generator, models and KV caches; the mesh stays open."""
+        if self.generator is not None:
+            self.generator.release_persistent_capture()
         self.generator = None
         self.models = []
         self.tt_kv_cache = []
