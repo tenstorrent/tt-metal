@@ -953,7 +953,8 @@ std::vector<Tensor> relu6_bw(
 }
 
 // Silu
-// result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
+// result:  grad * (sigmoid_result + (sig_deriv == 0 ? 0 : input * sig_deriv))
+// where sig_deriv = sigmoid_result * (1 - sigmoid_result)
 std::vector<std::optional<Tensor>> silu_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -968,15 +969,18 @@ std::vector<std::optional<Tensor>> silu_bw(
         (int)ttnn::operations::unary::VecMode::RC,
         ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid_res, std::nullopt, output_mem_config);
-    Tensor add_sub = ttnn::add(
-        ttnn::multiply(
-            ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config),
-        1.0f,
+    Tensor sig_deriv = ttnn::multiply(
+        sigmoid_res,
+        ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config, input_grad);
-
+    Tensor x_sig_deriv = ttnn::where(
+        ttnn::eqz(sig_deriv, output_mem_config),
+        0.0f,
+        ttnn::multiply(input, sig_deriv, std::nullopt, output_mem_config),
+        output_mem_config);
+    Tensor d_silu = ttnn::add(sigmoid_res, x_sig_deriv, std::nullopt, output_mem_config);
+    ttnn::multiply(grad, d_silu, std::nullopt, output_mem_config, input_grad);
     result[0] = input_grad;
     return result;
 }
