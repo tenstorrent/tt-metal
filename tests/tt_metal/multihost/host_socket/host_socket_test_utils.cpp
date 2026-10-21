@@ -176,7 +176,7 @@ void run_transfer(
     HostMeshSocket::TransportConfig transport;
     transport.h2d_mode = env_h2d_mode();
     transport.page_size = page_size;
-    transport.max_batch_pages = static_cast<uint32_t>(env_u64("TT_HOST_SOCKET_BATCH_PAGES", 8));
+    transport.max_batch_pages = static_cast<uint32_t>(env_u64("TT_HOST_SOCKET_BATCH_PAGES", 0));
 
     HostMeshSocket socket(mesh_device, config, transport);
     if (ack_latency_ns_out != nullptr || hops_out != nullptr) {

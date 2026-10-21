@@ -44,8 +44,10 @@ public:
     struct TransportConfig {
         /// Must divide fifo_size and match the page size the kernels set.
         uint32_t page_size = 0;
-        /// Pages handed to the transport at once; peer ring depth is the real bound.
-        uint32_t max_batch_pages = 8;
+        /// Upper bound on the pages handed to the transport per relay poll. 0 (default): no cap.
+        /// The relay forwards whatever has arrived at each poll, so a lone page leaves at once and
+        /// pages that pile up while the link is behind leave together; the peer ring depth bounds it.
+        uint32_t max_batch_pages = 0;
         /// False: no relay thread, caller must call poll().
         bool own_relay_thread = true;
         /// Receiver leg. DEVICE_PULL: the receiver kernel reads pages from the pinned host ring over

@@ -56,7 +56,10 @@ RelaySender::RelaySender(
     tt::tt_metal::distributed::D2HSocket& socket,
     RingGeometry geometry,
     uint32_t max_batch_pages) :
-    transport_(transport), socket_(socket), geom_(geometry), max_batch_pages_(std::max(1u, max_batch_pages)) {
+    transport_(transport),
+    socket_(socket),
+    geom_(geometry),
+    max_batch_pages_(max_batch_pages == 0 ? geometry.num_pages : max_batch_pages) {
     TT_FATAL(geom_.page_size != 0 && geom_.num_pages != 0, "RelaySender needs a non-empty ring geometry");
 }
 
@@ -124,6 +127,8 @@ bool RelaySender::poll() {
         return progress;
     }
 
+    // Everything that is ready goes now: a lone page leaves at once, and when the
+    // link is behind the pages that accumulated meanwhile leave together.
     const uint32_t n = std::min({static_cast<uint32_t>(available - awaiting_pop), room, max_batch_pages_});
     if (n == 0 || !transport_.can_send(n)) {
         return progress;

@@ -82,7 +82,7 @@ public:
         HostTransport& transport,
         tt::tt_metal::distributed::D2HSocket& socket,
         RingGeometry geometry,
-        uint32_t max_batch_pages = 8);
+        uint32_t max_batch_pages = 0);
 
     bool poll() override;
     uint64_t watermark() const override { return forwarded_.load(std::memory_order_acquire); }

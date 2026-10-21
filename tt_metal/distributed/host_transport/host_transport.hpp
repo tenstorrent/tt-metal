@@ -82,7 +82,8 @@ struct TransportParams {
     // Separates concurrent connections between the same rank pair. Both ends must
     // pick the same base, which the caller does by construction order.
     int tag_base = 0;
-    uint32_t max_batch_pages = 8;
+    // 0: no cap, the ring depth bounds a batch.
+    uint32_t max_batch_pages = 0;
 };
 
 // Whether this build can move pages between hosts at all. Safe to call before the
