@@ -28,6 +28,7 @@ from helpers.ulp_domains import Problem, TableError  # noqa: E402
 __all__ = [
     "blackhole_only",
     "problem_id",
+    "refuses",
     "quasar_only",
     "refused",
     "skip_for_blackhole",
@@ -44,6 +45,12 @@ def refused(problem: Problem):
     with pytest.raises(TableError) as caught:  # allow-pytest.raises: host-only test
         yield
     assert caught.value.problem is problem, caught.value
+
+
+def refuses(match: str):
+    """The block raises a ``ValueError`` whose message matches *match*; for the metric
+    and the gate, which raise plain ``ValueError``."""
+    return pytest.raises(ValueError, match=match)  # allow-pytest.raises: host-only test
 
 
 def problem_id(value) -> str:
