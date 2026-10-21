@@ -604,7 +604,22 @@ constant lives in DRAM and is shared by every EP layer of the model (`GLMMesh.co
 op graph is unchanged (the per-call `ttnn.clone` into L1 now reads DRAM: 2 MB per layer at 32 users/row).
 `test_mesh_moe.py` now asserts that the L1 high-water mark (the address of a fresh one-tile L1 probe, top-down
 allocator) is identical before and after the MoE forward, so a lazily built per-layer L1 constant fails the
-single-layer block test. Validation below.
+single-layer block test. Validation on the rows-6-7 (2,4) block (EP = 8, FABRIC_1D, bfp8 experts, today's defaults:
+fast mHC; logs `_logs/agents/ep32l1/block_*.log`):
+
+| stage | code | config | result |
+|---|---|---|---|
+| pre-fix repro | arg/glm53_mesh @8b79b5d9f9a | layers 0-13, 32 users/row | the SAME clash as the 8x4: `paged_update_cache` program 244, dataflow region ends at 1361056, L1 buffers down to 1277440, core range [0-0 - 11-1] |
+| post-fix | arg/glm53_ep32l1 @835a23dc959 | layers 0-13, 32 users/row (64 users) | pass: chain PCC 0.992108 vs HF after layer 13 (greedy 100 %), decode 30.17 ms/step = 33.1 tok/s per user, 2121 tok/s aggregate; TTFT 128 tokens warm 272 ms, prefill PCC 0.997012, first token = host head |
+| post-fix | same | layers 0-21, 4 users/row (8 users) | pass: chain PCC 0.942429 (hybrid 22L reference 0.942288), decode 31.61 ms/step = 31.6 tok/s per user, 253 tok/s aggregate; TTFT warm 313 ms, prefill PCC 0.963906 |
+| post-fix | same | layers 0-21, 32 users/row (64 users) | pass (pre-fix: a clash after ~10 MoE layers): chain PCC 0.942429, decode 47.67 ms/step = 21.0 tok/s per user, 1342 tok/s aggregate; TTFT warm 429 ms, prefill PCC 0.963906 |
+| `test_mesh_moe.py` ep | same | T = 2 / 32 per row | 2 passed: PCC 0.999940 / 0.999923; L1 high-water mark [before, iter 0, iter 1] = [1538048, 1537600, 1537600] (the 448 B = the model's TT_CCL semaphores, allocated once on the first collective), no L1-resident module state |
+| `test_mesh_moe.py` hybrid (FABRIC_2D) | same | T = 2 / 32 per row | 2 passed: PCC 0.999939 / 0.999922; marks [1538048, 1534976, 1534976] / [1538048, 1535488, 1535488] (its collectives' semaphores, once), no L1-resident module state: the invariant holds for both layouts |
+
+For scale, the hybrid 22-layer block runs of 2026-10-20 (composite mHC then) took 39.27 ms/step at 4 users/row and
+92.0 ms at 32 (dense experts); the EP block decode at 32 users/row is 2.17 ms per layer against 2.16 at 14 layers,
+so the per-layer cost is flat in the layer count. The EP conversion of a block layer is cold at 80-130 s (36 full
+experts per chip), ~10-20 s from the `mesh2x4_ep` cache afterwards.
 
 ### Fresh-model TTFT and the keep-stacked decode (v19 / v20, 09:40-09:55)
 

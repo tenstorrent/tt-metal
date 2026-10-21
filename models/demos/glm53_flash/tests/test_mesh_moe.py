@@ -28,12 +28,29 @@ from models.demos.glm53_flash.tt.moe import TtMoE
 ROWS, COLS = 2, 4
 
 
+def l1_resident(obj, mesh: GLMMesh) -> list[str]:
+    """Names of the L1-resident tensors a module (or the mesh's shared constants) keeps between calls. Persistent
+    module state must live in DRAM: a lazily built L1 constant per layer (the EP combine's zeroed slot tensor,
+    [K, T, 1, H] bf16 row-major: 8 KB pages round-robin from bank 0) pinned 24 KB / 8 KB of the first cores per MoE
+    layer at 32 / 4 users per row, and the 45-layer 8x4 e2e clashed a later program's static circular buffers with
+    the L1 buffers after 9 / 42 layers while this single-layer test passed (doc/mesh/README.md, EP32 L1 clash)."""
+    from models.demos.glm53_flash.tt.functional_decoder import device_tensors_of
+
+    found = []
+    for i, t in enumerate(device_tensors_of(obj)):
+        if t.memory_config().buffer_type == ttnn.BufferType.L1:
+            found.append(f"module tensor {i}: {tuple(t.shape)} {t.dtype} {t.layout}")
+    for key, t in mesh._consts.items():
+        if t.memory_config().buffer_type == ttnn.BufferType.L1:
+            found.append(f"mesh const {key}: {tuple(t.shape)} {t.dtype} {t.layout}")
+    return found
+
+
 def l1_high_water(mesh_device) -> int:
     """The address of a fresh one-tile L1 probe (freed again): the L1 allocator is top-down, so a lower address
-    after a forward means the module left persistent L1 buffers behind (lazily built constants). A per-layer L1
-    constant is a model-level bug even when one layer passes: on the 45-layer 8x4 EP e2e the per-layer zeroed slot
-    constant of the EP combine shrank the L1 left for the static CBs until a later program clashed
-    (doc/mesh/README.md, EP32 L1 clash)."""
+    after a forward means persistent L1 buffers were left behind. The first forward legitimately allocates the
+    model's persistent CCL semaphores (``get_tt_ccl``, a few hundred bytes, once per mesh); after that a forward
+    must not move the mark (a per-call L1 leak)."""
     probe = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.L1_MEMORY_CONFIG
     )
@@ -65,7 +82,7 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
     with torch.no_grad():
         y_hf = hf(xs.reshape(1, ROWS * rows_T, -1)).reshape(1, 1, ROWS * rows_T, -1)
     tt_x = mesh.upload(xs.bfloat16(), ttnn.bfloat16, rows=2)
-    l1_before = l1_high_water(mesh_device)
+    l1_marks = [l1_high_water(mesh_device)]
     for it in range(2):
         logger.info(f"{layout} MoE forward iter {it} (T={rows_T}/row) starting")
         t0 = time.perf_counter()
@@ -85,11 +102,8 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
         )
         assert worst > 0.995
         ttnn.deallocate(y)
-        l1_after = l1_high_water(mesh_device)
-        logger.info(
-            f"{layout} MoE layer: L1 high-water mark {l1_before} before the forward, {l1_after} after iter {it}"
-        )
-        assert l1_after == l1_before, (
-            f"the {layout} MoE layer left {l1_before - l1_after} B of persistent L1 buffers behind (lazily built L1 "
-            "constants: they pile up per layer and clash with later programs' static CBs on the 45-layer model)"
-        )
+        l1_marks.append(l1_high_water(mesh_device))
+    logger.info(f"{layout} MoE layer: L1 high-water mark before the forward / after iter 0 / after iter 1: {l1_marks}")
+    assert l1_marks[2] == l1_marks[1], f"the {layout} MoE forward leaks {l1_marks[1] - l1_marks[2]} B of L1 per call"
+    resident = l1_resident(tt, mesh)
+    assert not resident, f"the {layout} MoE layer keeps L1-resident state between calls (DRAM only): {resident}"
