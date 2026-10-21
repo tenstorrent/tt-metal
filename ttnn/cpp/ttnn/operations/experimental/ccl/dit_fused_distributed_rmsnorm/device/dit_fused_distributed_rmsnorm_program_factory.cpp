@@ -307,8 +307,10 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     // on the !is_tp_1 (all-gather) branch: derive_worker_cap calls into fabric
     // (get_tt_fabric_max_payload_size_bytes), which reaches the fabric context — null when
     // the op runs on a single device with fabric uninitialized (TP=1). The local path
-    // takes the whole grid (workers past the row count have no rows), so it never uses the cap.
-    const auto grid_size = input.device()->compute_with_storage_grid_size();
+    // takes the whole grid (workers past the row count have no rows), so it never uses the cap;
+    // a host input (stats-buffer sizing before upload) has no grid and needs no workers there.
+    const bool on_device = input.storage_type() == StorageType::DEVICE;
+    const auto grid_size = on_device ? input.device()->compute_with_storage_grid_size() : CoreCoord{0, 0};
     s.num_workers = s.is_tp_1 ? std::min<uint32_t>(grid_size.x * grid_size.y, s.capacity_tile_rows)
                               : pick_num_workers_tp_gt_1(
                                     s.capacity_tile_rows,
