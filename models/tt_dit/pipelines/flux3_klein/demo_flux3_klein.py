@@ -113,6 +113,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--weights-distilled", type=Path, default=None, help="distilled checkpoint dir")
     parser.add_argument("--eager", action="store_true", help="run the denoise and decode without tracing")
+    parser.add_argument(
+        "--layout",
+        choices=("dual", "sp4tp8", "sp8tp4"),
+        default="dual",
+        help="DiT mesh layout: dual (default: SP4 x TP8, and SP8 x TP4 for requests of 16K+ tokens, i.e. 2048x2048 and "
+        "up; two weight sets resident), or one fixed layout",
+    )
     parser.add_argument("--repeat", type=int, default=1, help="render N times (the second run replays the traces)")
     return parser.parse_args(argv)
 
@@ -223,7 +230,12 @@ def main(argv: list[str] | None = None) -> int:
     mesh = open_mesh()
     try:
         t0 = time.time()
-        pipeline = Flux3KleinPipeline(mesh, snapshots=snapshots, resident=(model,))
+        layout_kw = {
+            "dual": dict(sp_axis=0, tp_axis=1, large_layout=(1, 0)),
+            "sp4tp8": dict(sp_axis=0, tp_axis=1),
+            "sp8tp4": dict(sp_axis=1, tp_axis=0),
+        }[args.layout]
+        pipeline = Flux3KleinPipeline(mesh, snapshots=snapshots, resident=(model,), **layout_kw)
         print(f"pipeline resident ({model}) in {time.time() - t0:.1f}s")
         for i in range(args.repeat):
             try:
