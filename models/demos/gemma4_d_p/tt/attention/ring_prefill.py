@@ -437,10 +437,11 @@ def sliding_ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     num_lanes = prefill_metadata.num_lanes
+    q_slab = tt_q.shape[-2] // num_lanes
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(
-            tt_q.shape[-2] // num_lanes,
+            q_slab,
             sliding=True,
             num_heads=tt_q.shape[1],
             num_cores=(sdpa_grid.x - 1) * sdpa_grid.y,
@@ -454,7 +455,7 @@ def sliding_ring_prefill_attention(
     # Only the predecessor halo is exchanged, and the op requires a compact buffer (gathered rows < cache_seq *
     # ring): a full-capacity one fails "requires a compact halo buffer". The op infers the slot count from its rows.
     halo_tokens = sliding_halo_tokens(sliding_window_size, program_config.k_chunk_size)
-    gather_seq = max(halo_tokens, TILE_HEIGHT) * sliding_halo_slots(tt_q.shape[-2], halo_tokens)
+    gather_seq = max(halo_tokens, TILE_HEIGHT) * sliding_halo_slots(q_slab, halo_tokens)
     buffer_k = ccl_manager.get_ring_gather_buffer(
         (gather_buffer_key, "ring_k"),
         num_local_kv_heads,
