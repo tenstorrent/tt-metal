@@ -14,11 +14,8 @@
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
-// Reservation alignment for tensor geometry; HYBRID banks use DRAM alignment for SRAM too.
-uint32_t l1_tensor_allocation_alignment(const IDevice& device);
-
 // Creates a non-owning view. The caller must retain backing storage until all uses finish.
-// Address pairs cover every tensor core of each selected device; the caller validates backing bounds.
+// The caller must supply every tensor core on each selected device and validate backing bounds.
 std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
