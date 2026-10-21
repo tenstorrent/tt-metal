@@ -51,6 +51,7 @@ from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.weights import load_weights_from_hf
 
+from .distributed import resolve_batch_layout
 from .llama_composite_kv import LlamaCompositeKV
 
 _SUPPORTED_KINDS = ("llama", "qwen3")
@@ -160,8 +161,7 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
 def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
     from transformers import AutoConfig, AutoTokenizer
 
-    mesh = ttml.mesh()
-    fsdp_enabled = bool(device_config.enable_fsdp) and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
+    fsdp_enabled = resolve_batch_layout().fsdp_enabled
 
     tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
 
