@@ -37,6 +37,22 @@ def test_export_without_receivers():
     assert not os.path.exists(path)
 
 
+def test_reexport_keeps_newer_file():
+    # Exporting the same service again replaces the file. Dropping the old handle afterwards must
+    # leave the new file alone, and dropping the new one removes it.
+    old = ttnn.D2DStreamService.export_pipeline_descriptor(_service_id("again"), [], root=0)
+    new = ttnn.D2DStreamService.export_pipeline_descriptor(_service_id("again"), [], root=0)
+    assert old.path == new.path
+    path = new.path
+
+    del old
+    assert os.path.exists(path)
+    assert len(ttnn.D2DPipelineDescriptor.wait_and_read(path).ranks) == 1
+
+    del new
+    assert not os.path.exists(path)
+
+
 def test_export_rejects_bad_arguments(expect_error):
     with expect_error(RuntimeError, "null receiver"):
         ttnn.D2DStreamService.export_pipeline_descriptor(_service_id("none"), [[None]], root=0)

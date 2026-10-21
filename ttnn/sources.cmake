@@ -229,6 +229,9 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/operation_concepts.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
+    api/ttnn/tensor/d2d_pipeline_descriptor.hpp
+    api/ttnn/tensor/d2d_stage_gate.hpp
+    api/ttnn/tensor/d2d_stream_service.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp
     api/ttnn/tensor/layout/layout.hpp
