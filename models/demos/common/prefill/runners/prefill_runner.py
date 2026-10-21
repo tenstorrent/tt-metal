@@ -706,6 +706,9 @@ def run_request_loop(
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
+            # A sentinel chunk runs no prefill_chunk, so a drain-allocated record has no other owner.
+            if sockets.persistent_metadata() is None:
+                ttnn.deallocate(sockets.metadata)
             if mtp_tokens is not None and sockets.overhang is None:
                 ttnn.deallocate(mtp_tokens)
             if indices is not None:
@@ -722,8 +725,11 @@ def run_request_loop(
                 )
             break
         warmup = _is_warmup_sentinel(meta)
-        if warmup and sockets.tokens is None:
-            ttnn.deallocate(inp)
+        if warmup:
+            if sockets.tokens is None:
+                ttnn.deallocate(inp)
+            if sockets.persistent_metadata() is None:
+                ttnn.deallocate(sockets.metadata)
             if indices is not None:
                 ttnn.deallocate(indices)
         if before_first_chunk is not None:
