@@ -38,6 +38,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
@@ -66,7 +67,7 @@ _MESHES = {
 _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
-_MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
+_MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config, "kimi-k3": KimiK3Config}
 # Routing captured off-device from total_counts_per_expert, one dispatch group of a 32-chip chunked prefill
 # of each model's code_debug golden, scaled to this test's 10240 in-group routings. Scaling leaves the mean
 # intact -- 106.7 for Kimi's 96 experts, 160 for GLM's 64 -- and keeps the shape the model actually routes.
@@ -109,6 +110,28 @@ _CAPTURED_COUNTS = {
     },
 }
 # fmt: on
+
+
+def _synthetic_group_counts(group_experts, routings, hot_share):
+    """One dispatch group's per-expert counts summing to `routings`, for a model with no captured routing: a
+    seeded log-normal spread (max/mean about 2, like the flattest captured layers), and with `hot_share` > 0 one
+    expert taking that share of the group's routings."""
+    gen = torch.Generator().manual_seed(42)
+    hot = int(routings * hot_share)
+    weights = torch.exp(0.5 * torch.randn(group_experts, generator=gen, dtype=torch.float64))
+    counts = torch.floor(weights / weights.sum() * (routings - hot)).to(torch.int64)
+    counts[: routings - hot - int(counts.sum())] += 1
+    counts[group_experts // 2] += hot
+    return tuple(int(c) for c in counts)
+
+
+# Kimi K3 has no capture: 224 experts per group and top-16, so 4 picks per token per group over the 8 x 640
+# tokens. Hot-expert puts an eighth of the group's routings on one expert, about 28x the mean.
+_CAPTURED_COUNTS["kimi-k3"] = {
+    "balanced": _synthetic_group_counts(224, 8 * 640 * 4, 0.0),
+    "hot-expert": _synthetic_group_counts(224, 8 * 640 * 4, 0.125),
+}
+
 # Two real Kimi K2.7 cells for (8, 4), from a code_debug prefill, named by layer and chunk. L45c3 is the
 # median-skew cell (busiest expert 11.7x the mean). L11c9 is the most skewed of its 60 x 11 cells (expert 205
 # takes 3458 tokens, 32.4x the mean). Unlike balanced and hot-expert, a real cell keeps the model's own top-8
@@ -300,7 +323,8 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     get no tokens."""
     torch.manual_seed(42)
     model = _scaled_model(tuple(mesh_device.shape), model_id)
-    emb_dim = model.EMB_SIZE
+    # Kimi K3's routed experts and combine run at its latent width.
+    emb_dim = getattr(model, "ROUTED_EXPERT_HIDDEN_SIZE", model.EMB_SIZE)
     hidden_dim = model.MOE_INTERMEDIATE_SIZE
     num_routed_experts = model.NUM_ROUTED_EXPERTS
     num_experts_per_tok = model.NUM_EXPERTS_PER_TOKEN
@@ -406,7 +430,9 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     # Both cases run the crossover the model ships. Balanced leaves every expert under it, so the fused
     # pass takes them all -- which is what production does at this chunk size; the hot expert is the one
     # the threshold lifts into the unified pass.
-    threshold = model.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD
+    # A model with no threshold, Kimi K3, runs every expert on the unified half, as TtMoe's overlap does.
+    threshold = getattr(model, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", 0)
+    activation = ttnn.RoutedExpertActivation.SituGlu if model_id == "kimi-k3" else ttnn.RoutedExpertActivation.Silu
     assert threshold < max_dispatched_tokens_per_expert
     hot = int(counts.argmax())
     logger.info(
@@ -461,7 +487,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         hidden_dim=hidden_dim,
         max_tokens=max_dispatched_tokens_per_expert,
         torch_weights=[expert_weights] * (num_devices * experts_per_chip),
-        activation=ttnn.RoutedExpertActivation.Silu,
+        activation=activation,
     )
 
     def routed_expert(x=None, **overlap):
@@ -476,7 +502,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             hybrid_token_threshold=threshold,
             compute_kernel_config=tt_expert.compute_kernel_config,
-            activation=ttnn.RoutedExpertActivation.Silu,
+            activation=activation,
             **overlap,
         )
 
@@ -651,6 +677,8 @@ def _ci_unsupported_perf_combos(**params):
     indirect=["mesh_device", "device_params"],
 )
 def test_hybrid_routed_expert_combine_overlap(mesh_device, device_params, threshold_id, model_id, variant):
+    if model_id == "kimi-k3":
+        pytest.skip("the reference is SwiGLU and Kimi K3 runs SiTU-GLU: Kimi K3 is timed here, not checked")
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")

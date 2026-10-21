@@ -13,7 +13,7 @@ Environment:
     TT_DS_CAPTURED_LAYER   an integer: use one recorded MoE layer's real routing instead of the
                            synthetic draw.
     TT_DS_CAPTURED_PATH    where that recording lives; defaults to the golden prefill cache.
-    TT_DS_MODEL            glm53 or kimi27: that model's emb_dim, routed experts and top-k, and an extra 8x4 mesh
+    TT_DS_MODEL            glm53, kimi27 or kimik3: that model's routed emb_dim, routed experts and top-k, and an extra 8x4 mesh
                            opened at the payload the model's TtMoe opens it with (fabric2d-torus-xy-8x4-2link-model).
                            With fp8 the token is Q1's packed row, emb_dim plus one fp32 scale per 128, as TtMoe's fp8
                            wire sends it; pair it with row_major, and bf16 with tile, as the model does.
@@ -32,6 +32,7 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import (
     _HALF_TOKEN_PAYLOAD_8X1,
@@ -55,11 +56,12 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 EMB_DIM = 7 * 1024
 NUM_ROUTED_EXPERTS = 256
 NUM_EXPERTS_PER_TOK = 8
-_MODELS = {"glm53": GLM53Config, "kimi27": KimiK27Config}
+_MODELS = {"glm53": GLM53Config, "kimi27": KimiK27Config, "kimik3": KimiK3Config}
 _MODEL = os.environ.get("TT_DS_MODEL")
 assert _MODEL in (None, *_MODELS), f"TT_DS_MODEL: expected one of {sorted(_MODELS)}, got {_MODEL!r}"
 if _MODEL is not None:
-    EMB_DIM = _MODELS[_MODEL].EMB_SIZE
+    # Kimi K3's routed side, dispatch included, runs at its latent width.
+    EMB_DIM = getattr(_MODELS[_MODEL], "ROUTED_EXPERT_HIDDEN_SIZE", _MODELS[_MODEL].EMB_SIZE)
     NUM_ROUTED_EXPERTS = _MODELS[_MODEL].NUM_ROUTED_EXPERTS
     NUM_EXPERTS_PER_TOK = _MODELS[_MODEL].NUM_EXPERTS_PER_TOKEN
 
