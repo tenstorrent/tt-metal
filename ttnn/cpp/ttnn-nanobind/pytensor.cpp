@@ -74,8 +74,8 @@ namespace ttnn::tensor {
 using tt::tt_metal::experimental::per_core_allocation::SRAMTensorViewAddress;
 
 struct L1TensorGeometry {
-    DeviceAddr packed_size, page_size, aligned_shard_size, allocation_shard_size;
-    DeviceAddr page_alignment, allocation_alignment;
+    DeviceAddr packed_size, page_size, aligned_shard_size;
+    DeviceAddr page_alignment;
     std::vector<CoreCoord> cores;
     bool per_core;
 };
@@ -436,13 +436,11 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void pytensor_module_types(nb::module_& mod) {
-    nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Logical shard footprint and physical allocator alignment.")
+    nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Tensor data cores and page-aligned footprint.")
         .def_ro("packed_size", &L1TensorGeometry::packed_size)
         .def_ro("page_size", &L1TensorGeometry::page_size)
         .def_ro("aligned_shard_size", &L1TensorGeometry::aligned_shard_size)
-        .def_ro("allocation_shard_size", &L1TensorGeometry::allocation_shard_size)
         .def_ro("page_alignment", &L1TensorGeometry::page_alignment)
-        .def_ro("allocation_alignment", &L1TensorGeometry::allocation_alignment)
         .def_ro("cores", &L1TensorGeometry::cores)
         .def_ro("per_core", &L1TensorGeometry::per_core);
     // Tensor constructors that accept device and .to_device() function use keep alive call policy to communicate that
@@ -510,20 +508,15 @@ void pytensor_module(nb::module_& mod) {
                 pages = shard.num_pages();
             }
             geometry.page_alignment = device->allocator()->get_alignment(BufferType::L1);
-            // HYBRID banks reserve DRAM-aligned extents even though SRAM pages use L1 alignment.
-            geometry.allocation_alignment =
-                tt::tt_metal::experimental::per_core_allocation::l1_tensor_allocation_alignment(*device);
             const auto aligned_page = ((geometry.page_size + geometry.page_alignment - 1) / geometry.page_alignment) *
                                       geometry.page_alignment;
             geometry.aligned_shard_size = pages * aligned_page;
-            geometry.allocation_shard_size = tt::tt_metal::detail::calculate_bank_size_spread(
-                geometry.aligned_shard_size, aligned_page, 1, geometry.allocation_alignment);
             return geometry;
         },
         nb::arg("mesh_device").noconvert(),
         nb::arg("device_coord"),
         nb::arg("tensor_spec"),
-        "Return Metal-derived L1 page, shard and allocation geometry without allocating.");
+        "Return tensor data cores and page-aligned L1 geometry without allocating.");
     mod.def(
         "experimental_create_l1_tensor_view",
         [](distributed::MeshDevice& mesh,
