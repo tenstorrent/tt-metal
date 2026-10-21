@@ -17,7 +17,7 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in0 (A)  -> SrcB, tile shape ``[{1,2,4,8}, 32]``: only the top two faces, each
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
-  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
+  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
 
 ``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
 holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
@@ -30,13 +30,13 @@ The LLK writes ONLY the top ``M`` rows of each output face. The remaining ``32 -
 of every 32-row DEST tile are undefined, so the reorder below drops the per-tile padding
 and compares ONLY the ``M`` defined rows of each tile against the golden ``A @ B``.
 
-The ``ct in {7,9,11}`` question
--------------------------------
-The unpack MOP splits each k-tile's ``ct_dim`` output tiles into
-``first_half = ceil(ct/2)`` and ``second_half = floor(ct/2)`` replay ranges
-(llk_unpack_AB_custom_mm.h, the block near lines 130-160). Odd ct_dim is the case where
-the two halves differ in length, so this sweep includes the odd widths 7, 9, 11 (as well
-as 1 and even widths) to settle whether that odd-ct split multiplies correctly.
+Unpack MOP slot splits
+----------------------
+The unpack MOP covers one k-tile per iteration and spreads its ``ct_dim - 1`` reuses over
+one, two or four template slots (llk_unpack_AB_custom_mm.h, _llk_unpack_AB_custom_mm_mop_config_):
+A0 alone for ct = 1, A0 + B for ct 2 to 18, A0..A3 for ct 19 to 34. Odd widths are the ones
+whose slots differ in length, so the sweeps include odd ct (7, 19, 25) as well as 1, even
+widths and both ends of each slot configuration.
 
 Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/Quasar.
 This test writes a correct-by-construction golden; runtime pass/fail is a BH-card check.
@@ -98,6 +98,19 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
         return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
 
 
+_LAYOUTS = {"default": 0, "dense": 1, "compact": 2}
+
+
+@dataclass
+class CUSTOM_MM_LAYOUT(TemplateParameter):
+    """DEST layout of the output tiles: default (64 rows apart), dense (32) or compact (16)."""
+
+    layout: str = "dense"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t CUSTOM_MM_LAYOUT = {_LAYOUTS[self.layout]};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
 
@@ -128,20 +141,19 @@ class CustomMMStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(
+def _build_custom_mm(
     M,
     kt,
     ct,
     formats,
     dest_acc,
-    calls=CUSTOM_MM_CALLS(),
+    torch_a,
+    torch_b,
+    calls=None,
     preserve_zero_flag=False,
-    operands=None,
+    layout="dense",
 ):
-    """Run custom_mm and check it against the golden; return the (M, N) result.
-
-    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
-    """
+    """Build (but do not run) one custom_mm variant; return it with its (M, N) golden."""
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
     in0_format = formats.input_format
@@ -149,13 +161,6 @@ def _run_custom_mm(
     out_format = formats.output_format
     in0_packer = _PACKERS[in0_format]
     in1_packer = _PACKERS[in1_format]
-
-    if operands is None:
-        torch.manual_seed(0)
-        torch_a = torch.randn((M, K), dtype=torch.float32)
-        torch_b = torch.randn((K, N), dtype=torch.float32)
-    else:
-        torch_a, torch_b = operands
 
     # in0 (A -> SrcB): kt*2 faces of [M, 16], column-face order along K, contiguous.
     packed_a = b""
@@ -194,7 +199,7 @@ def _run_custom_mm(
                 )
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
-    # undone in the result reorder below. Instantiate MatmulGolden directly (not via
+    # undone in _device_rows. Instantiate MatmulGolden directly (not via
     # get_golden_generator) so the compile-producer's dummy generator does not break the
     # narrow-M reshape.
     golden = MatmulGolden()(
@@ -217,8 +222,9 @@ def _run_custom_mm(
         formats,
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls,
+            calls if calls is not None else CUSTOM_MM_CALLS(),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+            CUSTOM_MM_LAYOUT(layout),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -230,23 +236,67 @@ def _run_custom_mm(
         ),
         dest_acc=dest_acc,
     )
+    return configuration, golden
 
-    res = configuration.run().result
+
+def _device_rows(res, M, ct, out_format):
+    """Undo the device result layout into row-major (M, N).
+
+    The device packs ct tiles; within a tile the two 16-col faces (M x FACE_C_DIM, row-major)
+    sit contiguously, padded out to a full 32-row tile. Drop the per-tile padding
+    (span = len // ct) and reorder to row-major (M, N). Only the M defined rows survive.
+    """
     torch_out = torch.float32 if out_format == DataFormat.Float32 else torch.bfloat16
     res_tensor = torch.as_tensor(res, dtype=torch_out)
-
-    # Device packs ct tiles; within a tile the two 16-col faces (M x FACE_C_DIM, row-major)
-    # sit contiguously, padded out to a full 32-row tile. Drop the per-tile padding
-    # (span = len // ct) and reorder to row-major (M, N). Only the M defined rows survive.
     faces_per_tile = DEFAULT_TILE_C_DIM // FACE_C_DIM
     per_tile = res_tensor.reshape(ct, -1)[:, : M * DEFAULT_TILE_C_DIM]
-    res_tensor = (
+    return (
         per_tile.reshape(ct, faces_per_tile, M, FACE_C_DIM)
         .permute(2, 0, 1, 3)
-        .reshape(M, N)
+        .reshape(M, ct * DEFAULT_TILE_C_DIM)
     )
 
-    golden = golden.reshape(M, N).to(torch_out)
+
+def _seeded_operands(M, kt, ct):
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, kt * DEFAULT_TILE_R_DIM), dtype=torch.float32)
+    torch_b = torch.randn(
+        (kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM), dtype=torch.float32
+    )
+    return torch_a, torch_b
+
+
+def _run_custom_mm(
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    calls=CUSTOM_MM_CALLS(),
+    preserve_zero_flag=False,
+    operands=None,
+):
+    """Run custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    """
+    torch_a, torch_b = operands if operands is not None else _seeded_operands(M, kt, ct)
+    out_format = formats.output_format
+    configuration, golden = _build_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        dest_acc,
+        torch_a,
+        torch_b,
+        calls,
+        preserve_zero_flag,
+    )
+    res_tensor = _device_rows(configuration.run().result, M, ct, out_format)
+
+    torch_out = torch.float32 if out_format == DataFormat.Float32 else torch.bfloat16
+    golden = golden.reshape(M, ct * DEFAULT_TILE_C_DIM).to(torch_out)
 
     # K-aware absolute floor (Float16_b / bf16 dest only): the single LoFi MVMUL
     # accumulates the K-deep sum in a bf16 dest, so rounding noise grows ~linearly per
@@ -270,36 +320,36 @@ def _run_custom_mm(
     return res_tensor
 
 
-# LoFi-only per the header ("fidelity: LoFi only"). Float16_b (16-bit dest) and Float32
-# (32-bit dest) cover both DEST widths.
-CUSTOM_MM_FORMATS = input_output_formats(
-    [DataFormat.Float16_b, DataFormat.Float32], same=True
-)
+# LoFi-only per the header ("fidelity: LoFi only").
+# kt = 2 accumulates over several unpack MOP iterations; kt = 1 is covered by the compact sweep.
+KT_DIMS = [2]
 
-# kt is in [1,256]; small even values cover the paired MOP path.
-KT_DIMS = [2, 4]
-
-# ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
-# first_half/second_half MOP split treats asymmetrically (the ct in {7,9,11} question).
-CT_DIMS = [1, 2, 7, 9, 11, 16]
-
-
-def _dest_acc_for(formats):
-    # Float32 operands require a 32-bit dest; Float16_b uses the 16-bit dest.
-    if formats.input_format == DataFormat.Float32:
-        return DestAccumulation.Yes
-    return DestAccumulation.No
+# Dense layout, 32 DEST rows per output tile: 16 tiles fit a 16-bit SyncHalf DEST (512 rows), 8 a 32-bit one
+# (256 rows). 1 is the one-slot unpack MOP; 2, 7 and 16 two-slot ones, 7 with unequal slots.
+CT_DIMS_16BIT = [1, 2, 7, 16]
+CT_DIMS_32BIT = [1, 2, 7]
 
 
 @blackhole_only
 @parametrize(
-    formats=CUSTOM_MM_FORMATS,
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
     M=list(SUPPORTED_M),
     kt=KT_DIMS,
-    ct=CT_DIMS,
+    ct=CT_DIMS_16BIT,
 )
 def test_custom_mm(formats, M, kt, ct):
-    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats))
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    M=list(SUPPORTED_M),
+    kt=KT_DIMS,
+    ct=CT_DIMS_32BIT,
+)
+def test_custom_mm_fp32_dest(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
 
 
 ODD_K_CASES = [
@@ -315,29 +365,11 @@ ODD_K_CASES = [
     pytest.param(
         1,
         9,
-        1,
-        InputOutputFormat(
-            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
-        ),
-        id="k9-ct1-bfp8-post0",
-    ),
-    pytest.param(
-        1,
-        9,
         2,
         InputOutputFormat(
             DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
         ),
         id="k9-ct2-bfp4-post1",
-    ),
-    pytest.param(
-        8,
-        9,
-        3,
-        InputOutputFormat(
-            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
-        ),
-        id="k9-ct3-bfp8-post0",
     ),
 ]
 
@@ -345,8 +377,119 @@ ODD_K_CASES = [
 @blackhole_only
 @pytest.mark.parametrize("M,kt,ct,formats", ODD_K_CASES)
 def test_custom_mm_odd_k(formats, M, kt, ct):
-    """Exercise the single-K replay tail with both unpack tunings."""
+    """The post1 unpack tuning (Bfp4_b weights) at the one- and two-slot MOP widths, on a single and an odd kt."""
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+# Compact layout: 16 DEST rows per output tile, so a 16-bit SyncHalf DEST (512 rows) holds 32 tiles and a
+# 32-bit one (256 rows) 16. 18 is the widest two-slot unpack MOP; from 19 the MOP uses four slots, 19 and 32
+# being the narrowest and widest DEST-legal ones and 25 an uneven split of the reuses.
+COMPACT_CT_DIMS_16BIT = [1, 2, 7, 18, 19, 25, 32]
+COMPACT_CT_DIMS_32BIT = [1, 16]
+
+
+def _run_compact_against_default(M, kt, ct, formats, dest_acc):
+    """Run custom_mm<compact_packing> and require it bit-identical to default-layout runs.
+
+    The reference packs the same B in column slices narrow enough for the default 64-row
+    layout (8 tiles in a 16-bit SyncHalf DEST, 4 in a 32-bit one). Both do the same MVMULs
+    in the same order, so any difference is a layout or unpack-walk error. A tolerance
+    against the fp32 golden cannot tell those apart from bf16 accumulation rounding at these
+    widths. A PCC check against the golden still guards the case of both being wrong alike.
+    """
+    out_format = formats.output_format
+    torch_a, torch_b = _seeded_operands(M, kt, ct)
+    max_default_ct = 4 if dest_acc == DestAccumulation.Yes else 8
+
+    compact, golden = _build_custom_mm(
+        M, kt, ct, formats, dest_acc, torch_a, torch_b, layout="compact"
+    )
+    slices = []
+    for c0 in range(0, ct, max_default_ct):
+        width = min(max_default_ct, ct - c0)
+        cols = slice(c0 * DEFAULT_TILE_C_DIM, (c0 + width) * DEFAULT_TILE_C_DIM)
+        reference, _ = _build_custom_mm(
+            M, kt, width, formats, dest_acc, torch_a, torch_b[:, cols], layout="default"
+        )
+        slices.append((width, reference))
+
+    # Build every variant first: in the compile-producer phase the first run() skips the test.
+    compact.prepare()
+    for _, reference in slices:
+        reference.prepare()
+
+    result = _device_rows(compact.run().result, M, ct, out_format)
+    expected = torch.cat(
+        [
+            _device_rows(reference.run().result, M, width, out_format)
+            for width, reference in slices
+        ],
+        dim=1,
+    )
+
+    bits = torch.int32 if out_format == DataFormat.Float32 else torch.int16
+    mismatched = result.view(bits) != expected.view(bits)
+    assert not mismatched.any(), (
+        f"compact custom_mm differs from the default layout in {int(mismatched.sum())} of "
+        f"{mismatched.numel()} outputs (first at {mismatched.nonzero()[0].tolist()}) for "
+        f"M={M} kt={kt} ct={ct} formats={formats}"
+    )
+
+    pcc = torch.corrcoef(
+        torch.stack([result.float().flatten(), golden.float().flatten()])
+    )[0, 1]
+    assert pcc > 0.999, f"compact custom_mm PCC {pcc:.6f} against the golden"
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[1, 8],
+    kt=[1, 3],
+    ct=COMPACT_CT_DIMS_16BIT,
+)
+def test_custom_mm_compact(formats, M, kt, ct):
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.No)
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    M=[1, 8],
+    kt=[2],
+    ct=COMPACT_CT_DIMS_32BIT,
+)
+def test_custom_mm_compact_fp32_dest(formats, M, kt, ct):
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+COMPACT_WIDE_BFP_CASES = [
+    pytest.param(
+        8,
+        3,
+        18,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
+        ),
+        id="k3-ct18-bfp4-post1",
+    ),
+    pytest.param(
+        8,
+        2,
+        32,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
+        ),
+        id="k2-ct32-bfp4-post1",
+    ),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", COMPACT_WIDE_BFP_CASES)
+def test_custom_mm_compact_wide_bfp(formats, M, kt, ct):
+    """The post1 unpack tuning (Bfp4_b weights) at the widest two- and four-slot MOPs, where its slots run longest."""
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.No)
 
 
 # Multi-call: K splits over back-to-back calls that accumulate into one DEST, the way the blaze

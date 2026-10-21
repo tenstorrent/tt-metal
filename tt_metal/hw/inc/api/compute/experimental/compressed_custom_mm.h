@@ -71,7 +71,7 @@ ALWI void compressed_custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
-    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    PACK((_llk_pack_custom_mm_init_<dense_packing ? CustomMmDestLayout::Dense : CustomMmDestLayout::Default>()));
 }
 
 // clang-format off
@@ -110,7 +110,7 @@ ALWI void compressed_custom_mm_block_init_short(
     // NOTE: split_acc is accepted but NOT forwarded (see compressed_custom_mm_block_init).
     MATH((llk_math_compressed_custom_mm_init<transpose, false /* split_acc */, dense_packing>(in0_cb_id, in1_cb_id)));
 
-    PACK((_llk_pack_custom_mm_init_<dense_packing>()));
+    PACK((_llk_pack_custom_mm_init_<dense_packing ? CustomMmDestLayout::Dense : CustomMmDestLayout::Default>()));
 }
 
 // clang-format off
@@ -253,7 +253,7 @@ ALWI void compressed_custom_mm_block_math(
 // clang-format on
 template <bool dense_packing = false>
 ALWI void compressed_custom_mm_block_uninit() {
-    PACK((_llk_pack_custom_mm_uninit_<dense_packing>()));
+    PACK((_llk_pack_custom_mm_uninit_<dense_packing ? CustomMmDestLayout::Dense : CustomMmDestLayout::Default>()));
 }
 
 #endif  // ARCH_BLACKHOLE

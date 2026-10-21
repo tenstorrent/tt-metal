@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "experimental/llk_custom_mm_common.h"
 #include "llk_unpack_compressed.h"
 
 namespace compressed {
@@ -253,12 +254,15 @@ inline void llk_unpack_AB_custom_mm_compressed_init(const uint32_t operand0, con
  *            loop-count bug; ct_dim >= 12 exceeds the 32-insn buffer limit.
  * @tparam ct_dim  Output width in tiles. Compile-time for static_assert validation.
  */
-template <bool use_barrier = true, uint32_t ct_dim = 1, bool split_acc = false, bool dense_packing = false>
+template <
+    bool use_barrier = true,
+    uint32_t ct_dim = 1,
+    ckernel::CustomMmDestLayout dest_layout = ckernel::CustomMmDestLayout::Default>
 inline void custom_mm_compressed_block_init_short(
     const uint32_t in0_cb_id, const uint32_t in1_cb_id, const uint32_t out_cb_id) {
     llk_unpack_AB_custom_mm_compressed_init<use_barrier, ct_dim>(in0_cb_id, in1_cb_id);
-    MATH((llk_math_custom_mm_init<false, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
-    if constexpr (dense_packing) {
+    MATH((llk_math_custom_mm_init<false, dest_layout>(in0_cb_id, in1_cb_id, ct_dim)));
+    if constexpr (ckernel::custom_mm_tile_rows(dest_layout) == 32) {
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
     }

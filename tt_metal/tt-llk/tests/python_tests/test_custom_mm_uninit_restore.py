@@ -78,7 +78,14 @@ NUM_TILES = 4
 # from each compute API to the implementation exercised here.
 
 
-def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
+def _run(
+    formats,
+    dest_acc,
+    dense_packing,
+    skip_uninit,
+    block_mop_num_faces=4,
+    compact_packing=False,
+):
     torch.manual_seed(0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -95,6 +102,7 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
             PACK_NUM_TILES(NUM_TILES),
             CUSTOM_MM_UNINIT(
                 dense_packing=dense_packing,
+                compact_packing=compact_packing,
                 skip=skip_uninit,
                 block_mop_num_faces=block_mop_num_faces,
             ),
@@ -202,6 +210,47 @@ def test_custom_mm_uninit_restores_dense_wstride(
         f"custom_mm/compressed_custom_mm _block_uninit<dense_packing={dense_packing}> "
         "did not leave the packer able to pack plain tiles: the following plain "
         "_llk_pack_ did not reproduce the DEST tiles"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_custom_mm_uninit_restores_compact_strides(formats, dest_acc):
+    """The compact uninit must put both the 16-row face stride and the 64-row tile stride back.
+
+    Unlike dense_packing, the compact strides follow the DEST width, so this passes for a
+    32-bit pack source too.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    golden, device = _run(
+        formats, dest_acc, dense_packing=False, skip_uninit=False, compact_packing=True
+    )
+
+    assert passed_test(golden, device, formats.output_format), (
+        "custom_mm_block_uninit<compact_packing> did not leave the packer able to pack "
+        "plain tiles: the following plain _llk_pack_ did not reproduce the DEST tiles"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_custom_mm_compact_uninit_is_load_bearing(formats, dest_acc):
+    """Negative control for the compact restore: skip the uninit and the pack must be wrong."""
+    _skip_unsupported(formats, dest_acc)
+
+    golden, device = _run(
+        formats, dest_acc, dense_packing=False, skip_uninit=True, compact_packing=True
+    )
+
+    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
+        "run 1 reproduced the DEST tiles even though the uninit was skipped and the "
+        "compact 8-row face / 16-row tile strides were left in place, so the compact "
+        "restore test above proves nothing."
     )
 
 

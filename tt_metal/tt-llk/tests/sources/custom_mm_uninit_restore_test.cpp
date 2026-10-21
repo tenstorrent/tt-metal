@@ -12,6 +12,9 @@
 //   dense_packing -> cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW> back to the
 //                    default 64-row tile-to-tile stride
 //
+// custom_mm_block_uninit<CustomMmDestLayout::Compact> also puts the face (Z) stride back to 16 rows,
+// since the Compact layout packs faces 8 rows apart. UNINIT_COMPACT_PACKING drives that case.
+//
 // An earlier revision of #52727 also restored the tile-pack MOP, first unconditionally
 // and then behind a restore_tile_pack_mop flag. **Neither survived review** -- main's
 // uninit has no MOP restore and no such flag, and the fused caller is expected to pair
@@ -140,6 +143,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
+static_assert(!(UNINIT_DENSE_PACKING && UNINIT_COMPACT_PACKING), "pick one of dense and compact");
+constexpr CustomMmDestLayout uninit_layout = UNINIT_COMPACT_PACKING ? CustomMmDestLayout::Compact
+                                             : UNINIT_DENSE_PACKING ? CustomMmDestLayout::Dense
+                                                                    : CustomMmDestLayout::Default;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -150,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_pack_custom_mm_init_<UNINIT_DENSE_PACKING>();
+    _llk_pack_custom_mm_init_<uninit_layout, is_fp32_dest_acc_en>();
 
     // What a caller's pack_block_contiguous_init does: replace the MOP, keep the
     // ADDR_MODs/strides from the init above.
@@ -172,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)
     {
-        _llk_pack_custom_mm_uninit_<UNINIT_DENSE_PACKING>();
+        _llk_pack_custom_mm_uninit_<uninit_layout, is_fp32_dest_acc_en>();
     }
 
     // ---- run 1: plain per-tile pack, deliberately with NO packer re-init ----

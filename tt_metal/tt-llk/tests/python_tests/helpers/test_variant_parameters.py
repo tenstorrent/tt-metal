@@ -555,6 +555,9 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                the run-0 init (W-stride -> 32 rows) and the uninit
                                (W-stride -> 64 rows). The two must agree: a block packed
                                dense and torn down non-dense is not a supported call.
+    ``UNINIT_COMPACT_PACKING`` the ``compact_packing`` template argument, likewise applied
+                               to both: Z-stride -> 8 rows and W-stride -> 16 rows, then
+                               back to 16 and 64. Excludes ``dense_packing``.
     ``UNINIT_RESTORE_MOP``     the ``restore_tile_pack_mop`` template argument, i.e.
                                whether the uninit reinstalls the Default tile-pack MOP.
     ``UNINIT_SKIP``            negative control -- drop the uninit entirely. Not a
@@ -570,6 +573,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
     """
 
     dense_packing: bool = False
+    compact_packing: bool = False
     restore_mop: bool = False
     skip: bool = False
     block_mop_num_faces: int = 2
@@ -578,6 +582,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
         return "\n".join(
             [
                 f"constexpr bool UNINIT_DENSE_PACKING = {str(self.dense_packing).lower()};",
+                f"constexpr bool UNINIT_COMPACT_PACKING = {str(self.compact_packing).lower()};",
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
@@ -2193,7 +2198,7 @@ class CUSTOM_MM_REUSE_CFG(TemplateParameter):
     """Compile-time chain geometry for the custom_mm_reuse_dest_srcb test.
 
     The reuse LLK is the second matmul of a fused chain: its in0 operand is moved
-    out of DEST (where a preceding custom_mm<dense_packing> left its output) into
+    out of DEST (where a preceding Dense-layout custom_mm left its output) into
     SrcB via MOVD2B; only the weights are unpacked into SrcA. The C++ driver runs
     the whole chain, so these four constants size both the producer custom_mm and
     the reuse consumer:

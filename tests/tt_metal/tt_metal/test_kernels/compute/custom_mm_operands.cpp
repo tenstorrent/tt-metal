@@ -30,9 +30,11 @@ void kernel_main() {
     // Full init must run once, before tile-register traffic. The input addresses
     // are unused until execution; only their static format/geometry matter here.
     if constexpr (mixed) {
-        custom_mm_block_init<false, false, true>(tt::CBIndex::c_0, Weight(0), tt::CBIndex::c_16, producer_ct);
+        custom_mm_block_init<false, CustomMmDestLayout::Dense>(
+            tt::CBIndex::c_0, Weight(0), tt::CBIndex::c_16, producer_ct);
     } else {
-        custom_mm_block_init<false, false, true>(Activation(0), Weight(0), tt::CBIndex::c_16, producer_ct);
+        custom_mm_block_init<false, CustomMmDestLayout::Dense>(
+            Activation(0), Weight(0), tt::CBIndex::c_16, producer_ct);
     }
     pack_block_contiguous_init(tt::CBIndex::c_16);
 
@@ -68,11 +70,15 @@ void kernel_main() {
             }
         } else {
             if constexpr (mixed) {
-                custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, Weight(b_base), producer_ct);
-                custom_mm_block<false>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
+                custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                    tt::CBIndex::c_0, Weight(b_base), producer_ct);
+                custom_mm_block<false, false, CustomMmDestLayout::Dense>(
+                    tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
             } else {
-                custom_mm_block_init_short<false, false, true>(Activation(a_base), Weight(b_base), producer_ct);
-                custom_mm_block<false>(Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
+                custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                    Activation(a_base), Weight(b_base), producer_ct);
+                custom_mm_block<false, false, CustomMmDestLayout::Dense>(
+                    Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
             }
             if constexpr (mode == 2) {
                 // The reuse unpacker processes two K tiles per MOP iteration.
@@ -99,5 +105,5 @@ void kernel_main() {
             custom_mm_reuse_dest_srcb_pack_uninit();
         }
     }
-    custom_mm_block_uninit<true>();
+    custom_mm_block_uninit<CustomMmDestLayout::Dense>();
 }

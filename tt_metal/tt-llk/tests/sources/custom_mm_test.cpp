@@ -24,7 +24,7 @@
 //   in0 (A, the [M,K] operand)  -> SrcB, tile shape [{1,2,4,8}, 32]  (only the top two
 //                                  faces, each face_r_dim rows tall; face_r_dim = M)
 //   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles
-//   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
+//   rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST;
@@ -47,14 +47,15 @@
 //
 // The single unpack call issues one MOP covering the whole kt walk; the single math call
 // loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1; the finalize
-// path is disabled here).
+// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues one TT_MOP iteration per k-tile; the
+// finalize path is disabled here).
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
 #include "ckernel.h"
+#include "experimental/llk_custom_mm_common.h"
 #include "llk_defs.h"
 #include "params.h"
 
@@ -69,6 +70,13 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
+
+// CUSTOM_MM_LAYOUT picks where the output tiles sit in DEST, the same on the math and pack threads:
+// 0 Default, 1 Dense, 2 Compact. split_acc is off, so finalize is too.
+static_assert(CUSTOM_MM_LAYOUT <= 2, "CUSTOM_MM_LAYOUT must be 0 to 2");
+constexpr ckernel::CustomMmDestLayout dest_layout = CUSTOM_MM_LAYOUT == 2   ? ckernel::CustomMmDestLayout::Compact
+                                                    : CUSTOM_MM_LAYOUT == 1 ? ckernel::CustomMmDestLayout::Dense
+                                                                            : ckernel::CustomMmDestLayout::Default;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -150,15 +158,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         math::_configure_preserve_zero_flag_state_();
     }
 
-    // split_acc=false, dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
-    // dense_packing MUST be true: the pack thread reads the ct output tiles with the
-    // dense-packing W-stride (consecutive tiles 32 DEST rows apart), so the math must lay
-    // them out 32 rows apart too (ADDR_MOD_2 DEST incr = 32, not 64). With dense_packing
-    // false the math strides output tiles 64 rows apart, so pack reads tile i>0 from the
-    // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
-    // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
-    // dense_packing=true for the identical pack setup.
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    // transpose=false. operandB_face_r_dim = in0 M.
+    _llk_math_custom_mm_init_<false /* transpose */, dest_layout>(params.in0_face_r_dim, CT_DIM);
+
+    LLK_ASSERT((custom_mm_fits_dest<DstSync::SyncHalf, dest_layout>(0 /* dst_index */, CT_DIM)), "custom_mm: CT_DIM output tiles overrun the DEST sync region");
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
@@ -174,7 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
             ckernel::wait(2000);
         }
-        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        _llk_math_custom_mm_<false /* finalize */, dest_layout>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -184,6 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_custom_mm.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
@@ -202,7 +206,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    if constexpr (dest_layout == CustomMmDestLayout::Compact)
+    {
+        _llk_pack_custom_mm_init_<dest_layout, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (dest_layout == CustomMmDestLayout::Dense)
+    {
+        // Not the shared helper: its dense stride assumes a 16-bit pack source, and this test also runs fp32
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    }
 
     _llk_packer_wait_for_math_done_();
 
@@ -213,7 +225,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    if constexpr (dest_layout == CustomMmDestLayout::Compact)
+    {
+        _llk_pack_custom_mm_uninit_<dest_layout, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (dest_layout == CustomMmDestLayout::Dense)
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    }
 }
 
 #endif
