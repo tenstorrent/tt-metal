@@ -6,8 +6,8 @@
 N [1, 1] submeshes, and runs prefill/decode concurrently across one model per submesh
 via a single Generator (data_parallel == N).
 
-On-device sampling: temperature/top_k/top_p/seed are baked into each submesh's decode
-trace at construction and cannot vary per generate() call.
+On-device sampling: temperature/top_k/top_p/seed are fixed at construction and cannot vary
+per generate() call.
 """
 
 from __future__ import annotations

@@ -15,17 +15,14 @@ Run:
 import argparse
 import logging
 import os
-import random
 import re
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
-import numpy as np
-import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
-from ttml.common.utils import get_tt_metal_runtime_root
+from ttml.common.utils import get_tt_metal_runtime_root, set_seed
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
 
 MODEL_SOURCE = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
@@ -168,12 +165,6 @@ def parse_args():
         help="Training config path, relative to TT_METAL_RUNTIME_ROOT or absolute.",
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help="RNG seed for reproducible runs, and the train/eval split seed.",
-    )
-    parser.add_argument(
         "--eval_examples",
         type=int,
         default=16,
@@ -199,19 +190,16 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-
     tt_metal_root = get_tt_metal_runtime_root()
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
+    set_seed(training_config.seed)
     device_config = DeviceConfig(raw)
 
     model_source = raw["training_config"].get("model_source") or MODEL_SOURCE
     tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
-    train_dataset, eval_dataset = build_dataset(tokenizer, args.seed)
+    train_dataset, eval_dataset = build_dataset(tokenizer, training_config.seed)
 
     assert training_config.model_config, "training_config.model_config must be set"
     transformer_config = get_model_config(training_config.model_config)

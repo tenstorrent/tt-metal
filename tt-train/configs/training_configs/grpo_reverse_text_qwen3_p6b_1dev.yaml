@@ -9,6 +9,7 @@ training_config:
   # architecture comes from the HuggingFace config of the model source.
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b_memory_efficient.yaml"
   model_source: "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+  seed: 0
 
   optimizer:
     type: MorehAdamW
