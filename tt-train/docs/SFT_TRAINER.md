@@ -292,14 +292,17 @@ optimizer step. Set to `0.0` (default) to disable.
 
 ## DDP / Multi-device
 
-`SFTTrainer` supports distributed data-parallel (DDP) training without any
-DDP-specific configuration flags. Two extension points are combined:
+`SFTTrainer` needs no distributed flags. Open the device as a named mesh and
+split each batch with the mesh's batch mapper; the trainer does the rest:
 
-1. **Collate function** -- create batch tensors with a `shard_tensor_to_mesh_mapper`
-   so that each device receives a slice of the global batch.
-2. **`on_before_optimizer_step` callback** -- call
-   `ttml.core.distributed.synchronize_gradients` to all-reduce gradients before
-   the optimiser step.
+- it synchronizes gradients with `ttml.sync_gradients` every optimizer step,
+  averaging over the data axes (`dp`, `fsdp`) and summing tensor-parallel
+  partial gradients, as each parameter's layout requires;
+- its default loss, `ttml.parallel.cross_entropy_loss`, reads the logits'
+  layout: vocab-parallel when the vocabulary is sharded across a mesh axis,
+  plain cross-entropy otherwise;
+- with `max_grad_norm` it clips by the global norm of the (possibly sharded)
+  gradients.
 
 Loss aggregation across devices is handled automatically via a default
 `concat_mesh_to_tensor_composer(device, 0)`.  Pass a custom `loss_composer`
@@ -307,32 +310,16 @@ to the `SFTTrainer` constructor to override.
 
 ```python
 import ttml
-from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+from ttml.trainers import SFTConfig, SFTTrainer
 
-# -- device setup (caller responsibility) --
-autograd_ctx = ttml.autograd.AutoContext.get_instance()
-ttml.core.distributed.enable_fabric(num_devices)
-autograd_ctx.open_device([1, num_devices])
-autograd_ctx.initialize_parallelism_context(
-    ttml.autograd.DistributedConfig(enable_ddp=True)
-)
+mesh = ttml.Mesh((2, 4), ("dp", "tp"))
+ttml.open_device_mesh(mesh)  # enables fabric for a multi-device mesh
 
-device = autograd_ctx.get_device()
-shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-
-# -- gradient-sync callback --
-class DDPCallback(TrainerCallback):
-    def on_before_optimizer_step(self, trainer):
-        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
-
-# -- collate that shards along the batch dimension --
-def my_collate(examples, mapper=None):
+# -- collate that splits the batch across the batch axes (dp, fsdp) --
+def my_collate(examples, mapper=mesh.batch_mapper(tdim=0)):
     ...  # pass mapper to Tensor.from_numpy(...)
 
-trainer = SFTTrainer(
-    ...,
-    callbacks=[DDPCallback()]
-)
+trainer = SFTTrainer(...)
 trainer.train()
 ```
 

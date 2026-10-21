@@ -4,6 +4,10 @@ This guide explains how to configure and run distributed training with TTML, cov
 
 ## Overview
 
+> The Python models, trainers and FSDP read their layout from the named mesh and each tensor's topology instead of
+> `ParallelismContext`; see [DISTRIBUTED_LAYOUTS.md](DISTRIBUTED_LAYOUTS.md). This guide covers the C++ models and the
+> mesh descriptors both share.
+
 TTML supports four types of distributed parallelism:
 - **Data Parallel (DP/DDP)**: Replicate model across devices, shard data, synchronize gradients
 - **Tensor Parallel (TP)**: Shard model parameters across devices, gather/reduce as needed
