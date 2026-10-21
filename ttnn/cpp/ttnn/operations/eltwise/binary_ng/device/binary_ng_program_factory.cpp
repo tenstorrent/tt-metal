@@ -1422,6 +1422,34 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     if (block_pack || block_unpack) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
+    // Sharded column and scalar broadcasts: the other operand and the output sit whole in L1, so the broadcast tile is
+    // held while that operand goes through DEST in blocks.
+    {
+        const auto sbt = operation_attributes.subtile_broadcast_type;
+        const bool col_or_scalar =
+            sbt == SubtileBroadcastType::COL_A || sbt == SubtileBroadcastType::COL_B ||
+            sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B;
+        const bool bcast_is_a = sbt == SubtileBroadcastType::COL_A || sbt == SubtileBroadcastType::SCALAR_A;
+        const auto other_tiles = bcast_is_a ? b_num_tiles_per_shard : a_num_tiles_per_shard;
+        const bool fpu_bcast_kernel =
+            compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeBcast ||
+            compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
+            compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg;
+        const auto bop = op_config.binary_op;
+        const bool fpu_op = std::holds_alternative<OpConfig::FpuBinaryOp>(bop);
+        const bool bcast_block =
+            arch == tt::ARCH::BLACKHOLE && col_or_scalar && fpu_bcast_kernel && !is_sfpu_op && !is_where_op && fpu_op &&
+            !has_operand_activations && !has_post_activations && bf16_or_bfp8(a_data_format) &&
+            bf16_or_bfp8(b_data_format) && bf16_or_bfp8(c_data_format) && other_tiles.has_value() &&
+            other_tiles == c_num_tiles_per_shard &&
+            block_tiles >= ((a_data_format != b_data_format &&
+                             std::get<OpConfig::FpuBinaryOp>(bop) != OpConfig::FpuBinaryOp::MUL)
+                                ? 16u
+                                : 4u);
+        if (bcast_block) {
+            compute_kernel_defines["BINARY_NG_BCAST_BLOCK"] = fp32_dest_acc_en ? "4" : "8";
+        }
+    }
     if (block_pack) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }

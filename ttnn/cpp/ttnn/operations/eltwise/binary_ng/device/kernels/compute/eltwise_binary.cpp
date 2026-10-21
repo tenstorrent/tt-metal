@@ -3,6 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+
+#ifndef BINARY_NG_BCAST_BLOCK
+#define BINARY_NG_BCAST_BLOCK 0
+#endif
+// Blackhole: BINARY_NG_BCAST_BLOCK is the DEST tile count of a block section; the broadcast operand stays on one tile.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_NG_BCAST_BLOCK > 0)
+#define ELTWISE_BINARY_BLOCK_UNPACK (BINARY_NG_BCAST_BLOCK > 0)
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
@@ -40,6 +47,31 @@ ALWI void process_tile(
     PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, num_tiles_per_cycle);
     cb_post_bcast.wait_front(num_tiles_per_cycle);
 
+#if BINARY_NG_BCAST_BLOCK
+    for (uint32_t j = tile_start; j < freq;) {
+        const uint32_t n = (freq - j < BINARY_NG_BCAST_BLOCK) ? freq - j : BINARY_NG_BCAST_BLOCK;
+        cb_post_other.wait_front(n);
+        cb_out.reserve_back(n);
+
+        tile_regs_acquire();
+#if BCAST_INPUT
+        binary_block_fixed_operand<BINARY_OP_TYPE, false, true>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
+#else
+        binary_block_fixed_operand<BINARY_OP_TYPE, true, false>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
+#endif
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_out.get_cb_id());
+        }
+        tile_regs_release();
+
+        cb_out.push_back(n);
+        cb_post_other.pop_front(n);
+        j += n;
+    }
+#else
     for (uint32_t j = tile_start; j < freq; ++j) {
         PREPROCESS(OTHER_OP, CircularBuffer(CB_PRE_OTHER), cb_post_other, cb_out, num_tiles_per_cycle);
         cb_post_other.wait_front(num_tiles_per_cycle);
@@ -61,6 +93,7 @@ ALWI void process_tile(
         cb_out.push_back(num_tiles_per_cycle);
         cb_post_other.pop_front(num_tiles_per_cycle);
     }
+#endif
     cb_post_bcast.pop_front(num_tiles_per_cycle);
 }
 
