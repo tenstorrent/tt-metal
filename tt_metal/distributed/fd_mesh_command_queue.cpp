@@ -1441,7 +1441,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
             if (append_stall) {
                 // The prefetcher reads ahead of the dispatcher, so without this stall a later replay could fetch the
                 // command list before these writes land.
-                command_sequence.add_dispatch_wait_with_prefetch_stall(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, id_);
+                command_sequence.add_dispatch_wait_with_prefetch_stall(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
             sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, id_);
             sysmem_manager.fetch_queue_reserve_back(id_);
