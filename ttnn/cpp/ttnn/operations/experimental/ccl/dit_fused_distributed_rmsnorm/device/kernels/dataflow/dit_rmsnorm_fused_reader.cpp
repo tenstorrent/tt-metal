@@ -27,6 +27,7 @@
 #include "api/core_local_mem.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/kernel_profiler.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -40,7 +41,9 @@ void kernel_main() {
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t chunk_size_rows = 1u;  // chunk size is always 1 (no CT arg)
     constexpr uint32_t per_head_rope = get_compile_time_arg_val(9);
-    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(10);
+    // Worker count of the program; this core's tile-row range is derived from its index and the
+    // common tile-row count (runtime_length.hpp), the same way on every kernel of the program.
+    constexpr uint32_t num_workers = get_compile_time_arg_val(10);
     constexpr uint32_t bias_cb = get_compile_time_arg_val(11);
     constexpr uint32_t has_bias = get_compile_time_arg_val(12);
     // Per-token weight/bias: shape [N, H] (vs broadcast [1, H]). Read pattern
@@ -82,18 +85,17 @@ void kernel_main() {
     // weight/bias uses the one-shot resident face-row read. per-batch adaLN streams per row.
     constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
-    // Batched RoPE (CT 21): per-batch stride into cos/sin, in tiles (== one batch's whole cos/sin
-    // block). 0 -> broadcast the same cos/sin to every input batch. The reader always indexes
-    // cos/sin by the WITHIN-batch seq row (global_row % rope_seqlen_tiles) and adds
-    // (global_row / rope_seqlen_tiles) * rope_batch_stride_tiles; at batch=1 both terms collapse
-    // to the original single-batch indexing.
-    constexpr uint32_t rope_batch_stride_tiles = get_compile_time_arg_val(21);
+    // Batched RoPE (CT 21): 1 -> cos/sin has one block per input batch, 0 -> broadcast the same
+    // cos/sin to every input batch. The reader always indexes cos/sin by the WITHIN-batch seq row
+    // (global_row % rope_seqlen_tiles) and adds (global_row / rope_seqlen_tiles) * one batch's
+    // cos/sin block; at batch=1 both terms collapse to the original single-batch indexing.
+    constexpr uint32_t rope_per_batch = get_compile_time_arg_val(21);
     // Per-batch adaLN weight/bias (CT 22/23/24): [batch,1,H] — broadcast over seq but distinct per
     // batch. Streamed like per-token (per-row push + compute pops per row), but the read is the
     // face-row broadcast read at wbatch*num_tile_cols, wbatch = tile_row / rows_per_batch_tiles.
     constexpr uint32_t per_batch_weight = get_compile_time_arg_val(22);
     constexpr uint32_t per_batch_bias = get_compile_time_arg_val(23);
-    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(24);
+    constexpr uint32_t batch = get_compile_time_arg_val(24);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
     constexpr auto input_args = TensorAccessorArgs<25>();
@@ -107,18 +109,27 @@ void kernel_main() {
     constexpr auto tile_row_map_args = TensorAccessorArgs<recip_args.next_compile_time_args_offset() + 1>();
 #endif
 
-    uint32_t arg_idx = 0;
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t weight_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t bias_addr = get_common_arg_val<uint32_t>(2);
     const uint32_t rope_cos_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t rope_sin_addr = get_common_arg_val<uint32_t>(4);
-    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t total_tile_rows = get_common_arg_val<uint32_t>(6);
 #ifdef AFFINE_TILE_ROW_MAP
-    const uint32_t tile_row_map_addr = get_common_arg_val<uint32_t>(6);
+    const uint32_t tile_row_map_addr = get_common_arg_val<uint32_t>(7);
 #endif
+    const uint32_t worker_index = get_arg_val<uint32_t>(0);
+    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_tile_rows, num_workers);
+    const uint32_t tile_row_start = ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_tile_rows);
+    const uint32_t tile_row_end = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_tile_rows);
+    // Per-batch tile rows: the cos/sin seq length (validate pins it to the input's N) and the
+    // per-batch affine selector. batch is compile-time so the batch==1 case folds away.
+    const uint32_t rows_per_batch_tiles = total_tile_rows / batch;
+    const uint32_t rope_seqlen_tiles = rows_per_batch_tiles;
+    constexpr uint32_t rope_num_heads_dim = (per_head_rope != 0) ? (num_tile_cols / head_dim_tiles) : 1u;
+    const uint32_t rope_batch_stride_tiles =
+        (rope_per_batch != 0) ? (rope_num_heads_dim * rope_seqlen_tiles * head_dim_tiles) : 0u;
 
     Noc noc;
 
@@ -168,8 +179,9 @@ void kernel_main() {
     const auto tile_row_map_accessor = TensorAccessor(tile_row_map_args, tile_row_map_addr);
     CircularBuffer cb_tile_row_map(tile_row_map_cb);
     if (tile_row_start < tile_row_end) {
-        noc.async_read(
-            tile_row_map_accessor, cb_tile_row_map, tile_row_map_accessor.get_aligned_page_size(), {.page_id = 0}, {});
+        // The accessor's page size is the compiling launch's; read the live entries (16 B rounded).
+        const uint32_t map_bytes = (total_tile_rows * sizeof(uint32_t) + 15u) & ~15u;
+        noc.async_read(tile_row_map_accessor, cb_tile_row_map, map_bytes, {.page_id = 0}, {});
     }
     volatile tt_l1_ptr uint32_t* tile_row_map =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_tile_row_map.get_write_ptr());
@@ -308,8 +320,7 @@ void kernel_main() {
         // wbatch*num_tile_cols where wbatch = tile_row / rows_per_batch_tiles. Streamed (not
         // all-batches-resident), so weight_cb stays 1 row and a wide per-batch shard fits L1.
         if constexpr (per_batch_weight != 0) {
-            const uint32_t w_base =
-                ((rows_per_batch_tiles != 0) ? (tile_row / rows_per_batch_tiles) : 0u) * num_tile_cols;
+            const uint32_t w_base = (tile_row / rows_per_batch_tiles) * num_tile_cols;
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
@@ -337,8 +348,7 @@ void kernel_main() {
             }
         }
         if constexpr (per_batch_bias != 0) {
-            const uint32_t b_base =
-                ((rows_per_batch_tiles != 0) ? (tile_row / rows_per_batch_tiles) : 0u) * num_tile_cols;
+            const uint32_t b_base = (tile_row / rows_per_batch_tiles) * num_tile_cols;
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
@@ -453,9 +463,9 @@ void kernel_main() {
                     // r_seq) so each input batch reuses cos/sin at seq row r_seq. b selects the
                     // per-batch cos/sin block via rope_batch_stride_tiles (0 => broadcast, all
                     // batches share block 0). At batch=1: r_seq==r, rope_batch_off==0 (unchanged).
-                    const uint32_t r_seq = (rope_seqlen_tiles != 0) ? (r % rope_seqlen_tiles) : r;
+                    const uint32_t r_seq = (batch > 1) ? (r % rope_seqlen_tiles) : r;
                     const uint32_t rope_batch_off =
-                        (rope_seqlen_tiles != 0) ? ((r / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
+                        (batch > 1) ? ((r / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
                     // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim] — all
                     // heads' head_dim_tiles tiles for row r_seq, idx (+ per-batch offset)
                     // h*rope_seqlen_tiles*head_dim_tiles + r_seq*head_dim_tiles + c.

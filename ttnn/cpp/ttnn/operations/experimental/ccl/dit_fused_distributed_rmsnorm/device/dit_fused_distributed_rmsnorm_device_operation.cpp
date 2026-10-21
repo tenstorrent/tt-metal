@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/device.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -17,6 +18,60 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+// Tile rows spanned by an affine tensor's padded shape.
+uint32_t affine_tile_rows(const Tensor& t) { return (t.physical_volume() / t.padded_shape()[-1]) / TILE_HEIGHT; }
+
+// Stats scratch checks shared by the miss and hit validators: the page geometry must match the
+// op's spec exactly and the buffer must hold at least `min_pages` pages.
+void validate_stats_buffer(
+    const DitFusedDistributedRmsnormInputs& tensor_args,
+    const DitFusedDistributedRmsnormSizing& sizing,
+    uint32_t min_pages) {
+    const auto expected = make_stats_tensor_spec(sizing);
+    const auto& e_shape = expected.logical_shape();
+    TT_FATAL(
+        tensor_args.persistent_output_buffer.has_value(),
+        "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
+        "Allocate it as a regular device tensor with shape "
+        "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
+        e_shape[2],
+        e_shape[3]);
+    const auto& buf = tensor_args.persistent_output_buffer.value();
+    TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
+    TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
+    TT_FATAL(
+        buf.layout() == expected.layout(),
+        "persistent_output_buffer layout must be {} (got {})",
+        expected.layout(),
+        buf.layout());
+    TT_FATAL(
+        buf.dtype() == expected.data_type(),
+        "persistent_output_buffer dtype must be {} (got {})",
+        expected.data_type(),
+        buf.dtype());
+    TT_FATAL(
+        buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
+        "persistent_output_buffer must be in DRAM");
+    TT_FATAL(
+        buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
+        "persistent_output_buffer must be INTERLEAVED");
+    const auto& b_shape = buf.logical_shape();
+    TT_FATAL(b_shape.rank() == 4, "persistent_output_buffer rank must be 4 (got {})", b_shape.rank());
+    TT_FATAL(
+        b_shape[0] == 1 && b_shape[1] == 1 && b_shape[3] == e_shape[3] && b_shape[2] >= min_pages,
+        "persistent_output_buffer shape must be [1, 1, >= {}, {}], got [{}, {}, {}, {}]",
+        min_pages,
+        e_shape[3],
+        b_shape[0],
+        b_shape[1],
+        b_shape[2],
+        b_shape[3]);
+}
+
+}  // namespace
 
 uint32_t dit_fused_norm_ring_size(const MeshDevice& mesh_device, std::optional<uint32_t> cluster_axis) {
     if (!cluster_axis.has_value()) {
@@ -186,10 +241,6 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             "affine_tile_row_map has {} entries, the input has {} tile rows",
             map.logical_shape()[-1],
             input_tile_rows);
-        TT_FATAL(
-            map.buffer()->aligned_page_size() <= 65536u,
-            "affine_tile_row_map page ({} B) exceeds the 64 KiB reader buffer",
-            map.buffer()->aligned_page_size());
         const bool pt_w = weight.has_value() && weight->logical_shape()[-2] > 1;
         const bool pt_b = bias.has_value() && bias->logical_shape()[-2] > 1;
         TT_FATAL(pt_w || pt_b, "affine_tile_row_map needs a per-token ([.., rows, H]) weight or bias");
@@ -258,6 +309,30 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             args.num_heads_per_device);
     }
 
+    if (args.row_capacity.has_value()) {
+        TT_FATAL(
+            *args.row_capacity > 0 && *args.row_capacity % TILE_HEIGHT == 0,
+            "row_capacity ({}) must be a positive multiple of {}",
+            *args.row_capacity,
+            TILE_HEIGHT);
+    }
+    const auto sizing = compute_sizing(args, input);
+    TT_FATAL(
+        sizing.num_tile_rows <= sizing.capacity_tile_rows,
+        "input has {} rows per device, more than row_capacity ({})",
+        sizing.num_tile_rows * TILE_HEIGHT,
+        sizing.capacity_tile_rows * TILE_HEIGHT);
+    if (tile_row_map.has_value()) {
+        // The reader's map buffer is sized for the capacity; the live map page must fit it.
+        const uint32_t cb_bytes = tile_row_map_cb_bytes(*tile_row_map, sizing.capacity_tile_rows);
+        TT_FATAL(cb_bytes <= 65536u, "affine_tile_row_map buffer ({} B at capacity) exceeds 64 KiB", cb_bytes);
+        TT_FATAL(
+            tile_row_map->buffer()->aligned_page_size() <= cb_bytes,
+            "affine_tile_row_map page ({} B) exceeds the {} B reader buffer sized for row_capacity",
+            tile_row_map->buffer()->aligned_page_size(),
+            cb_bytes);
+    }
+
     // The all-gather path (TP>1, whole-row norm) requires a caller-supplied
     // persistent buffer for the gathered-stats DRAM scratch. The buffer must
     // be allocated as a mesh-coherent MeshBuffer (same DRAM address on every
@@ -265,50 +340,55 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     // outside the op lets the caller pre-create one MeshBuffer per cluster
     // and reuse it across launches; we reject mismatched shape/dtype/layout
     // up front so a wrong tensor doesn't silently corrupt the AG.
-    const auto sizing = compute_sizing(args, input);
     if (sizing.use_mux) {
-        // Validate the caller's buffer against the SAME spec compute_output_specs would allocate,
-        // so the check can never drift from the allocation.
-        const auto expected = make_stats_tensor_spec(sizing);
-        const auto& e_shape = expected.logical_shape();
+        validate_stats_buffer(tensor_args, sizing, sizing.total_pages);
+    }
+}
+
+// Cache hit: the hash fixes everything but the row count, so only the row-dependent bounds
+// are re-checked here. Nothing below touches the mesh.
+void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    const auto& shape = input.logical_shape();
+    const auto sizing = compute_sizing(args, input);
+    TT_FATAL(
+        sizing.num_tile_rows <= sizing.capacity_tile_rows,
+        "input has {} rows per device, more than row_capacity ({})",
+        sizing.num_tile_rows * TILE_HEIGHT,
+        sizing.capacity_tile_rows * TILE_HEIGHT);
+    if (tensor_args.rope_cos.has_value()) {
         TT_FATAL(
-            tensor_args.persistent_output_buffer.has_value(),
-            "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
-            "Allocate it as a regular device tensor with shape "
-            "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
-            e_shape[2],
-            e_shape[3]);
-        const auto& buf = tensor_args.persistent_output_buffer.value();
-        TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
-        TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
+            tensor_args.rope_cos->logical_shape()[2] == shape[2] &&
+                tensor_args.rope_sin->logical_shape() == tensor_args.rope_cos->logical_shape(),
+            "rope_cos/rope_sin seq dim must equal input N ({})",
+            shape[2]);
+    }
+    const auto& tile_row_map = tensor_args.affine_tile_row_map;
+    if (tile_row_map.has_value()) {
         TT_FATAL(
-            buf.layout() == expected.layout(),
-            "persistent_output_buffer layout must be {} (got {})",
-            expected.layout(),
-            buf.layout());
+            tile_row_map->logical_shape()[-1] >= sizing.num_tile_rows,
+            "affine_tile_row_map has {} entries, the input has {} tile rows",
+            tile_row_map->logical_shape()[-1],
+            sizing.num_tile_rows);
         TT_FATAL(
-            buf.dtype() == expected.data_type(),
-            "persistent_output_buffer dtype must be {} (got {})",
-            expected.data_type(),
-            buf.dtype());
-        TT_FATAL(
-            buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
-            "persistent_output_buffer must be in DRAM");
-        TT_FATAL(
-            buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
-            "persistent_output_buffer must be INTERLEAVED");
-        const auto& b_shape = buf.logical_shape();
-        TT_FATAL(b_shape.rank() == 4, "persistent_output_buffer rank must be 4 (got {})", b_shape.rank());
-        TT_FATAL(
-            b_shape[0] == e_shape[0] && b_shape[1] == e_shape[1] && b_shape[2] == e_shape[2] &&
-                b_shape[3] == e_shape[3],
-            "persistent_output_buffer shape must be [1, 1, {}, {}], got [{}, {}, {}, {}]",
-            e_shape[2],
-            e_shape[3],
-            b_shape[0],
-            b_shape[1],
-            b_shape[2],
-            b_shape[3]);
+            tile_row_map->buffer()->aligned_page_size() <=
+                tile_row_map_cb_bytes(*tile_row_map, sizing.capacity_tile_rows),
+            "affine_tile_row_map page ({} B) exceeds the reader buffer sized for row_capacity",
+            tile_row_map->buffer()->aligned_page_size());
+    }
+    for (const auto* affine : {&tensor_args.weight, &tensor_args.bias}) {
+        if (affine->has_value()) {
+            const auto n = (*affine)->logical_shape()[-2];
+            TT_FATAL(
+                n == 1 || n == shape[2] || (tile_row_map.has_value() && n % TILE_HEIGHT == 0),
+                "per-token weight/bias rows ({}) must equal input N ({}) without affine_tile_row_map",
+                n,
+                shape[2]);
+        }
+    }
+    if (sizing.use_mux) {
+        validate_stats_buffer(tensor_args, sizing, stats_pages_for_rows(sizing, args.ring_size, sizing.num_tile_rows));
     }
 }
 
@@ -384,12 +464,27 @@ DitFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     return tensors;
 }
 
+// The row count (shape[-2] of the input, per-token affine tensors, RoPE tables and the stats
+// scratch; the width of the tile-row map) is a runtime argument, so the key carries the
+// attributes, the capacity, every flag that selects a kernel path, and the row-free specs.
 ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "DitFusedDistributedRmsnormDeviceOperation::compute_program_hash");
-    auto* mesh_device = tensor_args.input.device();
-    auto sd_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    using ttnn::operations::common::hash_spec_without_rows;
+    constexpr uint64_t kSalt = 0x4449544e4f524d31ull;  // "DITNORM1"
+    const auto& input = tensor_args.input;
+    const auto& weight = tensor_args.weight;
+    const auto& bias = tensor_args.bias;
+    const auto& map = tensor_args.affine_tile_row_map;
+    const uint32_t num_tile_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
+    const uint32_t capacity_tile_rows = args.row_capacity.has_value() ? *args.row_capacity / TILE_HEIGHT : num_tile_rows;
+    const uint32_t batch = input.logical_shape()[1];
+    const bool per_token_weight = weight.has_value() && weight->logical_shape()[-2] > 1;
+    const bool per_token_bias = bias.has_value() && bias->logical_shape()[-2] > 1;
+    const bool per_batch_weight = weight.has_value() && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
+    const bool per_batch_bias = bias.has_value() && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
+    const auto map_hash = map.has_value() ? ttsl::hash::hash_objects_with_default_seed(
+                                                kSalt + 8, map->dtype(), map->layout(), map->memory_config())
+                                          : ttsl::hash::hash_objects_with_default_seed(kSalt + 8);
     return tt::tt_metal::operation::hash_operation<DitFusedDistributedRmsnormDeviceOperation>(
         args.epsilon,
         args.num_heads_per_device,
@@ -402,8 +497,22 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.topology,
         args.compute_kernel_config,
         static_cast<uint8_t>(args.norm_type),
-        subdevice_core_range_set,
-        tensor_args);
+        args.sub_device_id,
+        capacity_tile_rows,
+        per_token_weight,
+        per_token_bias,
+        per_batch_weight,
+        per_batch_bias,
+        hash_spec_without_rows(input, kSalt),
+        hash_spec_without_rows(weight, kSalt + 1),
+        hash_spec_without_rows(bias, kSalt + 2),
+        hash_spec_without_rows(tensor_args.rope_cos, kSalt + 3),
+        hash_spec_without_rows(tensor_args.rope_sin, kSalt + 4),
+        hash_spec_without_rows(tensor_args.persistent_output_buffer, kSalt + 5),
+        tensor_args.transformation_mat.has_value() ? std::optional(tensor_args.transformation_mat->tensor_spec())
+                                                   : std::nullopt,
+        tensor_args.reciprocals.has_value() ? std::optional(tensor_args.reciprocals->tensor_spec()) : std::nullopt,
+        map_hash);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -432,7 +541,8 @@ Tensor dit_fused_distributed_rmsnorm(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::DitFusedNormType norm_type,
     const std::optional<const Tensor>& reciprocals,
-    const std::optional<const Tensor>& affine_tile_row_map) {
+    const std::optional<const Tensor>& affine_tile_row_map,
+    std::optional<uint32_t> row_capacity) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -457,7 +567,8 @@ Tensor dit_fused_distributed_rmsnorm(
         multi_device_global_semaphore,
         subdevice_id,
         kernel_config_val,
-        norm_type);
+        norm_type,
+        row_capacity);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,

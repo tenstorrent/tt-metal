@@ -14,14 +14,23 @@
 
 namespace ttnn::experimental::prim {
 
+// Common runtime-arg slot of the live tile-row count in each kernel (kernels read the same slots).
+constexpr uint32_t kReaderRowsSlot = 6;        // after the six buffer addresses, before the optional map address
+constexpr uint32_t kDrainWriterRowsSlot = 2;   // after output, trans_mat
+constexpr uint32_t kWorkerWriterRowsSlot = 3;  // after output, trans_mat, stats scratch
+constexpr uint32_t kComputeRowsSlot = 0;
+constexpr uint32_t kForwarderRowsSlot = 0;
+
 struct DitFusedDistributedRmsnormSharedVariables {
     // Kernel-owned objects remain stable across Program moves. Dispatch assembly
     // redirects their data(), so cache these objects rather than raw payload pointers.
     tt::tt_metal::RuntimeArgsData* reader_common_args = nullptr;
     tt::tt_metal::RuntimeArgsData* writer_common_args = nullptr;
-    // Empty on the local-normalization path; each forwarder uses slots 0 and 1
-    // for the stats scratch and ping-pong semaphore addresses.
+    tt::tt_metal::RuntimeArgsData* compute_common_args = nullptr;
+    // Empty on the local-normalization path; each forwarder uses per-core slots 0 and 1
+    // for the stats scratch and ping-pong semaphore addresses and one common slot for the rows.
     std::vector<tt::tt_metal::RuntimeArgsData*> forwarder_runtime_args;
+    std::vector<tt::tt_metal::RuntimeArgsData*> forwarder_common_args;
 };
 
 struct DitFusedDistributedRmsnormMeshWorkloadFactory {

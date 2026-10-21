@@ -48,6 +48,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
 from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ...parallel.manager import CCLManager
@@ -359,7 +360,9 @@ def _fused_links(op_override):
     return op_override if op_override is not None else 2  # BH bench fused = 2-link MUX default
 
 
-def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weight, bias, rope, per_head_norm=None):
+def _call_op(
+    inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weight, bias, rope, per_head_norm=None, row_capacity=None
+):
     if per_head_norm is None:
         per_head_norm = cfg.per_head_norm
     trans = inp["trans"] if rope else None
@@ -385,6 +388,7 @@ def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weigh
             persistent_output_buffer=pob,
             num_preferred_links=num_links,
             reciprocals=inp.get("recip"),
+            row_capacity=row_capacity,
         )
     return ttnn.experimental.dit_fused_distributed_rmsnorm(
         inp["x"],
@@ -403,6 +407,7 @@ def _call_op(inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weigh
         persistent_output_buffer=pob,
         num_preferred_links=num_links,
         per_head_norm=per_head_norm,
+        row_capacity=row_capacity,
     )
 
 
@@ -1874,3 +1879,192 @@ def test_sweep(mesh_device, tp, topology, tp_axis, full_mesh, is_ci_env):
             logger.warning(f"SWEEP {pid} EXCEPTION: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"SWEEP [tp{tp}_{topology.name}] {len(points) - len(flagged)}/{len(points)} passed")
     assert not flagged, f"sweep failures ({len(flagged)}/{len(points)}):\n" + "\n".join(flagged)
+
+
+# ---------------------------------------------------------------------------
+# MiniMax-H3 (4x8, TP=4 ring on axis 0): one program per layer config for every served per-chip
+# row count. `row_capacity` pins the worker set and the stats scratch; the live row count is a
+# runtime argument, so the program cache must stay flat across the envelope.
+# ---------------------------------------------------------------------------
+
+_H3_TILE_ROWS = (148, 74, 287, 427, 470)  # per-chip tile rows (5 s warm point first, then the rest of the envelope)
+_H3_ROW_CAPACITY = 470 * 32
+_H3_DIM = 5376  # 1344 per chip at TP=4
+_H3_QK_DIM, _H3_HEAD_DIM, _H3_HEADS = 7168, 128, 56  # 14 heads x 128 per chip at TP=4
+_H3_TABLE_TILES = 25  # tile rows of the adaLN tile-row tables (800 rows)
+_H3_PARAMS = [pytest.param((4, 8), _DP_GAL_RING, id="galaxy_tp4_ring")]
+
+
+def _h3_block_inputs(mesh_device, tile_rows: int, *, tile_row_map: bool, in_fp32: bool = False):
+    """norm1/norm2 form: x [1,1,rows,5376] and per-token adaLN weight/bias, either full per-token tables
+    or a small tile-row table plus a per-chip map. Returns the device tensors and the fp32 reference."""
+    tp_axis = 0
+    rows = tile_rows * 32
+    torch.manual_seed(1000 + tile_rows)
+    x = torch.randn((1, 1, rows, _H3_DIM), dtype=torch.float32 if in_fp32 else torch.bfloat16)
+    table_rows = _H3_TABLE_TILES * 32 if tile_row_map else rows
+    table_w = (torch.randn((1, 1, table_rows, _H3_DIM)) * 0.5 + 1.0).to(torch.bfloat16)
+    table_b = (torch.randn((1, 1, table_rows, _H3_DIM)) * 0.5).to(torch.bfloat16)
+    out = {
+        "x": (float32_tensor if in_fp32 else bf16_tensor)(x, device=mesh_device, mesh_axis=tp_axis, shard_dim=-1),
+        "weight": bf16_tensor(table_w, device=mesh_device, mesh_axis=tp_axis, shard_dim=-1),
+        "bias": bf16_tensor(table_b, device=mesh_device, mesh_axis=tp_axis, shard_dim=-1),
+        "map": None,
+    }
+    if tile_row_map:
+        tmap = torch.randint(0, _H3_TABLE_TILES, (tile_rows,))
+        out["map"] = from_torch(
+            tmap.to(torch.int32).reshape(1, 1, 1, tile_rows),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+        )
+        expand = lambda t: t.reshape(-1, 32, _H3_DIM)[tmap].reshape(1, 1, rows, _H3_DIM)  # noqa: E731
+        table_w, table_b = expand(table_w), expand(table_b)
+    xf = x.float()
+    normed = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + NORM_EPS)
+    out["ref"] = (normed * table_w.float() + table_b.float()).reshape(rows, _H3_DIM)
+    return out
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("tile_row_map", [False, True], ids=["per_token", "tile_row_map"])
+def test_h3_dynamic_rows_block_norm(mesh_device, tile_row_map):
+    """DistributedRMSNorm with row_capacity (the H3 norm1/norm2 call form): warm at 148 tile rows, then
+    every other served length must hit the same programs (A/B semaphores and the stats pool alternate
+    per call); an fp32 input must add programs. PCC vs torch at every length."""
+    tp_axis = 0
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norm = DistributedRMSNorm(
+        embedding_dim=_H3_DIM,
+        norm_elementwise_affine=False,
+        mesh_axis=tp_axis,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        row_capacity=_H3_ROW_CAPACITY,
+    )
+
+    variants = [(t, False) for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], True)]
+    # Built up front: from_torch tilizes on device, one program per shape, which the flat check must not see.
+    inputs = {v: _h3_block_inputs(mesh_device, v[0], tile_row_map=tile_row_map, in_fp32=v[1]) for v in variants}
+
+    def run(variant):
+        tile_rows, in_fp32 = variant
+        inp = inputs[variant]
+        out = norm(
+            inp["x"],
+            dynamic_weight=inp["weight"],
+            dynamic_bias=inp["bias"],
+            dynamic_weight_includes_static=True,
+            dynamic_tile_row_map=inp["map"],
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"{variant}: non-finite output"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 block norm map={tile_row_map} tile_rows={tile_rows} fp32={in_fp32} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"{variant}: pcc={pcc}"
+
+    assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_dynamic_rows_stats_scratch(mesh_device):
+    """Raw op with a capacity-sized, NaN-poisoned stats scratch: every length reads back only pages
+    this launch wrote (finite output, PCC), and the pages past the live need stay untouched."""
+    tp_axis = 0
+    ring, links = 4, 2
+    ccl = CCLManager(mesh_device=mesh_device, num_links=links, topology=ttnn.Topology.Ring)
+    sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+    inputs = {t: _h3_block_inputs(mesh_device, t, tile_row_map=False) for t in _H3_TILE_ROWS}  # built up front
+    probe = inputs[_H3_TILE_ROWS[0]]
+    spec = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+        probe["x"], tp_axis, mesh_device, num_links=links, weight=probe["weight"], row_capacity=_H3_ROW_CAPACITY
+    )
+    pages, page_width = spec.shape[2], spec.shape[3]
+    del spec
+    poison = torch.full((1, 1, pages, page_width), float("nan"), dtype=torch.float32)
+    poison_host = ttnn.from_torch(
+        poison, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    pobs = [ttnn.to_device(poison_host, mesh_device) for _ in range(_PINGPONG)]
+    ttnn.synchronize_device(mesh_device)
+    num_workers = 64  # the pinned all-gather worker count on Blackhole (derive_worker_cap)
+    calls = 0
+
+    def run(tile_rows):
+        nonlocal calls
+        inp = inputs[tile_rows]
+        pob = pobs[calls % _PINGPONG]
+        out = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            inp["x"],
+            tp_axis,
+            mesh_device,
+            sems[calls % _PINGPONG],
+            topology=ttnn.Topology.Ring,
+            epsilon=NORM_EPS,
+            weight=inp["weight"],
+            bias=inp["bias"],
+            persistent_output_buffer=pob,
+            num_preferred_links=links,
+            row_capacity=_H3_ROW_CAPACITY,
+        )
+        calls += 1
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"tile_rows={tile_rows}: non-finite output (stale stats page read)"
+        pcc = _pcc(got, inp["ref"])
+        logger.info(f"H3 stats scratch tile_rows={tile_rows} pcc={pcc:.6f}")
+        assert pcc >= 0.999, f"tile_rows={tile_rows}: pcc={pcc}"
+        live_pages = ring * links * -(-tile_rows // num_workers)
+        for shard in ttnn.get_device_tensors(pob):
+            scratch = ttnn.to_torch(shard)[0, 0]
+            assert torch.isnan(scratch[live_pages:]).all(), f"tile_rows={tile_rows}: pages past the live need written"
+        ttnn.copy_host_to_device_tensor(poison_host, pob)
+        ttnn.synchronize_device(mesh_device)
+
+    assert_program_cache_flat(mesh_device, run, list(_H3_TILE_ROWS))
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
+def test_h3_dynamic_rows_per_head_rope(mesh_device):
+    """norm_q/norm_k form: per-head RMSNorm over 14 x 128 per chip with fused RoPE, full grid with
+    zero-row workers at the short lengths; one program across the envelope, fp32 input must miss."""
+    tp_axis, tp = 0, 4
+    topology = ttnn.Topology.Ring
+
+    def cfg_for(tile_rows, in_dtype="bf16"):
+        return Cfg(
+            f"h3_qk_{tile_rows}", FLUX, tp, tile_rows * 32, _H3_QK_DIM, _H3_HEAD_DIM, True, _H3_HEADS, True, True, in_dtype
+        )
+
+    variants = [(t, "bf16") for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], "fp32")]
+    inputs = {v: _build(mesh_device, cfg_for(*v), tp_axis) for v in variants}  # built up front (device tilize)
+
+    def run(variant):
+        tile_rows, in_dtype = variant
+        cfg = cfg_for(tile_rows, in_dtype)
+        inp = inputs[variant]
+        out = _call_op(
+            inp,
+            mesh_device,
+            [],
+            cfg,
+            topology,
+            tp_axis,
+            pob=None,
+            num_links=2,
+            weight=inp["weight"],
+            bias=None,
+            rope=True,
+            row_capacity=_H3_ROW_CAPACITY,
+        )
+        ttnn.synchronize_device(mesh_device)
+        got = _gather(out, tp_axis)
+        assert torch.isfinite(got).all(), f"{variant}: non-finite output"
+        pcc = _pcc(got, _torch_ref(cfg))
+        logger.info(f"H3 per-head rope tile_rows={tile_rows} dtype={in_dtype} pcc={pcc:.6f}")
+        assert pcc >= 0.997, f"{variant}: pcc={pcc}"
+
+    assert_program_cache_flat(mesh_device, run, variants, miss_indices=(len(variants) - 1,))
