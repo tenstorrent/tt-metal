@@ -65,7 +65,7 @@ def fidelity_phases(math_fidelity: MathFidelity) -> range:
 def warn_unmodelled_split(op_name: str, golden_name: str) -> None:
     """Say so when a multiply falls back to the exact product.
 
-    A multiply whose ``MANTISSA_SPLIT`` is ``None`` is computed exactly and
+    A multiply whose architecture has no ``mantissa_split`` is computed exactly and
     ``math_fidelity`` is ignored entirely. That is not a near-miss: hardware
     truncates both operands' mantissas on every phase, so the golden comes out
     *more* accurate than the device at every fidelity, and a test comparing

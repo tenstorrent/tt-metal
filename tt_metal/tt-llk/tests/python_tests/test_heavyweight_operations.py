@@ -357,7 +357,7 @@ def test_a_second_operand_a_chain_never_reads_is_refused():
     ids=lambda c: c.__name__,
 )
 def test_wormhole_and_blackhole_warn_that_fidelity_is_unmodelled(golden_class):
-    """MANTISSA_SPLIT is unset there, so the multiply is exact and math_fidelity
+    """mantissa_split is unset there, so the multiply is exact and math_fidelity
     is ignored. The warning is the only signal, and it has to survive
     pytest.ini's ignore::UserWarning -- hence a RuntimeWarning subclass."""
     golden = golden_class(MathFidelity.HiFi4)
