@@ -356,7 +356,7 @@ std::optional<RmChoice> live_rm_choice(
     const uint64_t free_l1 = get_max_l1_space(input);
     if (planned.rm.has_value()) {
         if (auto stick = fit_rm(*planned.rm, free_l1)) {
-            return RmChoice{std::move(*stick)};
+            return RmChoice{*stick};
         }
     }
     auto slab =
@@ -365,7 +365,7 @@ std::optional<RmChoice> live_rm_choice(
             : rm_arbitrary_geometry(input, logical_output_shape, planned.out_aligned_page, output_buffer, grid_cores);
     if (slab.has_value()) {
         if (auto fitted = fit_rm_arbitrary(*slab, free_l1)) {
-            return RmChoice{std::move(*fitted)};
+            return RmChoice{*fitted};
         }
     }
     return std::nullopt;
