@@ -7,7 +7,8 @@ Ground truth is DeepSeek's inference code shipped with the checkpoint (``inferen
 ``engram.py``); this module re-implements its prefill chunk by chunk (the inference code prefills one chunk from
 position 0 and then decodes token by token), with the GPU kernels' fp8 / fp4 quantize-dequantize steps
 (``kernels.py``) and the checkpoint's exact dequantization (``weights.py``). Each block runs through ``run_block``, so
-the block graphs below are the code. Compute dtype fp32 (``dtype`` other than fp32 is not supported).
+the block graphs below are the code. Compute dtype fp32; ``dtype=torch.bfloat16`` (official numerics only) keeps every
+activation in bf16 where DeepSeek's GPU code does (module docstring "Numerics").
 
 Residual: mHC with 4 streams, "single pass": a sublayer collapses the streams with the ``pre`` weights the PREVIOUS
 sublayer computed (attention: the previous layer's FFN mixes; FFN: this layer's attention mixes, computed from the block
@@ -88,11 +89,34 @@ Numerics (F112 / F128, reference/interface.py; one switch for the whole model, `
                identity: the fp8 act q-dq of every fp8 linear's input (q_a, kv, wq_b, wo_b, indexer wq_b, engram wkv,
                shared / routed experts x and h), the fp8 q-dq of the window KV and of the attention output before wo_a,
                the fp4 q-dq of the compressed KV, the index key and the index query. Everything stays fp32. The
-               checkpoint's weights keep their exact dequantized values (they are the model). This reference has no
-               TF32 rounding and no bf16 cast of an intermediate to remove (it computes in fp32; kernels.attend's bf16
-               P only applies to bf16 inputs, which only the oracle passes). kernels.py itself stays the faithful port
-               the oracle (hf_oracle.py) runs; the switch is at the call sites here (``_q8`` / ``_q4``), so a native
-               forward never calls a kernels.py quantizer (reference/test_numerics.py).
+               checkpoint's weights keep their exact dequantized values (they are the model). There is no TF32
+               rounding to remove, and no bf16 cast: every ``_r`` / ``_mm16`` bf16 point is official-at-bf16 only,
+               and kernels.attend's bf16 P only applies to bf16 q (official at bf16, the oracle). kernels.py itself
+               stays the faithful port the oracle (hf_oracle.py) runs; the switch is at the call sites here (``_q8`` /
+               ``_q4``), so a native
+               forward never calls a kernels.py quantizer (reference/test_numerics.py). Always fp32 (``dtype`` must
+               be fp32): the golden target.
+    official at dtype bf16 (F128 / F134 / F136: the margin source, spec reference.shipped_dtype): the GPU configuration
+               (generate.py sets torch's default dtype to bf16), as the oracle runs it with ``build_oracle(dtype=
+               torch.bfloat16)``. Arithmetic stays fp32 (the kernels' and the GEMMs' accumulation); a value is rounded
+               to bf16 (``_r``) exactly where model.py holds it in bf16 (bringup/official_taps.yaml): the block's
+               streams (at every unpack, so an fp32 golden input is read as the bf16 stream the GPU would hold), the
+               engram rows, every fp8 / fp4 / bf16 GEMM's output (fp8_gemm / fp4_gemm / F.linear write the default
+               dtype), every RMSNorm output, the hc_pre collapses, the RoPE'd q / kv / index q / latent / index key
+               (apply_rotary_emb copies back into the bf16 tensor), the index-score tile, its relu x weights product
+               and its head sum (bf16 tensors), weights_proj x scale, sparse_attn's bf16 P and output, the
+               inverse-RoPE'd output, wo_a, the hc_post outputs, the experts' h before w2 (Expert.forward:
+               x.to(dtype)), moe_add.
+               fp32 where model.py computes in fp32: the mHC mixes and Sinkhorn, the ratio-2 compressor's wkv / wgate
+               and pooling, the router, the routed experts' sum, the attention scores and softmax statistics, the
+               pending pre weights, the logits. The GEMMs model.py runs on bf16 x and a bf16 weight (wo_a, ratio-1
+               compressor wkv, indexer wk / weights_proj) and the index-score einsum with its relu x weights and head
+               sum run as bf16 tensors (``_mm16``), so the summation order is the oracle's: CPU bf16 GEMMs and fp32
+               GEMMs rounded once differ on ~0.03 % of outputs, and the fp8 quantizers grew that to rel 1.1e-2 by
+               layer 3 (DS41-91). With them the reference equals the oracle at bf16 bit for bit (layers 0-3, 512
+               tokens; reference/test_official_bf16.py). The fp8 / fp4 q-dq values are exact in bf16. State storage
+               stays fp32 (every stored value is bf16-exact). Top-k ties (frequent on bf16 index scores) break toward
+               the lowest position here; model.py's ``topk(sorted=False)`` leaves them to the kernel.
 
 Determinism: every GEMM runs in the fixed tiles of kernels.py ("GEMM tiling": 256-row dense tiles, expert groups
 padded to 32-row multiples (K-24), 64-query x 512-key index-score tiles), as the oracle's do, so a row's result never
@@ -522,12 +546,14 @@ class DS41Reference:
         tokenizer=None,
         numerics: str = "official",
     ):
-        assert dtype in (None, torch.float32), "the reference computes in fp32"
         assert numerics in NUMERICS, f"numerics {numerics!r} not in {NUMERICS}"
+        dtype = torch.float32 if dtype is None else dtype
+        assert dtype in (torch.float32, torch.bfloat16), f"dtype {dtype}: fp32, or bf16 (official, the GPU's)"
+        assert numerics == "official" or dtype == torch.float32, "native is fp32 (the golden target)"
         self.numerics = numerics
         self.cfg = cfg = Config.from_dir(model_path)
         self.ck = Checkpoint(model_path)
-        self.dtype = torch.float32
+        self.dtype = dtype  # official's activation dtype (bf16: the GPU configuration); the arithmetic stays fp32
         self.layer_ids = list(range(cfg.n_layers)) if layers is None else sorted(layers)
         self.embed_w = self.ck.weight("embed.weight", torch.float32)
         self.final_norm_w = self.ck.weight("norm.weight", torch.float32)
@@ -556,14 +582,40 @@ class DS41Reference:
     def native(self) -> bool:
         return self.numerics == "native"
 
-    def with_numerics(self, numerics: str) -> "DS41Reference":
-        """The same reference (weights, tables, hasher shared, not copied) with the other arithmetic."""
+    @property
+    def bf16(self) -> bool:
+        """official at dtype bf16: activations rounded to bf16 where the GPU code holds them in bf16."""
+        return self.numerics == "official" and self.dtype == torch.bfloat16
+
+    def with_numerics(self, numerics: str, dtype=None) -> "DS41Reference":
+        """The same reference (weights, tables, hasher shared, not copied) with the other arithmetic; native is fp32,
+        official keeps this one's dtype unless ``dtype`` is given."""
         import copy
 
         assert numerics in NUMERICS, f"numerics {numerics!r} not in {NUMERICS}"
+        dtype = torch.float32 if numerics == "native" else (dtype or self.dtype)
+        assert numerics == "official" or dtype == torch.float32, "native is fp32 (the golden target)"
         other = copy.copy(self)
-        other.numerics = numerics
+        other.numerics, other.dtype = numerics, dtype
         return other
+
+    def _r(self, x: torch.Tensor) -> torch.Tensor:
+        """A value model.py holds in bf16 (official at bf16): x rounded to bf16 (round to nearest even), kept in an fp32
+        tensor; otherwise x itself (fp32 official and native are unchanged)."""
+        return x.to(torch.bfloat16).float() if self.bf16 else x
+
+    def _mm16(self, x: torch.Tensor, w: torch.Tensor, fn=mm) -> torch.Tensor:
+        """A GEMM model.py runs on bf16 x and a bf16 weight (wo_a, ratio-1 compressor wkv, indexer wk / weights_proj;
+        fn = mm or K.grouped_out): at bf16 the same bf16 GEMM (fp32 accumulation, output rounded to bf16; the oracle's
+        summation order), returned in fp32; otherwise the fp32 GEMM of today."""
+        if not self.bf16:
+            return fn(x.float(), w)
+        return fn(x.to(torch.bfloat16), w.to(torch.bfloat16)).float()
+
+    def _unpack(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """unpack, the streams as model.py holds them (bf16 at bf16; the pending pre stays fp32)."""
+        s, pre = unpack(x, self.cfg.hc)
+        return self._r(s), pre
 
     def _q8(self, x: torch.Tensor) -> torch.Tensor:
         """The fp8 act quant-dequant (per 32, ue8m0) an fp8 GEMM input / the window KV gets; native: x in fp32."""
@@ -630,37 +682,41 @@ class DS41Reference:
     def component(self, layer: int, name: str):
         cfg, w, hc = self.cfg, self.w[layer], self.cfg.hc
 
+        r = self._r  # model.py's bf16 points (identity unless official at bf16)
+
         def attn_hc(ctx, x):
-            s, _ = unpack(x, hc)
+            s, _ = self._unpack(x)
             return hc_mixes(s, w["hc_attn_fn"], w["hc_attn_scale"], w["hc_attn_base"], cfg)
 
         def attn_collapse(ctx, x):
-            s, pre = unpack(x, hc)
-            return hc_pre(s, pre)
+            s, pre = self._unpack(x)
+            return r(hc_pre(s, pre))
 
         def attn_residual(ctx, x, mix, y):
-            s, _ = unpack(x, hc)
-            return hc_post(y, s, mix[:, hc : 2 * hc], mix[:, 2 * hc :].unflatten(-1, (hc, hc))).flatten(1)
+            s, _ = self._unpack(x)
+            return r(hc_post(r(y), s, mix[:, hc : 2 * hc], mix[:, 2 * hc :].unflatten(-1, (hc, hc))).flatten(1))
 
         def ffn_hc(ctx, h):
-            return hc_mixes(h.unflatten(1, (hc, -1)), w["hc_ffn_fn"], w["hc_ffn_scale"], w["hc_ffn_base"], cfg)
+            return hc_mixes(r(h).unflatten(1, (hc, -1)), w["hc_ffn_fn"], w["hc_ffn_scale"], w["hc_ffn_base"], cfg)
 
         def ffn_collapse(ctx, h, attn_mix):
-            return hc_pre(h.unflatten(1, (hc, -1)), attn_mix[:, :hc])
+            return r(hc_pre(r(h).unflatten(1, (hc, -1)), attn_mix[:, :hc]))
 
         def ffn_residual(ctx, h, mix, y):
-            s = hc_post(y, h.unflatten(1, (hc, -1)), mix[:, hc : 2 * hc], mix[:, 2 * hc :].unflatten(-1, (hc, hc)))
-            return pack(s, mix[:, :hc])
+            s = hc_post(
+                r(y), r(h).unflatten(1, (hc, -1)), mix[:, hc : 2 * hc], mix[:, 2 * hc :].unflatten(-1, (hc, hc))
+            )
+            return pack(r(s), mix[:, :hc])
 
         table = {
             "engram_rows": lambda ctx: self._engram_rows(layer, ctx),
-            "engram_kv": lambda ctx, rows: self._fp8_linear(rows, w["engram.wkv.weight"]),
+            "engram_kv": lambda ctx, rows: r(self._fp8_linear(rows, w["engram.wkv.weight"])),
             "engram_add": lambda ctx, x, kv: self._engram_add(layer, x, kv),
             "attn_hc": attn_hc,
             "attn_collapse": attn_collapse,
-            "attn_norm": lambda ctx, x: rms_norm(x, w["attn_norm.weight"], cfg.eps),
-            "q_a": lambda ctx, x: rms_norm(
-                self._fp8_linear(x, w["attn.wq_a.weight"]), w["attn.q_norm.weight"], cfg.eps
+            "attn_norm": lambda ctx, x: r(rms_norm(r(x), w["attn_norm.weight"], cfg.eps)),
+            "q_a": lambda ctx, x: r(
+                rms_norm(r(self._fp8_linear(r(x), w["attn.wq_a.weight"])), w["attn.q_norm.weight"], cfg.eps)
             ),
             "kv": lambda ctx, x: self._window_kv(layer, ctx, x),
             "compressor": lambda ctx, x: self._compressor(layer, ctx, x),
@@ -669,13 +725,13 @@ class DS41Reference:
             "attn_residual": attn_residual,
             "ffn_hc": ffn_hc,
             "ffn_collapse": ffn_collapse,
-            "ffn_norm": lambda ctx, x: rms_norm(x, w["ffn_norm.weight"], cfg.eps),
-            "router": lambda ctx, x: self._route(layer, x),
-            "experts": lambda ctx, x, r: self._experts(layer, x, r),
+            "ffn_norm": lambda ctx, x: r(rms_norm(r(x), w["ffn_norm.weight"], cfg.eps)),
+            "router": lambda ctx, x: self._route(layer, r(x)),
+            "experts": lambda ctx, x, rt: self._experts(layer, r(x), rt),
             "shared_expert": lambda ctx, x: self._swiglu(
-                x, *(w[f"ffn.shared_experts.{n}.weight"] for n in ("w1", "w3", "w2")), None, lin=mm
+                r(x), *(w[f"ffn.shared_experts.{n}.weight"] for n in ("w1", "w3", "w2")), None, lin=mm
             ),
-            "moe_add": lambda ctx, a, b: a + b,
+            "moe_add": lambda ctx, a, b: r(a + r(b)),
             "ffn_residual": ffn_residual,
         }
         return table[name]
@@ -686,11 +742,12 @@ class DS41Reference:
         if ctx.start == 0:
             st.tail[layer].fill_(-1)
         ids, st.tail[layer] = self.hasher.hashes(ctx.extra["tokens"], layer, st.tail[layer])
-        return self.tables[layer].rows(ids).flatten(1)
+        return self._r(self.tables[layer].rows(ids).flatten(1))  # ParallelEngramEmbedding: .to(bf16)
 
     def _engram_add(self, layer: int, x: torch.Tensor, kv: torch.Tensor) -> torch.Tensor:
         cfg, w = self.cfg, self.w[layer]
-        s, pre = unpack(x, cfg.hc)
+        s, pre = self._unpack(x)
+        kv = self._r(kv)
         key = kv[:, : cfg.hc * cfg.dim].float().unflatten(-1, (cfg.hc, cfg.dim))
         value = kv[:, cfg.hc * cfg.dim :].float()
         weight = w["engram.q_weight"].float() * w["engram.k_weight"].float()
@@ -698,7 +755,7 @@ class DS41Reference:
         rstd = torch.rsqrt(h.square().mean(-1) + eps) * torch.rsqrt(key.square().mean(-1) + eps)
         dot = (h * weight * key).sum(-1) * rstd * cfg.dim**-0.5
         gate = torch.sigmoid(torch.copysign(dot.abs().clamp_min(1e-6).sqrt(), dot))
-        return pack(h + gate.unsqueeze(-1) * value.unsqueeze(-2), pre)
+        return pack(self._r(h + gate.unsqueeze(-1) * value.unsqueeze(-2)), pre)  # .to(x.dtype)
 
     # ---------------------------------------------------------------- attention parts
     def _rot(self, layer: int, pos: torch.Tensor) -> torch.Tensor:
@@ -706,17 +763,21 @@ class DS41Reference:
 
     def _window_kv(self, layer: int, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
         cfg, w = self.cfg, self.w[layer]
-        kv = rms_norm(self._fp8_linear(x, w["attn.wkv.weight"]), w["attn.kv_norm.weight"], cfg.eps)
-        kv = rope(kv, self._rot(layer, torch.arange(ctx.start, ctx.start + x.shape[0])))
-        return self._q8(kv)
+        r = self._r
+        kv = r(rms_norm(r(self._fp8_linear(r(x), w["attn.wkv.weight"])), w["attn.kv_norm.weight"], cfg.eps))
+        kv = r(rope(kv, self._rot(layer, torch.arange(ctx.start, ctx.start + x.shape[0]))))
+        return r(self._q8(kv))
 
     def _compressor(self, layer: int, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
         cfg, w, st = self.cfg, self.w[layer], ctx.state
-        r, s0 = cfg.ratio(layer), ctx.start
+        r, s0, b = cfg.ratio(layer), ctx.start, self._r
+        x = b(x)
         if s0 == 0 and layer in st.partial:  # a new sequence (each step resets only the state it owns)
             st.partial[layer].zero_()
-        if r == 1:
-            latent = rms_norm(mm(x.float(), w["attn.compressor.wkv.weight"]), w["attn.compressor.norm.weight"], cfg.eps)
+        if r == 1:  # bf16 wkv on bf16 x at bf16 (model.py: self.norm(self.wkv(x)))
+            latent = b(
+                rms_norm(self._mm16(x, w["attn.compressor.wkv.weight"]), w["attn.compressor.norm.weight"], cfg.eps)
+            )
         else:
             kv = mm(x.float(), w["attn.compressor.wkv.weight"])
             sc = mm(x.float(), w["attn.compressor.wgate.weight"])
@@ -729,13 +790,13 @@ class DS41Reference:
             st.partial[layer][0, :rem] = kv[n * r :]
             st.partial[layer][1, :rem] = sc[n * r :]
             pooled = (kv[: n * r].view(n, r, -1) * sc[: n * r].view(n, r, -1).softmax(dim=1)).sum(dim=1)
-            latent = rms_norm(pooled, w["attn.compressor.norm.weight"], cfg.eps)
+            latent = b(rms_norm(b(pooled), w["attn.compressor.norm.weight"], cfg.eps))  # self.norm(kv.to(dtype))
         g0 = s0 // r
         n = latent.shape[0]
         rot = self._rot(layer, (g0 + torch.arange(n)) * r)  # a group sits at its first token's position
-        k = rms_norm(mm(latent, w["attn.indexer.wk.weight"]), w["attn.indexer.k_norm.weight"], cfg.eps)
-        k = self._q4(rope(k, rot), 32)
-        ckv = self._q4(rope(latent, rot), 16, e4m3_scale=True)
+        k = b(rms_norm(self._mm16(latent, w["attn.indexer.wk.weight"]), w["attn.indexer.k_norm.weight"], cfg.eps))
+        k = b(self._q4(b(rope(k, rot)), 32))
+        ckv = b(self._q4(b(rope(latent, rot)), 16, e4m3_scale=True))
         st.ckv[layer][g0 : g0 + n] = ckv
         st.index_k[layer][g0 : g0 + n] = k
         return torch.cat([ckv, k], dim=-1)
@@ -751,11 +812,14 @@ class DS41Reference:
             keys = st.index_k[cfg.kv_source_of(layer)][:n_keys]
         assert keys.shape[0] == n_keys
         pos = torch.arange(s0, end)
-        q = self._fp8_linear(qr, w["attn.indexer.wq_b.weight"]).view(s, nh, hd)
-        q = self._q4(rope(q, self._rot(layer, pos)), 32)
-        wts = mm(x.float(), w["attn.indexer.weights_proj.weight"]) * (hd**-0.5 * nh**-0.5)
+        rb = self._r
+        q = rb(self._fp8_linear(rb(qr), w["attn.indexer.wq_b.weight"])).view(s, nh, hd)
+        q = rb(self._q4(rb(rope(q, self._rot(layer, pos))), 32))
+        wts = rb(self._mm16(rb(x), w["attn.indexer.weights_proj.weight"]) * (hd**-0.5 * nh**-0.5))
         topk = min(cfg.index_topk, n_keys)
         out = torch.full((s, cfg.index_topk), -1, dtype=torch.int32)
+        if self.bf16:  # model.py: einsum('bshd,btd->bsht') of bf16 q and keys, relu x weights and the head sum in bf16
+            q, keys, wts = q.to(torch.bfloat16), keys.to(torch.bfloat16), wts.to(torch.bfloat16)
         for t0 in range(0, s, K.INDEX_Q_BLOCK):
             t1 = min(s, t0 + K.INDEX_Q_BLOCK)
             b = t1 - t0
@@ -788,11 +852,12 @@ class DS41Reference:
             st.window[layer].zero_()
         pos = torch.arange(s0, s0 + s)
         rot = self._rot(layer, pos)
-        q = self._fp8_linear(qr, w["attn.wq_b.weight"]).view(s, cfg.n_heads, d)
-        q = rope(q, rot)
+        b = self._r
+        q = b(self._fp8_linear(b(qr), w["attn.wq_b.weight"])).view(s, cfg.n_heads, d)
+        q = b(rope(q, rot))
         # window keys: ext holds positions s0 - win .. s0 + s - 1 (the previous chunk's tail from the ring)
         prev_pos = torch.arange(s0 - win, s0)
-        ext = torch.cat([st.window[layer][prev_pos.remainder(win)], kv.float()])
+        ext = torch.cat([st.window[layer][prev_pos.remainder(win)], b(kv).float()])
         wpos = window_rows(pos, win)  # [S, win] positions, inference order
         wvalid = (wpos <= pos.unsqueeze(-1)) & (wpos < s0 + s)
         wrow = (wpos - (s0 - win)).clamp(max=ext.shape[0] - 1)
@@ -801,11 +866,12 @@ class DS41Reference:
             compressed = rest.pop(0) if cfg.is_kv_source(layer) else None
             topk = rest.pop(0) if cfg.is_index_source(layer) else st.topk[cfg.index_source_of(layer)][s0 : s0 + s]
             if compressed is not None:
-                ckv = torch.cat([st.ckv[layer][: s0 // r], compressed[:, :d].float()])
+                ckv = torch.cat([st.ckv[layer][: s0 // r], b(compressed[:, :d]).float()])
             else:
                 ckv = st.ckv[cfg.kv_source_of(layer)][: (s0 + s) // r]
             topk = topk[:, : min(cfg.index_topk, (s0 + s) // r)].long()  # inference width: min(topk, end // r)
         sink = w["attn.attn_sink"].float()
+        qa = q.to(torch.bfloat16) if self.bf16 else q  # kernels.attend: bf16 q -> P rounded to bf16 before P @ V
         o = torch.empty(s, cfg.n_heads, d)
         for t0 in range(0, s, Q_BLOCK):
             t1 = min(s, t0 + Q_BLOCK)
@@ -815,14 +881,14 @@ class DS41Reference:
                 idx = topk[t0:t1]
                 keys = torch.cat([keys, ckv[idx.clamp_min(0)]], dim=1)
                 valid = torch.cat([valid, idx >= 0], dim=1)
-            o[t0:t1] = K.attend(q[t0:t1], keys, valid, sink, d**-0.5)
+            o[t0:t1] = b(K.attend(qa[t0:t1], keys, valid, sink, d**-0.5))  # sparse_attn: .to(q.dtype)
         # the ring keeps the last `win` positions
         tail = min(s, win)
-        st.window[layer][pos[-tail:].remainder(win)] = kv[-tail:].float()
-        o = rope(o, rot, inverse=True).view(s, cfg.o_groups, -1)
-        o = self._q8(o)
-        y = K.grouped_out(o, w["attn.wo_a.weight"])  # wo_a [groups, o_lora_rank, heads_per_group * d]
-        return self._fp8_linear(y.flatten(1), w["attn.wo_b.weight"])
+        st.window[layer][pos[-tail:].remainder(win)] = b(kv[-tail:]).float()
+        o = b(rope(o, rot, inverse=True)).view(s, cfg.o_groups, -1)
+        o = b(self._q8(o))
+        y = self._mm16(o, w["attn.wo_a.weight"], K.grouped_out)  # wo_a [groups, o_lora_rank, heads_per_group * d]
+        return b(self._fp8_linear(y.flatten(1), w["attn.wo_b.weight"]))
 
     # ---------------------------------------------------------------- MoE
     def _route(self, layer: int, x: torch.Tensor) -> torch.Tensor:
@@ -838,14 +904,14 @@ class DS41Reference:
         ``lin``: the routed-expert GEMM (one token group) or mm (the shared expert, fixed row tiles)."""
         xq = self._q8(x)
         lim = self.cfg.swiglu_limit
-        gate, up = lin(xq, w1), lin(xq, w3)
+        gate, up = self._r(lin(xq, w1)), self._r(lin(xq, w3))  # fp8 / fp4 GEMMs write bf16, then .float()
         if lim > 0:
             up = up.clamp(min=-lim, max=lim)
             gate = gate.clamp(max=lim)
         h = F.silu(gate) * up
         if weights is not None:
             h = weights * h
-        return lin(self._q8(h), w2)
+        return self._r(lin(self._q8(self._r(h)), w2))  # self.w2(x.to(dtype))
 
     def _experts(self, layer: int, x: torch.Tensor, routing: torch.Tensor) -> torch.Tensor:
         """sum over the selected experts of routing[t, e] * expert_e(x[t]), in expert-id order (the inference MoE
@@ -878,8 +944,8 @@ class DS41Reference:
         return pack(e.unsqueeze(1).expand(-1, self.cfg.hc, -1), pre)
 
     def final_norm(self, h: torch.Tensor) -> torch.Tensor:
-        s, pre = unpack(h, self.cfg.hc)
-        return rms_norm(hc_pre(s, pre), self.final_norm_w, self.cfg.eps)
+        s, pre = self._unpack(h)
+        return self._r(rms_norm(self._r(hc_pre(s, pre)), self.final_norm_w, self.cfg.eps))
 
     @torch.no_grad()
     def forward_chunk(self, tokens, start, state, rec=noop, logits_last_n=0):

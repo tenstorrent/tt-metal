@@ -9764,6 +9764,52 @@ tasks:
     gate_tasks:
     - R.2
     - R.3
+- id: FIX.7
+  title: Reference official numerics at the GPU's shipped dtype (bf16 activations)
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - R.2
+  - R.3
+  gate:
+    cmd: BRINGUP_TASK=R.2 BRINGUP_SCALED=0 python -m models.demos.common.bringup.intake.check_hf_sanity && BRINGUP_TASK=R.2
+      BRINGUP_SCALED=0 python -m models.demos.common.bringup.reference.check_hf --seq 4096 && BRINGUP_TASK=R.3 BRINGUP_SCALED=0
+      python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    metrics:
+      revision_ok: == 1
+      text_top1_acc: '>= 0.4'
+      smoke_ok: == 1
+      pcc_hidden_L*: '>= 0.9999'
+      pcc_logits: '>= 0.9999'
+      top1_match_frac: '>= 0.99'
+      pcc_hidden: '>= 0.99999'
+      pcc_state_min: '>= 0.99999'
+      graph_errors: == 0
+      boundaries_missing: == 0
+      graph_replay_maxabs: <= 0
+  device: false
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/__init__.py
+  brief:
+    details: 'Owner rule (framework F128 / F134 / F136): the margin of every accuracy check is the real reference''s distance
+      from full precision, and the real reference is DeepSeek''s GPU code: bf16 activations, fp32 accumulation in every GEMM,
+      its fp8 / fp4 roundings. Today DS41Reference refuses any dtype but fp32 (reference/ds41_ref.py:525), so numerics=''official''
+      is fp32 compute plus the q-dq only, and the framework''s drift / margin source (generate_golden --numerics official,
+      reference.drift replay at reference.shipped_dtype = bfloat16, spec) cannot run. Make DS41Reference(numerics=''official'',
+      dtype=torch.bfloat16) compute like the GPU code: keep every activation in bf16 exactly where DeepSeek''s inference code
+      keeps it in bf16 (bringup/official_taps.yaml lists the official dtypes per step; the oracle hooks.hf_model in bf16 is
+      the ground truth), GEMMs with bf16 / fp8 / fp4 inputs accumulating in fp32 then rounded to the output''s dtype, fp32
+      where the GPU code computes in fp32 (router, mHC / Sinkhorn, norms'' statistics if so). numerics=''native'' stays fp32
+      everywhere and must not change (bit-identical to today: it is the golden target); numerics=''official'' at dtype fp32
+      stays as today (R.2 / R.3 compare it with the fp32 oracle). Add a CPU test under reference/: official at bf16 vs hooks.hf_model(spec,
+      None) (the bf16 GPU configuration) over a short prefix (e.g. 512 tokens, layers 0-3) agrees per layer within a few bf16
+      roundings, and native is unchanged. Report per-layer rel of official-bf16 vs native at s4096 (the new margins).'
+    gate_tasks:
+    - R.2
+    - R.3
 - id: FIX.5
   title: P.16 ChunkMemo cleared at every chunk start
   step: overseer_fix

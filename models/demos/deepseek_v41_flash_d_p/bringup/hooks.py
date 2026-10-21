@@ -67,8 +67,10 @@ def _config(spec):
 
 def reference(spec, layers=None, dtype=None, numerics="official"):
     """The standalone CPU reference (reference/ds41_ref.py), the requested layers resident (fp32). numerics (F112,
-    F128): "official" = the released code's arithmetic, bit for bit (goldens, R.2 / R.3); "native" = full precision,
-    every activation fp8 / fp4 quant-dequant the identity (ds41_ref.py "Numerics")."""
+    F128): "official" = the released code's arithmetic, bit for bit (R.2 / R.3 at dtype fp32, vs the fp32 oracle); at
+    dtype bf16 (spec reference.shipped_dtype, the margin source: generate_golden --numerics official, reference.drift)
+    the GPU configuration, activations bf16 where model.py holds them (FIX.7); "native" = full precision, fp32, every
+    activation fp8 / fp4 quant-dequant the identity (ds41_ref.py "Numerics")."""
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import DS41Reference
 
