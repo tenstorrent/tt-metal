@@ -2,19 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Runs representative op configs on a mock Wormhole / Blackhole device. Nothing executes, but every
-// op's program factory runs and its kernels are JIT-compiled, so a kernel build error or a config
-// that does not fit (CBs, kernel-config buffer) fails here without hardware.
-// Run with an empty TT_METAL_CACHE so the kernels are actually compiled.
+// Calls ttnn ops on a mock Wormhole / Blackhole device: program factories run and kernels are JIT-compiled,
+// but nothing executes. A kernel that does not build fails here, without hardware. Use an empty cache:
+//   TT_METAL_CACHE=$(mktemp -d) tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile*/*wormhole_*'
+//
+// To add coverage:
+// - a config: one {"name", lambda} line in its *_cases() group, one per kernel file or compile-time branch;
+// - an op-type enum: one sweep<Enum>() call in CPU_KernelCompileSweep; new enum values are then covered.
+// CPU_KernelCompile runs in the PR gate, both suites in the merge gate.
 
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <exception>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -22,20 +30,27 @@
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
+#include <enchantum/enchantum.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/gather/gather.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa_decode/sdpa_decode.hpp"
@@ -59,9 +74,9 @@ ttnn::Tensor device_tensor(
         TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), ttnn::DRAM_MEMORY_CONFIG)), device);
 }
 
-ttnn::DeviceComputeKernelConfig compute_config(MeshDevice* device, bool fp32_dest_acc, bool approx) {
+ttnn::DeviceComputeKernelConfig compute_config(MeshDevice* device, bool fp32_dest_acc) {
     return ttnn::init_device_compute_kernel_config(
-        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx, fp32_dest_acc);
+        device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4, false, fp32_dest_acc);
 }
 
 const ttnn::Shape kTileShape({1, 1, 64, 64});
@@ -73,8 +88,47 @@ struct CompileCase {
 
 void PrintTo(const CompileCase& compile_case, std::ostream* os) { *os << compile_case.name; }
 
-// One case per kernel file or compile-time branch (dtype, fp32 accumulation, approximation mode,
-// fused activation, causal / masked); shapes are the smallest that select the kernel.
+std::vector<CompileCase> join(std::initializer_list<std::vector<CompileCase>> groups) {
+    std::vector<CompileCase> cases;
+    for (const auto& group : groups) {
+        cases.insert(cases.end(), group.begin(), group.end());
+    }
+    return cases;
+}
+
+// Tries BFLOAT16, then INT32. If the op rejects both on host the case is skipped; a kernel that does not
+// build always fails.
+void run_with_supported_dtype(const std::function<void(DataType)>& run) {
+    std::string rejected;
+    for (const auto dtype : {DataType::BFLOAT16, DataType::INT32}) {
+        try {
+            run(dtype);
+            return;
+        } catch (const std::exception& e) {
+            const std::string_view what = e.what();
+            if (what.find("build failed") != std::string_view::npos ||
+                what.find("Failed to generate binaries") != std::string_view::npos) {
+                throw;
+            }
+            rejected = what.substr(0, what.find('\n'));
+        }
+    }
+    GTEST_SKIP() << rejected;
+}
+
+// One case per enum value, named <prefix>_<VALUE>.
+template <typename Enum, typename Run>
+std::vector<CompileCase> sweep(const std::string& prefix, Run run) {
+    std::vector<CompileCase> cases;
+    for (const auto& [value, name] : enchantum::entries_generator<Enum>) {
+        cases.push_back({prefix + "_" + std::string(name), [value, run](MeshDevice* device) {
+                             run_with_supported_dtype([&](DataType dtype) { run(device, value, dtype); });
+                         }});
+    }
+    return cases;
+}
+
+// One case per kernel file or compile-time branch; shapes are the smallest that select it.
 std::vector<CompileCase> eltwise_cases() {
     auto unary = [](auto op, DataType dtype = DataType::BFLOAT16) {
         return [op, dtype](MeshDevice* device) { op(device_tensor(device, kTileShape, dtype)); };
@@ -117,7 +171,50 @@ std::vector<CompileCase> eltwise_cases() {
                  device_tensor(device, kTileShape));
          }},
         {"where_scalars", [](MeshDevice* device) { ttnn::where(device_tensor(device, kTileShape), 1.0f, 0.0f); }},
+        {"snake_beta",
+         [](MeshDevice* device) {
+             ttnn::snake_beta(
+                 device_tensor(device, kTileShape),
+                 device_tensor(device, ttnn::Shape({1, 1, 1, 64})),
+                 device_tensor(device, ttnn::Shape({1, 1, 1, 64})));
+         }},
     };
+}
+
+// Params are 1: valid as a value, a flag or an exponent.
+std::vector<CompileCase> unary_sweep_cases() {
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    return sweep<UnaryOpType>("unary", [](MeshDevice* device, UnaryOpType op_type, DataType dtype) {
+        const auto op = !ttnn::operations::unary::utils::is_parametrized_type(op_type) ? EltwiseUnaryWithParam(op_type)
+                        : dtype == DataType::INT32 ? EltwiseUnaryWithParam(op_type, std::vector<std::int32_t>{1, 1})
+                                                   : EltwiseUnaryWithParam(op_type, std::vector<float>{1.0f, 1.0f});
+        ttnn::prim::unary(
+            device_tensor(device, kTileShape, dtype), {op}, dtype, ttnn::DRAM_MEMORY_CONFIG, false, false, false);
+    });
+}
+
+// Each broadcast kind has its own kernels, and an op's SFPU include can be missing from just one.
+// Tensor-tensor only: binary_ng has no tensor-scalar kernel for some ops (MAXIMUM, GCD, ...), which the
+// public API sends through unary.
+std::vector<CompileCase> binary_sweep_cases() {
+    using ttnn::operations::binary::BinaryOpType;
+    const std::vector<std::tuple<std::string, ttnn::Shape, ttnn::Shape>> broadcasts = {
+        {"none", kTileShape, kTileShape},
+        {"row", kTileShape, ttnn::Shape({1, 1, 1, 64})},
+        {"col", kTileShape, ttnn::Shape({1, 1, 64, 1})},
+        {"row_col", ttnn::Shape({1, 1, 1, 64}), ttnn::Shape({1, 1, 64, 1})},
+        {"scalar", kTileShape, ttnn::Shape({1, 1, 1, 1})},
+    };
+    std::vector<CompileCase> cases;
+    for (const auto& [name, lhs, rhs] : broadcasts) {
+        auto group =
+            sweep<BinaryOpType>("binary_" + name, [lhs, rhs](MeshDevice* device, BinaryOpType op_type, DataType dtype) {
+                ttnn::prim::binary_ng(device_tensor(device, lhs, dtype), device_tensor(device, rhs, dtype), op_type);
+            });
+        cases.insert(cases.end(), group.begin(), group.end());
+    }
+    return cases;
 }
 
 std::vector<CompileCase> matmul_cases() {
@@ -135,7 +232,7 @@ std::vector<CompileCase> matmul_cases() {
                 std::nullopt,
                 program_config,
                 activation,
-                compute_config(device, fp32_dest_acc, false));
+                compute_config(device, fp32_dest_acc));
         };
     };
     const auto mcast_2d = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
@@ -199,7 +296,7 @@ std::vector<CompileCase> sdpa_cases() {
                 std::nullopt,
                 std::nullopt,
                 program_config,
-                compute_config(device, fp32_dest_acc, false));
+                compute_config(device, fp32_dest_acc));
         };
     };
     // Prefill: 1 user, 2 heads, 128 tokens, head dim 64, 64-token Q and K chunks.
@@ -225,7 +322,7 @@ std::vector<CompileCase> sdpa_cases() {
                 std::nullopt,
                 std::nullopt,
                 program_config,
-                compute_config(device, fp32_dest_acc, false));
+                compute_config(device, fp32_dest_acc));
         };
     };
     return {
@@ -239,6 +336,18 @@ std::vector<CompileCase> sdpa_cases() {
 
 std::vector<CompileCase> data_movement_cases() {
     const ttnn::Shape shape({1, 2, 64, 64});
+    // Gather picks a single-core or multi-core factory by index width (over 60 tiles is multi-core).
+    auto gather = [](uint32_t width, Layout layout) {
+        return [width, layout](MeshDevice* device) {
+            const ttnn::Shape gather_shape({1, 1, 32, width});
+            ttnn::gather(
+                device_tensor(device, gather_shape, DataType::BFLOAT16, layout),
+                -1,
+                device_tensor(device, gather_shape, DataType::UINT32, layout),
+                false,
+                std::nullopt);
+        };
+    };
     return {
         {"pad_tile",
          [shape](MeshDevice* device) {
@@ -260,15 +369,13 @@ std::vector<CompileCase> data_movement_cases() {
          [shape](MeshDevice* device) {
              ttnn::concat({device_tensor(device, shape), device_tensor(device, shape)}, 3);
          }},
+        {"gather_single_core", gather(64, Layout::TILE)},
+        {"gather_multi_core", gather(64 * 32, Layout::TILE)},
+        {"gather_row_major_single_core", gather(64, Layout::ROW_MAJOR)},
+        {"gather_row_major_multi_core", gather(64 * 32, Layout::ROW_MAJOR)},
+        {"prod_dim_n", [](MeshDevice* device) { ttnn::prod(device_tensor(device, ttnn::Shape({2, 2, 64, 64})), 0); }},
+        {"prod_dim_c", [](MeshDevice* device) { ttnn::prod(device_tensor(device, ttnn::Shape({2, 2, 64, 64})), 1); }},
     };
-}
-
-std::vector<CompileCase> compile_cases() {
-    std::vector<CompileCase> cases;
-    for (auto group : {eltwise_cases(), matmul_cases(), sdpa_cases(), data_movement_cases()}) {
-        cases.insert(cases.end(), group.begin(), group.end());
-    }
-    return cases;
 }
 
 class KernelCompileMockDevice : public ::testing::TestWithParam<std::tuple<tt::ARCH, CompileCase>> {
@@ -294,14 +401,25 @@ protected:
 
 TEST_P(KernelCompileMockDevice, Compiles) { std::get<1>(GetParam()).run(device_.get()); }
 
+std::string case_name(const ::testing::TestParamInfo<KernelCompileMockDevice::ParamType>& info) {
+    const auto arch = std::get<0>(info.param) == tt::ARCH::WORMHOLE_B0 ? "wormhole" : "blackhole";
+    return std::string(arch) + "_" + std::get<1>(info.param).name;
+}
+
+const auto kArchs = ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE);
+
+// CPU_: host-only, so CI runs these on CPU runners and leaves them out of hardware runs.
 INSTANTIATE_TEST_SUITE_P(
-    Ops,
+    CPU_KernelCompile,
     KernelCompileMockDevice,
     ::testing::Combine(
-        ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE), ::testing::ValuesIn(compile_cases())),
-    [](const auto& info) {
-        const auto arch = std::get<0>(info.param) == tt::ARCH::WORMHOLE_B0 ? "wormhole" : "blackhole";
-        return std::string(arch) + "_" + std::get<1>(info.param).name;
-    });
+        kArchs, ::testing::ValuesIn(join({eltwise_cases(), matmul_cases(), sdpa_cases(), data_movement_cases()}))),
+    case_name);
+
+INSTANTIATE_TEST_SUITE_P(
+    CPU_KernelCompileSweep,
+    KernelCompileMockDevice,
+    ::testing::Combine(kArchs, ::testing::ValuesIn(join({unary_sweep_cases(), binary_sweep_cases()}))),
+    case_name);
 
 }  // namespace
