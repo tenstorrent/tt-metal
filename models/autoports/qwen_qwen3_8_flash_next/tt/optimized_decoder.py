@@ -7,24 +7,27 @@ device. See doc/optimized_decoder for the real-weight policy and measurements.
 """
 
 import math
+import os
+
 import ttnn
+
 from .fused_decoder import (
-    FusedDecoder,
-    FusedGatedDeltaNet,
-    FusedQSA,
-    FusedPLE,
-    FusedMoE,
-    FusedHyperConnection,
-    _PackedMoE,
-    _PrefixView,
-    _shared_rope_tables,
-    _shared_apply_rope,
+    _PRECISE_GDN_COMPUTE,
     _PRECISE_GDN_READER,
     _PRECISE_PREFILL_READER,
-    _PRECISE_GDN_COMPUTE,
-    ngram_indices,
+    FusedDecoder,
+    FusedGatedDeltaNet,
+    FusedHyperConnection,
+    FusedMoE,
+    FusedPLE,
+    FusedQSA,
     _conv_taps,
     _mask_padding,
+    _PackedMoE,
+    _PrefixView,
+    _shared_apply_rope,
+    _shared_rope_tables,
+    ngram_indices,
 )
 
 
@@ -173,14 +176,15 @@ class OptimizedGatedDeltaNet(_ProjectionPolicy, FusedGatedDeltaNet):
             workers = max(1, len(coords) // self.batch_size)
             coords = coords[: workers * self.batch_size]
             cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-            args = [tiles, tile_bytes, self.max_requests, int(store), workers]
+            depth = -(-tiles // workers) if os.environ.get("QWEN_FLASH_STATE_DEPTH", "max") == "max" else 1
+            args = [tiles, tile_bytes, self.max_requests, int(store), workers, depth]
             for tensor in tensors:
                 args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
             cb = ttnn.CBDescriptor(
-                total_size=tile_bytes + 256,
+                total_size=depth * tile_bytes + 256,
                 core_ranges=cores,
                 format_descriptors=[
-                    ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=tile_bytes + 256)
+                    ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=depth * tile_bytes + 256)
                 ],
             )
             kernel = ttnn.KernelDescriptor(
@@ -1248,6 +1252,8 @@ _PARALLEL_STATE_SOURCE = r"""
 // SPDX-License-Identifier: Apache-2.0
 // Request-slot gather/scatter of complete interleaved state tiles. No numeric
 // conversion: FP32 recurrence and BF16 convolution state retain their bits.
+// A worker's tiles are read into `slots` L1 slots together and written together,
+// so one gather costs a couple of NOC round trips instead of one per tile.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -1260,7 +1266,8 @@ void kernel_main() {
     constexpr uint32_t slots = get_compile_time_arg_val(2);
     constexpr bool store = get_compile_time_arg_val(3);
     constexpr uint32_t workers = get_compile_time_arg_val(4);
-    constexpr auto ba = TensorAccessorArgs<5>();
+    constexpr uint32_t depth = get_compile_time_arg_val(5);
+    constexpr auto ba = TensorAccessorArgs<6>();
     constexpr auto wa = TensorAccessorArgs<ba.next_compile_time_args_offset()>();
     constexpr auto sa = TensorAccessorArgs<wa.next_compile_time_args_offset()>();
     constexpr auto pa = TensorAccessorArgs<sa.next_compile_time_args_offset()>();
@@ -1269,33 +1276,47 @@ void kernel_main() {
     const auto slot = TensorAccessor(sa, get_arg_val<uint32_t>(2));
     const auto pos = TensorAccessor(pa, get_arg_val<uint32_t>(3));
     const uint32_t lane = get_arg_val<uint32_t>(4);
+    const uint32_t worker = get_arg_val<uint32_t>(5);
     CircularBuffer cb(0);
     cb.reserve_back(1);
     const uint32_t base = cb.get_write_ptr();
-    auto words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+    const uint32_t meta = base + depth * bytes;
+    auto words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta);
     Noc noc;
-    noc.async_read(slot, CoreLocalMem<uint32_t>(base + bytes), 128, {.page_id = lane}, {});
-    noc.async_read(pos, CoreLocalMem<uint32_t>(base + bytes + 128), 128, {.page_id = lane}, {});
+    noc.async_read(slot, CoreLocalMem<uint32_t>(meta), 128, {.page_id = lane}, {});
+    noc.async_read(pos, CoreLocalMem<uint32_t>(meta + 128), 128, {.page_id = lane}, {});
     noc.async_read_barrier();
-    const uint32_t request = words[bytes / 4];
-    const uint32_t position = words[bytes / 4 + 32];
+    const uint32_t request = words[0];
+    const uint32_t position = words[32];
     ASSERT(request < slots);
     if (!store && position == 0) {
+        auto zero = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
         for (uint32_t j = 0; j < bytes / 4; ++j) {
-            words[j] = 0;
+            zero[j] = 0;
         }
-    }
-    for (uint32_t tile = get_arg_val<uint32_t>(5); tile < pages; tile += workers) {
-        if constexpr (store) {
-            noc.async_read(work, CoreLocalMem<uint32_t>(base), bytes, {.page_id = lane * pages + tile}, {});
-            noc.async_read_barrier();
-            noc.async_write(CoreLocalMem<uint32_t>(base), bank, bytes, {}, {.page_id = request * pages + tile});
-        } else {
-            if (position != 0) {
-                noc.async_read(bank, CoreLocalMem<uint32_t>(base), bytes, {.page_id = request * pages + tile}, {});
-                noc.async_read_barrier();
-            }
+        for (uint32_t tile = worker; tile < pages; tile += workers) {
             noc.async_write(CoreLocalMem<uint32_t>(base), work, bytes, {}, {.page_id = lane * pages + tile});
+        }
+        noc.async_write_barrier();
+        return;
+    }
+    for (uint32_t first = worker; first < pages; first += workers * depth) {
+        uint32_t count = 0;
+        for (uint32_t tile = first; count < depth && tile < pages; tile += workers, ++count) {
+            if constexpr (store) {
+                noc.async_read(work, CoreLocalMem<uint32_t>(base + count * bytes), bytes, {.page_id = lane * pages + tile}, {});
+            } else {
+                noc.async_read(bank, CoreLocalMem<uint32_t>(base + count * bytes), bytes, {.page_id = request * pages + tile}, {});
+            }
+        }
+        noc.async_read_barrier();
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t tile = first + i * workers;
+            if constexpr (store) {
+                noc.async_write(CoreLocalMem<uint32_t>(base + i * bytes), bank, bytes, {}, {.page_id = request * pages + tile});
+            } else {
+                noc.async_write(CoreLocalMem<uint32_t>(base + i * bytes), work, bytes, {}, {.page_id = lane * pages + tile});
+            }
         }
         noc.async_write_barrier();
     }

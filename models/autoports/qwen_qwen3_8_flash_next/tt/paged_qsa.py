@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bounded physical pooled-index storage, with one reusable lane scoring buffer."""
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -100,9 +101,115 @@ def transfer(attention, source, output, positions, page_table, *, seq, lane=None
     ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
 
 
+def gather_all(attention, positions, page_table, *, seq):
+    """Gather every lane's complete pooled prefix into the lane-major dense buffer in one program.
+
+    Lane b's tiles land at tile pages [b*T/32*4, (b+1)*T/32*4). Only live prefix tiles are
+    written (partial tiles zero-filled); the score mask discards every incomplete column.
+    """
+    output = attention.pooled_keys_all
+    grid = attention.device.compute_with_storage_grid_size()
+    coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(grid.x * grid.y)]
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+    tensors = [attention.pooled_cache, output, positions, page_table]
+    args = [attention.batch_size, seq, attention.max_context, attention.pool_tokens // 32, attention.blocks]
+    for tensor in tensors:
+        args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    scratch = 2048 + 2048 + 128 + attention.max_context // 32 * 4
+    cb = ttnn.CBDescriptor(
+        total_size=scratch,
+        core_ranges=cores,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)],
+    )
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=str(Path(__file__).with_name("kernels") / "qsa_pooled_gather_all.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cores,
+        compile_time_args=args,
+        runtime_args=[
+            ((c.x, c.y), [*[t.buffer_address() for t in tensors], i, len(coords)]) for i, c in enumerate(coords)
+        ],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
+
+
+def prefix_bound_all(attention, positions, output, *, seq):
+    """One conservative scorer bound covering all lanes (max over lanes of each lane's cap)."""
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    tensors = [positions, output]
+    args = [attention.batch_size, attention.blocks]
+    for tensor in tensors:
+        args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    cb = ttnn.CBDescriptor(
+        total_size=256,
+        core_ranges=cores,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=256)],
+    )
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=str(Path(__file__).with_name("kernels") / "indexer_prefix_all.cpp"),
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cores,
+        compile_time_args=args,
+        runtime_args=[((0, 0), [positions.buffer_address(), output.buffer_address(), seq])],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=[kernel], cbs=[cb]))
+
+
+def select_groups_batched(attention, pooled, iq, positions, page_table, seq):
+    """Decode selection with one gather, one bound and one mask for all lanes.
+
+    The scorer still runs per lane (it scores one key slot per call) but reads its lane from
+    the shared lane-major buffer, so the per-lane gather, bound, weight slice and typecast
+    disappear. Scores and the selection are what the per-lane path computes.
+    """
+    transfer(attention, pooled, attention.pooled_cache, positions, page_table, seq=seq)
+    qq = ttnn.to_layout(ttnn.concat((attention.indexer_prefix, iq), dim=2), ttnn.TILE_LAYOUT)
+    gather_all(attention, positions, page_table, seq=seq)
+    prefix_args = {}
+    if getattr(attention, "indexer_prefix_cap", False):
+        prefix_bound_all(attention, positions, attention.indexer_prefix_bound, seq=seq)
+        prefix_args["valid_end_tensor"] = attention.indexer_prefix_bound
+    weights = attention.indexer_weights[:1, :, :32, :]
+    rows = []
+    for lane in range(attention.batch_size):
+        scores = ttnn.experimental.indexer_score_dsa(
+            qq[lane : lane + 1],
+            attention.pooled_keys_all,
+            weights,
+            chunk_start_idx=attention.blocks - 32,
+            key_compression_ratio=1,
+            cache_batch_idx=lane,
+            program_config=ttnn.IndexerScoreProgramConfig(
+                q_chunk_size=32,
+                k_chunk_size=attention.indexer_chunk,
+                head_group_size=4,
+            ),
+            compute_kernel_config=attention.indexer_compute,
+            **prefix_args,
+        )
+        rows.append(ttnn.to_layout(ttnn.typecast(scores[:, :, 31:32, :], ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT))
+        # Release the padded dense score owner before the next lane.
+        del scores
+    scores = ttnn.concat(rows, dim=0)
+    del rows
+    bound = mask_scores_per_row(attention, scores, positions, seq)
+    return ttnn.experimental.topk_large_indices(scores, k=512, valid_length_tensor=bound)
+
+
 def select_groups(attention, pooled, iq, positions, page_table, seq):
     batched_selection = seq == 1 and attention.batch_size in (4, 8, 16, 32)
     attention._qsa_batched_selection = batched_selection
+    if (
+        batched_selection
+        and getattr(attention, "pooled_keys_all", None) is not None
+        and os.environ.get("QWEN_FLASH_BATCHED_SELECT", "1") == "1"
+    ):
+        if not getattr(attention, "_batched_select_announced", False):
+            attention._batched_select_announced = True
+            print("QSA_SELECT_PATH batched B", attention.batch_size, flush=True)
+        return select_groups_batched(attention, pooled, iq, positions, page_table, seq)
     transfer(attention, pooled, attention.pooled_cache, positions, page_table, seq=seq)
     qq = ttnn.to_layout(ttnn.concat((attention.indexer_prefix, iq), dim=2), ttnn.TILE_LAYOUT)
     padded = (seq + 62) // 32 * 32
