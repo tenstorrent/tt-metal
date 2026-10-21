@@ -38,6 +38,16 @@ tier, shard layout, model fields -- is treated as behaviour-affecting.
 `timeout` counts: verify_time_budget.py only proves it fits the team's budget, not
 that the test still finishes inside it. Lowering one is how a leg starts timing out.
 
+An entry may also declare how it runs, for anything that varies per pipeline and
+cannot be derived from the cmd:
+
+  * workdir    the directory the cmd runs from, relative to the checkout root.
+  * env        ambient variables the cmd reads, which the owning pipeline would
+               otherwise set from a workflow input.
+
+The workflow derives the rest from workdir -- an LLK one selects the LLK CI image
+and its SFPI setup -- so a new LLK yaml needs no extra declaration.
+
 Source references
 -----------------
 An entry is also scoped when its cmd names a file the PR changed. A token counts
@@ -45,7 +55,8 @@ only if it resolves to a tracked path -- a file, or a directory pytest is pointe
 at; filters and flags are ignored.
 
 Not transitive, and `./build/test/...` is untracked build output, so gtest legs are
-reached only through their yaml.
+reached only through their yaml. SOURCE_SCAN_EXEMPT_YAMLS opts a yaml out of this
+pass alone; edits to the yaml itself still scope normally.
 
 Time budgets are deliberately not checked here. The budget key for a yaml is not
 derivable from it (the filename convention breaks on nine files, and tiered keys
@@ -93,8 +104,8 @@ PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium"
 # the leg silently measures the wrong mode. See check_llk_perf_env.
 LLK_PERF_SCRIPT = re.compile(r"run_llk_perf_\w*\.sh")
 
-# What `export` will accept. A name it rejects would take the run step down under
-# set -e, after the leg has already claimed a runner.
+# What `export` accepts. A name it rejects would kill the run step under set -e,
+# after the leg has already claimed a runner.
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
@@ -591,10 +602,9 @@ def needs_packages(entry):
 def entry_env(entry, path):
     """The entry's declared `env`, flattened to KEY=VALUE lines for the run step.
 
-    Some cmds read ambient variables -- the LLK ones run `pytest -m "$PYTEST_MARKERS"`
-    under `set -u` -- which the owning pipeline sets from a workflow input. Declaring
-    them on the entry keeps the value next to the cmd that needs it, so this gate and
-    any other consumer read the same source instead of each carrying its own copy.
+    Some cmds read ambient variables the owning pipeline sets from a workflow input
+    -- the LLK ones run `pytest -m "$PYTEST_MARKERS"` under `set -u`. Declaring them
+    on the entry keeps the value beside the cmd, so every consumer reads one source.
     """
     env = entry.get("env")
     if env is None:
@@ -728,9 +738,8 @@ def scope_file(
                 check_llk_perf_env(entry, path)
                 entry_env(entry, path)
             except GateError:
-                # Same "skip if unedited" rule as the parse above: this entry's
-                # workdir/env is broken pre-existing data in a yaml the PR never
-                # touched, not something the PR introduced.
+                # Same "skip if unedited" rule as the parse above: broken data in a
+                # yaml the PR never touched is not the PR's problem.
                 if edited:
                     raise
                 continue
@@ -1176,8 +1185,7 @@ def main(argv=None):
         default=os.environ.get("UNSUPPORTED_YAMLS", ""),
         help=(
             "Yaml basenames the gate cannot dispatch, e.g. vllm_model_tests.yaml whose "
-            "entries carry no cmd (default: $UNSUPPORTED_YAMLS). Edits to these are routed "
-            "to their code owners for review instead of being run."
+            "entries carry no cmd (default: $UNSUPPORTED_YAMLS). These are dropped unparsed."
         ),
     )
     parser.add_argument(
