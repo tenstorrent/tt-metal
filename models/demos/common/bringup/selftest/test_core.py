@@ -289,10 +289,11 @@ def test_state_keeps_only_gated_metrics_when_a_test_records_many(sandbox):
     assert len(full) == 71 and full["info_069"]["value"] == 1.0
 
 
-def test_state_keeps_every_metric_of_a_small_test(sandbox):
+def test_state_keeps_the_gated_metrics_and_results_keep_all(sandbox):
+    """F129: state.json carries the gated metrics only (the 500 KB hook); results/<task>.json has every one."""
     led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995, info=2.0), metrics={"pcc_*": ">= 0.99"}))
     run_gate(sandbox.spec, led, "A.1")
-    assert led.state()["A.1"]["metrics"] == {"pcc_out": 0.995, "info": 2.0}
+    assert led.state()["A.1"]["metrics"] == {"pcc_out": 0.995}
 
 
 def test_a_refused_commit_is_a_fail_not_an_uncommitted_pass(sandbox):

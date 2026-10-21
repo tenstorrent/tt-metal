@@ -167,6 +167,15 @@ class Ledger:
         return json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
 
     def _save_state(self, state: dict) -> None:
+        from models.demos.common.bringup.core.gate import state_metrics
+
+        try:
+            tasks = self.tasks()
+        except (FileNotFoundError, KeyError, TypeError):
+            tasks = {}
+        for tid, e in state.items():  # F129: older entries kept every metric; trim them on the next save
+            if isinstance(e, dict) and e.get("metrics") and tid in tasks:
+                e["metrics"] = state_metrics(tasks[tid].get("gate", {}).get("metrics") or {}, e["metrics"])
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(state, indent=1, sort_keys=True) + "\n")
         tmp.replace(self.state_path)

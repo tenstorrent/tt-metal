@@ -1434,3 +1434,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   - Docs: the skill's accuracy section, agents' rules 14 / 17 and the reference role, the hooks template.
   - Guards (selftest/test_e2e_limits.py): the limit math, no fallback, drift on synthetic goldens, no generated device
     gate with a fixed accuracy number, no threshold() call in ladder / contract, defaults at native.
+- F129 (overseer, 2026-10-21): state.json keeps only each task's gated metrics and their limits (core/gate.state_metrics;
+  results/<task>.json keeps every metric, and the dashboard reads both). Ledger._save_state trims older entries on the
+  next save. DeepSeek-V4.1 FIX.6's gate passed every check and then failed its commit: state.json 502 KB > the repo's
+  500 KB large-file hook (128 KB of it were ungated metrics). Selftests: test_core.py, test_dashboard_limits.py.
