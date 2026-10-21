@@ -30,8 +30,14 @@ checkout="${user_checkout:-$tt_metal_home/generated/tt-transformers}"
 reports="$tt_metal_home/generated/test_reports"
 mkdir -p "$reports"
 
-# Clone once per job. Later calls in the same job reuse the checkout.
-if [ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null)" != "$ref" ]; then
+# Clone once per job. Later calls in the same job reuse the checkout. A CI runner keeps
+# generated/ between jobs, and a checkout left by an earlier job still holds its ignored
+# files: the module tests' model_cache/ names device weights by shape and dtype only, so
+# another job's weights load in place of this job's random ones. RUNNER_TEMP is emptied at
+# the start of every job, so a marker there tells this job's checkout from an earlier one.
+job_marker="${RUNNER_TEMP:+$RUNNER_TEMP/tt-transformers-checkout}"
+if [ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null)" != "$ref" ] ||
+    { [ -z "$user_checkout" ] && [ -n "$job_marker" ] && [ ! -e "$job_marker" ]; }; then
     if [ -n "$user_checkout" ]; then
         echo "TT_TRANSFORMERS_DIR=$checkout is not at $ref; check out that revision there or set TT_TRANSFORMERS_REF to its full sha" >&2
         exit 1
@@ -40,6 +46,9 @@ if [ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null)" != "$ref" ]; then
     git init -q "$checkout"
     git -C "$checkout" fetch -q --depth 1 https://github.com/tenstorrent/tt-transformers.git "$ref"
     git -C "$checkout" checkout -q --detach FETCH_HEAD
+fi
+if [ -n "$job_marker" ]; then
+    touch "$job_marker"
 fi
 if [ -n "$(git -C "$checkout" status --porcelain)" ]; then
     echo "tt-transformers checkout $checkout has local changes" >&2
