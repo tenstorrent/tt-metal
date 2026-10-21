@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/buffers/sram_address.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -18,10 +19,10 @@
 #include <map>
 #include <unordered_set>
 
-namespace tt::tt_metal::experimental::per_core_allocation {
+namespace tt::tt_metal::detail {
 
 // Reject reserved, misaligned and out-of-range SRAM before any device write occurs.
-void detail::validate_sram_address(IDevice& device, uint64_t address, uint64_t bytes) {
+void validate_sram_address(IDevice& device, uint64_t address, uint64_t bytes) {
     const auto alignment = device.allocator()->get_alignment(BufferType::L1);
     TT_FATAL(address % alignment == 0, "SRAM address must be aligned");
     TT_FATAL(
@@ -34,6 +35,10 @@ void detail::validate_sram_address(IDevice& device, uint64_t address, uint64_t b
         address <= device.l1_size_per_core() && bytes <= device.l1_size_per_core() - address,
         "SRAM range exceeds device SRAM");
 }
+
+}  // namespace tt::tt_metal::detail
+
+namespace tt::tt_metal::experimental::per_core_allocation {
 
 // Validate all addresses before creating non-owning buffer wrappers.
 distributed::MeshBuffer create_sram_buffer_view(
@@ -70,7 +75,7 @@ distributed::MeshBuffer create_sram_buffer_view(
         for (const auto& [core, address] : entries) {
             TT_FATAL(seen.insert(core).second, "Duplicate SRAM view placement");
             TT_FATAL(core_set.contains(core), "SRAM view placement core is not in the buffer configuration");
-            detail::validate_sram_address(*device, address, bytes_per_core);
+            tt::tt_metal::detail::validate_sram_address(*device, address, bytes_per_core);
             TT_FATAL(per_core || address == lockstep_address, "Lockstep tensor view requires one address on every core");
         }
         TT_FATAL(seen.size() == core_set.size(), "SRAM view placements must cover every configured data core");

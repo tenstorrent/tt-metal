@@ -12,8 +12,6 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
-#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
-#include <tt-metalium/allocator.hpp>
 #include <nanobind/stl/optional.h>
 
 namespace ttnn::global_semaphore {
@@ -28,15 +26,9 @@ void py_module(nb::module_& mod) {
            std::optional<uint32_t> initial_value,
            tt::tt_metal::BufferType buffer_type,
            uint64_t address) {
-            // Validate every device before the backdoor performs any initialization writes.
+            // The Metal entry point validates every destination before initializing storage.
             using namespace tt::tt_metal;
             TT_FATAL(buffer_type == BufferType::L1, "Address-based semaphores require ordinary SRAM");
-            for (auto* device : mesh.get_devices()) {
-                const uint64_t alignment = device->allocator()->get_alignment(BufferType::L1);
-                const auto footprint = ((sizeof(uint32_t) + alignment - 1) / alignment) * alignment;
-                tt::tt_metal::experimental::per_core_allocation::detail::validate_sram_address(
-                    *device, address, footprint);
-            }
             return tt::tt_metal::experimental::CreateGlobalSemaphore(mesh, cores, initial_value, buffer_type, address);
         },
         nb::arg("mesh_device"),
