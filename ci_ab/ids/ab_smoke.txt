@@ -1,0 +1,5 @@
+perf_eltwise_binary_allcfg.py::test_ac_binary[dest_acc:No-dest_sync:Half-formats:Bfp8_b->Bfp8_b-broadcast_type:Column-math_op:Elwadd-math_fidelity:LoFi-tile_dimensions:[32, 32]-input_dimensions:[256, 32]-acc_to_dest:False-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_binary[dest_acc:No-dest_sync:Half-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-math_fidelity:LoFi-tile_dimensions:[1, 32]-input_dimensions:[8, 32]-acc_to_dest:False-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_binary[dest_acc:No-dest_sync:Half-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-math_fidelity:LoFi-tile_dimensions:[32, 16]-input_dimensions:[256, 16]-acc_to_dest:False-form:pt]
+perf_eltwise_binary_allcfg.py::test_ac_binary[dest_acc:No-dest_sync:Half-formats:Bfp8_b->Bfp8_b-broadcast_type:Column-math_op:Elwadd-math_fidelity:LoFi-tile_dimensions:[32, 32]-input_dimensions:[256, 32]-acc_to_dest:False-form:pt]
+perf_eltwise_binary_allcfg.py::test_ac_binary[dest_acc:No-dest_sync:Half-formats:Float16_b->Float16_b-broadcast_type:Row-math_op:Elwadd-math_fidelity:LoFi-tile_dimensions:[32, 32]-input_dimensions:[256, 32]-acc_to_dest:False-form:pt]
