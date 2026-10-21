@@ -10,10 +10,11 @@
 
 namespace ttnn::ring_attention_all_gather {
 
-// 22 from main's CompileTimeArg enum, +1 for the trace-safe has_slot_metadata flag this branch appends
-// as the last reader arg. Must stay equal to the reader kernel's kNumFixedCompileTimeArgs sentinel.
-constexpr uint32_t kReaderFixedCompileTimeArgCount = 23;
-constexpr uint32_t kWriterFixedCompileTimeArgCount = 24;
+// 22 from main's CompileTimeArg enum, +1 for the trace-safe has_slot_metadata flag, +3 for the two-part local slice
+// (bands, chunk tiles, truncated newest-slab tiles). Must stay equal to the reader / writer kernels'
+// kNumFixedCompileTimeArgs sentinels.
+constexpr uint32_t kReaderFixedCompileTimeArgCount = 26;
+constexpr uint32_t kWriterFixedCompileTimeArgCount = 27;
 
 template <bool FullMesh>
 constexpr uint32_t tensor_rank_from_transport_rank(

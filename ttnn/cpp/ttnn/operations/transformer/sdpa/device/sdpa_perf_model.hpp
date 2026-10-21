@@ -46,4 +46,7 @@ int compute_sdpa_ideal_cycles_for_valid_pairs(
     tt::tt_metal::MathFidelity math_fidelity,
     int num_cores);
 
+// Ideal cycles for matmul work of `fma_flops` FLOPs (2 per multiply-add) spread over num_cores, at math_fidelity.
+int compute_matmul_ideal_cycles(double fma_flops, tt::tt_metal::MathFidelity math_fidelity, int num_cores);
+
 }  // namespace ttnn::operations::transformer::sdpa

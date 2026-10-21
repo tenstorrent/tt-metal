@@ -30,7 +30,13 @@ int compute_sdpa_ideal_cycles_for_valid_pairs(
 
     const double fma_flops = kFlopsPerFma * valid_pairs * static_cast<double>(DH + DV) *
                              static_cast<double>(num_heads_q) * static_cast<double>(batch_size);
+    return compute_matmul_ideal_cycles(fma_flops, math_fidelity, num_cores);
+}
 
+int compute_matmul_ideal_cycles(double fma_flops, tt::tt_metal::MathFidelity math_fidelity, int num_cores) {
+    if (fma_flops <= 0.0 || num_cores <= 0) {
+        return 0;
+    }
     // Ideal total cycles is ESTIMATED_FLOPS / IDEAL_THROUGHPUT.
     return static_cast<int>(std::ceil(
         (fma_flops / (static_cast<double>(num_cores) * kTensixMulAddsPerCycleLofi)) *

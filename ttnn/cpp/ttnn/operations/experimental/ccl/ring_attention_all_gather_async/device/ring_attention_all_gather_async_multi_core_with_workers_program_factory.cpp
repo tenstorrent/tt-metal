@@ -610,7 +610,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    RingAttentionLocalReadiness local_readiness) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -767,6 +768,27 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const bool output_bank_owned_schedule =
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(input_tensor, output_tensor, dim);
+    if (local_readiness.bands > 0) {
+        TT_FATAL(fuse_op, "Two-part local slice requires a fused consumer");
+        // The gather reader waits for each neighbor's part-0 marker during its local prefetch: both directions must
+        // receive a slice.
+        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Two-part local slice requires Ring topology");
+        TT_FATAL(
+            num_targets_forward > 0 && num_targets_backward > 0,
+            "Two-part local slice requires active traffic in both ring directions");
+        TT_FATAL(
+            local_readiness.truncate_tiles <= input_tensor[0].padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            "Two-part local slice truncation ({} tiles) exceeds the gathered slice",
+            local_readiness.truncate_tiles);
+        TT_FATAL(!partial_readiness_enabled, "Two-part local slice and midpoint partial readiness are exclusive");
+        TT_FATAL(output_bank_owned_schedule, "Two-part local slice currently requires the bank-owned packet schedule");
+        TT_FATAL(local_readiness.chunk_tiles > 0, "Two-part local slice needs the consumer's K chunk size");
+        for (const auto& tensor : input_tensor) {
+            TT_FATAL(
+                tensor.padded_shape()[2] == input_tensor[0].padded_shape()[2],
+                "Two-part local slice needs every gathered input to have the same rows");
+        }
+    }
     if (partial_readiness_enabled) {
         TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
         TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Partial all-gather readiness requires Ring topology");
@@ -963,6 +985,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
             // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
+            local_readiness.bands,                     // kLocalReadinessBands
+            local_readiness.chunk_tiles,               // kLocalReadinessChunkTiles
+            local_readiness.truncate_tiles,            // kLocalReadinessTruncateTiles
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -1017,6 +1042,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
+            local_readiness.bands,                              // kLocalReadinessBands
+            local_readiness.chunk_tiles,                        // kLocalReadinessChunkTiles
+            local_readiness.truncate_tiles,                     // kLocalReadinessTruncateTiles
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,

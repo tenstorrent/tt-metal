@@ -21,6 +21,12 @@ struct RingSDPAOpReceiver {
     uint32_t split_shard_id = 0;
     uint32_t split_second_half_wait = 0;
 
+    // Two-part local slice: the first remote slice from each direction is signaled after its part 0 and again when
+    // complete; get_next_ring_id_and_sync waits for part 0 only and leaves the completion wait pending here.
+    bool local_slice_readiness = false;
+    uint32_t pending_full_dir = 0;
+    uint32_t pending_full_val = 0;
+
     RingSDPAOpReceiver() {}
 
     RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) :
@@ -45,7 +51,8 @@ struct RingSDPAOpReceiver {
         if (this->wait_for_op_signal) {
             signal_op_semaphore_ids[1] = bwd_semaphore_id;
             signal_op_semaphore_ids[0] = fwd_semaphore_id;
-            split_forwarding_enabled = split_forwarding == 1;
+            split_forwarding_enabled = (split_forwarding & 1) != 0;
+            local_slice_readiness = (split_forwarding & 2) != 0;
             split_shard_id = split_shard;
             split_second_half_wait = split_wait;
         }
@@ -56,9 +63,23 @@ struct RingSDPAOpReceiver {
 
     uint32_t get_next_ring_id_and_sync() {
         ASSERT(initialized);
+        this->pending_full_val = 0;
         uint32_t ring_id = seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
             if (this->wait_for_op_signal) {
-                Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val);
+                if (this->local_slice_readiness && val > 0) {
+                    // val counts slices (direction 0 also the local pre-signal); the first slice's extra marker
+                    // moves every later completion up by one.
+                    const uint32_t slice = dir == 0 ? val - 1 : val;
+                    if (slice == 1) {
+                        Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val);
+                        this->pending_full_dir = dir;
+                        this->pending_full_val = val + 1;
+                    } else {
+                        Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val + 1);
+                    }
+                } else {
+                    Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val);
+                }
             }
         });
         // The split shard's second half is the forward chain's final arrival, on semaphore_ids[0] —
@@ -68,6 +89,16 @@ struct RingSDPAOpReceiver {
             Semaphore<>(this->signal_op_semaphore_ids[0]).wait_min(this->split_second_half_wait);
         }
         return ring_id;
+    }
+
+    // The current slice arrived only in part (two-part local slice): chunks outside part 0 must wait for this.
+    bool slice_partial() const { return this->pending_full_val != 0; }
+
+    void wait_slice_complete() {
+        if (this->pending_full_val != 0) {
+            Semaphore<>(this->signal_op_semaphore_ids[this->pending_full_dir]).wait_min(this->pending_full_val);
+            this->pending_full_val = 0;
+        }
     }
 
     uint32_t get_next_ring_id_and_consume_one_signal() {

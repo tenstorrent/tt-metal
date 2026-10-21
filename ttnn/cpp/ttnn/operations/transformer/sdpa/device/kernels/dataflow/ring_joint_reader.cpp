@@ -19,6 +19,8 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_local_readiness.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_metadata.hpp"
 #include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -449,6 +451,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++)};
+    // Rows of K the fused gather sends from each device's slice, as the host bounds it (re-applied per dispatch with
+    // logical_nt); the metadata path narrows it below exactly as the gather does on device. Two-part local slice only.
+    uint32_t gather_slice_rows = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -595,6 +600,10 @@ void kernel_main() {
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+            gather_slice_rows = std::min(
+                gather_slice_rows,
+                ring_attention_all_gather::compute_gather_valid_Ht(
+                    kv_actual_isl, q_local_padded_Nt, ring_size, get_named_compile_time_arg_val("gather_cache_tiles")));
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
@@ -972,6 +981,11 @@ void kernel_main() {
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
         }
+        // Two-part local slice (ring_attention_local_readiness.hpp): this remote slice has landed only in part. Which
+        // chunks part 0 covers is the sender's split of its slice for this device, computed as the sender does, so a
+        // chunk is read early only if the sender sent it before its part-0 marker.
+        const uint32_t readiness_num_chunks = ttnn::ring_attention_all_gather::local_readiness_split_chunks(
+            gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t);
 
         // In causal balanced case processing KV received from other devices:
         //
@@ -1257,6 +1271,12 @@ void kernel_main() {
                 }
                 const bool joint_chunk_is_local =
                     has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
+
+                if (fused_op_receiver.slice_partial() && !source_is_local &&
+                    !ttnn::ring_attention_all_gather::local_readiness_in_part0(
+                        source_k_chunk, readiness_num_chunks, ksplit_count)) {
+                    fused_op_receiver.wait_slice_complete();
+                }
 
                 if (packed_sources) {
                     // A chunk can span several sources. Wait through its last
@@ -1548,6 +1568,9 @@ void kernel_main() {
                         constexpr uint32_t kexp_bytes = kexp_tiles * k_tile_bytes;
                         const uint32_t credit_addr = get_semaphore(kexp_credit_sem);
                         const uint32_t data_addr = get_semaphore(kexp_data_sem);
+                        // Order matters beyond this exchange: compute's QK reads this core's half straight from
+                        // cb_kexp_own without waiting on it, and is safe only because this push of the peer's half
+                        // follows the wait for that half below (the QK waits for cb_kexp_peer).
                         cb_reserve_back(cb_kexp_peer, kexp_tiles);
                         const uint32_t slot_addr = get_write_ptr(cb_kexp_peer);
                         noc_semaphore_inc(get_noc_addr(kexp_peer_x, kexp_peer_y, credit_addr), 1);

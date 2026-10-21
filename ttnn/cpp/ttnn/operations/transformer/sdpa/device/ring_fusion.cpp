@@ -82,8 +82,11 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     // chain's final arrival, so its count is 1 (local) + backward_writes_expected (full slices)
     // + 1 (second half). Waiting for backward_writes_expected + 1 would be subsumed by the
     // sequencer's earlier wait for shard ring_index + backward_writes_expected, i.e. a no-op.
-    const uint32_t split_second_half_wait = this->backward_writes_expected + 2;
-    out_rt_args.push_back(static_cast<uint32_t>(this->split_forwarding_enabled ? 1 : 0));
+    // A two-part local slice adds one marker to that chain (its first slice's part 0).
+    const uint32_t split_second_half_wait = this->backward_writes_expected + 2 + (this->local_slice_readiness ? 1 : 0);
+    // Bit 0: split forwarding; bit 1: two-part local slice (keeps the argument layout fixed for every consumer).
+    out_rt_args.push_back(
+        static_cast<uint32_t>((this->split_forwarding_enabled ? 1 : 0) | (this->local_slice_readiness ? 2 : 0)));
     out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
     out_rt_args.push_back(static_cast<uint32_t>(split_second_half_wait));
 }

@@ -224,9 +224,8 @@ void kernel_main() {
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
     constexpr uint32_t cb_wuk = get_compile_time_arg_val(cb_arg_offset + 25);
-    constexpr uint32_t cb_kexp = get_compile_time_arg_val(cb_arg_offset + 26);
-    constexpr uint32_t cb_kexp_own = get_compile_time_arg_val(cb_arg_offset + 27);
-    constexpr uint32_t cb_kexp_peer = get_compile_time_arg_val(cb_arg_offset + 28);
+    constexpr uint32_t cb_kexp_own = get_compile_time_arg_val(cb_arg_offset + 26);
+    constexpr uint32_t cb_kexp_peer = get_compile_time_arg_val(cb_arg_offset + 27);
 
     // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling. The factory
     // appends only the remainder unit's starting flat ID per active ordinal.
@@ -257,6 +256,8 @@ void kernel_main() {
     static_assert(!k_expand || use_streaming_compute, "expanded K needs the streaming compute path");
     [[maybe_unused]] const uint32_t k_expand_rank =
         k_expand ? get_arg_val<uint32_t>(rotated_args_base + (ksplit_enabled ? 1 : 0)) : 0;
+    // Each launch starts with cb_kexp_own's pointers at its base: restart the slot parity with it.
+    k_expand_chunk_count = 0;
     const bool ksplit_active = ksplit_enabled && q_per_core == 1;
     const bool seg_active = seg_accum_enabled && q_per_core == 1;
     bool seg_state_valid = false;
@@ -673,7 +674,6 @@ void kernel_main() {
                 kv_region_Nt,
                 (GROUPED_KV_SOURCE_COUNT > 1),
                 DHt_qk,
-                k_expand ? cb_kexp : INVALID_CB,
                 k_expand ? cb_wuk : INVALID_CB,
                 k_expand ? kexp_latent_tiles : 0,
                 k_expand ? wuk_tiles : 0,

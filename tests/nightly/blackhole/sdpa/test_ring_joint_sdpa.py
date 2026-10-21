@@ -1811,12 +1811,15 @@ def run_ring_joint_sdpa_chunked(
 
     # reuse_kv_buffer: reuse one fixed, oversized KV cache across all chunks (logical_n / kv_actual_isl
     # grow per chunk) instead of a fresh right-sized input each chunk. Perf-only (pad-rotation permutes
-    # the output); covers both ring_mla and classic separate-K/V.
+    # the output); covers both ring_mla and classic separate-K/V. With the indexed cache it is the ttMLA call
+    # shape instead: chunk-aligned starts keep the balanced layout and natural output order, so it is checked.
     if reuse_kv_buffer:
         assert persistent_buffer_mode == "reuse_max", "reuse_kv_buffer requires reuse_max"
-        assert not do_check, "reuse_kv_buffer is perf-only (pad-rotation permutes output; no PCC check)"
-        assert num_iterations == 1, "reuse_kv_buffer is a single-pass perf path"
-        assert not indexed_nd_sharded_kv_cache, "reuse_kv_buffer uses its own oversized cache layout"
+        if not indexed_nd_sharded_kv_cache:
+            assert not do_check, "reuse_kv_buffer is perf-only (pad-rotation permutes output; no PCC check)"
+            assert num_iterations == 1, "reuse_kv_buffer is a single-pass perf path"
+        else:
+            assert not reuse_kv_upload_once, "the indexed reused cache is rebuilt per chunk"
     # reuse_kv_upload_once: build and upload that cache once with every chunk instead of per chunk (see
     # prepare_chunk_inputs); only the host-side setup changes, not what the device reads.
     assert not reuse_kv_upload_once or reuse_kv_buffer, "reuse_kv_upload_once requires reuse_kv_buffer"
@@ -1826,8 +1829,8 @@ def run_ring_joint_sdpa_chunked(
             0 <= kv_cache_batch_idx < cache_batch
         ), f"kv_cache_batch_idx {kv_cache_batch_idx} must be in [0, {cache_batch})"
         assert (
-            persistent_buffer_mode == "exact_per_chunk"
-        ), "Reusable max buffers are not combined with indexed K/V cache"
+            persistent_buffer_mode == "exact_per_chunk" or reuse_kv_buffer
+        ), "Reusable max buffers are combined with the indexed K/V cache only as one reused cache (reuse_kv_buffer)"
 
     n_chunks = total_seq // chunk_size
 
@@ -2205,6 +2208,35 @@ def run_ring_joint_sdpa_chunked(
 
         def prepare_chunk_inputs(i):
             s, e = i * chunk_size, (i + 1) * chunk_size
+
+            if reuse_kv_buffer and indexed_nd_sharded_kv_cache:
+                # As ttMLA calls the op: one oversized indexed cache (slot kv_cache_batch_idx; the other slots and each
+                # device's slab past the valid prefix hold garbage) with kv_actual_isl = s. The start is chunk-aligned,
+                # so the layout is the balanced growing one and the output keeps the natural row order.
+                stable_per_dev = reuse_kv_stable_seq // sp_size
+
+                def oversized_slot_cache(full, nh, head_dim, slots, slot):
+                    layout = to_balanced_growing_cache_layout(full, sp_size, chunk_size, i)
+                    seq_per_dev = layout.shape[2] // sp_size
+                    out = torch.randn(slots, nh, sp_size, stable_per_dev, head_dim, dtype=layout.dtype) * 100
+                    out[slot : slot + 1, :, :, :seq_per_dev, :] = layout.reshape(1, nh, sp_size, seq_per_dev, head_dim)
+                    return out.reshape(slots, nh, reuse_kv_stable_seq, head_dim)
+
+                K_input = oversized_slot_cache(K_full, nhk, d_k, cache_batch, kv_cache_batch_idx)
+                V_input = (
+                    oversized_slot_cache(V_full, nhv, d_v, 1, 0)
+                    if v_single_slot
+                    else oversized_slot_cache(V_full, nhv, d_v, cache_batch, kv_cache_batch_idx)
+                )
+                return (
+                    s,
+                    e,
+                    cache_batch,
+                    kv_cache_batch_idx,
+                    upload_q(Q_full if use_compact_single_chunk_q else Q_full[:, :, s:e, :].contiguous()),
+                    upload_k(K_input, memory_config=k_memory_config),
+                    upload_v(V_input, memory_config=None if v_single_slot else v_memory_config),
+                )
 
             if reuse_kv_buffer:
                 Q_chunk = Q_full if use_compact_single_chunk_q else Q_full[:, :, s:e, :].contiguous()
@@ -3919,9 +3951,15 @@ def test_ring_joint_attention_chunked_unrolled_v_production_accuracy(model_name)
     )
 
 
+# exact_kv: right-sized K/V per chunk. reuse_kv: as ttMLA calls the op, one oversized cache across the chunks with
+# kv_actual_isl (KV-pad rotation, the gather bounded to the valid prefix on the host).
+EXPANDED_K_KV_MODES = pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["exact_kv", "reuse_kv"])
+
+
 @pytest.mark.timeout(1800)
+@EXPANDED_K_KV_MODES
 @pytest.mark.parametrize("model_name", ["kimi_k3_expanded_k", "kimi_k2_7_expanded_k"])
-def test_ring_joint_attention_chunked_expanded_k_production_accuracy(model_name):
+def test_ring_joint_attention_chunked_expanded_k_production_accuracy(model_name, reuse_kv_buffer):
     """Kimi K3 / K2.7 production attention: expanded K on arrival in head pairs and K-split bands (chunks from ttMLA),
     indexed latent K cache, batch-1 per-head bfp8 V; every chunk checked against the full-sequence reference over K
     expanded on the host with the same bf8 W_UK."""
@@ -3937,12 +3975,15 @@ def test_ring_joint_attention_chunked_expanded_k_production_accuracy(model_name)
         v_single_slot=model.v_single_slot,
         max_k_splits=k_splits,
         matmul_math_fidelity=model.matmul_math_fidelity,
+        reuse_kv_buffer=reuse_kv_buffer,
+        persistent_buffer_mode="reuse_max" if reuse_kv_buffer else "exact_per_chunk",
     )
 
 
 @pytest.mark.timeout(1800)
+@EXPANDED_K_KV_MODES
 @pytest.mark.parametrize("model_name", ["kimi_k3_expanded_k", "kimi_k2_7_expanded_k"])
-def test_ring_joint_attention_chunked_expanded_k_production_determinism(model_name):
+def test_ring_joint_attention_chunked_expanded_k_production_determinism(model_name, reuse_kv_buffer):
     """Kimi K3 / K2.7 production attention (as above) run 3 times per chunk: per-chunk outputs must be bit-exact."""
     q_chunk, k_chunk, k_splits = expanded_k_production_chunks(model_name)
     model = EXPANDED_K_CHUNKED_MODEL_CONFIGS[model_name]
@@ -3956,6 +3997,8 @@ def test_ring_joint_attention_chunked_expanded_k_production_determinism(model_na
         v_single_slot=model.v_single_slot,
         max_k_splits=k_splits,
         matmul_math_fidelity=model.matmul_math_fidelity,
+        reuse_kv_buffer=reuse_kv_buffer,
+        persistent_buffer_mode="reuse_max" if reuse_kv_buffer else "exact_per_chunk",
     )
 
 
@@ -8824,16 +8867,36 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
 
 
 # Kimi K3 / K2.7 production attention (expanded K, head pairs, K-split bands; chunks from ttMLA): final 50k+5k chunk on
-# the Galaxy's 8-device SP ring (sp=8 tp=4, 110 SDPA cores). Util counts QK at the expanded width (192) and PV at 128;
-# the per-head K expansion is overhead on top, so it is not comparable to the absorbed rows above.
-EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
-    # (model_name, ring_size, expected_util, margin)
-    # q320 k256 in 2 bands, 96 cores: run-to-run spread 35.9-36.5% (4.76-4.84 ms), so +/-1.5%.
-    ("kimi_k3_expanded_k", 8, 36.2, 0.015),
-    # q320 k256 in 3 bands, 96 cores: 3.44 ms local median, 3.48 ms (33.26%) on the CI host (Blaze run 39441830514),
-    # so centre between the two and widen to +/-1.5% like K3.
-    ("kimi_k2_7_expanded_k", 8, 33.48, 0.015),
-]
+# an 8-device SP ring (110 SDPA cores). Util counts QK at the expanded width (192), PV at 128 and the in-op per-head K
+# expansion (every K row once per head, latent 512 -> 128), 1.335x the attention-only FLOPs at this shape; it is not
+# comparable to the absorbed rows above.
+if MESH_CONFIG.is_galaxy:
+    # sp=8 tp=4. Projected, not measured: the attention-only calibration (4.80 / 3.46 ms) re-based to this util
+    # (x1.335) and scaled by the LoudBox speedup of the in-place QK and two-part first slice (-6.5% / -5.3%), so the
+    # band is +/-5% until the next Galaxy run re-calibrates it to a measured centre and +/-1.5%.
+    EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
+        # (model_name, ring_size, expected_util, margin)
+        ("kimi_k3_expanded_k", 8, 51.70, 0.05),
+        ("kimi_k2_7_expanded_k", 8, 47.20, 0.05),
+    ]
+else:
+    # The Blackhole LoudBox ring (sp=8 tp=1): K3 4.31 ms, K2.7 3.10 ms, repeatable within 0.5%.
+    EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
+        ("kimi_k3_expanded_k", 8, 53.83, 0.015),
+        ("kimi_k2_7_expanded_k", 8, 49.85, 0.015),
+    ]
+
+
+def expanded_k_expansion_utilization(model, chunk_size, perf_chunk, duration_ns, core_count):
+    """Math util of the in-op K expansion: each head's K_nope = c_kv . W_UK over every K row of the ring, the work of the
+    highest-ranked chip, which bounds the op (the dense causal skip drops the newest slab of higher-ranked shards on the
+    other chips before they expand)."""
+    latent = model.d_k - (model.d_q - model.k_expand_nope)
+    k_rows = (perf_chunk + 1) * chunk_size
+    flops = 2 * k_rows * model.k_expand_nope * latent * model.nhq
+    constants = ARCH_CONSTANTS["blackhole"]
+    peak = core_count * duration_ns * constants["clock_ghz"] * constants["mm_flops_per_cycle_per_core"]
+    return 100.0 * flops / peak
 
 
 @pytest.mark.timeout(900)
@@ -8846,9 +8909,9 @@ EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_size_expected, expected_util, margin):
     """Math util of the final chunk of Kimi K3 / K2.7 production MLA chunked prefill (expanded K in head pairs and
-    K-split bands, indexed latent K cache, batch-1 per-head bfp8 V), on the Galaxy as production runs it."""
-    if not MESH_CONFIG.is_galaxy or MESH_CONFIG.sp_size != ring_size_expected:
-        pytest.skip(f"Calibrated on the Galaxy's SP ring of {ring_size_expected}, got sp={MESH_CONFIG.sp_size}")
+    K-split bands, indexed latent K cache, batch-1 per-head bfp8 V) on an SP ring of ring_size_expected."""
+    if MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Calibrated on an SP ring of {ring_size_expected}, got sp={MESH_CONFIG.sp_size}")
 
     q_chunk_size, k_chunk_size, k_splits = expanded_k_production_chunks(model_name)
     model = INDEXED_KV_CHUNKED_PERF_MODEL_CONFIGS[model_name]
@@ -8883,6 +8946,7 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, sdpa_cores, round_to_grid_rows=False
     )
+    utilization += expanded_k_expansion_utilization(model, chunk_size, perf_chunk, duration_ns, sdpa_cores)
     utilization /= get_matmul_peak_multiplier(model)
 
     logger.info(

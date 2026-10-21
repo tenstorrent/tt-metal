@@ -12,6 +12,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
+#include "ring_attention_local_readiness.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
 #include <algorithm>
@@ -48,6 +49,10 @@ enum CompileTimeArg : uint32_t {
     kPrefetchPackets,
     // Trace-safe cache-slot select, appended last so main's arg order is untouched.
     kHasSlotMetadata,
+    // Two-part local slice (ring_attention_local_readiness.hpp): K-split band count (0 = off) and K chunk tile rows.
+    kLocalReadinessBands,
+    kLocalReadinessChunkTiles,
+    kLocalReadinessTruncateTiles,
     kNumFixedCompileTimeArgs,
 };
 
@@ -76,6 +81,13 @@ constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialRead
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 constexpr bool has_slot_metadata = get_compile_time_arg_val(kHasSlotMetadata);
+constexpr uint32_t local_readiness_bands = get_compile_time_arg_val(kLocalReadinessBands);
+constexpr uint32_t local_readiness_chunk_tiles = get_compile_time_arg_val(kLocalReadinessChunkTiles);
+constexpr uint32_t local_readiness_truncate_tiles = get_compile_time_arg_val(kLocalReadinessTruncateTiles);
+constexpr bool local_readiness_enabled = local_readiness_bands > 0;
+static_assert(
+    !local_readiness_enabled || (output_bank_owned_schedule && !partial_readiness_enabled),
+    "two-part local slice needs the bank-owned schedule and excludes midpoint partial readiness");
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -255,75 +267,135 @@ void kernel_main() {
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
     // Read the local slice into the packet CB before sending it over Fabric.
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
-        const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
-        if constexpr (output_bank_owned_schedule) {
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
-                const uint32_t output_page_base =
-                    bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
-                if constexpr (partial_readiness_enabled) {
-                    const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
-                        input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
-                    prefetch_bank_owned_slices<false>(
-                        noc_obj,
-                        cb_output,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
-                        input_page_base,
-                        output_page_base,
-                        first_pages,
-                        worker_link[input_idx],
-                        num_links);
-                    prefetch_bank_owned_slices<false>(
-                        noc_obj,
-                        cb_output,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
-                        input_page_base + first_pages,
-                        output_page_base + first_pages,
-                        input_valid_pages[input_idx] - first_pages,
-                        worker_link[input_idx],
-                        num_links);
-                } else {
-                    prefetch_bank_owned_slices<false>(
-                        noc_obj,
-                        cb_output,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
-                        input_page_base,
-                        output_page_base,
-                        input_valid_pages[input_idx],
-                        worker_link[input_idx],
-                        num_links);
+    if constexpr (local_readiness_enabled) {
+        // In the writer's order: part 0 of every input and batch-head, then part 1.
+        // This direction's first slice goes to one neighbor: writer direction 1 sends toward lower transport ranks.
+        // A neighbor ranked below this device masks this slice's newest slab (dense causal skip), so split it as that
+        // neighbor's K bands are (ring_attention_local_readiness.hpp).
+        const uint32_t receiver_transport_rank =
+            direction == 1 ? (my_transport_rank + ring_size - 1) % ring_size : (my_transport_rank + 1) % ring_size;
+        const uint32_t receiver_tensor_rank =
+            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                receiver_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+        const uint32_t num_chunks = ttnn::ring_attention_all_gather::local_readiness_split_chunks(
+            input_valid_pages[0] / input_tensor_Wt[0],
+            local_readiness_truncate_tiles,
+            my_tensor_rank > receiver_tensor_rank,
+            local_readiness_chunk_tiles);
+        for (uint32_t part = 0; part < 2; ++part) {
+            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                const uint32_t row_pages = input_tensor_Wt[input_idx];
+                const uint32_t input_pages_per_batch_head = row_pages * input_tensor_Ht[input_idx];
+                const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                    const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                    const uint32_t output_page_base =
+                        bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
+                    const uint32_t valid_rows = input_valid_pages[input_idx] / row_pages;
+                    for (uint32_t range = 0; range <= local_readiness_bands; ++range) {
+                        const auto rows = ttnn::ring_attention_all_gather::local_readiness_rows(
+                            num_chunks, local_readiness_bands, local_readiness_chunk_tiles, valid_rows, part, range);
+                        if (rows.end <= rows.begin) {
+                            continue;
+                        }
+                        prefetch_bank_owned_slices<false>(
+                            noc_obj,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            input_tensor_addrgens[input_idx],
+                            input_page_base + rows.begin * row_pages,
+                            output_page_base + rows.begin * row_pages,
+                            (rows.end - rows.begin) * row_pages,
+                            worker_link[input_idx],
+                            num_links);
+                    }
                 }
             }
-        } else {
-            // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
-            uint32_t input_page_base = input_batch_base[input_idx];
-            uint32_t tiles_read = input_tile_id_start[input_idx];
-            uint32_t tiles_to_read = input_tile_id_end[input_idx];
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-                prefetch_batch_read_tiles<
-                    input_tensor_page_size,
-                    packet_size_in_pages,
-                    prefetch_packets,
-                    contig_pages_advanced>(
-                    noc_obj,
-                    cb_output,
-                    tiles_read,
-                    tiles_to_read,
-                    cb_fifo_limit,
-                    cb_fifo_size,
-                    input_tensor_addrgens[input_idx],
-                    [&](uint32_t tr) { return input_page_base + tr; });
-                tiles_read = input_tile_id_start[input_idx];
-                tiles_to_read = input_tile_id_end[input_idx];
-                input_page_base += input_pages_per_batch_head;
+            if (part == 0) {
+                // The receive loop below runs only once this device's own slice has been prefetched, so it would see
+                // the neighbor's part-0 marker only as late as its completion. Both neighbors send on the same
+                // schedule: wait for that marker here, between this slice's parts, and signal the consumer now.
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
+                if constexpr (fuse_op) {
+                    const uint32_t first_sender_transport_rank = direction == 1
+                                                                     ? (my_transport_rank + 1) % ring_size
+                                                                     : (my_transport_rank + ring_size - 1) % ring_size;
+                    op_signaler.synchronize_workers_and_signal_op(first_sender_transport_rank);
+                }
+            }
+        }
+    } else {
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+            const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+            if constexpr (output_bank_owned_schedule) {
+                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                    const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                    const uint32_t output_page_base =
+                        bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
+                    if constexpr (partial_readiness_enabled) {
+                        const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                            input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                        prefetch_bank_owned_slices<false>(
+                            noc_obj,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            input_tensor_addrgens[input_idx],
+                            input_page_base,
+                            output_page_base,
+                            first_pages,
+                            worker_link[input_idx],
+                            num_links);
+                        prefetch_bank_owned_slices<false>(
+                            noc_obj,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            input_tensor_addrgens[input_idx],
+                            input_page_base + first_pages,
+                            output_page_base + first_pages,
+                            input_valid_pages[input_idx] - first_pages,
+                            worker_link[input_idx],
+                            num_links);
+                    } else {
+                        prefetch_bank_owned_slices<false>(
+                            noc_obj,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            input_tensor_addrgens[input_idx],
+                            input_page_base,
+                            output_page_base,
+                            input_valid_pages[input_idx],
+                            worker_link[input_idx],
+                            num_links);
+                    }
+                }
+            } else {
+                // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
+                uint32_t input_page_base = input_batch_base[input_idx];
+                uint32_t tiles_read = input_tile_id_start[input_idx];
+                uint32_t tiles_to_read = input_tile_id_end[input_idx];
+                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                    prefetch_batch_read_tiles<
+                        input_tensor_page_size,
+                        packet_size_in_pages,
+                        prefetch_packets,
+                        contig_pages_advanced>(
+                        noc_obj,
+                        cb_output,
+                        tiles_read,
+                        tiles_to_read,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_tensor_addrgens[input_idx],
+                        [&](uint32_t tr) { return input_page_base + tr; });
+                    tiles_read = input_tile_id_start[input_idx];
+                    tiles_to_read = input_tile_id_end[input_idx];
+                    input_page_base += input_pages_per_batch_head;
+                }
             }
         }
     }
@@ -370,8 +442,14 @@ void kernel_main() {
         // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
         // GlobalSemaphore.
         const uint32_t next_slice = slices_received + 1;
+        // Two-part local slice: the first slice (the neighbor's own) carries one extra marker, after its part 0.
+        const bool two_part_slice = local_readiness_enabled && next_slice == 1;
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
+        } else if constexpr (local_readiness_enabled) {
+            // Slice 1: its part 0 (marker 1). Later slices complete one marker later than in the legacy protocol.
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), two_part_slice ? 1 : next_slice + 1);
         } else {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice);
         }
@@ -393,11 +471,19 @@ void kernel_main() {
                 sender_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
         if constexpr (fuse_op) {
-            // In partial mode this first signal exposes the completed prefix of the shard.
-            op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
+            // In partial mode this first signal exposes the completed prefix of the shard. A two-part slice's part 0
+            // was signaled during the local prefetch.
+            if (!two_part_slice) {
+                op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
+            }
         }
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2);
+            if constexpr (fuse_op) {
+                op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
+            }
+        } else if (two_part_slice) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 2);
             if constexpr (fuse_op) {
                 op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
             }

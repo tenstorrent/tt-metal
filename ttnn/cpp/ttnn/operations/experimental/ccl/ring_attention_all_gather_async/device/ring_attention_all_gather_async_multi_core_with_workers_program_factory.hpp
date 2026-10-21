@@ -60,6 +60,16 @@ struct RingAttentionRankMapping {
     uint32_t mesh_cols = 0;
 };
 
+// Two-part local slice for a fused ring-joint SDPA consumer (kernels/ring_attention_local_readiness.hpp): each device
+// sends its own slice as part 0 (the first half of every K-split band's chunks), a marker, then part 1, so the
+// consumer's first remote ring step starts before the whole slice has landed. Off when bands == 0.
+struct RingAttentionLocalReadiness {
+    uint32_t bands = 0;
+    uint32_t chunk_tiles = 0;
+    // Tiles of the newest slab a lower-ranked receiver masks entirely (its dense causal skip), left out of the split.
+    uint32_t truncate_tiles = 0;
+};
+
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
@@ -260,7 +270,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    RingAttentionLocalReadiness local_readiness = {});
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

@@ -627,6 +627,26 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
 }
 
+// The fused gather's K/V inputs and gathered outputs: K, plus V unless V is K's latent alias.
+std::pair<std::vector<Tensor>, std::vector<Tensor>> fused_gather_kv_tensors(
+    const ttnn::prim::RingJointSDPAInputs& tensor_args) {
+    std::vector<Tensor> inputs = {tensor_args.input_k};
+    std::vector<Tensor> outputs = {tensor_args.gathered_k};
+    if (tensor_args.input_v.has_value()) {
+        inputs.push_back(tensor_args.input_v.value());
+        outputs.push_back(tensor_args.gathered_v.value_or(tensor_args.gathered_k));
+    }
+    return {inputs, outputs};
+}
+
+// Rows of K the fused gather sends from each device's slice: its valid prefix, bounded as the gather bounds its first
+// input (the metadata path narrows it further on device, in the gather and in the SDPA reader alike).
+uint32_t fused_gather_slice_rows(
+    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
+    const uint32_t k_rows = tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    return std::min(compute_gather_valid_Ht(args, tensor_args).value_or(k_rows), k_rows);
+}
+
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -886,7 +906,8 @@ void apply_ring_joint_scalar_runtime_args(
         runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
         runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
         runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_valid_tile_count};
+        runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
+        fused_gather_slice_rows(args, tensor_args)};
     const std::array writer_values = {
         runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
     const std::array compute_values = {
@@ -1537,6 +1558,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ksplit_count = ksplit_requested;
     }
     log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
+
+    // Two-part local slice (RingAttentionLocalReadiness): each device sends its own slice to its neighbors as the
+    // leading share of every K-split band, a marker, then the rest, so the first remote ring step starts on that share
+    // instead of waiting for the whole slice. Limited to the plain chunked dense path, where the gather's slice is the
+    // valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the gather's on-device extent only
+    // when both run the metadata path.
+    const auto& ag_attrs_readiness = args.all_gather_operation_attributes;
+    const auto [readiness_gather_inputs, readiness_gather_outputs] = fused_gather_kv_tensors(tensor_args);
+    const bool local_slice_readiness =
+        ag_attrs_readiness.topology == ttnn::ccl::Topology::Ring && ag_attrs_readiness.ring_size > 2 &&
+        kernel_chunked && !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
+        args.kv_stripe_split == 1 && !v_shares_k_buffer &&
+        input_tensor_v.padded_shape()[2] == input_tensor_k.padded_shape()[2] &&
+        tensor_args.kv_actual_isl.has_value() == tensor_args.kv_pad_from_metadata(args.kv_stripe_split) &&
+        ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
+            readiness_gather_inputs, readiness_gather_outputs, ag_attrs_readiness.dim);
+    sdpa_fused_op_signaler->local_slice_readiness = local_slice_readiness;
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
     // restore CBs, so no bf16 running sum spans the whole prefix.
     const bool seg_accum =
@@ -2201,9 +2239,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         k_expand ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.k_expand_weight->dtype()) : k_df;
     // Disabled, they alias live CBs so compile-time tile-size queries in the kernels stay valid (as cb_attention_sink).
     const uint32_t cb_wuk = k_expand ? allocate_tile_cb(wuk_tiles, tt::tile_size(wuk_df), wuk_df) : cb_q_in;
-    const uint32_t cb_kexp = k_expand ? allocate_tile_cb(DHt_qk * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
     // This core's expanded rows on their way to the peer (compute -> reader) and the peer's arriving rows
     // (reader -> compute), both double-buffered.
+    // cb_kexp_own holds exactly two slots: compute never pops it (the reader does, once the peer copy has landed) and
+    // its QK addresses this core's half by the expansion's slot parity (k_expand_chunk_count).
     const uint32_t cb_kexp_own =
         k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
     const uint32_t cb_kexp_peer =
@@ -2222,7 +2261,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
     auto compute_cb_compile_time_args = cb_compile_time_args;
     compute_cb_compile_time_args.insert(
-        compute_cb_compile_time_args.end(), {cb_attention_sink, cb_wuk, cb_kexp, cb_kexp_own, cb_kexp_peer});
+        compute_cb_compile_time_args.end(), {cb_attention_sink, cb_wuk, cb_kexp_own, cb_kexp_peer});
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
 
@@ -3315,6 +3354,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    // The fused gather's cache rows (the fewest of its inputs'), for the reader's copy of its on-device extent.
+    reader_kernel.named_compile_time_args.emplace_back(
+        "gather_cache_tiles",
+        std::min(input_tensor_k.padded_shape()[2], input_tensor_v.padded_shape()[2]) / tt::constants::TILE_HEIGHT);
     compute_kernel.defines = kernel_defines;
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -3412,6 +3455,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
         reader_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
         reader_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
+        // The gather's slice extent, for the two-part local slice (re-applied per dispatch with the scalars above).
+        reader_args.push_back(fused_gather_slice_rows(args, tensor_args));
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -3568,12 +3613,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-    std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
-    std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k};
-    if (tensor_args.input_v.has_value()) {
-        all_gather_input_tensors.push_back(input_tensor_v);
-        all_gather_output_tensors.push_back(gathered_input_tensor_v);
-    }
+    auto [all_gather_input_tensors, all_gather_output_tensors] = fused_gather_kv_tensors(tensor_args);
     // Sharded-joint path: include joint K/V in the same fused gather so gathered_joint_k/v are
     // produced by the gather that actually runs on device. Same as spatial K/V: the AG omits each
     // device's own local slice from the gathered buffer; the SDPA reader fetches that slice from
@@ -3861,7 +3901,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
             /*partial_readiness_enabled=*/false,
-            rank_mapping);
+            rank_mapping,
+            // The gather splits each first slice like its receiver's K bands: a receiver ranked below the sender masks
+            // the sender's newest slab (one Q slab of the chunk) under the dense causal skip.
+            local_slice_readiness
+                ? RingAttentionLocalReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split) : 0u}
+                : RingAttentionLocalReadiness{});
     }
 
     return desc;

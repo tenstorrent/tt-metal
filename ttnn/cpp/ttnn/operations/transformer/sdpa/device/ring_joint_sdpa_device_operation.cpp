@@ -1369,6 +1369,19 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim);
+    // MLA expanded K: each K chunk a device processes is expanded once per head inside the op (c_kv @ W_UK^T, latent ->
+    // no-PE), at the QK / PV fidelity; DH above is Q's width, the expanded one. Under the dense causal skip a device
+    // drops the newest slab of every higher-ranked shard before expanding, so the highest rank expands every ring row:
+    // modeled here, as that device bounds the op.
+    int k_expansion_cycles = 0;
+    if (tensor_args.has_k_expand()) {
+        const auto& wuk_shape = tensor_args.k_expand_weight->logical_shape();
+        const double expansion_flops = 2.0 * static_cast<double>(B) * static_cast<double>(NQH) *
+                                       static_cast<double>(args.logical_n) * static_cast<double>(wuk_shape[2]) *
+                                       static_cast<double>(wuk_shape[3]);
+        k_expansion_cycles =
+            operations::transformer::sdpa::compute_matmul_ideal_cycles(expansion_flops, fidelity, grid.x * grid.y);
+    }
 
     if (args.has_sliding_window() && !has_joint_tensors) {
         const uint32_t q_chunks = tt::div_up(N_local, args.get_q_chunk_size());
@@ -1376,17 +1389,17 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
         const uint32_t active_cores = std::min<uint32_t>(grid.x * grid.y, scheduled_q_work);
         const uint32_t q_global_start =
             static_cast<uint32_t>(args.logical_n) - N_local * static_cast<uint32_t>(args.ring_size);
-        int ideal_cycles = compute_sliding_window_sdpa_ideal_cycles(
-            B,
-            NQH,
-            N_local,
-            static_cast<uint32_t>(args.ring_size),
-            q_global_start,
-            args.sliding_window_size.value(),
-            DH,
-            DV,
-            fidelity,
-            active_cores);
+        int ideal_cycles = k_expansion_cycles + compute_sliding_window_sdpa_ideal_cycles(
+                                                    B,
+                                                    NQH,
+                                                    N_local,
+                                                    static_cast<uint32_t>(args.ring_size),
+                                                    q_global_start,
+                                                    args.sliding_window_size.value(),
+                                                    DH,
+                                                    DV,
+                                                    fidelity,
+                                                    active_cores);
         return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
     }
 
@@ -1395,8 +1408,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
         const uint32_t prefix_k = args.kv_actual_isl.value();
         const uint32_t new_q_global = logical_n - prefix_k;
         const uint32_t ring_size = static_cast<uint32_t>(args.ring_size);
-        int ideal_cycles = compute_chunked_causal_sdpa_ideal_cycles(
-            B, NQH, new_q_global, prefix_k, ring_size, DH, DV, fidelity, grid.x * grid.y);
+        int ideal_cycles =
+            k_expansion_cycles + compute_chunked_causal_sdpa_ideal_cycles(
+                                     B, NQH, new_q_global, prefix_k, ring_size, DH, DV, fidelity, grid.x * grid.y);
         return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
     }
 
@@ -1406,8 +1420,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t cat_Sk = N_global + L;
 
     // Single attention pass over concatenated dimensions
-    int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
-        B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, grid.x * grid.y);
+    int ideal_cycles =
+        k_expansion_cycles + operations::transformer::sdpa::compute_sdpa_ideal_cycles(
+                                 B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, grid.x * grid.y);
 
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
