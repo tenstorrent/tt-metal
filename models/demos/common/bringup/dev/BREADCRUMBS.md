@@ -1518,3 +1518,20 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
     pcc_producer_kv_* stay).
   - Selftests: test_e2e_limits.py (the convention; a 2 % scale fails with PCC 1), test_device_side.py,
     test_e2e_runtime.py, test_drift_matched.py.
+- F136 (overseer, 2026-10-21; audit V12, V13): the margin's source must exist and be the shipped code.
+  - The G task stops with "no margin source" when the reference at numerics official, reference.shipped_dtype moves
+    no layer of the rung beyond one rounding (official identical to native, a hook that ignores numerics or dtype,
+    reference.no_rounding): every limit would be one rounding of the target, the device fails by design and agents
+    raise precision. Records official_identical, drift_layers, drift_layers_above_res (gated >= 1 in G tasks).
+  - `reference.margin_source: hf_official` (owner-signed, defaults.yaml `reference`): the official modelling code
+    (hooks.hf_model) at shipped_dtype in one pass, runs after a gap fed from the golden; layer outputs and top-5 only.
+    The report proposed an `-official` golden from it; the smaller version: the drift entries directly, marked
+    `source: hf_official` (`matched: false` on a prefix rung). A state or the final hidden has no drift then, and its
+    gate stops with the source named (e2e_limits._entry), never a fallback.
+  - R.5 also runs the reference's own official numerics on every tapped step's official inputs and requires the
+    tapped official output within the tap check's limit (`official_ref_vs_taps_errors == 0`): the -official
+    arithmetic shown to be the shipped code's, per step (V13: two definitions of the "real reference" are reconciled).
+  - Intake asks for reference.shipped_dtype (skill; spec template). The fixture's official numerics at a 16-bit
+    dtype round every step's output to it (a margin exists in every golden selftest).
+  - Selftests: test_drift_matched.py (an ignoring hook stops G; hf_official), test_noise_floor.py
+    (test_r5_checks_the_references_official_numerics_against_the_taps).

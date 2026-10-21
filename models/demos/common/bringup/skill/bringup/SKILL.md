@@ -54,6 +54,11 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 - **Precision reference point** (F123): the model ships realistic precision from the start (agents' rule 7);
   propose a reference (default: GLM-5.3's production settings: attention HiFi2, experts LoFi with fp32 accumulation,
   checkpoint-width weights, bf16 cross-chip sums) and record it in `agents.rules`.
+- **Shipped precision of the reference** (F128, F136): the dtype the released code computes in on its own hardware
+  (`reference.shipped_dtype`, default bfloat16; its fp32 islands come from the official code at R.5). It is the
+  end-to-end margin's source (`numerics: official`); a reference that cannot run at it stops the goldens with "no
+  margin source". Only the owner may then set `reference.margin_source: hf_official` (the official modelling code at
+  that dtype; layer outputs and top-5 only).
 - **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always
   2D fabric). They go in `agents.rules` and appear in every brief.
 - **Dashboard style**: `standard` (the ERNIE look), `teletext` (a 90s teletext service on a CRT), or `both`. Goes in

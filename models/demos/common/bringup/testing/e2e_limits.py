@@ -33,18 +33,25 @@ def load(golden_dir: Path, rung: str) -> dict:
     return json.loads(p.read_text())
 
 
+def _entry(drift: dict, key: str) -> dict:
+    if key not in drift:
+        src = {e.get("source", "reference") for e in drift.values()}
+        raise KeyError(f"no drift for {key!r} on this rung (margin source {', '.join(sorted(src))}; F134, F136)")
+    return drift[key]
+
+
 def err_limit(drift: dict, key: str) -> float:
-    e = drift[key]
+    e = _entry(drift, key)
     return CALIB * max(e["rel"], e["rel_res"])
 
 
 def pcc_limit(drift: dict, key: str) -> float:
-    e = drift[key]
+    e = _entry(drift, key)
     return 1.0 - CALIB * CALIB * max(1.0 - e["pcc"], 1.0 - e["pcc_res"])
 
 
 def overlap_limit(drift: dict, key: str) -> float:
-    e = drift[key]
+    e = _entry(drift, key)
     return 1.0 - CALIB * max(1.0 - e["overlap"], 1.0 - e["overlap_res"])
 
 

@@ -104,6 +104,17 @@ def main(argv=None):
             drift.main(spec_args + ["--rung", r])
             n += len(json.loads(drift.drift_path(rung_dir(spec, spec.rung(r)), r).read_text()))
         metrics.record("drift_metrics", n)
+        m = drift.margin(json.loads(drift.drift_path(rung_dir(spec, spec.rung(a.rung)), a.rung).read_text()))
+        for k, v in m.items():
+            metrics.record(k, v)
+        if not m["drift_layers_above_res"]:  # F136: no silent zero margin
+            raise SystemExit(
+                f"no margin source: the reference at numerics official, {spec.get('reference.shipped_dtype')} "
+                f"{'gives the full-precision golden exactly' if m['official_identical'] else 'moves no layer beyond one rounding'}"
+                " (it ignores numerics or dtype, or reference.no_rounding); every limit would be one rounding of the "
+                "target. Make the reference run at its shipped precision (the reference role), or the owner sets "
+                "reference.margin_source: hf_official (F136)"
+            )
         return
     torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
