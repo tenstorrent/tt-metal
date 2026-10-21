@@ -73,7 +73,7 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals,
+        uint32_t go_ring_slot,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
@@ -100,7 +100,6 @@ private:
     struct SubDeviceSetupCommands {
         std::vector<IDevice*> devices;
         std::vector<uint32_t> workers;
-        vector_aligned<uint32_t> noc_data;
         std::vector<std::pair<CoreRangeSet, uint32_t>> core_mapping;
         bool reset_launch_msg_state;
         std::vector<std::vector<vector_aligned<uint32_t>>> device_batches;
@@ -124,7 +123,6 @@ private:
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
         bool multicast_go_signals{false};
-        bool unicast_go_signals{false};
         SubDeviceId sub_device_id;
     };
 
@@ -283,7 +281,6 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         ttsl::Span<const uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;

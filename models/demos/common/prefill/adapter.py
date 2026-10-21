@@ -69,6 +69,8 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Dense KV dedup; sparse models always dedup.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -141,6 +143,13 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
+    supports_tp_shard_kv: bool = False
+    tp_shard_kv_default: bool = False
+
+    def fabric_payload_size(self) -> int:
+        """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
+        built, so a model whose ops need more room than ``model_config.FABRIC_PAYLOAD_SIZE`` returns it here."""
+        return self.model_config.FABRIC_PAYLOAD_SIZE
 
     def cache_kind(self, config_id: int) -> str:
         """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
@@ -210,11 +219,9 @@ class PrefillModelAdapter(ABC):
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
-        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
-        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
-        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
-        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
-        onto these and rejects any split whose rank starts fall off them."""
+        these). ``None`` => unconstrained (dense models — any split is fine). The runner
+        (``compute_layer_split``) snaps the default even split onto these and rejects any split whose
+        rank starts fall off them."""
         return None
 
     @abstractmethod

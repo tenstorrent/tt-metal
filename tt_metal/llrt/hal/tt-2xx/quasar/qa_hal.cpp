@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -300,9 +301,11 @@ public:
         includes.reserve(14);
 
         // Common includes for all core types
-        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
-        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
-            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        // A Quasar IP variant's LLK headers go first so they shadow the base ones under tt_llk_quasar.
+        const std::string& variant = params.rtoptions.get_quasar_variant();
+        const std::string variant_llk_dir = "tt_metal/tt-llk/tt_llk_quasar/arch/" + variant;
+        if (!variant.empty() && std::filesystem::is_directory(params.rtoptions.get_root_dir() + variant_llk_dir)) {
+            includes.push_back(variant_llk_dir);
         }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
@@ -311,18 +314,17 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        // Snapshot the env once: includes() runs separately for firmware and
-        // kernel builds, and a mid-process env change must not compile them
-        // against different maps.
-        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+        // Register headers for the IP variant. Variants without their own register map use the base Quasar one.
         // TODO: Use UMD supplied variant instead of env var
-        // defaults to Quasar if no variant is set
-        if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
+        if (variant == "horizon") {
             log_info(LogMetal, "Using variant: Horizon");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
-        } else if (quasar_variant != nullptr && (std::string(quasar_variant) == "trinity" || std::string(quasar_variant) == "2.0.2")){
+        } else if (variant == "trinity") {
             log_info(LogMetal, "Using variant: Trinity");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        } else if (!variant.empty()) {
+            log_info(LogMetal, "Using variant: {} with the base Quasar register map", variant);
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         } else {
             log_info(LogMetal, "Using variant: Quasar");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
@@ -381,14 +383,9 @@ public:
             }
             defines.push_back(std::string(map_info->config_define));
             // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
-            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
-            // decodes XY operands and cannot run under ATT currently; the rest of the
-            // watcher never decodes an address, so allow it when the sanitizer
-            // is explicitly disabled.
-            TT_FATAL(
-                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
-                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
-                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
+            // reject non-DRAM-backed CQs at compile time). The watcher, including its
+            // NoC sanitizer, runs under ATT: the sanitizer classifies operands through
+            // the map (debug/sanitize.h) instead of decoding XY fields.
             defines.push_back("NOC_ATT_ENABLED");
             defines.push_back("NOC_API_V3");
             static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;

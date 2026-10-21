@@ -646,7 +646,7 @@ void py_module(nb::module_& mod) {
 
     auto matmul_unified_program_config =
         tt_serializable_class<MatmulUnifiedProgramConfig>(mod, "MatmulUnifiedProgramConfig", R"doc(
-        Placement-first program config (Quasar-native matmul, stage A).
+        Placement-first program config (Quasar-native matmul).
 
         GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores; every
         other field defaults to auto. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
@@ -656,7 +656,9 @@ void py_module(nb::module_& mod) {
         through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
         the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
         (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are assigned
-        round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices.
+        round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices; on Quasar the
+        K chunks are assigned round-robin to the reader threads and the compute threads' shares of C to the
+        writer threads (DM cores).
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
         only; a sharded output needs batch 1 and exactly one C slice per core.

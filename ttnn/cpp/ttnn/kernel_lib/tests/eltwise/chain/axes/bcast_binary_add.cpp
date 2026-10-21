@@ -23,6 +23,10 @@ void kernel_main() {
     constexpr uint32_t n = get_compile_time_arg_val(0);
     constexpr uint32_t dim = get_compile_time_arg_val(1);  // 1=Col, 2=Row, 3=Scalar (ckernel values)
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_out_obj(cb_out);
+
     using namespace compute_kernel_lib;
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
@@ -33,18 +37,20 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(
-                    cb_b, BroadcastDim::Row, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
-            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+                input(cb_b, BroadcastDim::Row, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_a_obj, cb_b_obj},
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_out_obj});
     } else if constexpr (dim == 1) {
         eltwise_chain(
             IterationShape::tiles(n),
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
-                input(
-                    cb_b, BroadcastDim::Col, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
-            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+                input(cb_b, BroadcastDim::Col, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_a_obj, cb_b_obj},
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_out_obj});
     } else {  // dim == 3 -> Scalar
         eltwise_chain(
             IterationShape::tiles(n),
@@ -52,11 +58,9 @@ void kernel_main() {
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
                 input(
-                    cb_b,
-                    BroadcastDim::Scalar,
-                    WaitPolicy::PerTile,
-                    PopPolicy::PerTile,
-                    DataFormatReconfig::Disabled)>{},
-            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+                    cb_b, BroadcastDim::Scalar, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_a_obj, cb_b_obj},
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_out_obj});
     }
 }

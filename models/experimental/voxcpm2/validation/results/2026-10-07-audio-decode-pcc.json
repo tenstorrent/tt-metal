@@ -1,0 +1,71 @@
+{
+  "mode": "component_replay",
+  "component": "audio_vae.decode",
+  "event": "audio_vae.decode/000000",
+  "checkpoint": {
+    "repository": "openbmb/VoxCPM2",
+    "revision": "32279effe8c19989596f05d353d1447f51d9e915",
+    "files": {
+      "audiovae.pth": {
+        "sha256": "94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1",
+        "bytes": 376951122
+      },
+      "config.json": {
+        "sha256": "405f0dcd92f7feba6011ed4eac5c8d4f74cba9712f07fd5cfa3063bbdd95402c",
+        "bytes": 4336
+      },
+      "model.safetensors": {
+        "sha256": "f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d",
+        "bytes": 4580080592
+      },
+      "special_tokens_map.json": {
+        "sha256": "068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76",
+        "bytes": 1632
+      },
+      "tokenization_voxcpm2.py": {
+        "sha256": "84489ea32b6ee0cae22ed5480cacb6df85c46624c3119be9a2021c3649a12729",
+        "bytes": 2895
+      },
+      "tokenizer.json": {
+        "sha256": "f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20",
+        "bytes": 3676772
+      },
+      "tokenizer_config.json": {
+        "sha256": "e78a3ebb48a0b9437efd1823b6b726c823da89e49dd8bcc90c02419d9baa772b",
+        "bytes": 5059
+      }
+    }
+  },
+  "dtype": "bfloat16",
+  "device_id": 0,
+  "arch": "Arch.BLACKHOLE",
+  "visible_devices": "0000:c1:00.0",
+  "l1_small_size": 262144,
+  "ttnn_version": "0.65.1rc17.dev6333+h3.3",
+  "torch_version": "2.8.0+cpu",
+  "math_fidelity": "HiFi4",
+  "fp32_dest_acc": true,
+  "metrics": {
+    "passed": true,
+    "pcc": 0.9998259830234506,
+    "relative_rms": 0.06864748741119285,
+    "max_abs": 0.05704778432846063,
+    "reason": null
+  },
+  "limitations": [
+    "Compilation may be included; not steady-state performance",
+    "Captured CUDA input; not integrated TT generation",
+    "MiniCPM prefill KV cache output is not qualified"
+  ],
+  "date": "2026-10-07",
+  "generation": {
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "seed": 43,
+    "inference_timesteps": 10,
+    "max_len": 32,
+    "sample_rate": 48000,
+    "samples": 192000
+  },
+  "implementation_revision": "04ba2da9",
+  "scope": "Fresh native CUDA generation followed by TT codec replay; not integrated TT synthesis"
+}

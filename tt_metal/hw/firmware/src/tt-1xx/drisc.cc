@@ -49,7 +49,7 @@ uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __a
 // firmwares this block is streaming-only: a DRISC kernel built under TT_METAL_STREAMING_PROFILER resolves
 // kernel_profiler::wIndex (and zoneValid, which kernel_profiler_streaming.hpp defines itself for FW builds) out of
 // this firmware ELF via --just-symbols. Without it the kernel fails to link.
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
 }  // namespace kernel_profiler
@@ -81,12 +81,12 @@ int main() {
 
     DEVICE_PRINT_INITIALIZE_LOCK();
 
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;
 
     WAYPOINT("GW");
     while (1) {
-        while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
+        while (mailboxes->go_messages[0].slot[0].signal != RUN_MSG_GO) {
             invalidate_l1_cache();
         }
         WAYPOINT("GD");
@@ -105,7 +105,7 @@ int main() {
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
 
         if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
             launch_msg->kernel_config.enables = 0;

@@ -21,6 +21,7 @@
 // uncached-alias addresses (what the DFB getters hand out on Quasar DM); a LocalTensorAccessor base is the
 // plain (cached) L1 address, so normalise both operands first.
 #include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
+#include "internal/local_mem/address_access.h"
 FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
     return addr >= MEM_L1_UNCACHED_BASE ? addr : MEM_L1_UNCACHED_BASE + (addr - MEM_L1_BASE);
 }
@@ -227,7 +228,10 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_shard_to_write_back; ++i) {
         uint32_t l1_read_addr_out = dfb_out.get_read_ptr() + l1_read_addr_out_offset;
-        uint32_t l1_write_addr_out_reshard = out_shard.get_bank_base_address();
+        // Raw address needed: the shard sits at the same L1 address on every core, so this core's base is the
+        // remote write address on the storage core (and a local_l1_copy operand on Quasar).
+        uint32_t l1_write_addr_out_reshard =
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(out_shard.local_mem()));
 
         if (i == 0) {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
@@ -274,12 +278,9 @@ void kernel_main() {
 
     dfb_out.pop_front(out_block_num_tiles);
 
-    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
-    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
-    // and this hardware register persists across kernel launches. Kernels that
-    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
-    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
-    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
-    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
 }
