@@ -27,6 +27,20 @@ The release used prefix caching at batch one and the selected precision policy.
 Cached continuation uses decode arithmetic; its logits need not match full
 prefill under the different precision paths.
 
+The serving adapter anchors device sampling seeds to absolute token positions
+so batch rebuilds do not restart continuing requests' random streams. This
+changes sampled outputs relative to the linked release; revalidation is pending.
+
+Weekly CI includes real-checkpoint sliding/full decoder parity, traced decode,
+and partial-page/sliding-boundary cached continuation with prefix/neighbor-page
+preservation checks. Failure reports retain sanitized stack locations and
+exception types, not prompts, generated text, or raw server logs.
+
+The last successful weekly CI command took 1,373 seconds (22.9 minutes), including
+596 seconds of server startup. Its 50-minute allowance leaves room for dependency
+installation/compilation variance and the added device regressions. Timings for
+the expanded suite must be measured before tightening this allowance.
+
 ## vLLM serving
 
 Set `EXTRA_MODELS_DIR` to `models/demos` and select architecture

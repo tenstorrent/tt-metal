@@ -11,6 +11,7 @@ mkdir -p "$results" "$logs"
 work=$(mktemp -d)
 run_started=$SECONDS
 server_pid=
+startup_log=
 
 mark_phase() {
     printf 'Gemma4 26B CI phase=%s elapsed_seconds=%s\n' "$1" "$((SECONDS - run_started))" \
@@ -30,6 +31,12 @@ stop_server() {
 }
 
 cleanup() {
+    local status=$?
+    if [ "$status" -ne 0 ] && [ -n "$startup_log" ] && [ -f "$startup_log" ]; then
+        python -m models.demos.gemma4_26b_a4b_qb2.tests.startup_status \
+            "$startup_log" "$results/server-failure.json" || true
+        if [ -f "$results/server-failure.json" ]; then cat "$results/server-failure.json"; fi
+    fi
     stop_server
     rm -rf "$work"
     mark_phase cleanup_complete
@@ -63,9 +70,14 @@ popd
 
 mark_phase host_tests
 python -m pytest "$model_dir/tests/test_precision_policy.py" "$model_dir/tests/test_benchmark.py" \
-    "$model_dir/tests/test_prefix_caching.py" \
+    "$model_dir/tests/test_prefix_caching.py" "$model_dir/tests/test_seed_continuity.py" \
     --timeout 300 --junitxml "$results/host.xml"
 mark_phase host_tests_complete
+
+mark_phase device_numerics
+python -m pytest "$model_dir/tests/test_device_numerics.py" \
+    --timeout 900 --junitxml "$results/device-numerics.xml"
+mark_phase device_numerics_complete
 
 uv venv --python 3.11 "$work/eval-env"
 UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \

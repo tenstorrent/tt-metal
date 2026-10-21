@@ -64,7 +64,7 @@ def test_seeded_page_growth_and_slot_reordering(gemma_server_url):
     requests = [
         {
             "prompt": f"Continue this story about explorer {i}: " + "The path crossed a quiet forest. " * (i + 1),
-            "max_tokens": 129 + i,
+            "max_tokens": (8, 65, 129, 133)[i],
             "temperature": 0.8,
             "seed": 2**30 + 97 * i,
             "top_k": 20,
@@ -74,7 +74,8 @@ def test_seeded_page_growth_and_slot_reordering(gemma_server_url):
     first = completions(gemma_server_url, requests)
     second = completions(gemma_server_url, list(reversed(requests)))[::-1]
     for i, (a, b) in enumerate(zip(first, second)):
-        assert a["usage"]["completion_tokens"] == b["usage"]["completion_tokens"] == 129 + i
+        # Long requests survive multiple completions and scheduler row rebuilds.
+        assert a["usage"]["completion_tokens"] == b["usage"]["completion_tokens"] == requests[i]["max_tokens"]
         assert a["choices"][0]["text"] == b["choices"][0]["text"]
 
 

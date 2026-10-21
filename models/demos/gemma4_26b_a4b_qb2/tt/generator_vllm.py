@@ -19,7 +19,6 @@ class Gemma4ForCausalLM:
         "supports_device_penalties": False,
         "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D},
     }
-    needs_sampling_output_counts = True
 
     def __init__(self, generator, max_batch_size, *, vllm_config=None):
         self.generator = generator
@@ -305,15 +304,23 @@ class Gemma4ForCausalLM:
                 output_tokens = tokens.masked_fill(
                     (positions < original_prompt_lengths) | (positions >= prompt_lengths), -1
                 )
-                # Re-prefill rebuilds KV state but consumes the next sampling
-                # draw after the retained outputs; prefill does not increment.
                 gen.configure_sampling(
-                    sampling_params, prompt_tokens=prompt_tokens, seed_offsets=counts, _reuse_trace=reuse_request
+                    sampling_params,
+                    prompt_tokens=prompt_tokens,
+                    seed_offsets=prompt_lengths.flatten() - 1,
+                    _reuse_trace=reuse_request,
                 )
                 gen.sampler.reset_output_state(output_tokens)
             else:
                 prompt_tokens = tokens.masked_fill(positions >= prompt_lengths, -1)
-                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, _reuse_trace=reuse_request)
+                # Seed each sample by its absolute logit position. The pinned
+                # plugin supplies positions, but not generated-token counts.
+                gen.configure_sampling(
+                    sampling_params,
+                    prompt_tokens=prompt_tokens,
+                    seed_offsets=prompt_lengths.flatten() - 1,
+                    _reuse_trace=reuse_request,
+                )
         if trace_prefill:
             output = gen.serving_prefill_tokens(tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens)
             self._sampling_signature = repr(sampling_params) if gen.prefill_prepared is not None else None
@@ -377,14 +384,10 @@ class Gemma4ForCausalLM:
             return self._read_host_logits(logits, len(start_pos))
         signature = repr(sampling_params)
         if reset_batch or signature != self._sampling_signature:
-            if output_token_counts is None and output_tokens is not None:
-                output_token_counts = (output_tokens >= 0).sum(dim=-1)
-            seed_offsets = None
-            if output_token_counts is not None:
-                counts = self._output_counts(output_token_counts, tokens.shape[0])
-                # Prefill uses the base seed; _forward increments before each
-                # decode sample. The last generated token is this step's input.
-                seed_offsets = (counts - 1).clamp_min(0)
+            # _forward increments before sampling. Reanchor at position - 1
+            # when scheduler rows change; steady-state traces advance on device.
+            # This also handles preemption without per-request host RNG state.
+            seed_offsets = (torch.as_tensor(start_pos).flatten() - 1).clamp_min(0)
             if signature != self._sampling_signature:
                 eager_decode = self._has_eager_decode_trace()
                 reuse_trace = (

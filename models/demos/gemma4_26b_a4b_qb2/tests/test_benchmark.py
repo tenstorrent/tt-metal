@@ -8,6 +8,7 @@ import json
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from models.demos.gemma4_26b_a4b_qb2.tests import benchmark
 
@@ -227,12 +228,12 @@ def test_startup_status_never_copies_log_content():
     text = "\n".join(
         (
             "PRIVATE_PROMPT_SENTINEL",
-            "Loading Gemma4 layer 29",
-            "Gemma4 model loaded",
+            "LAYER_READY 29",
+            "MODEL_READY",
             "Warming model trace",
             "Traceback (most recent call last): PRIVATE_EXCEPTION_SENTINEL",
             "Timed out while waiting for active ethernet core PRIVATE_DEVICE_SENTINEL",
-            "Loading Gemma4 layer 999999 PRIVATE_ANSWER_SENTINEL",
+            "LAYER_READY 999999 PRIVATE_ANSWER_SENTINEL",
         )
     )
     assert startup_status(text) == {
@@ -247,6 +248,34 @@ def test_startup_status_never_copies_log_content():
         "exception_logged": False,
         "failure_category": "unknown",
     }
+
+
+@pytest.mark.parametrize(
+    "marker,stage",
+    [
+        ("MODEL_READY", "weights_loaded"),
+        ("SPLIT_TRACE_READY", "decode_trace_ready"),
+        ("LOGITS_TRACE_READY", "logits_trace_ready"),
+    ],
+)
+def test_real_startup_markers(marker, stage):
+    from models.demos.gemma4_26b_a4b_qb2.tests.startup_status import startup_status
+
+    assert startup_status(f"LAYER_READY 0\n{marker}")["last_stage"] == stage
+
+
+def test_crash_status_keeps_locations_not_content():
+    from models.demos.gemma4_26b_a4b_qb2.tests.startup_status import crash_status
+
+    result = crash_status(
+        "Traceback (most recent call last):\n"
+        '  File "/private/path/model.py", line 224, in decode_forward\n'
+        "    PRIVATE_SOURCE_SENTINEL\n"
+        "RuntimeError: PRIVATE_PROMPT_SENTINEL\n"
+    )
+    assert result["traceback_frames"] == [{"file": "model.py", "line": 224, "function": "decode_forward"}]
+    assert result["exception_types"] == ["RuntimeError"]
+    assert "PRIVATE" not in json.dumps(result)
 
 
 def test_report_preserves_run_start_and_every_shape(monkeypatch, tmp_path):
