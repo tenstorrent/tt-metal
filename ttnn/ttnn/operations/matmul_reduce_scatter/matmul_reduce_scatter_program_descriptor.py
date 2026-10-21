@@ -787,7 +787,20 @@ def build_groups(mesh_shape, cluster_axis):
 # ======================================================================================================================
 
 
-def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_config, memory_config, hooks):
+def run(
+    a,
+    w,
+    *,
+    cluster_axis,
+    scatter_dim,
+    topology,
+    num_links,
+    compute_kernel_config,
+    memory_config,
+    hooks,
+    extra_program=None,
+    extra_tensors=(),
+):
     mesh = a.device()
     a_shape, w_shape = list(a.shape), list(w.shape)
     if not 2 <= len(a_shape) <= 4 or any(s != 1 for s in a_shape[:-2]):
@@ -981,13 +994,45 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         gy=gy,
     )
     desc = create_mesh_program_descriptor(ctx)
-    result = ttnn.generic_op([a, w, output], desc)
+    if extra_program is not None:
+        desc = _merge_extra_programs(mesh, desc, extra_program)
+    result = ttnn.generic_op([a, w, *extra_tensors, output], desc)
     if STAGING_POLICY == "ephemeral":
         # Free the L1 staging once the program is enqueued: later ops reuse it only after this one finishes, and
         # peers write into it only while this program runs. Keeps it from crowding other ops' static CBs.
         ttnn.deallocate(res["staging"])
         res["staging"], res["staging_tiles"] = None, 0
     return result
+
+
+def _merge_extra_programs(mesh, desc, extra_program):
+    """A new MeshProgramDescriptor with extra_program((r, c), free_cores) merged onto the cores this op leaves idle.
+
+    free_cores are idle on every device, in the same order: ports sit next to each chip's own Ethernet cores, so
+    each device's idle set differs, and an extra program that signals its peers at its own core coordinates (the
+    KDA final carry) would otherwise hit a port or an unused core on the peer."""
+    gx, gy = _full_grid(mesh)
+    rows, cols = tuple(mesh.shape)
+    keys = {
+        (r, c): ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+        for r in range(rows)
+        for c in range(cols)
+    }
+    used = {
+        (x, y)
+        for key in keys.values()
+        for kernel in desc[key].kernels
+        for rng in kernel.core_ranges.ranges()
+        for x in range(rng.start.x, rng.end.x + 1)
+        for y in range(rng.start.y, rng.end.y + 1)
+    }
+    free = [ttnn.CoreCoord(x, y) for x in range(gx) for y in range(gy) if (x, y) not in used]
+    merged = ttnn.MeshProgramDescriptor()
+    for coord, key in keys.items():
+        program = desc[key]
+        extra = extra_program(coord, free)
+        merged[key] = program if extra is None else ttnn.merge_program_descriptors([program, extra])
+    return merged
 
 
 # ======================================================================================================================

@@ -364,6 +364,11 @@ class ttKDA:
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
         self.fused_output_reduce_scatter = program_config.fused_output_reduce_scatter and self.tensor_parallel_size > 1
+        if self.fused_output_reduce_scatter and self.carry_with_output_projection:
+            from models.demos.deepseek_v3_d_p.tt.kda.final_carry_program import FinalCarryProgram
+
+            carry = self.recurrence._relay_final_carry
+            self._mmrs_carry = FinalCarryProgram(mesh_device, carry._axis, carry._num_links)
         if self.fused_output_reduce_scatter:
             # The fused op reads its activation from DRAM and always accumulates in FP32 DEST.
             self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -688,7 +693,37 @@ class ttKDA:
         ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
-        if self.carry_with_output_projection:
+        if self.carry_with_output_projection and self.fused_output_reduce_scatter:
+            carry = result.final_state.inputs
+            final_state = self._mmrs_carry.allocate_output(carry["prefix_final"])
+            output = matmul_reduce_scatter(
+                output,
+                self.weights.output_projection,
+                cluster_axis=self._tp_cluster_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
+                compute_kernel_config=self.fused_output_compute_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                extra_program=lambda coord, cores: self._mmrs_carry.program(
+                    coord,
+                    cores,
+                    rank_final=carry["rank_final"],
+                    prefix_final=carry["prefix_final"],
+                    output=final_state,
+                    actual_start=carry["actual_start"],
+                    actual_end=carry["actual_end"],
+                    local_rows=carry["local_rows"],
+                    prefix_on_last_rank=True,
+                ),
+                extra_tensors=[
+                    t
+                    for t in (carry["rank_final"], carry["prefix_final"], carry["actual_start"], carry["actual_end"], final_state)
+                    if t is not None
+                ],
+            )
+            final_state = ttnn.reshape(final_state, carry["final_shape"])
+        elif self.carry_with_output_projection:
             normed = output
             # The output projection on the cores the final carry leaves (and max_matmul_cores allows).
             final_state, output = result.final_state.run(
