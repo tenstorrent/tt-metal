@@ -503,7 +503,7 @@ class TTMLRolloutSampler(RolloutSampler):
         # Free device columns now that we have host copies.
         deallocate_tensors(generated_columns + nlog_columns)
 
-        # For each row: prepend prefill's first token / first -log p, trim at
+        # For each row: prepend prefill's first token / first -log p, trim after
         # first stop token, negate nlog to obtain log_pi_old, right-pad with
         # zeros into a fixed-width [B, max_completion_length] float32 buffer.
         completions: List[List[int]] = []
@@ -514,7 +514,7 @@ class TTMLRolloutSampler(RolloutSampler):
             cut = len(row_tokens)
             for j, tok in enumerate(row_tokens):
                 if tok in stop_ids:
-                    cut = j
+                    cut = j + 1
                     break
             trimmed_tokens = row_tokens[:cut]
             trimmed_nlogs = row_nlogs[:cut]
