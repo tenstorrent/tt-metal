@@ -1,0 +1,3 @@
+tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_sharded_fp32_batch.py
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
