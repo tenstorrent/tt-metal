@@ -92,8 +92,8 @@ constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Unsupported on tiles other than 32x32 (asserted in @ref _llk_unpack_A_init_): COL broadcast
- *       with acc_to_dest or unpack to dest, and ROW broadcast with acc_to_dest. Transpose of faces
- *       works with unpack to dest on every tile shape.
+ *       with acc_to_dest or unpack to dest. Transpose of faces works with unpack to dest on every
+ *       tile shape.
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -311,7 +311,7 @@ inline void _llk_unpack_A_mop_config_(
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Asserted unsupported on tiles other than 32x32 (tt-metal#47328): COL broadcast with
- *       acc_to_dest or unpack to dest, and ROW broadcast with acc_to_dest.
+ *       acc_to_dest or unpack to dest.
  * @note Asserted unsupported on every tile shape, 32x32 included (tt-llk#1702): within-face
  *       transpose with unpack to dest. Use transpose_of_faces here and transpose within faces on
  *       the math thread (llk_math_transpose_dest). Transpose of faces alone works with unpack to
@@ -343,10 +343,9 @@ inline void _llk_unpack_A_init_(
         BType != BroadcastType::COL || num_faces == MAX_NUM_FACES ||
             (!acc_to_dest && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format)),
         "Unary Broadcast Column: tiles other than 32x32 need no acc_to_dest and no unpack to dest");
-    // Row broadcast with acc_to_dest: the MOP follows the face grid but has no test on tiles other
-    // than 32x32 (tt-metal#47328). (Scalar broadcast with acc_to_dest is rejected by a
-    // static_assert in _llk_unpack_A_mop_config_.)
-    LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == MAX_NUM_FACES, "Unary Broadcast Row with acc_to_dest: 32x32 only");
+    // Row broadcast with acc_to_dest follows the face grid on every tile shape; 16x32 is covered by
+    // TensixBinaryComputeTinyTileRowBroadcastWithDestReuse. (Scalar broadcast with acc_to_dest is
+    // rejected by a static_assert in _llk_unpack_A_mop_config_.)
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     // The unpacker's within-face transpose (haloize mode) gives wrong results with unpack to dest
     // on every tile shape, 32x32 included (tenstorrent/tt-llk#1702 item 15). The compute API
