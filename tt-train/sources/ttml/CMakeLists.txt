@@ -8,6 +8,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/parameter_dtype.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
@@ -94,7 +95,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp

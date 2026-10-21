@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Configuration classes for transformer training."""
+
 import os
 import yaml
 from dataclasses import dataclass
@@ -91,6 +92,12 @@ class TrainingConfig:
             raise ValueError(f"Unknown tokenizer_type: {tokenizer_type}")
 
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
+
+        # precision.param_dtype: the dtype trainable parameters are stored in, "bfloat16" or "float32". None (unset)
+        # keeps the dtype the model builds them in.
+        self.param_dtype = (tc.get("precision") or {}).get("param_dtype")
+        if self.param_dtype not in (None, "bfloat16", "float32"):
+            raise ValueError(f'precision.param_dtype must be "bfloat16" or "float32", got {self.param_dtype!r}')
 
 
 class TransformerConfig:

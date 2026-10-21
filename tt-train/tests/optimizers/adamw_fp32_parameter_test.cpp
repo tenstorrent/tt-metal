@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optimizers/adamw_full_precision.hpp"
-
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
@@ -13,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "optimizers/adamw.hpp"
 #include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -20,7 +19,7 @@
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
-struct AdamWFullPrecisionCase {
+struct AdamWFp32ParameterCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
     float lr{1e-3f};
     float beta1{0.9f};
@@ -31,10 +30,10 @@ struct AdamWFullPrecisionCase {
     std::string name;
 };
 
-// Custom printer for AdamWFullPrecisionCase used by gtest to make test output readable
-void PrintTo(const AdamWFullPrecisionCase& pc, std::ostream* os) {
+// Custom printer for AdamWFp32ParameterCase used by gtest to make test output readable
+void PrintTo(const AdamWFp32ParameterCase& pc, std::ostream* os) {
     *os << fmt::format(
-        "AdamWFullPrecisionCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={})",
+        "AdamWFp32ParameterCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={})",
         pc.name,
         pc.shape[0],
         pc.shape[1],
@@ -48,7 +47,7 @@ void PrintTo(const AdamWFullPrecisionCase& pc, std::ostream* os) {
         pc.amsgrad);
 }
 
-class AdamWFullPrecisionComparisonTest : public ::testing::TestWithParam<AdamWFullPrecisionCase> {
+class AdamWFp32ParameterComparisonTest : public ::testing::TestWithParam<AdamWFp32ParameterCase> {
 public:
     static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
@@ -83,11 +82,10 @@ static ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
     return output;
 }
 
-// CPU reference implementation of AdamW with fp32 master weights
-class CPUAdamWFullPrecision {
+// CPU reference: AdamW on fp32 weights, with bf16 gradients
+class CPUAdamWFp32 {
 public:
-    CPUAdamWFullPrecision(
-        float lr, float beta1, float beta2, float epsilon, float weight_decay = 0.0f, bool amsgrad = false) :
+    CPUAdamWFp32(float lr, float beta1, float beta2, float epsilon, float weight_decay = 0.0f, bool amsgrad = false) :
         m_lr(lr),
         m_beta1(beta1),
         m_beta2(beta2),
@@ -165,7 +163,7 @@ private:
     xt::xarray<float> m_max_second_moment;  // amsgrad
 };
 
-static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t steps) {
+static void run_steps_and_compare(const AdamWFp32ParameterCase& pc, uint32_t steps) {
     using namespace ttml;
 
     ttml::autograd::ctx().set_seed(123U);
@@ -193,14 +191,14 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     const size_t initial_steps = 10;
 
     // CPU reference implementation with fp32 master weights
-    CPUAdamWFullPrecision cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
+    CPUAdamWFp32 cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
     cpu_opt.set_state(w0_fp32, m0, v0, initial_steps, pc.amsgrad ? max_v0 : xt::xarray<float>{});
 
-    // Create theta parameter with bf16 weights
-    auto theta = autograd::create_tensor(ttml::core::from_xtensor(w0_fp32, &ttml::autograd::ctx().get_device()), true);
+    // The parameter is stored in fp32: it is the master weight, and fused AdamW updates it with fp32 moments.
+    auto theta = autograd::create_tensor(to_tt_fp32(w0_fp32), true);
     ttml::serialization::NamedParameters params{{"theta", theta}};
 
-    ttml::optimizers::AdamWFullPrecisionConfig cfg;
+    ttml::optimizers::AdamWConfig cfg;
     cfg.lr = pc.lr;
     cfg.beta1 = pc.beta1;
     cfg.beta2 = pc.beta2;
@@ -208,7 +206,7 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     cfg.weight_decay = pc.weight_decay;
     cfg.amsgrad = pc.amsgrad;
 
-    ttml::optimizers::AdamWFullPrecision opt(params, cfg);
+    ttml::optimizers::AdamW opt(params, cfg);
 
     // Inject optimizer state
     serialization::StateDict state;
@@ -219,11 +217,10 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     state["beta2"] = pc.beta2;
     state["epsilon"] = pc.epsilon;
     state["weight_decay"] = pc.weight_decay;
-    state["master_weights"] =
-        serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0_fp32), false)}};
+    state["amsgrad"] = pc.amsgrad;
+    state["stochastic_rounding"] = false;
     state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
     state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
-    state["amsgrad"] = pc.amsgrad;
     if (pc.amsgrad) {
         state["max_exp_avg_sq"] =
             serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(max_v0), false)}};
@@ -237,11 +234,11 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
         opt.step();
     }
 
-    // Compare master weights
+    // Compare the fp32 parameter with the CPU reference's weights
     const auto& cpu_master_weights = cpu_opt.get_master_weights();
-    const auto& device_master_weights = opt.get_master_weights();
-    auto master_weights_tensor = device_master_weights.at("theta")->get_value(autograd::PreferredPrecision::FULL);
-    auto device_master_weights_cpu = core::to_xtensor(master_weights_tensor);
+    const auto& device_weights = theta->get_value(autograd::PreferredPrecision::NATIVE);
+    ASSERT_EQ(device_weights.dtype(), ttnn::DataType::FLOAT32);
+    auto device_master_weights_cpu = core::to_xtensor(device_weights);
 
     float sum_error = 0.0f;
     float max_error = 0.0f;
@@ -259,12 +256,12 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     EXPECT_LT(max_error, max_error_tolerance);
 }
 
-static std::string CaseName(const ::testing::TestParamInfo<AdamWFullPrecisionCase>& info) {
+static std::string CaseName(const ::testing::TestParamInfo<AdamWFp32ParameterCase>& info) {
     const auto& c = info.param;
     return fmt::format("{}_B{}H{}S{}C{}", c.name, c.shape[0], c.shape[1], c.shape[2], c.shape[3]);
 }
 
-TEST_P(AdamWFullPrecisionComparisonTest, CompareWithCPU) {
+TEST_P(AdamWFp32ParameterComparisonTest, CompareWithCPU) {
     const auto& pc = GetParam();
     // Single step with pre-initialized momentum states for rigorous testing
     const uint32_t steps = 1;
@@ -272,7 +269,7 @@ TEST_P(AdamWFullPrecisionComparisonTest, CompareWithCPU) {
 }
 
 // Test cases with various hyperparameter configurations
-static const AdamWFullPrecisionCase kBasicCases[] = {
+static const AdamWFp32ParameterCase kBasicCases[] = {
     // Standard configurations with different learning rates
     {{1, 1, 128, 512}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e2"},
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e3"},
@@ -296,14 +293,14 @@ static const AdamWFullPrecisionCase kBasicCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    AdamWFullPrecisionBasicComparison, AdamWFullPrecisionComparisonTest, ::testing::ValuesIn(kBasicCases), CaseName);
+    AdamWFp32ParameterBasicComparison, AdamWFp32ParameterComparisonTest, ::testing::ValuesIn(kBasicCases), CaseName);
 
 // ====================================================================
 // Weight Decay Tests
-// Test AdamWFullPrecision with various weight decay configurations
+// Fused AdamW on fp32 parameters with various weight decay configurations
 // ====================================================================
 
-static const AdamWFullPrecisionCase kWeightDecayCases[] = {
+static const AdamWFp32ParameterCase kWeightDecayCases[] = {
     // Standard weight decay values
     {{1, 4, 32, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Standard_wd0p01"},
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, false, "Standard_wd0p1"},
@@ -316,14 +313,14 @@ static const AdamWFullPrecisionCase kWeightDecayCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    AdamWFullPrecisionWeightDecay, AdamWFullPrecisionComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
+    AdamWFp32ParameterWeightDecay, AdamWFp32ParameterComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
 
 // ====================================================================
 // AMSGrad Tests
-// Test AdamWFullPrecision with AMSGrad variant enabled
+// Fused AdamW on fp32 parameters with the AMSGrad variant enabled
 // ====================================================================
 
-static const AdamWFullPrecisionCase kAMSGradCases[] = {
+static const AdamWFp32ParameterCase kAMSGradCases[] = {
     // Standard AMSGrad
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
     // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
@@ -333,150 +330,4 @@ static const AdamWFullPrecisionCase kAMSGradCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    AdamWFullPrecisionAMSGrad, AdamWFullPrecisionComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
-
-// ====================================================================
-// State-dict restore tests
-// A checkpoint's betas may differ from the constructor config; both the
-// moment updates and the bias correction (beta powers) must follow the
-// restored betas.
-// ====================================================================
-
-class AdamWFullPrecisionStateDictTest : public ::testing::Test {
-public:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-
-protected:
-    void TearDown() override {
-        ttml::autograd::ctx().reset_graph();
-    }
-};
-
-// Builds an optimizer whose constructor betas differ from the effective ones, applies the
-// effective betas either through the state dict or through the setters, then verifies one
-// step against a CPU reference driven purely by the effective betas.
-static void run_effective_betas_step_and_compare(bool use_beta_setters) {
-    using namespace ttml;
-
-    const float lr = 1e-2f;
-    const float epsilon = 1e-8f;
-    const size_t initial_steps = 10;
-    const float constructor_beta1 = 0.9f;
-    const float constructor_beta2 = 0.999f;
-    const float effective_beta1 = 0.5f;
-    const float effective_beta2 = 0.9f;
-    const std::array<std::size_t, 4> shape = {1, 1, 128, 256};
-
-    autograd::ctx().set_seed(123U);
-    auto& gen = autograd::ctx().get_generator();
-    const uint32_t seed_param = gen();
-    const uint32_t seed_grad = gen();
-    const uint32_t seed_first_moment = gen();
-    const uint32_t seed_second_moment = gen();
-
-    xt::xarray<float> w0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_param);
-    xt::xarray<bfloat16> g0_bf16 =
-        test_utils::make_uniform_xarray<bfloat16>(shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed_grad);
-    xt::xarray<float> g0 = xt::cast<float>(g0_bf16);
-    xt::xarray<float> m0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_first_moment);
-    xt::xarray<float> v0 = test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed_second_moment);
-
-    // CPU reference driven purely by the effective betas: the behavior a resumed run must match.
-    CPUAdamWFullPrecision cpu_opt(lr, effective_beta1, effective_beta2, epsilon, /*weight_decay=*/0.0f);
-    cpu_opt.set_state(w0, m0, v0, initial_steps);
-    xt::xarray<float> w_cpu = cpu_opt.step(g0);
-
-    auto theta = autograd::create_tensor(core::from_xtensor(w0, &autograd::ctx().get_device()), true);
-    serialization::NamedParameters params{{"theta", theta}};
-
-    optimizers::AdamWFullPrecisionConfig cfg;
-    cfg.lr = lr;
-    cfg.beta1 = constructor_beta1;
-    cfg.beta2 = constructor_beta2;
-    cfg.epsilon = epsilon;
-    cfg.weight_decay = 0.0f;
-    optimizers::AdamWFullPrecision opt(params, cfg);
-
-    // When exercising the setters, the state dict carries the constructor betas so that only
-    // the setters introduce the effective ones.
-    const float state_beta1 = use_beta_setters ? constructor_beta1 : effective_beta1;
-    const float state_beta2 = use_beta_setters ? constructor_beta2 : effective_beta2;
-    {
-        serialization::StateDict state;
-        state["steps"] = initial_steps;
-        state["lr"] = lr;
-        state["initial_lr"] = lr;
-        state["beta1"] = state_beta1;
-        state["beta2"] = state_beta2;
-        state["epsilon"] = epsilon;
-        state["weight_decay"] = 0.0f;
-        state["master_weights"] =
-            serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0), false)}};
-        state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
-        state["exp_avg_sq"] =
-            serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
-        state["amsgrad"] = false;
-        opt.set_state_dict(state);
-    }
-
-    if (use_beta_setters) {
-        opt.set_beta1(effective_beta1);
-        opt.set_beta2(effective_beta2);
-    }
-
-    EXPECT_EQ(opt.get_steps(), initial_steps);
-    EXPECT_FLOAT_EQ(opt.get_beta1(), effective_beta1);
-    EXPECT_FLOAT_EQ(opt.get_beta2(), effective_beta2);
-
-    theta->set_grad(to_tt_bf16(g0_bf16));
-    opt.step();
-
-    const auto& device_master_weights = opt.get_master_weights();
-    auto master_weights_tensor = device_master_weights.at("theta")->get_value(autograd::PreferredPrecision::FULL);
-    auto actual = core::to_xtensor(master_weights_tensor);
-
-    auto error_metrics = [](const xt::xarray<float>& reference, const xt::xarray<float>& candidate) {
-        float sum_error = 0.0f;
-        float max_error = 0.0f;
-        for (size_t i = 0; i < reference.size(); ++i) {
-            float error = std::abs(reference.flat(i) - candidate.flat(i));
-            sum_error += error;
-            max_error = std::max(max_error, error);
-        }
-        return std::pair<float, float>(sum_error / static_cast<float>(reference.size()), max_error);
-    };
-
-    const float mean_error_tolerance = 1e-7f;
-    const float max_error_tolerance = 1e-6f;
-    auto [mean_error, max_error] = error_metrics(w_cpu, actual);
-    EXPECT_LE(mean_error, mean_error_tolerance) << "bias correction must follow the effective betas";
-    EXPECT_LE(max_error, max_error_tolerance) << "bias correction must follow the effective betas";
-
-    // Guard against a vacuous pass: a step whose moments follow the effective betas but whose
-    // bias correction still carries the constructor betas' powers must be clearly distinguishable
-    // from the reference.
-    xt::xarray<float> m1 = effective_beta1 * m0 + (1.0f - effective_beta1) * g0;
-    xt::xarray<float> v1 = effective_beta2 * v0 + (1.0f - effective_beta2) * (g0 * g0);
-    const float stale_bias_correction1 =
-        1.0f - std::pow(constructor_beta1, static_cast<float>(initial_steps)) * effective_beta1;
-    const float stale_bias_correction2 =
-        1.0f - std::pow(constructor_beta2, static_cast<float>(initial_steps)) * effective_beta2;
-    xt::xarray<float> w_stale =
-        w0 - lr * (m1 / stale_bias_correction1) / (xt::sqrt(v1 / stale_bias_correction2) + epsilon);
-    auto [stale_mean_error, stale_max_error] = error_metrics(w_cpu, w_stale);
-    EXPECT_GT(stale_mean_error, mean_error_tolerance)
-        << "constructor and effective betas too close to distinguish; test is not meaningful";
-}
-
-TEST_F(AdamWFullPrecisionStateDictTest, RestoredBetasDriveBiasCorrection) {
-    run_effective_betas_step_and_compare(/*use_beta_setters=*/false);
-}
-
-TEST_F(AdamWFullPrecisionStateDictTest, BetaSettersRecomputeBiasCorrection) {
-    run_effective_betas_step_and_compare(/*use_beta_setters=*/true);
-}
+    AdamWFp32ParameterAMSGrad, AdamWFp32ParameterComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);

@@ -14,7 +14,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/sgd.hpp"
 #include "test_utils/optimizer_state.hpp"
 #include "test_utils/random_data.hpp"
@@ -96,13 +95,15 @@ void expect_full_view_tracks_fused_step(const Config& config) {
     expect_views_track(state_tensors(optimizer), autograd::PreferredPrecision::FULL, [&] { optimizer.step(); });
 }
 
-// AdamWFullPrecision updates its fp32 master weights and moments in place. Their bf16 views must follow. It creates
-// all of its state at construction, so one step checks every tensor.
-void expect_half_view_tracks_full_precision_step(const optimizers::AdamWFullPrecisionConfig& config) {
-    auto [theta, grad] = make_parameter(ttnn::DataType::BFLOAT16);
+// Fused AdamW on an fp32 parameter, the fp32 master weight, updates the parameter and its fp32 moments in place.
+// Their bf16 views must follow. AdamW creates its state at construction, so one step checks every tensor.
+void expect_half_views_track_fused_adamw_step_on_fp32_parameter(const optimizers::AdamWConfig& config) {
+    auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
     theta->set_grad(grad);
-    optimizers::AdamWFullPrecision optimizer(serialization::NamedParameters{{"theta", theta}}, config);
-    expect_views_track(state_tensors(optimizer), autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
+    optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
+    auto tensors = state_tensors(optimizer);
+    tensors.emplace_back("theta", theta);
+    expect_views_track(tensors, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
 }
 
 const ttnn::Shape kShape({1, 1, 32, 32});
@@ -377,17 +378,17 @@ TEST_F(AutogradTensorTest, NativeValueTracksFusedAdamWStepOnFp32Parameter) {
     expect_views_track({{"theta", theta}}, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
 }
 
-TEST_F(AutogradTensorTest, HalfViewTracksAdamWFullPrecisionStep) {
-    optimizers::AdamWFullPrecisionConfig config;
+TEST_F(AutogradTensorTest, HalfViewTracksFusedAdamWStateOnFp32Parameter) {
+    optimizers::AdamWConfig config;
     config.lr = 1e-2F;
-    expect_half_view_tracks_full_precision_step(config);
+    expect_half_views_track_fused_adamw_step_on_fp32_parameter(config);
 }
 
-TEST_F(AutogradTensorTest, HalfViewTracksAdamWFullPrecisionStepWithAmsgrad) {
-    optimizers::AdamWFullPrecisionConfig config;
+TEST_F(AutogradTensorTest, HalfViewTracksFusedAdamWStateOnFp32ParameterWithAmsgrad) {
+    optimizers::AdamWConfig config;
     config.lr = 1e-2F;
     config.amsgrad = true;
-    expect_half_view_tracks_full_precision_step(config);
+    expect_half_views_track_fused_adamw_step_on_fp32_parameter(config);
 }
 
 // Stochastic rounding applies to bf16 parameters only; an fp32 parameter is updated without it.

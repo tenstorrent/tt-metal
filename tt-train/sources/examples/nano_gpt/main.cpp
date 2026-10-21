@@ -6,6 +6,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <optional>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 
@@ -14,6 +15,7 @@
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -170,6 +172,8 @@ struct TrainingConfig {
     std::string scheduler_type = "identity";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
+    // precision.param_dtype: the dtype trainable parameters are stored in. Unset keeps the dtype the model builds.
+    std::optional<ttnn::DataType> param_dtype;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -191,6 +195,11 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
+    if (auto precision_node = training_config["precision"]) {
+        if (auto param_dtype_node = precision_node["param_dtype"]) {
+            config.param_dtype = ttml::core::parse_param_dtype(param_dtype_node.as<std::string>());
+        }
+    }
 
     return config;
 }
@@ -714,6 +723,11 @@ int main(int argc, char **argv) {
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
+    }
+
+    // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype.
+    if (training_config.param_dtype) {
+        ttml::core::store_trainable_parameters_as(get_model_parameters(model), *training_config.param_dtype);
     }
 
     // Load model parameters if in eval mode and model path exists

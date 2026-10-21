@@ -10,7 +10,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
@@ -19,7 +18,7 @@ using namespace ttml;
 
 // Every optimizer except fused AdamW only has a bf16 update. Given an fp32 parameter, they must fail at
 // construction instead of silently training a bf16 copy (fused SGD) or turning the parameter into bf16 through
-// set_value (AdamWFullPrecision and the composites).
+// set_value (the composites).
 class Bf16ParameterGuardTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
@@ -61,10 +60,6 @@ TEST_F(Bf16ParameterGuardTest, AdamWComposite) {
 
 TEST_F(Bf16ParameterGuardTest, MuonComposite) {
     expect_rejects_fp32_and_accepts_bf16<optimizers::MuonComposite>(optimizers::MuonConfig{});
-}
-
-TEST_F(Bf16ParameterGuardTest, AdamWFullPrecision) {
-    expect_rejects_fp32_and_accepts_bf16<optimizers::AdamWFullPrecision>(optimizers::AdamWFullPrecisionConfig{});
 }
 
 TEST_F(Bf16ParameterGuardTest, FusedAdamWAcceptsFp32Parameters) {

@@ -508,6 +508,11 @@ def run_training(
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
+    # Before the optimizer is created, so its state follows the stored dtype; a resumed checkpoint loads into it too.
+    if training_cfg.param_dtype is not None:
+        dtype = {"bfloat16": ttnn.DataType.BFLOAT16, "float32": ttnn.DataType.FLOAT32}[training_cfg.param_dtype]
+        ttml.core.store_trainable_parameters_as(model.parameters(), dtype)
+
     optimizer = create_optimizer(model, yaml_config)
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
