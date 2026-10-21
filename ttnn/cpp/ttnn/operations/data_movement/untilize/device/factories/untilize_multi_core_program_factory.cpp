@@ -152,11 +152,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     uint32_t input_dfb_num_tiles;
     bool double_buffer;
     if (runtime_rows) {
-        // The row count is not known at build time: double-buffer whenever two rows of input and
-        // output tiles fit the static L1 budget (not the live occupancy, which the hash ignores).
+        // The row count is not known at build time, and the cached program outlives the L1 state it
+        // was built in: double-buffer only while two rows take at most half the static CB space.
         const uint64_t double_buffer_bytes =
             2ull * num_tiles_per_input_block * (input_single_tile_size + output_single_tile_size);
-        double_buffer = double_buffer_bytes <= ttnn::operations::data_movement::get_static_l1_space(a);
+        double_buffer = 2 * double_buffer_bytes <= ttnn::operations::data_movement::get_static_l1_space(a);
     } else {
         double_buffer = num_input_blocks_per_full_core != 1;
     }
