@@ -1,8 +1,8 @@
 # dataflow_buffer_spec invariant tests
 
-Local invariants of `DataflowBufferSpec` (`dataflow_buffer_spec.hpp`).  Most other DFB rules depend
-on the kernels that bind the DFB, so they are structural and live in `../program_spec/`; `DFBAdvancedOptions` rules
-are in `../advanced_options/`.
+Invariants of `DataflowBufferSpec` (`dataflow_buffer_spec.hpp`), including the borrowed-memory constraints
+from `DFBAdvancedOptions` (`advanced_options.hpp`) below. Structural rules involving kernel bindings live
+in `../program_spec/`.
 
 ## Listed invariants
 
@@ -25,10 +25,28 @@ struct DataflowBufferSpec {
     // - When tile_format_metadata is set, the data_format_metadata must also be set.
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
-    // Invariant:
-    // - When set, the named TensorParameter's TensorSpec is L1-resident (L1 or L1_SMALL).
-    std::optional<TensorParamName> borrowed_from = std::nullopt;
+    // Invariant: When set:
+    // - Names a TensorParameter declared in ProgramSpec::tensor_parameters or a
+    //   RawAllocationParameter declared in ProgramAdvancedOptions::raw_allocation_parameters.
+    // - The bound memory object has L1/SRAM storage on every node occupied by the DFB.
+    // - When borrowing from a tensor, its TensorSpec is L1-resident (L1 or L1_SMALL),
+    //   and each occupied node's allocation can hold entry_size * num_entries bytes.
+    // - When borrowing from a RawAllocation, advanced_options.borrowed_memory_offset
+    //   + entry_size * num_entries must not exceed its per-node size on any occupied node.
+    std::optional<std::variant<TensorParamName, RawAllocationParamName>> borrowed_from = std::nullopt;
 
     DFBAdvancedOptions advanced_options;
+};
+
+struct DFBAdvancedOptions {
+    // Other fields to be filled in later.
+
+    // Invariant:
+    // - Must be a multiple of the L1 alignment.
+    // - Must be zero when DataflowBufferSpec::borrowed_from is unset or names a TensorParameter.
+    // - When borrowing from a RawAllocation, borrowed_memory_offset
+    //   + DataflowBufferSpec::entry_size * DataflowBufferSpec::num_entries must not exceed
+    //   the RawAllocation's per-node size on any node occupied by the DFB.
+    uint32_t borrowed_memory_offset = 0;  // in bytes
 };
 ```

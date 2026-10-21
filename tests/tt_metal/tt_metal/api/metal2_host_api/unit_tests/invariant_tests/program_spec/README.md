@@ -36,7 +36,7 @@ struct WorkUnitSpec {
 };
 
 struct ProgramSpec {
-    // Object invariants (excluding advanced options):
+    // Object invariants (excluding most advanced options):
     //
     // Every name resolves:
     // - Each KernelSpec::DFBBinding::dfb_spec_name names a spec in dataflow_buffers.
@@ -44,7 +44,11 @@ struct ProgramSpec {
     // - Each KernelSpec::ScratchpadBinding::scratchpad_spec_name names a spec in scratchpads.
     // - Each KernelSpec::TensorBinding::tensor_parameter_name names a parameter in tensor_parameters.
     // - Each name in WorkUnitSpec::kernels names a spec in kernels.
-    // - Each DataflowBufferSpec::borrowed_from, when set, names a parameter in tensor_parameters.
+    // - Each DataflowBufferSpec::borrowed_from, when set:
+    //   - A TensorParamName names a parameter in tensor_parameters.
+    //   - A RawAllocationParamName names a parameter in advanced_options.raw_allocation_parameters.
+    // - Each ScratchpadSpec::advanced_options.borrowed_from, when set, has an allocation name
+    //   that names a parameter in advanced_options.raw_allocation_parameters.
     //
     // Every declaration is used:
     // - Each kernel is listed by at least one WorkUnitSpec.

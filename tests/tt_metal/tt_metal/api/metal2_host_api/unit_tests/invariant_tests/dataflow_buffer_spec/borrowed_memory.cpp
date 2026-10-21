@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Local invariants of DataflowBufferSpec::borrowed_from (dataflow_buffer_spec.hpp): the TensorParameter it names is
-// L1-resident, not per-node allocated, and large enough to hold the DFB.
+// Local invariants of DFB borrowed memory: L1 tensor backing without per-node allocation,
+// raw-allocation backing, node coverage, capacity, and borrowing offsets.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -126,6 +126,208 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNdShardLargerThanWholeTensorS
         tensor_spec.compute_packed_buffer_size_bytes());
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtZeroOffset) {
+    // `entry_size * num_entries` may equal the allocation’s per-node capacity.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = 0;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtNonzeroOffset) {
+    // An aligned offset is allowed, and `offset + entry_size * num_entries` may equal capacity.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = alignment;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 3 * alignment,
+            },
+    }};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExtraAllocationNodes) {
+    // The allocation may cover more nodes than the DFB occupies.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = 0;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBMissingOccupiedNode) {
+    // The allocation must cover every node occupied by the DFB.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = 0;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment,
+            },
+    }};
+    spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("dfb"),
+            ::testing::ContainsRegex("(node|core|cover)"),
+            ::testing::Not(::testing::HasSubstr("not implemented")))));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExceedsCapacity) {
+    // Capacity must accommodate all entries, rather than just one entry.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = 0;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 2 * alignment - 1,
+            },
+    }};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("dfb"),
+            ::testing::ContainsRegex("(size|capacity|fit|exceed)"),
+            ::testing::Not(::testing::HasSubstr("not implemented")))));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetCausesOverrun) {
+    // The capacity check includes the offset, even when all entries fit without it.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = alignment;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 3 * alignment - 1,
+            },
+    }};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("dfb"),
+            ::testing::ContainsRegex("(size|capacity|fit|exceed)"),
+            ::testing::Not(::testing::HasSubstr("not implemented")))));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBMisalignedOffset) {
+    // The borrowing offset must satisfy L1 alignment, even when capacity is sufficient.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    ASSERT_GT(alignment, 1u);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = 1;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties =
+            RangeLockstepAllocationProperties{
+                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
+                .per_bank_size = 4 * alignment,
+            },
+    }};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("dfb"),
+            ::testing::ContainsRegex("align"),
+            ::testing::Not(::testing::HasSubstr("not implemented")))));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBAllBankLockstep) {
+    // DFB borrowing accepts the all-bank property alternative as well as range-lockstep.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = 0;
+    spec.advanced_options.raw_allocation_parameters = {RawAllocationParameter{
+        .unique_id = RawAllocationParamName{"arena"},
+        .properties = LockstepAllocationProperties{.per_bank_size = 2 * alignment},
+    }};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetWithoutBorrowing) {
+    // A DFB with no backing-memory reference must have zero borrowing offset.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters.clear();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = alignment;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("dfb"),
+            ::testing::ContainsRegex("offset"),
+            ::testing::Not(::testing::HasSubstr("not implemented")))));
+}
+
+TEST_F(ProgramSpecTestQuasar, RawAllocationDFBOffsetWithTensorBorrowing) {
+    // A tensor-backed DFB must have zero borrowing offset, even if a nonzero offset is aligned and fits.
+    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("tensor", Shape{1, 2 * alignment}, {1, 2 * alignment}, 1, Layout::ROW_MAJOR)};
+    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = alignment;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("dfb"),
+            ::testing::ContainsRegex("offset"),
+            ::testing::Not(::testing::HasSubstr("not implemented")))));
 }
 
 }  // namespace
