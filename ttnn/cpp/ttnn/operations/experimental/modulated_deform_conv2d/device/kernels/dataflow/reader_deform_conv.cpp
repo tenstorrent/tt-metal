@@ -344,15 +344,23 @@ void kernel_main() {
             // The mask logits follow the row's 2*K*K offsets.
             const tt_l1_ptr uint16_t* msk = off + 2 * kernel_positions;
             tt_l1_ptr uint32_t* row = geom + tile_element(r, 0);
-            // A kernel position's (dy, dx) pair is one aligned word of the row.
+            // A kernel position's (dy, dx) pair is one aligned word of the row. The row's loads all
+            // go out before its stores, which the compiler cannot move them past, so their latencies
+            // overlap.
             const tt_l1_ptr uint32_t* off_pairs = reinterpret_cast<const tt_l1_ptr uint32_t*>(off);
+            uint32_t pairs[kernel_positions];
+            uint16_t logits[kernel_positions];
+#pragma GCC unroll 32
+            for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+                pairs[kk] = off_pairs[kk];
+                logits[kk] = msk[kk];
+            }
 #pragma GCC unroll 32
             for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
                 tt_l1_ptr uint32_t* dst = row + tile_element(0, kk);
-                const uint32_t pair = off_pairs[kk];
-                dst[IN_DY * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pair));
-                dst[IN_DX * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pair >> 16));
-                dst[IN_MASK * TILE_ELEMENTS] = saturate_to_fp32(msk[kk]);
+                dst[IN_DY * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pairs[kk]));
+                dst[IN_DX * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pairs[kk] >> 16));
+                dst[IN_MASK * TILE_ELEMENTS] = saturate_to_fp32(logits[kk]);
             }
             // The window origin is the same at every kernel position; compute broadcasts column 0.
             row[IN_ORIGIN_Y * TILE_ELEMENTS] = origin_y;
