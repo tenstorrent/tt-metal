@@ -24,7 +24,39 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
+def to_device_tensor(t, dtype, device, mesh_mapper=None, memory_config=None, host_tilize=False):
+    """TILE-layout device tensor. `host_tilize` tilizes on the host and copies the result, so no device
+    op runs (from_torch with a device tilizes on it), which keeps a cache-miss-forbidden window clean."""
+    if not host_tilize:
+        return ttnn.from_torch(
+            t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, mesh_mapper=mesh_mapper
+        )
+    host = ttnn.from_torch(
+        t, dtype=dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper or ttnn.ReplicateTensorToMesh(device)
+    )
+    return ttnn.to_device(host, device, memory_config=memory_config)
+
+
+def make_ag_buffers(device, rows, K, dtype, count, poison=False, use_non_fused=False, host_tilize=False):
+    """`count` persistent all-gather buffers of `rows` x K per device, replicated over the mesh.
+    `poison` fills them with NaN so any read past the live rows shows up in the output."""
+    shape = (1, 1, rows, K) if use_non_fused else (rows, K)
+    fill = torch.full(shape, float("nan")) if poison else torch.zeros(shape)
+    return [
+        to_device_tensor(
+            fill,
+            dtype,
+            device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            host_tilize=host_tilize,
+        )
+        for _ in range(count)
+    ]
+
+
 def assert_quality(torch_output, tt_output):
+    assert torch.isfinite(tt_output).all(), "non-finite values in the op output"
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
     logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
@@ -78,15 +110,22 @@ def run_test_linear_impl(
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
     share_addcmul_inputs=False,
+    transpose_core_grid=None,
+    ccl_semaphore_handles=None,
+    barrier_semaphore_handles=None,
+    persistent_output_buffers=None,
+    ag_buffer_rows=None,
+    host_tilize=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
     )
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(device, num_devices, ccl_cores, 0) for _ in range(num_iters)]
-
-    barrier_semaphore_handles = [ttnn.create_global_semaphore(device, ccl_cores, 0) for _ in range(num_iters)]
+    # Semaphores and persistent buffers may be handed in so several calls share (and alternate) them.
+    if ccl_semaphore_handles is None:
+        ccl_semaphore_handles = [create_global_semaphores(device, num_devices, ccl_cores, 0) for _ in range(num_iters)]
+    if barrier_semaphore_handles is None:
+        barrier_semaphore_handles = [ttnn.create_global_semaphore(device, ccl_cores, 0) for _ in range(num_iters)]
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
@@ -97,20 +136,20 @@ def run_test_linear_impl(
         # weight is the packed [gate|up] of width 2*out_N; the fused op emits out_N.
         N = N // 2
     per_device_M = M // device.shape[sp_axis]
-    if use_persistent_buffers:
-        persistent_output_buffers = [
-            ttnn.from_torch(
-                torch.zeros((1, 1, per_device_M, K), dtype=torch_dtype)
-                if use_non_fused
-                else torch.zeros((per_device_M, K), dtype=torch_dtype),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=input_dtype,
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None]),
-            )
-            for _ in range(num_iters)
-        ]
+    if persistent_output_buffers is not None:
+        use_persistent_buffers = True
+    elif use_persistent_buffers:
+        # A buffer taller than the live rows (ag_buffer_rows) is NaN-filled: the op must never read past M.
+        persistent_output_buffers = make_ag_buffers(
+            device,
+            ag_buffer_rows or per_device_M,
+            K,
+            input_dtype,
+            num_iters,
+            poison=ag_buffer_rows is not None,
+            use_non_fused=use_non_fused,
+            host_tilize=host_tilize,
+        )
     else:
         persistent_output_buffers = []
 
@@ -131,30 +170,26 @@ def run_test_linear_impl(
                 shard_dims = [sp_axis + 2, None]
             else:
                 shard_dims = [sp_axis, None]
-        tt_addcmul_a = ttnn.from_torch(
+        tt_addcmul_a = to_device_tensor(
             torch_addcmul_a,
-            dtype=input_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=residual_memory_config,
+            input_dtype,
+            device,
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+            memory_config=residual_memory_config,
+            host_tilize=host_tilize,
         )
         if broadcast_gate:
-            tt_addcmul_b = ttnn.from_torch(
-                torch_addcmul_b,
-                dtype=input_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=gate_memory_config,
+            tt_addcmul_b = to_device_tensor(
+                torch_addcmul_b, input_dtype, device, memory_config=gate_memory_config, host_tilize=host_tilize
             )
         else:
-            tt_addcmul_b = ttnn.from_torch(
+            tt_addcmul_b = to_device_tensor(
                 torch_addcmul_b,
-                dtype=input_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=gate_memory_config,
+                input_dtype,
+                device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+                memory_config=gate_memory_config,
+                host_tilize=host_tilize,
             )
     else:
         tt_addcmul_a = None
@@ -264,7 +299,7 @@ def run_test_linear_impl(
                 fused_activation=activation_fn,
                 compute_kernel_config=compute_config,
                 config=matmul_config,
-                persistent_output_buffer=persistent_output_buffers[i],
+                persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 topology=topology,
@@ -279,6 +314,7 @@ def run_test_linear_impl(
                 chunks=chunks,
                 chunk_sizes=list(chunk_sizes) if chunk_sizes else [],
                 fuse_swiglu=fuse_swiglu,
+                transpose_core_grid=transpose_core_grid,
             )
 
         return tt_output
@@ -418,6 +454,13 @@ def run_test_linear(
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
     share_addcmul_inputs=False,
+    use_persistent_buffers=True,
+    transpose_core_grid=None,
+    ccl_semaphore_handles=None,
+    barrier_semaphore_handles=None,
+    persistent_output_buffers=None,
+    ag_buffer_rows=None,
+    host_tilize=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -466,12 +509,12 @@ def run_test_linear(
         shard_dims = [0, 0]
         shard_dims[cluster_axis] = 1  # K on cluster_axis
         shard_dims[1 - cluster_axis] = 0  # M on the other axis
-    tt_input = ttnn.from_torch(
+    tt_input = to_device_tensor(
         torch_input,
-        dtype=dtype,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
+        dtype,
+        device,
         mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+        host_tilize=host_tilize,
     )
 
     # Fused SwiGLU: tile-pair interleave the (replicated) weight/bias so each ring device's
@@ -485,10 +528,10 @@ def run_test_linear(
         if use_bias:
             bias_to_load = prepare_for_fused_swiglu(bias_input.reshape(1, -1), ndev=ring_size).reshape(bias_input.shape)
 
-    tt_weight = ttnn.from_torch(weight_to_load, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = to_device_tensor(weight_to_load, weight_dtype or dtype, device, host_tilize=host_tilize)
     tt_bias = None
     if use_bias:
-        tt_bias = ttnn.from_torch(bias_to_load, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = to_device_tensor(bias_to_load, bias_dtype or dtype, device, host_tilize=host_tilize)
 
     return run_test_linear_impl(
         device=device,
@@ -533,6 +576,13 @@ def run_test_linear(
         gate_memory_config=gate_memory_config,
         num_buffers_per_channel=num_buffers_per_channel,
         share_addcmul_inputs=share_addcmul_inputs,
+        use_persistent_buffers=use_persistent_buffers,
+        transpose_core_grid=transpose_core_grid,
+        ccl_semaphore_handles=ccl_semaphore_handles,
+        barrier_semaphore_handles=barrier_semaphore_handles,
+        persistent_output_buffers=persistent_output_buffers,
+        ag_buffer_rows=ag_buffer_rows,
+        host_tilize=host_tilize,
     )
 
 
