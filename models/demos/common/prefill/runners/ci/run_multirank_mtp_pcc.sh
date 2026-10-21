@@ -21,7 +21,9 @@ CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
-PCC_THRESHOLD=0.85
+# Trunk KVPE floor for the packed scaled-FP8 cache: quantizing the latent costs ~0.013 at depth
+# (MTP1 SC1 trunk 0.8426 on FP8 vs 0.8555 on bf16), so this matches run_multirank_pcc.sh's glm53 floor.
+PCC_THRESHOLD=0.83
 # The MTP levels are decoder blocks chained on the trunk output, so their KV inherits the trunk error
 # and adds one block's worth per level. GLM-5.3 drifts ~0.03/level against its own CPU reference
 # (test_mtp.py L4: KVPE 0.874 vs GLM-5.2 0.903), which puts 7 levels at ~0.83 while the trunk itself
