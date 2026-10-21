@@ -1,0 +1,2 @@
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py
+tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_layernorm_post_allgather.py
