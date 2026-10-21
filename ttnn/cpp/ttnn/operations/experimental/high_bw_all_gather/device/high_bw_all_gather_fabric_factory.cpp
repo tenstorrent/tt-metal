@@ -735,9 +735,11 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
 
     // Shards-arrived counter (data_valid_semaphore) and downstream-started counter (ready_semaphore, the fence), at one
     // address on every core of every chip.
-    const bool has_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
-    const auto counter_buffer_type = has_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    const auto counter_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     const bool external_counters = args.ready_semaphore.has_value();
+    if (!external_counters) {
+        ttnn::ccl::warn_if_semaphores_fall_back_to_l1(counter_buffer_type);
+    }
     auto downstream_started_counter = external_counters ? *args.ready_semaphore
                                                         : ttnn::global_semaphore::create_global_semaphore(
                                                               mesh_device, available_cores, 0, counter_buffer_type);
