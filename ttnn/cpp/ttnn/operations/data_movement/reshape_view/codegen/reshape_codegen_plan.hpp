@@ -62,8 +62,8 @@ tt::tt_metal::TensorSpec output_spec(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // L1 window independent of live occupancy: the L1 bank (allocator range less L1_SMALL) minus the per-bank footprint
-// of the input and output when they live in L1. Routing and validation gate on the smallest plan fitting it, so the
-// route never moves with live occupancy; which plan the program is built with is live_tile_choice's decision.
+// of the input and output when they live in L1. Routing gates on the smallest plan fitting it, so the route never
+// moves with live occupancy; which plan the program is built with is live_tile_choice's decision.
 uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec);
 
 // The plan the program is built with: `planned` when its buffers fit the L1 free below the lowest live allocation,

@@ -566,17 +566,24 @@ namespace {
 
 enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
 
-// supported_by_codegen covers what the codegen prim carries; the padded shape and pad_value are free-function
-// arguments it never sees, so they are checked here.
-bool codegen_can_serve(
+// The codegen plan when routing should take it. The padded shape and pad_value are free-function arguments the prim
+// never sees, so call_contract_violation checks them here.
+std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     const std::optional<PadValue>& pad_value,
     const MemoryConfig& mem_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) == nullptr &&
-           reshape_codegen::supported_by_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+    if (!operations::data_movement::codegen_supported_on_arch(tensor) ||
+        reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) != nullptr) {
+        return std::nullopt;
+    }
+    auto route = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+    if (route.demoted) {
+        return std::nullopt;
+    }
+    return std::move(route.plan);
 }
 
 ttnn::Tensor reshape_dispatch(
@@ -601,7 +608,9 @@ ttnn::Tensor reshape_dispatch(
         const char* violation =
             reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);
         TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
-        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+        auto route = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+        TT_FATAL(route.plan.has_value(), "reshape_force_codegen: outside the codegen scope: {}", route.violation);
+        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*route.plan));
     }
 
     // No reshape required only when the shape AND the memory config are unchanged. A same-shape
@@ -751,10 +760,11 @@ ttnn::Tensor reshape_dispatch(
         return operations::data_movement::PerformView(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
-    if (impl == ReshapeImpl::ROUTED && operations::data_movement::codegen_supported_on_arch(tensor) &&
-        codegen_can_serve(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid) &&
-        !reshape_codegen::is_demoted(tensor, logical_shape, mem_config, sub_core_grid)) {
-        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+    if (impl == ReshapeImpl::ROUTED) {
+        if (auto plan =
+                routed_codegen_plan(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid)) {
+            return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
+        }
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558

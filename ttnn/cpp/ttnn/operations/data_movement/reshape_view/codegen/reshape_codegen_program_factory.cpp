@@ -234,11 +234,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
         ttnn::operations::data_movement::get_max_l1_space(input));
     auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
     const rcg::TileRowsLayout layout = plan.layout;
-    TT_FATAL(
-        tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
-        "Reshape output has {} tiles, the tile-row plan expects {}",
-        tensor_return_value.buffer()->num_pages(),
-        layout.num_output_pages);
+    TT_ASSERT(tensor_return_value.buffer()->num_pages() == layout.num_output_pages);
 
     const auto plan_owner = upload_table(std::move(plan.table), layout.num_batches, layout.page_words, input);
     return table_workload(
@@ -269,11 +265,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_
         "tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
     const rcg::TileMappedLayout& layout = mapped->layout;
-    TT_FATAL(
-        tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
-        "Reshape output has {} tiles, the segment map expects {}",
-        tensor_return_value.buffer()->num_pages(),
-        layout.num_output_pages);
+    TT_ASSERT(tensor_return_value.buffer()->num_pages() == layout.num_output_pages);
 
     auto plan = rcg::build_tile_mapped_plan(
         input.logical_shape(),
