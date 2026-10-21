@@ -231,9 +231,11 @@ plus a factory beside the others in
 NewArchDataTransferBlocks = partial(DataTransferBlocks, NewArch())
 ```
 
-`partial`, not a plain function: a function assigned to a class attribute
-becomes a *method*, so `self.blocks_class()` in the operations layer would pass
-`self` as the architecture and raise.
+`partial`, not a plain function. A plain function is a descriptor, so assigning
+one as a **class attribute** binds it as a method and passes `self` as the
+architecture. A dataclass field — how the operations layer holds these — stores
+on the instance and is safe either way, but `partial` is safe in both places
+and accepts the `__name__`/`__doc__` the factories carry.
 
 ### When a unit's behaviour genuinely differs
 
