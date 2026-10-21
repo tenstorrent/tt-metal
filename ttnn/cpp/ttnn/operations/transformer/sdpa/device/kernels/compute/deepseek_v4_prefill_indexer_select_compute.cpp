@@ -10,6 +10,8 @@
 // The leader merges the other splits' survivors and emits the indices, invisible slots as 0xFFFFFFFF.
 // Candidate mode instead folds each chunk of CAND_TOPK candidate-block maxima (staged by the writer) into the
 // query's running top-CAND_TOPK candidate blocks, and the leader emits those ids.
+// Pool mode runs the entry selection for one query per unit over its pool (unsplit), scored as relu(q . k^T) on
+// [heads, keys] tiles reduced over the heads by a gate-row matmul.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -91,6 +93,11 @@ constexpr uint32_t cb_stage = get_compile_time_arg_val(dis::compute_ct_arg::CB_S
 constexpr uint32_t cb_csurv_in = get_compile_time_arg_val(dis::compute_ct_arg::CB_CSURV_IN);
 constexpr uint32_t cb_csurv_out = get_compile_time_arg_val(dis::compute_ct_arg::CB_CSURV_OUT);
 constexpr uint32_t cb_cand_out = get_compile_time_arg_val(dis::compute_ct_arg::CB_CAND_OUT);
+constexpr bool pool = get_compile_time_arg_val(dis::compute_ct_arg::POOL) != 0;
+// Queries per work unit, and the unit's q / gate tiles.
+constexpr uint32_t rows = pool ? 1 : dis::ROWS;
+constexpr uint32_t q_tiles = pool ? head_dim_tiles : num_heads * head_dim_tiles;
+constexpr uint32_t w_tiles = pool ? 1 : num_heads;
 
 constexpr uint32_t K = dis::TOPK;
 constexpr uint32_t CK = dis::CAND_TOPK;
@@ -162,6 +169,52 @@ void score_step(uint32_t step) {
     tile_regs_release();
     pack_untilize_uninit(cb_scores);
     qk.pop_front(step_qk_tiles);
+}
+
+// Pool mode: one query, q as [heads, dims] tiles. relu(q . k^T) is [heads, keys] per key tile; the gate row
+// (row 0 of cb_w) times it sums the heads into row 0, untilized into the query's score row (the other rows of the
+// slots are zero and unused).
+void score_step_pool(uint32_t step) {
+    compute_kernel_lib::tilize<head_dim_tiles, cb_k_rm, cb_k>(step_tiles, step_tiles * TILE_R_DIM);
+
+    CircularBuffer k(cb_k), qk(cb_qk);
+    k.wait_front(step_tiles * head_dim_tiles);
+    reconfig_data_format(cb_k, cb_q);
+    pack_reconfig_data_format(cb_qk);
+    matmul_block_init(cb_q, cb_k, 1 /*transpose k*/, 1, 1, head_dim_tiles);
+    pack_relu_config(ReluConfig::zero());
+    qk.reserve_back(step_tiles);
+    tile_regs_acquire();
+    for (uint32_t col = 0; col < step_tiles; ++col) {
+        for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+            matmul_block(cb_q, cb_k, d, col * head_dim_tiles + d, col, 1 /*transpose k*/, 1, 1, head_dim_tiles);
+        }
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t col = 0; col < step_tiles; ++col) {
+        pack_tile(col, cb_qk);
+    }
+    tile_regs_release();
+    qk.push_back(step_tiles);
+    k.pop_front(step_tiles * head_dim_tiles);
+    pack_relu_config(ReluConfig::none());
+
+    reconfig_data_format(cb_qk, cb_w);
+    matmul_block_init(cb_w, cb_qk, 0, 1, 1, 1);
+    pack_reconfig_data_format(cb_scores);
+    pack_untilize_dest_init<step_tiles, score_row_tiles>(cb_scores);
+    qk.wait_front(step_tiles);
+    tile_regs_acquire();
+    for (uint32_t col = 0; col < step_tiles; ++col) {
+        matmul_block(cb_w, cb_qk, 0, col, col, 0, 1, 1, 1);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_untilize_dest<step_tiles, score_row_tiles>(cb_scores, 1, step);
+    tile_regs_release();
+    pack_untilize_uninit(cb_scores);
+    qk.pop_front(step_tiles);
 }
 
 // Sorts one chunk at DST dst into [values, indices] at dst, dst + 1, indices offset by entry base. The global
@@ -401,12 +454,12 @@ void kernel_main() {
         const uint32_t num_blocks = read_tile_value(cb_meta, 0, dis::meta_word::NUM_BLOCKS);
         const uint32_t first_entry = read_tile_value(cb_meta, 0, dis::meta_word::FIRST_ENTRY);
         const uint32_t tile_blocks = read_tile_value(cb_meta, 0, dis::meta_word::TILE_BLOCKS);
-        uint32_t limits[dis::ROWS];
-        for (uint32_t s = 0; s < dis::ROWS; ++s) {
+        uint32_t limits[rows];
+        for (uint32_t s = 0; s < rows; ++s) {
             limits[s] = read_tile_value(cb_meta, 0, dis::meta_word::LIMITS + s);
         }
-        q.wait_front(num_heads * head_dim_tiles);
-        w.wait_front(num_heads);
+        q.wait_front(q_tiles);
+        w.wait_front(w_tiles);
 
         // Groups are aligned to absolute multiples of GROUP_BLOCKS blocks, so a group's entry base is a multiple of
         // GROUP_BLOCKS * K and ORs onto the decoded in-group index.
@@ -420,7 +473,11 @@ void kernel_main() {
             for (uint32_t b = 0; b < group_blocks; ++b) {
                 scores.reserve_back(dis::ROWS);
                 for (uint32_t step = 0; step < steps_per_block; ++step) {
-                    score_step(step);
+                    if constexpr (pool) {
+                        score_step_pool(step);
+                    } else {
+                        score_step(step);
+                    }
                 }
                 scores.push_back(dis::ROWS);
             }
@@ -441,7 +498,7 @@ void kernel_main() {
                     const uint32_t chunk = group / dis::CAND_CHUNK_BLOCKS;
                     CircularBuffer stage(cb_stage);
                     stage.wait_front(dis::ROWS * stage_row_tiles);
-                    for (uint32_t s = 0; s < dis::ROWS; ++s) {
+                    for (uint32_t s = 0; s < rows; ++s) {
                         const uint32_t active = dis::cand_active(limits[s], chunk, first_block, end_block);
                         if (active == 0) {
                             continue;
@@ -460,7 +517,7 @@ void kernel_main() {
                 continue;
             }
             scores.wait_front(dis::GROUP_BLOCKS * dis::ROWS);
-            for (uint32_t s = 0; s < dis::ROWS; ++s) {
+            for (uint32_t s = 0; s < rows; ++s) {
                 // Query s sees blocks [first_block, row_end) of the split; its last one finishes its survivor.
                 const uint32_t seen_blocks = (limits[s] + K - 1) / K;
                 const uint32_t row_end = seen_blocks < end_block ? seen_blocks : end_block;
@@ -486,27 +543,27 @@ void kernel_main() {
         }
         if constexpr (candidates) {
             if (split == 0 || num_blocks > 0) {
-                for (uint32_t s = 0; s < dis::ROWS; ++s) {
+                for (uint32_t s = 0; s < rows; ++s) {
                     if (!cand_seeded[s]) {
                         cand_seed(split != 0);
                     }
                 }
             }
             if (split == 0) {
-                for (uint32_t s = 0; s < dis::ROWS; ++s) {
+                for (uint32_t s = 0; s < rows; ++s) {
                     cand_emit(tile_blocks);
                 }
             }
         } else if (split == 0) {
-            for (uint32_t s = 0; s < dis::ROWS; ++s) {
+            for (uint32_t s = 0; s < rows; ++s) {
                 emit_row(s, tile_blocks);
             }
         } else if (num_blocks > 0) {
             done.reserve_back(1);
             done.push_back(1);
         }
-        q.pop_front(num_heads * head_dim_tiles);
-        w.pop_front(num_heads);
+        q.pop_front(q_tiles);
+        w.pop_front(w_tiles);
         meta.pop_front(1);
     }
 }

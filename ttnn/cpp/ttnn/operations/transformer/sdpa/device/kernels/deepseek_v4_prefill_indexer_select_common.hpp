@@ -59,6 +59,14 @@ inline bool cand_last_chunk(uint32_t limit, uint32_t chunk, uint32_t end_block) 
     return (chunk + 1) * CAND_TOPK >= hi;
 }
 
+// Pool mode (the two-level select's level two): the work unit is one query, scored against only the entries of
+// its candidate blocks (its pool, at most CAND_TOPK * CAND_BLOCK entries) and selecting the top TOPK of them.
+// Pool position p is entry list[p / CAND_BLOCK] * CAND_BLOCK + p % CAND_BLOCK, list being the query's visible
+// candidate blocks with the one holding its newest entry (the only partial one) last.
+constexpr uint32_t POOL_LIST_WORDS = 16;  // header words before the list
+constexpr uint32_t POOL_LIST_PAGE_BYTES = (POOL_LIST_WORDS + CAND_TOPK) * sizeof(uint32_t);
+constexpr uint32_t POOL_PIECE_BYTES = 64;  // aligned read holding one 16-datum face row of a bf16 tile
+
 // Reader -> compute mailbox (and its copy to the writer), one page per work unit (uint32 words).
 namespace meta_word {
 enum : uint32_t {
@@ -165,8 +173,41 @@ enum : uint32_t {
     CB_CSURV_IN,
     CB_CSURV_OUT,
     CB_CAND_OUT,
+    POOL,  // 1: pool mode (one query per unit, q as [heads, dims] tiles, one gate tile)
     END,
 };
+}
+
+// Pool mode: per-core runtime args of its reader and writer (compute takes core_arg, one query per "tile").
+namespace pool_core_arg {
+enum : uint32_t { FIRST_QUERY, NUM_QUERIES, END };
+}
+namespace pool_reader_common_arg {
+enum : uint32_t { Q_ADDRESS, W_ADDRESS, KEYS_ADDRESS, START_ADDRESS, CANDS_ADDRESS, NUM_ENTRIES, END };
+}
+namespace pool_writer_common_arg {
+enum : uint32_t { OUTPUT_ADDRESS, END };
+}
+namespace pool_reader_ct_arg {
+enum : uint32_t {
+    NUM_HEADS = 0,
+    HEAD_DIM,
+    NUM_TOKENS,
+    RATE,
+    CB_Q,
+    CB_W,
+    CB_K_RM,
+    CB_NEGINF,
+    CB_META,
+    CB_START,
+    CB_LIST,    // reader -> writer: the query's pool list
+    CB_BOUNCE,  // reader scratch: aligned reads of q and gate rows
+    CB_CANDS,   // reader scratch: the query's candidate row
+    END,
+};
+}
+namespace pool_writer_ct_arg {
+enum : uint32_t { CB_OUT = 0, CB_LIST, END };
 }
 
 }  // namespace deepseek_v4_prefill_indexer_select

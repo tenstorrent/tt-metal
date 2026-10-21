@@ -47,8 +47,22 @@ void validate_non_hashed(const DeepseekV4PrefillIndexerSelectInputs& t) {
         t.q.logical_shape()[3],
         ks);
     TT_FATAL(t.idx_keys.padded_shape() == ks, "deepseek_v4_prefill_indexer_select: idx_keys must not be padded");
+    if (t.candidates.has_value()) {
+        check_dram(*t.candidates, Layout::ROW_MAJOR, "candidates");
+        TT_FATAL(
+            t.candidates->device() == device, "deepseek_v4_prefill_indexer_select: candidates must be on q's device");
+    }
 }
 }  // namespace
+
+DeepseekV4PrefillIndexerSelectOperation::program_factory_t
+DeepseekV4PrefillIndexerSelectOperation::select_program_factory(
+    const DeepseekV4PrefillIndexerSelectParams& /*attrs*/, const DeepseekV4PrefillIndexerSelectInputs& t) {
+    if (t.candidates.has_value()) {
+        return PoolProgramFactory{};
+    }
+    return ProgramFactory{};
+}
 
 uint32_t deepseek_v4_prefill_indexer_select_num_splits(uint32_t num_q_tiles, uint32_t num_cores) {
     return std::clamp<uint32_t>(num_cores / num_q_tiles, 1, dis::MAX_SPLITS);
@@ -103,6 +117,18 @@ void DeepseekV4PrefillIndexerSelectOperation::validate_on_program_cache_miss(
     TT_FATAL(
         (D * sizeof(uint16_t)) % tt::tt_metal::hal::get_dram_alignment() == 0,
         "deepseek_v4_prefill_indexer_select: idx_keys row bytes must be DRAM aligned");
+    if (t.candidates.has_value()) {
+        TT_FATAL(!attrs.candidates, "deepseek_v4_prefill_indexer_select: pool mode does not select candidates");
+        TT_FATAL(H == tile, "deepseek_v4_prefill_indexer_select: pool mode needs H == {} (got {})", tile, H);
+        TT_FATAL(
+            t.candidates->dtype() == DataType::UINT32, "deepseek_v4_prefill_indexer_select: candidates must be uint32");
+        TT_FATAL(
+            t.candidates->logical_shape() == ttnn::Shape({1, 1, T, dis::CAND_TOPK}),
+            "deepseek_v4_prefill_indexer_select: candidates must be [1, 1, {}, {}] (got {})",
+            T,
+            dis::CAND_TOPK,
+            t.candidates->logical_shape());
+    }
 }
 
 DeepseekV4PrefillIndexerSelectOperation::spec_return_value_t
@@ -119,7 +145,9 @@ DeepseekV4PrefillIndexerSelectOperation::compute_output_specs(
             shape, tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram));
     };
     // Scratch page (peer, query, value / index) holds one fp32 tile.
-    const uint32_t scratch_pages = attrs.candidates ? 1 : std::max<uint32_t>(1, (splits - 1) * T * 2);
+    // Pool mode does not split a query's work.
+    const uint32_t scratch_pages =
+        attrs.candidates || t.candidates.has_value() ? 1 : std::max<uint32_t>(1, (splits - 1) * T * 2);
     // Candidate scratch page (split, query, survivor tile) holds one fp32 tile.
     const uint32_t rows = attrs.candidates ? 1 : T;
     const uint32_t cand_rows = attrs.candidates ? T : 1;
@@ -147,7 +175,12 @@ ttsl::hash::hash_t DeepseekV4PrefillIndexerSelectOperation::compute_program_hash
     const DeepseekV4PrefillIndexerSelectParams& attrs, const DeepseekV4PrefillIndexerSelectInputs& t) {
     // idx_keys' entry count E rides on a runtime arg, so a longer buffer reuses the program.
     return tt::tt_metal::operation::hash_operation<DeepseekV4PrefillIndexerSelectOperation>(
-        attrs.compress_ratio, attrs.candidates, attrs.compute_kernel_config, t.q.logical_shape(), t.start.dtype());
+        attrs.compress_ratio,
+        attrs.candidates,
+        attrs.compute_kernel_config,
+        t.q.logical_shape(),
+        t.start.dtype(),
+        t.candidates.has_value());
 }
 
 Tensor deepseek_v4_prefill_indexer_select(
@@ -155,6 +188,7 @@ Tensor deepseek_v4_prefill_indexer_select(
     const Tensor& weights,
     const Tensor& idx_keys,
     const Tensor& start,
+    const std::optional<Tensor>& pool,
     uint32_t compress_ratio,
     bool candidates,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
@@ -170,6 +204,7 @@ Tensor deepseek_v4_prefill_indexer_select(
             .weights = weights,
             .idx_keys = idx_keys,
             .start = start,
+            .candidates = pool,
         });
     return candidates ? outputs[2] : outputs[0];
 }

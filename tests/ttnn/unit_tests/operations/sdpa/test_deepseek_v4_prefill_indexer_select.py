@@ -11,6 +11,7 @@ from models.common.utility_functions import run_for_blackhole
 from ttnn.operations.transformer_golden import (
     MASKED_INDEX,
     deepseek_v4_prefill_indexer_candidate_scores,
+    deepseek_v4_prefill_indexer_pool_scores,
     deepseek_v4_prefill_indexer_scores,
 )
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import to_dev
@@ -52,27 +53,30 @@ def run(device, q, weights, keys, start, rate):
     return ttnn.to_torch(out).to(torch.int64).reshape(q.shape[2], TOPK) & 0xFFFFFFFF
 
 
-def check(indices, q, weights, keys, start, rate):
-    """Per query: exactly min(512, visible) distinct visible entries, the rest sentinels, and a selection whose
-    reference scores match the reference top-512's up to bf16 near-ties at the cut."""
+def check(indices, q, weights, keys, start, rate, candidates=None):
+    """Per query: exactly min(512, eligible) distinct eligible entries, the rest sentinels, and a selection whose
+    reference scores match the reference top-512's up to bf16 near-ties at the cut. Eligible entries are the visible
+    ones, within the query's candidate blocks when given."""
     scores = deepseek_v4_prefill_indexer_scores(q, weights, keys, start, rate)
-    T, E = scores.shape
-    limits = ((start + torch.arange(T) + 1) // rate).clamp(max=E)
+    if candidates is not None:
+        scores = deepseek_v4_prefill_indexer_pool_scores(scores, candidates)
+    T = scores.shape[0]
+    eligible = scores > float("-inf")
     worst_recall = 1.0
     for s in range(T):
         row = indices[s]
         valid = row[row != MASKED_INDEX]
-        n = min(TOPK, int(limits[s]))
+        n = min(TOPK, int(eligible[s].sum()))
         assert valid.numel() == n, f"query {s}: {valid.numel()} valid slots, expected {n}"
         if n == 0:
             continue
         assert valid.unique().numel() == n, f"query {s}: duplicate indices"
-        assert int(valid.max()) < int(limits[s]), f"query {s}: selected an entry it cannot see"
-        ref_values, ref_idx = scores[s, : limits[s]].topk(n)
+        assert int(valid.max()) < scores.shape[1] and bool(eligible[s, valid].all()), f"query {s}: ineligible entry"
+        ref_values, ref_idx = scores[s].topk(n)
         got = scores[s, valid]
         # Device scores are bf16 products at HiFi2 (like indexer_score_dsa's default): anything selected must be
         # within that rounding (relative to the row's score magnitude) of the reference cut.
-        tol = 4e-2 * scores[s, : limits[s]].abs().max() + 1e-6
+        tol = 4e-2 * scores[s, eligible[s]].abs().max() + 1e-6
         assert got.min() >= ref_values[-1] - tol, f"query {s}: selected {got.min()} below the cut {ref_values[-1]}"
         assert got.sum() >= ref_values.sum() - n * tol / 8, f"query {s}: selection score sum too low"
         recall = len(set(valid.tolist()) & set(ref_idx.tolist())) / n
@@ -174,6 +178,42 @@ def test_deepseek_v4_prefill_indexer_select_candidates(device, T, E, start, rate
     )
     cand = ttnn.to_torch(cand).to(torch.int64).reshape(T, CAND_TOPK) & 0xFFFFFFFF
     check_candidates(cand, q, weights, keys, start, rate)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "T, E, start, rate",
+    [
+        (32, 512, 0, 1),  # first chunk: the pool is every visible entry
+        (32, 600, 0, 4),  # queries 0..2 see nothing
+        (64, 1536, 1400, 1),
+        (32, 20000, 19900, 1),  # pools of 2048 blocks, the newest partial
+        (128, 40000, 75000, 2),
+        (2048, 2048, 0, 2),
+    ],
+)
+def test_deepseek_v4_prefill_indexer_select_from_candidates(device, T, E, start, rate):
+    """The two-level select: a consumer's top-512 among the source's candidate blocks. Here the consumer scores with
+    other q / gates than the source (as a later layer does); with the source's own, it is the plain top-512."""
+    q, weights, keys = make_inputs(T, E, seed=4)
+    q_c, weights_c, _ = make_inputs(T, E, seed=5)
+    keys_tt, start_tt = to_dev(keys, device, ttnn.bfloat16), start_tensor(start, device)
+    cand_tt = ttnn.transformer.deepseek_v4_prefill_indexer_select_candidates(
+        to_tile(q, device), to_tile(weights, device), keys_tt, start_tt, compress_ratio=rate
+    )
+    cand = ttnn.to_torch(cand_tt).to(torch.int64).reshape(T, CAND_TOPK) & 0xFFFFFFFF
+
+    pooled = ttnn.transformer.deepseek_v4_prefill_indexer_select_from_candidates(
+        to_tile(q_c, device), to_tile(weights_c, device), keys_tt, start_tt, cand_tt, compress_ratio=rate
+    )
+    pooled = ttnn.to_torch(pooled).to(torch.int64).reshape(T, TOPK) & 0xFFFFFFFF
+    check(pooled, q_c, weights_c, keys, start, rate, candidates=cand)
+
+    own = ttnn.transformer.deepseek_v4_prefill_indexer_select_from_candidates(
+        to_tile(q, device), to_tile(weights, device), keys_tt, start_tt, cand_tt, compress_ratio=rate
+    )
+    own = ttnn.to_torch(own).to(torch.int64).reshape(T, TOPK) & 0xFFFFFFFF
+    check(own, q, weights, keys, start, rate)
 
 
 @run_for_blackhole()
