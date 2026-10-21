@@ -6,7 +6,8 @@ set -euo pipefail
 
 MODEL="${1:-glm53}"
 CONFIG="${2:-sc4}"
-LEVELS="${3:-4}"
+# The manifest's name after "${MODEL}_", e.g. mtp4 or mtp_kv_share.
+VARIANT="${3:-mtp4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -50,14 +51,14 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
 fi
 RUNNER_NUM_USERS_EXPORT="${RUNNER_NUM_USERS:+export PREFILL_NUM_USERS=${RUNNER_NUM_USERS}; }"
 
-MANIFEST="${MANIFEST_DIR}/${MODEL}_mtp${LEVELS}.json"
-[ -f "${MANIFEST}" ] || { echo "no manifest for ${MODEL} MTP${LEVELS} at ${MANIFEST}" >&2; exit 2; }
+MANIFEST="${MANIFEST_DIR}/${MODEL}_${VARIANT}.json"
+[ -f "${MANIFEST}" ] || { echo "no manifest ${MODEL}_${VARIANT}.json in ${MANIFEST_DIR}" >&2; exit 2; }
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 
 NUM_LAYERS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"]["PREFILL_NUM_LAYERS"])' "${MANIFEST}")
 MTP_LEVELS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"]["PREFILL_MTP_LEVELS"])' "${MANIFEST}")
-[ "${MTP_LEVELS}" = "${LEVELS}" ] || { echo "${MANIFEST} declares PREFILL_MTP_LEVELS=${MTP_LEVELS}, not ${LEVELS}" >&2; exit 2; }
+[ "${MTP_LEVELS}" -ge 1 ] 2>/dev/null || { echo "${MANIFEST} declares PREFILL_MTP_LEVELS=${MTP_LEVELS}; this launcher needs at least 1" >&2; exit 2; }
 
 TRUNK_TRACE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
 MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
@@ -71,7 +72,7 @@ RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
-MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_mtp${LEVELS}_ci_mr.XXXXXX")
+MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_${VARIANT}_ci_mr.XXXXXX")
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
@@ -115,7 +116,7 @@ cleanup() {
       --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
       --chunk-size "${CHUNK_SIZE}" \
       --probe-chunks "${PROBE_CHUNKS}" \
-      --summary-name "${MODEL}_mtp${LEVELS}_${CONFIG}" \
+      --summary-name "${MODEL}_${VARIANT}_${CONFIG}" \
       || echo "summary generation failed (non-fatal)"
   fi
   if [ -n "${PREFILL_KEEP_RUN_DIR:-}" ]; then
@@ -126,7 +127,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "resolved shape for ${MODEL} MTP${MTP_LEVELS}/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${RUNNER_NUM_USERS:-manifest} chunks=${REAL_CHUNKS}"
+echo "resolved shape for ${MODEL}_${VARIANT} (MTP${MTP_LEVELS})/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${RUNNER_NUM_USERS:-manifest} chunks=${REAL_CHUNKS}"
 
 cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
