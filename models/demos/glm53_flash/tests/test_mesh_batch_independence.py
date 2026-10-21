@@ -156,6 +156,19 @@ def test_mesh_batch_independence(mesh_device, layer_idx):
                         )
         logger.info(f"{name}: {'independent' if len(failures) == n0 else 'LEAK'} ({len(failures) - n0} mismatches)")
 
+    # same prompt in every slot: every slot's output must be bit-identical (the 1 M x 32-user runs showed slot 3 of a
+    # row diverging from slots 0-2 at near-ties while those three stayed identical: doc/mesh/README.md)
+    same = run([0] * B)
+    n0 = len(failures)
+    for t, out in enumerate(same):
+        for r in range(ROWS):
+            for u in range(1, B):
+                a, b = out[:, r * B], out[:, r * B + u]
+                if not torch.equal(a, b):
+                    failures.append(f"same prompt: step {t} row {r} slot {u} differs from slot 0 ({_first_diff(a, b)})")
+    logger.info(
+        f"same prompt in every slot: {'identical' if len(failures) == n0 else 'SLOTS DIFFER'} ({len(failures) - n0} mismatches)"
+    )
     last = list(base_assign)
     last[B - 1] = B  # another window in the last slot
     check_unchanged("last slot changed", last, B - 1)
