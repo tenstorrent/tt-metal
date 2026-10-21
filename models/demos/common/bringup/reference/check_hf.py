@@ -5,7 +5,8 @@
 
     python -m models.demos.common.bringup.reference.check_hf --spec S --seq 512 [--num-layers N]
 
-Records pcc_hidden_L{i:02d} per layer, pcc_logits, top1_match_frac, text_next_token_acc.
+Records pcc_hidden_L{i:02d} per layer, pcc_logits, top1_match_frac, text_next_token_acc for the reference's official
+numerics (the HF code's arithmetic; gated), and the same with a native_ prefix for the full-precision target (F132).
 ``--num-layers`` (or spec ``hf.parity_layers``) truncates both models to their first N layers, for checkpoints that
 do not fit in host memory in fp32. A layer subset that ends before the last layer defaults to N = its last layer + 1. Hooks the model may provide: ``hf_model(spec, num_layers)``, ``hf_layers(model)``.
 """
@@ -19,7 +20,7 @@ import torch
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.metrics import cpu_threads
-from models.demos.common.bringup.reference.golden import hf_path, load_spec, text_tokens
+from models.demos.common.bringup.reference.golden import hf_path, load_spec, reference_at, text_tokens
 
 
 def subset_prefix(spec) -> int | None:
@@ -86,31 +87,41 @@ def main(argv=None):
     hf_out, hf_logits = run_hf(spec, tokens, n)
 
     layers = list(range(n or spec.num_layers))
-    ref = spec.hooks().reference(spec, layers=layers, dtype=torch.float32)
+    # F132: the HF code is the official arithmetic (gated); the full-precision target is recorded beside it (native_)
+    for numerics, pre in (("official", ""), ("native", "native_")):
+        parity(spec, numerics, pre, layers, tokens, a.seq, hf_out, hf_logits)
+        gc.collect()
+    metrics.record("parity_layers", len(layers))
+
+
+def parity(spec, numerics, pre, layers, tokens, seq, hf_out, hf_logits) -> None:
+    ref = reference_at(spec, numerics, layers=layers)
     rec_out = {}
 
     def rec(name, t):
         if name.startswith("L") and name.endswith(".out"):
             rec_out[int(name[1:].split(".")[0])] = t.detach().clone()
 
-    state = ref.new_state(a.seq)
-    _, logits = ref.forward_chunk(tokens, 0, state, rec, logits_last_n=a.seq)
+    state = ref.new_state(seq)
+    _, logits = ref.forward_chunk(tokens, 0, state, rec, logits_last_n=seq)
     logits = logits.float()
 
     worst = 1.0
     for i in layers:
         p = metrics.pcc(rec_out[i], hf_out[i])
         worst = min(worst, p)
-        metrics.record(f"pcc_hidden_L{i:02d}", p)
-        print(f"L{i:02d} pcc={p:.7f} maxabs={(rec_out[i] - hf_out[i]).abs().max():.3e}")
+        metrics.record(f"{pre}pcc_hidden_L{i:02d}", p)
+        print(f"{numerics} L{i:02d} pcc={p:.7f} maxabs={(rec_out[i] - hf_out[i]).abs().max():.3e}")
     p_log = metrics.pcc(logits, hf_logits)
     top1 = (logits.argmax(-1) == hf_logits.argmax(-1)).float().mean().item()
     nxt = (logits[:-1].argmax(-1) == tokens[1:]).float().mean().item()
-    print(f"logits pcc={p_log:.7f} top1_match={top1:.4f} worst_layer={worst:.7f} next-token acc on text={nxt:.3f}")
-    metrics.record("pcc_logits", p_log)
-    metrics.record("top1_match_frac", top1)
-    metrics.record("text_next_token_acc", nxt)
-    metrics.record("parity_layers", len(layers))
+    print(
+        f"{numerics}: logits pcc={p_log:.7f} top1_match={top1:.4f} worst_layer={worst:.7f} next-token acc on "
+        f"text={nxt:.3f}"
+    )
+    metrics.record(f"{pre}pcc_logits", p_log)
+    metrics.record(f"{pre}top1_match_frac", top1)
+    metrics.record(f"{pre}text_next_token_acc", nxt)
 
 
 if __name__ == "__main__":

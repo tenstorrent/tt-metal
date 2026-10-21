@@ -57,27 +57,30 @@ def official_dir(spec: Spec, rung: dict) -> Path:
     return d.with_name(d.name + OFFICIAL_SUFFIX)
 
 
-def golden_numerics(spec: Spec) -> str:
-    """F128 (owner): goldens are the full-precision reference ('native'), unless the spec says otherwise."""
-    return str(spec.get("golden.numerics") or "native")
+TARGET_NUMERICS = "native"  # F128 / F132 (owner): the target of every check is the full-precision reference; no switch
+NUMERICS = ("native", "official")
 
 
-def reference_at(spec: Spec, numerics: str, **kw):
-    """The CPU reference at ``numerics`` ('native' = full precision, 'official' = the shipped code's roundings). A model
-    whose hooks.reference has no ``numerics`` switch has one arithmetic: allowed only when the spec declares it free of
-    parity roundings (``reference.no_rounding: true``); never a silent fallback to a rounded reference (F128)."""
+def reference_at(spec: Spec, numerics: str, *, layers=None, dtype=torch.float32):
+    """The only way into hooks.reference (F132): the CPU reference at ``numerics`` ('native' = full precision, the
+    target; 'official' = the shipped code's arithmetic, only for the margin). The hook must name a ``numerics``
+    parameter (a ``**kw``-only hook would take it and silently ignore it). A hook without one has one arithmetic:
+    allowed only when the spec declares it free of parity roundings (``reference.no_rounding: true``; F136 then checks
+    a margin exists); never a silent fallback (F128)."""
     import inspect
 
+    if numerics not in NUMERICS:
+        raise ValueError(f"numerics {numerics!r}, want one of {NUMERICS}")
     fn = spec.hooks().reference
-    params = inspect.signature(fn).parameters
-    if "numerics" in params or any(p.kind is p.VAR_KEYWORD for p in params.values()):
-        return fn(spec, numerics=numerics, **kw)
-    if numerics != "official" and not spec.get("reference.no_rounding"):
+    if "numerics" in inspect.signature(fn).parameters:
+        return fn(spec, layers=layers, dtype=dtype, numerics=numerics)
+    if not spec.get("reference.no_rounding"):
         raise SystemExit(
-            f"hooks.reference has no `numerics` switch, so it cannot run at {numerics!r} (full precision); add the "
-            "switch (the reference role), or set reference.no_rounding: true if its arithmetic rounds nothing (F128)"
+            f"hooks.reference has no `numerics` parameter, so it cannot run at {numerics!r}; add it (the reference "
+            "role: native = fp32 with every quantize-dequantize off, official = the shipped code's arithmetic), or "
+            "set reference.no_rounding: true if its arithmetic rounds nothing (F128, F132)"
         )
-    return fn(spec, **kw)
+    return fn(spec, layers=layers, dtype=dtype)
 
 
 def content_hash(d: Path) -> str:

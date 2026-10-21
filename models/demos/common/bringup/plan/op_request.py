@@ -294,7 +294,6 @@ def _source_of(fn) -> tuple[str, str]:
 
 def generate(spec, tid: str, op: str, force: bool = False) -> Path:
     """Write <bringup_dir>/op_requests/<op>/ for task tid: everything mechanical filled, the rest marked <<AGENT."""
-    import torch
 
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.spec import parse_layers
@@ -313,7 +312,9 @@ def generate(spec, tid: str, op: str, force: bool = False) -> Path:
         raise FileExistsError(f"{d} exists (use --force to rewrite it)")
     d.mkdir(parents=True, exist_ok=True)
 
-    ref = spec.hooks().reference(spec, layers=[layer], dtype=torch.float32)
+    from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, reference_at
+
+    ref = reference_at(spec, TARGET_NUMERICS, layers=[layer])  # F132: the op's golden function is the target
     st = next(s for s in ref.block_graph(layer) if s.name == step)
     g, c = component_golden(spec)
     gl = g.layer(c, layer)
@@ -496,7 +497,9 @@ def _check_reference(spec, d: Path, req: dict) -> list[str]:
     except Exception as e:  # noqa: BLE001 - any import problem is a rejection
         return [f"reference.py / bind.py do not import: {e!r}"]
     layer = int(req.get("representative_layer", spec.representative_layer(comp["block_type"])))
-    ref = spec.hooks().reference(spec, layers=[layer], dtype=torch.float32)
+    from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, reference_at
+
+    ref = reference_at(spec, TARGET_NUMERICS, layers=[layer])  # F132: the op's golden function is the target
     steps = {s.name: s for s in ref.block_graph(layer)}
     st = steps.get(comp["step"])
     if st is None:

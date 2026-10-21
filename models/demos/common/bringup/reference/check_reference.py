@@ -10,6 +10,7 @@
 2. Every block type's graph is valid (graph_errors == 0) and truthful: replaying the representative layer's block
    through run_block, from the recorded block input and a state holding the recorded prefix, reproduces every
    recorded boundary of the last chunk exactly (graph_replay_maxabs, boundaries_missing).
+Both for the full-precision target (plain metric names) and the official arithmetic (official_ prefix; F132).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import torch
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.metrics import cpu_threads
-from models.demos.common.bringup.reference.golden import load_spec, text_tokens
+from models.demos.common.bringup.reference.golden import load_spec, reference_at, text_tokens
 from models.demos.common.bringup.reference.interface import boundary_names, run_block, validate_graph
 
 
@@ -61,8 +62,14 @@ def main(argv=None):
     assert a.seq % a.chunk == 0 and a.seq // a.chunk >= 2, "need at least two chunks"
     torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
+    # F132: both arithmetics are checked; the target's metrics keep the plain names, the official one's official_
+    for numerics, pre in (("native", ""), ("official", "official_")):
+        check(spec, a, numerics, pre)
+
+
+def check(spec, a, numerics: str, pre: str) -> None:
     layers = spec.layers()
-    ref = spec.hooks().reference(spec, layers=layers, dtype=torch.float32)
+    ref = reference_at(spec, numerics, layers=layers)
     tokens = text_tokens(spec, a.seq)
     last = a.seq // a.chunk - 1
 
@@ -95,10 +102,10 @@ def main(argv=None):
         for ch_t in [ref.state_tensors(ch_state, i, a.seq)]
         for n, x in ref.state_tensors(full_state, i, a.seq).items()
     )
-    metrics.record("pcc_hidden", p_h)
-    metrics.record("pcc_state_min", p_state)
-    metrics.record("maxabs_hidden", float((full_h - ch_h).abs().max()))
-    print(f"chunked vs one-shot: hidden pcc={p_h:.9f} state min pcc={p_state:.9f}")
+    metrics.record(f"{pre}pcc_hidden", p_h)
+    metrics.record(f"{pre}pcc_state_min", p_state)
+    metrics.record(f"{pre}maxabs_hidden", float((full_h - ch_h).abs().max()))
+    print(f"{numerics}: chunked vs one-shot: hidden pcc={p_h:.9f} state min pcc={p_state:.9f}")
 
     graph_errs, worst, missing = 0, 0.0, 0
     start = last * a.chunk
@@ -138,10 +145,11 @@ def main(argv=None):
             if d > 0:
                 print(f"graph {bt} (layer {li}): replayed {n} differs by {d:.3e}")
         print(f"graph {bt} (layer {li}): {len(steps)} steps replayed, max abs diff {worst:.3e}")
-    write_graphs(ref, reps)
-    metrics.record("graph_errors", graph_errs)
-    metrics.record("boundaries_missing", missing)
-    metrics.record("graph_replay_maxabs", worst)
+    if numerics == "native":
+        write_graphs(ref, reps)
+    metrics.record(f"{pre}graph_errors", graph_errs)
+    metrics.record(f"{pre}boundaries_missing", missing)
+    metrics.record(f"{pre}graph_replay_maxabs", worst)
 
 
 if __name__ == "__main__":
