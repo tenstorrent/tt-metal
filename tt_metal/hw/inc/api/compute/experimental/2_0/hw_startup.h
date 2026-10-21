@@ -7,6 +7,7 @@
 #ifdef ARCH_QUASAR
 
 #include "api/compute/common.h"                        // ALWI, UNPACK/MATH/PACK, DST_ACCUM_MODE
+#include "api/compute/experimental/2_0/dest_sync.h"    // dest chain
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
 #include "experimental/2_0/llk_2_0.h"                  // id-free Quasar LLK API
 
@@ -14,20 +15,21 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Id-free (2.0) two-input hardware startup, Quasar. Programs the unpacker SrcA/SrcB register formats, the ALU
- * source formats and the packer input format from the operand descriptors (NTTPs). No buffer descriptor is
- * programmed here: on Quasar every op init (copy_init, pack_init) programs its own descriptor, so each op's
- * init must still be called before the op. The operands' runtime l1_address is unused. Dest synchronization is
- * NOT set up here; call dest_sync_init (dest_sync.h) after this. Call exactly once, at the top of the kernel.
+ * Id-free (2.0) two-input hardware startup, Quasar. Call exactly once, at the top of the kernel, on every thread.
+ * Resets the Dest dvalid chain (every dvalid bit, bank id and control word a previous kernel left, then a barrier so
+ * no thread joins before the reset lands), programs the kernel-wide state (Dest 16/32-bit mode, ALU formats,
+ * packer input format, Dest bank 0 on every thread) and the SrcA/SrcB formats. Buffer descriptors are not
+ * programmed here: every op init programs its own, so each op's init must still run before the op. The operands'
+ * runtime addresses are unused.
  *
  * Only 16-bit float operands (Float16_b, Float16) are supported: register format == L1 format.
  *
- * | Param Type | Name                | Description                                  | Type                   | Valid Range        | Required |
- * |------------|---------------------|----------------------------------------------|------------------------|--------------------|----------|
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                    | bool                   |                    | False    |
+ * | Param Type | Name                | Description                                    | Type                   | Valid Range        | Required |
+ * |------------|---------------------|------------------------------------------------|------------------------|--------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                      | bool                   |                    | False    |
  * | Template   | FA/SA, FB/SB, FO/SO | in0 / in1 / out L1 format + geometry (deduced) | DataFormat/TensorShape | Float16_b, Float16 | True     |
- * | Function   | in0 / in1           | Input operands (in0 -> SrcA, in1 -> SrcB)    | LLKOperand             | N/A                | True     |
- * | Function   | out                 | Output operand                               | LLKOperand             | N/A                | True     |
+ * | Function   | in0 / in1           | Input operands (in0 -> SrcA, in1 -> SrcB)      | LLKOperand             | N/A                | True     |
+ * | Function   | out                 | Output operand                                 | LLKOperand             | N/A                | True     |
  */
 // clang-format on
 template <
@@ -49,6 +51,7 @@ ALWI void compute_kernel_hw_startup(
         experimental::is_legal_tile_shape(SA) && experimental::is_legal_tile_shape(SB) &&
             experimental::is_legal_tile_shape(SO),
         "compute_kernel_hw_startup: illegal tile shape.");
+    _llk_dest_chain_reset_();
     UNPACK((llk_2_0::unpack_hw_configure<
             experimental::LLKOperand<FA, SA>::descriptor,
             experimental::LLKOperand<FB, SB>::descriptor>()));
