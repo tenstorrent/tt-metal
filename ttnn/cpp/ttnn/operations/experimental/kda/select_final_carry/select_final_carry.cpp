@@ -3,6 +3,8 @@
 
 #include "select_final_carry.hpp"
 
+#include <array>
+
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "device/select_final_carry_device_operation.hpp"
@@ -10,6 +12,20 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental::kda {
+
+namespace {
+
+std::optional<std::array<uint32_t, 2>> semaphore_addresses(
+    const std::optional<std::vector<tt::tt_metal::GlobalSemaphore>>& semaphores) {
+    if (!semaphores) {
+        return std::nullopt;
+    }
+    TT_FATAL(semaphores->size() == 2, "select_final_carry: semaphores must be [barrier, arrival]");
+    return std::array<uint32_t, 2>{
+        static_cast<uint32_t>((*semaphores)[0].address()), static_cast<uint32_t>((*semaphores)[1].address())};
+}
+
+}  // namespace
 
 ttnn::Tensor select_final_carry(
     const ttnn::Tensor& rank_final,
@@ -19,7 +35,10 @@ ttnn::Tensor select_final_carry(
     const std::optional<ttnn::Tensor>& actual_end,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     uint32_t sequence_parallel_axis,
-    std::optional<uint32_t> num_links) {
+    std::optional<uint32_t> num_links,
+    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores,
+    bool prefix_on_last_rank,
+    const std::optional<std::vector<tt::tt_metal::GlobalSemaphore>>& semaphores) {
     // Validation runs on cache misses only; the device must be known before then to pick the links.
     TT_FATAL(
         prefix_final.storage_type() == StorageType::DEVICE && prefix_final.buffer() != nullptr,
@@ -48,7 +67,10 @@ ttnn::Tensor select_final_carry(
         sequence_parallel_axis,
         local_rows,
         num_links.value_or(available_links),
-        topology);
+        topology,
+        prefix_on_last_rank,
+        cores,
+        semaphore_addresses(semaphores));
 }
 
 }  // namespace ttnn::experimental::kda
