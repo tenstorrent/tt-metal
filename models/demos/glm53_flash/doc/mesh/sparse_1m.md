@@ -408,5 +408,16 @@ Block validation (rows 0-1 (2,4) block, 2026-10-21 13:30-14:20, logs `_logs/agen
 
 | the same 16 K e2e under the scratch layout (A/B, same block and config) | first tokens / needles identical; TTFT 11.0 / 11.0 / 11.3 s for users 1-3 against 11.8 / 11.8 / 11.7 s with heads2users: the owner-gather prefill costs ~+0.7 s (+6 %) on a 16 K prompt through 45 layers; DRAM 28.01 GiB after the build (two 16 K slots per chip) vs 27.85 |
 
+8x4, 1 M x 4 users per row (45 layers bfp8, regions prefill in 2048 sub-chunks, QBLOCK 512, 16 K chunks; first
+attempt 2026-10-21 14:41-15:11, `_logs/agents/mu1m/07_8x4_1m_4users.log`): build 493 s; DRAM after the build
+28.85 GiB allocated / 2.48 GiB free per chip with ONE 1 M slot per chip (32748 latent blocks x 32 x 512 bf16 +
+262144 pools x 128 per DSA layer: 1.00 GiB + 64 MiB, x 11 layers = 11.7 GiB) -- the layout the scratch slot could not
+fit. User 0 prefilled the whole 1 047 526-token prompt: TTFT 751.3 s (1394 tok/s), 9.4-9.7 s per 16 K chunk flat from
+131 K to 1 M (the first and the ragged last chunk carry the compiles: 78 / 70 s), first token 785 'The' as in the
+single-user 1 M run (the depth-0.5 model-limit case above). User 1 ran at 7.0-7.4 s per chunk (nothing to compile) and
+OOM'd at chunk [999424, 1015808) in `indexer.select` on the 260 MB score block (66.5 MB free per bank in pieces of
+<= 30.3 MB): the test's multi-user loop had kept every user's last-chunk streams (128 MB per chip) and logits alive
+between prompts (fixed: released per user; the rerun takes QBLOCK 256 for margin).
+
 Found on the way: `PrefillSlot.allocate` uploaded a 1-element `cache_idx` with the column-sharded mapper, so every
 partitioned `GLM53MeshModel` build had failed since the traced prefill landed (fixed: one slot value per column).
