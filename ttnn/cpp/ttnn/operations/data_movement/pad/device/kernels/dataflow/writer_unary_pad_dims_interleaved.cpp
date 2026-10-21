@@ -13,8 +13,8 @@
 #include "experimental/kernel_args.h"
 #if !defined(ARCH_QUASAR)
 // ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
-// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch uses a
-// plain volatile load instead. Same guard as data_movement/common/kernels/common.hpp.
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. On Quasar the
+// flush_l2_cache_range after the fill orders it instead. Same guard as data_movement/common/kernels/common.hpp.
 #include "ckernel.h"
 #endif
 
@@ -54,11 +54,9 @@ void kernel_main() {
     // source of every pad-tile write. A store can retire before its write-request lands in L1, and the
     // RISCV core and the NoC are different L1 clients with no program-order guarantee between them
     // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled word so the fill
-    // is processed before the first NoC write is issued. Same construction as #50374.
-#if defined(ARCH_QUASAR)
-    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
-    (void)*(pad_buffer + num_elems - 1);
-#else
+    // is processed before the first NoC write is issued. Same construction as #50374. On Quasar the
+    // flush_l2_cache_range above already orders the fill (it fences on both sides).
+#if !defined(ARCH_QUASAR)
     (void)ckernel::load_blocking(pad_buffer + num_elems - 1);
 #endif
 

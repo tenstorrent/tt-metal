@@ -8,8 +8,8 @@
 #include "api/tensor/noc_traits.h"
 #if !defined(ARCH_QUASAR)
 // ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
-// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch uses a
-// plain volatile load instead. Same guard as data_movement/common/kernels/common.hpp.
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch flushes
+// the written range with flush_l2_cache_range instead. Same guard as data_movement/common/kernels/common.hpp.
 #include "ckernel.h"
 #endif
 #include <algorithm>
@@ -78,9 +78,10 @@ void kernel_main() {
         // different L1 clients with no program-order guarantee between them
         // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled element so
         // the fill is processed before the first NoC write is issued. Same construction as #50374.
-#if defined(ARCH_QUASAR)
-        // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
-        (void)*(fill_ptr + row_size - 1);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Quasar DM: the CB write pointer is the cached address, so the fill sits in L1D/L2 while the NoC
+        // reads TL1. Flush the fill page (fences on both sides). Matches fill_rm_interleaved.cpp.
+        flush_l2_cache_range(static_cast<uintptr_t>(fill_addr), static_cast<size_t>(row_size * sizeof(IntType)));
 #else
         (void)ckernel::load_blocking(fill_ptr + row_size - 1);
 #endif
@@ -134,9 +135,11 @@ void kernel_main() {
                 // store queue can still hold them when the NoC command is issued (MemoryOrdering.md).
                 // Read the last one back so all of them are processed first. Same construction as #50374.
                 if (last_written != nullptr) {
-#if defined(ARCH_QUASAR)
-                    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
-                    (void)*(last_written);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                    // Quasar DM: the CB read pointer is the cached address; flush the input page so the NoC
+                    // sees the scattered elements (fences on both sides).
+                    flush_l2_cache_range(
+                        static_cast<uintptr_t>(input_addr), static_cast<size_t>(row_size * sizeof(IntType)));
 #else
                     (void)ckernel::load_blocking(last_written);
 #endif

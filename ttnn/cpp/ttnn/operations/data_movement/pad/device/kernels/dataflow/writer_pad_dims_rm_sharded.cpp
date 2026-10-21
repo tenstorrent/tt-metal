@@ -14,7 +14,7 @@
 #if !defined(ARCH_QUASAR)
 // ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
 // and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch uses a
-// plain volatile load instead. Same guard as data_movement/common/kernels/common.hpp.
+// fence instead. Same guard as data_movement/common/kernels/common.hpp.
 #include "ckernel.h"
 #endif
 
@@ -32,8 +32,9 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     // is processed before the first loop-back read is issued. Same guard as the interleaved reader of
     // this op (reader_pad_dims_rm_interleaved_v2.cpp) and #50374.
 #if defined(ARCH_QUASAR)
-    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
-    (void)*(ptr + (num_bytes_risc / 2) - 1);
+    // Quasar DM: get_write_ptr() is the uncached alias, so the seed already targets TL1; the fence orders
+    // those stores before the loop-back read. Same as tt_memmove in data_movement/common/kernels/common.hpp.
+    __asm__ __volatile__("fence" ::: "memory");
 #else
     (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
 #endif
