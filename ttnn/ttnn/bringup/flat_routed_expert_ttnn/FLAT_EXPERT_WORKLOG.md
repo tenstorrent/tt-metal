@@ -1177,3 +1177,32 @@ lays out the same two random experts with `flat_weight_regions`. K3 28 / 56, K2.
 GLM-5.3-Flash 9 / 18: every layout field equal (np, rg, nu, nk_gu, nd, pcds, col0s, banks, dw_rot, ...), the experts'
 blocks bit-identical, only the down regions' zero padding grows with the count (K3 1344 -> 2688 tiles per down
 region). A chip's tensor = per-expert blocks placed into its regions; nothing per mesh.
+
+## GLM-5.3 flat expert vs the DRAM floor: the DRISC per-tile ceiling again (2026-10-21, one chip bh-lb-09 12 x 10)
+test_flat_balanced_sweep.py, E 32, H 6144, I 2048, SiLU, bfp4, pure DRISC 64 gate/up + 32 down + 4 relays
+(MIMO_FL_CMB_DRISC=1 DRISC_DUAL=0 DRISC_PURE=1 ND=32 RDOWN=0), balanced M per expert; recipe
+/localdev/mstaletovic/flat90_glm53/run.sh <tag> [probes]. Floors at 512 GB/s: weights 32 x 21.2 MB = 680 MB 1327 us,
+x 61 / 123 us, y 61 / 123 us (M 80 / 160) -> 1450 / 1573 us (1389 / 1450 without y).
+| variant | M 80 | M 160 |
+| base | 1668 (87%) | 1919 (82%) |
+| NO_MATH | 1683 | 1938 |
+| no y (YRM_NOWRITE: the fused case) | 1617 | 1785 |
+| + W_NOREAD (weights forwarded, not read) | 1404 | 1727 |
+| + W_NOFWD (read, not forwarded) | 1528 | 1706 |
+| read only (W_NOFWD + XRD_SKIP, no y) | 1385 (491 GB/s) | 1439 |
+| no y + DRISC_UB 2 | 1561 (-3.5%) | 1868 (+4.6%) |
+| no y, E 16 | 822 | 939 |
+- Not compute (NO_MATH unchanged). No y, steady state from E 16 / 32: 49.7 / 52.9 us an expert against a floor of
+  43.4 / 45.3 (87 / 86%), fixed 27 / 93 us.
+- M 80: reading alone 1385 (96% of 512) and forwarding alone 1404 are at the floor; both on one tile 1617 = 3072
+  units of one 13.8 KB block per tile per call in 0.53 us each = 26.2 GB/s a tile x 16 tiles = 420 GB/s: the
+  per-tile ceiling of the GLM-Flash 2026-10-19 entry. DRISC profile (MIMO_FL_DRISC_PROF, the profiled call 2437 us),
+  cycles per unit, the bank's two tiles: DMA 214 / 254, grant refresh 94-108 / 11-16 (470-650 vs 84-108 refreshes a
+  call), NoC writes 199 / 201, flush + semaphore 155 / 197, total 984 / 1048 (a third of it outside those sections).
+  One RISC does all of it per block, serially.
+- DRISC_UB 2 halves the per-unit cost but halves the units in flight: -3.5% at M 80, +4.6% at M 160 (as GLM-Flash).
+- M 160 has two more costs: x reads (the relays' NOC1 DRAM reads against each bank's NOC1-endpoint DRISC tile: no
+  forwarding 1706 vs read only 1439, weights not read 1727) and a 93 us pipeline tail.
+Options: fewer RISC cycles a block on the DRISC (no ack wait per unit, batched flushes, a multicast write where a block
+goes to G > 1 receivers, fewer grant refreshes on tile 1); UB from the call's rows (2 at small M, 1 above); the x relay
+reads off the DRISC tiles' NOC1 endpoints; the tail at large M.
