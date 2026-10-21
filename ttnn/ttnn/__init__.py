@@ -393,6 +393,7 @@ from ttnn.core import (
 
 tile_size = ttnn._ttnn.tensor.tile_size
 experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
+experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
