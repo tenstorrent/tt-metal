@@ -1215,7 +1215,9 @@
   model: dit-encoders
   skus:
     wh_llmbox:
-      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
+      # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
