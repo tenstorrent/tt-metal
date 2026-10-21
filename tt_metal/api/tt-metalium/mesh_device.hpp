@@ -356,15 +356,15 @@ public:
 
     // Open a MeshDevice which will use the given MetalEnv.
     static std::shared_ptr<MeshDevice> open_mesh_device(
-        MetalEnv& env, const MeshDeviceConfig& config, const CreateMeshDeviceOptions& options = {});
+        MetalEnv& env, const MeshDeviceConfig& config, const OpenMeshDeviceOptions& options = {});
 
     // Open a unit mesh for the physical device ID which will use the given MetalEnv.
     static std::shared_ptr<MeshDevice> open_unit_mesh(
-        MetalEnv& env, ChipId device_id, const CreateMeshDeviceOptions& options = {});
+        MetalEnv& env, ChipId device_id, const OpenMeshDeviceOptions& options = {});
 
     // Open a unit mesh for each physical device ID in the list which will use the given MetalEnv.
     static std::map<ChipId, std::shared_ptr<MeshDevice>> open_unit_meshes(
-        MetalEnv& env, ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options = {});
+        MetalEnv& env, ttsl::Span<const ChipId> device_ids, const OpenMeshDeviceOptions& options = {});
 
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }
