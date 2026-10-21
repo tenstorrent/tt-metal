@@ -791,3 +791,10 @@ default `GLM53_PREFILL_EXPERTS=blocks` path, 5x slower than the regions path the
 90.0 ms = 11.1 tok/s per user (356 aggregate) on the stream expert op. So the column-3 divergence is absent at 64 K
 with the full model; the bisect continues on the regions path (`sched_bisect_v2.sh`: 64 K, 256 K), which the first
 bisect scripts had omitted.
+
+**64 K x 4 users per row, regions prefill path (19:23, `long_8x4_N65536_4users_regions.log`):** TTFT 32.5 / 27.4 / 27.3 /
+27.3 s (2016-2402 tok/s), needles 32/32, rows agree, users agree; decode 148.2 ms = 6.7 tok/s per user through the
+regions expert kernel (no stacked copy; 13.2 GiB free after the prefills, so `GLM53_REGIONS_KEEP_STACKED=1` fits and
+gives the 90 ms block-op decode). Bisect continues at 256 K. To-do once the chips are free: make `regions` the
+default prefill path with the stacked copy kept whenever the memory planner says it fits (validate the MoE unit test
+and the traced prefill on a block first: the regions path must be trace-safe for prompts of 33..2048 tokens).
