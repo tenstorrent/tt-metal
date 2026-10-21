@@ -596,3 +596,18 @@ regions-kernel decode's 0.99986-0.99999); on the 8x4 both expert forms fit at 64
 HF, decode 165.6 ms per step with wrap mHC vs 215.9 ms through the regions kernel under the same wrap config
 (the fast mHC through regions gave 148.3 ms; fast + stacked is the combination to measure next, ~100 ms expected at one
 user per row).
+
+### Decode with the fast mHC and the stacked expert path at 64 K (v22, 2026-10-21 13:10-13:35)
+
+`GLM53_REGIONS_KEEP_STACKED=1` with the fast-mHC defaults, regions prefill, 64 K needle on the 8x4 (both results
+8/8 identical to HF, needle found):
+
+| users per row (total) | TTFT 65493 tokens | decode step | tok/s per user (aggregate) |
+|---|---|---|---|
+| 1 (8) | 31.8 s (2061 tok/s) | 101.8 ms | 9.8 (79) |
+| 4 (32) | 36.2 s (1811 tok/s) | 99.0 ms | 10.1 (323) |
+
+Against the morning's 215.9 ms (wrap mHC through the regions kernel) at one user per row. At ISL 16 the 32-user
+step is 75.5 ms, so the 64 K context adds ~24 ms per step (sparse attention + index scoring); the 33 tok/s per
+user target at 32 users (1 M ISL) is 3.3x away, the 19 tok/s at 256 users (121 ms at ISL 16) 2.3x: the
+optimization phase's starting point.
