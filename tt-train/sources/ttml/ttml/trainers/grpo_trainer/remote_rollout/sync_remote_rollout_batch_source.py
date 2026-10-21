@@ -8,6 +8,8 @@ import gc
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from ttml.common.utils import repeat_interleave
+
 from ..grpo_trainer import RolloutBatch
 from ..grpo_ttml_model import weights_ref_hf_dict
 from ..rollout_batch_source import (
@@ -65,7 +67,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
                 )
             rollout = RolloutBatch(
                 weight_version=version,
-                prompts=[p for p in prompts for _ in range(g)],
+                prompts=repeat_interleave(prompts, g),
                 completions=completions,
                 logprobs=pad_logprobs(completions, token_logprobs, self._max_completion_length),
             )
