@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/reflection.hpp>
 #include <vector>
 #include <string>
@@ -202,7 +203,9 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+        // TT_FABRIC_BW_TELEMETRY_OFF leaves the EDM's bandwidth telemetry off in performance mode (the csv's bandwidth
+        // comes from the senders' cycle counts; the telemetry only feeds the per-link log line and costs the router)
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE && std::getenv("TT_FABRIC_BW_TELEMETRY_OFF") == nullptr) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
