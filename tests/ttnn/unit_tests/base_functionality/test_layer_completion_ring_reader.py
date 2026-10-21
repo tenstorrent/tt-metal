@@ -241,7 +241,7 @@ def test_first_token_records_are_collected_not_counted():
     assert d.completed_chunks == 2
 
 
-def test_without_the_mode_an_empty_span_is_still_a_producer_bug():
+def test_without_the_mode_an_empty_span_is_still_a_producer_bug(expect_error):
     d = LayerCompletionRingReader(FakeRing([msg(2, 2)]), num_layers=NUM_LAYERS)
-    with pytest.raises(ValueError, match="out of bounds"):
+    with expect_error(ValueError, "out of bounds"):
         d.step()
