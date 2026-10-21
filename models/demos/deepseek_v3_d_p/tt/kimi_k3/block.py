@@ -228,6 +228,7 @@ class TtKimiK3Block(LightweightModule):
                 tp_axis=self.attention.mla.tp_shard_kv_axis,
             )
         elif self._kda_layer_ack and (d2h_service is not None or on_layer_complete is not None):
+            assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
             send_layer_ack(
                 mesh_device=self.mesh_device,
                 global_layer_idx=self.layer_idx,
