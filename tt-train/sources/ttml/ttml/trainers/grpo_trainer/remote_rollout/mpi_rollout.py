@@ -127,6 +127,7 @@ class MPIRolloutServer:
             op, body = OP_REQUEST_TRANSFER, b""
         except Exception:
             op, body = OP_ERROR, traceback.format_exc().encode("utf-8")
+        del per_target
         self._bridge.barrier()
         self._respond(op, body)
 
