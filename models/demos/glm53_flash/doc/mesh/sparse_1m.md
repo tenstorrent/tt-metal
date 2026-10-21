@@ -406,5 +406,7 @@ Block validation (rows 0-1 (2,4) block, 2026-10-21 13:30-14:20, logs `_logs/agen
 | e2e 16 K needle, 4 users per row, 45 layers bfp4 experts, chunk 8192 | every user first token 15209 'amber', 8/8 greedy tokens == NEEDLE_16384, needle found on all 8 (row, user) chains; TTFT 11.8 s warm per user (1381-1398 tok/s), decode 133 ms = 7.5 tok/s per user (60 tok/s over the 8 slots); DRAM 27.85 GiB allocated / 3.48 free per chip after the build |
 | e2e 64 K needle, 4 users per row, same config | every user first token 15209, 8/8 greedy tokens == NEEDLE_65536, needle found 8/8; TTFT 46.5 s warm per user (1408 tok/s; user 0 69.5 s with the kernel compiles), decode 150.7 ms = 6.6 tok/s per user (53 tok/s aggregate); DRAM 28.40 GiB allocated / 2.93 free per chip after the build (4 x 64 K slots per row = one per chip) |
 
+| the same 16 K e2e under the scratch layout (A/B, same block and config) | first tokens / needles identical; TTFT 11.0 / 11.0 / 11.3 s for users 1-3 against 11.8 / 11.8 / 11.7 s with heads2users: the owner-gather prefill costs ~+0.7 s (+6 %) on a 16 K prompt through 45 layers; DRAM 28.01 GiB after the build (two 16 K slots per chip) vs 27.85 |
+
 Found on the way: `PrefillSlot.allocate` uploaded a 1-element `cache_idx` with the column-sharded mapper, so every
 partitioned `GLM53MeshModel` build had failed since the traced prefill landed (fixed: one slot value per column).
