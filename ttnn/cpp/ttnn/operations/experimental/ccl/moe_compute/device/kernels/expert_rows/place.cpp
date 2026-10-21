@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// expert rows metadata and placement (data movement only). Reads the routing table the expert rows program wrote and
-// writes moe_compute's outputs:
+// expert rows, the placement program's place.cpp (data movement only). Reads the routing table the expert rows program
+// wrote and writes moe_compute's outputs:
 //   output 0  per-expert token counts, one row in every grid core's shard (same L1 address on every core)
 //   output 1  one activation row per token with >= 1 local expert, ascending: [token, k per expert (k + 1 = not
 //             routed), score bits per expert], then rows [-1, k + 1 .., 0 ..]
@@ -92,12 +92,12 @@ FORCE_INLINE uint32_t read_routing_table(
     if (routed_rows) {
         const uint32_t parts[] = {
             table_rows, table_entry_experts, table_entry_tokens, table_entry_scores, table_entry_k};
-        for (uint32_t i = 0; i < sizeof(parts) / sizeof(parts[0]); ++i) {
+        for (uint32_t part = 0; part < sizeof(parts) / sizeof(parts[0]); ++part) {
             noc.async_read(
                 PrecomposedUnicastEndpoint{},
-                CoreLocalMem<uint32_t>(scratch + scratch_table + parts[i]),
+                CoreLocalMem<uint32_t>(scratch + scratch_table + parts[part]),
                 part_bytes,
-                {.noc_addr = table_noc_addr + parts[i]},
+                {.noc_addr = table_noc_addr + parts[part]},
                 {});
         }
     }
@@ -105,9 +105,9 @@ FORCE_INLINE uint32_t read_routing_table(
         reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_counts);
     const tt_l1_ptr uint16_t* table_expert_first_rows =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_offsets);
-    for (uint32_t e = 0; e < local_experts; ++e) {
-        expert_row_counts[e] = table_expert_rows[e];
-        expert_first_rows[e] = table_expert_first_rows[e];
+    for (uint32_t expert = 0; expert < local_experts; ++expert) {
+        expert_row_counts[expert] = table_expert_rows[expert];
+        expert_first_rows[expert] = table_expert_first_rows[expert];
     }
     noc.async_read_barrier();
     return routed_rows;
@@ -124,8 +124,8 @@ FORCE_INLINE void write_count_rows(
     uint32_t virtual_y_arg) {
     volatile tt_l1_ptr uint32_t* count_row =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + scratch_count_row);
-    for (uint32_t i = 0; i < count_words; ++i) {
-        count_row[i] = i < local_experts ? expert_row_counts[i] : 0;
+    for (uint32_t word = 0; word < count_words; ++word) {
+        count_row[word] = word < local_experts ? expert_row_counts[word] : 0;
     }
     for (uint32_t core = core_index; core < grid_w * grid_h; core += program_cores) {
         const uint32_t x = get_arg_val<uint32_t>(virtual_x_arg + core % grid_w);
@@ -139,7 +139,7 @@ FORCE_INLINE void write_count_rows(
     }
 }
 
-// Output 2: page e for the experts e with e % program_cores == core_index.
+// Output 2: the page of each expert with expert % program_cores == core_index.
 template <typename ETAccessor>
 FORCE_INLINE void write_e_t_pages(
     const Noc& noc,
@@ -150,21 +150,22 @@ FORCE_INLINE void write_e_t_pages(
     const tt_l1_ptr uint16_t* row_tokens,
     uint32_t core_index) {
     volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + scratch_e_t);
-    for (uint32_t e = core_index; e < local_experts; e += program_cores) {
+    for (uint32_t expert = core_index; expert < local_experts; expert += program_cores) {
         noc.async_write_barrier();  // the page buffer is reused per page
-        const uint32_t n = expert_row_counts[e];
-        for (uint32_t i = 0; i <= n; ++i) {
-            page[e_t_entry_words * i] = i < n ? uint32_t(row_tokens[expert_first_rows[e] + i]) : end_of_list;
-            page[e_t_entry_words * i + 1] = 0;
-            page[e_t_entry_words * i + 2] = 0;
-            page[e_t_entry_words * i + 3] = 0;
+        const uint32_t row_count = expert_row_counts[expert];
+        for (uint32_t entry = 0; entry <= row_count; ++entry) {
+            page[e_t_entry_words * entry] =
+                entry < row_count ? uint32_t(row_tokens[expert_first_rows[expert] + entry]) : end_of_list;
+            page[e_t_entry_words * entry + 1] = 0;
+            page[e_t_entry_words * entry + 2] = 0;
+            page[e_t_entry_words * entry + 3] = 0;
         }
         noc.async_write(
             CoreLocalMem<uint32_t>(scratch + scratch_e_t),
             e_t,
-            (n + 1) * e_t_entry_words * word_bytes,
+            (row_count + 1) * e_t_entry_words * word_bytes,
             {},
-            {.page_id = e});
+            {.page_id = expert});
     }
 }
 
@@ -175,12 +176,12 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* activation_buffer(uint32_t scratch, ui
 // [token, not_routed_k per expert, 0 per expert, 0 alignment padding]
 FORCE_INLINE void clear_activation_row(volatile tt_l1_ptr uint32_t* row, uint32_t token) {
     row[0] = token;
-    for (uint32_t e = 0; e < local_experts; ++e) {
-        row[1 + e] = not_routed_k;
-        row[1 + local_experts + e] = 0;
+    for (uint32_t expert = 0; expert < local_experts; ++expert) {
+        row[1 + expert] = not_routed_k;
+        row[1 + local_experts + expert] = 0;
     }
-    for (uint32_t i = 1 + 2 * local_experts; i < activation_row_bytes / word_bytes; ++i) {
-        row[i] = 0;
+    for (uint32_t word = 1 + 2 * local_experts; word < activation_row_bytes / word_bytes; ++word) {
+        row[word] = 0;
     }
 }
 
@@ -210,9 +211,9 @@ FORCE_INLINE uint32_t write_activated_rows(
             }
             volatile tt_l1_ptr uint32_t* row = activation_buffer(scratch, buffer);
             clear_activation_row(row, token);
-            for (uint32_t q = first_entry; q < end_entry; ++q) {
-                row[1 + entry_experts[q]] = entry_k[q];
-                row[1 + local_experts + entry_experts[q]] = uint32_t(entry_scores[q]);
+            for (uint32_t entry = first_entry; entry < end_entry; ++entry) {
+                row[1 + entry_experts[entry]] = entry_k[entry];
+                row[1 + local_experts + entry_experts[entry]] = uint32_t(entry_scores[entry]);
             }
             noc.async_write(
                 CoreLocalMem<uint32_t>(scratch + scratch_activation + buffer * activation_row_bytes),
@@ -257,17 +258,18 @@ FORCE_INLINE void place_double_buffer_shard(
     uint32_t height_shard,
     uint32_t width_shard) {
     const uint32_t first_expert = local_experts >= 2 ? local_experts - 2 : 0;
-    for (uint32_t e = first_expert; e < local_experts; ++e) {
-        const uint32_t n = expert_row_counts[e];
-        const uint32_t base_rows = n / height_shards, remainder = n % height_shards;
+    for (uint32_t expert = first_expert; expert < local_experts; ++expert) {
+        const uint32_t row_count = expert_row_counts[expert];
+        const uint32_t base_rows = row_count / height_shards, remainder = row_count % height_shards;
         const uint32_t shard_rows = base_rows + (height_shard < remainder ? 1 : 0);
         const uint32_t shard_first = height_shard * base_rows + (height_shard < remainder ? height_shard : remainder);
-        for (uint32_t i = 0; i < shard_rows; ++i) {
+        for (uint32_t shard_row = 0; shard_row < shard_rows; ++shard_row) {
             noc.async_read(
                 row_buffer,
-                CoreLocalMem<uint32_t>(double_buffer + (e % 2) * half_bytes + i * segment_bytes),
+                CoreLocalMem<uint32_t>(double_buffer + (expert % 2) * half_bytes + shard_row * segment_bytes),
                 segment_bytes,
-                {.page_id = expert_first_rows[e] + shard_first + i, .offset_bytes = width_shard * segment_bytes},
+                {.page_id = expert_first_rows[expert] + shard_first + shard_row,
+                 .offset_bytes = width_shard * segment_bytes},
                 {});
         }
     }

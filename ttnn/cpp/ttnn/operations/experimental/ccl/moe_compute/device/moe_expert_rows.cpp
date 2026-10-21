@@ -13,6 +13,7 @@
 #include <limits>
 #include <set>
 #include <string_view>
+#include <tuple>
 #include <variant>
 
 #include <tt-logger/tt-logger.hpp>
@@ -22,7 +23,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "kernels/expert_rows/expert_rows_common.h"
 #include "kernels/moe_ring_common.h"
@@ -44,7 +45,6 @@ constexpr uint32_t kWordBytes = sizeof(uint32_t);
 constexpr uint32_t kBf16Bytes = sizeof(uint16_t);
 constexpr uint32_t kTileBytesBf16 = tt::constants::TILE_HW * kBf16Bytes;
 constexpr uint32_t kTileRowBytesBf16 = tt::constants::TILE_WIDTH * kBf16Bytes;
-constexpr uint32_t kJobRows = expert_rows::tile_rows;  // rows per row tile of a job
 constexpr uint32_t kGroupTiles = expert_rows::group_tiles;
 constexpr uint32_t kColumnsPerGroup = expert_rows::group_columns;  // each column gives one activated tile
 constexpr uint32_t kMaxTopK = 32;  // rows_reader keeps one u16 per k of a token on its stack (its static_assert)
@@ -116,9 +116,8 @@ constexpr uint32_t kRowsReaderKernelIdx = 0;
 constexpr uint32_t kRowsWriterKernelIdx = 1;
 constexpr uint32_t kRowsComputeKernelIdx = 2;
 // The placement program with the combine starts with selective_reduce_combine's kernels: its reader, then its writer
-// (then, with FullCcl, its mux kernels). The writer's runtime arg 4 is the cross-device semaphore address.
+// (then, with FullCcl, its mux kernels).
 constexpr uint32_t kPlaceCombineWriterKernelIdx = 1;
-constexpr uint32_t kPlaceCombineWriterSemaphoreArgIdx = 4;
 
 bool expert_rows_arch(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0; }
 
@@ -128,23 +127,24 @@ uint32_t align_to_part(uint32_t bytes) { return tt::align(bytes, expert_rows::pa
 struct LayoutCursor {
     uint32_t end = 0;
     uint32_t take(uint32_t bytes) {
-        const uint32_t at = end;
+        const uint32_t offset = end;
         end = align_to_part(end + bytes);
-        return at;
+        return offset;
     }
 };
 
-// moe_compute's prepared weights (prepare_w0_w1 / prepare_w2, moe_ring_common.h) as the expert rows reader addresses
-// them, in tiles. W0/W1, per (layer, expert): the ring positions' slices back to back (ShardLayout::w0_w1_first_tile),
-// each its column pairs (4 tiles per K row) at a stride of pair_tiles, then, for an odd count in the compact layout,
-// one half block-column (one column, 2 tiles per K row); that stream is cut into one piece of piece_tiles per DRAM
-// bank, so a slice can go on in the next bank (with equal even counts and 14-tile transactions, piece r is position r's
-// slice). W2, per (layer, expert): w2_tiles in position r's own bank, its output groups (4 tiles per K row) at a stride
-// of w2_group_tiles; the last of the w2_groups can be 2 output tiles wide. The K padding at the end of each group is
-// not read.
+// moe_compute's prepared weights (prepare_w0_w1_tensor_for_moe_compute / prepare_w2_tensor_for_moe_compute in
+// moe_compute_utils.py, moe_ring_common.h) as the expert rows reader addresses them, in tiles. W0/W1, per (layer,
+// expert): the ring positions' slices back to back (ShardLayout::w0_w1_first_tile), each its column groups (4 tiles per
+// K row) at a stride of w0_w1_group_tiles, then, for an odd count in the compact layout, one half block-column (one
+// column, 2 tiles per K row); that stream is cut into one piece of w0_w1_piece_tiles per DRAM bank, so a slice can go
+// on in the next bank (with equal even counts and 14-tile transactions, piece r is position r's slice). W2, per (layer,
+// expert): w2_slice_tiles in position r's own bank, its output groups (4 tiles per K row) at a stride of
+// w2_group_tiles; the last of the w2_groups can be 2 output tiles wide. The K padding at the end of each group is not
+// read.
 struct PreparedLayout {
-    uint32_t piece_tiles = 0, pair_tiles = 0;
-    uint32_t w2_tiles = 0, w2_group_tiles = 0;
+    uint32_t w0_w1_piece_tiles = 0, w0_w1_group_tiles = 0;
+    uint32_t w2_slice_tiles = 0, w2_group_tiles = 0;
     GroupRun w2_groups{0, false};
 };
 
@@ -153,16 +153,16 @@ PreparedLayout prepared_layout(uint32_t hidden_tiles, uint32_t intermediate_tile
     const uint32_t block = moe_ring::W0_W1_TXNS_PER_BLOCK * tiles_per_txn;
     const uint32_t bias_rows = has_bias ? 1 : 0;
     const uint32_t w0_w1_k_rows = hidden_tiles + bias_rows, w2_k_rows = intermediate_tiles + bias_rows;
-    PreparedLayout l;
-    l.piece_tiles =
+    PreparedLayout layout;
+    layout.w0_w1_piece_tiles =
         moe_ring::w0_w1_bank_blocks_per_expert(w0_w1_k_rows, intermediate_tiles, ring, ring, tiles_per_txn) * block;
-    l.pair_tiles = tt::div_up(w0_w1_k_rows, moe_ring::block_tiles_h(tiles_per_txn)) * block;
-    l.w2_tiles = moe_ring::w2_core_blocks_per_expert(hidden_tiles, w2_k_rows, ring, tiles_per_txn) * block;
-    l.w2_group_tiles = tt::div_up(w2_k_rows, moe_ring::block_tiles_h(tiles_per_txn)) * block;
-    l.w2_groups = {
+    layout.w0_w1_group_tiles = tt::div_up(w0_w1_k_rows, moe_ring::block_tiles_h(tiles_per_txn)) * block;
+    layout.w2_slice_tiles = moe_ring::w2_core_blocks_per_expert(hidden_tiles, w2_k_rows, ring, tiles_per_txn) * block;
+    layout.w2_group_tiles = tt::div_up(w2_k_rows, moe_ring::block_tiles_h(tiles_per_txn)) * block;
+    layout.w2_groups = {
         moe_ring::w2_num_a2a_iters(hidden_tiles, ring),
         moe_ring::w2_last_a2a_iter_half(hidden_tiles, ring, tiles_per_txn)};
-    return l;
+    return layout;
 }
 
 // moe_compute's prepared layout of one ring position
@@ -184,17 +184,17 @@ std::vector<ShardLayout> shard_layouts(
     const bool compact = moe_ring::w0_w1_compact_for_shape(intermediate_tiles, ring);
     std::vector<ShardLayout> layouts(ring);
     uint32_t column = 0, output_tile = 0;
-    for (uint32_t r = 0; r < ring; ++r) {
-        layouts[r].columns = moe_ring::shard_tiles(intermediate_tiles, r, ring);
-        layouts[r].first_column = column;
-        column += layouts[r].columns;
-        layouts[r].output_tiles = moe_ring::w2_shard_tiles(hidden_tiles, r, intermediate_tiles, ring);
-        layouts[r].first_output_tile = output_tile;
-        output_tile += layouts[r].output_tiles;
-        layouts[r].w0_w1_first_tile =
-            moe_ring::w0_w1_core_block_offset(intermediate_tiles, r, ring, column_blocks, half_column_blocks) *
+    for (uint32_t position = 0; position < ring; ++position) {
+        layouts[position].columns = moe_ring::shard_tiles(intermediate_tiles, position, ring);
+        layouts[position].first_column = column;
+        column += layouts[position].columns;
+        layouts[position].output_tiles = moe_ring::w2_shard_tiles(hidden_tiles, position, intermediate_tiles, ring);
+        layouts[position].first_output_tile = output_tile;
+        output_tile += layouts[position].output_tiles;
+        layouts[position].w0_w1_first_tile =
+            moe_ring::w0_w1_core_block_offset(intermediate_tiles, position, ring, column_blocks, half_column_blocks) *
             moe_ring::W0_W1_TXNS_PER_BLOCK * tiles_per_txn;
-        layouts[r].half_column = compact && layouts[r].columns % 2 == 1;
+        layouts[position].half_column = compact && layouts[position].columns % 2 == 1;
     }
     return layouts;
 }
@@ -211,17 +211,17 @@ struct TableBlock {
 TableBlock table_block(uint32_t tokens, uint32_t top_k, uint32_t local_experts) {
     const uint32_t entries = tokens * top_k;
     LayoutCursor cursor;
-    TableBlock t;
+    TableBlock block;
     cursor.take(expert_rows::part_alignment);  // the head
-    t.counts = cursor.take(local_experts * kBf16Bytes);
-    t.offsets = cursor.take(local_experts * kBf16Bytes);
-    t.rows = cursor.take(entries * kBf16Bytes);
-    t.entry_experts = cursor.take(entries * kBf16Bytes);
-    t.entry_tokens = cursor.take(entries * kBf16Bytes);
-    t.entry_scores = cursor.take(entries * kBf16Bytes);
-    t.entry_k = cursor.take(entries * kBf16Bytes);
-    t.bytes = cursor.end;
-    return t;
+    block.counts = cursor.take(local_experts * kBf16Bytes);
+    block.offsets = cursor.take(local_experts * kBf16Bytes);
+    block.rows = cursor.take(entries * kBf16Bytes);
+    block.entry_experts = cursor.take(entries * kBf16Bytes);
+    block.entry_tokens = cursor.take(entries * kBf16Bytes);
+    block.entry_scores = cursor.take(entries * kBf16Bytes);
+    block.entry_k = cursor.take(entries * kBf16Bytes);
+    block.bytes = cursor.end;
+    return block;
 }
 
 // Byte offsets of the expert rows reader's routing scratch (cb_routing). [table, jobs) is the routing table block the
@@ -242,35 +242,35 @@ RoutingLayout routing_layout(
     const uint32_t area_bytes = expert_rows::entry_area_bytes(tokens_per_core * shape.top_k);
     const TableBlock block = table_block(shape.tokens, shape.top_k, shape.local_experts);
     LayoutCursor cursor;
-    RoutingLayout o;
-    o.own_mapping = cursor.take(shape.global_experts * kBf16Bytes);
-    o.source_mappings = cursor.take(sources_per_core * shape.global_experts * kBf16Bytes);
-    o.token_ids = cursor.take(tokens_per_core * shape.index_page_bytes);
-    o.token_scores = cursor.take(tokens_per_core * shape.index_page_bytes);
-    o.ctl = cursor.take(expert_rows::ctl_bytes(expert_groups));
-    o.active_experts = cursor.take(shape.local_experts * kBf16Bytes);
-    o.expert_rows = cursor.take(shape.local_experts * kBf16Bytes);
-    o.expert_first_rows = cursor.take(shape.local_experts * kBf16Bytes);
-    o.table = cursor.take(block.bytes);
-    o.table_counts = o.table + block.counts;
-    o.table_offsets = o.table + block.offsets;
-    o.row_tokens = o.table + block.rows;
-    o.entry_experts = o.table + block.entry_experts;
-    o.entry_tokens = o.table + block.entry_tokens;
-    o.entry_scores = o.table + block.entry_scores;
-    o.entry_k = o.table + block.entry_k;
-    o.table_bytes = block.bytes;
-    o.jobs = cursor.take(shape.tokens * shape.top_k * sizeof(expert_rows::JobRecord));
-    o.entry_areas = cursor.take(program_cores * area_bytes);
-    o.size = cursor.end;
-    return o;
+    RoutingLayout layout;
+    layout.own_mapping = cursor.take(shape.global_experts * kBf16Bytes);
+    layout.source_mappings = cursor.take(sources_per_core * shape.global_experts * kBf16Bytes);
+    layout.token_ids = cursor.take(tokens_per_core * shape.index_page_bytes);
+    layout.token_scores = cursor.take(tokens_per_core * shape.index_page_bytes);
+    layout.ctl = cursor.take(expert_rows::ctl_bytes(expert_groups));
+    layout.active_experts = cursor.take(shape.local_experts * kBf16Bytes);
+    layout.expert_rows = cursor.take(shape.local_experts * kBf16Bytes);
+    layout.expert_first_rows = cursor.take(shape.local_experts * kBf16Bytes);
+    layout.table = cursor.take(block.bytes);
+    layout.table_counts = layout.table + block.counts;
+    layout.table_offsets = layout.table + block.offsets;
+    layout.row_tokens = layout.table + block.rows;
+    layout.entry_experts = layout.table + block.entry_experts;
+    layout.entry_tokens = layout.table + block.entry_tokens;
+    layout.entry_scores = layout.table + block.entry_scores;
+    layout.entry_k = layout.table + block.entry_k;
+    layout.table_bytes = block.bytes;
+    layout.jobs = cursor.take(shape.tokens * shape.top_k * sizeof(expert_rows::JobRecord));
+    layout.entry_areas = cursor.take(program_cores * area_bytes);
+    layout.size = cursor.end;
+    return layout;
 }
 
 // The writer's scratch (cb_scratch): the x staging (tile_rows rows per row tile, each the core's piece of an x chunk of
 // at most piece_max tiles), that piece as tiles, and the staging of one row tile of output rows (one output group).
 uint64_t writer_scratch_bytes(uint32_t row_tiles, uint32_t piece_max) {
-    return uint64_t{kJobRows} * row_tiles * piece_max * kTileRowBytesBf16 +
-           uint64_t{piece_max} * row_tiles * kTileBytesBf16 + kJobRows * kGroupTiles * kTileRowBytesBf16;
+    return uint64_t{expert_rows::tile_rows} * row_tiles * piece_max * kTileRowBytesBf16 +
+           uint64_t{piece_max} * row_tiles * kTileBytesBf16 + expert_rows::tile_rows * kGroupTiles * kTileRowBytesBf16;
 }
 
 // Weight blocks of cb_w when jobs hold units (several row tiles): whole chunk units (none wraps around the CB), at
@@ -303,48 +303,50 @@ struct Buffering {
 
 // Circular buffer bytes per core of one plan.
 struct CbSizes {
-    uint32_t x = 0, w = 0, activated = 0, intermediate = 0, rows = 0, ctl = 0, routing = 0, scratch = 0;
+    uint32_t x_chunks = 0, weights = 0, activated = 0, intermediate = 0, rows = 0, ctl = 0, routing = 0, scratch = 0;
     uint32_t ones = 0;      // with a bias row
     uint32_t partials = 0;  // with several x or W2 chunks per job
     uint32_t total() const {
-        return x + w + activated + intermediate + rows + ctl + routing + scratch + partials + ones;
+        return x_chunks + weights + activated + intermediate + rows + ctl + routing + scratch + partials + ones;
     }
 };
 
 // The CBs of a buffering choice, when they fit cb_budget bytes per core.
 std::optional<CbSizes> cb_sizes(
     const MoEExpertRowsShape& shape,
-    const Buffering& b,
+    const Buffering& buffering,
     uint32_t activated_tiles,
     uint32_t block_tiles,
     uint32_t routing_bytes,
     uint32_t partial_tile_bytes,
     uint32_t cb_budget) {
     const uint32_t hidden_tiles = shape.hidden_tiles(), intermediate_tiles = shape.intermediate_tiles();
-    const bool spill = b.chunk_tiles < hidden_tiles || b.w2_chunk_rows < intermediate_tiles;
-    const uint64_t x = uint64_t{b.x_slots} * b.chunk_tiles * b.row_tiles * kTileBytesBf16;
-    const uint64_t w = uint64_t{b.block_slots} * block_tiles * tt::tile_size(tt::DataFormat::Bfp4_b);
-    const uint64_t activated = uint64_t{kActivatedSlots} * b.row_tiles * activated_tiles * kTileBytesBf16;
-    const uint64_t intermediate = uint64_t{b.intermediate_slots} * b.row_tiles * intermediate_tiles * kTileBytesBf16;
+    const bool spill = buffering.chunk_tiles < hidden_tiles || buffering.w2_chunk_rows < intermediate_tiles;
+    const uint64_t x_chunks =
+        uint64_t{buffering.x_slots} * buffering.chunk_tiles * buffering.row_tiles * kTileBytesBf16;
+    const uint64_t weights = uint64_t{buffering.block_slots} * block_tiles * tt::tile_size(tt::DataFormat::Bfp4_b);
+    const uint64_t activated = uint64_t{kActivatedSlots} * buffering.row_tiles * activated_tiles * kTileBytesBf16;
+    const uint64_t intermediate =
+        uint64_t{buffering.intermediate_slots} * buffering.row_tiles * intermediate_tiles * kTileBytesBf16;
     const uint64_t rows = kRowsSlots * kGroupTiles * kTileBytesBf16;
-    const uint64_t scratch = writer_scratch_bytes(b.row_tiles, b.chunk_piece_max);
+    const uint64_t scratch = writer_scratch_bytes(buffering.row_tiles, buffering.chunk_piece_max);
     // a 4-tile slot per (column group, row tile), also for a half group (rows_compute.cpp)
-    const uint64_t partials = spill ? uint64_t{b.row_tiles} * std::max(activated_tiles, kColumnsPerGroup) *
+    const uint64_t partials = spill ? uint64_t{buffering.row_tiles} * std::max(activated_tiles, kColumnsPerGroup) *
                                           kGroupTiles / kColumnsPerGroup * partial_tile_bytes
                                     : 0;
     const uint64_t ones = shape.has_bias ? kTileBytesBf16 : 0;
-    const uint64_t total =
-        x + w + activated + intermediate + rows + b.ctl_bytes + routing_bytes + scratch + partials + ones;
+    const uint64_t total = x_chunks + weights + activated + intermediate + rows + buffering.ctl_bytes + routing_bytes +
+                           scratch + partials + ones;
     if (total > cb_budget) {
         return std::nullopt;
     }
     return CbSizes{
-        .x = static_cast<uint32_t>(x),
-        .w = static_cast<uint32_t>(w),
+        .x_chunks = static_cast<uint32_t>(x_chunks),
+        .weights = static_cast<uint32_t>(weights),
         .activated = static_cast<uint32_t>(activated),
         .intermediate = static_cast<uint32_t>(intermediate),
         .rows = static_cast<uint32_t>(rows),
-        .ctl = b.ctl_bytes,
+        .ctl = buffering.ctl_bytes,
         .routing = routing_bytes,
         .scratch = static_cast<uint32_t>(scratch),
         .ones = static_cast<uint32_t>(ones),
@@ -380,7 +382,6 @@ struct ExpertRowsPlan {
     uint32_t block_packets = 0;    // NoC packets per read block
     uint32_t block_slots = 0;
     uint32_t blocks_in_flight = 0;
-    uint32_t sources_per_core = 0;
     uint32_t chunk_tiles = 0, chunk_piece_max = 0, chunk_blocks = 0, w2_chunk_rows = 0;  // Buffering
     bool slot_credits = false;
     uint32_t ctl_bytes = 0;
@@ -400,24 +401,24 @@ struct CoreSplit {
     std::vector<ExpertRowsCore> members;
 };
 
-// Bank b's cores: its NOC-0-optimal DRAM reader core first, then the nearest free cores (round-robin over banks).
+// Each bank's cores: its NOC-0-optimal DRAM reader core first, then the nearest free cores (round-robin over banks).
 std::vector<std::vector<CoreCoord>> place_cores(
     const std::vector<CoreCoord>& optimal, const std::vector<uint32_t>& counts, CoreCoord grid) {
     std::set<std::pair<uint32_t, uint32_t>> taken;
     std::vector<std::vector<CoreCoord>> out(optimal.size());
-    for (uint32_t b = 0; b < optimal.size(); ++b) {
-        if (counts[b]) {
-            out[b].push_back(optimal[b]);
-            taken.insert({optimal[b].x, optimal[b].y});
+    for (uint32_t bank = 0; bank < optimal.size(); ++bank) {
+        if (counts[bank]) {
+            out[bank].push_back(optimal[bank]);
+            taken.insert({optimal[bank].x, optimal[bank].y});
         }
     }
     const uint32_t most = *std::max_element(counts.begin(), counts.end());
     for (uint32_t step = 1; step < most; ++step) {
-        for (uint32_t b = 0; b < optimal.size(); ++b) {
-            if (out[b].size() >= counts[b]) {
+        for (uint32_t bank = 0; bank < optimal.size(); ++bank) {
+            if (out[bank].size() >= counts[bank]) {
                 continue;
             }
-            const int ox = optimal[b].x, oy = optimal[b].y;
+            const int optimal_x = optimal[bank].x, optimal_y = optimal[bank].y;
             double best = std::numeric_limits<double>::max();
             CoreCoord pick{0, 0};
             for (uint32_t x = 0; x < grid.x; ++x) {
@@ -425,10 +426,10 @@ std::vector<std::vector<CoreCoord>> place_cores(
                     if (taken.contains({x, y})) {
                         continue;
                     }
-                    const int dx = static_cast<int>(x) - ox, dy = static_cast<int>(y) - oy;
-                    double cost = std::abs(dx) + std::abs(dy) + (dy != 0 ? kPlaceOtherRowCost : 0.0) +
-                                  (dx < 0 ? kPlaceSmallerXCost : 0.0) + (dy < 0 ? kPlaceSmallerYCost : 0.0) +
-                                  (ox > 0 && dx < 0 ? kPlaceSmallerXOffColumnZeroCost : 0.0);
+                    const int delta_x = static_cast<int>(x) - optimal_x, delta_y = static_cast<int>(y) - optimal_y;
+                    double cost = std::abs(delta_x) + std::abs(delta_y) + (delta_y != 0 ? kPlaceOtherRowCost : 0.0) +
+                                  (delta_x < 0 ? kPlaceSmallerXCost : 0.0) + (delta_y < 0 ? kPlaceSmallerYCost : 0.0) +
+                                  (optimal_x > 0 && delta_x < 0 ? kPlaceSmallerXOffColumnZeroCost : 0.0);
                     if (cost < best) {
                         best = cost;
                         pick = CoreCoord(x, y);
@@ -440,10 +441,10 @@ std::vector<std::vector<CoreCoord>> place_cores(
                 "moe_compute expert rows: the {}x{} worker grid is full; bank {} needs {} cores, has {}",
                 grid.x,
                 grid.y,
-                b,
-                counts[b],
-                out[b].size());
-            out[b].push_back(pick);
+                bank,
+                counts[bank],
+                out[bank].size());
+            out[bank].push_back(pick);
             taken.insert({pick.x, pick.y});
         }
     }
@@ -452,8 +453,9 @@ std::vector<std::vector<CoreCoord>> place_cores(
 
 // W2 output groups per member: contiguous runs in member order on top of its gate/up tiles, the busiest member least
 // loaded, then the least sum of squared loads; earlier members take more on a tie (with equal runs, the
-// least-loaded-member greedy deal). best[m][j]: (busiest, sum of squares) of members 0..m-1 taking groups [0, j);
-// first[m][j]: member m - 1's first group there.
+// least-loaded-member greedy deal). best[member_end][group_end]: (busiest, sum of squares) of members [0, member_end)
+// taking groups [0, group_end), the last of them groups [run_begin, group_end); first[member_end][group_end]: that
+// run_begin.
 std::vector<uint32_t> split_output_groups(
     const std::vector<uint64_t>& gate_up_tiles, const std::vector<uint64_t>& output_prefix) {
     const uint32_t members = gate_up_tiles.size(), groups = output_prefix.size() - 1;
@@ -462,25 +464,28 @@ std::vector<uint32_t> split_output_groups(
     std::vector<std::vector<Cost>> best(members + 1, std::vector<Cost>(groups + 1, kNone));
     std::vector<std::vector<uint32_t>> first(members + 1, std::vector<uint32_t>(groups + 1, 0));
     best[0][0] = {0, 0};
-    for (uint32_t m = 1; m <= members; ++m) {
-        for (uint32_t j = 0; j <= groups; ++j) {
-            for (uint32_t i = 0; i <= j; ++i) {
-                if (best[m - 1][i] == kNone) {
+    for (uint32_t member_end = 1; member_end <= members; ++member_end) {
+        for (uint32_t group_end = 0; group_end <= groups; ++group_end) {
+            for (uint32_t run_begin = 0; run_begin <= group_end; ++run_begin) {
+                if (best[member_end - 1][run_begin] == kNone) {
                     continue;
                 }
-                const uint64_t load = gate_up_tiles[m - 1] + output_prefix[j] - output_prefix[i];
-                const Cost c = {std::max(best[m - 1][i].first, load), best[m - 1][i].second + load * load};
-                if (c <= best[m][j]) {
-                    best[m][j] = c;
-                    first[m][j] = i;
+                const uint64_t load =
+                    gate_up_tiles[member_end - 1] + output_prefix[group_end] - output_prefix[run_begin];
+                const Cost cost = {
+                    std::max(best[member_end - 1][run_begin].first, load),
+                    best[member_end - 1][run_begin].second + load * load};
+                if (cost <= best[member_end][group_end]) {
+                    best[member_end][group_end] = cost;
+                    first[member_end][group_end] = run_begin;
                 }
             }
         }
     }
     std::vector<uint32_t> outputs(members);
-    for (uint32_t m = members, j = groups; m > 0; --m) {
-        outputs[m - 1] = j - first[m][j];
-        j = first[m][j];
+    for (uint32_t member_end = members, group_end = groups; member_end > 0; --member_end) {
+        outputs[member_end - 1] = group_end - first[member_end][group_end];
+        group_end = first[member_end][group_end];
     }
     return outputs;
 }
@@ -508,49 +513,50 @@ struct Planner {
             .readers_per_bank = readers_per_bank, .block_tiles = block_tiles, .block_packets = block_packets};
         const uint32_t w0_w1_k_rows = shape.hidden_tiles() + shape.bias_rows();
         const uint32_t w2_k_rows = shape.intermediate_tiles() + shape.bias_rows();
-        for (uint32_t r = 0; r < shard_banks.size(); ++r) {
-            const ShardLayout& l = layouts[r];
-            const GroupRun columns = l.column_groups();
-            const uint32_t readers = std::min(readers_per_bank, columns.count), output_groups = l.output_groups();
+        for (uint32_t position = 0; position < shard_banks.size(); ++position) {
+            const ShardLayout& shard = layouts[position];
+            const GroupRun columns = shard.column_groups();
+            const uint32_t readers = std::min(readers_per_bank, columns.count), output_groups = shard.output_groups();
             std::vector<uint32_t> member_groups(readers);
             std::vector<uint64_t> gate_up_tiles(readers), output_prefix(output_groups + 1, 0);
-            for (uint32_t m = 0, group = 0; m < readers; ++m) {
-                member_groups[m] = columns.count / readers + (m < columns.count % readers ? 1 : 0);
-                for (const uint32_t end = group + member_groups[m]; group < end; ++group) {
-                    gate_up_tiles[m] += columns.width(group) * w0_w1_k_rows;
+            for (uint32_t reader = 0, group = 0; reader < readers; ++reader) {
+                member_groups[reader] = columns.count / readers + (reader < columns.count % readers ? 1 : 0);
+                for (const uint32_t end = group + member_groups[reader]; group < end; ++group) {
+                    gate_up_tiles[reader] += columns.width(group) * w0_w1_k_rows;
                 }
             }
-            for (uint32_t q = 0; q < output_groups; ++q) {
-                output_prefix[q + 1] = output_prefix[q] + prepared.w2_groups.width(q) * w2_k_rows;
+            for (uint32_t output_group = 0; output_group < output_groups; ++output_group) {
+                output_prefix[output_group + 1] =
+                    output_prefix[output_group] + prepared.w2_groups.width(output_group) * w2_k_rows;
             }
             const std::vector<uint32_t> member_outputs = split_output_groups(gate_up_tiles, output_prefix);
             uint32_t first_group = 0, first_output = 0;
-            for (uint32_t m = 0; m < readers; ++m) {
-                ExpertRowsCore c;
-                c.ring_position = r;
-                c.bank = shard_banks[r];
-                c.first_column_group = first_group;
-                c.column_groups = member_groups[m];
-                c.half_column = l.half_column && first_group + member_groups[m] == columns.count;
-                c.first_column = l.first_column + kColumnsPerGroup * first_group;
-                c.activated_columns =
-                    std::min(l.columns - kColumnsPerGroup * first_group, kColumnsPerGroup * member_groups[m]);
-                c.first_output_group = first_output;
-                c.output_groups = member_outputs[m];
-                c.half_output = prepared.w2_groups.half_last && member_outputs[m] > 0 &&
-                                first_output + member_outputs[m] == prepared.w2_groups.count;
-                c.first_output_tile = l.first_output_tile + kGroupTiles * first_output;
-                c.output_tiles =
-                    member_outputs[m]
-                        ? std::min(l.output_tiles - kGroupTiles * first_output, kGroupTiles * member_outputs[m])
-                        : 0;
-                split.members.push_back(c);
-                first_group += member_groups[m];
-                first_output += member_outputs[m];
+            for (uint32_t reader = 0; reader < readers; ++reader) {
+                ExpertRowsCore member;
+                member.ring_position = position;
+                member.bank = shard_banks[position];
+                member.first_column_group = first_group;
+                member.column_groups = member_groups[reader];
+                member.half_column = shard.half_column && first_group + member_groups[reader] == columns.count;
+                member.first_column = shard.first_column + kColumnsPerGroup * first_group;
+                member.activated_columns =
+                    std::min(shard.columns - kColumnsPerGroup * first_group, kColumnsPerGroup * member_groups[reader]);
+                member.first_output_group = first_output;
+                member.output_groups = member_outputs[reader];
+                member.half_output = prepared.w2_groups.half_last && member_outputs[reader] > 0 &&
+                                     first_output + member_outputs[reader] == prepared.w2_groups.count;
+                member.first_output_tile = shard.first_output_tile + kGroupTiles * first_output;
+                member.output_tiles = member_outputs[reader] ? std::min(
+                                                                   shard.output_tiles - kGroupTiles * first_output,
+                                                                   kGroupTiles * member_outputs[reader])
+                                                             : 0;
+                split.members.push_back(member);
+                first_group += member_groups[reader];
+                first_output += member_outputs[reader];
             }
         }
-        for (const auto& m : split.members) {
-            split.activated_tiles = std::max(split.activated_tiles, kColumnsPerGroup * m.column_groups);
+        for (const auto& member : split.members) {
+            split.activated_tiles = std::max(split.activated_tiles, kColumnsPerGroup * member.column_groups);
         }
         return split;
     }
@@ -559,17 +565,17 @@ struct Planner {
     void place_groups(ExpertRowsPlan& plan, const CoreSplit& split, uint32_t expert_groups) const {
         const uint32_t ring = shard_banks.size();
         std::vector<uint32_t> counts(ring, 0);
-        for (const auto& m : split.members) {
-            counts[m.ring_position] += expert_groups;
+        for (const auto& member : split.members) {
+            counts[member.ring_position] += expert_groups;
         }
         std::vector<uint32_t> bank_counts(optimal.size(), 0);
-        for (uint32_t r = 0; r < ring; ++r) {
-            bank_counts[shard_banks[r]] = counts[r];
+        for (uint32_t position = 0; position < ring; ++position) {
+            bank_counts[shard_banks[position]] = counts[position];
         }
         const auto placed = place_cores(optimal, bank_counts, grid);
         std::vector<uint32_t> first_member(ring, 0);
-        for (uint32_t i = split.members.size(); i-- > 0;) {
-            first_member[split.members[i].ring_position] = i;
+        for (uint32_t member_index = split.members.size(); member_index-- > 0;) {
+            first_member[split.members[member_index].ring_position] = member_index;
         }
         plan.readers_per_bank = split.readers_per_bank;
         plan.expert_groups = expert_groups;
@@ -580,35 +586,39 @@ struct Planner {
         plan.blocks_in_flight =
             *std::max_element(bank_counts.begin(), bank_counts.end()) >= kOneBlockInFlightBankCores ? 1 : 2;
         for (uint32_t group = 0; group < expert_groups; ++group) {
-            for (uint32_t i = 0; i < split.members.size(); ++i) {
-                ExpertRowsCore c = split.members[i];
-                c.group = group;
-                c.core = placed[c.bank][(i - first_member[c.ring_position]) * expert_groups + group];
-                plan.cores.push_back(c);
+            for (uint32_t member_index = 0; member_index < split.members.size(); ++member_index) {
+                ExpertRowsCore member = split.members[member_index];
+                member.group = group;
+                member.core =
+                    placed[member.bank][(member_index - first_member[member.ring_position]) * expert_groups + group];
+                plan.cores.push_back(member);
             }
         }
     }
 
-    ExpertRowsPlan make_plan(
+    // The plan of `buffering` over expert_groups copies of the split, when its CBs fit cb_budget.
+    std::optional<ExpertRowsPlan> make_plan(
         const CoreSplit& split,
-        const Buffering& b,
+        const Buffering& buffering,
         uint32_t expert_groups,
-        uint32_t sources_per_core,
-        const RoutingLayout& routing,
-        const CbSizes& cbs) const {
+        const RoutingLayout& routing) const {
+        const auto cbs = cb_sizes(
+            shape, buffering, split.activated_tiles, split.block_tiles, routing.size, partial_tile_bytes, cb_budget);
+        if (!cbs.has_value()) {
+            return std::nullopt;
+        }
         ExpertRowsPlan plan;
-        plan.row_tiles = b.row_tiles;
-        plan.x_slots = b.x_slots;
-        plan.intermediate_slots = b.intermediate_slots;
-        plan.block_slots = b.block_slots;
-        plan.sources_per_core = sources_per_core;
-        plan.chunk_tiles = b.chunk_tiles;
-        plan.chunk_piece_max = b.chunk_piece_max;
-        plan.chunk_blocks = b.chunk_blocks;
-        plan.w2_chunk_rows = b.w2_chunk_rows;
-        plan.slot_credits = b.slot_credits;
-        plan.ctl_bytes = b.ctl_bytes;
-        plan.cbs = cbs;
+        plan.row_tiles = buffering.row_tiles;
+        plan.x_slots = buffering.x_slots;
+        plan.intermediate_slots = buffering.intermediate_slots;
+        plan.block_slots = buffering.block_slots;
+        plan.chunk_tiles = buffering.chunk_tiles;
+        plan.chunk_piece_max = buffering.chunk_piece_max;
+        plan.chunk_blocks = buffering.chunk_blocks;
+        plan.w2_chunk_rows = buffering.w2_chunk_rows;
+        plan.slot_credits = buffering.slot_credits;
+        plan.ctl_bytes = buffering.ctl_bytes;
+        plan.cbs = *cbs;
         plan.routing = routing;
         place_groups(plan, split, expert_groups);
         return plan;
@@ -624,9 +634,9 @@ struct Planner {
             for (const auto& [x_slots, intermediate_slots] : kBuffering) {
                 for (uint32_t expert_groups = grid_cores() / group_cores; expert_groups >= 1; --expert_groups) {
                     const uint32_t program_cores = expert_groups * group_cores;
-                    const uint32_t sources = sources_per_core(program_cores);
-                    const RoutingLayout routing = routing_layout(shape, program_cores, sources, expert_groups);
-                    const Buffering b{
+                    const RoutingLayout routing =
+                        routing_layout(shape, program_cores, sources_per_core(program_cores), expert_groups);
+                    const Buffering buffering{
                         .row_tiles = 1,
                         .x_slots = x_slots,
                         .intermediate_slots = intermediate_slots,
@@ -638,16 +648,9 @@ struct Planner {
                         .w2_chunk_rows = shape.intermediate_tiles(),
                         .ctl_bytes = ctl_cb_bytes(1),
                         .slot_credits = false};
-                    const auto cbs = cb_sizes(
-                        shape,
-                        b,
-                        split.activated_tiles,
-                        split.block_tiles,
-                        routing.size,
-                        partial_tile_bytes,
-                        cb_budget);
-                    if (cbs.has_value()) {
-                        return make_plan(split, b, expert_groups, sources, routing, *cbs);
+                    auto plan = make_plan(split, buffering, expert_groups, routing);
+                    if (plan.has_value()) {
+                        return plan;
                     }
                 }
             }
@@ -667,17 +670,18 @@ struct Planner {
             chunks.push_back(chunk);
         }
         // jobs of at most 32 row_tiles rows of one expert: at most one partial job per expert plus the full ones
-        const uint32_t jobs_max = shape.local_experts + shape.tokens * shape.top_k / (kJobRows * row_tiles);
+        const uint32_t jobs_max =
+            shape.local_experts + shape.tokens * shape.top_k / (expert_rows::tile_rows * row_tiles);
         for (const uint32_t block_slots : kBlockSlots) {
             for (uint32_t expert_groups = grid_cores() / group_cores; expert_groups >= 1; --expert_groups) {
                 const uint32_t program_cores = expert_groups * group_cores;
-                const uint32_t sources = sources_per_core(program_cores);
-                const RoutingLayout routing = routing_layout(shape, program_cores, sources, expert_groups);
+                const RoutingLayout routing =
+                    routing_layout(shape, program_cores, sources_per_core(program_cores), expert_groups);
                 const uint32_t ctl_bytes = ctl_cb_bytes(1 + tt::div_up(jobs_max, expert_groups));
                 for (const uint32_t chunk : chunks) {
                     const uint32_t chunk_blocks =
                         expert_rows::run_blocks(kGroupTiles, chunk + shape.bias_rows(), split.block_tiles);
-                    const Buffering b{
+                    const Buffering buffering{
                         .row_tiles = row_tiles,
                         .x_slots = kChunkXSlots,
                         .intermediate_slots = kChunkIntermediateSlots,
@@ -688,16 +692,9 @@ struct Planner {
                         .w2_chunk_rows = chunk_blocks * split.block_tiles / kGroupTiles - shape.bias_rows(),
                         .ctl_bytes = ctl_bytes,
                         .slot_credits = true};
-                    const auto cbs = cb_sizes(
-                        shape,
-                        b,
-                        split.activated_tiles,
-                        split.block_tiles,
-                        routing.size,
-                        partial_tile_bytes,
-                        cb_budget);
-                    if (cbs.has_value()) {
-                        return make_plan(split, b, expert_groups, sources, routing, *cbs);
+                    auto plan = make_plan(split, buffering, expert_groups, routing);
+                    if (plan.has_value()) {
+                        return plan;
                     }
                 }
             }
@@ -740,19 +737,35 @@ PlanOrRefusal plan_expert_rows(
         packet_counts.push_back(1);
     }
     if (packet_tiles < kGroupTiles) {
-        return std::string("a NoC packet holds less than one K row of four weight tiles");
+        return fmt::format(
+            "a NoC packet of {} B holds {} weight tiles of {} B, less than one K row of a column group ({} tiles)",
+            burst,
+            packet_tiles,
+            weight_tile_bytes,
+            kGroupTiles);
     }
     const auto layouts = shard_layouts(hidden_tiles, intermediate_tiles, shape.has_bias, ring);
     const PreparedLayout prepared = prepared_layout(hidden_tiles, intermediate_tiles, shape.has_bias, ring);
     uint32_t most_groups = 0;
-    for (const auto& l : layouts) {
-        if (l.columns == 0) {
-            return std::string("a DRAM bank holds no intermediate column");
+    for (uint32_t position = 0; position < ring; ++position) {
+        const ShardLayout& shard = layouts[position];
+        if (shard.columns == 0) {
+            return fmt::format(
+                "DRAM bank {} (ring position {}) holds no intermediate column: {} intermediate tiles over {} banks",
+                shard_banks[position],
+                position,
+                intermediate_tiles,
+                ring);
         }
-        if (l.output_tiles == 0) {
-            return std::string("a DRAM bank holds no W2 output tile");
+        if (shard.output_tiles == 0) {
+            return fmt::format(
+                "DRAM bank {} (ring position {}) holds no W2 output tile: {} hidden tiles over {} banks",
+                shard_banks[position],
+                position,
+                hidden_tiles,
+                ring);
         }
-        most_groups = std::max(most_groups, l.column_groups().count);
+        most_groups = std::max(most_groups, shard.column_groups().count);
     }
     // reader cores per bank: 1 while the grid has fewer than kTwoReadersCoresPerBank worker cores per DRAM bank, else
     // 2; a larger split (up to the busiest bank's column groups) only when fewer block slots do not fit. Jobs of
@@ -795,12 +808,12 @@ PlanOrRefusal plan_expert_rows(
            " row tiles per job fits the circular-buffer budget of " + std::to_string(cb_budget) + " B per core";
 }
 
-std::vector<uint32_t> shard_banks_of(const ttnn::Tensor& w) {
-    const auto& mapping = w.buffer()->get_buffer_page_mapping();
+std::vector<uint32_t> shard_banks_of(const ttnn::Tensor& weights) {
+    const auto& mapping = weights.buffer()->get_buffer_page_mapping();
     std::vector<uint32_t> banks;
     banks.reserve(mapping->all_cores.size());
-    for (const auto& c : mapping->all_cores) {
-        banks.push_back(static_cast<uint32_t>(c.x));
+    for (const auto& core : mapping->all_cores) {
+        banks.push_back(static_cast<uint32_t>(core.x));
     }
     return banks;
 }
@@ -811,41 +824,41 @@ struct GridCoords {
 };
 
 GridCoords grid_coords(ttnn::MeshDevice* mesh_device, CoreCoord grid) {
-    GridCoords g;
+    GridCoords coords;
     for (uint32_t x = 0; x < grid.x; ++x) {
-        g.xs.push_back(mesh_device->worker_core_from_logical_core(CoreCoord(x, 0)).x);
+        coords.xs.push_back(mesh_device->worker_core_from_logical_core(CoreCoord(x, 0)).x);
     }
     for (uint32_t y = 0; y < grid.y; ++y) {
-        g.ys.push_back(mesh_device->worker_core_from_logical_core(CoreCoord(0, y)).y);
+        coords.ys.push_back(mesh_device->worker_core_from_logical_core(CoreCoord(0, y)).y);
     }
     for (uint32_t x = 0; x < grid.x; ++x) {
         for (uint32_t y = 0; y < grid.y; ++y) {
-            const CoreCoord v = mesh_device->worker_core_from_logical_core(CoreCoord(x, y));
+            const CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(CoreCoord(x, y));
             TT_FATAL(
-                v.x == g.xs[x] && v.y == g.ys[y],
+                virtual_core.x == coords.xs[x] && virtual_core.y == coords.ys[y],
                 "moe_compute expert rows: worker grid is not a product of rows and columns: logical ({}, {}) is "
                 "virtual ({}, {}), its column and row give ({}, {})",
                 x,
                 y,
-                v.x,
-                v.y,
-                g.xs[x],
-                g.ys[y]);
+                virtual_core.x,
+                virtual_core.y,
+                coords.xs[x],
+                coords.ys[y]);
         }
     }
-    return g;
+    return coords;
 }
 
 std::vector<uint32_t> core_mask(const std::vector<CoreCoord>& cores, CoreCoord grid) {
     std::vector<uint32_t> words(tt::div_up(grid.x * grid.y, 32u), 0);
-    for (const auto& c : cores) {
-        const uint32_t linear_index = c.x * grid.y + c.y;
+    for (const auto& core : cores) {
+        const uint32_t linear_index = core.x * grid.y + core.y;
         words[linear_index / 32] |= 1u << (linear_index % 32);
     }
     return words;
 }
 
-uint32_t float_bits(float v) { return std::bit_cast<uint32_t>(v); }
+uint32_t float_bits(float value) { return std::bit_cast<uint32_t>(value); }
 
 // mapping rows of the devices whose tokens this device receives (moe_compute tilize_reader: the devices of the
 // dispatch axis through this device, in axis order)
@@ -866,7 +879,7 @@ std::vector<uint32_t> source_rows(
     return out;
 }
 
-uint32_t aligned_page(const ttnn::Tensor& t) { return t.buffer()->aligned_page_size(); }
+uint32_t aligned_page(const ttnn::Tensor& tensor) { return tensor.buffer()->aligned_page_size(); }
 
 // Peak DRAM bandwidth in bytes / s.
 double dram_peak_bytes_per_s(tt::ARCH arch) {
@@ -881,22 +894,23 @@ double matmul_tile_cycles(tt::tt_metal::MathFidelity fidelity) {
 
 // Expected jobs (at most job_rows rows of one expert) of one call: local_experts experts, each routed by each token
 // with probability top_k / global_experts (uniform routing).
-double expected_jobs(const MoEExpertRowsShape& s, uint32_t job_rows) {
-    const double p = std::min(1.0, static_cast<double>(s.top_k) / s.global_experts);
-    const uint32_t tokens = s.tokens;
-    if (p >= 1.0) {
-        return s.local_experts * std::ceil(tokens / static_cast<double>(job_rows));
+double expected_jobs(const MoEExpertRowsShape& shape, uint32_t job_rows) {
+    const double route_probability = std::min(1.0, static_cast<double>(shape.top_k) / shape.global_experts);
+    const uint32_t tokens = shape.tokens;
+    if (route_probability >= 1.0) {
+        return shape.local_experts * std::ceil(tokens / static_cast<double>(job_rows));
     }
-    // sum over j >= 1 of P(rows > job_rows (j - 1)), rows ~ Binomial(tokens, p)
-    double pmf = std::pow(1.0 - p, tokens), cdf = 0.0, jobs = 0.0;
-    for (uint32_t n = 0; n <= tokens; ++n) {
+    // sum over j >= 1 of P(rows > job_rows (j - 1)), rows ~ Binomial(tokens, route_probability)
+    double pmf = std::pow(1.0 - route_probability, tokens), cdf = 0.0, jobs = 0.0;
+    for (uint32_t row_count = 0; row_count <= tokens; ++row_count) {
         cdf += pmf;
-        if (n % job_rows == 0) {
-            jobs += std::max(0.0, 1.0 - cdf);  // P(rows > n)
+        if (row_count % job_rows == 0) {
+            jobs += std::max(0.0, 1.0 - cdf);  // P(rows > row_count)
         }
-        pmf *= (static_cast<double>(tokens - n) / (n + 1)) * (p / (1.0 - p));
+        pmf *= (static_cast<double>(tokens - row_count) / (row_count + 1)) *
+               (route_probability / (1.0 - route_probability));
     }
-    return s.local_experts * jobs;
+    return shape.local_experts * jobs;
 }
 
 // The cost model's terms of one plan, per job: the stream time of its weights at the DRAM peak (the busiest bank's
@@ -912,42 +926,43 @@ JobCost job_cost(const MoEExpertRowsShape& shape, const ExpertRowsPlan& plan, ui
     const uint32_t w0_w1_k_rows = hidden_tiles + shape.bias_rows(), w2_k_rows = intermediate_tiles + shape.bias_rows();
     const auto layouts = shard_layouts(hidden_tiles, intermediate_tiles, shape.has_bias, banks);
     const PreparedLayout prepared = prepared_layout(hidden_tiles, intermediate_tiles, shape.has_bias, banks);
-    JobCost jc;
+    JobCost per_job;
     // tiles each bank (shard) streams for one job: group 0's W0/W1 runs split at the bank pieces, W2 in its own bank
     std::vector<double> bank_tiles(banks, 0.0);
-    for (const auto& c : plan.cores) {
+    for (const auto& member : plan.cores) {
         // weight tiles per K row of the core's column groups and of its output groups
-        const double gate_up_width = c.column_run().tiles();
-        const double down_width = c.output_run().tiles();
+        const double gate_up_width = member.column_run().tiles();
+        const double down_width = member.output_run().tiles();
         const double tiles = gate_up_width * w0_w1_k_rows + down_width * w2_k_rows;
-        if (tiles > jc.busiest) {
-            jc.busiest = tiles;
+        if (tiles > per_job.busiest) {
+            per_job.busiest = tiles;
             if (plan.row_tiles > 1) {
                 const uint32_t single_chunk =
                     expert_rows::single_chunk_tiles(plan.chunk_tiles, plan.row_tiles, hidden_tiles);
-                jc.reloads = gate_up_width * (tt::div_up(hidden_tiles, plan.chunk_tiles) - 1) +
-                             down_width * (tt::div_up(intermediate_tiles, plan.w2_chunk_rows) - 1);
-                jc.single_reloads = gate_up_width * (tt::div_up(hidden_tiles, single_chunk) - 1);
+                per_job.reloads = gate_up_width * (tt::div_up(hidden_tiles, plan.chunk_tiles) - 1) +
+                                  down_width * (tt::div_up(intermediate_tiles, plan.w2_chunk_rows) - 1);
+                per_job.single_reloads = gate_up_width * (tt::div_up(hidden_tiles, single_chunk) - 1);
             }
         }
-        if (c.group == 0) {
-            const ShardLayout& l = layouts[c.ring_position];
-            for (uint32_t group = c.first_column_group; group < c.first_column_group + c.column_groups; ++group) {
-                uint32_t at = l.w0_w1_first_tile + group * prepared.pair_tiles;
-                for (uint32_t left = l.column_groups().width(group) * w0_w1_k_rows; left > 0;) {
-                    const uint32_t piece = at / prepared.piece_tiles;
-                    const uint32_t take = std::min(left, (piece + 1) * prepared.piece_tiles - at);
+        if (member.group == 0) {
+            const ShardLayout& shard = layouts[member.ring_position];
+            for (uint32_t group = member.first_column_group; group < member.first_column_group + member.column_groups;
+                 ++group) {
+                uint32_t stream_tile = shard.w0_w1_first_tile + group * prepared.w0_w1_group_tiles;
+                for (uint32_t left = shard.column_groups().width(group) * w0_w1_k_rows; left > 0;) {
+                    const uint32_t piece = stream_tile / prepared.w0_w1_piece_tiles;
+                    const uint32_t take = std::min(left, (piece + 1) * prepared.w0_w1_piece_tiles - stream_tile);
                     bank_tiles[piece] += take;
-                    at += take;
+                    stream_tile += take;
                     left -= take;
                 }
             }
-            bank_tiles[c.ring_position] += down_width * w2_k_rows;
+            bank_tiles[member.ring_position] += down_width * w2_k_rows;
         }
     }
     const double busiest_bank = *std::max_element(bank_tiles.begin(), bank_tiles.end());
-    jc.stream_s = busiest_bank * banks * tt::tile_size(tt::DataFormat::Bfp4_b) / dram_peak_bytes_per_s(arch);
-    return jc;
+    per_job.stream_s = busiest_bank * banks * tt::tile_size(tt::DataFormat::Bfp4_b) / dram_peak_bytes_per_s(arch);
+    return per_job;
 }
 
 // The cost model's prediction of one plan: its job terms and the seconds of the call.
@@ -963,13 +978,13 @@ struct CostModel {
     double tile_s = 0, clock_hz = 0;
 
     PlanCost cost(const ExpertRowsPlan& plan) const {
-        const JobCost jc = job_cost(shape, plan, banks, arch);
-        PlanCost pc{.stream_s = jc.stream_s, .busiest = jc.busiest, .reloads = jc.reloads};
-        const double compute = pc.busiest * tile_s + pc.reloads * kReloadTileCycles / clock_hz;
-        pc.call_s = std::max(
-            expected_jobs(shape, kJobRows * plan.row_tiles) * pc.stream_s,
-            std::ceil(expected_jobs(shape, kJobRows) / plan.expert_groups) * compute);
-        return pc;
+        const JobCost per_job = job_cost(shape, plan, banks, arch);
+        PlanCost predicted{.stream_s = per_job.stream_s, .busiest = per_job.busiest, .reloads = per_job.reloads};
+        const double compute = predicted.busiest * tile_s + predicted.reloads * kReloadTileCycles / clock_hz;
+        predicted.call_s = std::max(
+            expected_jobs(shape, expert_rows::tile_rows * plan.row_tiles) * predicted.stream_s,
+            std::ceil(expected_jobs(shape, expert_rows::tile_rows) / plan.expert_groups) * compute);
+        return predicted;
     }
 };
 
@@ -983,44 +998,44 @@ struct PlaceLayout {
     TableBlock table;
     uint32_t scratch_counts = 0, scratch_offsets = 0, scratch_e_t = 0, scratch_activation = 0, scratch_count_row = 0;
     uint32_t scratch_table = 0, scratch_bytes = 0;
-    uint32_t count_words = 0, e_t_page = 0, activation_row = 0;
+    uint32_t count_words = 0, e_t_page_bytes = 0, activation_row_bytes = 0;
 };
 
 PlaceLayout place_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts) {
     const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
-    PlaceLayout o;
-    o.table = table_block(tokens, top_k, local_experts);
-    o.count_words = tt::align(local_experts * kWordBytes, l1_align) / kWordBytes;
-    o.e_t_page = (tokens + 1) * tt::align(kWordBytes, l1_align);
-    o.activation_row = tt::align((2 * local_experts + 1) * kWordBytes, l1_align);
+    PlaceLayout layout;
+    layout.table = table_block(tokens, top_k, local_experts);
+    layout.count_words = tt::align(local_experts * kWordBytes, l1_align) / kWordBytes;
+    layout.e_t_page_bytes = (tokens + 1) * tt::align(kWordBytes, l1_align);
+    layout.activation_row_bytes = tt::align((2 * local_experts + 1) * kWordBytes, l1_align);
     LayoutCursor cursor;
-    o.scratch_counts = cursor.take(local_experts * kWordBytes);
-    o.scratch_offsets = cursor.take(local_experts * kWordBytes);
-    o.scratch_e_t = cursor.take(o.e_t_page);
-    o.scratch_activation = cursor.take(expert_rows::activation_buffers * o.activation_row);
-    o.scratch_count_row = cursor.take(o.count_words * kWordBytes);
-    o.scratch_table = cursor.take(o.table.bytes);
-    o.scratch_bytes = cursor.end;
-    return o;
+    layout.scratch_counts = cursor.take(local_experts * kWordBytes);
+    layout.scratch_offsets = cursor.take(local_experts * kWordBytes);
+    layout.scratch_e_t = cursor.take(layout.e_t_page_bytes);
+    layout.scratch_activation = cursor.take(expert_rows::activation_buffers * layout.activation_row_bytes);
+    layout.scratch_count_row = cursor.take(layout.count_words * kWordBytes);
+    layout.scratch_table = cursor.take(layout.table.bytes);
+    layout.scratch_bytes = cursor.end;
+    return layout;
 }
 
-// feed.cpp's scratch: the table block's head, then two staging buffers of `batch` row slices (one ring position's W2
-// output columns of a row).
+// feed.cpp's scratch: the table block's head, then from scratch_stage two staging buffers of batch_rows row slices (one
+// ring position's W2 output columns of a row) at slice_stride.
 struct FeedLayout {
-    uint32_t slice = 0, batch = 0, stage = 0, bytes = 0;
+    uint32_t slice_stride = 0, batch_rows = 0, scratch_stage = 0, bytes = 0;
 };
 
 FeedLayout feed_layout(const PlaceLayout& place, const std::vector<ShardLayout>& layouts, uint32_t tile_width_bytes) {
     constexpr uint32_t kStageBytes = 16 * 1024;  // per staging buffer
-    FeedLayout f;
-    for (const auto& l : layouts) {
-        f.slice = std::max(f.slice, l.output_tiles * tile_width_bytes);
+    FeedLayout layout;
+    for (const auto& shard : layouts) {
+        layout.slice_stride = std::max(layout.slice_stride, shard.output_tiles * tile_width_bytes);
     }
-    f.slice = align_to_part(f.slice);
-    f.batch = std::clamp(kStageBytes / f.slice, 1u, kJobRows);
-    f.stage = align_to_part(place.table.rows);
-    f.bytes = f.stage + 2 * f.batch * f.slice;
-    return f;
+    layout.slice_stride = align_to_part(layout.slice_stride);
+    layout.batch_rows = std::clamp(kStageBytes / layout.slice_stride, 1u, expert_rows::tile_rows);
+    layout.scratch_stage = align_to_part(place.table.rows);
+    layout.bytes = layout.scratch_stage + 2 * layout.batch_rows * layout.slice_stride;
+    return layout;
 }
 
 // selective_reduce_combine's row offset per height shard in the double buffer (output kTilizeOutput), from its values
@@ -1046,7 +1061,8 @@ ForcedKernel forced_kernel() {
     return kernel == "expert_rows" ? ForcedKernel::ExpertRows : ForcedKernel::None;
 }
 
-// TT_METAL_MOE_COMPUTE_ROW_TILES=M, a test and benchmark hook: jobs of M row tiles, 1 <= M <= max_row_tiles.
+// TT_METAL_MOE_COMPUTE_ROW_TILES=<row tiles>, a test and benchmark hook: jobs of that many row tiles, from 1 to
+// max_row_tiles.
 std::optional<uint32_t> forced_row_tiles(uint32_t max_row_tiles) {
     const char* value = std::getenv("TT_METAL_MOE_COMPUTE_ROW_TILES");
     if (value == nullptr) {
@@ -1073,21 +1089,66 @@ std::optional<MoEExpertRowsParams> ring_with_reason(ForcedKernel forced, const s
     return std::nullopt;
 }
 
+// The first input layout rule of the expert rows path that the call breaks, with the observed value, or nullopt.
+std::optional<std::string> input_layout_refusal(const MoEComputeInputs& tensor_args) {
+    const ttnn::Tensor& input = tensor_args.tilize_input_tensor;
+    const ttnn::Tensor& indices = tensor_args.tilize_expert_indices_tensor;
+    const ttnn::Tensor& mapping = tensor_args.tilize_expert_mapping_tensor;
+    if (input.logical_shape().rank() < 3) {
+        return fmt::format("the input has rank {}, expected at least 3", input.logical_shape().rank());
+    }
+    if (indices.logical_shape().rank() < 2) {
+        return fmt::format("the expert indices have rank {}, expected at least 2", indices.logical_shape().rank());
+    }
+    if (mapping.logical_shape().rank() != 2) {
+        return fmt::format("the expert mapping has rank {}, expected 2", mapping.logical_shape().rank());
+    }
+    using NamedTensor = std::pair<std::string_view, const ttnn::Tensor*>;
+    const std::array<NamedTensor, 4> routing_inputs = {{
+        {"input", &input},
+        {"expert indices", &indices},
+        {"expert scores", &tensor_args.tilize_expert_scores_tensor},
+        {"expert mapping", &mapping},
+    }};
+    for (const auto& [name, tensor] : routing_inputs) {
+        if (tensor->layout() != Layout::ROW_MAJOR) {
+            return fmt::format("the {} tensor has layout {}, expected ROW_MAJOR", name, tensor->layout());
+        }
+    }
+    const std::array<NamedTensor, 2> weights = {{
+        {"W0/W1", &tensor_args.matmul_w0_w1_tensor},
+        {"W2", &tensor_args.matmul_w2_tensor},
+    }};
+    for (const auto& [name, tensor] : weights) {
+        if (tensor->logical_shape().rank() != 6) {
+            return fmt::format("the {} weights have rank {}, expected 6", name, tensor->logical_shape().rank());
+        }
+        if (tensor->dtype() != DataType::BFLOAT4_B) {
+            return fmt::format("the {} weights are {}, expected BFLOAT4_B", name, tensor->dtype());
+        }
+        if (tensor->memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+            return fmt::format(
+                "the {} weights are {}, expected HEIGHT_SHARDED", name, tensor->memory_config().memory_layout());
+        }
+    }
+    return std::nullopt;
+}
+
 // The shape of a moe_compute call. Rows kept per local expert (row_cap): its e_t page (one entry per token) and its
-// double-buffer half (output kTilizeOutput: per core 2 halves of height-shard-split rows of hidden / dp values, read
-// with the combine's row stride).
+// double-buffer half (output kTilizeOutput: per core 2 halves of height-shard-split rows of
+// hidden_size / num_data_parallel_cores values, read with the combine's row stride).
 MoEExpertRowsShape expert_rows_shape(
     ttnn::MeshDevice& mesh_device,
     const MoEComputeParams& args,
     const MoEComputeInputs& tensor_args,
     const tt::tt_metal::TensorSpec& dense) {
-    const auto& x = tensor_args.tilize_input_tensor;
+    const auto& input = tensor_args.tilize_input_tensor;
     MoEExpertRowsShape shape;
-    shape.hidden_size = x.logical_shape()[-1];
+    shape.hidden_size = input.logical_shape()[-1];
     shape.intermediate_size = args.intermediate_size;
     shape.local_experts = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     shape.top_k = tensor_args.tilize_expert_indices_tensor.logical_shape()[-1];
-    shape.tokens = x.logical_shape()[0] * x.logical_shape()[1];
+    shape.tokens = input.logical_shape()[0] * input.logical_shape()[1];
     shape.global_experts = tensor_args.tilize_expert_mapping_tensor.logical_shape()[-1];
     const auto& view = mesh_device.get_view();
     shape.num_sources = args.cluster_axis().value_or(1) == 1 ? view.num_cols() : view.num_rows();
@@ -1146,13 +1207,13 @@ uint64_t ring_tilize_cb_bytes(
     const auto& map = tensor_args.tilize_expert_mapping_tensor;
     const uint64_t l1_align = tt::tt_metal::hal::get_l1_alignment();
     const uint64_t tokens = shape.tokens, local_experts = shape.local_experts;
-    const uint64_t activation_row = tt::align((2 * local_experts + 1) * kWordBytes, l1_align);
+    const uint64_t activation_row_bytes = tt::align((2 * local_experts + 1) * kWordBytes, l1_align);
     const uint64_t tilize_cores = std::max<size_t>(1, ring_cores.tilize_cores.size());
     const uint64_t x_page = tensor_args.tilize_input_tensor.buffer()->aligned_page_size();
     return local_experts * specs[kETPages].compute_page_size_bytes()                      // e_t lists
-           + tokens * activation_row                                                      // activation rows
+           + tokens * activation_row_bytes                                                // activation rows
            + tt::div_up(tokens, 2) * l1_align * local_experts                             // second RISC's e_t
-           + tt::div_up(tokens, 2) * activation_row                                       // second RISC's rows
+           + tt::div_up(tokens, 2) * activation_row_bytes                                 // second RISC's rows
            + map.buffer()->num_pages() * map.buffer()->aligned_page_size()                // mapping
            + kRingTokensPerChunk * tt::align(tt::div_up(x_page, tilize_cores), l1_align)  // input
            + kRingSmallCbBytes;
@@ -1174,13 +1235,14 @@ std::variant<CostedPlan, std::string> choose_row_tiles(
     tt::DataFormat partials,
     CostedPlan best) {
     const MoEExpertRowsShape& shape = model.shape;
-    const std::optional<uint32_t> forced = forced_row_tiles(tt::div_up(shape.tokens * shape.top_k, kJobRows));
-    const double jobs = expected_jobs(shape, kJobRows);
+    const std::optional<uint32_t> forced =
+        forced_row_tiles(tt::div_up(shape.tokens * shape.top_k, expert_rows::tile_rows));
+    const double jobs = expected_jobs(shape, expert_rows::tile_rows);
     const double compute_bound =
         std::min<double>(best.plan.expert_groups, jobs) * best.cost.stream_s / (best.cost.busiest * model.tile_s);
     const double compute_cap =
         std::round(jobs) >= 2.0 * best.plan.expert_groups ? std::round(compute_bound) : std::floor(compute_bound);
-    uint32_t most = std::min<uint32_t>(compute_cap, tt::div_up(shape.tokens, kJobRows));
+    uint32_t most = std::min<uint32_t>(compute_cap, tt::div_up(shape.tokens, expert_rows::tile_rows));
     uint32_t least = 2;
     if (forced.has_value()) {
         most = least = *forced;
@@ -1200,8 +1262,8 @@ std::variant<CostedPlan, std::string> choose_row_tiles(
         }
         const PlanCost cost = model.cost(*plan);
         uint32_t most_output_groups = 0;
-        for (const auto& c : plan->cores) {
-            most_output_groups = std::max(most_output_groups, c.output_groups);
+        for (const auto& member : plan->cores) {
+            most_output_groups = std::max(most_output_groups, member.output_groups);
         }
         // the writer's NoC commands per row of a job: one x read per chunk, two face-row reads per tile of its x
         // piece, and per output group two face-row reads per tile and one row write
@@ -1210,7 +1272,7 @@ std::variant<CostedPlan, std::string> choose_row_tiles(
         const double output_commands = (2.0 * kGroupTiles + 1) * most_output_groups;
         const double row_ops = x_reads + piece_reads + output_commands;
         const double writer_bound =
-            plan->expert_groups * cost.stream_s / (kJobRows * row_ops * kWriterOpCycles / model.clock_hz);
+            plan->expert_groups * cost.stream_s / (expert_rows::tile_rows * row_ops * kWriterOpCycles / model.clock_hz);
         if (!forced.has_value() && (row_tiles > std::lround(writer_bound) || cost.call_s > best.cost.call_s)) {
             continue;
         }
@@ -1242,8 +1304,8 @@ std::array<uint32_t, 2> layer_weight_args(
     const MoEExpertRowsParams& args, const MoEExpertRowsInputs& tensor_args, const PreparedLayout& layout) {
     const uint32_t local_experts = args.shape.local_experts;
     return {
-        layer_address(tensor_args.w0_w1_tensor, args.layer_id, local_experts, layout.piece_tiles),
-        layer_address(tensor_args.w2_tensor, args.layer_id, local_experts, layout.w2_tiles)};
+        layer_address(tensor_args.w0_w1_tensor, args.layer_id, local_experts, layout.w0_w1_piece_tiles),
+        layer_address(tensor_args.w2_tensor, args.layer_id, local_experts, layout.w2_slice_tiles)};
 }
 
 // The tiles of one shard per (layer, expert) of prepared weights: their last three dims.
@@ -1295,40 +1357,53 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
             forced, "an extent-1 cluster axis builds no combine for the expert rows feed; dm1 writes the output");
     }
     if (!expert_rows_arch(mesh_device->arch())) {
-        return ring_with_reason(forced, "no expert rows weight-stream variant for this architecture");
+        return ring_with_reason(
+            forced, fmt::format("the expert rows path runs on Blackhole and Wormhole, not {}", mesh_device->arch()));
     }
     if (mesh_device->arch() != tt::ARCH::BLACKHOLE && forced != ForcedKernel::ExpertRows) {
         return ring_with_reason(
             forced, "Wormhole takes the expert rows path only when TT_METAL_MOE_COMPUTE_KERNEL=expert_rows forces it");
     }
-    const auto& x = tensor_args.tilize_input_tensor;
-    const auto& idx = tensor_args.tilize_expert_indices_tensor;
-    const auto& sc = tensor_args.tilize_expert_scores_tensor;
-    const auto& map = tensor_args.tilize_expert_mapping_tensor;
-    const auto& w01 = tensor_args.matmul_w0_w1_tensor;
-    const auto& w2 = tensor_args.matmul_w2_tensor;
-    if (x.logical_shape().rank() < 3 || idx.logical_shape().rank() < 2 || map.logical_shape().rank() != 2 ||
-        w01.logical_shape().rank() != 6 || w2.logical_shape().rank() != 6 || x.layout() != Layout::ROW_MAJOR ||
-        idx.layout() != Layout::ROW_MAJOR || sc.layout() != Layout::ROW_MAJOR || map.layout() != Layout::ROW_MAJOR ||
-        w01.dtype() != DataType::BFLOAT4_B || w2.dtype() != DataType::BFLOAT4_B ||
-        w01.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED ||
-        w2.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-        return ring_with_reason(forced, "inputs outside the expert rows layout rules");
+    if (const auto refusal = input_layout_refusal(tensor_args)) {
+        return ring_with_reason(forced, *refusal);
     }
     if (args.num_shared_experts_per_device.value_or(0) > 0 && args.combine_params.has_value()) {
-        return ring_with_reason(forced, "shared experts split over the mesh");
+        return ring_with_reason(
+            forced,
+            fmt::format(
+                "{} shared experts per device with the combine (split over the mesh)",
+                *args.num_shared_experts_per_device));
     }
     const auto specs = MoEComputeDeviceOperation::compute_output_specs(args, tensor_args);
     const MoEExpertRowsShape shape = expert_rows_shape(*mesh_device, args, tensor_args, specs[kTilizeOutput]);
     if (shape.top_k < 1 || shape.top_k > kMaxTopK) {
         return ring_with_reason(forced, fmt::format("top_k {} outside 1..{}", shape.top_k, kMaxTopK));
     }
-    if (aligned_page(sc) != shape.index_page_bytes || shape.tokens % shape.num_sources != 0 ||
-        uint64_t{shape.tokens} * shape.top_k > kMaxRoutedRows) {
-        return ring_with_reason(forced, "routing tensors outside the expert rows rules");
+    const uint32_t scores_page_bytes = aligned_page(tensor_args.tilize_expert_scores_tensor);
+    if (scores_page_bytes != shape.index_page_bytes) {
+        return ring_with_reason(
+            forced,
+            fmt::format(
+                "the expert scores pages are {} B, the expert indices pages {} B",
+                scores_page_bytes,
+                shape.index_page_bytes));
+    }
+    if (shape.tokens % shape.num_sources != 0) {
+        return ring_with_reason(
+            forced, fmt::format("{} tokens do not split evenly over {} sources", shape.tokens, shape.num_sources));
+    }
+    if (uint64_t{shape.tokens} * shape.top_k > kMaxRoutedRows) {
+        return ring_with_reason(
+            forced,
+            fmt::format(
+                "{} tokens * top_k {} = {} routed rows, more than the routing table's u16 rows hold ({})",
+                shape.tokens,
+                shape.top_k,
+                uint64_t{shape.tokens} * shape.top_k,
+                kMaxRoutedRows));
     }
     const uint32_t budget = cb_budget_of(*mesh_device);
-    const auto banks = shard_banks_of(w01);
+    const auto banks = shard_banks_of(tensor_args.matmul_w0_w1_tensor);
     const tt::DataFormat partials = partials_format(args.fp32_dest_acc_en);
     auto first = plan_expert_rows(mesh_device, shape, banks, budget, 1, partials);
     if (const auto* refusal = std::get_if<std::string>(&first)) {
@@ -1360,19 +1435,21 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
         budget;
     // Cost model. Every path streams each touched expert's weights once per job: a job is at most 32 of its rows on the
     // ring and with one row tile per job, at most 32 row_tiles rows with weight-stationary jobs. A bank's weights come
-    // at 1 / banks of the DRAM peak, so the busiest bank sets the stream time S of a job. The ring computes each job on
-    // one core per bank and pays a ring pass per job; the expert rows path spreads the work over readers_per_bank cores
-    // per bank and runs G expert groups in parallel. With the combine (SingleDevice, FullCcl) the ring overlaps it with
-    // its compute, while the expert rows path feeds it one expert at a time after its rows exist, so that path also
-    // pays the feed: per active expert and per row.
-    //   t_ring = J(32) (max(S, ring tiles per core * c) + ring * hop)
-    //   t_expert_rows(M) = max(J(32 M) S, ceil(J(32) / G) * (busiest * c + reloads(M) * r))
-    //                      [+ active experts * feed_expert + rows * feed_row]
-    // c: seconds per tile matmul (matmul_tile_cycles at the device clock); hop, feed_expert, feed_row and r
-    // (kReloadTileCycles): cycle counts at the clock; J(n): expected jobs of at most n rows (top_k / experts of each
-    // token); M: row tiles per job; reloads(M): the partial tiles a row tile of a job of several row tiles writes and
-    // reads back between chunks. The expert rows path runs only with a clear predicted margin over the ring
-    // (kCostMargin); within it the ring is kept.
+    // at 1 / banks of the DRAM peak, so the busiest bank sets the stream time of a job (stream_s). The ring computes
+    // each job on one core per bank and pays a ring pass per job; the expert rows path spreads the work over
+    // readers_per_bank cores per bank and runs expert_groups groups in parallel. With the combine (SingleDevice,
+    // FullCcl) the ring overlaps it with its compute, while the expert rows path feeds it one expert at a time after
+    // its rows exist, so that path also pays the feed: per active expert and per row.
+    //   t_ring = jobs(32) * (max(stream_s, ring_tiles * tile_s) + ring * hop)
+    //   t_expert_rows = max(jobs(32 row_tiles) * stream_s,
+    //                       ceil(jobs(32) / expert_groups) * (busiest * tile_s + reloads * reload))
+    //                   [+ active_experts * feed_expert + rows * feed_row]
+    // tile_s: seconds per tile matmul (matmul_tile_cycles at the device clock); hop, feed_expert, feed_row and reload
+    // (kRingHopCycles, kFeedExpertCycles, kFeedRowCycles*, kReloadTileCycles): cycle counts at the clock; jobs(n):
+    // expected jobs of at most n rows (expected_jobs: top_k / global experts of each token); row_tiles: row tiles per
+    // job; reloads: the partial tiles a row tile of a job of several row tiles writes and reads back between chunks.
+    // The expert rows path runs only with a clear predicted margin over the ring (kCostMargin); within it the ring is
+    // kept.
     const uint32_t hidden_tiles = shape.hidden_tiles(), intermediate_tiles = shape.intermediate_tiles();
     const uint32_t ring = banks.size();
     const uint32_t w0_w1_k_rows = hidden_tiles + shape.bias_rows(), w2_k_rows = intermediate_tiles + shape.bias_rows();
@@ -1391,10 +1468,10 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
         return ring_with_reason(forced, *why);
     }
     const auto& [plan, cost] = std::get<CostedPlan>(chosen);
-    const double jobs = expected_jobs(shape, kJobRows);
+    const double jobs = expected_jobs(shape, expert_rows::tile_rows);
     uint32_t ring_columns = 0;  // gate/up columns of the ring's busiest core (moe_ring_common.h)
-    for (uint32_t r = 0; r < ring; ++r) {
-        ring_columns = std::max(ring_columns, moe_ring::w0_w1_stored_cols(intermediate_tiles, r, ring));
+    for (uint32_t position = 0; position < ring; ++position) {
+        ring_columns = std::max(ring_columns, moe_ring::w0_w1_stored_cols(intermediate_tiles, position, ring));
     }
     const PreparedLayout prepared = prepared_layout(hidden_tiles, intermediate_tiles, shape.has_bias, ring);
     // matmul tiles of the ring's busiest core per job: W0 and W1 of its columns, its W2 output groups
@@ -1404,8 +1481,8 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
         jobs * (std::max(cost.stream_s, ring_tiles * model.tile_s) + ring * kRingHopCycles / clock_hz);
     double t_expert_rows = cost.call_s;
     if (args.path != MoEComputePath::ComputeOnly) {
-        const double p = std::min(1.0, static_cast<double>(shape.top_k) / shape.global_experts);
-        const double active_experts = shape.local_experts * (1.0 - std::pow(1.0 - p, shape.tokens));
+        const double route_probability = std::min(1.0, static_cast<double>(shape.top_k) / shape.global_experts);
+        const double active_experts = shape.local_experts * (1.0 - std::pow(1.0 - route_probability, shape.tokens));
         const double rows =
             static_cast<double>(shape.tokens) * shape.top_k * shape.local_experts / shape.global_experts;
         const double row_cycles = args.path == MoEComputePath::FullCcl ? kFeedRowCyclesCcl : kFeedRowCyclesLocal;
@@ -1471,60 +1548,67 @@ void MoEExpertRowsDeviceOperation::validate_on_program_cache_hit(
 void MoEExpertRowsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_activation_limit(args.activation_type, args.activation_limit);
-    const auto& s = args.shape;
+    const auto& shape = args.shape;
     TT_FATAL(
-        s.tokens % s.num_sources == 0, "moe_compute expert rows: {} tokens over {} sources", s.tokens, s.num_sources);
-    TT_FATAL(s.top_k >= 1 && s.top_k <= kMaxTopK, "moe_compute expert rows: top_k {} outside 1..{}", s.top_k, kMaxTopK);
+        shape.tokens % shape.num_sources == 0,
+        "moe_compute expert rows: {} tokens over {} sources",
+        shape.tokens,
+        shape.num_sources);
     TT_FATAL(
-        uint64_t{s.tokens} * s.top_k <= kMaxRoutedRows,
+        shape.top_k >= 1 && shape.top_k <= kMaxTopK,
+        "moe_compute expert rows: top_k {} outside 1..{}",
+        shape.top_k,
+        kMaxTopK);
+    TT_FATAL(
+        uint64_t{shape.tokens} * shape.top_k <= kMaxRoutedRows,
         "moe_compute expert rows: tokens * top_k must fit 16 bits: {} tokens, top_k {}",
-        s.tokens,
-        s.top_k);
-    const auto& w01 = tensor_args.w0_w1_tensor;
+        shape.tokens,
+        shape.top_k);
+    const auto& w0_w1 = tensor_args.w0_w1_tensor;
     const auto& w2 = tensor_args.w2_tensor;
     TT_FATAL(
-        w01.dtype() == DataType::BFLOAT4_B && w2.dtype() == DataType::BFLOAT4_B,
+        w0_w1.dtype() == DataType::BFLOAT4_B && w2.dtype() == DataType::BFLOAT4_B,
         "moe_compute expert rows: weights must be bfloat4_b, got W0/W1 {} and W2 {}",
-        w01.dtype(),
+        w0_w1.dtype(),
         w2.dtype());
     const uint32_t indices_page = aligned_page(tensor_args.expert_indices_tensor);
     const uint32_t scores_page = aligned_page(tensor_args.expert_scores_tensor);
     TT_FATAL(
-        indices_page == s.index_page_bytes && scores_page == s.index_page_bytes,
+        indices_page == shape.index_page_bytes && scores_page == shape.index_page_bytes,
         "moe_compute expert rows: indices and scores must share one page size of {} B, got {} and {} B",
-        s.index_page_bytes,
+        shape.index_page_bytes,
         indices_page,
         scores_page);
-    const auto w01_banks = shard_banks_of(w01);
+    const auto w0_w1_banks = shard_banks_of(w0_w1);
     const auto w2_banks = shard_banks_of(w2);
     TT_FATAL(
-        w01_banks == w2_banks,
+        w0_w1_banks == w2_banks,
         "moe_compute expert rows: W0/W1 and W2 shards must sit on the same banks, got {} and {}",
-        w01_banks,
+        w0_w1_banks,
         w2_banks);
     TT_FATAL(
-        args.layer_id < w01.logical_shape()[1],
+        args.layer_id < w0_w1.logical_shape()[1],
         "moe_compute expert rows: layer_id {} is out of range for {} layers of weights",
         args.layer_id,
-        w01.logical_shape()[1]);
+        w0_w1.logical_shape()[1]);
 }
 
 MoEExpertRowsDeviceOperation::spec_return_value_t MoEExpertRowsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& s = args.shape;
+    const auto& shape = args.shape;
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto result = plan_expert_rows(
         mesh_device,
-        s,
+        shape,
         shard_banks_of(tensor_args.w0_w1_tensor),
         args.cb_budget,
         args.row_tiles,
         partials_format(args.fp32_dest_acc_en));
     const auto* plan = std::get_if<ExpertRowsPlan>(&result);
     TT_FATAL(plan != nullptr, "moe_compute expert rows: {}", std::get<std::string>(result));
-    const uint32_t rows = std::min(s.tokens * s.top_k, s.local_experts * s.row_cap);
+    const uint32_t rows = std::min(shape.tokens * shape.top_k, shape.local_experts * shape.row_cap);
     const auto rows_spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape({rows, s.hidden_size}),
+        ttnn::Shape({rows, shape.hidden_size}),
         tt::tt_metal::TensorLayout(
             DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
     const auto table_spec = tt::tt_metal::TensorSpec(
@@ -1551,18 +1635,18 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
     std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh_device = tensor_args.input_tensor.device();
-    const auto& s = args.shape;
-    const uint32_t hidden_tiles = s.hidden_tiles();
-    const uint32_t intermediate_tiles = s.intermediate_tiles();
+    const auto& shape = args.shape;
+    const uint32_t hidden_tiles = shape.hidden_tiles();
+    const uint32_t intermediate_tiles = shape.intermediate_tiles();
     const auto shard_banks = shard_banks_of(tensor_args.w0_w1_tensor);
     const uint32_t ring = shard_banks.size();
     const auto result = plan_expert_rows(
-        mesh_device, s, shard_banks, args.cb_budget, args.row_tiles, partials_format(args.fp32_dest_acc_en));
+        mesh_device, shape, shard_banks, args.cb_budget, args.row_tiles, partials_format(args.fp32_dest_acc_en));
     TT_FATAL(
         std::holds_alternative<ExpertRowsPlan>(result), "moe_compute expert rows: {}", std::get<std::string>(result));
     TT_FATAL(
         expert_rows_arch(mesh_device->arch()),
-        "moe_compute expert rows: no weight-stream variant for architecture {}",
+        "moe_compute expert rows: the expert rows program runs on Blackhole and Wormhole, not {}",
         mesh_device->arch());
     const ExpertRowsPlan& plan = std::get<ExpertRowsPlan>(result);
     const auto& routing = plan.routing;
@@ -1572,35 +1656,35 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
     const uint32_t device_id = mesh_coordinate[0] * view.num_cols() + mesh_coordinate[1];
     const auto sources = source_rows(*mesh_device, mesh_coordinate, args.cluster_axis);
     TT_FATAL(
-        sources.size() == s.num_sources,
+        sources.size() == shape.num_sources,
         "moe_compute expert rows: {} sources, expected {}",
         sources.size(),
-        s.num_sources);
+        shape.num_sources);
 
     const ttnn::Tensor& rows_tensor = tensor_return_value[0];
     const ttnn::Tensor& table_tensor = tensor_return_value[1];
 
     const uint32_t weight_tile_bytes = tt::tile_size(tt::DataFormat::Bfp4_b);
-    const PreparedLayout layout = prepared_layout(hidden_tiles, intermediate_tiles, s.has_bias, ring);
-    const auto shards = shard_layouts(hidden_tiles, intermediate_tiles, s.has_bias, ring);
+    const PreparedLayout layout = prepared_layout(hidden_tiles, intermediate_tiles, shape.has_bias, ring);
+    const auto shards = shard_layouts(hidden_tiles, intermediate_tiles, shape.has_bias, ring);
     const uint32_t w0_w1_tiles = prepared_tiles_per_expert(tensor_args.w0_w1_tensor.logical_shape());
     const uint32_t w2_tiles = prepared_tiles_per_expert(tensor_args.w2_tensor.logical_shape());
     TT_FATAL(
-        w0_w1_tiles == layout.piece_tiles && w2_tiles == layout.w2_tiles,
-        "moe_compute expert rows: weights do not have the prepared layout of H {} / N {} on {} banks: {} / {} tiles "
-        "per (layer, expert) in a bank, expected {} / {}",
-        s.hidden_size,
-        s.intermediate_size,
+        w0_w1_tiles == layout.w0_w1_piece_tiles && w2_tiles == layout.w2_slice_tiles,
+        "moe_compute expert rows: weights do not have the prepared layout of hidden size {} / intermediate size {} on "
+        "{} banks: W0/W1 {} / W2 {} tiles per (layer, expert) in a bank, expected {} / {}",
+        shape.hidden_size,
+        shape.intermediate_size,
         ring,
         w0_w1_tiles,
         w2_tiles,
-        layout.piece_tiles,
-        layout.w2_tiles);
+        layout.w0_w1_piece_tiles,
+        layout.w2_slice_tiles);
 
     std::vector<CoreCoord> all_cores;
     all_cores.reserve(plan.cores.size());
-    for (const auto& c : plan.cores) {
-        all_cores.push_back(c.core);
+    for (const auto& member : plan.cores) {
+        all_cores.push_back(member.core);
     }
     const CoreRangeSet all_set = CoreRangeSet(ttsl::Span<const CoreCoord>(all_cores));
     const std::vector<uint32_t> all_mask = core_mask(all_cores, grid);
@@ -1620,8 +1704,8 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         cb_partials,
     };
     const CbSizes& cbs = plan.cbs;
-    create_cb(desc, all_set, cb_x, cbs.x, tt::DataFormat::Float16_b, kTileBytesBf16);
-    create_cb(desc, all_set, cb_w, cbs.w, tt::DataFormat::Bfp4_b, weight_tile_bytes);
+    create_cb(desc, all_set, cb_x, cbs.x_chunks, tt::DataFormat::Float16_b, kTileBytesBf16);
+    create_cb(desc, all_set, cb_w, cbs.weights, tt::DataFormat::Bfp4_b, weight_tile_bytes);
     create_cb(desc, all_set, cb_activated, cbs.activated, tt::DataFormat::Float16_b, kTileBytesBf16);
     create_cb(desc, all_set, cb_intermediate, cbs.intermediate, tt::DataFormat::Float16_b, kTileBytesBf16);
     create_cb(desc, all_set, cb_rows, cbs.rows, tt::DataFormat::Float16_b, kTileBytesBf16);
@@ -1655,48 +1739,48 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
     // several row tiles per job: the root deals the jobs to the groups by the cost model's predicted job time
     // (rows_reader.cpp), in cycles scaled down by a power of two while a group's most jobs (its ctl list) could
     // overflow its 32-bit load
-    const JobCost jc = job_cost(s, plan, ring, mesh_device->arch());
+    const JobCost per_job = job_cost(shape, plan, ring, mesh_device->arch());
     const double tile_cycles = matmul_tile_cycles(args.math_fidelity);
-    const double stream_cycles = plan.expert_groups * jc.stream_s * mesh_device->get_clock_rate_mhz() * 1e6;
-    const double row_tile_cycles = jc.busiest * tile_cycles + jc.reloads * kReloadTileCycles;
-    const double single_cycles = jc.busiest * tile_cycles + jc.single_reloads * kReloadTileCycles;
+    const double stream_cycles = plan.expert_groups * per_job.stream_s * mesh_device->get_clock_rate_mhz() * 1e6;
+    const double row_tile_cycles = per_job.busiest * tile_cycles + per_job.reloads * kReloadTileCycles;
+    const double single_cycles = per_job.busiest * tile_cycles + per_job.single_reloads * kReloadTileCycles;
     const double job_most = std::max({stream_cycles, plan.row_tiles * row_tile_cycles, single_cycles});
-    const uint32_t ctl_entries = plan.ctl_bytes / kWordBytes;
+    const uint32_t ctl_words = plan.ctl_bytes / kWordBytes;
     double deal_unit = 1.0;
-    while (job_most * ctl_entries / deal_unit >= kDealLoadLimit) {
+    while (job_most * ctl_words / deal_unit >= kDealLoadLimit) {
         deal_unit *= 2.0;
     }
-    auto deal_units = [&](double cycles) { return static_cast<uint32_t>(std::ceil(cycles / deal_unit)); };
+    auto deal_units = [deal_unit](double cycles) { return static_cast<uint32_t>(std::ceil(cycles / deal_unit)); };
     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs reader_ct = {
         {"cb_w", cb_w},
         {"cb_routing", cb_routing},
         {"cb_ctl", cb_ctl},
         {"block_tiles", plan.block_tiles},
-        {"tile_bytes", weight_tile_bytes},
+        {"weight_tile_bytes", weight_tile_bytes},
         {"block_slots", plan.block_slots},
         {"block_packets", plan.block_packets},
         {"blocks_in_flight", plan.blocks_in_flight},
-        {"tokens", s.tokens},
-        {"local_experts", s.local_experts},
-        {"top_k", s.top_k},
-        {"global_experts", s.global_experts},
-        {"index_page_bytes", s.index_page_bytes},
+        {"tokens", shape.tokens},
+        {"local_experts", shape.local_experts},
+        {"top_k", shape.top_k},
+        {"global_experts", shape.global_experts},
+        {"index_page_bytes", shape.index_page_bytes},
         {"mapping_page_bytes", aligned_page(tensor_args.expert_mapping_tensor)},
-        {"tokens_per_source", s.tokens / s.num_sources},
+        {"tokens_per_source", shape.tokens / shape.num_sources},
         {"expert_groups", plan.expert_groups},
-        {"job_rows", kJobRows * plan.row_tiles},
+        {"job_rows", expert_rows::tile_rows * plan.row_tiles},
         {"row_tiles", plan.row_tiles},
         {"chunk_tiles", plan.chunk_tiles},
         {"chunk_blocks", plan.chunk_blocks},
         {"w2_chunk_rows", plan.w2_chunk_rows},
         {"hidden_tiles", hidden_tiles},
         {"intermediate_tiles", intermediate_tiles},
-        {"has_bias", s.has_bias ? 1u : 0u},
-        {"ctl_words", plan.ctl_bytes / kWordBytes},
+        {"has_bias", shape.has_bias ? 1u : 0u},
+        {"ctl_words", ctl_words},
         {"deal_stream", deal_units(stream_cycles)},
         {"deal_row_tile", deal_units(row_tile_cycles)},
         {"deal_single", deal_units(single_cycles)},
-        {"row_cap", s.row_cap},
+        {"row_cap", shape.row_cap},
         {"grid_w", grid.x},
         {"grid_h", grid.y},
         {"mask_words", static_cast<uint32_t>(all_mask.size())},
@@ -1721,10 +1805,10 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"routing_table_bytes", routing.table_bytes},
         {"routing_jobs", routing.jobs},
         {"routing_entry_areas", routing.entry_areas},
-        {"w0_w1_group_tiles", layout.pair_tiles},
-        {"w0_w1_piece_tiles", layout.piece_tiles},
+        {"w0_w1_group_tiles", layout.w0_w1_group_tiles},
+        {"w0_w1_piece_tiles", layout.w0_w1_piece_tiles},
         {"w2_group_tiles", layout.w2_group_tiles},
-        {"w2_slice_tiles", layout.w2_tiles},
+        {"w2_slice_tiles", layout.w2_slice_tiles},
     };
     std::vector<uint32_t> reader_ct_pos;
     tt::tt_metal::TensorAccessorArgs(*tensor_args.expert_indices_tensor.buffer()).append_to(reader_ct_pos);
@@ -1751,7 +1835,7 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"grid_w", grid.x},
         {"grid_h", grid.y},
         {"mask_words", static_cast<uint32_t>(all_mask.size())},
-        {"row_bytes", s.hidden_size * kBf16Bytes},
+        {"row_bytes", shape.hidden_size * kBf16Bytes},
         {"expert_groups", plan.expert_groups},
         {"sem_intermediate", sem_intermediate},
         {"sem_x", sem_x},
@@ -1772,7 +1856,7 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         {"hidden_tiles", hidden_tiles},
         {"intermediate_tiles", intermediate_tiles},
         {"ring_cores", ring},
-        {"has_bias", s.has_bias ? 1u : 0u},
+        {"has_bias", shape.has_bias ? 1u : 0u},
         {"cb_x", cb_x},
         {"cb_activated", cb_activated},
         {"cb_intermediate", cb_intermediate},
@@ -1842,15 +1926,15 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
     const uint32_t program_cores = plan.cores.size();
     const auto layer_weights = layer_weight_args(args, tensor_args, layout);
     for (uint32_t core_index = 0; core_index < program_cores; ++core_index) {
-        const ExpertRowsCore& c = plan.cores[core_index];
+        const ExpertRowsCore& member = plan.cores[core_index];
         std::vector<CoreCoord> group_cores;
-        for (const auto& o : plan.cores) {
-            if (o.group == c.group) {
-                group_cores.push_back(o.core);
+        for (const auto& other : plan.cores) {
+            if (other.group == member.group) {
+                group_cores.push_back(other.core);
             }
         }
         tt::tt_metal::KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(c.bank);
+        reader_args.push_back(member.bank);
         reader_args.push_back(tensor_args.expert_indices_tensor.buffer());
         reader_args.push_back(tensor_args.expert_scores_tensor.buffer());
         reader_args.push_back(tensor_args.expert_mapping_tensor.buffer());
@@ -1858,37 +1942,41 @@ tt::tt_metal::ProgramDescriptor build_expert_rows_program_descriptor(
         reader_args.append(
             {layer_weights[0],
              layer_weights[1],
-             shards[c.ring_position].w0_w1_first_tile + c.first_column_group * layout.pair_tiles,
-             c.column_groups,
-             c.first_output_group,
-             c.output_groups,
-             c.group,
+             shards[member.ring_position].w0_w1_first_tile + member.first_column_group * layout.w0_w1_group_tiles,
+             member.column_groups,
+             member.first_output_group,
+             member.output_groups,
+             member.group,
              core_index,
              program_cores,
              static_cast<uint32_t>(root.x),
              static_cast<uint32_t>(root.y),
              device_id,
-             c.half_column ? 1u : 0u,
-             c.half_output ? 1u : 0u});
-        desc.kernels[kRowsReaderKernelIdx].emplace_runtime_args(c.core, reader_args);
+             member.half_column ? 1u : 0u,
+             member.half_output ? 1u : 0u});
+        desc.kernels[kRowsReaderKernelIdx].emplace_runtime_args(member.core, reader_args);
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(tensor_args.input_tensor.buffer());
         writer_args.push_back(rows_tensor.buffer());
         writer_args.append(
-            {c.activated_columns,
-             c.first_column,
-             c.output_groups,
-             c.first_output_tile,
-             c.output_tiles,
-             c.group,
+            {member.activated_columns,
+             member.first_column,
+             member.output_groups,
+             member.first_output_tile,
+             member.output_tiles,
+             member.group,
              core_index % plan.group_cores});
         writer_args.append(core_mask(group_cores, grid));
-        desc.kernels[kRowsWriterKernelIdx].emplace_runtime_args(c.core, writer_args);
+        desc.kernels[kRowsWriterKernelIdx].emplace_runtime_args(member.core, writer_args);
 
         desc.kernels[kRowsComputeKernelIdx].emplace_runtime_args(
-            c.core,
-            {c.column_groups, c.output_groups, c.ring_position, c.half_column ? 1u : 0u, c.half_output ? 1u : 0u});
+            member.core,
+            {member.column_groups,
+             member.output_groups,
+             member.ring_position,
+             member.half_column ? 1u : 0u,
+             member.half_output ? 1u : 0u});
     }
     return desc;
 }
@@ -1916,9 +2004,10 @@ void MoEExpertRowsFactory::override_runtime_arguments(
     std::vector<ttnn::Tensor>& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
     // Buffer addresses are bindings. The layer's weight addresses are offsets that layer_id moves.
-    const auto& s = args.shape;
+    const auto& shape = args.shape;
     const uint32_t ring = shard_banks_of(tensor_args.w0_w1_tensor).size();
-    const PreparedLayout layout = prepared_layout(s.hidden_tiles(), s.intermediate_tiles(), s.has_bias, ring);
+    const PreparedLayout layout =
+        prepared_layout(shape.hidden_tiles(), shape.intermediate_tiles(), shape.has_bias, ring);
     const auto layer_weights = layer_weight_args(args, tensor_args, layout);
     auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kRowsReaderKernelIdx);
     for (auto& reader_args_column : reader_args_by_core) {
@@ -1926,8 +2015,8 @@ void MoEExpertRowsFactory::override_runtime_arguments(
             if (reader_args.size() == 0) {
                 continue;
             }
-            for (uint32_t a = 0; a < layer_weights.size(); ++a) {
-                reader_args[kReaderLayerWeightArgs + a] = layer_weights[a];
+            for (uint32_t weight = 0; weight < layer_weights.size(); ++weight) {
+                reader_args[kReaderLayerWeightArgs + weight] = layer_weights[weight];
             }
         }
     }
@@ -1955,10 +2044,10 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     const bool ccl = args.path == MoEComputePath::FullCcl;
     TT_FATAL(
         tensor_args.expert_rows_tensor.has_value() && tensor_args.expert_rows_table_tensor.has_value(),
-        "moe_compute expert rows place: needs the expert rows program's outputs");
+        "moe_compute expert rows placement program: needs the expert rows program's outputs");
     TT_FATAL(
         !ccl || (init_barrier_semaphore.has_value() && final_barrier_semaphore.has_value()),
-        "moe_compute expert rows place: FullCcl needs the combine's barrier semaphores");
+        "moe_compute expert rows placement program: FullCcl needs the combine's barrier semaphores");
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
     const ttnn::Tensor& rows = *tensor_args.expert_rows_tensor;
@@ -1972,7 +2061,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     const PlaceLayout place = place_layout(tokens, top_k, local_experts);
     TT_FATAL(
         table.buffer()->size() >= place.table.bytes,
-        "moe_compute expert rows place: routing table is {} B, expected {}",
+        "moe_compute expert rows placement program: routing table is {} B, expected {}",
         table.buffer()->size(),
         place.table.bytes);
 
@@ -1986,7 +2075,9 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
     const uint32_t segment_bytes = hidden_size / width_shards * kBf16Bytes;  // a row's part in one width shard
     const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
     const GridCoords virtual_coords = grid_coords(mesh_device, grid);
-    auto virt = [&](const CoreCoord& c) { return mesh_device->worker_core_from_logical_core(c); };
+    auto virt = [mesh_device](const CoreCoord& logical_core) {
+        return mesh_device->worker_core_from_logical_core(logical_core);
+    };
 
     std::vector<CoreCoord> cores;  // place.cpp's cores; with the combine also feed.cpp's, in ring order
     uint32_t done_sem = 0, meta_sem = 0;
@@ -1998,8 +2089,8 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         TT_FATAL(
             args.combine_params.has_value() && args.combine_params->local_combine == !ccl &&
                 tensor_return_value.size() == kOutputsWithCombine,
-            "moe_compute expert rows place: SingleDevice / FullCcl need their combine parameters and {} outputs; got "
-            "combine parameters {}, local_combine {}, {} outputs",
+            "moe_compute expert rows placement program: SingleDevice / FullCcl need their combine parameters and {} "
+            "outputs; got combine parameters {}, local_combine {}, {} outputs",
             kOutputsWithCombine,
             args.combine_params.has_value(),
             args.combine_params.has_value() && args.combine_params->local_combine,
@@ -2016,7 +2107,7 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         const auto& combine_params = *args.combine_params;
         TT_FATAL(
             combine_params.worker_cores.size() >= height_shards * width_shards,
-            "moe_compute expert rows place: {} combine cores, need {}",
+            "moe_compute expert rows placement program: {} combine cores, need {}",
             combine_params.worker_cores.size(),
             height_shards * width_shards);
         const std::vector<CoreCoord> combine_cores(
@@ -2043,22 +2134,23 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         const auto layouts =
             shard_layouts(hidden_tiles, args.intermediate_size / tt::constants::TILE_WIDTH, args.has_bias, ring);
         std::vector<std::vector<CoreCoord>> feeders_by_column(width_shards);
-        for (uint32_t r = 0; r < ring; ++r) {
-            const uint32_t begin = moe_ring::w2_combine_col_begin(layouts[r].first_output_tile, shard_width_tiles);
-            const uint32_t end =
-                moe_ring::w2_combine_col_end(layouts[r].first_output_tile, layouts[r].output_tiles, shard_width_tiles);
+        for (uint32_t position = 0; position < ring; ++position) {
+            const uint32_t begin =
+                moe_ring::w2_combine_col_begin(layouts[position].first_output_tile, shard_width_tiles);
+            const uint32_t end = moe_ring::w2_combine_col_end(
+                layouts[position].first_output_tile, layouts[position].output_tiles, shard_width_tiles);
             TT_FATAL(
                 begin >= end || end <= width_shards,
-                "moe_compute expert rows place: ring position {} feeds combine columns [{}, {}) of {}",
-                r,
+                "moe_compute expert rows placement program: ring position {} feeds combine columns [{}, {}) of {}",
+                position,
                 begin,
                 end,
                 width_shards);
-            for (uint32_t c = begin; c < end; ++c) {
-                feeders_by_column[c].push_back(cores[r]);
+            for (uint32_t column = begin; column < end; ++column) {
+                feeders_by_column[column].push_back(cores[position]);
             }
         }
-        append_selective_reduce_combine_to_descriptor(
+        const uint32_t combine_writer_kernel_idx = append_selective_reduce_combine_to_descriptor(
             desc,
             combine_params,
             mesh_coordinate,
@@ -2070,8 +2162,13 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
             meta_sem,
             sync_sem,
             feeders_by_column);
+        TT_FATAL(
+            combine_writer_kernel_idx == kPlaceCombineWriterKernelIdx,
+            "moe_compute expert rows placement program: combine writer is kernel {}, expected {}",
+            combine_writer_kernel_idx,
+            kPlaceCombineWriterKernelIdx);
 
-        // feed.cpp: feeder r streams the W2 output columns ring position r owns in the ring program
+        // feed.cpp: each ring position's feeder streams the W2 output columns that position owns in the ring program
         const uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * rows.element_size();
         const FeedLayout feed = feed_layout(place, layouts, tile_width_bytes);
         constexpr uint32_t kFeedCb = 1;
@@ -2085,13 +2182,13 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
             {"tile_width_bytes", tile_width_bytes},
             {"half_bytes", combine_stride * segment_bytes},
             {"row_bytes", hidden_size * kBf16Bytes},
-            {"batch_rows", feed.batch},
-            {"slice_stride", feed.slice},
+            {"batch_rows", feed.batch_rows},
+            {"slice_stride", feed.slice_stride},
             {"table_counts", place.table.counts},
             {"table_offsets", place.table.offsets},
             {"table_rows", place.table.rows},
             {"table_bytes", place.table.bytes},
-            {"scratch_stage", feed.stage},
+            {"scratch_stage", feed.scratch_stage},
             {"combine_sync_semaphore_id", sync_sem},
         };
         std::vector<uint32_t> feed_pos;
@@ -2109,36 +2206,36 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
                     .noc = tt::tt_metal::NOC::NOC_1,
                 },
         });
-        for (uint32_t r = 0; r < ring; ++r) {
-            const uint32_t first_shard = layouts[r].first_output_tile / shard_width_tiles;
+        for (uint32_t position = 0; position < ring; ++position) {
+            const uint32_t first_shard = layouts[position].first_output_tile / shard_width_tiles;
             const uint32_t last_shard =
-                (layouts[r].first_output_tile + layouts[r].output_tiles - 1) / shard_width_tiles;
+                (layouts[position].first_output_tile + layouts[position].output_tiles - 1) / shard_width_tiles;
             TT_FATAL(
                 last_shard - first_shard < expert_rows::max_slice_shards,
-                "moe_compute expert rows feed: a slice spans more than {} width shards: ring position {} covers width "
-                "shards {}..{}",
+                "moe_compute expert rows placement program: a feeder slice spans more than {} width shards: ring "
+                "position {} covers width shards {}..{}",
                 expert_rows::max_slice_shards,
-                r,
+                position,
                 first_shard,
                 last_shard);
             tt::tt_metal::KernelDescriptor::RTArgList feed_args;
             feed_args.push_back(rows.buffer());
             feed_args.push_back(table.buffer());
             feed_args.push_back(dense_out.buffer());
-            feed_args.append({layouts[r].first_output_tile, layouts[r].output_tiles});
-            for (const auto& c : combine_cores) {
-                const CoreCoord v = virt(c);
-                feed_args.push_back(v.x);
-                feed_args.push_back(v.y);
+            feed_args.append({layouts[position].first_output_tile, layouts[position].output_tiles});
+            for (const auto& combine_core : combine_cores) {
+                const CoreCoord virtual_core = virt(combine_core);
+                feed_args.push_back(virtual_core.x);
+                feed_args.push_back(virtual_core.y);
             }
-            desc.kernels[feed_kernel].emplace_runtime_args(cores[r], feed_args);
+            desc.kernels[feed_kernel].emplace_runtime_args(cores[position], feed_args);
         }
     }
 
-    const CoreRangeSet set = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
-    create_cb(desc, set, 0, place.scratch_bytes, tt::DataFormat::UInt32, place.scratch_bytes);
+    const CoreRangeSet place_set = CoreRangeSet(ttsl::Span<const CoreCoord>(cores));
+    create_cb(desc, place_set, 0, place.scratch_bytes, tt::DataFormat::UInt32, place.scratch_bytes);
 
-    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs ct = {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs place_ct = {
         {"cb_scratch", 0},
         {"tokens", tokens},
         {"top_k", top_k},
@@ -2147,8 +2244,8 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"segment_bytes", segment_bytes},
         {"half_bytes", combine_stride * segment_bytes},
         {"count_words", place.count_words},
-        {"e_t_page_bytes", place.e_t_page},
-        {"activation_row_bytes", place.activation_row},
+        {"e_t_page_bytes", place.e_t_page_bytes},
+        {"activation_row_bytes", place.activation_row_bytes},
         {"grid_w", grid.x},
         {"grid_h", grid.y},
         {"program_cores", static_cast<uint32_t>(cores.size())},
@@ -2171,24 +2268,24 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         {"scratch_count_row", place.scratch_count_row},
         {"scratch_table", place.scratch_table},
     };
-    std::vector<uint32_t> ct_pos;
-    tt::tt_metal::TensorAccessorArgs(*rows.buffer()).append_to(ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*e_t_out.buffer()).append_to(ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*activation_out.buffer()).append_to(ct_pos);
-    tt::tt_metal::TensorAccessorArgs(*table.buffer()).append_to(ct_pos);
+    std::vector<uint32_t> place_ct_pos;
+    tt::tt_metal::TensorAccessorArgs(*rows.buffer()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(*e_t_out.buffer()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(*activation_out.buffer()).append_to(place_ct_pos);
+    tt::tt_metal::TensorAccessorArgs(*table.buffer()).append_to(place_ct_pos);
     const uint32_t place_kernel = desc.kernels.size();
     desc.kernels.push_back(tt::tt_metal::KernelDescriptor{
         .kernel_source = std::string(kKernelDir) + "place.cpp",
-        .core_ranges = set,
-        .compile_time_args = std::move(ct_pos),
-        .named_compile_time_args = std::move(ct),
+        .core_ranges = place_set,
+        .compile_time_args = std::move(place_ct_pos),
+        .named_compile_time_args = std::move(place_ct),
         .config =
             tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::NOC_0,
             },
     });
-    for (uint32_t i = 0; i < cores.size(); ++i) {
+    for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
         tt::tt_metal::KernelDescriptor::RTArgList place_args;
         place_args.push_back(rows.buffer());
         place_args.push_back(e_t_out.buffer());
@@ -2197,16 +2294,16 @@ tt::tt_metal::ProgramDescriptor build_place_program_descriptor(
         place_args.push_back(dense_out.buffer());
         place_args.push_back(table.buffer());
         place_args.append(
-            {combine ? 0 : i / width_shards,
-             combine ? 0 : i % width_shards,
-             i,
+            {combine ? 0 : core_index / width_shards,
+             combine ? 0 : core_index % width_shards,
+             core_index,
              static_cast<uint32_t>(lead.x),
              static_cast<uint32_t>(lead.y),
              static_cast<uint32_t>(sync.x),
              static_cast<uint32_t>(sync.y)});
         place_args.append(virtual_coords.xs);
         place_args.append(virtual_coords.ys);
-        desc.kernels[place_kernel].emplace_runtime_args(cores[i], place_args);
+        desc.kernels[place_kernel].emplace_runtime_args(cores[core_index], place_args);
     }
     return desc;
 }
@@ -2222,21 +2319,11 @@ tt::tt_metal::WorkloadDescriptor MoEComputePlaceFactory::create_workload_descrip
     std::optional<GlobalSemaphore> init_barrier_semaphore;
     std::optional<GlobalSemaphore> final_barrier_semaphore;
     if (args.path == MoEComputePath::FullCcl) {
-        // the combine's barrier counters, above the mux's ceiling where an L1_SMALL region exists (as the standalone
-        // selective_reduce_combine allocates them)
-        auto* mesh_device = tensor_args.tilize_input_tensor.device();
-        const CoreRangeSet combine_set = CoreRangeSet(ttsl::Span<const CoreCoord>(args.combine_params->worker_cores));
-        const auto buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-        init_barrier_semaphore =
-            ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_set, 0, buffer_type);
-        // only when the caller passes none (value_or would create one either way)
-        final_barrier_semaphore =
-            args.combine_params->optional_cross_device_semaphore.has_value()
-                ? *args.combine_params->optional_cross_device_semaphore
-                : ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_set, 0, buffer_type);
-        workload.semaphores.push_back(*init_barrier_semaphore);
-        workload.semaphores.push_back(*final_barrier_semaphore);
-        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
+        std::tie(init_barrier_semaphore, final_barrier_semaphore) = add_selective_reduce_combine_barrier_semaphores(
+            workload,
+            tensor_args.tilize_input_tensor.device(),
+            CoreRangeSet(ttsl::Span<const CoreCoord>(args.combine_params->worker_cores)),
+            args.combine_params->optional_cross_device_semaphore);
     }
     const std::vector<ttnn::MeshCoordinate> all_coordinates = tensor_coords.coords();
     for (const auto& coord : all_coordinates) {
@@ -2264,17 +2351,8 @@ void MoEComputePlaceFactory::override_runtime_arguments(
     if (args.path != MoEComputePath::FullCcl || !args.combine_params->optional_cross_device_semaphore.has_value()) {
         return;
     }
-    const uint32_t cross_device_semaphore_addr =
-        static_cast<uint32_t>(args.combine_params->optional_cross_device_semaphore->address());
-    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kPlaceCombineWriterKernelIdx);
-    for (auto& writer_args_column : writer_args_by_core) {
-        for (auto& writer_args : writer_args_column) {
-            if (writer_args.size() == 0) {
-                continue;
-            }
-            writer_args[kPlaceCombineWriterSemaphoreArgIdx] = cross_device_semaphore_addr;
-        }
-    }
+    override_selective_reduce_combine_cross_device_semaphore(
+        program, kPlaceCombineWriterKernelIdx, *args.combine_params->optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::experimental::prim
