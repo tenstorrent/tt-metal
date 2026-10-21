@@ -7,7 +7,7 @@
 Runs moe_compute's own end-to-end check (test_moe_compute_6U._run_model_test: per-expert counts, activation rows, e_t,
 the double buffer and the combine output against the goldens, over several layers, eager or traced) on the ring
 program and on the expert rows programs (each forced with TT_METAL_MOE_COMPUTE_KERNEL; the expert rows arm on
-Blackhole only for now).
+Blackhole only).
 
 Layouts: every mesh of test_moe_compute_6U (Galaxy 1x8 / 1x16 torus and linear, 8x1 / 16x1 rows, the Blackhole
 LoudBox lines), each run when TT_MESH_GRAPH_DESC_PATH names its descriptor, as in that file; and a 1xN line for other
@@ -141,7 +141,7 @@ def _layouts():
 @pytest.mark.parametrize("model", sorted(MODELS))
 def test_moe_compute_expert_rows_full_ccl(mesh_device, device_params, mesh_cfg, enable_trace, kernel, model):
     if kernel == "expert_rows" and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
-        pytest.skip("Wormhole keeps the ring path; its forced expert rows FullCcl waits for a run on a healthy Galaxy")
+        pytest.skip("Wormhole uses the ring path for FullCcl")
     model_cfg, experts_per_device, has_bias, activation = MODELS[model]
     with _kernel(kernel):
         _run_model_test(
