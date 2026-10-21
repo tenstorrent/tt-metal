@@ -114,6 +114,19 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Compute the output gate's projection columns in their own matmul (ttnn.linear's 2D multicast matmul) on the worker
+    # cores the SP relay leaves idle (the gate is only read by the gated norm). Taken only with the ring relay.
+    overlap_output_gate: bool = False
+    # Blackhole di/dt: at most this many cores run projection matmuls at once. The projections take the widest
+    # full-height block of worker columns within it (11 x 10 of the 12 x 10 grid at 110).
+    max_matmul_cores: int = 110
+    # K-block tiles of the worker-block projections (block_projection_program_config).
+    input_projection_k_block: int = 4
+    output_projection_k_block: int = 4
+    output_gate_k_block: int = 8
+    # Output-gate tile columns per core the tuned input projection takes past its own width: they shorten the gate
+    # matmul beside the SP relay, whose window is on the critical path.
+    input_projection_extra_gate_tiles: int = 2
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -123,10 +136,44 @@ class KDAProgramConfig:
             )
         if self.gated_rms_output_dtype not in (ttnn.float32, ttnn.bfloat16):
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
+        if self.max_matmul_cores <= 0:
+            raise ValueError("max_matmul_cores must be positive")
+
+
+def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
+    """The widest block of full-height worker columns of ``grid`` with at most ``max_cores`` cores."""
+    return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
 
 
 # Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
 _TUNED_PROJECTION_ROWS = 640
+
+
+def block_projection_program_config(
+    columns: int, rows: int, m_tiles: int, n_tiles: int, k_block: int
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """ttnn.linear's 2D multicast schedule for an [m_tiles, K] @ [K, n_tiles] projection on the worker block of the
+    first ``columns`` columns and ``rows`` rows: one output block per core, K in ``k_block``-tile blocks, and the
+    largest (then widest) output subblock within the four FP32 destination tiles."""
+    per_core_m = -(-m_tiles // rows)
+    per_core_n = -(-n_tiles // columns)
+    subblock_h, subblock_w = max(
+        ((h, w) for h in (1, 2, 4) for w in (4, 3, 2, 1) if h * w <= 4 and per_core_m % h == 0 and per_core_n % w == 0),
+        key=lambda hw: (hw[0] * hw[1], hw[1]),
+    )
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(columns, rows),
+        in0_block_w=k_block,
+        out_subblock_h=subblock_h,
+        out_subblock_w=subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
 
 
 def tuned_projection_matmul_configs(
@@ -148,16 +195,21 @@ def tuned_projection_matmul_configs(
     per_core_m = math.ceil(row_tiles / grid.y)
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     input_per_core_n = math.ceil(math.ceil(input_n / ttnn.TILE_SIZE) / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4:
         return None, None
+    # 1x3 output subblocks when the per-core width allows, else 2x2 over a width padded to even (the input projection
+    # without the output gate's columns: 293 tiles, 26 per core).
+    input_subblock = (1, 3) if input_per_core_n % 3 == 0 else (2, 2)
+    if input_subblock == (2, 2):
+        input_per_core_n += input_per_core_n % 2
     # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
     # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
     # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
     input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=3,
+        out_subblock_h=input_subblock[0],
+        out_subblock_w=input_subblock[1],
         out_block_h=per_core_m,
         out_block_w=input_per_core_n,
         per_core_M=per_core_m,
@@ -213,6 +265,15 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # Tuned at T=5120 on the 110-core matmul grid with bfloat8_b weights: 8-tile K blocks, and the input
+        # projection takes 5 gate tile columns per core past its width, 32 tiles per core (1 x 4 subblocks; 29 or
+        # 31 leave only 2 x 1), so the gate beside the relay gets 37 tiles on 8 columns.
+        input_projection_k_block=8,
+        output_projection_k_block=8,
+        input_projection_extra_gate_tiles=5,
+        # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
+        # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
+        overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),
     )
 
 

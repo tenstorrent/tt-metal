@@ -7,6 +7,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 namespace ttnn::operations::experimental::kda::select_final_carry::detail {
@@ -62,6 +63,52 @@ void bind_select_final_carry(nb::module_& mod) {
         nb::arg("num_links") = nb::none(),
         nb::arg("cores") = nb::none(),
         nb::arg("prefix_on_last_rank") = false,
+        nb::arg("semaphores") = nb::none());
+
+    ttnn::bind_function<"select_final_carry_with_projection", "ttnn.experimental.kda.">(
+        mod,
+        R"doc(
+        ``select_final_carry`` with a projection ``projection_input @ projection_weight`` in the same
+        dispatch, on worker cores the final carry's ``cores`` leave (``ttnn.linear``'s 2D multicast matmul with
+        ``projection_program_config``, on its cores). Nothing reads the carry until the next call, and its program mostly waits on the
+        sequence-parallel fabric, so that wait hides behind the projection's compute.
+
+        Args:
+            rank_final, prefix_final (ttnn.Tensor): As ``select_final_carry``'s.
+            projection_input (ttnn.Tensor): Interleaved TILE ``[..., M, K]``.
+            projection_weight (ttnn.Tensor): Interleaved TILE ``[K, N]``.
+
+        Keyword Args:
+            actual_start, local_rows, actual_end, memory_config, sequence_parallel_axis, num_links,
+                prefix_on_last_rank: As ``select_final_carry``'s.
+            cores (list[ttnn.CoreCoord]): The final carry's worker cores.
+            projection_program_config (ttnn.MatmulMultiCoreReuseMultiCastProgramConfig): The
+                projection's schedule and cores (``allowed_worker_cores``, or the grid from (0, 0)).
+            projection_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the
+                projection's BFLOAT16 output. Defaults to DRAM.
+            projection_compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The
+                projection's fidelity; defaults to HiFi2.
+
+        Returns:
+            tuple[ttnn.Tensor, ttnn.Tensor]: The final carry and the projection's output.
+        )doc",
+        &ttnn::experimental::kda::select_final_carry_with_projection,
+        nb::arg("rank_final").noconvert(),
+        nb::arg("prefix_final").noconvert(),
+        nb::arg("projection_input").noconvert(),
+        nb::arg("projection_weight").noconvert(),
+        nb::kw_only(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("local_rows"),
+        nb::arg("cores"),
+        nb::arg("projection_program_config"),
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("num_links") = nb::none(),
+        nb::arg("prefix_on_last_rank") = false,
+        nb::arg("projection_memory_config") = nb::none(),
+        nb::arg("projection_compute_kernel_config") = nb::none(),
         nb::arg("semaphores") = nb::none());
 }
 

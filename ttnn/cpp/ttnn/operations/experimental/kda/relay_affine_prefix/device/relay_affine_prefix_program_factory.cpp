@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
+#include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -211,8 +212,33 @@ tt::tt_metal::WorkloadDescriptor RelayAffinePrefixProgramFactory::create_workloa
     std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor workload;
+    // The output gate's projection (and the copy of its first columns), the same program on every device.
+    std::optional<tt::tt_metal::ProgramDescriptor> gate;
+    if (const auto& config = attrs.output_gate) {
+        gate = kda_factory_detail::projection_program(
+            *in.gate_input,
+            *in.gate_weight,
+            outputs[2],
+            config->program_config,
+            config->output_column,
+            config->compute_kernel_config);
+        if (config->output_column > 0) {
+            gate = tt::tt_metal::merge_program_descriptors(
+                {*gate,
+                 kda_factory_detail::copy_tile_columns_program(
+                     *in.gate_copy_source,
+                     config->copy_source_column,
+                     outputs[2],
+                     config->output_column,
+                     config->copy_cores)});
+        }
+    }
     for (const auto& coord : tensor_coords.coords()) {
-        workload.programs.push_back({ttnn::MeshCoordinateRange(coord), build_program(attrs, in, outputs, coord)});
+        auto program = build_program(attrs, in, outputs, coord);
+        if (gate) {
+            program = tt::tt_metal::merge_program_descriptors({program, *gate});
+        }
+        workload.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(program)});
     }
     return workload;
 }
