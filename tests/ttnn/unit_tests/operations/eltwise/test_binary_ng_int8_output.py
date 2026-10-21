@@ -11,7 +11,7 @@ import ttnn
 @pytest.mark.parametrize("op_name", ["add", "multiply", "subtract"])
 @pytest.mark.parametrize("scalar_rhs", [False, True])
 @pytest.mark.parametrize("preallocated", [False, True])
-def test_binary_ng_int8_output(device, input_dtype, op_name, scalar_rhs, preallocated):
+def test_binary_ng_int8_output(device, input_dtype, op_name, scalar_rhs, preallocated, expect_error):
     # Integer values cover both signs and byte wrapping without rounding ambiguity.
     x = (torch.arange(1024).reshape(32, 32) % 127 - 63).float()
     rhs = torch.full_like(x, 2) if scalar_rhs else (torch.arange(1024).reshape(32, 32) % 3 + 1).float()
@@ -28,7 +28,7 @@ def test_binary_ng_int8_output(device, input_dtype, op_name, scalar_rhs, preallo
             )
         }
     if device.arch() == ttnn.device.Arch.QUASAR:
-        with pytest.raises(RuntimeError, match="INT8 output typecast is not supported on Quasar"):
+        with expect_error(RuntimeError, "INT8 output typecast is not supported on Quasar"):
             getattr(ttnn, op_name)(a, b, **kwargs)
         return
     expected = getattr(torch, op_name)(x, rhs)
