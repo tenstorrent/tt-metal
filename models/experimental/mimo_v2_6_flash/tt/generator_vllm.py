@@ -24,14 +24,17 @@ the SWA layers too), each shared that way: 9 K and 9 V buffers for 9 global and 
 keep both copies of their KV head on a chip pair (setup_vllm_kv_cache): a block can be shared by requests in slots
 of either parity.
 
-Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample. Decode replays one traced step
-per replica (captured in ``warmup_model_decode``) that also computes each slot's greedy token and writes it, with
-the slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back). With ``sample_on_device_mode``
-the plugin samples greedy rows on device (``max_device_top_k`` 1: a row with temperature > 0 and any other top_k,
-penalties, logprobs or structured output send the whole batch to host sampling, which reads the logit rows) and
-overlaps the steps (``decode_input_update_contract`` 1, ``supports_async_decode``): a steady step copies nothing
-(the trace reads its RoPE cos / sin from device tables at its own positions; past 128K context it copies those of
-the adapter's own position counter), and its tokens are read back without blocking. Prefill runs
+Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample. Decode replays one of two traced
+steps per replica (captured in ``warmup_model_decode``) that also computes each slot's token and writes it, with the
+slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back): the greedy step (GreedyHead), or,
+while a lane holds a row with temperature > 0, the sampled step (DeviceSampler: temperature, top_k up to
+``max_device_top_k``, top_p; one uniform per row from the host each step). With ``sample_on_device_mode`` the plugin
+samples on device unless a row asks for what the sampler lacks (a top_k past its candidates, pure temperature
+sampling without top_p or top_k, a seed, penalties, logprobs or structured output send the whole batch to host
+sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
+``supports_async_decode``): a steady step copies nothing but the sampled rows' uniforms (the trace reads its RoPE
+cos / sin from device tables at its own positions; past 128K context it copies those of the adapter's own position
+counter), and its tokens are read back without blocking. Prefill runs
 eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
@@ -50,6 +53,7 @@ import ttnn
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
 from .attention import page_table_width
+from .device_sampler import CANDIDATES_PER_CHIP
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
@@ -94,10 +98,14 @@ class MiMoV2ForCausalLM:
         "supports_prefix_caching": True,
         "folds_dp_into_lanes": True,
         "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
-        # Device sampling is the decode trace's greedy token (module docstring).
+        # Device sampling: the decode trace's greedy token or DeviceSampler's draw (module docstring). Its candidates
+        # are each chip's CANDIDATES_PER_CHIP largest logits, which bound top_k and stand in for the vocabulary when
+        # a top_p < 1 row sets no top_k; a row with neither (pure temperature sampling) or with a seed samples on host.
         "supports_sample_on_device": True,
         "supports_async_decode": True,
-        "max_device_top_k": 1,
+        "max_device_top_k": TP * CANDIDATES_PER_CHIP,
+        "supports_device_top_p_without_top_k": True,
+        "supports_device_seeds": False,
         "supports_device_penalties": False,
         "supports_device_logprobs": False,
     }
@@ -129,6 +137,9 @@ class MiMoV2ForCausalLM:
         # Per lane: int32 [max_batch] positions the next decode step reads (-1: idle slot), set by a reloading step
         # and advanced with every step, as the trace advances its own (a steady step reads no host positions).
         self.decode_positions = [None] * self.dp
+        # Per lane: whether its rows' sampling parameters (set by a reloading step) include a sampled row, which
+        # selects the sampled decode trace.
+        self.lane_sampled = [False] * self.dp
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -434,8 +445,10 @@ class MiMoV2ForCausalLM:
         """One decode step for every lane's slots: tokens [B, 1], start_pos [B] (-1: idle slot), B = lanes x per_lane.
 
         ``sampling_params`` None: host sampling, every step reloads the inputs and the step returns logits
-        [B, 1, vocab]. Otherwise device sampling (greedy only, ``max_device_top_k`` 1): the step returns the greedy
-        tokens [B]. ``reload_inputs`` False (steady device decode) leaves ``tokens`` and ``start_pos`` unread: the
+        [B, 1, vocab]. Otherwise device sampling: the step returns the tokens [B], greedy or drawn by DeviceSampler with
+        the rows' parameters, which a step with ``reload_inputs`` or ``reload_sampling_params`` uploads (the rows'
+        order is the one ``tokens`` has then). ``reload_inputs`` False (steady device decode) leaves ``tokens`` and
+        ``start_pos`` unread: the
         trace consumes the tokens and positions its last replay wrote, and the adapter copies the RoPE inputs of its
         own position counter (``decode_positions``); ``reload_page_table`` then copies the page tables.
 
@@ -482,8 +495,9 @@ class MiMoV2ForCausalLM:
                 if pos is None:
                     raise RuntimeError(f"lane {lane}: a steady decode before any reloading decode")
             active = pos >= 0
-            if on_device:
-                self._check_greedy(sampling_params, first, [s for s in range(last - first) if active[s]])
+            if on_device and (reload_inputs or reload_sampling_params):
+                self._set_sampling(lane, model, sampling_params, first, last, active)
+            sample = on_device and self.lane_sampled[lane]
             if not bool(active.any()):
                 self.decode_positions[lane] = pos
                 handles.append(None)
@@ -494,7 +508,12 @@ class MiMoV2ForCausalLM:
                 )
             if enable_trace and model.decode_trace is None:
                 raise RuntimeError("decode trace requested before warmup_model_decode captured it")
-            handle = model.decode_enqueue(tok, pos) if reload_inputs else model.decode_enqueue_resident(pos)
+            if sample:
+                model.sampler.set_uniforms(torch.rand(model.max_batch))
+            if reload_inputs:
+                handle = model.decode_enqueue(tok, pos, sample=sample)
+            else:
+                handle = model.decode_enqueue_resident(pos, sample=sample)
             self.decode_positions[lane] = torch.where(active, pos + 1, pos)
             handles.append((lane, last - first, handle))
         out = {"rows": rows, "handles": handles, "tokens": on_device}
@@ -522,17 +541,31 @@ class MiMoV2ForCausalLM:
             stats = None
         self._timing = stats
 
-    @staticmethod
-    def _check_greedy(sampling_params, first, slots):
-        """Device sampling is greedy: every active row has temperature 0 or top_k 1 (the plugin routes any other
-        row to host sampling through ``max_device_top_k``)."""
-        for s in slots:
-            temperature = float(sampling_params.temperature[first + s])
-            top_k = int(sampling_params.top_k[first + s])
-            if temperature != 0.0 and top_k != 1:
+    def _set_sampling(self, lane, model, sampling_params, first, last, active):
+        """Uploads the sampling parameters of the lane's rows [first, last) (idle rows greedy) and records whether
+        any row samples. A sampled row must be within what the plugin routes to the device (``model_capabilities``):
+        top_k up to ``max_device_top_k`` or none with top_p < 1, and no seed."""
+        n = last - first
+        temperature = torch.tensor([float(t) for t in sampling_params.temperature[first:last]])
+        top_k = torch.tensor([int(k) for k in sampling_params.top_k[first:last]])
+        top_p = torch.tensor([float(p) for p in sampling_params.top_p[first:last]])
+        seeds = list(sampling_params.seed[first:last]) if sampling_params.seed is not None else [None] * n
+        temperature = torch.where(active[:n], temperature, torch.zeros_like(temperature))
+        vocab = self.gen.cfg.vocab_size
+        max_k = self.model_capabilities["max_device_top_k"]
+        for s in range(n):
+            if temperature[s] == 0 or top_k[s] == 1:
+                continue
+            k, p = int(top_k[s]), float(top_p[s])
+            unbounded = k < 1 or k >= vocab
+            if (not unbounded and k > max_k) or (unbounded and p >= 1.0) or seeds[s] is not None:
                 raise ValueError(
-                    f"row {first + s}: device sampling is greedy only; got temperature {temperature}, top_k {top_k}"
+                    f"row {first + s}: device sampling takes top_k <= {max_k}, or none with top_p < 1, and no seed; "
+                    f"got temperature {float(temperature[s])}, top_k {k}, top_p {p}, seed {seeds[s]}"
                 )
+        hosts, sampled = model.sampler.host_params(temperature, top_k, top_p)
+        model.sampler.set_params(hosts)
+        self.lane_sampled[lane] = sampled
 
     def read_decode_output(self, out, async_read=False, **kwargs):
         """Starts reading a decode step's output: its greedy tokens (device sampling), without blocking when
