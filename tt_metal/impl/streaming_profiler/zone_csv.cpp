@@ -4,8 +4,6 @@
 
 #include "impl/streaming_profiler/zone_csv.hpp"
 
-#include <unistd.h>
-
 #include <cstdio>
 #include <span>
 #include <string>
@@ -107,6 +105,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         Row& r = rows_.emplace_back(row_for(d.core()));
         r.timer_id = legacy;
         r.timestamp = d.timestamp();
+        r.prog = d.runtime_id();
         r.data = payload.front();
         r.type = "TS_DATA";
     }
@@ -122,13 +121,10 @@ void ZoneCsvConsumer::write_csv() {
         "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
         "time[cycles since reset], data, run host ID, trace id, trace id counter, "
         "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
-    // The PID, not a constant: two hand-concatenated captures then carry different ids and the reader's
-    // multi-run warning still fires.
-    const uint32_t run_id = static_cast<uint32_t>(::getpid());
     for (const Row& r : rows_) {
         std::fprintf(
             f,
-            "%u, %u, %u, %s, %u, %llu, %llu, %u, %u, 0, %.*s, %s, 0, streaming, , %u, %u\n",
+            "%u, %u, %u, %s, %u, %llu, %llu, %u, , , %.*s, %s, 0, streaming, , %u, %u\n",
             r.chip,
             r.core_x,
             r.core_y,
@@ -136,7 +132,6 @@ void ZoneCsvConsumer::write_csv() {
             r.timer_id,
             static_cast<unsigned long long>(r.timestamp),
             static_cast<unsigned long long>(r.data),
-            run_id,
             r.prog,
             static_cast<int>(r.zone_name.size()),
             r.zone_name.empty() ? "" : r.zone_name.data(),
