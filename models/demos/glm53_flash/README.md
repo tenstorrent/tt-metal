@@ -38,7 +38,7 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 
 | Batch | Hardware | ISL (tokens) | TTFT | T/S/U | Target T/S/U | T/S | Notes |
 |---|---|---|---|---|---|---|---|
-| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 353 ms | 14.3 | 33 | 458 | decode step 69.8 ms; TTFT and decode from separate runs of the same config (one-run re-measure queued) |
+| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 266 ms | 12.0 | 33 | 385 | one run: one random token per user slot (diverse expert routing); decode step 83.1 ms; 128-token first token == HF head |
 | 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 139 ms | 8.7 | 19 | 2217 | one run: dense expert pass, one random token per user slot; decode step 115.5 ms; greedy id == host head for every user |
 | 8   | Galaxy 8x4 (Blackhole) | 65 493 | 31.8 s | 9.8 | 60 | 79 | one prompt, replicated to the 8 rows; 2061 tok/s prefill; decode step 101.8 ms on the stream expert op |
 | 32  | Galaxy 8x4 (Blackhole) | 65 493 | 27.3 s | 6.7 | 33 | 216 | one run: every slot populated (4 prompts per row prefilled one after another at 2400 tok/s on the MoE regions prefill path), needle retrieved by all 32 slots, users of a row bit-identical; decode step 148.2 ms through the regions expert kernel (the stacked block op decodes at 90 ms when its copy fits: one-run re-measure queued) |
@@ -47,8 +47,9 @@ distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughpu
 | 2   | 2x4 block (Blackhole), image + text | 286 (256 image tokens) | 1.2 s | 6.9 | - | 14 | one run (multimodal demo): eager vision tower 90 ms + prefill; decode step 145 ms; 45 layers bfp4 experts; answer identical to HF (one-run re-measure with today's defaults queued) |
 
 Experimental EP32 expert layout (`GLM53_MOE_LAYOUT=ep`, all-to-all dispatch / combine over the 32 chips; no
-long-context prefill path yet, so not the default): traced decode step 58.1 ms at 32 users (17.2 tok/s per user,
-551 aggregate) and 135.8 ms at 256 users (7.4 tok/s per user, 1885), same chain PCC and greedy ids.
+long-context prefill path and a prefill accuracy gap at 128 tokens, so not the default): with one random token
+per user, traced decode step 139.2 ms at 256 users with the combine op (7.2 tok/s per user) and 126.3 ms with the
+dense row-exchange combine (7.9 tok/s per user, 2028 aggregate); a reduce-scatter combine is under validation.
 
 Accuracy on the same stack: the 16 K and 64 K needle prompts generate 8/8 greedy tokens identical to the HF CPU
 reference (`reference/compare_to_tt.py`); the needle is retrieved at 1 M for distances up to ~460 K tokens (32 of 32 slots in the 32-user run; a needle placed 523 K tokens before the question is missed, and on that prompt one slot per row also flipped its first token, under investigation); the
