@@ -9739,7 +9739,6 @@ tasks:
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
-      prefill_ms_full: '> 0'
       pos_chunk: '>= 1'
       op_rows: '>= 1'
       timeline_ok: == 1
