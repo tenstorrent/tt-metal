@@ -49,7 +49,11 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     // Row-major uint32 [1, 1, 1, >= tile rows], one page: per-token weight/bias tile row r is read from row map[r];
     // entries must index existing tile rows of the affine tensors (the producer checks them, the op does not).
-    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt);
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt,
+    // Largest per-device row count (batch * N, multiple of 32) one cached program serves; the live row count is
+    // then a runtime argument, so inputs of any row count up to it share the program and the stats buffer
+    // (which must be created with the same row_capacity). Absent: one program per row count.
+    std::optional<uint32_t> row_capacity = std::nullopt);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.
@@ -77,7 +81,8 @@ ttnn::Tensor dit_fused_distributed_layernorm(
     // replicated per device. Read by the writer at kernel start so the Welford LLK does an
     // array load instead of a soft-float 1/(N+1) per sample. Absent -> runtime-division
     // fallback. Build with ttnn.create_layer_norm_reciprocals.
-    const std::optional<const ttnn::Tensor>& reciprocals = std::nullopt);
+    const std::optional<const ttnn::Tensor>& reciprocals = std::nullopt,
+    std::optional<uint32_t> row_capacity = std::nullopt);
 
 // Allocate the persistent stats DRAM scratch buffer required by the all-gather path
 // (TP>1, whole-row norm). Returns std::nullopt for shapes that don't all-gather (TP=1,
@@ -100,7 +105,9 @@ std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& weight = std::nullopt,
     const std::optional<const ttnn::Tensor>& transformation_mat = std::nullopt,
     const std::optional<const ttnn::Tensor>& rope_cos = std::nullopt,
-    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt);
+    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt,
+    // Same value the op is invoked with: the buffer is sized for this many rows instead of the input's.
+    std::optional<uint32_t> row_capacity = std::nullopt);
 
 std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
@@ -111,6 +118,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& weight = std::nullopt,
     const std::optional<const ttnn::Tensor>& transformation_mat = std::nullopt,
     const std::optional<const ttnn::Tensor>& rope_cos = std::nullopt,
-    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt);
+    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt,
+    std::optional<uint32_t> row_capacity = std::nullopt);
 
 }  // namespace ttnn::experimental

@@ -35,6 +35,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "dit_rmsnorm_scalar_setup.hpp"
 #include "api/debug/kernel_profiler.hpp"
 
@@ -45,16 +46,17 @@ constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(3);
 constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(4);
 constexpr uint32_t ring_size = get_compile_time_arg_val(5);
 constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(6);
-constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(7);
-constexpr uint32_t max_rounds = get_compile_time_arg_val(8);              // pages per (device,forwarder)
-constexpr uint32_t stick_bytes = get_compile_time_arg_val(9);             // 128
-constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(10);  // num_forwarders*max_rounds
+// The row split, the round count (pages per (device, forwarder)) and the pages per device all
+// follow from the common tile-row count and these two static counts, on worker and forwarder alike.
+constexpr uint32_t num_workers = get_compile_time_arg_val(7);
+constexpr uint32_t num_forwarders = get_compile_time_arg_val(8);
+constexpr uint32_t stick_bytes = get_compile_time_arg_val(9);  // 128
 // Shared packet CB (created on the whole core grid -> uniform L1 addr, so this
 // worker's CircularBuffer(packet_cb).get_write_ptr() == the forwarder core's
 // packet base) and grid-uniform sync sem ids.
-constexpr uint32_t packet_cb = get_compile_time_arg_val(11);
-constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);
-constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);
+constexpr uint32_t packet_cb = get_compile_time_arg_val(10);
+constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(11);
+constexpr uint32_t go_sem_id = get_compile_time_arg_val(12);
 // Tile row-0 layout (post transpose_wh): face_00 row0 = bytes [0,64), face_01
 // row0 = bytes [1024,1088). 32 fp32 = 128 B real data per stat tile.
 constexpr uint32_t kFaceRowBytes = 64u;
@@ -67,7 +69,7 @@ static_assert(stick_bytes % kStatBytes == 0, "stick_bytes must be a whole multip
 constexpr uint32_t num_stats = stick_bytes / kStatBytes;
 
 // Scalar/eps/trans_mat population args (after the output + dram accessors).
-constexpr auto output_args = TensorAccessorArgs<14>();
+constexpr auto output_args = TensorAccessorArgs<13>();
 constexpr auto stats_dram_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 constexpr uint32_t SCB = stats_dram_args.next_compile_time_args_offset();
 constexpr uint32_t w_sum_cb = get_compile_time_arg_val(SCB + 0);
@@ -82,10 +84,16 @@ constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t transformation_mat_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t stats_dram_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t total_num_tile_rows = get_common_arg_val<uint32_t>(3);
+    const uint32_t worker_index = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_num_tile_rows, num_workers);
+    const uint32_t tile_row_start =
+        ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_num_tile_rows);
+    const uint32_t tile_row_end = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_num_tile_rows);
+    const uint32_t max_rounds = rows_per_worker;  // pages per (device, forwarder)
+    const uint32_t num_chunks_per_device = num_forwarders * max_rounds;
     // Forwarder core NoC coords (which core to write the stick to / inc arrival),
     // plus this worker's per-core forwarder group + slot (runtime, differs per core).
     const uint32_t fwd_x = get_arg_val<uint32_t>(arg_idx++);

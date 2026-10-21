@@ -52,6 +52,11 @@ struct DitFusedDistributedRmsnormParams {
 
     DeviceComputeKernelConfig compute_kernel_config;
 
+    // Largest folded row count (batch * N per device, multiple of 32) one cached program serves.
+    // Pins the worker set and sizes the stats scratch; the live row count is a runtime argument.
+    // Absent: sized to the input, so every row count is its own program (the legacy behaviour).
+    std::optional<uint32_t> row_capacity;
+
     DitFusedDistributedRmsnormParams(
         float epsilon,
         uint32_t num_heads_per_device,
@@ -65,7 +70,8 @@ struct DitFusedDistributedRmsnormParams {
         std::vector<GlobalSemaphore> multi_device_global_semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         DeviceComputeKernelConfig compute_kernel_config,
-        DitFusedNormType norm_type = DitFusedNormType::RMS) :
+        DitFusedNormType norm_type = DitFusedNormType::RMS,
+        std::optional<uint32_t> row_capacity = std::nullopt) :
         epsilon(epsilon),
         num_heads_per_device(num_heads_per_device),
         per_head_norm(per_head_norm),
@@ -78,12 +84,13 @@ struct DitFusedDistributedRmsnormParams {
         topology(topology),
         multi_device_global_semaphore(std::move(multi_device_global_semaphore)),
         sub_device_id(sub_device_id),
-        compute_kernel_config(compute_kernel_config) {}
+        compute_kernel_config(compute_kernel_config),
+        row_capacity(row_capacity) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(11);
+        attrs.reserve(12);
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
         attrs.emplace_back("per_head_norm", per_head_norm);
@@ -95,6 +102,7 @@ struct DitFusedDistributedRmsnormParams {
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
+        attrs.emplace_back("row_capacity", row_capacity);
         return attrs;
     }
 };
@@ -136,12 +144,15 @@ struct DitFusedDistributedRmsnormInputs {
 // constraint — workers cooperate by writing different chunk indices into
 // the same set of pages. Total pages per chip = num_devices * num_chunks_per_device.
 struct DitFusedDistributedRmsnormSizing {
-    uint32_t num_tile_rows = 0;
-    uint32_t num_workers = 0;
+    uint32_t num_tile_rows = 0;       // live folded tile rows of the input
+    uint32_t capacity_tile_rows = 0;  // row_capacity / 32, or num_tile_rows when no capacity is set
+    uint32_t num_workers = 0;         // pinned from capacity_tile_rows
+    uint32_t num_forwarders = 0;      // min(num_links, num_workers) on the all-gather path, else 0
+    uint32_t max_rounds = 0;          // rounds(capacity_tile_rows, num_workers) on the all-gather path
     bool is_tp_1 = false;                // ring_size==1 or per_head_norm: reduce locally, no all-gather
     bool use_mux = false;                // !is_tp_1: uses the fabric-forwarder all-gather + DRAM scratch
     uint32_t window_size = 0;            // tile-rows per packed page
-    uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
+    uint32_t num_chunks_per_device = 0;  // num_forwarders * max_rounds (at capacity)
     uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 on the is_tp_1 path)
     uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
     // Stats transported per token-tile: 1 for RMSNorm (sum-of-squares), 2 for
@@ -153,6 +164,14 @@ struct DitFusedDistributedRmsnormSizing {
 
 DitFusedDistributedRmsnormSizing compute_sizing(
     const DitFusedDistributedRmsnormParams& args, const Tensor& input);
+
+// Stats scratch pages the all-gather path touches for `num_tile_rows` live tile rows:
+// ring_size * num_forwarders * rounds(num_tile_rows, num_workers). 0 on the is_tp_1 path.
+uint32_t stats_pages_for_rows(
+    const DitFusedDistributedRmsnormSizing& sizing, uint32_t ring_size, uint32_t num_tile_rows);
+
+// Bytes of the reader's tile-row-map buffer: one map page sized for `capacity_tile_rows` entries.
+uint32_t tile_row_map_cb_bytes(const Tensor& tile_row_map, uint32_t capacity_tile_rows);
 
 // Single source of truth for the persistent gathered-stats DRAM scratch spec:
 // [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, DRAM INTERLEAVED.
