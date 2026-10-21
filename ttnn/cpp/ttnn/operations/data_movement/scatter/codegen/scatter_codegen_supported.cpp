@@ -226,13 +226,16 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 
 namespace {
 
-// See prefers_row_major_strategy(): the tile-row threshold, the longest stick the detour's untilize
-// may materialize, and the NOC transaction boundary the untilized stick must already sit on.
+// See prefers_row_major_strategy(). Both bounds are measured tunings, not derived limits: on
+// Blackhole the per-stick split out-ran the TILE factories' per-tile-row split up to 32 tile rows,
+// with Ht=64 kept on the TILE path by the same measurement, and sticks past 32768 elements were
+// never measured to win untilized -- the chunked RM plan itself would admit far wider ones.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
-// Longest stick the detour will untilize; wider TILE rows stay on the TILE factories. Carried over
-// from the prototype, not derived from L1: the chunked RM plan keeps only the input and output
-// sticks resident, so the L1 check below admits sticks far wider than this.
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
+// The untilized stick's raw byte width must sit on a 32 B boundary: the generator's own routing
+// term for the detour, kept so the detour serves exactly the cases it was measured on. Not a
+// transport requirement -- the ROW_MAJOR factory serves unaligned sticks for direct ROW_MAJOR
+// callers through the same page-aligned accessors.
 constexpr uint32_t kRowMajorRerouteNocAlign = 32;
 
 // L1 bytes on the fullest bank that a ROW_MAJOR tensor of `shape` and `dtype` placed per
@@ -286,9 +289,8 @@ bool prefers_row_major_strategy(
     if (stick_elems > kRowMajorRerouteMaxStickElems || index_w > kRowMajorRerouteMaxStickElems) {
         return false;
     }
-    // Checked against the RAW (unaligned) byte width, not the device-aligned page: the untilized
-    // stick is exactly this many bytes wide on the wire, and a width that isn't already NOC-aligned
-    // makes the detour's transport unsafe regardless of how the destination buffer pads it.
+    // Checked against the RAW (unaligned) byte width, not the device-aligned page, as the generator's
+    // routing term is defined (see kRowMajorRerouteNocAlign).
     const uint64_t raw_input_page_bytes = static_cast<uint64_t>(stick_elems) * input_tensor.element_size();
     const uint64_t raw_index_page_bytes = static_cast<uint64_t>(index_w) * index_tensor.element_size();
     if (raw_input_page_bytes % kRowMajorRerouteNocAlign != 0 || raw_index_page_bytes % kRowMajorRerouteNocAlign != 0) {
