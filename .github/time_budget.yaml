@@ -292,8 +292,8 @@ runtime:
   perf:
     wh_n300_civ2: 35
     wh_n300_perf: 35
-    bh_p150_perf: 45
-    bh_p150_perf_high_core_count: 10
+    bh_p150_perf: 35
+    bh_p150_perf_high_core_count: 20
     bh_p150b_civ2_viommu: 10
   perf_profiler:
     wh_n300_civ2: 5
