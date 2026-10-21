@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <random>
 #include <string>
 #include <vector>
@@ -49,7 +50,7 @@ constexpr uint32_t kCbTiles = 2;
 constexpr uint32_t kDramBankId = 0;  // single-bank DRAM buffers, as reader_unary and writer_unary address them
 constexpr size_t kMaxReportedMismatches = 8;
 
-constexpr float kLn2 = 0.69314718056f;
+constexpr float kLn2 = std::numbers::ln2_v<float>;
 constexpr float kExpOverflow = 88.72283905f;     // ln(FLT_MAX)
 constexpr float kExpUnderflow = -87.33654475f;   // ln(FLT_MIN): the kernel flushes every result below it to +0
 constexpr float kExpSubnormal = -103.97207708f;  // ln(smallest subnormal)
