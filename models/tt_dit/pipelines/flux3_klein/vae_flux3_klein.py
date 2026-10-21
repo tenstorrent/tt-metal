@@ -200,10 +200,14 @@ def aligned_slice_count(wanted: int, width: int) -> int:
 
 
 def _slice_mode() -> str:
-    """``FLUX3_KLEIN_VAE_SLICE_MODE``: ``aligned`` (default: explicit TILE-aligned counts above ``AUTO_SLICE_MAX_AREA``),
-    ``explicit`` (the unaligned budget counts, for the 2026-10-20 regression probe only) or ``auto`` (ttnn's auto
-    slicer at every size, the pre-fix behaviour)."""
-    mode = os.environ.get("FLUX3_KLEIN_VAE_SLICE_MODE", "aligned").strip().lower()
+    """``FLUX3_KLEIN_VAE_SLICE_MODE``: ``auto`` (default since 2026-10-21: ttnn's auto slicer at every size, with the
+    conv config tensors in DRAM; the fastest decoder measured: 0.41 / 1.13 / 2.48 s traced at 2048² / 4096x2304 /
+    4096² vs 0.50 / 1.37 / 3.12 s with the aligned counts), ``aligned`` (explicit TILE-aligned counts above
+    ``AUTO_SLICE_MAX_AREA``, the 2026-10-20 default) or ``explicit`` (the unaligned budget counts, for the 2026-10-20
+    regression probe only). The slice count changes the convs' rounding (at 2K auto is 53.96 dB and aligned 53.49 dB
+    against the replicated TP4 reference decoder, both far above the 50 dB gate), so the choice is a PSNR-gate-class
+    default, recorded in the project's status board."""
+    mode = os.environ.get("FLUX3_KLEIN_VAE_SLICE_MODE", "auto").strip().lower()
     if mode not in ("aligned", "explicit", "auto"):
         raise ValueError(f"FLUX3_KLEIN_VAE_SLICE_MODE must be aligned, explicit or auto, got {mode!r}")
     return mode
