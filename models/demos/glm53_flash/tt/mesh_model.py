@@ -28,6 +28,7 @@ from models.demos.glm53_flash.tt.trace_prefill import (
     DEFAULT_LENGTHS,
     PrefillSlot,
     PrefillTraceInputs,
+    PrefillTraceResult,
     pick_prefill_length,
     supported_prefill_lengths,
 )
@@ -185,12 +186,16 @@ class GLM53MeshModel:
                 on_chunk(s0, e, time.perf_counter() - t0)
         return out
 
-    def first_token(self, logits_or_ids: ttnn.Tensor, owner_row: int) -> int:
+    def first_token(self, logits_or_ids, owner_row: int = 0, row: int = 0) -> int:
         """The prompt's first greedy token from the owner row's chip: ``logits_or_ids`` is the eager
-        ``prefill``'s last-token logits (argmax taken here) or the traced prefill's ids (row 0)."""
+        ``prefill``'s last-token logits (argmax taken here), a greedy-id tensor (``row`` of it), or a
+        ``PrefillTraceResult`` (its own tile row)."""
+        if isinstance(logits_or_ids, PrefillTraceResult):
+            res = logits_or_ids
+            logits_or_ids, owner_row, row = res.ids, res.owner_row, res.row
         ids = logits_or_ids if logits_or_ids.dtype == ttnn.uint32 else self.head.greedy(logits_or_ids)
         shard = self.mesh.device_tensors(ids)[owner_row * self.mesh.cols]
-        return int(ttnn.to_torch(shard).view(torch.int32).reshape(-1)[0])
+        return int(ttnn.to_torch(shard).view(torch.int32).reshape(-1)[row])
 
     # ------------------------------------------------------------- traced prefill
     def trace_prefill_lengths(self, lengths=DEFAULT_LENGTHS) -> list[int]:
@@ -211,9 +216,16 @@ class GLM53MeshModel:
             ttnn.deallocate(streams)
             streams = out
         if self.head is None:
-            return streams, None, None
-        logits = self.head.selected_logits(streams, inp.head_sel)  # [1,1,32,V]: row 0 = the prompt's last token
-        return streams, logits, self.head.greedy(logits)
+            return streams
+        logits = self.head.tile_logits(streams, inp.tile_start, inp.tile_end)  # [1,1,32,V]: the last token's tile
+        ids = self.head.greedy(logits)
+        # the tile outputs go to buffers that predate every capture (they survive other traces' replays and the
+        # capture-created tensors die inside the trace); the streams stay the capture's transient output
+        ttnn.copy(logits, inp.out_logits)
+        ttnn.copy(ids, inp.out_ids)
+        ttnn.deallocate(logits)
+        ttnn.deallocate(ids)
+        return streams
 
     def capture_prefill(self, lengths=None, cq_id: int = 0, warmup_user: int = 0) -> list[int]:
         """Allocate the persistent inputs of every requested length (default ``trace_prefill_lengths``),
@@ -229,33 +241,33 @@ class GLM53MeshModel:
         ]
         if not todo:
             return []
-        new = {T: PrefillTraceInputs.allocate(self.mesh, T) for T in todo}
+        vocab = self.cfg.vocab_size if self.head is not None else None
+        new = {T: PrefillTraceInputs.allocate(self.mesh, T, self.cfg.hidden_size, vocab) for T in todo}
         self.prefill_slot.set_user(warmup_user)
         for T, inp in new.items():  # program-cache warm-up with the exact shapes and argument values
             t0 = time.perf_counter()
             dummy = torch.arange(T, dtype=torch.long) % 1000 + 1000
             inp.set_prompt(self.mesh, self.embedding.tokens_to_host(dummy, pad_to=T), T)
-            for t in self._prefill_graph(inp):
-                if t is not None:
-                    ttnn.deallocate(t)
+            ttnn.deallocate(self._prefill_graph(inp))
             ttnn.synchronize_device(self.device)
             logger.info(f"traced prefill: T={T} compiled in {time.perf_counter() - t0:.1f} s")
         for T, inp in new.items():
             t0 = time.perf_counter()
             inp.trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
-            inp.outputs = self._prefill_graph(inp)
+            inp.streams = self._prefill_graph(inp)
             ttnn.end_trace_capture(self.device, inp.trace_id, cq_id=cq_id)
             ttnn.synchronize_device(self.device)
             self.prefill_traces[T] = inp
             logger.info(f"traced prefill: T={T} captured in {time.perf_counter() - t0:.1f} s")
         return todo
 
-    def prefill_traced(self, prompt_ids: torch.Tensor, user: int = 0, cq_id: int = 0):
+    def prefill_traced(self, prompt_ids: torch.Tensor, user: int = 0, cq_id: int = 0) -> PrefillTraceResult:
         """One prompt through the captured trace of the smallest supported length >= its token count
         (``ValueError`` when none fits: use ``prefill``). Refreshes the slot / per-length inputs, replays,
-        and returns ``(streams, logits, ids, owner_row)``: the trace's output tensors (``streams``
-        ``[1,1,T_loc,16384]`` per row, ``logits`` ``[1,1,32,V]`` and greedy ``ids`` ``[1,1,32,1]`` whose
-        row 0 on the owner row's chips is the prompt's; they are overwritten by the next replay)."""
+        and returns a ``PrefillTraceResult``: the last layer's ``streams`` (``[1,1,T_loc,16384]`` per row,
+        transient: read before another replay), the ``logits`` ``[1,1,32,V]`` / greedy ``ids`` ``[1,1,32,1]``
+        of the last token's tile (persistent buffers) and ``owner_row`` / ``row`` locating the prompt's
+        token (``first_token(result)``)."""
         S = int(prompt_ids.numel())
         T = pick_prefill_length(S, self.prefill_traces)
         if T is None:
@@ -266,7 +278,7 @@ class GLM53MeshModel:
         ttnn.execute_trace(self.device, inp.trace_id, cq_id=cq_id, blocking=True)
         for dec in self.layers:
             dec.next_start[user] = S
-        return (*inp.outputs, inp.owner_row(S))
+        return PrefillTraceResult(inp.streams, inp.out_logits, inp.out_ids, inp.owner_row(S), inp.last_row(S), S, T)
 
     def release_prefill_traces(self):
         for inp in self.prefill_traces.values():

@@ -24,9 +24,17 @@ captures):
   position ``p`` with ``p % 4 == j`` (selected on device with a HiFi4 matmul: exact) and written as one
   ring block; every pool of the padded chunk is written, the pools past the prompt are rewritten by
   decode before they become selectable;
-* the last token: ``head_sel`` ``[1,1,32,T/rows]`` bf16, row-sharded, row 0 one-hot at the owner row's
-  local last row (the head's collapse + final norm run on every local row, the selection is a bf16
-  one-hot matmul after the norm: exact), so the trace ends with the greedy id of the prompt.
+* the last token: the head's collapse + final norm run on every local row, then the 32-row tile holding
+  the owner row's local last row is cut with the tensor-argument ``ttnn.slice`` (``tile_start`` /
+  ``tile_end`` ``[4]`` int32 replicated: the slice program keys on the length, the offset is a runtime
+  tensor; the node tt_transformers uses after its bucketed prefill traces,
+  ``Transformer.process_logits_after_prefill_trace``), the LM head + greedy run on that tile and the
+  prompt's id is row ``(S-1) % 32`` of the owner row's chip (``PrefillTraceResult.row``).
+
+Outputs: the logits ``[1,1,32,V]`` and ids ``[1,1,32,1]`` are copied inside the trace into buffers
+allocated before any capture (``out_logits`` / ``out_ids``, the qwen38 generator's pattern), so they
+survive the replays of other traces; the last layer's ``streams`` stay the capture's transient output
+(read them before any other replay).
 """
 
 from __future__ import annotations
@@ -191,30 +199,45 @@ class PrefillTraceInputs:
 
     T: int  # the padded chunk length (rows of the whole chunk)
     T_loc: int  # rows per mesh row (sequence-parallel slabs)
+    hidden: int  # the head's hidden width (the tile slice's last bound)
     ids: ttnn.Tensor  # [1,1,1,T] uint32 RM, row-sharded (each row embeds its own slab)
     end: ttnn.Tensor  # [1,1,1,1] uint32 RM replicated: the prompt length S (ttKDA actual_end)
     ring_sel: ttnn.Tensor  # [1,1,32,T] bf16 TILE replicated: ring-row selector (rows j < 4)
-    head_sel: ttnn.Tensor  # [1,1,32,T_loc] bf16 TILE row-sharded: last-token selector (row 0)
+    tile_start: ttnn.Tensor  # [4] int32 replicated: [0, 0, tile0, 0], the last token's 32-row tile of the local rows
+    tile_end: ttnn.Tensor  # [4] int32 replicated: [1, 1, tile0 + 32, hidden]
+    out_logits: ttnn.Tensor | None  # [1,1,32,V] bf16 TILE: the tile's logits, copied inside the trace
+    out_ids: ttnn.Tensor | None  # [1,1,32,1] uint32 RM: the tile's greedy ids, copied inside the trace
     S: int = 0
     trace_id: object = None
-    outputs: tuple | None = None  # (streams [1,1,T_loc,16384], logits [1,1,32,V], ids [1,1,32,1]) of the capture
+    streams: ttnn.Tensor | None = None  # the capture's last-layer output [1,1,T_loc,16384] (transient)
 
     @classmethod
-    def allocate(cls, mesh: GLMMesh, T: int) -> "PrefillTraceInputs":
+    def allocate(cls, mesh: GLMMesh, T: int, hidden: int, vocab: int | None) -> "PrefillTraceInputs":
+        """``vocab`` None: no head, no output buffers."""
         rows = mesh.rows
         if T % (TILE * rows):
             raise ValueError(f"T={T} must be a multiple of {TILE * rows} on a {rows}-row mesh")
         T_loc = T // rows
+        i32, rm = ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
         return cls(
             T=T,
             T_loc=T_loc,
-            ids=_upload(
-                mesh, torch.zeros(1, 1, 1, T, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rows_dim=3
-            ),
-            end=_upload(mesh, torch.tensor([[[[T]]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            hidden=hidden,
+            ids=_upload(mesh, torch.zeros(1, 1, 1, T, dtype=torch.int32), ttnn.uint32, rm, rows_dim=3),
+            end=_upload(mesh, torch.tensor([[[[T]]]], dtype=torch.int32), ttnn.uint32, rm),
             ring_sel=_upload(mesh, torch.zeros(1, 1, TILE, T), ttnn.bfloat16, ttnn.TILE_LAYOUT),
-            head_sel=_upload(mesh, torch.zeros(1, 1, TILE * rows, T_loc), ttnn.bfloat16, ttnn.TILE_LAYOUT, rows_dim=2),
+            tile_start=_upload(mesh, torch.tensor([0, 0, T_loc - TILE, 0], dtype=torch.int32), i32, rm),
+            tile_end=_upload(mesh, torch.tensor([1, 1, T_loc, hidden], dtype=torch.int32), i32, rm),
+            out_logits=_upload(mesh, torch.zeros(1, 1, TILE, vocab), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            if vocab
+            else None,
+            out_ids=_upload(mesh, torch.zeros(1, 1, TILE, 1, dtype=torch.int32), ttnn.uint32, rm) if vocab else None,
         )
+
+    @property
+    def outputs(self) -> tuple:
+        """(streams, logits, ids) after a replay: the transient last-layer output and the copied tile outputs."""
+        return self.streams, self.out_logits, self.out_ids
 
     # ---- host values
     @staticmethod
@@ -229,17 +252,13 @@ class PrefillTraceInputs:
                 sel[0, 0, j, p] = 1.0
         return sel
 
-    @staticmethod
-    def head_selector(S: int, T_loc: int, rows: int) -> torch.Tensor:
-        """[1,1,32*rows,T_loc] (row-sharded over the mesh rows): row 0 of the owner row's block selects its local
-        row of the prompt's last token; every other row is zero (their head rows are discarded)."""
-        sel = torch.zeros(1, 1, TILE * rows, T_loc)
-        owner, local = divmod(S - 1, T_loc)
-        sel[0, 0, TILE * owner, local] = 1.0
-        return sel
-
     def owner_row(self, S: int) -> int:
+        """The mesh row whose slab holds the prompt's last token."""
         return (S - 1) // self.T_loc
+
+    def last_row(self, S: int) -> int:
+        """The row of the last token inside the 32-row tile the trace's head sees."""
+        return ((S - 1) % self.T_loc) % TILE
 
     def set_prompt(self, mesh: GLMMesh, ids_host: torch.Tensor, S: int):
         """``ids_host`` [1,1,1,T] int32 (padded prompt ids), ``S`` the prompt length."""
@@ -248,5 +267,20 @@ class PrefillTraceInputs:
         _refresh(mesh, ids_host, self.ids, rows_dim=3)
         _refresh(mesh, torch.tensor([[[[S]]]], dtype=torch.int32), self.end)
         _refresh(mesh, self.ring_selector(S, self.T), self.ring_sel)
-        _refresh(mesh, self.head_selector(S, self.T_loc, mesh.rows), self.head_sel, rows_dim=2)
+        tile0 = ((S - 1) % self.T_loc) // TILE * TILE  # the same local offset on every row (the owner row is read)
+        _refresh(mesh, torch.tensor([0, 0, tile0, 0], dtype=torch.int32), self.tile_start)
+        _refresh(mesh, torch.tensor([1, 1, tile0 + TILE, self.hidden], dtype=torch.int32), self.tile_end)
         self.S = S
+
+
+@dataclass
+class PrefillTraceResult:
+    """What ``GLM53MeshModel.prefill_traced`` returns: the trace's outputs and where the prompt's token is."""
+
+    streams: ttnn.Tensor  # the last layer's output rows (this row's slab), transient
+    logits: ttnn.Tensor | None  # [1,1,32,V] bf16: the logits of the last token's tile (persistent buffer)
+    ids: ttnn.Tensor | None  # [1,1,32,1] uint32: its greedy ids (persistent buffer)
+    owner_row: int  # the mesh row holding the last token
+    row: int  # the last token's row inside the tile
+    S: int
+    T: int

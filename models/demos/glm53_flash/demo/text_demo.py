@@ -169,8 +169,7 @@ def test_text_demo(mesh_device, input_prompts, users_per_row, max_seq_len, max_g
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
         if TRACE_PREFILL and model.has_prefill_trace(isl[u]):
-            _, _, ids_first, owner_row = model.prefill_traced(ids, user=u)
-            first = model.first_token(ids_first, owner_row)
+            first = model.first_token(model.prefill_traced(ids, user=u))
         else:
             _, logits_last, owner_row = model.prefill(ids, user=u)
             first = model.first_token(logits_last, owner_row)

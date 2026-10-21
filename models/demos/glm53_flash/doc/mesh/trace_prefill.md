@@ -14,6 +14,23 @@ repo's answer (`models/tt_transformers/tt/generator.py` `_capture_trace_prefill`
 `model_config.trace_prefill_supported_seq_lens`) is one trace per supported length over persistent device
 inputs, the prompt padded to the next supported length.
 
+## What is reused from the reference generators, what is new
+
+| piece | reference (`models/tt_transformers/tt/generator.py`, `models/demos/qwen38_27b_qb2/tt/generator.py`) | here |
+|---|---|---|
+| trace per padded length over persistent inputs refreshed with `copy_host_to_device_tensor`, compile pass before the capture pass with the SAME graph function | `_easy_trace_prefill` / `_prepare_trace_prefill` + `_record_trace_prefill` (`_prefill_trace_forward` shared "verbatim by the compile pass and the capture pass"), `trace_prefill_supported_seq_lens` | `capture_prefill` (allocate all -> compile each -> capture each, `_prefill_graph` shared), `supported_prefill_lengths` |
+| every bucket compiled before any recording ("Compile every bucket before recording any of them") | `warmup_model_prefill` with `_defer_prefill_recording` | the same order inside `capture_prefill`; `warmup_decode` before it |
+| the last token out of a bucketed trace: the 32-row tile cut by a tensor-argument `ttnn.slice` (persistent `[4]` int32 start / end; the program keys on the bucket, the offset is a runtime tensor), the row `last_token_idx % 32` read on the host | `Transformer.process_logits_after_prefill_trace` (`_tail_slice_start` / `_tail_slice_end`, `extract_user(last_token_idx % 32)`) | `TtModelHead.tile_logits` (the same slice, inside the trace, after the collapse + norm of every row), `PrefillTraceResult.row` |
+| trace outputs copied into buffers that predate every capture ("The copy target predates every trace. No capture-created output may remain alive when an earlier decode trace is replayed") | qwen38 `_prefill_trace_step` (`ttnn.copy` into `prefill_prepared["output"]`) | `out_logits` / `out_ids` of `PrefillTraceInputs`, the copies at the end of `_prefill_graph` |
+| no persistent allocation after a capture; new signatures -> release and recapture | qwen38 `_release_traces()` before fresh persistent buffers, `prefill_signatures` | the ordering rule above (demo / test); serving should adopt the release-and-recapture |
+| the valid prompt length inside a padded bucket | tt_transformers: RoPE / page tables / `last_token_idx` per prompt, the padding rows are never read; qwen38: one trace per EXACT length (no padding) | ttKDA `actual_end` as a persistent device scalar (the kernels clip their chronology there), causal SDPA for the DSA rows |
+
+New here, with the reason:
+
+* the user slot as a device value (`PrefillSlot`): both references trace one fixed slot (qwen38: "physical slot 0, prefix 0" in its trace key; tt_transformers pins `user_id=0` for chunked prefill and routes a traced prefill through the page table of the user) and run other slots eagerly or recapture. Our demo prefills 4-32 distinct slots per row through the same traces, so the slot index became `batch_idx_tensor` of the paged fills (an existing argument of `paged_fill_cache`) and, for the KDA recurrent state that is not paged, the `[B*H*K/32, 1, 32, V]` view + the same paged fill; the tap-major conv history has no paged form, hence the one-hot mask blend (exact in bf16).
+* the pooled-key ring tail (`ring_sel`, one HiFi4 matmul per ring + one block fill): the DSA indexer's raw ring is GLM-specific (no reference node); the eager path writes `S % 4` single rows with host-chosen slots, which cannot be traced at a fixed length.
+* the KDA zero input state as a persistent tensor instead of `allocate_state` (`ttnn.zeros`) inside the pass: a capture must not allocate a host-written tensor.
+
 ## Phase A (implemented): one trace per length in the dense range
 
 Supported lengths: {128, 256, 512, 1024, 2048} rounded up to a multiple of `32 * rows` (sequence-parallel row

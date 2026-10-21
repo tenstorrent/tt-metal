@@ -141,13 +141,35 @@ def test_slot_write_ops(mesh_device):
     got = ttnn.to_torch(out)[0, 0]
     assert torch.equal(got[:4], x_h[0, 0, 96:100]) and torch.equal(got[4], x_h[0, 0, 35]), "one-hot selection not exact"
     assert torch.equal(got[5:], torch.zeros_like(got[5:])), "zero selector rows are not zero"
-    logger.info("slot-write primitives: recurrent paged fill, conv mask blend, ring fill, one-hot selection all exact")
+    # the tensor-argument slice of the last token's tile (tt_transformers' node): rows 32..63 of 128 bf16 rows
+    starts = up(torch.tensor([0, 0, 32, 0], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    ends = up(torch.tensor([1, 1, 64, D], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    x = up(x_h, ttnn.bfloat16)
+    tile = ttnn.slice(input_tensor=x, starts=starts, ends=ends, slice_dim=2, num_devices=T // 32)
+    assert tuple(tile.shape) == (1, 1, 32, D), tile.shape
+    assert torch.equal(ttnn.to_torch(tile)[0, 0], x_h[0, 0, 32:64]), "tensor-argument slice of the tile"
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(torch.tensor([0, 0, 96, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        starts,
+    )
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.tensor([1, 1, 128, D], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+        ),
+        ends,
+    )
+    tile = ttnn.slice(input_tensor=x, starts=starts, ends=ends, slice_dim=2, num_devices=T // 32)
+    assert torch.equal(ttnn.to_torch(tile)[0, 0], x_h[0, 0, 96:128]), "tensor-argument slice after a bounds refresh"
+    logger.info(
+        "slot-write primitives: recurrent paged fill, conv mask blend, ring fill, one-hot selection, tensor-argument "
+        "tile slice all exact"
+    )
 
 
-def _owner_logits(model: GLM53MeshModel, logits: ttnn.Tensor, owner_row: int) -> torch.Tensor:
-    """Row 0 of the owner row's logits (the eager single row / the traced selected row) -> [V] fp32 on the host."""
+def _owner_logits(model: GLM53MeshModel, logits: ttnn.Tensor, owner_row: int, row: int = 0) -> torch.Tensor:
+    """Row ``row`` of the owner row's logits (the eager single row / the traced tile) -> [V] fp32 on the host."""
     shard = model.mesh.device_tensors(logits)[owner_row * model.mesh.cols]
-    return ttnn.to_torch(shard).float()[0, 0, 0].clone()
+    return ttnn.to_torch(shard).float()[0, 0, row].clone()
 
 
 def _stream_rows(model: GLM53MeshModel, streams: ttnn.Tensor, S: int) -> torch.Tensor:
@@ -241,7 +263,8 @@ def test_traced_vs_eager(mesh_device):
         return pool[offset : offset + S].clone()
 
     lengths = model.trace_prefill_lengths()
-    cases = [(S, u) for S, u in ((100, 0), (128, 1), (200, 0), (384, 1)) if any(T >= S for T in lengths)]
+    # S % 4 != 0 (103): the ring rows of the open pool are compared too
+    cases = [(S, u) for S, u in ((100, 0), (128, 1), (103, 1), (200, 0), (384, 1)) if any(T >= S for T in lengths)]
     logger.info(f"trace lengths {lengths}; cases (S, user) {cases}")
 
     # ---- phase 1 (eager, before any capture): the persistent decode inputs + the eager decode compile, then every
@@ -291,12 +314,12 @@ def test_traced_vs_eager(mesh_device):
     for S, u in cases:
         tok_e, owner_e, le, rows_e, state_e = eager[(S, u)]
         T = min(T for T in model.prefill_traces if T >= S)
-        streams, logits, ids, owner_t = model.prefill_traced(prompt(S), user=u)
-        tok_t = model.first_token(ids, owner_t)
-        lt = _owner_logits(model, logits, owner_t)
-        rows_t = _stream_rows(model, streams, S)
+        res = model.prefill_traced(prompt(S), user=u)
+        tok_t = model.first_token(res)
+        lt = _owner_logits(model, res.logits, res.owner_row, res.row)
+        rows_t = _stream_rows(model, res.streams, S)
         state_t = _slot_state(model, u, S)
-        assert owner_t == owner_e, (owner_t, owner_e)
+        assert res.owner_row == owner_e, (res.owner_row, owner_e)
         assert int(lt.argmax()) == tok_t, "the traced greedy id is not the argmax of its own selected row"
         p_log, p_rows = pcc(le, lt), pcc(rows_e, rows_t)
         logger.info(
@@ -311,10 +334,10 @@ def test_traced_vs_eager(mesh_device):
             mismatches.append((S, u, tok_e, tok_t))
 
     # replay-twice stability: prompt A then prompt B through the same trace (B into another slot) -> B's result
-    _, logits, ids, owner = model.prefill_traced(prompt(100), user=0)
-    la = _owner_logits(model, logits, owner)
-    _, logits, ids, owner = model.prefill_traced(prompt(S_STABLE, 50), user=1)
-    tok_b, lb = model.first_token(ids, owner), _owner_logits(model, logits, owner)
+    res = model.prefill_traced(prompt(100), user=0)
+    la = _owner_logits(model, res.logits, res.owner_row, res.row)
+    res = model.prefill_traced(prompt(S_STABLE, 50), user=1)
+    tok_b, lb = model.first_token(res), _owner_logits(model, res.logits, res.owner_row, res.row)
     p_stable = pcc(eager_stable[1], lb)
     logger.info(
         f"replay-twice: prompt B (S={S_STABLE}, slot 1) after prompt A (S=100, slot 0): first token traced {tok_b} "
@@ -324,8 +347,7 @@ def test_traced_vs_eager(mesh_device):
     assert not torch.equal(la, lb), "the second replay returned the first prompt's logits"
 
     # decode continuity: the traced prefill's state (KDA carries, cache pages, index) feeds the eager decode
-    _, logits, ids, owner = model.prefill_traced(prompt(S_DECODE, 20), user=0)
-    tok_dec_t = model.first_token(ids, owner)
+    tok_dec_t = model.first_token(model.prefill_traced(prompt(S_DECODE, 20), user=0))
     traced_decode = [tok_dec_t] + _decode_ids(model, tok_dec_t, S_DECODE, 2)
     logger.info(f"decode continuity (S={S_DECODE}): first + 2 decode ids eager {eager_decode} traced {traced_decode}")
 
@@ -333,8 +355,7 @@ def test_traced_vs_eager(mesh_device):
     for _ in range(N_TTFT):
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        _, logits, ids, owner = model.prefill_traced(prompt(100), user=0)
-        model.first_token(ids, owner)
+        model.first_token(model.prefill_traced(prompt(100), user=0))
         traced_walls.append(time.perf_counter() - t0)
     logger.info(
         f"PERF-TTFT mesh {MESH} layers {len(layers)} S=100: eager min {min(eager_walls) * 1e3:.1f} ms "

@@ -206,8 +206,8 @@ def _ttft(model, layers, cfg):
     for it in range(3):
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        streams, logits, ids, owner = model.prefill_traced(prompt, user=0)
-        tok = model.first_token(ids, owner)
+        res = model.prefill_traced(prompt, user=0)
+        streams, tok = res.streams, model.first_token(res)
         traced_walls.append(time.perf_counter() - t0)
         out = (
             model.mesh.to_host(streams, rows=2 if model.mesh.rows > 1 else None).float()[0, 0, :S_p].reshape(S_p, 4, -1)

@@ -210,20 +210,22 @@ class TtModelHead(LightweightModule):
         ttnn.deallocate(row)
         return out
 
-    def selected_logits(self, streams: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
-        """Traced prefill: logits ``[1, 1, 32, vocab]`` of the rows ``selector`` ``[1, 1, 32, T]`` (bf16
-        one-hot rows, a persistent device input) picks out of the ``T`` packed rows: the collapse and the
-        final norm run on every row (per-row ops), the selection is a HiFi4 bf16 matmul AFTER the norm
-        (one nonzero product per output: exact), then the same decode-shaped LM-head matmul
-        ``last_token_logits`` runs on its single row. Row 0 of the result is the selected token's."""
+    def tile_logits(self, streams: ttnn.Tensor, tile_start: ttnn.Tensor, tile_end: ttnn.Tensor) -> ttnn.Tensor:
+        """Traced prefill: logits ``[1, 1, 32, vocab]`` of one 32-row tile of the ``T`` packed rows, the tile
+        chosen by the persistent device bounds ``tile_start`` / ``tile_end`` (``[4]`` int32:
+        ``[0, 0, tile0, 0]`` / ``[1, 1, tile0 + 32, hidden]``): the collapse and the final norm run on every
+        row (per-row ops), the tensor-argument ``ttnn.slice`` cuts the tile (the program keys on ``T``, the
+        offset is a runtime tensor: the node ``tt_transformers`` uses after its bucketed prefill traces),
+        then the same decode-shaped LM-head matmul ``last_token_logits`` runs on the tile."""
         h = self.collapse(streams)
         hn = self.norm(h)
         if h is not streams:
             ttnn.deallocate(h)
-        row = ttnn.matmul(selector, hn, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,1,32,H]
+        T = int(hn.shape[-2])
+        tile = ttnn.slice(input_tensor=hn, starts=tile_start, ends=tile_end, slice_dim=2, num_devices=T // TILE)
         ttnn.deallocate(hn)
-        out = self.logits(row)
-        ttnn.deallocate(row)
+        out = self.logits(tile)
+        ttnn.deallocate(tile)
         return out
 
     def forward_greedy(self, streams: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
