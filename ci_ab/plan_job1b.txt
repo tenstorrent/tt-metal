@@ -1,0 +1,9 @@
+# job 1b: ABBA on the broadcast module, half b
+b1 M ids/job1b.txt L1_TO_L1
+b1 H ids/job1b.txt L1_TO_L1
+b1 H2 ids/job1b.txt L1_TO_L1
+b1 M ids/job1b.txt L1_TO_L1
+b2 H2 ids/job1b.txt L1_TO_L1
+b2 M ids/job1b.txt L1_TO_L1
+b2 M ids/job1b.txt L1_TO_L1
+b2 H ids/job1b.txt L1_TO_L1

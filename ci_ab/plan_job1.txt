@@ -1,9 +1,0 @@
-# job 1: ABBA on the broadcast module
-b1 M ids/job1.txt L1_TO_L1
-b1 H ids/job1.txt L1_TO_L1
-b1 H2 ids/job1.txt L1_TO_L1
-b1 M ids/job1.txt L1_TO_L1
-b2 H2 ids/job1.txt L1_TO_L1
-b2 M ids/job1.txt L1_TO_L1
-b2 M ids/job1.txt L1_TO_L1
-b2 H ids/job1.txt L1_TO_L1
