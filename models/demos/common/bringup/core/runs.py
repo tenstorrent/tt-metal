@@ -225,7 +225,8 @@ def rehash_goldens(spec: Spec, ledger: Ledger) -> dict[str, list[str]]:
     data = yaml.safe_load(ledger.tasks_path.read_text())
     done, checked = {}, {}
     for t in data["tasks"]:
-        frozen = t.get("frozen") or {}
+        block = t.get("frozen") or {}
+        frozen = block["files"] if isinstance(block.get("files"), dict) else block  # {path: sha} under "files"
         for rel in list(frozen):
             f = Path(rel) if Path(rel).is_absolute() else spec.repo / rel
             try:
