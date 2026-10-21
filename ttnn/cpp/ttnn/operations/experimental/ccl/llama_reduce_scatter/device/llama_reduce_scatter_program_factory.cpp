@@ -349,20 +349,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    auto* target_device = mesh_device->get_device(mesh_coordinate);
-
     const uint32_t ring_size = operation_attributes.ring_devices;
     const uint32_t num_devices = ring_size;
 
     auto topology = operation_attributes.topology;
 
     uint32_t ring_index = 0;  // Initialize device index
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
 
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                                        : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    const uint32_t coord_index = mesh_coordinate[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
@@ -370,20 +364,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             ring_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(ring_size - 1);
                 backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
             }
             if (i != ring_size - 1) {
-                forward_device = devices.at(i + 1);
                 forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
                 forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
@@ -767,8 +757,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     uint32_t link_idx = 0;
 
-    bool forward_fabric_connection = forward_device.has_value();
-    bool backward_fabric_connection = backward_device.has_value();
+    bool forward_fabric_connection = forward_fabric_node_id.has_value();
+    bool backward_fabric_connection = backward_fabric_node_id.has_value();
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {

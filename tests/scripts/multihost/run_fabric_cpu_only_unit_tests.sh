@@ -372,6 +372,7 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Topol
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="AdjacencyGuidedPlacement.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorTests*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalDescriptorBuilder.*"
+run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest.*:ChannelTrimmingFastPath.*:ChannelTrimmingGlobalOverride.*:ChannelTrimmingForwardedMask.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalNodeIdTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalSystemDescriptorDiff.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
@@ -678,8 +679,9 @@ fi # bh-subtorus-sc16
 #
 # Asset choice matters, and most of the superclusters in tt-cluster-descriptors cannot be used for the
 # matching runs: their FSD and their cluster descriptors disagree about what the hosts are called, so the
-# host filter correctly refuses the descriptor before any of this is exercised. SC36_*_aisleD is
-# cluster_id bh-glx-120-* against an FSD naming bh-glx-110-*; the revAB assets drop the rack token entirely
+# host filter correctly refuses the descriptor before any of this is exercised. SC36_*_aisleD said
+# cluster_id bh-glx-110-* against an FSD naming bh-glx-120-* until tt-cluster-descriptors#26 (it is used for
+# the parity run at the end of this group); the revAB assets drop the rack token entirely
 # (bh-glx-c01u02 vs bh-glx-110-c01u02); SC20_32x4_revC_subtorus_aisleC does agree on host names but its FSD
 # declares 16 intra-host cables that the host's own cluster descriptor does not have. The two SC16 revC
 # systems below are the ones where the FSD and the mock agree exactly.
@@ -724,6 +726,34 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 
 # Aisle C host against the aisle D FSD: no common host, refused at ingest.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest"
+
+# FSD vs live-PSD placement parity. Each mesh graph runs twice on the same mock: mapped on live
+# discovery, then mapped on the factory system descriptor (--factory-system-descriptor). On the FSD run
+# the hosts, ranks, chip allocation and board revision still come from the live PSD; only the topology
+# the mapper places on is the FSD's. Everything the control plane generates (asic_to_fabric_node_mapping,
+# intermesh port assignment, chip coordinates) has to come out byte-identical, and the same gtest
+# filters as the graphs' bh-subtorus entries (layout check included) have to pass on both runs.
+#  - blitz superpod (64 single-host 4x2 meshes) on the full 36-host SC36 revC aisle-D mock + its FSD.
+#  - quad-galaxy 4x8/4x4/4x2 10-stage ring (128 ASICs) on the 4-host revC subtorus aisle-D pod + its FSD,
+#    where the graph is designed to run; on the 36-host mock it seats mesh 7 on an invalid tray pair and
+#    loses the mesh 4 -> 5 cable in live mode too, so it is not a parity question there.
+FSD_SC36_AISLED_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD
+FSD_SC36_AISLED_DESCRIPTOR="$FSD_SC36_AISLED_DIR/SC36_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto"
+# One scratch dir for every parity run, removed on any exit (a failing step without --keep-going aborts
+# the script from inside run_test, so an in-line rm would be skipped).
+FSD_PSD_PARITY_DIR=$(mktemp -d -t fsd_psd_parity.XXXXXX)
+trap 'rm -rf "$FSD_PSD_PARITY_DIR"' EXIT
+for parity_case in \
+  "fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_2X4_PIPELINE}|${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}|${FSD_SC36_AISLED_DESCRIPTOR}" \
+  "fabric_cpu_only_blitz_quad_galaxy_4x8_4x4_4x2_10stage_ring_mesh_graph_descriptor.textproto|ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck|${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}|${FSD_QUAD_HOST_DESCRIPTOR}"; do
+  IFS='|' read -r parity_mgd parity_filter parity_mapping parity_fsd <<<"$parity_case"
+  parity_out="$FSD_PSD_PARITY_DIR/${parity_mgd%%_mesh_graph_descriptor.textproto}"
+  run_test env TT_METAL_LOGS_PATH=$parity_out/psd TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/${parity_mgd}" --mock-cluster-rank-binding "${parity_mapping}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${parity_filter}"
+  run_test env TT_METAL_LOGS_PATH=$parity_out/fsd TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/${parity_mgd}" --mock-cluster-rank-binding "${parity_mapping}" --factory-system-descriptor "${parity_fsd}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${parity_filter}"
+  run_test diff -r "$parity_out/psd/generated/fabric" "$parity_out/fsd/generated/fabric"
+done
+rm -rf "$FSD_PSD_PARITY_DIR"
+trap - EXIT
 
 fi # bh-fsd-reliability
 

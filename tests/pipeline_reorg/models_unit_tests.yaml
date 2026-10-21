@@ -22,6 +22,7 @@
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
+    pytest --timeout 60 models/tt_transformers/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
@@ -787,7 +788,8 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
+    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
   model: minimax-m3
   skus:
     bh_p150:
@@ -806,10 +808,9 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
-      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
-      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
-      timeout: 30
+      # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
+      # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
@@ -978,6 +979,7 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
@@ -2371,6 +2373,29 @@
     bh_p150:
       timeout: 5
       tier: 3
-  owner_id: U09B1UE301K # Abror Shopulatov
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
+  team: models
+  budget_type: unit
+
+# VoxCPM2 component qualification only; integrated TT speech synthesis remains pending.
+# The 16 device replay cases need the two pinned CUDA captures and the checkpoint under
+# /mnt/MLPerf/tt_dnn-models/openbmb/VoxCPM2 (see models/experimental/voxcpm2/validation/cases.py).
+# Until those are provisioned the device cases skip and this leg runs the host tests only
+# (seconds on bh_p150, run 38267491428). Once the assets are staged, add
+# `export VOXCPM2_REQUIRE_DEVICE_TESTS=1` so missing assets fail instead of skip, and raise
+# the timeout (with the models unit_tier3 bh_p150 budget) to cover the device replays.
+- name: VoxCPM2 component accuracy tests
+  cmd: |
+    set -e
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/experimental/voxcpm2/requirements.txt
+    pytest models/experimental/voxcpm2/tests --timeout=120
+  model: voxcpm2
+  model_family: VoxCPM
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
