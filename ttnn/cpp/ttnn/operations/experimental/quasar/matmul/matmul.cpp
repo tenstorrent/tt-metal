@@ -112,14 +112,14 @@ static bool get_post_process_bias(
     bool post_process_bias = false;
     if (bias.has_value() && program_config.has_value() &&
         std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value())) {
-        // The unified kernels add a single tile row of bias (broadcast down M) to every batch, through a row
-        // broadcast into a 16-bit DST (the Wormhole LLK misplaces its rows in a 32-bit one).
+        // The unified kernels add one bias row (broadcast down M) to every batch, through a row broadcast into a
+        // 16-bit DST (the Wormhole LLK misplaces its rows in a 32-bit one).
         const tt::tt_metal::Tile A_tile = input_tensor_a_adjusted.tensor_spec().tile();
         const uint32_t A_tile_height = transpose_a ? A_tile.get_width() : A_tile.get_height();
-        const uint32_t bias_padded_height = bias.value().padded_shape()[-2];
-        const bool bias_is_one_tile_row = bias_padded_height == A_tile_height;
+        const bool bias_is_one_row =
+            bias.value().logical_shape()[-2] == 1 && bias.value().padded_shape()[-2] == A_tile_height;
         const bool bias_is_batched = detail::is_input_batched(bias.value().logical_shape());
-        return !bias_is_one_tile_row || bias_is_batched || fp32_dest_acc_en;
+        return !bias_is_one_row || bias_is_batched || fp32_dest_acc_en;
     }
     if (bias.has_value()) {
         // Quasar: the fused matmul+bias path was historically avoided (bmm_large..._fused_bias TILE_COUNTERS
@@ -251,11 +251,11 @@ static ttnn::Tensor bound_matmul(
     bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
     if (!parameters.program_config.has_value() &&
         std::holds_alternative<MatmulUnifiedProgramConfig>(chosen_program_config)) {
-        // The auto-config chose the unified matmul: keep the choice so the op does not choose again, and fuse the
-        // activation instead of running it after the op.
-        MatmulUnifiedProgramConfig unified = std::get<MatmulUnifiedProgramConfig>(chosen_program_config);
-        unified.fused_activation = parameters.user_fused_activation;
-        parameters.program_config = unified;
+        // The auto-config chose the unified matmul, placed on the user's core grid and with the activation fused, for
+        // the compute config resolved above: the op runs that config with that compute config.
+        parameters.program_config = chosen_program_config;
+        parameters.compute_kernel_config = matmul_struct.compute_kernel_config;
+        parameters.user_core_coord = std::nullopt;
         parameters.user_fused_activation = std::nullopt;
     }
 
@@ -289,6 +289,22 @@ static ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         parameters.transpose_a,
         get_fp32_dest_acc_en(matmul_struct.compute_kernel_config));
+
+    // Activations the op does not fuse run after it, in order: a unified config's when the bias is added after the op
+    // (the kernels run it on the finished sum), then the caller's unless a user grid had the op fuse it into its auto
+    // config. The op is passed only an activation it fuses.
+    std::vector<ttnn::operations::unary::EltwiseUnaryWithParam> activations_after_op;
+    if (post_process_bias && parameters.program_config.has_value()) {
+        auto* unified = std::get_if<MatmulUnifiedProgramConfig>(&parameters.program_config.value());
+        if (unified != nullptr && unified->fused_activation.has_value()) {
+            activations_after_op.push_back(unified->fused_activation.value());
+            unified->fused_activation = std::nullopt;
+        }
+    }
+    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+        activations_after_op.push_back(parameters.user_fused_activation.value());
+        parameters.user_fused_activation = std::nullopt;
+    }
 
     auto attributes = ttnn::prim::qsr::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
@@ -350,11 +366,9 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, result_shape);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
-
-        output_tensor =
-            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+    if (!activations_after_op.empty()) {
+        output_tensor = ttnn::unary_chain(
+            output_tensor, activations_after_op, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;
