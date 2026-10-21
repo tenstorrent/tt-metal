@@ -115,9 +115,16 @@ ValueBlockPeers value_block_peers(const Device& device, const ValueBlockDistribu
 uint32_t tile_bytes(const Tensor& tensor);
 // The cores, merged into rectangles (which dispatch writes in one multicast each).
 tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoord> cores);
+// Whether the set holds exactly these cores.
+bool same_cores(const tt::tt_metal::CoreRangeSet& set, std::span<const tt::tt_metal::CoreCoord> cores);
+// The cores a height-sharded tensor's shards are on, shard by shard.
+std::vector<tt::tt_metal::CoreCoord> shard_cores(const Tensor& tensor);
 tt::tt_metal::CBDescriptor cb_descriptor(
     uint32_t index, uint32_t pages, uint32_t page_size, tt::DataFormat format, const tt::tt_metal::CoreRangeSet& cores);
 // A circular buffer over a height-sharded L1 tensor's shards, in place.
 tt::tt_metal::CBDescriptor sharded_cb_descriptor(uint32_t index, const Tensor& tensor);
+// The compute kernel's hardware settings; check_compute_config rejects the packer_l1_acc the descriptor cannot carry.
+tt::tt_metal::ComputeConfigDescriptor compute_config_descriptor(
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

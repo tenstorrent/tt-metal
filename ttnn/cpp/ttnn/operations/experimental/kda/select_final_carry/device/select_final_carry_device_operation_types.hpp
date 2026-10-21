@@ -31,8 +31,8 @@ struct SelectFinalCarryParams {
     uint32_t num_links;
     tt::tt_fabric::Topology topology;
     tt::tt_metal::MemoryConfig output_mem_config;
-    // The prefix's final state is valid only on the last chronological rank (the SP relay leaves it there), so
-    // without a split tail that rank multicasts it instead of every rank copying its own.
+    // The prefix's final state is valid only on the last chronological rank (where the SP relay leaves it): without a
+    // split tail that rank multicasts it to the others.
     bool prefix_on_last_rank = false;
     // The worker cores, when given: the first num_links send over the fabric and all of them copy.
     std::optional<std::vector<tt::tt_metal::CoreCoord>> cores;

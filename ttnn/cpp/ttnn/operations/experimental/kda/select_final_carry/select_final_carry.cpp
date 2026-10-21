@@ -8,7 +8,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "device/select_final_carry_device_operation.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -82,7 +81,7 @@ ttnn::Tensor select_final_carry(
         line.topology,
         prefix_on_last_rank,
         cores,
-        semaphore_addresses(semaphores));
+        semaphore_addresses(semaphores))[0];
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> select_final_carry_with_projection(
@@ -103,33 +102,31 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> select_final_carry_with_projection(
     const std::optional<ttnn::DeviceComputeKernelConfig>& projection_compute_kernel_config,
     const std::optional<std::vector<tt::tt_metal::GlobalSemaphore>>& semaphores) {
     const auto line = line_setup(prefix_final, sequence_parallel_axis, num_links);
-    auto outputs = ttnn::device_operation::launch<ttnn::experimental::prim::SelectFinalCarryOperation>(
-        ttnn::experimental::prim::SelectFinalCarryParams{
-            .sequence_parallel_axis = sequence_parallel_axis,
-            .local_rows = local_rows,
-            .num_links = line.num_links,
-            .topology = line.topology,
-            .output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
-            .prefix_on_last_rank = prefix_on_last_rank,
-            .cores = cores,
-            .semaphore_addresses = semaphore_addresses(semaphores),
-            .projection =
-                ttnn::experimental::prim::FinalCarryProjectionParams{
-                    .program_config = projection_program_config,
-                    .compute_kernel_config = ttnn::init_device_compute_kernel_config(
-                        prefix_final.device()->arch(),
-                        projection_compute_kernel_config,
-                        tt::tt_metal::MathFidelity::HiFi2,
-                        false,
-                        true),
-                    .output_mem_config = projection_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG)}},
-        ttnn::experimental::prim::SelectFinalCarryInputs{
-            .rank_final = rank_final,
-            .prefix_final = prefix_final,
-            .actual_start = actual_start,
-            .actual_end = actual_end,
-            .projection_input = projection_input,
-            .projection_weight = projection_weight});
+    const auto outputs = ttnn::experimental::prim::select_final_carry(
+        rank_final,
+        prefix_final,
+        memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        actual_start,
+        actual_end,
+        sequence_parallel_axis,
+        local_rows,
+        line.num_links,
+        line.topology,
+        prefix_on_last_rank,
+        cores,
+        semaphore_addresses(semaphores),
+        ttnn::experimental::prim::FinalCarryProjectionParams{
+            .program_config = projection_program_config,
+            // HiFi2 unless given, approximation off, FP32 accumulation.
+            .compute_kernel_config = ttnn::init_device_compute_kernel_config(
+                prefix_final.device()->arch(),
+                projection_compute_kernel_config,
+                tt::tt_metal::MathFidelity::HiFi2,
+                /*default_approx_mode=*/false,
+                /*default_fp32_acc=*/true),
+            .output_mem_config = projection_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG)},
+        projection_input,
+        projection_weight);
     return {outputs[0], outputs[1]};
 }
 

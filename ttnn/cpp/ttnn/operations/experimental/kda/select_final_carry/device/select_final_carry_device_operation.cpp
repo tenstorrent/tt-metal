@@ -37,6 +37,12 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         kda_factory_detail::check_interleaved(*tensor, operation_name, name);
     }
     kda_factory_detail::check_same_device(in.rank_final, in.prefix_final, operation_name, "prefix_final");
+    // Each buffer argument is refreshed on a program-cache hit through its own binding; one buffer bound to both would
+    // leave one of them stale.
+    TT_FATAL(
+        in.rank_final.buffer() != in.prefix_final.buffer(),
+        "{}: rank_final and prefix_final must be different tensors",
+        operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     const auto& tail = in.rank_final.logical_shape();
     const auto& prefix = in.prefix_final.logical_shape();
@@ -48,6 +54,10 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
     const auto* mesh = in.rank_final.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(attrs.num_links > 0, "{}: num_links must be positive", operation_name);
+    TT_FATAL(
+        !attrs.prefix_on_last_rank || mesh->shape()[attrs.sequence_parallel_axis] > 1,
+        "{}: prefix_on_last_rank needs more than one sequence-parallel rank",
+        operation_name);
     TT_FATAL(
         !attrs.cores || attrs.cores->size() >= attrs.num_links, "{}: needs a core per fabric link", operation_name);
     if (attrs.projection) {
@@ -86,7 +96,7 @@ SelectFinalCarryOperation::tensor_return_value_t SelectFinalCarryOperation::crea
     return outputs;
 }
 
-Tensor select_final_carry(
+std::vector<Tensor> select_final_carry(
     const Tensor& rank_final,
     const Tensor& prefix_final,
     const tt::tt_metal::MemoryConfig& memory_config,
@@ -98,7 +108,10 @@ Tensor select_final_carry(
     tt::tt_fabric::Topology topology,
     bool prefix_on_last_rank,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores,
-    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses) {
+    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses,
+    const std::optional<FinalCarryProjectionParams>& projection,
+    const std::optional<Tensor>& projection_input,
+    const std::optional<Tensor>& projection_weight) {
     return ttnn::device_operation::launch<SelectFinalCarryOperation>(
         SelectFinalCarryParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -108,12 +121,15 @@ Tensor select_final_carry(
             .output_mem_config = memory_config,
             .prefix_on_last_rank = prefix_on_last_rank,
             .cores = cores,
-            .semaphore_addresses = semaphore_addresses},
+            .semaphore_addresses = semaphore_addresses,
+            .projection = projection},
         SelectFinalCarryInputs{
             .rank_final = rank_final,
             .prefix_final = prefix_final,
             .actual_start = actual_start,
-            .actual_end = actual_end})[0];
+            .actual_end = actual_end,
+            .projection_input = projection_input,
+            .projection_weight = projection_weight});
 }
 
 }  // namespace ttnn::experimental::prim

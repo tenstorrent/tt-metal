@@ -28,9 +28,6 @@ tt::tt_metal::ProgramDescriptor projection_program(
     uint32_t output_column,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
-// The worker cores projection_program runs on.
-tt::tt_metal::CoreRangeSet projection_cores(const ProjectionProgramConfig& program_config);
-
 void check_projection(
     const Tensor& a, const Tensor& w, const ProjectionProgramConfig& program_config, std::string_view name);
 

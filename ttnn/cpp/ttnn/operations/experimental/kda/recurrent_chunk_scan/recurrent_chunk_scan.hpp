@@ -29,7 +29,7 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     uint32_t sequence_parallel_axis = 0,
     const std::optional<Tensor>& actual_end = std::nullopt);
 
-ttnn::Tensor summarize_chunk_recurrence(
+std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const ttnn::Tensor& v_beta,
     const ttnn::Tensor& kd,
     const ttnn::Tensor& q_decay,
@@ -44,6 +44,8 @@ ttnn::Tensor summarize_chunk_recurrence(
     uint32_t sequence_parallel_axis = 0,
     const std::optional<Tensor>& actual_end = std::nullopt,
     bool tail = false,
-    bool init = true);
+    bool init = true,
+    bool emit_outputs = false,
+    const std::optional<ttnn::MemoryConfig>& emit_memory_config = std::nullopt);
 
 }  // namespace ttnn::experimental::kda
