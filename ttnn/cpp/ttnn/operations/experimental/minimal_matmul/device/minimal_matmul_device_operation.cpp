@@ -10,11 +10,77 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+constexpr uint64_t kProgramHashSalt = 0x4d4d5f6d6d5f7631ULL;  // "MM_mm_v1"
+
+// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash.
+ttsl::hash::hash_t spec_without_rows(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kProgramHashSalt)
+                              : ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt);
+}
+
+}  // namespace
+
+ttsl::hash::hash_t MinimalMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t M = input.physical_volume() / input.padded_shape()[-1];
+    const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
+    const auto& b = tensor_args.fused_ternary_input_b;
+    // The grid orientation (M > N) and, without an explicit config, the default subblock choice
+    // (N >= M) are the only row-dependent program decisions; they enter the key as one bit.
+    const bool transpose_core_grid = M > N;
+    const bool b_broadcast = b.has_value() && b->padded_shape()[-2] == TILE_HEIGHT;
+    return ttsl::hash::hash_objects_with_default_seed(
+        kProgramHashSalt,
+        operation_attributes,
+        operations::common::hash_spec_without_rows(input, kProgramHashSalt),
+        tensor_args.weight_tensor.tensor_spec(),
+        spec_without_rows(tensor_args.bias_tensor),
+        spec_without_rows(tensor_args.optional_input_tensor),
+        spec_without_rows(tensor_args.fused_ternary_input_a),
+        spec_without_rows(tensor_args.fused_ternary_input_b),
+        transpose_core_grid,
+        b_broadcast);
+}
+
+// Only the row-dependent invariants the hash does not cover; everything else was checked on the
+// miss that built the program.
+void MinimalMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t M = input.physical_volume() / input.padded_shape()[-1];
+    TT_FATAL(M > 0 && M % TILE_HEIGHT == 0, "minimal_matmul activation rows ({}) must be a multiple of 32", M);
+    if (tensor_args.optional_input_tensor.has_value()) {
+        const auto& second = tensor_args.optional_input_tensor.value();
+        TT_FATAL(
+            second.physical_volume() / second.padded_shape()[-1] == M,
+            "minimal_matmul fused concat: second-input rows must match the activation rows ({})",
+            M);
+    }
+    if (operation_attributes.fused_ternary_scalar.has_value()) {
+        TT_FATAL(
+            tensor_args.fused_ternary_input_a->padded_shape()[-2] == M,
+            "fused_ternary_input_a rows ({}) must match the activation rows ({})",
+            tensor_args.fused_ternary_input_a->padded_shape()[-2],
+            M);
+        const uint32_t b_rows = tensor_args.fused_ternary_input_b->padded_shape()[-2];
+        TT_FATAL(
+            b_rows == TILE_HEIGHT || b_rows == M,
+            "fused_ternary_input_b rows ({}) must be one tile row or the activation rows ({})",
+            b_rows,
+            M);
+    }
+}
+
 void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
