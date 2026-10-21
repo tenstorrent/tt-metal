@@ -137,18 +137,19 @@ class IndexRecorder:
                 self.rows[pos] = row[:first].sort().values
 
 
-def attn_prefill(attn, cache, mesh, rows_t, user, chunks, start0, slab, qblock, env, timer=None):
+def attn_prefill(attn, cache, mesh, rows_t, user, chunks, start0, slab, qblock, env, timer=None, record=True):
     """Prefill rows [start0, start0 + sum(chunks)) into slot ``user`` chunk by chunk (slab-local or v1).
-    Returns (output [n, 4096] fp32, IndexRecorder, per-chunk wall seconds, per-chunk stage groups)."""
+    Returns (output [n, 4096] fp32, IndexRecorder, per-chunk wall seconds, per-chunk stage groups). ``record``:
+    install the index recorder (its per-sub-block host readback sits inside the timed window: off for timing)."""
     env.setenv("GLM53_PREFILL_QBLOCK", str(qblock))
     rec = IndexRecorder(mesh, start0 + sum(chunks))
-    attn.on_indices = rec
+    attn.on_indices = rec if record else None
     attn.set_stage_timer(timer)
     outs, walls, stages, start = [], [], [], start0
     for n in chunks:
         if timer is not None:
             timer.reset()
-        x = _chunk_to_device(mesh, rows_t, start, n, slab)
+        x = _chunk_to_device(mesh, rows_t, start - start0, n, slab)  # rows_t holds the rows from start0 on
         ttnn.synchronize_device(mesh.device)
         t0 = time.perf_counter()
         y = attn.prefill_forward(x, cache, user, n, start=start, slab=slab)
@@ -329,14 +330,20 @@ def test_slab_primitives(mesh_device):
 
 
 # ------------------------------------------------------------------------------- attention, R4097
-def _run_variant(attn, cache, mesh, rows_t, chunks, start0, qblock, env, timer=None):
+def _run_variant(attn, cache, mesh, rows_t, chunks, start0, qblock, env, timer=None, record=True):
     """v1 into slot 0, slab-local into slot 1 (same rows, same chunking); returns the comparison lines."""
-    ref, ref_idx, w_ref, _ = attn_prefill(attn, cache, mesh, rows_t, 0, chunks, start0, False, qblock, env)
-    got, got_idx, w_got, st = attn_prefill(attn, cache, mesh, rows_t, 1, chunks, start0, True, qblock, env, timer)
+    ref, ref_idx, w_ref, _ = attn_prefill(
+        attn, cache, mesh, rows_t, 0, chunks, start0, False, qblock, env, None, record
+    )
+    got, got_idx, w_got, st = attn_prefill(
+        attn, cache, mesh, rows_t, 1, chunks, start0, True, qblock, env, timer, record
+    )
     r = row_pcc(ref, got)
     below = int((r < ROW_PCC_BAR).sum())
     exact = int((ref == got).all(dim=1).sum())
-    itxt, n_sparse, n_diff = compare_indices(ref_idx.rows, got_idx.rows) if ref_idx.rows else ("no sparse rows", 0, 0)
+    itxt, n_sparse, n_diff = (
+        compare_indices(ref_idx.rows, got_idx.rows) if ref_idx.rows else ("no sparse rows recorded", 0, 0)
+    )
     state, state_ok = compare_state(cache, mesh, start0 + sum(chunks))
     head = (
         f"chunks {list(chunks)} from {start0} x sub-block {qblock}: rows {ref.shape[0]}: pcc min {r.min():.7f} "
@@ -494,9 +501,16 @@ def test_dsa_attention_slab_long(mesh_device, monkeypatch, n_pos):
             monkeypatch.setenv("GLM53_SPARSE_A2A", a2a)
             f, (w_ref, w_got, _) = _run_variant(attn, cache, mesh, rows_t, chunks, start0, qb, monkeypatch)
             failures += [f"a2a={a2a}: {x}" for x in f]
-            # warmed: the same chunking again into the same slots (identical state), stage breakdown of the slab path
-            f2, (w_ref2, w_got2, st2) = _run_variant(attn, cache, mesh, rows_t, chunks, start0, qb, monkeypatch, timer)
+            # warmed walls: the same chunking again into the same slots (identical state), no index recorder (its
+            # host readback per sub-block would sit inside the timed window) and no stage timer (its per-mark mesh
+            # synchronizations would inflate the slab pass only); then a slab-only pass with the stage timer
+            f2, (w_ref2, w_got2, _) = _run_variant(
+                attn, cache, mesh, rows_t, chunks, start0, qb, monkeypatch, record=False
+            )
             failures += [f"a2a={a2a}: {x}" for x in f2]
+            _, _, _, st2 = attn_prefill(
+                attn, cache, mesh, rows_t, 1, chunks, start0, True, qb, monkeypatch, timer, False
+            )
             for i, n in enumerate(chunks):
                 s0 = start0 + sum(chunks[:i])
                 kind = "dense" if s0 + n <= DENSE_ROWS else ("sparse" if s0 >= DENSE_ROWS else "mixed")
@@ -505,6 +519,6 @@ def test_dsa_attention_slab_long(mesh_device, monkeypatch, n_pos):
                     f"TIMING N={n_pos} chunk [{s0}, {s0 + n}) ({kind}, sub-block {qb}, sparse a2a {a2a}) on {MESH}: v1 cold "
                     f"{w_ref[i] * 1e3:.0f} warm {w_ref2[i] * 1e3:.0f} ms | slab cold {w_got[i] * 1e3:.0f} warm "
                     f"{w_got2[i] * 1e3:.0f} ms ({n / w_got2[i]:.0f} tok/s) -> x{w_ref2[i] / w_got2[i]:.2f}; "
-                    f"slab stages ms (timed run): {stg}"
+                    f"slab stages ms (separate timed pass, stage-synchronized): {stg}"
                 )
     assert not failures, "\n".join(failures)

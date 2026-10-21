@@ -249,10 +249,13 @@ class TtDecoderLayer(LightweightModule):
             dsa_kw = dict(start=start, slot=slot, ring_sel=ring_sel)
             if self.mesh.rows == 1:
                 return self.attn.prefill_forward(h, state.cache, user, seq_len, **dsa_kw)
-            if sp_attention_mode() == "slab":
+            if sp_attention_mode() == "slab" and slot is None:
                 # sequence-parallel rows, slab-local: the row attends its own slab's queries against the
                 # full prefix; only the chunk's latent and index stems are gathered over the rows
-                # (``TtDSA._prefill_slab``), the output is the slab's directly
+                # (``TtDSA._prefill_slab``), the output is the slab's directly. The traced prefill (``slot``)
+                # keeps v1 below: its chunks are all-dense and <= 2048 rows, and the slab path's per-geometry
+                # constants (the Q offset tensor, window bounds) are uploaded on first use, which a trace
+                # capture without an eager warm-up of the same shape would not allow (not validated yet).
                 return self.attn.prefill_forward(h, state.cache, user, seq_len, slab=True, **dsa_kw)
             # sequence-parallel rows (v1): every row attends over the whole chunk (gathered slabs, in
             # row order), fills the replicated cache/index identically, then keeps its own slab of the

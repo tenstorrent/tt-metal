@@ -52,7 +52,7 @@ from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGa
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
-from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
+from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
 
 TILE = 32
@@ -63,6 +63,8 @@ DSA_FUSED_DEFAULT = "fused" if os.environ.get("GLM53_DSA_FUSED", "0") == "1" els
 # which absorb matrices the fused block folds into its projections: "both" (default) | "q" | "o" | "none"
 # (an unfolded side runs the composite's per-head bmm + transposes; a precision / perf attribution knob)
 DSA_FOLD = os.environ.get("GLM53_DSA_FOLD", "both")
+# prefill stems (q_a, kv_a, q_b, the indexer's q): "fixed" (default: M-independent prefill_linear) | "default"
+PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
 
 
 def sparse_decode_enabled() -> bool:
@@ -640,18 +642,30 @@ class TtDSA(LightweightModule):
         return self._decode_cfgs[batch]
 
     # ---------------------------------------------------------------- shared stems
+    def _stem(self, lin: DecodeLinear, x: ttnn.Tensor, row_block: int = PREFILL_ROW_BLOCK) -> ttnn.Tensor:
+        """One projection of the prefill / decode stems: decode-shaped inputs (M <= 32) take the 1D mcast config,
+        prefill rows the M-independent ``prefill_linear`` (fixed K blocking in row blocks: a row's result is then
+        bit-identical whatever the chunk / slab length it is computed in -- the default dispatch picks its K
+        blocking per M and gives one-ulp differences between a 4096- and an 8192-row call, which flip near-tie
+        top-k selections; GLM53_PREFILL_STEMS=default keeps the default dispatch for an A/B)."""
+        if x.shape[-2] <= TILE or PREFILL_STEMS != "fixed":
+            return lin(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return prefill_linear(
+            x, lin.w, self.full_grid, row_block=row_block, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2
+        )
+
     def _q_resid(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,4096] -> q_resid [1,1,T,1536] bf16 (q_a -> rmsnorm)."""
-        qa = self.lin_qa(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        qa = self._stem(self.lin_qa, x)
         return ttnn.rms_norm(qa, epsilon=self.cfg.rms_norm_eps, weight=self.qa_norm, compute_kernel_config=self.hifi4)
 
     def _q(self, q_resid: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid [1,1,T,1536] -> q [1,1,T,H*256] bf16 (q_b)."""
-        return self.lin_qb(q_resid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return self._stem(self.lin_qb, q_resid, row_block=PREFILL_ROW_BLOCK // 2)  # 4096 wide: 16 tiles per core
 
     def _latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,4096] -> c [1,1,T,512] bf16 (kv_a -> rmsnorm)."""
-        c = self.lin_kva(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        c = self._stem(self.lin_kva, x)
         return ttnn.rms_norm(c, epsilon=self.cfg.rms_norm_eps, weight=self.kva_norm, compute_kernel_config=self.hifi4)
 
     def _absorb_bmm_config(self, N: int, in0_block_w: int):

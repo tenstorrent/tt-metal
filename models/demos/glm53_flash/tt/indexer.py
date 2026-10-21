@@ -368,7 +368,14 @@ class TtDSAIndexer(LightweightModule):
         already computed by the caller's fused stem). ``rows_form``: q as [1,T,Hi,D] instead (query t's heads as
         the rows of its tile row: the custom scorer's layout, ``select(q_rows_form=True)``)."""
         T = x.shape[-2]
-        q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
+        if T > TILE and os.environ.get("GLM53_PREFILL_STEMS", "fixed") == "fixed":
+            # M-independent (fixed K blocking) like the k / gate stems: the index queries decide the top-k, and a
+            # one-ulp difference between chunk / slab lengths flips near-tie selections (tt/dsa.py ``_stem``)
+            q = prefill_linear(
+                q_resid, self.w_qb, self._grid, row_block=1024, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2
+            )
+        else:
+            q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
         q = ttnn.reshape(q, [1, T, self.Hi, self.D])  # [1,T,Hi,D]
         if not rows_form:
             q = ttnn.transpose(q, 1, 2)  # [1,Hi,T,D]
