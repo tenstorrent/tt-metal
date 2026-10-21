@@ -6,9 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -18,26 +19,22 @@ constexpr uint32_t get_barrier_read_threshold() {
 void kernel_main() {
     Noc noc;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_id = get_arg_val<uint32_t>(1);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t num_unpadded_tiles_head_dim = get_compile_time_arg_val(1);
-    constexpr uint32_t num_unpadded_tiles_seqlen_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t num_padded_tiles_seqlen_dim = get_compile_time_arg_val(3);
-    constexpr uint32_t num_readers = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t num_tiles = get_arg(args::num_tiles);
+    constexpr uint32_t num_unpadded_tiles_head_dim = get_arg(args::num_unpadded_tiles_head_dim);
+    constexpr uint32_t num_unpadded_tiles_seqlen_dim = get_arg(args::num_unpadded_tiles_seqlen_dim);
+    constexpr uint32_t num_padded_tiles_seqlen_dim = get_arg(args::num_padded_tiles_seqlen_dim);
+    constexpr uint32_t num_readers = get_arg(args::num_readers);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t tile_size = get_tile_size(dfb::in0);
+    const auto s0 = TensorAccessor(tensor::src);
 
-    constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src_args, src_addr);
-
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
 
     uint32_t src_tile_id = start_id;
-    cb_in0.reserve_back(num_tiles);
-    uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+    dfb_in0.reserve_back(num_tiles);
+    uint32_t src_buffer_l1_addr = dfb_in0.get_write_ptr();
     uint32_t seqlen_dim_id = 0;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_size, num_readers>();
@@ -63,5 +60,5 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_in0.push_back(num_tiles);
+    dfb_in0.push_back(num_tiles);
 }
