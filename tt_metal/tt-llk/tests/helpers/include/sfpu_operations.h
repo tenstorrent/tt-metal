@@ -1411,7 +1411,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
     {
-        // Legacy tt-llk primitive: computes 1 - tanh(x)^2 with tanh from the LUT
+        // Legacy primitive: computes 1 - tanh(x)^2 with tanh from the LUT
         // (WITH_PRECOMPUTED_TANH = 0). Distinct from the accurate sech2 variant above.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_tanh_derivative_, (APPROX_MODE, 0, ITERATIONS), dst_index, vector_mode, ITERATIONS);
     }
