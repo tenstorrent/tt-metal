@@ -234,9 +234,12 @@ MatmulUnifiedPlan make_plan(
     // K chunk.
     plan.K_chunk_tiles = K_chunk_tiles;
     plan.K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
-    // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
-    // to pay off (the last K chunk spills and reloads either way, so more than two).
-    plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > 2;
+    // The packer accumulates partials in L1 when there are enough K chunks for the reconfig overhead to pay off:
+    // from two when it adds straight onto the C slice, else more than two (the last K chunk spills and reloads).
+    const bool can_accumulate_in_C_slice =
+        !base.fp32_dest_acc_en && plan.C_format == tt::DataFormat::Float16_b && !base.has_fused_activation;
+    plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > (can_accumulate_in_C_slice ? 1 : 2);
+    plan.accumulate_in_C_slice = can_accumulate_in_C_slice && plan.packer_l1_acc_en;
     plan.C_partials_format = base.fp32_dest_acc_en   ? tt::DataFormat::Float32
                              : plan.packer_l1_acc_en ? tt::DataFormat::Float16_b
                                                      : plan.C_format;
@@ -285,7 +288,7 @@ MatmulUnifiedPlan make_plan(
                                          : K_chunk_tiles * plan.C_slice_N_padded_tiles * plan.operand_buffer_depth;
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
-    const bool partials_ever_written = plan.K_chunks_per_C_slice > 1;
+    const bool partials_ever_written = plan.K_chunks_per_C_slice > 1 && !plan.accumulate_in_C_slice;
     plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && plan.C_buffer_depth == 1 &&
                                          (!partials_ever_written || C_slices_per_core == 1);
     // Partials that are never written need one entry per thread when they cannot reuse C_slice's L1.
@@ -348,8 +351,11 @@ std::pair<double, double> estimate_plan_cycles(
     const double K_chunk_cycles = subblocks_per_thread * (model.subblock_cycles + plan.K_chunk_tiles * K_tile_cycles +
                                                           subblock_tiles * model.tile_pack_cycles) +
                                   model.K_chunk_cycles;
-    // With packer L1 accumulation only the last K chunk reloads the partial sums, else every K chunk after the first.
-    const uint32_t reloads_per_C_slice = plan.packer_l1_acc_en ? 1 : plan.K_chunks_per_C_slice - 1;
+    // Accumulating in the C slice reloads nothing; packer L1 accumulation in C_partials reloads the partial sums on
+    // the last K chunk only, else every K chunk after the first reloads them.
+    const uint32_t reloads_per_C_slice = plan.accumulate_in_C_slice ? 0
+                                         : plan.packer_l1_acc_en    ? 1
+                                                                    : plan.K_chunks_per_C_slice - 1;
     const double compute_cycles = C_slices_on_busiest_core * (plan.K_chunks_per_C_slice * K_chunk_cycles +
                                                               reloads_per_C_slice * subblocks_per_thread *
                                                                   subblock_tiles * model.tile_reload_cycles);
@@ -506,6 +512,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     // Shape, layout and batch of the bias are checked by the op; it is one tile row of C's columns.
     base.has_bias = bias_tile_bytes > 0;
     base.bias_entry_bytes = bias_tile_bytes;
+    base.has_fused_activation = config.fused_activation.has_value();
     const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
     const uint64_t l1_budget = l1_ceiling - l1_base;
