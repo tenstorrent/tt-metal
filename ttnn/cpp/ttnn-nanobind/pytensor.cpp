@@ -432,26 +432,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
-namespace {
-// Binding-only result describing tensor data, without allocating or retaining SRAM.
-struct L1TensorGeometry {
-    DeviceAddr packed_size = 0;
-    DeviceAddr page_size = 0;
-    DeviceAddr aligned_shard_size = 0;
-    DeviceAddr page_alignment = 0;
-    std::vector<CoreCoord> cores;
-    bool per_core = false;
-};
-}  // namespace
-
 void pytensor_module_types(nb::module_& mod) {
-    nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Tensor data cores and page-aligned footprint.")
-        .def_ro("packed_size", &L1TensorGeometry::packed_size)
-        .def_ro("page_size", &L1TensorGeometry::page_size)
-        .def_ro("aligned_shard_size", &L1TensorGeometry::aligned_shard_size)
-        .def_ro("page_alignment", &L1TensorGeometry::page_alignment)
-        .def_ro("cores", &L1TensorGeometry::cores)
-        .def_ro("per_core", &L1TensorGeometry::per_core);
     // Tensor constructors that accept device and .to_device() function use keep alive call policy to communicate that
     // Device needs to outlive Tensor. This is because when tensors on device are destroyed they need to deallocate
     // their buffers via device. keep_alive increases the ref count of the Device object being passed into the
@@ -493,50 +474,12 @@ void pytensor_module_types(nb::module_& mod) {
 
 void pytensor_module(nb::module_& mod) {
     mod.def(
-        "experimental_l1_tensor_geometry",
-        [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
-            auto* device = mesh.get_device(coord);
-            TT_FATAL(
-                device != nullptr && spec.memory_config().buffer_type() == BufferType::L1,
-                "L1 tensor geometry requires a local device and L1 TensorSpec");
-            const auto args = spec.compute_buffer_sharding_args();
-            TT_FATAL(is_sharded(args.buffer_layout()), "L1 tensor geometry requires sharded memory");
-            const auto packed_size = spec.compute_packed_buffer_size_bytes();
-            const auto page_size = spec.compute_page_size_bytes();
-            const bool per_core = tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(args);
-            std::vector<CoreCoord> cores;
-            size_t pages;
-            if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
-                cores = distribution->cores_with_data();
-                pages = distribution->max_num_dev_pages_per_core();
-            } else {
-                TT_FATAL(args.shard_spec().has_value(), "L1 tensor geometry requires a shard specification");
-                const auto& shard = *args.shard_spec();
-                cores =
-                    corerange_to_cores(shard.grid(), std::nullopt, shard.orientation() == ShardOrientation::ROW_MAJOR);
-                pages = shard.num_pages();
-            }
-            const auto page_alignment = device->allocator()->get_alignment(BufferType::L1);
-            const auto aligned_page = ((page_size + page_alignment - 1) / page_alignment) * page_alignment;
-            return L1TensorGeometry{packed_size, page_size, pages * aligned_page, page_alignment, std::move(cores), per_core};
-        },
-        nb::arg("mesh_device").noconvert(),
-        nb::arg("device_coord"),
-        nb::arg("tensor_spec"),
-        "Return tensor data cores and page-aligned L1 geometry without allocating.");
-    mod.def(
         "experimental_create_sram_tensor_view",
         [](distributed::MeshDevice& mesh,
            const TensorSpec& spec,
            const std::vector<SRAMTensorViewAddress>& placements) {
-            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
-                mesh,
-                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
-                tt::tt_metal::distributed::DeviceLocalBufferConfig{
-                    .page_size = spec.compute_page_size_bytes(),
-                    .buffer_type = spec.memory_config().buffer_type(),
-                    .sharding_args = spec.compute_buffer_sharding_args()},
-                placements);
+            auto buffer =
+                tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(mesh, spec, placements);
             std::vector<distributed::MeshCoordinate> coords;
             std::unordered_set<distributed::MeshCoordinate> seen;
             for (const auto& [location, address] : placements) {
@@ -553,7 +496,8 @@ void pytensor_module(nb::module_& mod) {
         nb::arg("tensor_spec"),
         nb::arg("placements"),
         nb::keep_alive<0, 1>(),
-        "Create a non-owning L1 tensor view. The caller must validate bounds and retain backing storage.");
+        "Create a non-owning SRAM tensor view. Metal validates coverage, alignment and SRAM bounds; "
+        "the caller validates backing bounds and retains backing storage.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
@@ -1838,31 +1782,6 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
 
-    mod.def(
-        "experimental_allocate_single_device_tensor",
-        [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
-            TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Extent acquisition requires L1");
-            TT_FATAL(
-                experimental::per_core_allocation::is_per_core_allocation(spec.compute_buffer_sharding_args()),
-                "Extent acquisition requires per-core allocation");
-            auto buffer = experimental::per_core_allocation::create_on_single_device(
-                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
-                tt::tt_metal::distributed::DeviceLocalBufferConfig{
-                    .page_size = spec.compute_page_size_bytes(),
-                    .buffer_type = spec.memory_config().buffer_type(),
-                    .sharding_args = spec.compute_buffer_sharding_args()},
-                &mesh,
-                coord);
-            TensorTopology topology(
-                distributed::MeshShape(1, 1), {distributed::MeshMapperConfig::Replicate{}}, {coord});
-            return Tensor(DeviceStorage(
-                mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), {coord}));
-        },
-        nb::arg("mesh_device").noconvert(),
-        nb::arg("coord"),
-        nb::arg("tensor_spec"),
-        nb::keep_alive<0, 1>(),
-        "Allocate per-core L1 on one device without initializing or uploading any bytes.");
     mod.def(
         "experimental_to_single_device",
         [](const Tensor& host_tensor,
