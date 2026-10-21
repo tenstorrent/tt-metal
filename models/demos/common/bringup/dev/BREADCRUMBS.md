@@ -1629,3 +1629,9 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   fails). DeepSeek-V4.1: F128's full-precision goldens replaced the frozen ones, so every C.* / S.* gate failed "frozen
   file changed: .../manifest.json"; a full re-freeze would have run every test twice more on the device.
   Selftest: test_reference.py::test_rehash_goldens_updates_only_verified_golden_files.
+- F145 (overseer, 2026-10-21): R.5's old tap check (official output vs the fp32 step within calib x the input nudge)
+  compared against the full-precision step since F132, so every step whose official code rounds to fp8 / fp4 inside
+  failed (DeepSeek-V4.1: 40 of 129 steps, q_a / kv / attention / experts / shared expert at 1-5 %). That distance is
+  the step's margin: recorded (`in_step_rounding`), never an error. The tap map is checked by F136's official_vs_taps
+  (the reference's official numerics on the tapped inputs reproduce each tapped output; a mis-mapped tap or a stale
+  state fails there, and an `explained` entry cannot hide it). Selftests: test_noise_floor.py.
