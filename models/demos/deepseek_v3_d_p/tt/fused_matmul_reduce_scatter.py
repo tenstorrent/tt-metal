@@ -35,6 +35,8 @@ def fused_matmul_reduce_scatter(
     topology: ttnn.Topology,
     num_links: int,
     math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
+    extra_program=None,
+    extra_tensors=(),
 ) -> ttnn.Tensor:
     """x @ weight summed over `cluster_axis` and scattered on `dim` (2 or 3, i.e. rows or columns)."""
     return matmul_reduce_scatter(
@@ -46,4 +48,6 @@ def fused_matmul_reduce_scatter(
         num_links=num_links,
         compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        extra_program=extra_program,
+        extra_tensors=extra_tensors,
     )

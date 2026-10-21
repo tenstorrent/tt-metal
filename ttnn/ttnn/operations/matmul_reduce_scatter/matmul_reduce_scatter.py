@@ -122,7 +122,11 @@ def matmul_reduce_scatter(
     num_links: int | None = None,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
     memory_config: ttnn.MemoryConfig | None = None,
+    extra_program=None,
+    extra_tensors=(),
 ) -> ttnn.Tensor:
+    """extra_program(coord, free_cores) -> ProgramDescriptor | None merges another program onto the cores this op
+    leaves idle on each device (its core ranges must not overlap this op's); extra_tensors are its I/O tensors."""
     validate(
         input_tensor,
         weight,
@@ -146,4 +150,6 @@ def matmul_reduce_scatter(
         compute_kernel_config=compute_kernel_config,
         memory_config=memory_config,
         hooks=pkg,
+        extra_program=extra_program,
+        extra_tensors=tuple(extra_tensors),
     )

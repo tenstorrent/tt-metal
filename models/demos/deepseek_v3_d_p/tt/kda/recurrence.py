@@ -112,6 +112,8 @@ class PendingFinalCarry:
     CarryProjection in its dispatch when given, and returns the final state and the projection's output."""
 
     run: object
+    # Experiment (fused output reduce-scatter): the carry's inputs, for a caller merging it into its own program.
+    inputs: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -582,7 +584,14 @@ def _scan_sp_grouped_chunks(
             PendingFinalCarry(
                 lambda projection=None: final_carry(
                     rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows, projection
-                )
+                ),
+                inputs=dict(
+                    rank_final=rank_final,
+                    prefix_final=prefix_final_state,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    local_rows=geometry.local_rows,
+                ),
             ),
             output_gate,
         )
@@ -872,7 +881,8 @@ class KDARecurrence:
                 final_state, projected = pending.run(projection)
                 return ttnn.reshape(final_state, shape), projected
 
-            return RecurrenceResult(output, PendingFinalCarry(run), scan.output_gate)
+            inputs = dict(pending.inputs or {}, final_shape=shape)
+            return RecurrenceResult(output, PendingFinalCarry(run, inputs), scan.output_gate)
         return RecurrenceResult(output, ttnn.reshape(scan.final_state, shape), scan.output_gate)
 
     def __call__(
