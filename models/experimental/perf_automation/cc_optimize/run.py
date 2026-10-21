@@ -4381,7 +4381,7 @@ def _run_device_proc(
         #
         # EXCEPT A STALL. A step killed for making no progress was hung, not slow: its duration is the
         # stall window plus however long the hang went unnoticed, and says nothing about what the work
-        # costs. Recording a hang is what grew MiniCPM5-2B's budgets on 2026-10-20: a gate check hung on
+        # costs. Recording a hang is what grew a 2B LLM's budgets on 2026-10-20: a gate check hung on
         # a deadlocked kernel was booked as a 1891 s profile beside four of 21-69 s, p95 x 6 hit the 3 h
         # ceiling, and the next hang was given 3 h as both its stall window and its budget. That one
         # reached the ceiling only because the stack check could not read the test (probes._py_spy_dump);
@@ -5260,8 +5260,12 @@ def _run_round_with_watchdog(
         # BUG 4 (#3): feed the real round duration back so later budgets scale off OBSERVED
         # cost instead of a baseline-derived proxy. Without this the adaptive path never
         # learns and every timer stays on its estimate.
+        # EXCEPT A KILLED ROUND. Its length is the cap that killed it, not what a round costs, and
+        # booking it raised the next cap (2 x p95) toward the ceiling: a 2B LLM, 2026-10-20, two
+        # hung rounds booked at 9,185 s and 10,804 s.
         try:
-            record_observed(repo_root, "round", time.monotonic() - _now0)
+            if not wedge_reason:
+                record_observed(repo_root, "round", time.monotonic() - _now0)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -5844,7 +5848,7 @@ def _model_tree_snapshot(repo_root, model_root) -> dict | None:
     differs from HEAD or is untracked. None when the model dir is not inside this repo or git cannot say.
 
     WHAT A KILLED ROUND LEAVES BEHIND IS WHAT THE NEXT ONE RUNS. The round watchdog SIGKILLs the agent
-    mid-attempt, and nothing put back the edit it was measuring. Measured on MiniCPM5-2B, 2026-10-20:
+    mid-attempt, and nothing put back the edit it was measuring. Measured on a 2B LLM, 2026-10-20:
     the agent single-buffered a C++ matmul's output CB, the measurement hung on the deadlocked chip, the
     watchdog killed the round -- and the edit stayed. The gate check after it profiled the edit and hung,
     the next round's agent saw the diff and called the gate check, which hung for its whole 3 h round,
@@ -5916,9 +5920,7 @@ def _restore_model_tree(repo_root, snap, patch_path=None) -> list:
         return []
     if patch_path is not None:
         try:
-            diff = subprocess.run(
-                ["git", "diff", "HEAD", "--", str(rel)], cwd=str(repo_root), capture_output=True, text=True, timeout=120
-            ).stdout
+            diff = gitio.diff_text(repo_root, "HEAD", rel)
             untracked = gitio.untracked_under(repo_root, rel)
             created = [p for p, w in todo if w is _AT_HEAD and p in untracked]
             Path(patch_path).parent.mkdir(parents=True, exist_ok=True)

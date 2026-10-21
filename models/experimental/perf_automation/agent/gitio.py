@@ -81,6 +81,12 @@ def changed_files(repo, sha: str, pathspec=None) -> list[str]:
     return [ln for ln in r.stdout.splitlines() if ln.strip()]
 
 
+def diff_text(repo, sha: str, pathspec=None) -> str:
+    """The working tree's full diff against `sha`, scoped like `changed_files`. "" when git cannot say."""
+    r = _git(["diff", sha] + (["--", str(pathspec)] if pathspec else []), repo)
+    return r.stdout if r.returncode == 0 else ""
+
+
 def untracked_under(repo, pathspec=None) -> set:
     """Untracked files under pathspec, as repo-relative strings."""
     specs = (

@@ -972,7 +972,7 @@ def _py_spy_dump(exe, pid):
 
     PTRACE IS NOT A GIVEN. Under Yama ptrace_scope=1 -- the default on Ubuntu -- only an ANCESTOR may
     read a process, and py-spy is the supervisor's child, a sibling of the test, so every read came back
-    "Permission Denied" and the stack check never ran at all. Measured on MiniCPM5-2B, 2026-10-20: a
+    "Permission Denied" and the stack check never ran at all. Measured on a 2B LLM, 2026-10-20: a
     profile hung in `to_torch` for 90 minutes, then 3 hours, with its stack never read once, while the
     test's background threads ticked the syscall counter and kept the stall clock from starting.
     Reproduced with a profiled pytest frozen after `import ttnn`: the stall check never fired and only

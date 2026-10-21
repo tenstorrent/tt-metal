@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A hung device step is caught, and the round killed over it leaves nothing behind for the next one.
 
-MiniCPM5-2B, 2026-10-20. An agent single-buffered a C++ matmul's output CB and measured it; the kernel
+A 2B LLM, 2026-10-20. An agent single-buffered a C++ matmul's output CB and measured it; the kernel
 deadlocked the chip. Three things then turned one bad edit into six hours of nothing:
 
   * the stall check never fired: the box runs Yama ptrace_scope=1, py-spy (the supervisor's child, a
@@ -27,7 +27,6 @@ sys.path.insert(0, str(_PA))
 sys.path.insert(0, str(_PA / "cc_optimize"))
 
 import agent.probes as P  # noqa: E402
-
 
 # --- the stack read survives a ptrace refusal ------------------------------------------------------
 
@@ -212,3 +211,25 @@ def test_the_loop_snapshots_each_round_and_restores_only_a_killed_one():
     killed = seg.index("if wedged:", launch)
     restore = seg.index("_restore_model_tree(", launch)
     assert killed < restore < seg.index("else:", killed), "the restore belongs to the killed-round branch"
+
+
+def test_a_killed_round_is_not_booked_as_the_cost_of_a_round():
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _run_round_with_watchdog(")
+    body = src[i : src.index("\ndef ", i + 1)]
+    rec = body.index('record_observed(repo_root, "round"')
+    guard = body.rindex("if ", 0, rec)
+    assert "not wedge_reason" in body[guard:rec], "a killed round's length is its cap, and booking it grows the cap"
+
+
+def test_the_kept_diff_comes_from_the_shared_git_helper(repo, tmp_path):
+    from agent import gitio
+
+    (repo / "models" / "demo_x" / "kernel.py").write_text("BUFFERS = 1\n")
+    assert "BUFFERS = 1" in gitio.diff_text(repo, "HEAD", "models/demo_x")
+    assert "x = 1" not in gitio.diff_text(repo, "HEAD", "models/demo_x"), "the diff is scoped to the model dir"
+    assert gitio.diff_text(tmp_path, "HEAD") == "", "outside a repo it says nothing rather than raising"
+    seg = _PA.joinpath("cc_optimize", "run.py").read_text()
+    seg = seg[seg.index("def _restore_model_tree(") :]
+    seg = seg[: seg.index("\ndef ", 1)]
+    assert '["git", "diff"' not in seg, "the restore must use gitio, not its own git call"
