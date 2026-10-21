@@ -27,6 +27,38 @@ inline void llk_math_matmul_init_impl(
         in0_tensor_shape, in1_tensor_shape, transpose, ct_dim, rt_dim);
 }
 
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// Builds exact shapes from the tile dims (1/2/4/8/16/32 rows, 16/32 cols); the LLK derives the same tile dims
+// and partial_face (in0 face_r_dim < FACE_R_DIM) back from them.
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+inline void llk_math_matmul_init_impl(
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    [[maybe_unused]] const bool partial_face,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim) {
+    const auto shape_from_tile_dims = [](const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim) {
+        return ckernel::make_tensor_shape(
+            static_cast<std::uint8_t>(tile_r_dim < FACE_R_DIM ? tile_r_dim : FACE_R_DIM),
+            static_cast<std::uint8_t>(FACE_C_DIM),
+            static_cast<std::uint8_t>(tile_r_dim > FACE_R_DIM ? 2 : 1),
+            static_cast<std::uint8_t>(tile_c_dim > FACE_C_DIM ? 2 : 1));
+    };
+    const ckernel::TensorShape in0_tensor_shape = shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+    LLK_ASSERT(
+        in0_tensor_shape.total_row_dim() == in0_tile_r_dim && in0_tensor_shape.total_col_dim() == in0_tile_c_dim &&
+            in1_tensor_shape.total_row_dim() == in1_tile_r_dim && in1_tensor_shape.total_col_dim() == in1_tile_c_dim,
+        "matmul tile dims have no exact TensorShape");
+    LLK_ASSERT(
+        partial_face == (in0_tensor_shape.face_r_dim < FACE_R_DIM), "matmul partial_face does not match in0 tile dims");
+    llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL>(
+        in0_tensor_shape, in1_tensor_shape, transpose, ct_dim, rt_dim);
+}
+
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
