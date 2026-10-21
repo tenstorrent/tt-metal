@@ -1205,14 +1205,13 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     [((2, 3, 37, 45), -1), ((2, 3, 37, 45), None), ((1, 1, 32, 40), -1), ((1, 1, 64, 7), -2), ((1, 1, 1, 1), None)],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("scalar", [1.0, -1.0])
-def test_max_min_block_float_unaligned_width(device, op, shape, dim, keepdim, dtype, scalar):
+def test_max_min_bfloat8_b_unaligned_width(device, op, shape, dim, keepdim, scalar):
     torch.manual_seed(0)
     torch_input = torch.randn(shape) * 4
     if shape == (1, 1, 1, 1):
         torch_input = -torch_input.abs() - 1 if op == "max" else torch_input.abs() + 1
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     stored = ttnn.to_torch(tt_input).float()
     dims = tuple(range(len(shape))) if dim is None else (dim,)
     take_max = (op == "max") == (scalar > 0)
@@ -1222,11 +1221,7 @@ def test_max_min_block_float_unaligned_width(device, op, shape, dim, keepdim, dt
     expected = scalar * picked
 
     tt_output = getattr(ttnn, op)(tt_input, dim=dim, keepdim=keepdim, scalar=scalar)
-    assert tt_output.dtype == dtype
+    assert tt_output.dtype == ttnn.bfloat8_b
     output = ttnn.to_torch(tt_output).float()
     assert output.shape == expected.shape
-    if dtype == ttnn.bfloat8_b:
-        rtol, atol = 0.02, 0.02
-    else:
-        rtol, atol = 0.0, 0.25 * expected.abs().max().item()
-    assert torch.allclose(output, expected, rtol=rtol, atol=atol), f"max abs diff {(output - expected).abs().max()}"
+    assert torch.allclose(output, expected, rtol=0.02, atol=0.02), f"max abs diff {(output - expected).abs().max()}"

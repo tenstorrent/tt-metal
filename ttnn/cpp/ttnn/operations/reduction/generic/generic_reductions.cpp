@@ -559,7 +559,7 @@ Tensor reduce(
     if constexpr (
         reduce_type == reduction_common::ReduceType::Max || reduce_type == reduction_common::ReduceType::Min) {
         const auto& lshape = input_tensor_arg.logical_shape();
-        if (input_tensor_arg.layout() == TILE_LAYOUT && tt::tt_metal::is_block_float(input_tensor_arg.dtype()) &&
+        if (input_tensor_arg.layout() == TILE_LAYOUT && input_tensor_arg.dtype() == DataType::BFLOAT8_B &&
             lshape.rank() > 0 && lshape[-1] % tt::constants::FACE_WIDTH != 0) {
             auto widened = reduce<reduce_type>(
                 ttnn::typecast(input_tensor_arg, DataType::BFLOAT16),
