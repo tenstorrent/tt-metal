@@ -9,7 +9,7 @@
 // Loop order matches the reader and the writer: C slice (over all the core's batches), K chunk, subblocks, k_tile.
 // Compute threads (Quasar NEOs; one thread elsewhere) take the subblocks round-robin in walk order
 // and all see the whole A and B slices; a thread's subblocks sit back to back in its C_entries_per_thread
-// entries of C_slice / C_partials, reserved and pushed once per K chunk.
+// entries of C_slice / C_partials, reserved once per K chunk (once per C slice when accumulating in C_slice).
 // FUSE_BIAS: K chunk 0 starts DST at the bias row instead of zero, so the partials carry it and the sum gets it
 // once. SFPU_OP_*_ACTIVATION: the activation runs on the finished sum in DST before the last K chunk's pack.
 // Compile-time args are the template parameters, runtime args the function parameters.
@@ -97,8 +97,8 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
             }
 #endif
 
-            // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
-            // onto them, and the finished sum is packed without accumulation.
+            // With packer L1 accumulation K chunk 0 overwrites the running sum and later K chunks add DST onto it;
+            // a sum kept in C_partials is packed to C_slice without accumulation on the last K chunk.
             if constexpr (partials_format_differs) {
                 pack_reconfig_data_format(pack_target_id);
             }
@@ -106,11 +106,8 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_reconfig_l1_acc((K_chunk > 0 && (accumulate_in_C_slice || !last_K_chunk)) ? 1 : 0);
             }
 #ifdef ARCH_QUASAR
-            // Quasar: the pack destination alternates between C_partials and C_slice each K chunk. The pack
-            // BFD is baked at pack_init (pack_reconfig_data_format is gasket-only, and only runs when the
-            // formats differ), so re-init the packer for the current target every K chunk — otherwise the
-            // last chunk's result is packed to the C_partials BFD left by compute_kernel_hw_startup. Accumulating in
-            // C_slice packs there only, initialized once above.
+            // Quasar bakes the pack target into pack_init (pack_reconfig_data_format only reprograms the gasket), so
+            // re-init it every K chunk as the target alternates; accumulating in C_slice packs there only (init above).
             if constexpr (!accumulate_in_C_slice) {
                 pack_init(pack_target_id);
             }

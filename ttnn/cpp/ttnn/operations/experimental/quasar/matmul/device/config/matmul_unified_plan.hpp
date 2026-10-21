@@ -110,7 +110,6 @@ struct MatmulUnifiedPlan {
     // With packer L1 accumulation in C's own format and no activation on the finished sum, every K chunk adds
     // straight onto the C slice's entries: no partials round trip, and the C slice is reserved once.
     bool accumulate_in_C_slice = false;
-    bool has_fused_activation = false;
     tt::DataFormat A_format{};
     tt::DataFormat B_format{};
     tt::DataFormat C_format{};
@@ -125,6 +124,7 @@ struct MatmulUnifiedPlan {
     uint32_t C_partials_entries = 0;
     // C_partials reuses C_slice's L1; only safe when partials are never live while C_slice holds unread data.
     bool alias_C_partials_onto_C_slice = false;
+    bool has_fused_activation = false;  // it needs the finished sum in DST, so no accumulate_in_C_slice
     // Fused bias: one tile row of the C slice's columns per C slice, loaded into DST before K chunk 0 so the
     // sum carries it once. Reader thread t pushes the bias of every num_reader_threads-th C slice into its own
     // part of the DFB, one set of C_slice_N_padded_tiles entries each.
