@@ -523,23 +523,37 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   (`build_gpt_oss_dflash_router_pipeline_graph`). A fork is limited to **two branches**:
   - exactly one router: the only stage with in-degree 0, not counting the branches' return
     edges;
-  - the router splits into two branches (one entry, two exits) and the two branches join back
-    at the router (two entries, one exit). No other stage splits or joins;
+  - the router splits into two branches (one entry, two exits), and branches that return join
+    back at the router (up to two entries, one exit). No other stage splits or joins;
   - each branch is a chain;
-  - the router's edge into each branch is FABRIC; each branch's return to the router may be
-    FABRIC or HOST.
+  - the router's edge into each branch is FABRIC;
+  - a branch may return to the router, over FABRIC or HOST, or it may **dead-end**: its last
+    stage has no out-edge.
 
-  This is the stricter of blaze's two checks. `fork_structure` (carve planner, 3.2) accepts
-  any number of branches, but the runtime fork builder `_find_branches`
-  (`pipeline_builder/fork.py`) asserts exactly two and requires the router-to-branch edges
-  over fabric. Tier A follows the runtime, so a descriptor it passes is one blaze can build.
+  For the branch count and the router's edges, this is the stricter of blaze's two checks:
+  `fork_structure` (carve planner, 3.2) accepts any number of branches, but the runtime fork
+  builder `_find_branches` (`pipeline_builder/fork.py`) asserts exactly two and requires the
+  router-to-branch edges over fabric. Tier A follows the runtime there.
+
+  Dead ends go the other way: Tier A allows them although blaze rejects them today, in both
+  `fork_structure` ("branch ending at X has no loopback edge back to the router") and
+  `_find_branches` ("Branch tail must have exactly one loopback edge to router"). Later
+  steps treat a dead-end branch like a HOST-return branch, which already has no fabric return:
+  - Tier B and the carve planner place it as an open path that starts next to the router,
+    and it needs 1 router neighbour, not 2;
+  - Tier C's port of `fork_structure` and `plan_fork_carve` (3.2) accepts a branch with no
+    return and plans it with `_path_of_length`, as for a host return;
+  - the resolver sees no return edge for it, as for a host return today.
+
+  > **TODO (blaze):** accept dead-end branches in `fork_structure` and `_find_branches`.
+  > Until then a descriptor with one passes Tiers A to C and fails at build time.
 
   > **TODO:** lift the two-branch limit as soon as blaze's fork runtime supports more
   > branches (`_find_branches` asserts `len(succ[router]) == 2`, and branch roles are fixed
   > by index: 0 is target, 1 is draft). Then the rule becomes "one router, any number of
   > chain branches", which is what `fork_structure` already accepts. Tier B's router degree
-  > check (2 neighbours per fabric-return branch plus 1 per host-return branch) needs no
-  > change.
+  > check (2 neighbours per fabric-return branch plus 1 per host-return or dead-end branch)
+  > needs no change.
 - **HOST transport on any edge.** Blaze supports host hops anywhere in a ring or branch
   (host input, host output and host hops on both sides of a stage), not just on a branch's
   return. Under FLEXIBLE placement no edge may be declared HOST up front, because blaze only
@@ -554,7 +568,7 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
 | `mixed4` plus `edges { src: "s1" dst: "s1" }` | reject | self-edge |
 | `mixed4` with `s0 -> s1` repeated | pass | two channels on that hop; the builder reads one link per edge, which is a builder limit |
 | dflash: `router -> target0 .. target37 -> router`, `router -> draft0 .. draft10 -> router` (draft return HOST) | pass | one router, two chain branches, both return to it |
-| edges `s0 -> s1`, `s0 -> s2`, `s1 -> s0`; `s2` has no out-edge | reject | out-degree 2 makes it a fork, and the branch ending at `s2` has no edge back to the router (`fork_structure`) |
+| edges `s0 -> s1`, `s0 -> s2`, `s1 -> s0`; `s2` has no out-edge | pass | a fork whose branch `s2` dead-ends, which is allowed. Blaze rejects it today in `fork_structure` (TODO above) |
 | a router with three branches | reject | more than two branches; blaze's fork runtime builds exactly two (TODO above) |
 | a branch stage with out-degree 2 (a fork inside a branch) | reject | only the router may split; each branch must be a chain |
 | two stages with in-degree 0 | reject | two routers; a fork has exactly one |
@@ -663,7 +677,7 @@ Slice adjacency comes from `device_topology` dims and RING wraps. Crossing endpo
 open, because which slice a crossing touches is not known until seating. This checks that
 the stages assigned to the mesh can be cut into whole-slice rectangles along a path or cycle,
 including joint stages and, for a fork, the router's degree: 2 neighbours per fabric-return
-branch plus 1 per host-return branch.
+branch plus 1 per host-return or dead-end branch.
 
 #### Examples
 
@@ -1179,11 +1193,13 @@ error     no-alignment: found 1 cycle(s) of the right length (6 slices) but no r
 
 **E. A fork** (`plan_fork_carve`, example C's fabric). A branch that returns over fabric
 needs a cycle through the router; one that returns over host needs only an open path
-starting next to the router.
+starting next to the router. A dead-end branch (allowed by Tier A, 2.1) is planned the same
+way as a host return: an open path, one router neighbour. Blaze's planner rejects dead ends
+today, so the port adds this.
 
 | Step | What it does |
 |---|---|
-| input checks | Router exactly one slice; branch stages whole slices. `need_edges = 2 x fabric-return branches + 1 x host-return branches`; `need_slices = 1 + all branch slices`. |
+| input checks | Router exactly one slice; branch stages whole slices. `need_edges = 2 x fabric-return branches + 1 x host-return branches` (dead ends count as host returns); `need_slices = 1 + all branch slices`. |
 | router candidates | Every slice with at least `need_edges` neighbours, in slice order. |
 | branch order | Fabric-return branches first, shortest first (a short cycle must hug the router), then host-return branches. |
 | walks | Fabric return: `_cycles_through` (prune, contract and cycle search on the free slices, keeping cycles through the router), both directions. Host return: `_path_of_length` from each free router neighbour. Each walk is cut into the branch's rectangles. |
@@ -1830,7 +1846,7 @@ allowed set only when it fails under every projection and layout:
   to; or
 - for a router whose binding set is this mesh alone, and only with a hard-pinned layout: no
   slice reaches the router's required degree (2 per fabric-return branch plus 1 per
-  host-return branch). Otherwise the exact check catches it.
+  host-return or dead-end branch). Otherwise the exact check catches it.
 
 **Caveats.**
 

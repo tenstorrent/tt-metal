@@ -1157,7 +1157,7 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     ],
     tests: [
       "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with a HOST return.",
-      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two routers, three branches, a branch that splits, a HOST edge out of the router, a branch with no return, FLEXIBLE + HOST).",
+      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two routers, three branches, a branch that splits, a HOST edge out of the router, FLEXIBLE + HOST). A dead-end branch parses.",
       "Every existing MGD in tt_metal/fabric/mesh_graph_descriptors still parses unchanged.",
     ],
     behaviour: "No behaviour change without the new section.",
@@ -1347,6 +1347,7 @@ private:
     ],
     steps: [
       "Port HostSlice, CarveSlot, plan_ring_carve, plan_fork_carve, fork_structure, validate_carve_plan, keeping blaze's sort keys.",
+      "One deliberate difference: fork_structure and plan_fork_carve accept a dead-end branch and plan it as an open path, like a host return. Blaze rejects it, so its goldens are hand-written, not dumped.",
       "Expose a cycle iterator: Tier C keeps trying cycles until one resolves; blaze stops at the first.",
       "budget-exhausted returns Unknown, which Tier C treats as accept.",
       "Golden parity: a blaze script dumps (slices, adjacency, shapes) -> verdict + phase; a gtest replays them against the port.",
@@ -2401,7 +2402,7 @@ function DescriptorExamples() {
           ["mixed4 + edge s1 > s1", "reject", "self-edge"],
           ["mixed4 with s0 > s1 repeated", "pass", "two channels on that hop; the builder reads one link per edge"],
           ["dflash: router > target0..37 > router, router > draft0..10 > router (HOST)", "pass", "one router, two chain branches, both return to it"],
-          ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "reject", "out-degree 2 makes it a fork; the branch at s2 never returns to the router"],
+          ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a fork whose branch s2 dead-ends, which is allowed; blaze rejects it today (TODO)"],
           ["a router with three branches", "reject", "more than two branches; blaze's fork runtime builds exactly two (TODO)"],
           ["a branch stage with out-degree 2", "reject", "only the router may split; each branch is a chain"],
           ["two stages with in-degree 0", "reject", "two routers; a fork has exactly one"],
@@ -2411,7 +2412,7 @@ function DescriptorExamples() {
           ["a stage [2, 4] where every slice is 4x2", "pass here", "no transpose, so Tier B finds no mesh it binds to"],
         ]}
         rowTone={[
-          "success", "success", "danger", "success", "success", "danger", "danger", "danger", "danger", "danger", "danger",
+          "success", "success", "danger", "success", "success", "warning", "danger", "danger", "danger", "danger", "danger",
           "success", "warning",
         ]}
       />
@@ -3276,8 +3277,7 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
             ["No self-edges", 'edges { src: "s0" dst: "s0" }'],
             ["Shapes rank 2, dims > 0", "shape { dims: [ 4, 2, 1 ] }"],
             ["Linear (out-degree <= 1), or one fork (dflash)", "two routers, or a branch stage that also splits"],
-            ["A fork has at most 2 branches: the router splits 1 into 2 and joins 2 into 1", "a router with three branches"],
-            ["Every fork branch returns to the router (FABRIC or HOST)", "a branch that dead-ends"],
+            ["A fork has at most 2 branches: the router splits 1 into 2; branches that return join back (up to 2 into 1)", "a router with three branches"],
             ["The router's edge into a branch is FABRIC", 'router -> draft0 with transport: HOST'],
             ["FLEXIBLE declares no HOST edges (blaze plans them)", "placement: FLEXIBLE + transport: HOST"],
             ["At most one pipeline per MGD", "two pipeline_descriptors entries"],
@@ -3291,6 +3291,12 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
           limit of two follows blaze's fork runtime (_find_branches in pipeline_builder/fork.py asserts exactly two, with
           branch 0 the target and branch 1 the draft). The carve planner's fork_structure already accepts any number. Lift
           the limit in Tier A as soon as the runtime supports more branches.
+        </Callout>
+        <Callout tone="warning" title="Dead-end branches are allowed">
+          A branch may end without returning to the router. Tier B and the carve planner place it like a host-return branch:
+          an open path from a router neighbour, using 1 router neighbour instead of 2. TODO (blaze): fork_structure and
+          _find_branches both reject a branch with no return today, so until they accept it such a descriptor passes Tiers A
+          to C and fails at build time.
         </Callout>
       </Stack>
 
