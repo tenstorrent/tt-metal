@@ -24,24 +24,60 @@ namespace {
 
 // Validate borrowed-memory DFBs.
 //
-// A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
-// backing MeshTensor flows through ProgramRunArgs::tensor_args at execution time.
-// We enforce only the safety-relevant checks:
-//  - the named parameter exists
-//  - the TensorSpec places storage in L1, with one address on every node (not per-node allocated),
-//  - the spec is large enough
-// We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
-// That's on the user; this is an advanced feature.
+// DataflowBufferSpec::borrowed_from names either a TensorParameter or a RawAllocationParameter.
+// These checks use the declared properties; they neither allocate memory nor attach a runtime
+// backing object to the DFB. Without a borrow source, borrowed_memory_offset must be zero.
+//
+// For a TensorParameter, the backing MeshTensor flows through ProgramRunArgs::tensor_args at
+// execution time. We enforce the safety-relevant checks available from its TensorSpec:
+//  - the named parameter exists,
+//  - the TensorSpec places storage in L1 (L1 and L1_SMALL are accepted),
+//  - the tensor is not per-node allocated; each node must use the same backing address,
+//  - its per-bank allocation is large enough for entry_size * num_entries,
+//  - borrowed_memory_offset is zero; tensor borrowing does not support an offset.
+// We don't validate layout considerations (interleaved vs sharded, page / tile sizes, etc.).
+// Those remain the user's responsibility; this is an advanced feature. The attach-time sizing
+// check remains authoritative for the actual backing buffer (see the sizing discussion below).
+//
+// For a RawAllocationParameter, ValidateRawAllocationBorrowing checks that:
+//  - the named parameter exists,
+//  - the offset is a multiple of the device's L1 alignment,
+//  - range-lockstep properties cover every node occupied by the DFB; all-bank lockstep needs
+//    no additional coverage check,
+//  - offset + entry_size * num_entries fits within the declared per-bank size, including equality.
+// Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
+// checked per node against the requested extent, without counting allocator alignment padding;
+// the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
+// Raw-allocation parameter properties are validated before borrowers. Passing these spec-time
+// checks does not yet enable raw-allocation borrowing: construction and runtime attachment still
+// need to be wired up.
 void ValidateBorrowedMemory(
     const DataflowBufferSpec& dfb,
     const CollectedSpecData& collected,
     uint32_t l1_alignment,
     const NumBanksFromBufferType& num_banks_from_buffer_type) {
+    const uint32_t offset = dfb.advanced_options.borrowed_memory_offset;
     if (!dfb.borrowed_from.has_value()) {
+        TT_FATAL(
+            offset == 0, "DFB '{}' borrowed_memory_offset must be zero when borrowed_from is unset.", dfb.unique_id);
         return;
     }
+    if (const auto* allocation_name = std::get_if<RawAllocationParamName>(&*dfb.borrowed_from)) {
+        ValidateRawAllocationBorrowing(
+            *allocation_name,
+            collected,
+            fmt::format("DFB '{}'", dfb.unique_id),
+            collected.dfb_node_set.at(dfb.unique_id),
+            offset,
+            uint64_t{dfb.entry_size} * dfb.num_entries,
+            l1_alignment);
+        return;
+    }
+    TT_FATAL(
+        offset == 0,
+        "DFB '{}' borrowed_memory_offset must be zero when borrowing from a TensorParameter.",
+        dfb.unique_id);
     const auto* tensor_name = std::get_if<TensorParamName>(&*dfb.borrowed_from);
-    TT_FATAL(tensor_name != nullptr, "DFB '{}' borrowing from RawAllocation is not implemented", dfb.unique_id);
     const TensorParamName& tp_name = *tensor_name;
     auto it = collected.tensor_parameter_by_name.find(tp_name);
     TT_FATAL(

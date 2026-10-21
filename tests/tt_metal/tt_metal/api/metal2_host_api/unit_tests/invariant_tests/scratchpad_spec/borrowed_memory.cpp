@@ -8,6 +8,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -105,10 +106,9 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadMissingOccupiedNode) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("scratch"),
-            ::testing::ContainsRegex("(node|core|cover)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'scratch' borrows from RawAllocationParameter 'arena', which does not "
+                                 "cover every occupied node.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadExceedsCapacity) {
@@ -131,10 +131,12 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadExceedsCapacity) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("scratch"),
-            ::testing::ContainsRegex("(size|capacity|fit|exceed)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "ScratchpadSpec 'scratch' borrowing offset {} + size_per_node {} exceeds RawAllocationParameter 'arena' "
+            "per_bank_size {}.",
+            0,
+            2 * alignment,
+            2 * alignment - 1))));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadOffsetCausesOverrun) {
@@ -157,10 +159,12 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadOffsetCausesOverrun) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("scratch"),
-            ::testing::ContainsRegex("(size|capacity|fit|exceed)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "ScratchpadSpec 'scratch' borrowing offset {} + size_per_node {} exceeds RawAllocationParameter 'arena' "
+            "per_bank_size {}.",
+            alignment,
+            2 * alignment,
+            3 * alignment - 1))));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadMisalignedOffset) {
@@ -184,10 +188,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadMisalignedOffset) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("scratch"),
-            ::testing::ContainsRegex("align"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
+            "ScratchpadSpec 'scratch' borrowing offset 1 must be a multiple of L1 alignment {}.", alignment))));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationScratchpadAllBankLockstep) {

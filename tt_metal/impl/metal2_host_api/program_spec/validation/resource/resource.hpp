@@ -17,7 +17,7 @@ namespace tt::tt_metal::experimental {
 // ----------------------------------------------------------------------------
 // Resource validation: declarations, bindings, and cross-kernel usage of every
 // resource a ProgramSpec declares (DFBs, prefetcher pipes, scratchpads,
-// semaphores, tensor parameters).
+// semaphores, tensor parameters, raw-allocation parameters).
 // ----------------------------------------------------------------------------
 //
 // Callers outside this folder use only the three phase drivers below
@@ -64,8 +64,20 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx);
 void ValidatePrefetcherPipeLanesAndRelays(
     const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch);
 
+// raw_allocation.cpp
+void ValidateRawAllocationParameter(const RawAllocationParameter& parameter);
+void ValidateRawAllocationBorrowing(
+    const RawAllocationParamName& allocation_name,
+    const CollectedSpecData& collected,
+    std::string_view borrower,
+    const NodeRangeSet& occupied_nodes,
+    uint32_t offset,
+    uint64_t size_per_node,
+    uint32_t l1_alignment);
+
 // scratchpad.cpp
-void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch);
+void ValidateScratchpadSpec(
+    const ScratchpadSpec& scratchpad, const CollectedSpecData& collected, uint32_t l1_alignment, tt::ARCH arch);
 void ValidateScratchpadBindings(const KernelSpec& kernel);
 void ValidateScratchpadsUsed(const ValidationContext& ctx);
 
