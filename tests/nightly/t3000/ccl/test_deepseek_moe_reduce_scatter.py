@@ -36,6 +36,15 @@ def run_deepseek_moe_reduce_scatter_impl(
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
 
+    # The ring runs along `rs_cluster_axis`, or along the one non-trivial axis of a line mesh when the whole mesh is
+    # the ring; the inputs shard rs_dim along that axis and replicate on the other, in a label of the mesh's own shape.
+    mesh_shape = tuple(mesh_device.shape)
+    ring_axis = (
+        rs_cluster_axis if rs_cluster_axis is not None else max(range(len(mesh_shape)), key=mesh_shape.__getitem__)
+    )
+    input_placements = [ttnn.PlacementReplicate()] * len(mesh_shape)
+    input_placements[ring_axis] = ttnn.PlacementShard(rs_dim)
+
     for i in range(num_iters):
         pre_rs_reduction_global_input_shape = pre_rs_reduction_input_shape[:]
         pre_rs_reduction_global_input_shape[rs_dim] *= num_devices
@@ -50,10 +59,7 @@ def run_deepseek_moe_reduce_scatter_impl(
             dtype=dtype,
             memory_config=sum_input_memory_config,
             mesh_mapper=ttnn.create_mesh_mapper(
-                mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(rs_dim)], ttnn.MeshShape(1, num_devices)
-                ),
+                mesh_device, ttnn.MeshMapperConfig(input_placements, ttnn.MeshShape(*mesh_shape))
             ),
         )
 
@@ -87,10 +93,10 @@ def run_deepseek_moe_reduce_scatter_impl(
             cluster_axis=rs_cluster_axis,
         )
 
-        # Output TensorTopology: the inputs carry [Replicate, Shard(rs_dim)] on (1, N) through
-        # deepseek_moe_fast_reduce_nc; ring position d keeps the reduced slice d, so the output is the reduce_scatter
-        # label -- the collapsed {N}, [Shard(rs_dim)] for a whole-mesh ring, Shard(rs_dim) on the cluster axis
-        # otherwise -- which ConcatMeshToTensor(dim=rs_dim) composes below.
+        # Output TensorTopology: the inputs carry Shard(rs_dim) on the ring axis of the mesh (Replicate on the other)
+        # through deepseek_moe_fast_reduce_nc; ring position d keeps the reduced slice d, so the output is the
+        # reduce_scatter label -- the collapsed {N}, [Shard(rs_dim)] for a whole-mesh ring, Shard(rs_dim) on the
+        # cluster axis otherwise -- which ConcatMeshToTensor(dim=rs_dim) composes below.
         if rs_cluster_axis is None:
             expected_placements = [f"PlacementShard({rs_dim})"]
             expected_shape = (num_devices,)
