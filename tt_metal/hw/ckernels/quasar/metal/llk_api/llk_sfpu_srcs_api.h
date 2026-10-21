@@ -56,7 +56,6 @@ inline ckernel::TensorShape llk_sfpu_srcs_slice_shape_impl(const std::uint32_t y
  * @param l1_out_addr_16B: L1 output address (16B units).
  * @param pack_S_src_format: SrcS source format for the packer.
  * @param pack_S_dst_format: L1 output format.
- * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
 inline void llk_sfpu_srcs_unary_init(
@@ -65,8 +64,7 @@ inline void llk_sfpu_srcs_unary_init(
     const DataFormat unpack_S_dst_format,
     const std::uint32_t l1_out_addr_16B,
     const DataFormat pack_S_src_format,
-    const DataFormat pack_S_dst_format,
-    const bool implied_math_format) {
+    const DataFormat pack_S_dst_format) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
@@ -75,8 +73,6 @@ inline void llk_sfpu_srcs_unary_init(
         srcs_shape, l1_in_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
-
-    cfg_rmw(DISABLE_IMPLIED_SRCS_FORMAT_RMW, !implied_math_format);
 
     _llk_unpack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
@@ -99,7 +95,6 @@ inline void llk_sfpu_srcs_unary_init(
  * @param l1_out_addr_16B: L1 output address (16B units).
  * @param pack_S_src_format: SrcS source format for the packer.
  * @param pack_S_dst_format: L1 output format.
- * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
 inline void llk_sfpu_srcs_binary_init(
@@ -109,8 +104,7 @@ inline void llk_sfpu_srcs_binary_init(
     const DataFormat unpack_S_dst_format,
     const std::uint32_t l1_out_addr_16B,
     const DataFormat pack_S_src_format,
-    const DataFormat pack_S_dst_format,
-    const bool implied_math_format) {
+    const DataFormat pack_S_dst_format) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
@@ -121,8 +115,6 @@ inline void llk_sfpu_srcs_binary_init(
         srcs_shape, l1_in1_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
-
-    cfg_rmw(DISABLE_IMPLIED_SRCS_FORMAT_RMW, !implied_math_format);
 
     _llk_unpack_srcs_config_<1 /*INSTRN_COUNT*/, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_unpack_srcs_binary_mop_config_(bfd_a, bfd_b);
@@ -193,11 +185,10 @@ inline void SfpuSrcsUnaryOp<Op>::init(
     const std::uint32_t l1_in_addr_16B,
     const DataFormat l1_in_format,
     const std::uint32_t l1_out_addr_16B,
-    const DataFormat l1_out_format,
-    const bool implied_math_format) {
+    const DataFormat l1_out_format) {
     constexpr DataFormat srcs_format = Op::Layout::format;
     llk_sfpu_srcs_unary_init<INSTRN_COUNT>(
-        l1_in_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format, implied_math_format);
+        l1_in_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
     Op::init_op();
 }
 
@@ -215,18 +206,10 @@ inline void SfpuSrcsBinaryOp<Op>::init(
     const std::uint32_t l1_in1_addr_16B,
     const DataFormat l1_in_format,
     const std::uint32_t l1_out_addr_16B,
-    const DataFormat l1_out_format,
-    const bool implied_math_format) {
+    const DataFormat l1_out_format) {
     constexpr DataFormat srcs_format = Op::Layout::format;
     llk_sfpu_srcs_binary_init<INSTRN_COUNT>(
-        l1_in0_addr_16B,
-        l1_in1_addr_16B,
-        l1_in_format,
-        srcs_format,
-        l1_out_addr_16B,
-        srcs_format,
-        l1_out_format,
-        implied_math_format);
+        l1_in0_addr_16B, l1_in1_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
     Op::init_op();
 }
 

@@ -75,8 +75,7 @@ struct SfpuSrcsUnaryOp {
         const std::uint32_t l1_in_addr_16B,
         const DataFormat l1_in_format,
         const std::uint32_t l1_out_addr_16B,
-        const DataFormat l1_out_format,
-        const bool implied_math_format);
+        const DataFormat l1_out_format);
 
     template <std::uint8_t INSTRN_COUNT = 1>
     static void run(const std::uint32_t num_tiles);
@@ -117,8 +116,7 @@ struct SfpuSrcsBinaryOp {
         const std::uint32_t l1_in1_addr_16B,
         const DataFormat l1_in_format,
         const std::uint32_t l1_out_addr_16B,
-        const DataFormat l1_out_format,
-        const bool implied_math_format);
+        const DataFormat l1_out_format);
 
     template <std::uint8_t INSTRN_COUNT = 1>
     static void run(const std::uint32_t num_tiles);
