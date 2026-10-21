@@ -60,6 +60,15 @@
 #endif
 #endif
 
+// 1 where the tree packs a BFP output block with one closed tile per MOP run
+#ifndef TA_BFP_CLOSED
+#if __has_include("llk_tilize_bfp_closed.h")
+#define TA_BFP_CLOSED 1
+#else
+#define TA_BFP_CLOSED 0
+#endif
+#endif
+
 // 1 where the tree's tilize_block takes the unpack to DEST tiles of a row's DEST section under one handshake
 #ifndef TA_DEST_RUNS
 #if __has_include("llk_tilize_dest_runs.h")
@@ -287,13 +296,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #if UNPACK_BLOCK
 // As llk_pack_tilize_block (#60672): one block pack run only for full 32x32 tiles with a non-BFP output, else per tile.
-inline bool pack_block_ok(const std::uint32_t pack_dst_format)
+inline bool pack_block_ok(const std::uint32_t pack_dst_format, const std::uint32_t unpack_src_format)
 {
-    return TA_NF == 4 && TA_FACE_R == 16 && !IS_BFP_FORMAT(pack_dst_format);
+    return TA_NF == 4 && TA_FACE_R == 16 &&
+           (!IS_BFP_FORMAT(pack_dst_format) || (TA_BFP_CLOSED && !_llk_pack_skip_bh_tilize_workaround_wrapper_(unpack_src_format)));
 }
 
-inline void pack_tilize_block(const std::uint32_t num_tiles, const std::uint32_t unpack_src_format)
+inline void pack_tilize_block(const std::uint32_t num_tiles, const std::uint32_t unpack_src_format, const std::uint32_t pack_dst_format)
 {
+#if TA_BFP_CLOSED
+    if (IS_BFP_FORMAT(pack_dst_format))
+    {
+        _llk_pack_tilize_block_closed_<TA_SYNC, is_fp32_dest_acc_en>(0, PERF_ADDRESS(PERF_OUTPUT, 0), num_tiles, 4096);
+        return;
+    }
+#endif
     if (_llk_pack_skip_bh_tilize_workaround_wrapper_(unpack_src_format))
     {
         _llk_pack_block_<TA_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, 0), num_tiles);
@@ -350,9 +367,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_packer_wait_for_math_done_();
                         }
-                        if (n > 1 && pack_block_ok(formats.pack_dst))
+                        if (n > 1 && pack_block_ok(formats.pack_dst, formats.unpack_A_src))
                         {
-                            pack_tilize_block(n, formats.unpack_A_src);
+                            pack_tilize_block(n, formats.unpack_A_src, formats.pack_dst);
                         }
                         else
                         {
@@ -380,9 +397,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     const std::uint32_t num_tiles = std::min(remaining_tiles, SECT_TILES);
 #if UNPACK_BLOCK
-                    if (num_tiles > 1 && pack_block_ok(formats.pack_dst))
+                    if (num_tiles > 1 && pack_block_ok(formats.pack_dst, formats.unpack_A_src))
                     {
-                        pack_tilize_block(num_tiles, formats.unpack_A_src);
+                        pack_tilize_block(num_tiles, formats.unpack_A_src, formats.pack_dst);
                         remaining_tiles -= num_tiles;
                         continue;
                     }
@@ -405,9 +422,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 const std::uint32_t num_tiles = std::min(remaining_tiles, SECT_TILES);
                 _llk_packer_wait_for_math_done_();
 #if UNPACK_BLOCK
-                if (num_tiles > 1 && pack_block_ok(formats.pack_dst))
+                if (num_tiles > 1 && pack_block_ok(formats.pack_dst, formats.unpack_A_src))
                 {
-                    pack_tilize_block(num_tiles, formats.unpack_A_src);
+                    pack_tilize_block(num_tiles, formats.unpack_A_src, formats.pack_dst);
                     _llk_pack_dest_section_done_<TA_SYNC, is_fp32_dest_acc_en>();
                     remaining_tiles -= num_tiles;
                     continue;
