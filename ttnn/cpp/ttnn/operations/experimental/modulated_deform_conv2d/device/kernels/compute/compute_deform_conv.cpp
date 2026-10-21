@@ -195,12 +195,15 @@ void compute_geometry(uint32_t in_cb_index, uint32_t index_cb_index, uint32_t we
 
     tile_regs_acquire();
     copy_tile(in_cb_index, IN_DY, 0);
-    copy_tile(in_cb_index, IN_ORIGIN_Y, 1);
     copy_tile(in_cb_index, IN_DX, 3);
-    copy_tile(in_cb_index, IN_ORIGIN_X, 4);
     copy_tile(in_cb_index, IN_MASK, 6);
     copy_tile(geom_kernel_cb_index, KERNEL_Y, 2);
     copy_tile(geom_kernel_cb_index, KERNEL_X, 5);
+    // The reader writes each row's window origin in column 0 only.
+    unary_bcast_init<BroadcastType::COL>(in_cb_index);
+    unary_bcast<BroadcastType::COL>(in_cb_index, IN_ORIGIN_Y, 1);
+    unary_bcast<BroadcastType::COL>(in_cb_index, IN_ORIGIN_X, 4);
+    unary_bcast_uninit<BroadcastType::COL>(in_cb_index);
 
     sigmoid_tile_init();
     sigmoid_tile<GEOM_FACES>(6);  // the mask, from its logits
