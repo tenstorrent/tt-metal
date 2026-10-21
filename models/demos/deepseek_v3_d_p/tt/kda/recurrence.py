@@ -29,6 +29,11 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     preparation_bytes,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import (
+    RelayAffinePrefix,
+    fabric_wraps_axis,
+    persistent_semaphores,
+)
 
 
 def _group_summary_memory_config(
@@ -449,6 +454,8 @@ def _scan_sp_grouped_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     gather_buffer: ttnn.Tensor | None = None,
+    affine_relay: RelayAffinePrefix | None = None,
+    final_carry: "_RelayFinalCarry | None" = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -465,15 +472,18 @@ def _scan_sp_grouped_chunks(
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
         )
-        group_entry_states, prefix_final_state = distributed_prefix(
-            packed,
-            initial_state,
-            sequence_parallel_axis=sequence_parallel_axis,
-            compute_config=compute_config.affine_prefix,
-            actual_start=actual_start,
-            local_rows=geometry.local_rows,
-            gather_buffer=gather_buffer,
-        )
+        if affine_relay is not None:
+            group_entry_states, prefix_final_state = affine_relay(packed, initial_state, actual_start)
+        else:
+            group_entry_states, prefix_final_state = distributed_prefix(
+                packed,
+                initial_state,
+                sequence_parallel_axis=sequence_parallel_axis,
+                compute_config=compute_config.affine_prefix,
+                actual_start=actual_start,
+                local_rows=geometry.local_rows,
+                gather_buffer=gather_buffer,
+            )
     else:
         # The reduction and the scan read only slots with a valid segment (the reduction writes its own identity for
         # a rank without a head), so the other slots need no identity.
@@ -524,10 +534,17 @@ def _scan_sp_grouped_chunks(
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
+    rank_final = ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim))
+    if final_carry is not None:
+        # The relay leaves the prefix's final state on the first and last chronological ranks only: without a split
+        # tail the last rank multicasts it, with one the tail's owner multicasts its own.
+        return RecurrenceResult(
+            output, final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
+        )
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
     final_state = ttnn.experimental.kda.select_final_carry(
-        ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim)),
+        rank_final,
         prefix_final_state,
         actual_start=actual_start,
         actual_end=actual_end,
@@ -536,6 +553,34 @@ def _scan_sp_grouped_chunks(
         sequence_parallel_axis=sequence_parallel_axis,
     )
     return RecurrenceResult(output, final_state)
+
+
+class _RelayFinalCarry:
+    """select_final_carry with the prefix's final state on the last chronological rank, where the relay leaves it."""
+
+    def __init__(self, device: ttnn.MeshDevice, sequence_parallel_axis: int, num_links: int):
+        grid = device.compute_with_storage_grid_size()
+        # The last worker row(s): the fabric senders are the first num_links of these, the rest copy.
+        self._cores = [ttnn.CoreCoord(x, y) for y in range(grid.y - 1, grid.y - 3, -1) for x in range(grid.x)]
+        self._axis = sequence_parallel_axis
+        self._num_links = num_links
+        # The line barrier and arrival counters persist across calls.
+        self._semaphores = persistent_semaphores(device, 2)
+
+    def __call__(self, rank_final, prefix_final, actual_start, actual_end, local_rows):
+        return ttnn.experimental.kda.select_final_carry(
+            rank_final,
+            prefix_final,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            local_rows=local_rows,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sequence_parallel_axis=self._axis,
+            num_links=self._num_links,
+            cores=self._cores,
+            prefix_on_last_rank=True,
+            semaphores=self._semaphores,
+        )
 
 
 class KDARecurrence:
@@ -636,6 +681,35 @@ class KDARecurrence:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
+        # The SP relay replaces the summary gather and chain when the fabric wraps the SP axis (the last rank
+        # sends the final state on to the first); the final carry then runs as its own program.
+        self._affine_relay = None
+        self._relay_final_carry = None
+        if (
+            self._sequence_parallel
+            and program_config.relay_affine_prefix
+            and grouped
+            and self._groups == 1
+            and fabric_wraps_axis(sequence_parallel_axis)
+            and tuple(device.shape)[sequence_parallel_axis] > 2
+            and _sp_links(device, sequence_parallel_axis) > 0
+        ):
+            links = _sp_links(device, sequence_parallel_axis)
+            self._affine_relay = RelayAffinePrefix.shared(
+                device,
+                sequence_parallel_axis=sequence_parallel_axis,
+                batch_heads=batch * heads,
+                key_dim=key_dim,
+                value_dim=value_dim,
+                num_links=links,
+                local_rows=local_rows,
+                math_fidelity=program_config.affine_prefix_math_fidelity,
+            )
+            self._relay_final_carry = _RelayFinalCarry(device, sequence_parallel_axis, links)
+            # The relay replaces the summary gather, so its persistent buffer goes unused.
+            if self._gather_buffer is not None:
+                ttnn.deallocate(self._gather_buffer)
+                self._gather_buffer = None
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
@@ -802,4 +876,6 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             gather_buffer=self._gather_buffer,
+            affine_relay=self._affine_relay,
+            final_carry=self._relay_final_carry,
         )

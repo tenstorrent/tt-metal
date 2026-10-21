@@ -47,6 +47,8 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
     const auto* mesh = in.rank_final.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(attrs.num_links > 0, "{}: num_links must be positive", operation_name);
+    TT_FATAL(
+        !attrs.cores || attrs.cores->size() >= attrs.num_links, "{}: needs a core per fabric link", operation_name);
 }
 
 SelectFinalCarryOperation::spec_return_value_t SelectFinalCarryOperation::compute_output_specs(
@@ -73,14 +75,20 @@ Tensor select_final_carry(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    bool prefix_on_last_rank,
+    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores,
+    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses) {
     return ttnn::device_operation::launch<SelectFinalCarryOperation>(
         SelectFinalCarryParams{
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
             .num_links = num_links,
             .topology = topology,
-            .output_mem_config = memory_config},
+            .output_mem_config = memory_config,
+            .prefix_on_last_rank = prefix_on_last_rank,
+            .cores = cores,
+            .semaphore_addresses = semaphore_addresses},
         SelectFinalCarryInputs{
             .rank_final = rank_final,
             .prefix_final = prefix_final,

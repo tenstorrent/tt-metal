@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -109,5 +110,14 @@ ValueBlockPeers value_block_peers(const Device& device, const ValueBlockDistribu
         static_cast<uint32_t>(last.x),
         static_cast<uint32_t>(last.y)};
 }
+
+// Descriptor-factory helpers of the KDA generic-program ops.
+uint32_t tile_bytes(const Tensor& tensor);
+// The cores, merged into rectangles (which dispatch writes in one multicast each).
+tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoord> cores);
+tt::tt_metal::CBDescriptor cb_descriptor(
+    uint32_t index, uint32_t pages, uint32_t page_size, tt::DataFormat format, const tt::tt_metal::CoreRangeSet& cores);
+// A circular buffer over a height-sharded L1 tensor's shards, in place.
+tt::tt_metal::CBDescriptor sharded_cb_descriptor(uint32_t index, const Tensor& tensor);
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

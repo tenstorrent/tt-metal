@@ -238,4 +238,40 @@ ValueBlockDistribution distribute_value_blocks(
     return result;
 }
 
+uint32_t tile_bytes(const Tensor& tensor) {
+    return tensor.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype()));
+}
+
+tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoord> cores) {
+    return tt::tt_metal::CoreRangeSet(ttsl::Span<const tt::tt_metal::CoreCoord>(cores.data(), cores.size()))
+        .merge_ranges();
+}
+
+tt::tt_metal::CBDescriptor cb_descriptor(
+    uint32_t index,
+    uint32_t pages,
+    uint32_t page_size,
+    tt::DataFormat format,
+    const tt::tt_metal::CoreRangeSet& cores) {
+    return tt::tt_metal::CBDescriptor{
+        .total_size = pages * page_size,
+        .core_ranges = cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = index, .data_format = format, .page_size = page_size}}},
+    };
+}
+
+tt::tt_metal::CBDescriptor sharded_cb_descriptor(uint32_t index, const Tensor& tensor) {
+    const auto& shard = *tensor.memory_config().shard_spec();
+    const uint32_t page = tile_bytes(tensor);
+    auto cb = cb_descriptor(
+        index,
+        shard.shape[0] * shard.shape[1] / tt::constants::TILE_HW,
+        page,
+        tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype()),
+        shard.grid);
+    cb.buffer = tensor.buffer();
+    return cb;
+}
+
 }  // namespace ttnn::experimental::prim::kda_factory_detail
