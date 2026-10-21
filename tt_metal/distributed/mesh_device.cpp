@@ -942,7 +942,6 @@ void MeshDeviceImpl::establish_device_property_caches() {
     properties.l1_size_per_core = l1_size_per_core();
     properties.dram_size_per_channel = dram_size_per_channel();
     properties.ethernet_cores = ethernet_cores();
-    properties.storage_only_cores = storage_only_cores();
     mesh_properties_ = std::move(properties);
 }
 
@@ -1565,13 +1564,6 @@ const std::set<CoreCoord>& MeshDeviceImpl::ethernet_cores() const {
     return validate_and_get_reference_value(
         local_devices_, [](const auto* device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
 }
-const std::set<CoreCoord>& MeshDeviceImpl::storage_only_cores() const {
-    if (mesh_properties_.has_value()) {
-        return mesh_properties_->storage_only_cores;
-    }
-    return validate_and_get_reference_value(
-        local_devices_, [](const auto* device) -> const std::set<CoreCoord>& { return device->storage_only_cores(); });
-}
 uint32_t MeshDeviceImpl::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     return validate_and_get_reference_value(local_devices_, [noc_index, core](const auto* device) {
         return device->get_noc_unicast_encoding(noc_index, core);
@@ -2189,7 +2181,6 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return pimpl_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const { return pimpl_->ethernet_cores(); }
-const std::set<CoreCoord>& MeshDevice::storage_only_cores() const { return pimpl_->storage_only_cores(); }
 uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     return pimpl_->get_noc_unicast_encoding(noc_index, core);
 }

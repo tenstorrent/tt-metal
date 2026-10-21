@@ -186,7 +186,6 @@ private:
         uint32_t l1_size_per_core = 0;
         uint32_t dram_size_per_channel = 0;
         std::set<CoreCoord> ethernet_cores;
-        std::set<CoreCoord> storage_only_cores;
     };
     std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
@@ -362,7 +361,6 @@ public:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
