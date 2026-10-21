@@ -50,9 +50,8 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     // Row-major uint32 [1, 1, 1, >= tile rows], one page: per-token weight/bias tile row r is read from row map[r];
     // entries must index existing tile rows of the affine tensors (the producer checks them, the op does not).
     const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt,
-    // Largest per-device row count (batch * N, multiple of 32) one cached program serves; the live row count is
-    // then a runtime argument, so inputs of any row count up to it share the program and the stats buffer
-    // (which must be created with the same row_capacity). Absent: one program per row count.
+    // Largest per-device row count (batch * N, multiple of 32) one cached program and its stats buffer
+    // serve (create the buffer with the same row_capacity). Absent: one program per row count.
     std::optional<uint32_t> row_capacity = std::nullopt);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)

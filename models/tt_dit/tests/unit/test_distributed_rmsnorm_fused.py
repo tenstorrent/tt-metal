@@ -1881,11 +1881,8 @@ def test_sweep(mesh_device, tp, topology, tp_axis, full_mesh, is_ci_env):
     assert not flagged, f"sweep failures ({len(flagged)}/{len(points)}):\n" + "\n".join(flagged)
 
 
-# ---------------------------------------------------------------------------
-# MiniMax-H3 (4x8, TP=4 ring on axis 0): one program per layer config for every served per-chip
-# row count. `row_capacity` pins the worker set and the stats scratch; the live row count is a
-# runtime argument, so the program cache must stay flat across the envelope.
-# ---------------------------------------------------------------------------
+# MiniMax-H3 (4x8, TP=4 ring on axis 0): `row_capacity` pins the worker set and the stats scratch, so one
+# program per layer config must serve every served per-chip row count.
 
 _H3_TILE_ROWS = (148, 74, 287, 427, 470)  # per-chip tile rows (5 s warm point first, then the rest of the envelope)
 _H3_ROW_CAPACITY = 470 * 32
@@ -1930,9 +1927,8 @@ def _h3_block_inputs(mesh_device, tile_rows: int, *, tile_row_map: bool, in_fp32
 @pytest.mark.parametrize(("mesh_device", "device_params"), _H3_PARAMS, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("tile_row_map", [False, True], ids=["per_token", "tile_row_map"])
 def test_h3_dynamic_rows_block_norm(mesh_device, tile_row_map):
-    """DistributedRMSNorm with row_capacity (the H3 norm1/norm2 call form): warm at 148 tile rows, then
-    every other served length must hit the same programs (A/B semaphores and the stats pool alternate
-    per call); an fp32 input must add programs. PCC vs torch at every length."""
+    """DistributedRMSNorm with row_capacity: warm at 148 tile rows, then every other served length must hit
+    the same programs (A/B semaphores and stats pool alternating); an fp32 input must add programs."""
     tp_axis = 0
     ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     norm = DistributedRMSNorm(

@@ -961,10 +961,8 @@ namespace ttnn::prim {
 
 namespace {
 
-// ---- Per-core Q work and K/V store-and-forward chains ----------------------------------------------------
-// Everything here is a function of one length-dependent number, num_q_chunks. The dynamic-length path rebuilds
-// it on the host whenever the per-chip length changes (apply_dynamic_local_n_runtime_args), so it lives outside
-// the descriptor builder.
+// ---- Per-core Q work and K/V store-and-forward chains: functions of num_q_chunks, rebuilt on the host
+// when the dynamic-length path sees a new per-chip length (apply_dynamic_local_n_runtime_args).
 struct CoreHeadWork {
     uint32_t head = 0;
     uint32_t q_chunk_count = 0;
@@ -3862,9 +3860,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     return desc;
 }
 
-// dynamic_local_n cache hit: the per-core words that follow the per-chip length (Q split, head chains, the
-// gather's slab height) are rebuilt only when the length differs from the one the cached program last ran at;
-// the reader's common runtime word is that memo. head_mcast_pin is shared across the coordinates of one dispatch.
+// dynamic_local_n cache hit: the per-core words that follow the per-chip length are rebuilt only when it
+// differs from the length the program last ran at (the memo is the reader's common runtime word).
 void apply_dynamic_local_n_runtime_args(
     Program& program,
     const RingJointSDPAParams& args,

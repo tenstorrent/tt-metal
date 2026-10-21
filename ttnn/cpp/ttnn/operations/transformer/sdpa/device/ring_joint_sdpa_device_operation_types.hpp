@@ -47,9 +47,8 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
-    // The per-chip padded length N_local is a runtime quantity: the program hash ignores it, the kernels take
-    // it from one common runtime word, and a cache hit rewrites the per-core split only when it changed.
-    // Requires logical_n as a device tensor, non-causal MHA with a separate V, no joint tensors.
+    // The per-chip padded length N_local is a runtime quantity: the hash ignores it and the kernels take it
+    // from one common runtime word. Requires logical_n as a device tensor, non-causal MHA with a separate V.
     bool dynamic_local_n = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.

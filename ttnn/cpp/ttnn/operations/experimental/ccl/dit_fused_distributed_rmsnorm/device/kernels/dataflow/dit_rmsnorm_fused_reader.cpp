@@ -85,10 +85,8 @@ void kernel_main() {
     // weight/bias uses the one-shot resident face-row read. per-batch adaLN streams per row.
     constexpr uint32_t weight_bcast_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t bias_bcast_tiles = get_compile_time_arg_val(20);
-    // Batched RoPE (CT 21): 1 -> cos/sin has one block per input batch, 0 -> broadcast the same
-    // cos/sin to every input batch. The reader always indexes cos/sin by the WITHIN-batch seq row
-    // (global_row % rope_seqlen_tiles) and adds (global_row / rope_seqlen_tiles) * one batch's
-    // cos/sin block; at batch=1 both terms collapse to the original single-batch indexing.
+    // Batched RoPE (CT 21): 1 -> one cos/sin block per input batch, 0 -> the same block for every
+    // batch. cos/sin is indexed by the within-batch seq row plus the batch's block offset.
     constexpr uint32_t rope_per_batch = get_compile_time_arg_val(21);
     // Per-batch adaLN weight/bias (CT 22/23/24): [batch,1,H] — broadcast over seq but distinct per
     // batch. Streamed like per-token (per-row push + compute pops per row), but the read is the

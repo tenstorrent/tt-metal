@@ -65,9 +65,8 @@ _SWEPT_BLOCKINGS = {
 
 _DEVICE_GRID = ttnn.CoreCoord(12, 10)
 
-# Blocking of the dynamic-length path: one config for every M. It is the v2.3 rule pick over the whole
-# served envelope (M_block = min(6, ceil(pcM / 2)) rounds to 6 from 74 tile rows per device on), so a
-# length no longer changes the fused op's program; the window clamp in `get_params` stays at 2 there.
+# Blocking of the dynamic-length path: one config (the v2.3 rule pick over the served envelope) for
+# every M, so a length never changes the fused op's program.
 _PINNED_BLOCKING = FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1)
 
 _TILE = 32

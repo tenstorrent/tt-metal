@@ -169,10 +169,8 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     assert check_result["relative_rmse"] < 0.02
 
 
-# The row count is a runtime quantity: one program serves every MiniMax-H3 packed length. These
-# are the DiT's proj_out / audio_proj_out shapes (K=5376, N=96 / 32) with the generic blocking the
-# model resolves for them; the sweep warms at 148 tile rows per chip, then serves the smallest
-# length and three more up to the capacity with the cache flat, and a width change must miss.
+# The row count is a runtime quantity: one program serves every MiniMax-H3 packed length at the DiT's
+# proj_out / audio_proj_out shapes (K=5376, N=96 / 32); a width change must miss.
 H3_PROJ_OUT_TILE_ROWS = (148, 74, 287, 427, 470)
 
 

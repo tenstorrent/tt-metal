@@ -2,17 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Length classes of the dynamic-length path.
-
-The dynamic-length ops take the per-device row count as a runtime word, so one program could serve
-every served length. But the best ring SDPA chunk pair and ff1 blocking differ between the two ends
-of the envelope (measured per block on 4x8 Blackhole: (320, 384) chunks are 10 % faster than
-(256, 512) at 4736 rows/device and 5 % slower at 13664; ff1 6/3/16 beats 4/3/16 at 4736 and loses
-5 % at 13664). The envelope is therefore split into classes keyed on the per-device row count
-(padded packed length / SP), each class holding one frozen program set; a class value reaches the
-op as a config object, never as a shape, so a length inside a class never changes a program. The
-pipeline's warm-up runs one request inside every class.
-"""
+"""Length classes: the best SDPA chunk pair and ff1 blocking differ between the ends of the envelope, so
+each class freezes one program set; a class reaches the op as a config, never as a shape."""
 
 from __future__ import annotations
 

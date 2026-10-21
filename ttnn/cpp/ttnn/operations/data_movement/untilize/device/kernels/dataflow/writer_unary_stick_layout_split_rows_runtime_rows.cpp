@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer of the interleaved multi-core untilize: same stick writes as
-// writer_unary_stick_layout_split_rows_multi_core.cpp, with this core's block range derived from the
-// common row count instead of per-core runtime args.
+// Writer of the interleaved multi-core untilize: the split-rows writer's stick writes, with this
+// core's block range derived from the common row count instead of per-core runtime args.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

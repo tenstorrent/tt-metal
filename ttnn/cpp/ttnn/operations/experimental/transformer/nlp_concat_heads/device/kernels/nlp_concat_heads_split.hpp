@@ -9,9 +9,8 @@
 
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
-// Per-core (row, head) block range of the interleaved nlp_concat_heads program, shared by the reader
-// and the writer. Whole rows go to a core unless there are fewer rows than cores, in which case the
-// (row, head) units are split instead; blocks stay contiguous either way.
+// Per-core (row, head) block range of the interleaved nlp_concat_heads program: whole rows per core,
+// or (row, head) units when there are fewer rows than cores; contiguous either way.
 inline std::pair<uint32_t, uint32_t> nlp_concat_heads_block_range(
     uint32_t core_idx, uint32_t h_tiles, uint32_t batch, uint32_t heads, uint32_t num_cores, bool head_parallel_ok) {
     const uint32_t total_rows = batch * h_tiles;

@@ -9,9 +9,8 @@
 
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
-// Per-core block range of the interleaved fused-embedding program: blocks are 32-index tiles rows,
-// `blocks_per_batch` of them per index row, derived on device from the common row count so the
-// reader, the tilize compute and the writer agree and a hit rewrites one word.
+// Per-core block range (32-index rows) of the interleaved fused-embedding program, derived on device
+// from the common row count so the reader, compute and writer agree.
 inline std::pair<uint32_t, uint32_t> embeddings_fused_block_range(
     uint32_t core_idx, uint32_t blocks_per_batch, uint32_t batch, uint32_t num_cores) {
     const uint32_t total = batch * blocks_per_batch;

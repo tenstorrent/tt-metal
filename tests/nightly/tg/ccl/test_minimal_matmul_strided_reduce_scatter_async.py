@@ -1121,11 +1121,8 @@ def test_minimal_matmul_strided_reduce_scatter_adopted_blockings(mesh_device, nu
     )
 
 
-# ---------------------------------------------------------------------------------------------
-# MiniMax-H3 ff2 (K=3584, N=5376, reduce-scatter over the 4-device TP ring): the packed row count
-# is a runtime quantity, so one program serves every length the DiT serves (74..470 tile rows per
-# chip) with the program cache flat; the ring semaphore sets alternate across calls as in the model.
-# ---------------------------------------------------------------------------------------------
+# MiniMax-H3 ff2 (K=3584, N=5376, reduce-scatter over the 4-device TP ring): the row count is a runtime
+# quantity, so one program serves every served length (74..470 tile rows per chip).
 
 H3_FF2_K = 3584
 H3_FF2_N = 5376

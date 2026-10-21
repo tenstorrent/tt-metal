@@ -10,9 +10,8 @@
 // that build a fused matmul + reduce-scatter program (minimal_matmul_strided_reduce_scatter_async).
 // That helper binds the *legacy* kernels; this factory binds the _metal2 forks beside them.
 //
-// The row count M is a common runtime arg (M_tiles): the program hash leaves it out, the kernels
-// derive their per-core row range from it and a static core index, and override_runtime_arguments
-// re-applies it together with the tensor bindings on every program-cache hit.
+// The row count M is a common runtime arg (M_tiles): the hash leaves it out, the kernels derive their
+// per-core row range from it, and override_runtime_arguments re-applies it on every cache hit.
 //
 
 #include "minimal_matmul_device_operation.hpp"

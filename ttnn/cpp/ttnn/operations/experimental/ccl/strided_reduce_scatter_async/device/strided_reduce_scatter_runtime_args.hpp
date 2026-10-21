@@ -6,10 +6,8 @@
 
 #include <cstdint>
 
-// Common runtime-argument slots of the strided reduce-scatter kernels, shared by the host factory
-// (strided_reduce_scatter_async_program.cpp) and the kernels. slice_Ht (the reduce-scattered row
-// count in tiles) is the one per-call length word; the per-core row split, the M block count and
-// the page counts are derived from it on device (runtime_length.hpp).
+// Common runtime-argument slots of the strided reduce-scatter kernels, shared by host and kernels.
+// slice_Ht is the one per-call length word; the per-core split and page counts derive from it on device.
 namespace ttnn::experimental::ccl::strided_reduce_scatter_common_args {
 
 struct Reader {

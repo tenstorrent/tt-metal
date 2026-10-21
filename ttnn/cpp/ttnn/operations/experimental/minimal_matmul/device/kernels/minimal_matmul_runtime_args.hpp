@@ -6,9 +6,8 @@
 
 #include <cstdint>
 
-// Common runtime-argument slots of the legacy minimal_matmul kernels, shared by the host factory
-// (minimal_matmul_program_factory.cpp) and the kernels. M_tiles is the one per-call length word;
-// every per-core row range is derived from it on device (runtime_length.hpp).
+// Common runtime-argument slots of the legacy minimal_matmul kernels, shared by host and kernels.
+// M_tiles is the one per-call length word; every per-core row range derives from it on device.
 namespace ttnn::experimental::prim::minimal_matmul_common_args {
 
 // in0 and in1 data-movement kernels (sender and receiver flavours).

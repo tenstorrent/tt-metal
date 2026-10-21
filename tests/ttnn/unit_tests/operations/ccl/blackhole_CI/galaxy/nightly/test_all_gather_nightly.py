@@ -267,10 +267,8 @@ def test_all_gather_ring_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-# ---------------------------------------------------------------------------------------------
 # MiniMax-H3 DiT gathers on the 4x8 Galaxy with the row count as a runtime word: one program per
 # gather serves every served per-chip length (74..470 tile rows).
-# ---------------------------------------------------------------------------------------------
 def _h3_tile_rows():
     return [148, 74, 287, 427, 470]
 

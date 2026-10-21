@@ -170,9 +170,8 @@ class DistributedRMSNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
-        # Largest per-device row count (batch * N, multiple of 32) one cached program and one stats
-        # buffer pool serve; the live row count is then a runtime argument of the fused op. None keeps
-        # one program and one pool per row count.
+        # Largest per-device row count (batch * N, multiple of 32) one cached program and stats pool
+        # serve; None keeps one per row count.
         self.row_capacity = row_capacity
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -272,10 +271,8 @@ class DistributedRMSNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                # Key includes everything that changes the stats-buffer geometry: the per-device
-                # width, the row capacity (the live row count is not part of it), heads-per-device,
-                # RoPE presence and weight presence/width. Guards against a shared-cache collision
-                # between two modules differing only in affine geometry.
+                # Everything that changes the stats-buffer geometry (width, row capacity, heads per
+                # device, RoPE and weight presence/width), so modules never share a mismatched buffer.
                 # per_head_norm changes the stats geometry (per-head reduces locally -> no
                 # all-gather scratch), so it MUST be part of the key and forwarded to
                 # create_stats_buffer (which returns None for the per-head/local path).

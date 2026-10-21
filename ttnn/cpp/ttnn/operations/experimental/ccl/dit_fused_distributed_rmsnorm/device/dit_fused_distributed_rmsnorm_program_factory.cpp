@@ -306,9 +306,8 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     // agree on num_workers (they share this single-source-of-truth path). Only evaluated
     // on the !is_tp_1 (all-gather) branch: derive_worker_cap calls into fabric
     // (get_tt_fabric_max_payload_size_bytes), which reaches the fabric context — null when
-    // the op runs on a single device with fabric uninitialized (TP=1). The local path
-    // takes the whole grid (workers past the row count have no rows), so it never uses the cap;
-    // a host input (stats-buffer sizing before upload) has no grid and needs no workers there.
+    // the op runs on a single device with fabric uninitialized (TP=1). The local path takes the
+    // whole grid and never uses the cap; a host input (stats sizing before upload) has no grid.
     const bool on_device = input.storage_type() == StorageType::DEVICE;
     const auto grid_size = on_device ? input.device()->compute_with_storage_grid_size() : CoreCoord{0, 0};
     s.num_workers = s.is_tp_1 ? std::min<uint32_t>(grid_size.x * grid_size.y, s.capacity_tile_rows)
@@ -492,10 +491,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
 
     // ------------------------------------------------------------------------
-    // Core allocation: workers, forwarders and the stats geometry come from the
-    // capacity (compute_sizing), so the program and its core set are the same for
-    // every row count up to it; the live row count only reaches the kernels as a
-    // common runtime argument.
+    // Core allocation: workers, forwarders and the stats geometry come from the capacity
+    // (compute_sizing), so the program is the same for every row count up to it.
     // ------------------------------------------------------------------------
     const auto sizing = compute_sizing(args, input_tensor);
     const bool is_tp_1 = sizing.is_tp_1;
@@ -549,9 +546,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // CircularBuffer(packet_cb).get_write_ptr() / Semaphore(id), no cross-core address args.
     const CoreRangeSet all_core_set({core_grid});
 
-    // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf). The contiguous
-    // tile-row split (worker w owns [w*rpw, min((w+1)*rpw, rows))) is derived on device
-    // from the runtime row count (runtime_length.hpp), on every kernel alike.
+    // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf). The contiguous tile-row
+    // split is derived on device from the runtime row count (runtime_length.hpp).
     auto worker_forwarder = [&](uint32_t w) -> uint32_t { return use_mux ? (w / workers_per_forwarder) : 0u; };
     auto worker_slot = [&](uint32_t w) -> uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
 
@@ -1406,9 +1402,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     }
 
     // ------------------------------------------------------------------------
-    // Runtime args. Buffer bindings and the live tile-row count are common args
-    // (one write per kernel on a cache hit); each worker's only per-core args are
-    // its static index and forwarder routing, from which it derives its row range.
+    // Runtime args: buffer bindings and the live tile-row count are common args; each worker's
+    // per-core args are its static index and forwarder routing.
     // ------------------------------------------------------------------------
     std::vector<uint32_t> reader_common_args = {
         input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, recip_addr_rt, num_tile_rows};
@@ -1441,10 +1436,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     }
 
     // ------------------------------------------------------------------------
-    // Per-forwarder runtime args: stats_dram, out_ready GlobalSemaphore, the
-    // group's worker NoC coords, then fwd+bwd fabric-connection args on this
-    // forwarder's routing plane (link_idx = f). The per-round present counts are
-    // derived on device from the common row count and the group's worker indices.
+    // Per-forwarder runtime args: stats_dram, out_ready GlobalSemaphore, the group's worker NoC
+    // coords, then fwd+bwd fabric-connection args on this forwarder's routing plane (link_idx = f).
     //
     // Guarded on num_forwarders>0 (== use_mux == !is_tp_1): the TP=1 / per_head_norm
     // path has no forwarders and no all-gather, and may run on a single device with

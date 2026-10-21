@@ -464,9 +464,8 @@ DitFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     return tensors;
 }
 
-// The row count (shape[-2] of the input, per-token affine tensors, RoPE tables and the stats
-// scratch; the width of the tile-row map) is a runtime argument, so the key carries the
-// attributes, the capacity, every flag that selects a kernel path, and the row-free specs.
+// The row count is a runtime argument, so the key carries the attributes, the capacity, every flag
+// that selects a kernel path, and the row-free specs.
 ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using ttnn::operations::common::hash_spec_without_rows;

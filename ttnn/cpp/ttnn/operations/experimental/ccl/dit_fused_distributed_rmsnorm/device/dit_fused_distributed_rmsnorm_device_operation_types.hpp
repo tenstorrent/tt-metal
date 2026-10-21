@@ -52,9 +52,8 @@ struct DitFusedDistributedRmsnormParams {
 
     DeviceComputeKernelConfig compute_kernel_config;
 
-    // Largest folded row count (batch * N per device, multiple of 32) one cached program serves.
-    // Pins the worker set and sizes the stats scratch; the live row count is a runtime argument.
-    // Absent: sized to the input, so every row count is its own program (the legacy behaviour).
+    // Largest folded row count (batch * N per device, multiple of 32) one cached program serves; it
+    // pins the worker set and the stats scratch. Absent: one program per row count.
     std::optional<uint32_t> row_capacity;
 
     DitFusedDistributedRmsnormParams(

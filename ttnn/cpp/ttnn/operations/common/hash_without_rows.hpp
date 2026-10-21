@@ -29,11 +29,8 @@ inline ttsl::hash::hash_t hash_dims_without_rows(ttsl::hash::hash_t seed, ttsl::
 }
 }  // namespace detail
 
-// Program-cache hash of a TensorSpec for ops whose kernels take the row count (shape[-2]) as a
-// runtime argument. Hashes dtype, layout, tile, memory config (with shard spec), rank and every
-// logical / padded / alignment entry except [-2]; deliberately leaves out shape[-2] and the storage.
-// `salt` keeps two ops with identical hashed fields from sharing a cache entry: a custom
-// compute_program_hash drops the framework's canonical-key collision guard, so each op passes its own.
+// Hashes the spec except shape[-2]; `salt` separates ops that share fields, since a custom hash drops
+// the framework's collision guard.
 inline ttsl::hash::hash_t hash_spec_without_rows(const tt::tt_metal::TensorSpec& spec, uint64_t salt = 0) {
     const auto& layout = spec.tensor_layout();
     auto h = ttsl::hash::hash_objects_with_default_seed(

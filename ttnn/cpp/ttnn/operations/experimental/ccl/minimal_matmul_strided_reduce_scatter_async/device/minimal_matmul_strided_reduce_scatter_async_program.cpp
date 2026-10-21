@@ -226,9 +226,8 @@ minimal_matmul_strided_reduce_scatter_async_program(
     uint32_t padded_N_tiles = tt::round_up(N_tiles, num_cores_x);
     uint32_t mm_N_full_block_wt_val = padded_N_tiles / num_cores_x;
 
-    // The RS geometry comes from the activations' height: with a rolling window the matmul output
-    // tensor is only mm_window_blocks M blocks tall, and even unwindowed the RS output / intermediate
-    // may be taller (capacity-sized persistent buffers) than the rows being reduced.
+    // The RS geometry comes from the activations' height: the windowed MM output is shorter and the
+    // RS output / intermediate may be taller (capacity-sized) than the rows being reduced.
     const std::optional<uint32_t> mm_logical_Ht_val = input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
     // =========================================================================

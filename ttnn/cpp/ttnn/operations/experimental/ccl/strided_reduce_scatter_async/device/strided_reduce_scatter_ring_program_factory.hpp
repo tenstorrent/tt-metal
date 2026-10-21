@@ -83,9 +83,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // Caller-owned scratch for the per-MM-core progress counters (fused MM->RS signaling only): uint32
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
-// Cache-hit refresh for ring topology: rewrites the common runtime args (row count, addresses,
-// semaphores) of the three kernels; nothing per core. slice_Ht is the reduce-scattered height in
-// tiles (the activations' height, not the windowed MM output's).
+// Cache-hit refresh (ring): rewrites the three kernels' common runtime args, nothing per core.
+// slice_Ht is the reduce-scattered height in tiles (the activations', not the windowed MM output's).
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     const StridedReduceScatterProgramArtifacts& artifacts,

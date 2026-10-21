@@ -2,13 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side dispatch timer for one transformer block (``MINIMAX_H3_TIME_DISPATCH``).
-
-``MINIMAX_H3_TIME_DISPATCH=1`` times every top-level ttnn call of block 0 of each forward with
-``perf_counter_ns`` and logs host microseconds per op kind, the Python time between calls (the gaps)
-and the ``ttnn.synchronize_device`` calls made on the way; any other integer selects that block.
-The hooks fire on the host only, so the numbers are enqueue cost, never device time.
-"""
+"""``MINIMAX_H3_TIME_DISPATCH=<block>`` logs the host time of every top-level ttnn call of that block per
+forward (enqueue cost only, never device time)."""
 
 from __future__ import annotations
 
