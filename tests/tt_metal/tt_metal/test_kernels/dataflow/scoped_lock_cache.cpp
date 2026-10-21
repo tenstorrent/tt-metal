@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #elif defined(USE_LOCAL_TENSOR_ACCESSOR)
 #include "api/tensor/local_tensor_accessor.h"
+#include "internal/local_mem/address_access.h"
 #elif !defined(USE_SCRATCHPAD)
 #error "scoped_lock_cache.cpp requires one of -DUSE_CORE_LOCAL_MEM / -DUSE_SCRATCHPAD / -DUSE_LOCAL_TENSOR_ACCESSOR"
 #endif
@@ -40,7 +41,8 @@ void kernel_main() {
     // No region_base runtime arg here: the host binds the scratchpad, so its address is only known
     // in-kernel and the probe region is derived from the binding instead.
     Scratchpad<volatile uint32_t> pad(scratch::pad);
-    const uint32_t region_base = pad.get_base_address();
+    // Raw address: the probe below needs the cached and uncached (+ MEM_L1_UNCACHED_BASE) aliases of the region.
+    const uint32_t region_base = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     auto make_lock = [&](uint32_t off, uint32_t n) { return pad.scoped_lock(off, n); };
 #endif
 

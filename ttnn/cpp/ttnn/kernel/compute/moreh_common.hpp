@@ -391,6 +391,37 @@ ALWI void mask_tile_to_dfb(
     }
 }
 
+// Same contract as mask_tile_to_dfb, but the masked lanes are written as +inf instead of 0. A MIN
+// pool must treat padding as +inf, otherwise a zeroed pad wins whenever every real lane of the row
+// is positive (see the softmin shift in moreh_softmax_{h,w}(_large).cpp). Mirrors the MINUS_INF
+// handling of the moreh_norm ord_other kernels; ckl::MaskPosInf is backed by mask_posinf_tile.
+template <uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
+ALWI void mask_posinf_tile_to_dfb(
+    DataflowBuffer& dfb_in,
+    DataflowBuffer& dfb_mask,
+    DataflowBuffer& dfb_out,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1) {
+    dfb_in.wait_front(itile + 1);
+    dfb_mask.wait_front(mtile + 1);
+
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        ckl::CopyTile<moreh_input<DfbIn>>{dfb_in, itile},
+        ckl::CopyTile<moreh_input<DfbMask>, ckl::Dst::D1>{dfb_mask, mtile},
+        ckl::MaskPosInf<>{},
+        ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
+
+    if (pop) {
+        dfb_in.pop_front(pop);
+    }
+    if (popm) {
+        dfb_mask.pop_front(popm);
+    }
+}
+
 template <ckl::BroadcastDim Bcast, uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void sub_tiles_bcast_to_dfb(
     DataflowBuffer& dfb0,
