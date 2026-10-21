@@ -1211,6 +1211,20 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+#ifdef SOL_DEBUG
+    // TT_SOL_DEBUG=1: the arrival-signal semaphores as this core first sees them (program-local, initial value 0,
+    // incremented by the all-gather workers once per slab), and the wait thresholds the sequencer will use.
+    DPRINT(
+        "SYNC start sem0={} sem1={} exp0={} exp1={} split={} split_shard={} split_wait={} ring_index={}\n",
+        Semaphore<>(fused_op_receiver.signal_op_semaphore_ids[0]).value(),
+        Semaphore<>(fused_op_receiver.signal_op_semaphore_ids[1]).value(),
+        fused_op_receiver.seq.expected[0],
+        fused_op_receiver.seq.expected[1],
+        fused_op_receiver.split_forwarding_enabled ? 1u : 0u,
+        fused_op_receiver.split_shard_id,
+        fused_op_receiver.split_second_half_wait,
+        ring_index);
+#endif
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
@@ -1244,6 +1258,16 @@ void kernel_main() {
                        : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                              fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         }();
+#ifdef SOL_DEBUG
+        // After the wait: the semaphore values the sync passed on. A value far above the iteration count means
+        // the wait was already satisfied before this op's slabs arrived.
+        DPRINT(
+            "SYNC it={} rid={} sem0={} sem1={}\n",
+            ring_iter,
+            ring_id,
+            Semaphore<>(fused_op_receiver.signal_op_semaphore_ids[0]).value(),
+            Semaphore<>(fused_op_receiver.signal_op_semaphore_ids[1]).value());
+#endif
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {

@@ -3376,7 +3376,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
     // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
-    if (sol_resident && std::getenv("TT_SOL_DEBUG") && std::string(std::getenv("TT_SOL_DEBUG")) == "1") {
+    // Any mode: also the per-ring-iteration arrival-semaphore trace ("SYNC ...") in the reader.
+    if (std::getenv("TT_SOL_DEBUG") && std::string(std::getenv("TT_SOL_DEBUG")) == "1") {
         reader_kernel.defines.emplace_back("SOL_DEBUG", "1");
     }
     // Per-phase device-profiler zones inside sdpa_inner_loop_step (Q@KT, reduce, exp, V matmul, SALAD, ...). They

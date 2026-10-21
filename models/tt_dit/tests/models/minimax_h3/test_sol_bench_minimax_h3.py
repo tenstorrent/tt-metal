@@ -207,7 +207,10 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             prefix_times.clear()
             # density comes from the compile run; the host readback must not be inside the timed reps
             density = getattr(tt_model, "sol_last_density", None)
-            tt_model.sol_report_density = False
+            # Keep the per-call density readback on during the timed reps (2026-10-21): the resident op's time
+            # tracks the mask density call by call, and on a machine whose pre-pass gathers are corrupted the mask
+            # changes between calls. The readback sits in the module time, never in the op time.
+            densities = []
             profile = os.environ.get("SOL_BENCH_PROFILE") == "1"
             if profile:
                 ttnn.ReadDeviceProfiler(mesh_device)
@@ -215,6 +218,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             for _ in range(REPS):
                 ms, out = _timed(module_call, mesh_device, 1)
                 module_ms.append(ms)
+                densities.append(getattr(tt_model, "sol_last_density", None))
             if profile:
                 ttnn.ReadDeviceProfiler(mesh_device)
         finally:
@@ -233,6 +237,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             "prefix_ms": prefix_times,
             "prefix_mode": tt_model.sol_prefix_mode if mode == "sol" else None,
             "chunk_density": density,
+            "chunk_density_per_rep": densities,
         }
         results.append(rec)
         prefix_note = (
@@ -243,6 +248,11 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             f"chunks={chunks_env or 'measured'} tau={tau}: compile {compile_ms:.0f} ms; "
             f"module {' / '.join(f'{m:.2f}' for m in module_ms)} ms; op {' / '.join(f'{m:.2f}' for m in op_times)} ms"
             f"{prefix_note}; density {density}"
+            + (
+                f"; density per rep {' / '.join('-' if d is None else f'{d:.3f}' for d in densities)}"
+                if any(d is not None for d in densities)
+                else ""
+            )
         )
         del tt_model
 
