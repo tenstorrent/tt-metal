@@ -718,3 +718,14 @@ Fused router top-k on the 8x4 (45 layers, bfp8, 4 users per row, `test_mesh_mode
 0.750624 / 0.811891 / 0.827025 and the greedy ids identical to the composite's digits, traced decode step **69.8 ms**
 (14.3 tok/s per user, 458 aggregate) vs 75.5 ms with the composite. `GLM53_ROUTER_FUSED=1` is the default from
 4d62fa6795c (`0` keeps the composite).
+
+### Fused mHC pre-block on a mesh: wrong and unsafe (2026-10-21 16:13)
+
+With the weight read made mesh-safe, `GLM53_MHC_PRE_BLOCK=1` on the rows 4-5 block (45 layers bfp4, 4 users per row,
+fused router) gave chain PCC 0.701 against the control's 0.824 with the greedy id wrong for every user, a faster step
+(64.0 vs 79.3 ms), then a UMD exception at device close (core dump); the next job on the block timed out on the ARC
+message queue and two telemetry snapshots 12 s apart showed frozen heartbeats on all 32 chips (the ARC-hang signature
+of the 2026-10-20 21:41 incident). The op's kernels (`custom_ops/mhc_pre_block`) are suspected of mis-addressing the
+NOC on a mesh; the knob stays off and the op must not run on a mesh before a kernel audit. Recovery per the device
+rules: zero holders confirmed, one `tt-smi -r`; the EP32 8x4 e2e and the 1 M x 32-user rerun follow in
+`_logs/mesh/sched_post_reset.sh` once the heartbeats advance again.
