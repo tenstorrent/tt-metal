@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ttnn._ttnn.layer_completion import (
+    FIRST_TOKEN_FLAG,
     LayerCompletionQueue,
     LayerCompletionRouter,
 )
 
-__all__ = ["LayerCompletionQueue", "LayerCompletionRouter"]
+__all__ = ["FIRST_TOKEN_FLAG", "LayerCompletionQueue", "LayerCompletionRouter"]

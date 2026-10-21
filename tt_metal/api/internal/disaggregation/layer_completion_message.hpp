@@ -6,6 +6,8 @@
 // to the master rank. Each message names its chunk (slot, position range) and the layers now resident for it,
 // so the master forwards as-arrived and consumers key on content. One message per completion event at the
 // span the model reports: per-layer hooks emit [l, l+1); a stage-level completion emits one [first, end).
+// A first-token record (flags kLayerCompletionFirstToken) instead names the chunk that ends a prompt and carries
+// the token sampled after it in layer_start, with layer_end == layer_start: no layers.
 
 #pragma once
 
@@ -29,7 +31,8 @@ struct LayerCompletionMessage {
     // Global layers [layer_start, layer_end); per-layer emission is [l, l+1).
     uint32_t layer_start = 0;
     uint32_t layer_end = 0;
-    // 0 for completions; kLayerCompletionSentinel for end-of-stream.
+    // 0 for completions; kLayerCompletionFirstToken for a first-token record; kLayerCompletionSentinel for
+    // end-of-stream.
     uint32_t flags = 0;
     // Host wall clock (ns since the Unix epoch) when a host first saw the completion; forwarding keeps it.
     uint64_t host_timestamp_ns = 0;
@@ -48,6 +51,7 @@ static_assert(offsetof(LayerCompletionMessage, flags) == 20);
 static_assert(offsetof(LayerCompletionMessage, host_timestamp_ns) == 24);
 
 inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
+inline constexpr uint32_t kLayerCompletionFirstToken = 1u;
 
 inline uint64_t layer_completion_host_timestamp_ns() noexcept {
     return static_cast<uint64_t>(

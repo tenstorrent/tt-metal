@@ -96,6 +96,40 @@ TEST(LayerCompletionRouter, MasterForwardsAsArrived) {
     router->stop();
 }
 
+// A first-token record is forwarded like any completion: its flag and its empty layer range arrive unchanged.
+TEST(LayerCompletionRouter, ForwardsFirstTokenRecords) {
+    const std::string ring = fresh_name("tok_ring");
+    const std::string sched = fresh_name("tok_sched");
+    unlink_if_exists(ring);
+    unlink_if_exists(sched);
+
+    LayerCompletionRouterConfig cfg;
+    cfg.rank = 0;
+    cfg.world_size = 1;
+    cfg.master_rank = 0;
+    cfg.ring_shm_name = ring;
+    cfg.scheduler_shm_name = sched;
+    cfg.completions_per_chunk = 24;
+    auto router = std::make_unique<LayerCompletionRouter>(std::move(cfg));
+
+    auto producer = LayerCompletionQueue::connect(ring, 5'000);
+    auto scheduler = LayerCompletionQueue::connect(sched, 5'000);
+
+    LayerCompletionMessage token = make_msg(/*tag=*/9, /*layer_start=*/2059, /*layer_end=*/2059);
+    token.flags = kLayerCompletionFirstToken;
+    ASSERT_TRUE(producer->try_push(token));
+    LayerCompletionMessage out{};
+    ASSERT_TRUE(wait_until([&] { return scheduler->try_pop(out); }));
+    EXPECT_EQ(out.flags, kLayerCompletionFirstToken);
+    EXPECT_EQ(out.layer_start, 2059u);
+    EXPECT_EQ(out.layer_end, 2059u);
+    EXPECT_EQ(out.pos_start, 9u);
+
+    producer->shutdown();
+    scheduler->shutdown();
+    router->stop();
+}
+
 // A full scheduler ring stalls the forward; draining resumes it in order.
 TEST(LayerCompletionRouter, SchedulerRingBackpressure) {
     const std::string ring = fresh_name("bp_ring");

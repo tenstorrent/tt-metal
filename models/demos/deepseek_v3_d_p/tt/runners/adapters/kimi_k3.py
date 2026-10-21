@@ -296,6 +296,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
         norm_weight, lm_head = self._host_head()
         return host_norm_head_argmax(hidden, norm_weight, lm_head, eps=KimiK3Config.RMS_NORM_EPS)
 
+    def warm_host_first_token(self) -> None:
+        self._host_head()
+
     def _host_head(self):
         """``(model.norm.weight, lm_head.weight)`` read once from the dequantized checkpoint (~2.3 GB)."""
         head = getattr(self, "_host_head_weights", None)

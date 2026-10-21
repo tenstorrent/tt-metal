@@ -581,6 +581,15 @@ position as `slot<s>_end<actual_end>.pt`. The driver waits up to `PREFILL_FIRST_
 for the request's file, turns it into a token with the adapter's `first_token_from_hidden` and deletes
 it. Put the directory on shared storage when the last rank and driver rank 0 are on different hosts.
 
+`PREFILL_FIRST_TOKEN_RECORD=1` is the same token for a scheduler that reads the layer-completion ring (the
+tt-d-gen engine) rather than a handoff file. The chunk metadata grows a 4th word, flags, and the scheduler
+sets bit 0 on a request's last chunk; the flag rides the D2D metadata to the last rank. There, after that
+chunk, the runner computes the token with `first_token_from_hidden` and pushes a first-token record
+(`LayerCompletionMessage::flags == kLayerCompletionFirstToken`, the token in `layer_start` and `layer_end`,
+no layers) on its local ring, which the router forwards to the scheduler like any completion. Both ends must
+agree on the 16-byte metadata, and the Python ring reader does not accept these records, so the producer
+and driver flows here run without it. Excludes MTP and DFlash.
+
 The sentinel has no runner-side counterpart: the driver writes it for an external P→D consumer, and
 nothing in the runner reads it. It also means "copied", not "verified" — the destination read-back runs
 after it is published.

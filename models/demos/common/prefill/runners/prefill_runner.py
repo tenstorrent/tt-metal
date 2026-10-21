@@ -117,9 +117,13 @@ assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# PREFILL_FIRST_TOKEN_RECORD=1: the scheduler marks a request's last chunk in a 4th metadata word (bit 0), and the
+# last rank answers with a first-token record on the layer-completion ring. Off, the metadata stays 12 bytes.
+FIRST_TOKEN_RECORD = os.environ.get("PREFILL_FIRST_TOKEN_RECORD", "0") == "1"
+SAMPLE_FIRST_TOKEN = 1  # kPrefillMetadataSampleFirstToken in tt-d-gen's pipeline_types.hpp
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if FIRST_TOKEN_RECORD else 0)
 
-D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0) + (4 if FIRST_TOKEN_RECORD else 0)
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
@@ -143,6 +147,11 @@ FIRST_TOKEN_DIR = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
 if FIRST_TOKEN_DIR and not ADAPTER.supports_host_first_token:
     raise ValueError(f"PREFILL_FIRST_TOKEN_DIR is set but {type(ADAPTER).__name__} cannot compute a first token")
 assert not (FIRST_TOKEN_DIR and (MTP_LEVELS or DFLASH_ENABLED)), "PREFILL_FIRST_TOKEN_DIR excludes MTP and DFlash"
+if FIRST_TOKEN_RECORD and not ADAPTER.supports_host_first_token:
+    raise ValueError(f"PREFILL_FIRST_TOKEN_RECORD is set but {type(ADAPTER).__name__} cannot compute a first token")
+assert not (FIRST_TOKEN_RECORD and (MTP_LEVELS or DFLASH_ENABLED)), "PREFILL_FIRST_TOKEN_RECORD excludes MTP and DFlash"
+# The last rank's own connection to its local ring, for first-token records; set in main().
+_first_token_queue = None
 
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
 # the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
@@ -175,6 +184,8 @@ def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = Fal
     }
     if with_provided_levels:
         meta["provided_levels"] = max(0, int(m[3]))
+    if FIRST_TOKEN_RECORD:  # excludes MTP, so the flags word is always the 4th
+        meta["flags"] = int(m[3]) & 0xFFFFFFFF
     return meta
 
 
@@ -352,6 +363,8 @@ def _d2d_send(
         words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
         if MTP_LEVELS:
             words.append(int(meta["provided_levels"]))
+        if FIRST_TOKEN_RECORD:
+            words.append(int(meta.get("flags", 0)))
         md_tensor = ttnn.from_torch(
             torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
             dtype=ttnn.uint32,
@@ -502,7 +515,10 @@ def _compute_and_send(
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
         _record_chunk_timing(rank, c, t_start, compute_ms)
     if runtime.config.is_last_rank and out is not None:
-        _emit_first_token_row(runtime, out, meta, rank)
+        if FIRST_TOKEN_DIR:
+            _emit_first_token_row(runtime, out, meta, rank)
+        if FIRST_TOKEN_RECORD and meta.get("flags", 0) & SAMPLE_FIRST_TOKEN:
+            _push_first_token(runtime, out, meta, rank)
         if not runtime.config.use_trace:  # traced: the replay's persistent output, not ours to free
             ttnn.deallocate(out)
     forward_md = None
@@ -557,6 +573,31 @@ def _emit_first_token_row(runtime, out, meta: dict, rank: int) -> None:
         )
     except Exception as e:  # noqa: BLE001 -- see the docstring
         logger.error(f"[pp rank {rank}] first-token row emission failed: {type(e).__name__}: {e}")
+
+
+def _push_first_token(runtime, out, meta: dict, rank: int) -> None:
+    """Sample the token after the chunk's last valid position and push it as a first-token record.
+
+    The scheduler holds the request's migration until this record arrives, so a failure here is fatal rather than
+    logged: a request that never gets its token would wait forever."""
+    from ttnn._experimental.layer_completion import FIRST_TOKEN_FLAG
+
+    n_valid = int(meta["actual_end"]) - int(meta["actual_start"])
+    if n_valid <= 0:
+        raise RuntimeError(f"[pp rank {rank}] first token asked for an empty chunk {meta}")
+    hidden, host_ms = runtime.tail_hidden_row(out, n_valid - 1)
+    t0 = time.perf_counter()
+    token = int(ADAPTER.first_token_from_hidden(hidden))
+    head_ms = (time.perf_counter() - t0) * 1000.0
+    slot, start, end = int(meta["slot_id"]), int(meta["actual_start"]), int(meta["actual_end"])
+    while not _first_token_queue.try_push(slot, start, end, token, token, flags=FIRST_TOKEN_FLAG):
+        if _shutdown:
+            return
+        time.sleep(0.0001)
+    logger.info(
+        f"[pp rank {rank}] FIRST_TOKEN slot={slot} end={end} token={token} "
+        f"(row {host_ms:.1f} ms, head {head_ms:.1f} ms)"
+    )
 
 
 def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None) -> None:
@@ -738,6 +779,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
 
 
 def main() -> None:
+    global _first_token_queue
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
 
@@ -790,8 +832,8 @@ def main() -> None:
         num_links=2 if is_blackhole() else 1,
         gate_mode_name=_gate_mode_name,
         # is_last_rank, not True: TtPrefillTransformer asserts kv_only_last_layer -> is_last_rank, since a
-        kv_only_last_layer=is_last_rank and not MTP_LEVELS and not FIRST_TOKEN_DIR,
-        return_last_hidden=is_last_rank and bool(FIRST_TOKEN_DIR),
+        kv_only_last_layer=is_last_rank and not MTP_LEVELS and not FIRST_TOKEN_DIR and not FIRST_TOKEN_RECORD,
+        return_last_hidden=is_last_rank and bool(FIRST_TOKEN_DIR or FIRST_TOKEN_RECORD),
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
@@ -964,6 +1006,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         sink = LayerCompletionRingWriter(producer, is_shutdown=lambda: _shutdown)
         runtime.set_layer_completion_sink(sink)
         source_desc = "host on_layer_complete callback"
+    if FIRST_TOKEN_RECORD and is_last_rank:
+        _first_token_queue = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        # Loaded now, so the first request does not wait on the checkpoint read.
+        ADAPTER.warm_host_first_token()
     logger.info(
         f"[migration] layer-completion routing up: "
         f"rank={rank}/{num_ranks} master={master_rank} "
@@ -1028,6 +1074,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         gc.collect()
         if producer is not None:
             producer.shutdown()
+        if _first_token_queue is not None:
+            _first_token_queue.shutdown()
         if router is not None:
             router.stop()
 

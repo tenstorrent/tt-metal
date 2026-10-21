@@ -171,6 +171,32 @@ TEST(LayerCompletionQueue, AllFieldsRoundTrip) {
     owner->shutdown();
 }
 
+// A first-token record keeps its flag and its token (in layer_start, with an empty layer range) through the ring.
+TEST(LayerCompletionQueue, FirstTokenRecordRoundTrip) {
+    const std::string name = fresh_name("first_token");
+    auto owner = LayerCompletionQueue::create(name, 4);
+    auto conn = LayerCompletionQueue::connect(name, 5'000);
+
+    const LayerCompletionMessage in{
+        /*slot_id=*/3u,
+        /*pos_start=*/5120u,
+        /*pos_end=*/8193u,
+        /*layer_start=*/163'839u,
+        /*layer_end=*/163'839u,
+        /*flags=*/kLayerCompletionFirstToken,
+        /*host_timestamp_ns=*/1'760'000'000'000'000'001ull};
+    ASSERT_TRUE(owner->try_push(in));
+
+    LayerCompletionMessage out{};
+    ASSERT_TRUE(conn->try_pop(out));
+    EXPECT_EQ(out.flags, kLayerCompletionFirstToken);
+    EXPECT_FALSE(is_layer_completion_sentinel(out));
+    EXPECT_EQ(out.layer_start, 163'839u);
+    EXPECT_EQ(out.layer_end, out.layer_start);
+    EXPECT_EQ(out.pos_end, 8193u);
+    owner->shutdown();
+}
+
 TEST(LayerCompletionQueue, PublishesAcksPerChunk) {
     const std::string name = fresh_name("acks");
     auto owner = LayerCompletionQueue::create(name, 61);

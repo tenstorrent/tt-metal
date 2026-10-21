@@ -181,6 +181,9 @@ class PrefillModelAdapter(ABC):
         resumes migrated recurrent state needs it: it cannot re-run position ``prompt_len - 1``."""
         raise NotImplementedError(f"{type(self).__name__} does not compute the first token on the host")
 
+    def warm_host_first_token(self) -> None:
+        """Load whatever ``first_token_from_hidden`` reads, ahead of the first request."""
+
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
 

@@ -27,6 +27,7 @@ namespace ttnn::layer_completion {
 namespace nb = nanobind;
 
 void bind_layer_completion_api(nb::module_& mod) {
+    mod.attr("FIRST_TOKEN_FLAG") = tt::tt_metal::internal::kLayerCompletionFirstToken;
     using tt::tt_metal::internal::LayerCompletionMessage;
     using tt::tt_metal::internal::LayerCompletionQueue;
     using tt::tt_metal::internal::LayerCompletionRouter;
@@ -54,14 +55,18 @@ void bind_layer_completion_api(nb::module_& mod) {
                uint32_t pos_start,
                uint32_t pos_end,
                uint32_t layer_start,
-               uint32_t layer_end) {
+               uint32_t layer_end,
+               uint32_t flags) {
+                if (flags == tt::tt_metal::internal::kLayerCompletionSentinel) {
+                    throw std::invalid_argument("LayerCompletionQueue.try_push: flags is the end-of-stream sentinel");
+                }
                 return self.try_push(LayerCompletionMessage{
                     slot_id,
                     pos_start,
                     pos_end,
                     layer_start,
                     layer_end,
-                    0u,
+                    flags,
                     tt::tt_metal::internal::layer_completion_host_timestamp_ns()});
             },
             nb::arg("slot_id"),
@@ -69,7 +74,10 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("pos_end"),
             nb::arg("layer_start"),
             nb::arg("layer_end"),
-            "Producer push, stamped with the host time. Returns False (no write) when the ring is full.")
+            nb::arg("flags") = 0u,
+            "Producer push, stamped with the host time. Returns False (no write) when the ring is full. flags is 0 "
+            "for a completion, or FIRST_TOKEN_FLAG for a first-token record (the token in layer_start and "
+            "layer_end).")
         .def(
             "try_pop",
             [](LayerCompletionQueue& self)
