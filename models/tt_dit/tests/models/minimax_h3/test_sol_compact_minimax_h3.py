@@ -135,6 +135,10 @@ def _run(
     S = tuple(mesh_device.shape)[sp_axis]
     scale = D**-0.5
     sink_tokens = 300 if rows < 4096 else 849
+    if mode == "resident" and q_chunk == Q_CHUNK:
+        # Resident mode's compute unit is the 64-row query block, and its L1 FIFO of per-chunk accumulators does not
+        # fit next to a 256-row chunk's CBs (static CB region clashes with the L1 buffers at 1,504,000 B).
+        q_chunk = Q1_CHUNK
     geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
 
     ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -258,10 +262,13 @@ def test_accuracy_vs_dense(mesh_device, sp_axis, tp_axis, num_links, topology, i
 @GALAXY_RING
 def test_modes_agree(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
     """gather/chunk/compact are three implementations of the same math -- they must agree, not merely each be close."""
+    # Resident runs at 64-row chunks with the chunk-form mask, a different approximation of the same mask, so it is
+    # compared against chunk mode in test_resident_matches_chunk instead.
+    modes = [m for m in MODES if m != "resident"]
     outs = {
-        m: _run(mesh_device, sp_axis, num_links, topology, capfd, mode=m, tau=1.0, want_dense=False).sol for m in MODES
+        m: _run(mesh_device, sp_axis, num_links, topology, capfd, mode=m, tau=1.0, want_dense=False).sol for m in modes
     }
-    for m in MODES[1:]:
+    for m in modes[1:]:
         assert _pcc(outs["gather"], outs[m]) > 0.999, f"gather vs {m} disagree"
 
 
@@ -449,21 +456,33 @@ def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, t
 
 
 @GALAXY_RING
-def test_resident_matches_chunk(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
+@pytest.mark.parametrize("tau", [-1e4, 2.0], ids=["keepall", "tau2"])
+@pytest.mark.parametrize(
+    "rows,logical_n,k_chunk",
+    [(1024, 8192, 512), (1024, 8192, 256), (1184, 9472, 512), (1184, 9472, 256)],
+    ids=["r1024k512", "r1024k256", "r1184k512", "r1184k256"],
+)
+def test_resident_matches_chunk(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, tau, reset_seeds, capfd
+):
     """M1's correctness gate (sol_attn_status_2026-10-21.md 4a): resident mode is chunk mode with the K/V-once loop
     order -- each piece streamed once per core and applied to every resident 64-row query chunk from L1.
 
     Same inputs and the same chunk-form mask at 64-row query chunks; only the loop order and where the accumulators
-    live differ, so the two outputs must agree to bf16 noise. At rows=1024 a core holds about two resident chunks and
-    some cores straddle two heads, which exercises the interleaved per-head streaming.
+    live differ, so the two outputs must agree to bf16 noise. tau=-1e4 keeps every piece (no state rotation), tau 2
+    rotates most of them. rows 1184 leaves a partial last K chunk and partial Q chunks (the geometry that produced
+    garbage on 2026-10-21); k_chunk 256 halves the piece (Sk_chunk_t 8). At rows=1024 a core holds about two
+    resident chunks and some cores straddle two heads, which exercises the interleaved per-head streaming.
     """
-    kw = dict(tau=2.0, q_chunk=Q1_CHUNK)
+    kw = dict(tau=tau, q_chunk=Q1_CHUNK, rows=rows, logical_n=logical_n, k_chunk=k_chunk)
     base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
     res = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", want_dense=False, **kw)
-    p_chunk = _pcc(base.sol, res.sol, LOGICAL_N)
-    p_dense = _pcc(res.sol, base.dense, LOGICAL_N)
+    p_chunk = _pcc(base.sol, res.sol, logical_n)
+    p_dense = _pcc(res.sol, base.dense, logical_n)
+    p_chunk_dense = _pcc(base.sol, base.dense, logical_n)
     logger.info(
-        f"[resident] density {res.density:.4f}; pcc(resident, chunk) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}"
+        f"[resident] rows={rows} k_chunk={k_chunk} tau={tau} density {res.density:.4f}; "
+        f"pcc(resident, chunk) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}; pcc(chunk, dense) {p_chunk_dense:.5f}"
     )
     assert res.modes_logged == {"resident"}, f"factory compiled {sorted(res.modes_logged)}"
     assert base.density == res.density, "the mask must be the chunk-mode one"
