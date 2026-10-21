@@ -42,7 +42,11 @@ void kernel_main() {
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s0 = TensorAccessor(s0_args, src0_addr, w_tile);
     const auto s1 = TensorAccessor(s1_args, src1_addr, w_tile);
-#ifdef GMOE_RELAYOUT_SPLIT
+// GMOE_RELAYOUT_PAGE_A: the destination's page stride (each page padded to a 256-byte multiple: the readers' DRAM
+// reads then start 256-byte aligned)
+#if defined(GMOE_RELAYOUT_PAGE_A)
+    const auto d = TensorAccessor(d_args, dst_addr, GMOE_RELAYOUT_PAGE_A);
+#elif defined(GMOE_RELAYOUT_SPLIT)
     const auto d = TensorAccessor(d_args, dst_addr, page / GMOE_RELAYOUT_SPLIT);
 #else
     const auto d = TensorAccessor(d_args, dst_addr, page);

@@ -43,7 +43,11 @@ void kernel_main() {
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s_table = TensorAccessor(table_args, table_addr, 8 * gmoe::E);
     const auto s_a = TensorAccessor(ag_args, ag_addr, a_tile);
+#ifdef GMOE_PAGE_A
+    const auto s_d = TensorAccessor(d_args, down_addr, GMOE_PAGE_A);  // (pages padded to a 256-byte multiple)
+#else
     const auto s_d = TensorAccessor(d_args, down_addr, KD * w_tile);
+#endif
 
     cb_reserve_back(cb_scr, 1);
     const uint32_t table_l1 = get_write_ptr(cb_scr);
@@ -106,7 +110,11 @@ void kernel_main() {
         const uint32_t slot = issued % DEPTH;
         cb_reserve_back(cb_w, (issued - pushed + 1) * KD);
         const uint32_t wl1 = wbase + slot * KD * w_tile;
+#ifdef GMOE_PAGE_A
+        constexpr uint32_t half = (KD * w_tile / 2) & ~255u;
+#else
         constexpr uint32_t half = (KD * w_tile / 2) & ~63u;
+#endif
         noc_async_read_set_trid(1 + slot, 0);
         noc_async_read_set_trid(1 + slot, NOC_B);
         // the unit's K tiles (one page of the relaid weights), half on each NOC

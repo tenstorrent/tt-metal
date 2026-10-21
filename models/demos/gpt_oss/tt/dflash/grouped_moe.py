@@ -61,12 +61,26 @@ class GroupedMoE:
         [1, E x 720]) on DRAM (BatchedVerify.moe)."""
         assert rows == 256
         self.mesh, self.hidden, self.rows = mesh, hidden, rows
-        # weight reads in flight per core (units, split over both NOCs): gate|up 288 -> 241 us at 3 (vs 1); down: no
-        # gain past 6
-        self.gu_depth, self.dn_depth = 3, 6
-        # gate|up unit pages split in gu_split (consecutive pages in consecutive DRAM banks: one 103 KB page kept a core
-        # on one bank per unit; unit test 280 -> 251 us at 10)
-        self.gu_split = int(os.environ.get("B32_GMOE_GU_SPLIT", "10"))
+        # weight reads in flight per core (units, split over both NOCs). With real routing tables (all 24 layers of a
+        # real run injected, _scratch_b32_gmoe.py GUTAB) fewer outstanding reads are faster (DRAM congestion): gate|up
+        # 1 unit (vs 3: 240 -> 224 us at 3 pages), down 2 (vs 6: 92 -> 86 us)
+        self.gu_depth = int(os.environ.get("B32_GMOE_GU_DEPTH", "1"))
+        self.dn_depth = int(os.environ.get("B32_GMOE_DN_DEPTH", "2"))
+        # gate|up unit pages split in gu_split (consecutive pages in consecutive DRAM banks). Real tables, weights-only
+        # reads: odd splits 3 / 5 / 9 / 15 158-169 us, even 2 / 4 / 6 / 10 / 12 / 20 192-198 us (not the NOC choice,
+        # the start bank or 256-byte page alignment: each tested, no change); full op 3 pages 217 vs 10 pages 268 us
+        self.gu_split = int(os.environ.get("B32_GMOE_GU_SPLIT", "3"))
+        # gate|up unit cost weights (gmoe_common.hpp unit_cost: wc + slots x cc): real tables 2:1 217 vs 3:1 224 us
+        self.gu_wc, self.gu_cc = 2, 1
+        # gate|up in0 block (slots): an expert with more slots reloads its rows per block per unit
+        self.gu_group = int(os.environ.get("B32_GMOE_GU_GROUP", str(GROUP)))
+        # the gate|up bias copied into DST before the matmul accumulates (GMOE_BIAS_DST; no BF16 round trip and add
+        # pass: 215.5 -> 212.1 us)
+        self.gu_bias_dst = os.environ.get("B32_GMOE_BIAS_DST", "1") == "1"
+        self.gu_inflight = 0  # (gate|up units with outstanding reads, GMOE_INFLIGHT; 0: gu_depth)
+        self.gu_probe = []  # (unit-test probes: GMOE_PROBE_NOMM / NOX / NOW)
+        # relaid weight pages padded to a multiple of page_align bytes (B32_GMOE_PAGE_ALIGN; 0: unpadded)
+        self.page_align = int(os.environ.get("B32_GMOE_PAGE_ALIGN", "0"))
         grid = mesh.compute_with_storage_grid_size()
         self.gx = grid.x
         self.cores_all = ttnn.CoreRangeSet(
@@ -177,11 +191,23 @@ class GroupedMoE:
             self.xg_noc = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(j, 0)).x for j in range(10)]
             self.xg_noc += [mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, i)).y for i in range(8)]
         self.combine_pc = _pc2d(10, 8, 8, 1, self.kt // 10, 3)
+        # (B32_GMOE_DUMP: every layer's slot table copied per pass, for the real routing's slot counts)
+        self.dump = None
+        if os.environ.get("B32_GMOE_DUMP"):
+            self.dump = [ttnn.from_torch(torch.zeros(1, 1, 1, 2 * E, dtype=torch.int32), dtype=ttnn.uint32,
+                                         layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                         mesh_mapper=rep) for _ in moe]  # fmt: skip
+
+    def _page_a(self, page):
+        """The relaid weights' page stride: page padded to self.page_align bytes (0: unpadded)."""
+        a = self.page_align
+        return -(-page // a) * a if a else page
 
     def _relayout(self, src0, src1, units, page, down, split=1):
         """Every unit's weight tiles into one contiguous page (fused_decode/kernels/gmoe_relayout.cpp): a [units, page]
-        row-major DRAM tensor (BFP4 bytes); split: as [units x split, page / split]."""
-        dst = ttnn.empty([1, 1, units * split, page // 4 // split], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh,
+        row-major DRAM tensor (BFP4 bytes); split: as [units x split, page / split]; pages padded per _page_a."""
+        pa = self._page_a(page // split)
+        dst = ttnn.empty([1, 1, units * split, pa // 4], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh,
                          memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
         cores = self.cores_all
         nt = src0.shape[-1] // TILE
@@ -192,7 +218,8 @@ class GroupedMoE:
             kernel_source=str(KERNEL_DIR / "gmoe_relayout.cpp"), core_ranges=cores, compile_time_args=ct,
             runtime_args=[], common_runtime_args=[t.buffer_address() for t in (src0, src1, dst)],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-            defines=([("GMOE_RELAYOUT_DOWN", "1")] if down else []) + ([("GMOE_RELAYOUT_SPLIT", str(split))] if split > 1 else []),
+            defines=([("GMOE_RELAYOUT_DOWN", "1")] if down else []) + ([("GMOE_RELAYOUT_SPLIT", str(split))] if split > 1 else [])
+            + ([("GMOE_RELAYOUT_PAGE_A", str(pa))] if pa != page // split else []),
         )  # fmt: skip
         cbs = [self._cb(0, ttnn.uint32, page, 1, cores)]
         ttnn.generic_op([src0, src1, dst], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs))
@@ -284,9 +311,11 @@ class GroupedMoE:
         page = 16 * ((4 * (2 + 2 * E) + 15) // 16)
         return [self._cb(base, ttnn.uint32, page, 1, cores), self._cb(base + 1, ttnn.uint32, page, 1, cores)]
 
-    def gate_up(self, li, xg, wc=3, cc=1):
+    def gate_up(self, li, xg, wc=None, cc=None):
         """A_g = SwiGLU(X_g's slots x their expert's gate / up columns + bias) (self.ag)."""
         L = self.layers[li]
+        wc = self.gu_wc if wc is None else wc
+        cc = self.gu_cc if cc is None else cc
         cores = self.cores_all
         cb_scr, cb_mc, cb_mw, cb_x, cb_w, cb_b, cb_out, cb_mm = range(8)
         io = [self.table, xg, L["gate_up"], L["gate_bias"], L["up_bias"]]
@@ -304,7 +333,10 @@ class GroupedMoE:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
                 runtime_args=[], common_runtime_args=rca,
-                defines=[("GMOE_DEPTH", str(self.gu_depth)), ("GMOE_SPLIT", str(self.gu_split))]
+                defines=[("GMOE_DEPTH", str(self.gu_depth)), ("GMOE_SPLIT", str(self.gu_split)), ("GMOE_GROUP", str(self.gu_group))]
+                + [(d, "1") for d in self.gu_probe]
+                + ([("GMOE_INFLIGHT", str(self.gu_inflight))] if self.gu_inflight else [])
+                + ([("GMOE_PAGE_A", str(self._page_a(2 * self.kt * 576 // self.gu_split)))] if self.page_align else [])
                 + ([("GMOE_XG_SHARDED", str(xg_arg)), ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(MAX_SLOTS // 8))] if self.xg_sharded else []),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
@@ -315,7 +347,8 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_compute.cpp"), core_ranges=cores, compile_time_args=cct,
-                runtime_args=[],
+                runtime_args=[], defines=[("GMOE_GROUP", str(self.gu_group))] + [(d, "1") for d in self.gu_probe]
+                + ([("GMOE_BIAS_DST", "1")] if self.gu_bias_dst else []),
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),
@@ -323,7 +356,7 @@ class GroupedMoE:
         cbs = [
             self._cb(cb_scr, ttnn.uint32, 8 * E, 1, cores),
             *self._meta_cbs(cores, cb_mc),
-            self._cb(cb_x, ttnn.bfloat8_b, 1088, GROUP * self.kt, cores),
+            self._cb(cb_x, ttnn.bfloat8_b, 1088, self.gu_group * self.kt, cores),
             self._cb(cb_w, ttnn.bfloat4_b, 576, self.gu_depth * 2 * self.kt, cores),
             self._cb(cb_b, ttnn.bfloat16, 2048, self.gu_depth * 2, cores),
             self._cb(cb_out, ttnn.bfloat8_b, 1088, 4, cores),
@@ -352,7 +385,8 @@ class GroupedMoE:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_down_reader.cpp"), core_ranges=cores, compile_time_args=rct,
                 runtime_args=[], common_runtime_args=[t.buffer_address() for t in io],
-                defines=[("GMOE_DEPTH", str(self.dn_depth))] + ([("GMOE_AG_SHARDED", "1")] if self.ag_sharded else []),
+                defines=[("GMOE_DEPTH", str(self.dn_depth))] + ([("GMOE_AG_SHARDED", "1")] if self.ag_sharded else [])
+                + ([("GMOE_PAGE_A", str(self._page_a(self.ku * 576)))] if self.page_align else []),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(
@@ -385,6 +419,8 @@ class GroupedMoE:
     def from_x8(self, li, x8):
         """__call__ after route() from the normed rows already in BFP8 (L1 interleaved; dflash/batched.py _ResNorm
         writes them)."""
+        if self.dump is not None:
+            ttnn.copy(self.table, self.dump[li])
         xg = self.gather(x8)
         self.gate_up(li, xg)
         xg.deallocate(True)

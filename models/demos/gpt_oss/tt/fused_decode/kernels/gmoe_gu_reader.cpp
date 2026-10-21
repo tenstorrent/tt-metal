@@ -44,8 +44,13 @@ void kernel_main() {
     constexpr uint32_t x_tile = 1088;       // BFP8_b
     constexpr uint32_t w_tile = 576;        // BFP4_b
     constexpr uint32_t b_tile = 2048;       // BF16
-    constexpr uint32_t GROUP = 4;           // slots per in0 load
-    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units in flight
+    constexpr uint32_t GROUP = GMOE_GROUP;  // slots per in0 load
+    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units buffered (cb_w)
+#ifdef GMOE_INFLIGHT
+    constexpr uint32_t INFLIGHT = GMOE_INFLIGHT;  // units whose reads are outstanding at once (<= DEPTH)
+#else
+    constexpr uint32_t INFLIGHT = DEPTH;
+#endif
     constexpr uint8_t NOC_B = 1;            // the second half of each weight page (dynamic NOC mode)
 
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
@@ -54,7 +59,11 @@ void kernel_main() {
     constexpr uint32_t SPLIT = GMOE_SPLIT;            // pages per unit (gmoe_relayout.cpp GMOE_RELAYOUT_SPLIT)
     constexpr uint32_t sp = 2 * KT * w_tile / SPLIT;  // bytes per page
     static_assert(2 * KT % SPLIT == 0 && sp % 64 == 0);
+#ifdef GMOE_PAGE_A
+    const auto s_gu = TensorAccessor(gu_args, gu_addr, GMOE_PAGE_A);  // (pages padded to a 256-byte multiple)
+#else
     const auto s_gu = TensorAccessor(gu_args, gu_addr, sp);
+#endif
     const auto s_gb = TensorAccessor(gb_args, gb_addr, b_tile);
     const auto s_ub = TensorAccessor(ub_args, ub_addr, b_tile);
 
@@ -82,7 +91,9 @@ void kernel_main() {
         // bits); 4 slots' 360 reads under one id wrapped it, and the wait returned before every tile had landed
         noc_async_read_set_trid(X_TRID, 0);
         noc_async_read_set_trid(X_TRID, 1);
-#ifdef GMOE_XG_SHARDED
+#if defined(GMOE_PROBE_NOX)
+        (void)l1;
+#elif defined(GMOE_XG_SHARDED)
         // X_g block sharded over a GMOE_XG_SX x GMOE_XG_SY core grid (the gather matmul's own output): slot s's row
         // tile is row s % RS of the shards of core row s / RS, its KT tiles KT / SX contiguous tiles in each core of
         // that row (common args GMOE_XG_SHARDED..: the grid's NOC x per column, then NOC y per row): SX reads per slot,
@@ -149,7 +160,7 @@ void kernel_main() {
         if (p.tiles[e] == 0) {
             continue;
         }
-        if (issued - pushed == DEPTH) {
+        if (issued - pushed == INFLIGHT) {
             push_one();
         }
         const uint32_t slot = issued % DEPTH, inflight = issued - pushed + 1;
@@ -161,15 +172,31 @@ void kernel_main() {
         noc_async_read_set_trid(1 + slot, NOC_B);
         // the unit's [k][gate, up] tiles (SPLIT consecutive pages of the relaid weights: consecutive DRAM banks),
         // alternating NOCs
+#ifdef GMOE_PROBE_NOW
+        if constexpr (false) {
+#else
         if constexpr (SPLIT == 1) {  // (one page: half on each NOC)
+#endif
             constexpr uint32_t half = (KT * w_tile) & ~63u;
             noc_async_read(s_gu.get_noc_addr(u, 0, 0), wl1, half, 0);
             noc_async_read(s_gu.get_noc_addr(u, half, NOC_B), wl1 + half, PW * w_tile - half, NOC_B);
         } else {
-            for (uint32_t q = 0; q < SPLIT; ++q) {
+#ifndef GMOE_PROBE_NOW
+            for (uint32_t q0 = 0; q0 < SPLIT; ++q0) {
+#ifdef GMOE_ROT
+                const uint32_t q = (q0 + c) % SPLIT;  // (cores start on different banks)
+#else
+                const uint32_t q = q0;
+#endif
+#ifdef GMOE_NOC_ALT
+                // (q + u) % 2: with an even SPLIT, q % 2 alone sent every page of a bank over the same NOC
+                const uint8_t nn = (q + u) % 2 ? NOC_B : 0;
+#else
                 const uint8_t nn = q % 2 ? NOC_B : 0;
+#endif
                 noc_async_read(s_gu.get_noc_addr(u * SPLIT + q, 0, nn), wl1 + q * sp, sp, nn);
             }
+#endif
         }
         noc_async_read(s_gb.get_noc_addr(n, 0, 0), bl1, b_tile, 0);
         noc_async_read(s_ub.get_noc_addr(n, 0, NOC_B), bl1 + b_tile, b_tile, NOC_B);
