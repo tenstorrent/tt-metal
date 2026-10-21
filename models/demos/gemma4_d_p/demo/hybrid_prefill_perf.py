@@ -50,6 +50,7 @@ def test_prefill_hybrid_comparison(mesh_device, reset_seeds):
     assert ttnn.device.IsProgramRealtimeProfilerActive(), "Requires the real-time device profiler"
     chunk_size = int(os.getenv("GEMMA4_PERF_CHUNK_SIZE", "8192"))
     repeats = int(os.getenv("GEMMA4_PERF_DEVICE_REPEATS", "5"))
+    profile = os.getenv("GEMMA4_PERF_PROFILE", "0") == "1"
     assert 0 < chunk_size <= 262144 and chunk_size % 1024 == 0 and repeats > 0
     mixed_lengths = tuple(
         int(n) for n in os.getenv("GEMMA4_PERF_REQUEST_LENGTHS", "512,512,1024,1536,2048,2560").split(",")
@@ -123,11 +124,13 @@ def test_prefill_hybrid_comparison(mesh_device, reset_seeds):
         git_dirty=bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()),
         model=hf_model,
         layers=len(model.layers),
+        layer_types=[layer.layer_type for layer in model.layers],
         mesh=[8, 4],
         chunk_size=chunk_size,
         requests=requests,
         prefixes=prefixes,
         repeats=repeats,
+        profile=profile,
         cache_history="Synthetic KV; current chunks are overwritten on every replay",
         device_metric="Maximum per-chip first-program-start to last-program-end span, including gaps",
         excluded="Loading, compilation, capture, input/metadata staging, and warmup replays",
@@ -164,6 +167,7 @@ def test_prefill_hybrid_comparison(mesh_device, reset_seeds):
                     trace if path == "legacy" else None,
                     repeats=repeats,
                     run=hybrid.run if path == "hybrid" else None,
+                    profile=profile,
                 )
                 device_us = [c["device_us"] for c in captures]
                 report["results"].append(

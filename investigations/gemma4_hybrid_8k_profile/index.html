@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gemma4 prefill · Device profile</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Gemma4 31B · 60 layers · CP8 / TP4</p>
+    <h1>Where the hybrid time goes</h1>
+    <p>Legacy: <strong>1 × 8192</strong>. Hybrid: <strong>512 + 512 + 1024 + 1536 + 2048 + 2560</strong>.</p>
+    <p class="muted">Same 8192 new tokens. The selected prefix applies to every request.</p>
+  </header>
+  <nav aria-label="Prefix selection">
+    <span>Prefix per request</span>
+    <button data-prefix="0">0</button>
+    <button data-prefix="253952" class="selected" aria-pressed="true">253,952</button>
+  </nav>
+  <p id="status" role="status">Loading recorded device profile…</p>
+  <section id="content" hidden>
+    <div id="cards" class="cards"></div>
+    <h2>Total device time</h2>
+    <div id="bars"></div>
+    <div id="legend"></div>
+    <div class="columns">
+      <div>
+        <h2>Where the difference comes from</h2>
+        <table><thead><tr><th>Component</th><th>Legacy ms</th><th>Hybrid ms</th><th>Δ ms</th></tr></thead><tbody id="breakdown"></tbody></table>
+      </div>
+      <div>
+        <h2>Hybrid attention per request</h2>
+        <p class="muted">Mean op time across 10 global / 50 sliding-window layers.</p>
+        <table><thead><tr><th>Request</th><th>Tokens</th><th>Global ms/op</th><th>SWA ms/op</th></tr></thead><tbody id="requests"></tbody></table>
+        <p id="takeaway"></p>
+      </div>
+    </div>
+    <h2>Device program timeline</h2>
+    <div class="controls">
+      <button id="fit">Fit all</button><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button>
+      <span class="muted">Scroll to zoom · drag to pan · double-click to reset · hover for details</span>
+    </div>
+    <p class="muted">Separate replays, each starting at zero on its longest-span chip. Blank lanes mean another category is running; the bottom lane shows actual gaps.</p>
+    <div class="canvas-wrap"><canvas id="timeline" aria-label="Interactive timeline of native device programs"></canvas></div>
+    <p id="range" class="muted"></p>
+    <footer>
+      <p>Five warmed samples per cell; the timeline shows the median sample. Program spans include all work inside that program. <strong>SDPA includes its fused all-gather / halo communication.</strong> This capture cannot separate that internal communication from compute. Device gaps are uncovered intervals, not a CPU profile.</p>
+      <p>Model loading, compilation, capture, input/metadata staging and warmup are excluded. KV histories are synthetic. All 32 chips have matching program counts; all 20 selected-chip captures have non-overlapping, complete spans.</p>
+      <p><a href="breakdown.png">Download summary chart</a> · <a href="trace.json.gz" download>Perfetto / Chrome trace (.json.gz)</a> · <a href="findings.md">Findings</a> · <a href="measurements.md">Measurements</a> · <a href="analysis.json">Analysis JSON</a></p>
+      <p class="muted">To inspect the export in a trace viewer, open trace.json.gz (decompress first if required). No host stacks or cross-chip clock synchronization are implied.</p>
+    </footer>
+  </section>
+</main>
+<div id="tooltip" role="tooltip" hidden></div>
+<script src="timeline.js"></script>
+</body>
+</html>

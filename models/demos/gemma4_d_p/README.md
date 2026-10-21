@@ -112,6 +112,8 @@ The test measures only these two paths at prefixes 0 and 253952, using the same 
 
 Results are saved under `investigations/gemma4_hybrid_8k_comparison`; see the [recorded comparison](../../../investigations/gemma4_hybrid_8k_comparison/summary.md). Configure `GEMMA4_PERF_OUTPUT` or `GEMMA4_PERF_DEVICE_REPEATS` as needed. To change the batch capacity, set `GEMMA4_PERF_CHUNK_SIZE` and comma-separated `GEMMA4_PERF_REQUEST_LENGTHS` together; request lengths must be multiples of 256 and fill the batch exactly.
 
+Set `GEMMA4_PERF_PROFILE=1` to retain native program timestamps and kernel sources on each replay's longest-span chip. The [8k hybrid profile](../../../investigations/gemma4_hybrid_8k_profile/findings.md) provides a device-time breakdown, an interactive timeline, a Perfetto export, and capture/analysis commands for the same four timing cells.
+
 The full-model packed sanity test uses five requests totaling 4096 tokens with fixed, nonzero rotated prefixes:
 
 ```bash
