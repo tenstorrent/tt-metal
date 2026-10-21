@@ -1571,9 +1571,14 @@ def test_all_to_all_async_whole_mesh_2d_warn_only_keeps_input_label(mesh_device,
     error level: a scatter-family fallback) and the output -- the caller's persistent output buffer -- keeps the
     input's {N}, [Shard(2)]: the hook's explicit fallback, not the framework's union over the buffers' stale labels.
     That label under-claims (every device does hold a distinct piece, in boundary order), so nothing is composed by
-    it."""
+    it. The refused op itself runs only where the boundary walk visits every device (2x4); with interior devices (8x4)
+    its factory indexes past the boundary ring, so that mesh is skipped."""
     torch.manual_seed(30)
-    _, _, num_devices = _mesh(mesh_device)
+    rows, cols, num_devices = _mesh(mesh_device)
+    if rows > 2 and cols > 2:
+        pytest.skip(
+            "the op's whole-mesh ring is the walk around the mesh boundary; a mesh with interior devices cannot run it"
+        )
     full = _integers([1, 1, 128 * num_devices, 128 * num_devices])
     tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=2))
     _skip_unless_ring(tt_input, None)
