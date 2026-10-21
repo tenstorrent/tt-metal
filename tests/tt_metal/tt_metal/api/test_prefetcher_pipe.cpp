@@ -1670,6 +1670,69 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_StaleCommitRejected) {
     EXPECT_EQ(words[1], new_entry_size);
 }
 
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CtorWritesBackDirtyCreditLine) {
+    // Quasar: the constructor drops this core's cached credit lines so it reads L1. A dirty line must
+    // be written back, not discarded: a 64B line also holds words the counters don't use. One core,
+    // so it fits the 1x3 RTL sim: a sender page stamped by hand, its entry size already applied, so
+    // the constructor sends nothing to the receiver the page names.
+    if (!is_quasar()) {
+        GTEST_SKIP() << "Quasar DM caches only";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord core(0, 0);
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_size = 4 * entry_size;
+    constexpr uint32_t probe_value = 0x5a5a1234;
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
+    // Page: header + XY table, then the SENT and ACKED blocks on their own lines, then the ring.
+    constexpr uint32_t line = PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN;
+    const uint32_t base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t page_addr = (base + line - 1) & ~(line - 1);
+    const uint32_t sent_offset = line;
+    const uint32_t acked_offset = 2 * line;
+    const uint32_t ring_addr = page_addr + 3 * line;
+    // Last word of the last lane's SENT slot: same line as the lane-0 counter, never used.
+    const uint32_t probe_addr = page_addr + sent_offset + PREFETCHER_PIPE_MAX_CREDIT_LANES * l1_alignment - 4;
+
+    const auto phys = mesh_device->worker_core_from_logical_core(core);
+    std::vector<uint32_t> page(3 * line / sizeof(uint32_t), 0);
+    page[REMOTE_DFB_CFG_IS_SENDER] = 1;
+    page[REMOTE_DFB_CFG_NUM_RECEIVERS] = 1;
+    page[REMOTE_DFB_CFG_FIFO_START] = ring_addr;
+    page[REMOTE_DFB_CFG_FIFO_SIZE] = ring_size;
+    page[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] = ring_addr;
+    page[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = entry_size;
+    page[PREFETCHER_PIPE_CFG_NOC_XY_OFFSET] = prefetcher_pipe_noc_xy_byte_offset();
+    page[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET] = sent_offset;
+    page[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET] = acked_offset;
+    page[PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET] = sent_offset;
+    page[PREFETCHER_PIPE_CONFIG_HEADER_WORDS] = static_cast<uint32_t>(phys.x);
+    page[PREFETCHER_PIPE_CONFIG_HEADER_WORDS + 1] = static_cast<uint32_t>(phys.y);
+    slow_dispatch::WriteToL1(device, core, page_addr, page, CoreType::WORKER);
+
+    m2::KernelSpec kernel =
+        make_dm_kernel("probe", "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_dirty_credit_line.cpp");
+    kernel.compile_time_args = {
+        {"config_page_addr", page_addr},
+        {"entry_size", entry_size},
+        {"probe_addr", probe_addr},
+        {"probe_value", probe_value}};
+    m2::ProgramSpec spec{
+        .name = "pipe_dirty_credit_line",
+        .kernels = {kernel},
+        .work_units = {work_unit("probe_wu", {"probe"}, CoreRangeSet(CoreRange(core)))},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+    distributed::MeshWorkload workload;
+    persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
+
+    std::vector<uint32_t> probe;
+    slow_dispatch::ReadFromL1(device, core, probe_addr, sizeof(uint32_t), probe, CoreType::WORKER);
+    EXPECT_EQ(probe.at(0), probe_value) << "the constructor discarded a dirty credit line";
+}
+
 // ============================================================================
 // Relay DFB: host-side relationship and lane programming
 // ============================================================================
