@@ -25,5 +25,4 @@ tests/ttnn/tracy/test_streaming_profiler.py
 # shell=False. See #61436.
 tools/tt-ember/auto.py
 tools/tt-ember/common.py
-tools/tt-ember/run_all.py
-tools/tt-ember/run_power_cases.py
+tools/tt-ember/run_sweep.py
