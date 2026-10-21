@@ -5,7 +5,6 @@
 import math
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -58,44 +57,6 @@ def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
     if activation_dtype is None or x.get_dtype() == activation_dtype:
         return x
     return ttnn.typecast(x, activation_dtype)
-
-
-_AGMM_ORIENTATION_KWARG = "transpose_core_grid"
-_agmm_orientation_supported: bool | None = None
-
-
-def _run_agmm(transpose_core_grid: bool | None, **kwargs):
-    """`all_gather_minimal_matmul_async` with the worker-grid orientation pinned when the caller asks.
-
-    `transpose_core_grid=None` keeps the op's own choice (`force_transpose or M > N`). A pinned value goes
-    through the op's tri-state parameter; an op without it can still pin the transposed orientation via
-    `force_transpose`, and a non-transposed pin falls back to the op's choice with one warning.
-    """
-    global _agmm_orientation_supported
-    op = ttnn.experimental.all_gather_minimal_matmul_async
-    if transpose_core_grid is None:
-        return op(**kwargs)
-    if _agmm_orientation_supported is not False:
-        try:
-            output = op(**kwargs, **{_AGMM_ORIENTATION_KWARG: transpose_core_grid})
-        except TypeError as error:
-            # nanobind lists the op's signatures after "Available signatures"; the kwarg is absent there
-            # only when the op lacks it (the "Called with" echo always names it).
-            signatures = str(error).partition("Available signatures")[2]
-            if _agmm_orientation_supported or _AGMM_ORIENTATION_KWARG in signatures:
-                raise
-            _agmm_orientation_supported = False
-            if not transpose_core_grid:
-                logger.warning(
-                    "all_gather_minimal_matmul_async has no transpose_core_grid parameter; a non-transposed "
-                    "orientation cannot be pinned and follows the op's M > N rule"
-                )
-        else:
-            _agmm_orientation_supported = True
-            return output
-    if transpose_core_grid:
-        kwargs["force_transpose"] = True
-    return op(**kwargs)
 
 
 def resolve_output_dtype(dtype, x: ttnn.Tensor):
@@ -500,8 +461,7 @@ class ColParallelLinear(Module):
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
             )
-            outputs = _run_agmm(
-                transpose_core_grid,
+            outputs = ttnn.experimental.all_gather_minimal_matmul_async(
                 input_tensor=x,
                 weight_tensor=weight,
                 bias_tensor=self.bias.data if self.bias is not None else None,
@@ -517,6 +477,7 @@ class ColParallelLinear(Module):
                     None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(tp_mesh_axis)
                 ),
                 force_transpose=force_transpose,
+                transpose_core_grid=transpose_core_grid,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,

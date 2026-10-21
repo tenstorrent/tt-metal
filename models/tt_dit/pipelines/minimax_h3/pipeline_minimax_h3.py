@@ -516,10 +516,8 @@ class MiniMaxH3Pipeline:
         dynamic_length: bool | None = None,
         max_sequence_length: int | None = None,
     ) -> None:
-        """`dynamic_length` serves every packed length up to `max_sequence_length` (default: the top rung of
-        the mesh's ladder) padded only to the SP alignment, with one program set per length class, one request
-        state and a warm-up of one point per class instead of the bucket ladder. Eager only (a trace freezes
-        the length). Off by default: the presets keep bucketing, and the quad keeps bucketing plus tracing."""
+        """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
+        length class (eager only; off by default)."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         supplied = (tp_axis, sp_axis, num_links, topology)
@@ -1411,9 +1409,8 @@ class MiniMaxH3Pipeline:
         return self.max_sequence_length if (self.bucket_denoise or self.dynamic_length) else None
 
     def _bind_kv_gather_pair(self, transformer: MiniMaxH3Transformer3DModel) -> None:
-        """Allocate the capacity-sized K/V gather pair once, outside the per-request transient scope that
-        frees every pair first allocated inside it, so a request neither re-allocates 0.86 GB/device at
-        its first step nor fragments DRAM across lengths. Idempotent (the manager caches by key)."""
+        """Allocate the capacity-sized K/V gather pair once, outside the per-request transient scope.
+        Idempotent."""
         attn = transformer.transformer_blocks[0].attn
         if self.kv_gather_capacity is None or not attn.use_ring:
             return
@@ -2300,8 +2297,8 @@ class MiniMaxH3Pipeline:
     ) -> None:
         """
         Buffer allocation and, when tracing, trace capture. A bucketed pipeline compiles one program set
-        per rung, a dynamic-length one proves its single set at two lengths; the legacy unbucketed pipeline
-        has nothing bounded to warm.
+        per rung, a dynamic-length one warms its single set at the capacity point, the shortest request and
+        one point per uncovered class; the legacy unbucketed pipeline has nothing bounded to warm.
         """
         if not (self.bucket_denoise or self.dynamic_length):
             return
@@ -2377,10 +2374,8 @@ class MiniMaxH3Pipeline:
     def _warm_denoise_envelope(
         self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
     ) -> dict[int, dict]:
-        """The dynamic-length warm-up: one forced two-step generation at `max_sequence_length` (binds the
-        largest buffers and shows the DRAM high-water), one at the shortest served request, and one inside
-        every length class neither of those falls in, so each class's program set is built. Returns the
-        request that fit the capacity point."""
+        """Dynamic-length warm-up: one two-step generation at the capacity, one at the shortest request, one
+        per remaining class. Returns the request that fit the capacity point."""
         cap = self.max_sequence_length
         request = self._run_forced_fit(cap, prompt, overrides.get(cap, generation_kwargs), shrink=cap not in overrides)
         fitted = {cap: request} if request is not None else {}

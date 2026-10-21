@@ -21,10 +21,7 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
-import functools
-import inspect
 import math
-import re
 from typing import NamedTuple
 
 import ttnn
@@ -90,9 +87,8 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 }
 
 
-# Blocking of the dynamic-length path per (K, N) layer and length class, measured on 4x8 Blackhole: to_qkv
-# and to_out take one blocking at every length (faster than the per-M table at both ends), ff1 wants
-# 6/3/16 up to the short class and the table's 4/3/16 beyond it.
+# Blocking of the dynamic-length path per (K, N) layer and length class; to_qkv and to_out take one
+# blocking at every length, ff1 one per class.
 AGMM_PINNED_BLOCKING: dict[tuple[int, int], dict[str, tuple[int, int, int]]] = {
     (5376, 5376): {"short": (4, 6, 16), "long": (4, 6, 16)},
     (5376, 7168): {"short": (6, 3, 16), "long": (4, 3, 16)},
@@ -117,29 +113,12 @@ AGMM_PINNED_TRANSPOSED: dict[tuple[int, int], bool] = {
 }
 
 
-def op_takes_keyword(op, name: str) -> bool:
-    """Whether a ttnn op's binding takes keyword `name`. `inspect` cannot read the nanobind callable behind
-    ttnn's operation wrappers, so its per-overload signatures (`__nb_signature__`) are searched then."""
-    function = getattr(op, "function", op)
-    try:
-        return name in inspect.signature(function).parameters
-    except (TypeError, ValueError):
-        overloads = getattr(getattr(function, "__call__", None), "__nb_signature__", None) or ()
-        return any(re.search(rf"\b{name}\s*:", overload[0]) for overload in overloads)
-
-
-@functools.cache
-def agmm_orientation_pinnable() -> bool:
-    """Whether the op takes `transpose_core_grid`. Without it only the transposed orientation can be pinned
-    (`force_transpose`), so every layer then runs transposed at every length."""
-    return op_takes_keyword(ttnn.experimental.all_gather_minimal_matmul_async, "transpose_core_grid")
-
-
 def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> dict[str, AgmmPin]:
-    """The AGMM program of a `(K, N)` layer per length class: one worker-grid orientation at every length (the
-    op's own `M > N` rule would flip to_qkv and ff1 once M passes their N, inside the served envelope) and the
-    class's `AGMM_PINNED_BLOCKING`; classes with the same blocking share one pin."""
-    transposed = AGMM_PINNED_TRANSPOSED.get((k, n), True) if agmm_orientation_pinnable() else True
+    """The AGMM program of a `(K, N)` layer per length class: one worker-grid orientation at every length and
+    the class's `AGMM_PINNED_BLOCKING`; classes with the same blocking share one pin."""
+    if (k, n) not in AGMM_PINNED_BLOCKING:
+        raise ValueError(f"dynamic_length has no pinned AGMM blocking for (K, N)={(k, n)}; TP=4 layouts only")
+    transposed = AGMM_PINNED_TRANSPOSED[(k, n)]
     grid = agmm_worker_grid(full_grid, transposed, num_links)
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
     in0_axis = grid.x if transposed else grid.y

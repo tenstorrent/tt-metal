@@ -371,7 +371,10 @@ still waiting in, and the run deadlocks rather than failing.
 the top rung, 120320 for t2va) replaces the bucket ladder on the 4x8: a request is padded only to the SP
 alignment (256 rows), and the DiT ops that used to key a program on the padded length
 (`all_gather_minimal_matmul_async`, the fused ff2 MM+reduce-scatter, the ring SDPA, the standalone
-`minimal_matmul` heads) take the per-device row count as a runtime word instead. Eager only: a trace
+`minimal_matmul` heads, the fused distributed RMS/LayerNorm, `nlp_create_qkv_heads`, `nlp_concat_heads`,
+`all_gather_async`, `embedding` and its `untilize`) take the per-device row count as a runtime word
+instead; the norms' worker split (`row_capacity`) and the ring attention's K/V gather pair are sized once
+at `max_sequence_length / 8` rows per device. Eager only: a trace
 freezes the length, so the quad preset stays bucketed and traced, and the 4x8 preset still buckets
 unless the flag is passed.
 

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import inspect
 import math
 
 import torch
@@ -26,39 +25,6 @@ from .length_classes import LENGTH_CLASSES, length_class
 # Ring SDPA chunk pair of the dynamic-length path per length class, one program each. Measured per block
 # on 4x8: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
 DYNAMIC_RING_SDPA_CHUNKS: dict[str, tuple[int, int]] = {"short": (320, 384), "long": (256, 512)}
-
-
-_RING_SDPA_DYNAMIC_KWARG = "dynamic_local_n"
-_ring_sdpa_dynamic_supported: bool | None = None
-
-
-def _run_ring_sdpa(dynamic_local_n: bool, **kwargs):
-    """`ring_joint_scaled_dot_product_attention`, asking the op to take the per-chip padded length as a
-    runtime word when `dynamic_local_n`; an op without that parameter runs the length-keyed program."""
-    global _ring_sdpa_dynamic_supported
-    op = ttnn.transformer.ring_joint_scaled_dot_product_attention
-    if not dynamic_local_n or _ring_sdpa_dynamic_supported is False:
-        return op(**kwargs)
-    try:
-        output = op(**kwargs, **{_RING_SDPA_DYNAMIC_KWARG: True})
-    except TypeError as error:
-        # nanobind lists the op's signatures after "Available signatures"; the kwarg is absent there only
-        # when the op lacks it (the "Called with" echo always names it).
-        if _ring_sdpa_dynamic_supported or _RING_SDPA_DYNAMIC_KWARG in str(error).partition("Available signatures")[2]:
-            raise
-        _ring_sdpa_dynamic_supported = False
-        return op(**kwargs)
-    _ring_sdpa_dynamic_supported = True
-    return output
-
-
-def norm_capacity_kwargs(row_capacity: int | None) -> dict:
-    """`DistributedRMSNorm` constructor kwargs that size the fused norm's program, workers and stats scratch
-    for `row_capacity` per-device rows (one program for every row count up to it), or `{}` when the layer
-    has no such parameter yet (then the op keys everything on the live row count)."""
-    if row_capacity is None or "row_capacity" not in inspect.signature(DistributedRMSNorm.__init__).parameters:
-        return {}
-    return {"row_capacity": row_capacity}
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -147,9 +113,8 @@ class MiniMaxH3Attention(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
     ) -> None:
-        """`dynamic_length` freezes every length-keyed choice (AGMM grid/blocking/orientation, ring SDPA
-        chunks) at construction so one program per op serves every per-device length; `norm_row_capacity`
-        (per-device rows) sizes the fused QK norms' program for every row count up to it on that path."""
+        """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
+        length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -217,7 +182,7 @@ class MiniMaxH3Attention(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            **(norm_capacity_kwargs(norm_row_capacity) if dynamic_length else {}),
+            **({"row_capacity": norm_row_capacity} if dynamic_length else {}),
         )
         self.norm_q = DistributedRMSNorm(**qk_norm_kwargs)
         self.norm_k = DistributedRMSNorm(**qk_norm_kwargs)
@@ -262,6 +227,7 @@ class MiniMaxH3Attention(Module):
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
             self.use_ring
+            and not dynamic_length  # the exp ring op keys its program on the length
             and is_blackhole()
             and tp_factor == 4
             and parallel_config.sequence_parallel.factor == 32
@@ -634,8 +600,7 @@ class MiniMaxH3Attention(Module):
                 num_buffers_per_channel=32,
             )
         elif self.use_ring:
-            spatial_BHNE, _prompt, _lse = _run_ring_sdpa(
-                self.dynamic_length,
+            spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 input_tensor_q=q_BHNE,
                 input_tensor_k=k_BHNE,
                 input_tensor_v=v_BHNE,
@@ -661,6 +626,7 @@ class MiniMaxH3Attention(Module):
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                 use_column_major_ccl=True,
+                dynamic_local_n=self.dynamic_length,
             )
         else:
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(

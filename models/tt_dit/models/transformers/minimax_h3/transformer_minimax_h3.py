@@ -19,7 +19,6 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
-from .attention_minimax_h3 import norm_capacity_kwargs
 from .time_dispatch import DispatchTimer, timed_block_index
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock
@@ -92,7 +91,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_axis=self.tp_mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            **(norm_capacity_kwargs(norm_row_capacity) if dynamic_length else {}),
+            **({"row_capacity": norm_row_capacity} if dynamic_length else {}),
         )
         self.linear = ColParallelLinear(
             time_embed_dim,
@@ -143,7 +142,12 @@ class MiniMaxH3AdaLayerNormOut(Module):
             tables.append(table if self.dynamic_length else ttnn.to_layout(table, ttnn.TILE_LAYOUT))
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
-            return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
+            return ttnn.unsqueeze(
+                ttnn.embedding(
+                    timestep_indices, table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length
+                ),
+                0,
+            )
 
         shift, scale = gather(tables[0]), gather(tables[1])
         return ttnn.add(ttnn.mul(self.norm(hidden), ttnn.add(scale, 1.0)), shift)
@@ -214,9 +218,8 @@ class MiniMaxH3Transformer3DModel(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
     ) -> None:
-        """`dynamic_length`: every length-keyed program choice is frozen at construction (see the blocks),
-        the fused norms are sized for `kv_gather_capacity / sp` rows per device, and the per-forward state is
-        one entry rather than one per padded length. Defaults to the legacy, length-keyed behaviour."""
+        """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -566,7 +569,11 @@ class MiniMaxH3Transformer3DModel(Module):
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
-            return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
+            # The native untilize of the TILE table keeps the gather's programs free of the request's length.
+            gathered = ttnn.embedding(
+                as_indices(indices), table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length
+            )
+            return ttnn.unsqueeze(gathered, 0)
 
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 

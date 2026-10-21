@@ -20,7 +20,7 @@ from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_kwargs, agmm_pins
-from .attention_minimax_h3 import MiniMaxH3Attention, norm_capacity_kwargs
+from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
@@ -75,14 +75,13 @@ class MiniMaxH3TransformerBlock(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
     ) -> None:
-        """`dynamic_length` freezes the ff1 / ff2 blockings (ff1 per length class) at construction and runs the
-        one-hot modulation gathers through `minimal_matmul` with one frozen blocking, so no per-block program
-        depends on the per-device length; `norm_row_capacity` (per-device rows) sizes the fused norms there."""
+        """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
+        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
-        norm_kwargs = norm_capacity_kwargs(norm_row_capacity) if dynamic_length else {}
+        norm_kwargs = {"row_capacity": norm_row_capacity} if dynamic_length else {}
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
@@ -261,9 +260,8 @@ class MiniMaxH3TransformerBlock(Module):
         return tables
 
     def _gather_rows(self, table: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
-        """One table row per row of the bf16 one-hot selector (exact): [1, 1, S_local, hidden_local] for the
-        per-token gather, [1, 1, expanded_rows, hidden_local] for the tile-row selector. The dynamic-length
-        path runs it through minimal_matmul, whose program does not depend on the row count."""
+        """One table row per row of the bf16 one-hot selector (exact); the dynamic-length path runs it through
+        minimal_matmul, whose program does not depend on the row count."""
         if self.dynamic_length:
             return ttnn.experimental.minimal_matmul(
                 input_tensor=selector,
