@@ -71,6 +71,28 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
+// For a mux in program-local L1 (FabricMuxConfig::place_in_program_local_l1): waits until the mux is ready for
+// traffic, in place of wait_for_fabric_endpoint_ready, and returns the L1 address of its memory map. The mux's
+// addresses from the host are offsets from it. fabric_mux_l1_base_semaphore_id is
+// FabricMuxConfig::get_l1_base_semaphore_id(); a semaphore id has the same address on every core of the program.
+// local_scratch_address is a word of this core's L1 to read into.
+FORCE_INLINE uint32_t wait_for_fabric_mux_l1_base(
+    uint8_t fabric_mux_x,
+    uint8_t fabric_mux_y,
+    uint32_t fabric_mux_l1_base_semaphore_id,
+    uint32_t local_scratch_address) {
+    uint64_t noc_addr = get_noc_addr(fabric_mux_x, fabric_mux_y, get_semaphore(fabric_mux_l1_base_semaphore_id));
+    auto local_scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_scratch_address);
+
+    local_scratch_ptr[0] = 0;
+    do {
+        noc_async_read_one_packet(noc_addr, local_scratch_address, 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    } while (local_scratch_ptr[0] == 0);
+    return local_scratch_ptr[0];
+}
+
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_client_connect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
     connection_handle.template open<true>();
