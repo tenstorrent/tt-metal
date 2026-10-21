@@ -2391,7 +2391,7 @@ _SINGLE_DEVICE_SHAPES = [
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("shape", _SINGLE_DEVICE_SHAPES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_full_local(mesh_device, mesh_shape, shape):
+def test_moe_compute_expert_rows_single_device(mesh_device, mesh_shape, shape):
     """SingleDevice (compute_only=False on one card): the combine output of the expert rows path is bitwise equal to the
     ring path's and within 1 % rel L2 of the FP32 golden (HiFi4, FP32 DEST)."""
     _skip_unless_supported_arch(mesh_device)
@@ -2407,7 +2407,7 @@ def test_moe_compute_expert_rows_full_local(mesh_device, mesh_shape, shape):
 @pytest.mark.parametrize("tokens", [1, 64])
 @pytest.mark.parametrize("kind", ["random", "skewed", "empty"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_full_local_routing(mesh_device, mesh_shape, kind, tokens):
+def test_moe_compute_expert_rows_single_device_routing(mesh_device, mesh_shape, kind, tokens):
     """SingleDevice over token counts and uneven experts (experts with no token, one expert in every token)."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 16, tokens, 8, 512, 2048, kind=kind)
@@ -2419,7 +2419,7 @@ def test_moe_compute_expert_rows_full_local_routing(mesh_device, mesh_shape, kin
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mode", sorted(_PRECISION_MODES))
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_full_local_deterministic(mesh_device, mesh_shape, mode):
+def test_moe_compute_expert_rows_single_device_deterministic(mesh_device, mesh_shape, mode):
     """SingleDevice: eager, repeated eager and a trace replay give bitwise-equal combine outputs in every DEST mode and
     with the defaults."""
     _skip_unless_supported_arch(mesh_device)
@@ -2470,7 +2470,7 @@ def test_moe_compute_expert_rows_layer_id(mesh_device, mesh_shape):
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "full_local"])
+@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "single_device"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_only):
     """A token naming one expert at two k is listed once per k, as moe_compute lists it: counts and the e_t page hold
@@ -2519,7 +2519,7 @@ def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "full_local"])
+@pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "single_device"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, compute_only):
     """Every k of every token names expert 0 (top_k * tokens entries, more than its e_t page holds): the expert rows
@@ -2673,7 +2673,7 @@ def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("kind, mode", [("hot_last", "hifi4_fp32"), ("cold_last", "lofi_bf16")])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_row_tiles_full_local(mesh_device, mesh_shape, kind, mode):
+def test_moe_compute_expert_rows_row_tiles_single_device(mesh_device, mesh_shape, kind, mode):
     """SingleDevice: the combine output (every routed row of every expert) with jobs of 4 row tiles is bitwise equal to
     one row tile per job and to the ring path's."""
     _skip_unless_supported_arch(mesh_device)
