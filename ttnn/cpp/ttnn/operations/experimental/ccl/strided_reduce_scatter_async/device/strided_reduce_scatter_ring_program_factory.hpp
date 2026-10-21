@@ -83,23 +83,19 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // Caller-owned scratch for the per-MM-core progress counters (fused MM->RS signaling only): uint32
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt);
 
-// Override runtime arguments helper for ring topology
+// Cache-hit refresh for ring topology: rewrites the common runtime args (row count, addresses,
+// semaphores) of the three kernels; nothing per core. slice_Ht is the reduce-scattered height in
+// tiles (the activations' height, not the windowed MM output's).
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
+    const StridedReduceScatterProgramArtifacts& artifacts,
     const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
+    uint32_t slice_Ht,
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output,
-    uint32_t reader_addcmul_rt_arg_offset = 0,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_a = std::nullopt,
     const std::optional<const Tensor>& addcmul_b = std::nullopt);
 

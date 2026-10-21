@@ -7,10 +7,30 @@
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+constexpr uint64_t kProgramHashSalt = 0x4d4d52535f763100ULL;  // "MMRS_v1"
+
+// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash.
+template <typename OptionalTensor>
+ttsl::hash::hash_t spec_without_rows(const OptionalTensor& tensor) {
+    return tensor.has_value() ? operations::common::hash_spec_without_rows(tensor->tensor_spec(), kProgramHashSalt)
+                              : ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt);
+}
+
+template <typename OptionalTensor>
+ttsl::hash::hash_t full_spec(const OptionalTensor& tensor) {
+    return tensor.has_value() ? ttsl::hash::hash_objects_with_default_seed(tensor->tensor_spec())
+                              : ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt);
+}
+
+}  // namespace
 
 MinimalMatmulStridedReduceScatterAsync::program_factory_t
 MinimalMatmulStridedReduceScatterAsync::select_program_factory(
@@ -18,9 +38,70 @@ MinimalMatmulStridedReduceScatterAsync::select_program_factory(
     return MinimalMatmulStridedReduceScatterAsyncProgramFactory{};
 }
 
+ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The default worker count is sized from the input bytes, so only an explicit count lets the
+    // program be shared across row counts; otherwise keep the rows in the key.
+    const bool workers_pinned = attributes.num_workers_per_link.has_value();
+    const auto& b = tensor_args.addcmul_input_tensor2;
+    const bool b_broadcast = b.has_value() && b->logical_shape()[-2] <= 1;
+    return ttsl::hash::hash_objects_with_default_seed(
+        kProgramHashSalt,
+        attributes,
+        workers_pinned ? operations::common::hash_spec_without_rows(tensor_args.input_tensor, kProgramHashSalt)
+                       : ttsl::hash::hash_objects_with_default_seed(tensor_args.input_tensor.tensor_spec()),
+        tensor_args.weight_tensor.tensor_spec(),
+        spec_without_rows(tensor_args.optional_rs_intermediate_tensor),
+        spec_without_rows(tensor_args.optional_rs_output_tensor),
+        spec_without_rows(tensor_args.bias),
+        spec_without_rows(tensor_args.addcmul_input_tensor1),
+        spec_without_rows(tensor_args.addcmul_input_tensor2),
+        b_broadcast,
+        spec_without_rows(tensor_args.mm_optional_input_tensor),
+        full_spec(tensor_args.mm_progress_counters),
+        full_spec(tensor_args.mm_credit_counters));
+}
+
+// Only the row-dependent invariants the hash does not cover; everything else was checked on the
+// miss that built the program.
 void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
+    const uint32_t M = tensor_args.input_tensor.padded_shape()[-2];
+    TT_FATAL(M > 0 && M % tt::constants::TILE_HEIGHT == 0, "MMRS activation rows ({}) must be a multiple of 32", M);
+    if (tensor_args.mm_optional_input_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.mm_optional_input_tensor->padded_shape()[-2] == M,
+            "MMRS fused-concat second input rows ({}) must match the activation rows ({})",
+            tensor_args.mm_optional_input_tensor->padded_shape()[-2],
+            M);
+    }
+    if (tensor_args.optional_rs_intermediate_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_rs_intermediate_tensor->padded_shape()[-2] >= M,
+            "MMRS rs_intermediate rows ({}) must hold the activation rows ({})",
+            tensor_args.optional_rs_intermediate_tensor->padded_shape()[-2],
+            M);
+    }
+    if (tensor_args.optional_rs_output_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_rs_output_tensor->padded_shape()[-2] >= M,
+            "MMRS rs_output rows ({}) must hold the activation rows ({})",
+            tensor_args.optional_rs_output_tensor->padded_shape()[-2],
+            M);
+    }
+    if (attributes.fused_ternary_scalar.has_value()) {
+        TT_FATAL(
+            tensor_args.addcmul_input_tensor1->logical_shape()[-2] >= M,
+            "addcmul_input_tensor1 rows ({}) must hold the activation rows ({})",
+            tensor_args.addcmul_input_tensor1->logical_shape()[-2],
+            M);
+        const uint32_t b_rows = tensor_args.addcmul_input_tensor2->logical_shape()[-2];
+        TT_FATAL(
+            b_rows == 1 || b_rows >= M,
+            "addcmul_input_tensor2 rows ({}) must be 1 or hold the activation rows ({})",
+            b_rows,
+            M);
+    }
 }
 
 void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
@@ -95,22 +176,47 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         const auto& ta_shape = ta.logical_shape();
         const auto& tb_shape = tb.logical_shape();
 
+        // Rows beyond M are never read: a and a full-row b may be taller than the activations
+        // (capacity-sized buffers), they only need the same width.
         TT_FATAL(
-            ta_shape[-2] == M && ta_shape[-1] == N_rs,
-            "addcmul_input_tensor1 shape must match RS output [M={}, N/ring_size={}], got [{}, {}]",
+            ta_shape[-2] >= M && ta_shape[-1] == N_rs,
+            "addcmul_input_tensor1 shape must hold the RS output [M={}, N/ring_size={}], got [{}, {}]",
             M,
             N_rs,
             ta_shape[-2],
             ta_shape[-1]);
         TT_FATAL(
-            (tb_shape[-2] == 1 || tb_shape[-2] == M) && tb_shape[-1] == N_rs,
-            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}] or full [M={}, N/ring_size={}], got "
+            (tb_shape[-2] == 1 || tb_shape[-2] >= M) && tb_shape[-1] == N_rs,
+            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}] or hold [M={}, N/ring_size={}], got "
             "[{}, {}]",
             N_rs,
             M,
             N_rs,
             tb_shape[-2],
             tb_shape[-1]);
+    }
+
+    // Caller-owned RS buffers: same width/dtype/layout as the op would allocate, at least M rows
+    // (rows beyond M are never touched, so a capacity-sized persistent pair may be reused).
+    {
+        const uint32_t M = tensor_args.input_tensor.padded_shape()[-2];
+        const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
+        const auto check_rs_buffer = [&](const std::optional<Tensor>& t, uint32_t width, const char* name) {
+            if (!t.has_value()) {
+                return;
+            }
+            TT_FATAL(t->layout() == Layout::TILE, "{} must be TILE layout", name);
+            TT_FATAL(
+                t->padded_shape()[-1] == width && t->padded_shape()[-2] >= M,
+                "{} must be [>= {} rows, {} cols], got [{}, {}]",
+                name,
+                M,
+                width,
+                t->padded_shape()[-2],
+                t->padded_shape()[-1]);
+        };
+        check_rs_buffer(tensor_args.optional_rs_intermediate_tensor, N, "optional_rs_intermediate_tensor");
+        check_rs_buffer(tensor_args.optional_rs_output_tensor, N / attributes.ring_size, "optional_rs_output_tensor");
     }
 
     // An L1 MM output opts into the L1 handoff (see compute_output_specs). Unwindowed, the

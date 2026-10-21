@@ -68,20 +68,14 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
+    const StridedReduceScatterProgramArtifacts& artifacts,
     const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
+    uint32_t slice_Ht,
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output,
-    uint32_t reader_addcmul_rt_arg_offset = 0,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_a = std::nullopt,
     const std::optional<const Tensor>& addcmul_b = std::nullopt);
 }  // namespace ttnn
@@ -139,22 +133,18 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         // output_tensor[0] = MM output = RS input
         // output_tensor[1] = RS intermediate
         // output_tensor[2] = RS output
+        // The reduce-scattered height is the activations' height (the MM output may be a window).
+        const uint32_t slice_Ht = tensor_args.input_tensor.padded_shape()[-2] / TILE_HEIGHT;
         ::ttnn::ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
             program,
-            shared_variables.rs_shared_variables.reader_kernel_id,
-            shared_variables.rs_shared_variables.writer_kernel_id,
-            shared_variables.rs_shared_variables.all_cores,
-            attributes.num_links,
-            shared_variables.rs_shared_variables.num_directions_per_link,
-            shared_variables.rs_shared_variables.num_workers_per_direction,
-            shared_variables.rs_shared_variables.num_mux_cores_per_direction_per_link,
-            shared_variables.rs_shared_variables.num_cores_per_link,
+            shared_variables.rs_shared_variables,
             attributes.barrier_semaphore,
             attributes.semaphore,
+            slice_Ht,
             output_tensor.at(0),  // RS input = MM output
             output_tensor.at(1),  // RS intermediate
             output_tensor.at(2),  // RS output
-            shared_variables.rs_shared_variables.reader_addcmul_rt_arg_offset,
+            attributes.fused_ternary_scalar,
             tensor_args.addcmul_input_tensor1,
             tensor_args.addcmul_input_tensor2);
 
@@ -236,12 +226,10 @@ minimal_matmul_strided_reduce_scatter_async_program(
     uint32_t padded_N_tiles = tt::round_up(N_tiles, num_cores_x);
     uint32_t mm_N_full_block_wt_val = padded_N_tiles / num_cores_x;
 
-    // With a rolling window the matmul output tensor is only mm_window_blocks M blocks tall, so the
-    // RS needs the true height told to it separately. Take it from the activations, which are always
-    // full height.
-    const std::optional<uint32_t> mm_logical_Ht_val =
-        mm_window_blocks.has_value() ? std::optional<uint32_t>(input_tensor.padded_shape()[-2] / TILE_HEIGHT)
-                                     : std::nullopt;
+    // The RS geometry comes from the activations' height: with a rolling window the matmul output
+    // tensor is only mm_window_blocks M blocks tall, and even unwindowed the RS output / intermediate
+    // may be taller (capacity-sized persistent buffers) than the rows being reduced.
+    const std::optional<uint32_t> mm_logical_Ht_val = input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
     // =========================================================================
     // STEP 1: Create the Reduce Scatter program FIRST
