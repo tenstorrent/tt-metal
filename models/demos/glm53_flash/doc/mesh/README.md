@@ -611,3 +611,23 @@ Against the morning's 215.9 ms (wrap mHC through the regions kernel) at one user
 step is 75.5 ms, so the 64 K context adds ~24 ms per step (sparse attention + index scoring); the 33 tok/s per
 user target at 32 users (1 M ISL) is 3.3x away, the 19 tok/s at 256 users (121 ms at ISL 16) 2.3x: the
 optimization phase's starting point.
+
+## Optimization phase: per-op decode profile with the e2e knobs (2026-10-21 13:36-13:45, rows 4-5 block, tracy)
+
+`tests/test_perf_mesh.py`, one traced decode step of one layer, device time of chip (0,0); the block's expert slices
+are 1024-wide (4x the 8x4's 256), so the expert terms are ~4x the 8x4's; everything else transfers. Reports:
+`_logs/mesh/report_prof2_{l4_b4_stream,l3_b4_stream,l4_b32_dense}/summary.md` (+ the op lists `dev0_r0c0_decode_ops.csv`).
+
+| point | step | ops | mHC | router (+routing CCL) | experts | attention | CCL composites |
+|---|---|---|---|---|---|---|---|
+| layer 4 KDA+MoE, 4 users/row, stream op | 2.016 ms | 90 | 474 us / 34 ops | 168 us / 17 ops (+~80 us of broadcasts and pads) | 382 + 455 us (2 generic ops) | 229 us / 7 ops | 297 us / 23 ops |
+| layer 3 DSA+MoE, 4 users/row, stream op | 2.398 ms | 133 | 475 / 34 | 168 / 17 | 440 + 441 | 609 us / 50 ops (dense DSA decode composite) | 255 / 23 |
+| layer 4, 32 users/row, dense layout | 4.512 ms | 73 | 473 / 34 | 160 / 15 | 1044 + 1038 + 942 us (64 x 4096 x 73728 matmuls x2, 64 x 73728 x 4096) | 402 / 7 | 126 / 7 |
+
+Each mHC pre-block is 16 ops of ~203 us: `MhcSplitSinkhorn` 52 us and a `LayerNorm` 46 us both on ONE core, two
+tiny matmuls, reduces, transposes and pads; the post-mix v2 kernel is 33 us. The router is ~28 single-core-heavy ops
+(`TopK` 49 us and `Gather` 33 us on one core, pads, untilize/tilize pairs, two column `AllBroadcast`s of the routing).
+The dense expert matmuls at 32 users per row run at ~20 % of the bfp8 peak (14.5 GFLOP per chip per layer on the 8x4 in
+~750 us). Budget to the targets (0.67 ms per layer at 32 users, 1.17 ms at 256): fused pre-block (A/B below), fused
+router op (agent `routerop`), the dense-matmul program config, then the CCL pairs (RS+AG per all-reduce) and the DSA
+decode composite.
