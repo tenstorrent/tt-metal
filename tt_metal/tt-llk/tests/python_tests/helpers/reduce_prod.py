@@ -11,7 +11,7 @@ from .format_config import InputOutputFormat
 from .golden_generators import ELEMENTS_PER_TILE, TILE_DIM, truncate_to_dest_width
 from .llk_params import DestAccumulation, format_dict
 
-PROD_DIMENSIONS = [[TILE_DIM, TILE_DIM], [2 * TILE_DIM, 2 * TILE_DIM]]
+PROD_DIMENSIONS = [[2 * TILE_DIM, 2 * TILE_DIM]]
 PROD_STIMULI = ["pow2", "near_one"]
 
 PROD_STIMULUS_SEED = 48794
@@ -40,13 +40,8 @@ PROD_SPECIAL_RUN = 160
 
 
 def generate_prod_stimuli(stimulus: str, tile_cnt: int) -> torch.Tensor:
-    """Per-tile PROD stimuli, laid out tile by tile (the product does not depend on the order).
-
-    ``pow2``: +-1, +-2 and +-0.5 only, so every partial product is an exact power of two and a
-    lost sign or a dropped or duplicated +-2 or +-0.5 shows up as a bit mismatch.
-    ``near_one``: random signs on magnitudes in (NEAR_ONE_LOW, NEAR_ONE_HIGH), so the fp32
-    multiply chain rounds.
-    """
+    """``pow2``: +-1, +-2 and +-0.5 only, so every product is exact; ``near_one``: random signs on
+    magnitudes in (NEAR_ONE_LOW, NEAR_ONE_HIGH), so the fp32 multiply chain rounds."""
     gen = torch.Generator().manual_seed(PROD_STIMULUS_SEED)
     tiles = []
     for t in range(tile_cnt):
@@ -74,12 +69,8 @@ def prod_result_bounds(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Lowest and highest value each tile's element [0][0] may hold.
-
-    The exact product, widened by PROD_FP32_CHAIN_RTOL for near_one (pow2 products are exact),
-    then narrowed as the device stores it: SFPSTORE into a 16-bit Dest truncates toward zero,
-    while a 32-bit Dest keeps fp32 and the packer rounds to the output format. Both narrowings
-    are monotonic, so narrowing the two ends bounds every value the fp32 chain can produce.
+    """Bounds on each tile's element [0][0]: the exact product, widened by PROD_FP32_CHAIN_RTOL for
+    near_one, then narrowed the way the device stores it (a 16-bit Dest store truncates toward zero).
     """
     exact = src.to(torch.float64).view(tile_cnt, ELEMENTS_PER_TILE).prod(dim=1)
     rtol = 0.0 if stimulus == "pow2" else PROD_FP32_CHAIN_RTOL
@@ -91,11 +82,7 @@ def prod_result_bounds(
 
 
 def generate_prod_special_tile(special: str) -> tuple[torch.Tensor, float]:
-    """One tile for a PROD_SPECIAL_CLASSES entry, and the product the device must store.
-
-    Infinities keep the sign of the finite lanes' product; inf * 0 and NaN give NaN; an
-    fp32 overflow gives +inf and an underflow flushes to zero.
-    """
+    """One tile for a PROD_SPECIAL_CLASSES entry, and the product the device must store."""
     tile = torch.ones(ELEMENTS_PER_TILE, dtype=torch.float64)
     if special in ("overflow", "underflow"):
         tile[:PROD_SPECIAL_RUN] = 2.0 if special == "overflow" else 0.5

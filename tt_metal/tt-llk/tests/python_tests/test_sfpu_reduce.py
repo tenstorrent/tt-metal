@@ -552,12 +552,7 @@ def test_sfpu_reduce_prod(formats, dest_acc, stimulus, dimension_combinations):
 
 @parametrize(formats=PROD_FORMATS, special=PROD_SPECIAL_CLASSES)
 def test_sfpu_reduce_prod_specials(formats, special):
-    """IEEE specials through the scalar PROD multiply chain (see generate_prod_special_tile).
-
-    dest_acc follows the format, as in test_float_reduce_specials: these are the two cells
-    specials_safe() accepts. A NaN only reaches L1 as a NaN where nan_survives_to_l1() says so;
-    elsewhere the narrowing store turns it into an infinity whose sign Wormhole leaves unspecified.
-    """
+    """IEEE specials through the scalar PROD multiply chain, in the two cells specials_safe() accepts."""
     dest_acc = (
         DestAccumulation.Yes
         if formats.input_format.is_32_bit()

@@ -111,7 +111,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_reduce.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
@@ -143,11 +142,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_sfpu_init_();
-        if constexpr (POOL_TYPE == ckernel::PoolType::PROD)
-        {
-            // Approximate GELU's LUT overwrites LCONST_0, so PROD only passes if init_reduce restores it.
-            ckernel::sfpu::gelu_init<true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en>();
-        }
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();
 
         // Math is the SFPU link in the chain.

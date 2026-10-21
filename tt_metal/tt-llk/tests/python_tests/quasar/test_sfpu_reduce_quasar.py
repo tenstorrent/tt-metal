@@ -570,13 +570,7 @@ PROD_FORMATS = [
     dimension_combinations=PROD_DIMENSIONS,
 )
 def test_sfpu_reduce_prod_quasar(formats, stimulus, dimension_combinations):
-    """Scalar PROD on Quasar: every tile's product must land in its element [0][0].
-
-    pow2 stimuli have an exact product, so they must match bit-exactly. near_one allows the fp32
-    chain's error, then models the store's narrowing (see prod_result_bounds). The kernel runs
-    approximate gelu_init before init_reduce, so a LCONST_0 that init_reduce failed to restore
-    breaks every product.
-    """
+    """Scalar PROD on Quasar: each tile's product lands in its element [0][0] (see prod_result_bounds)."""
     dest_acc = _unpack_to_dest_acc(formats.input_format)
     input_dimensions = dimension_combinations
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE

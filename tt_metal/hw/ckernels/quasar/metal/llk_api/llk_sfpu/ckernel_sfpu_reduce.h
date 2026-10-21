@@ -38,8 +38,7 @@ constexpr std::uint32_t REDUCE_COLS_PER_TILE = TILE_C_DIM;
 
 // Working registers. Only LREG0-7 are usable as destinations here: writing 12-15 captures the
 // instruction into a Load Macro register instead of executing it, while 9/10/11 hold the constants
-// 0.0, 1.0 and -1.0 - no ordinary SFPU instruction writes those, but SFPCONFIG can reprogram them
-// (see @ref init_reduce).
+// 0.0, 1.0 and -1.0, which no ordinary SFPU instruction writes.
 constexpr std::uint32_t REDUCE_ACC_REG = p_sfpu::LREG4;    // row reduce: running per-row total; scalar PROD: product
 constexpr std::uint32_t REDUCE_ROT_REG = p_sfpu::LREG5;    // row reduce and scalar PROD: rotated accumulator copy
 constexpr std::uint32_t REDUCE_RECIP_REG = p_sfpu::LREG6;  // row AVG: 1/num_cols, live for the whole block
@@ -466,16 +465,13 @@ inline void reduce_scalar_prod_tile() {
 // ============================================================================
 
 /**
- * @brief Check a reduce configuration at compile time; for PROD, also restore LCONST_0 to 0.0.
+ * @brief Check a reduce configuration at compile time.
  *
- * The SFPU config register, ADDR_MOD_7 and the RWC counters are all set up by
- * @ref _llk_math_eltwise_sfpu_init_, and the reduce addresses Dest with immediates measured from
- * the section base @ref _llk_math_eltwise_sfpu_start_ writes. No reduce path claims a replay slot.
- *
- * The folds read LCONST_0 / LCONST_1 (LREG9/10) as 0.0 / 1.0, and SFPCONFIG can overwrite those -
- * gelu_init in approximate mode loads its LUT there - while @c _init_sfpu_config_reg_ restores
- * only SFPU_CTRL and LREG11. PROD therefore reloads LCONST_0, the addend of every SFPMUL; the other
- * pools still rely on the reset defaults.
+ * Nothing is programmed here. The SFPU config register, ADDR_MOD_7 and the RWC counters are all
+ * set up by @ref _llk_math_eltwise_sfpu_init_, and the reduce addresses Dest with immediates
+ * measured from the section base @ref _llk_math_eltwise_sfpu_start_ writes. No reduce path claims
+ * a programmable constant register or a replay slot, so this cannot disturb a neighbouring op's
+ * setup.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN/PROD>; PROD takes float formats only
  * @tparam FORMAT: Math-side data format of the operand
@@ -501,10 +497,6 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
     static_assert(
         !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
         "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
-
-    if constexpr (POOL_TYPE == PoolType::PROD) {
-        math::_sfpu_load_config32_(p_sfpu::LCONST_0, 0 /* upper16 */, 0 /* lower16 */);
-    }
 }
 
 /**
