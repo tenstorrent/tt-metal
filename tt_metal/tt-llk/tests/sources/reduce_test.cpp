@@ -20,13 +20,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) && (POOL_TYPE != ckernel::PoolType::MAX);
 
-// SPEED_OF_LIGHT must keep the shape constexpr: a const packed TensorShape is not folded and the reduce loop slows down.
-#ifdef SPEED_OF_LIGHT
-#define REDUCE_TENSOR_SHAPE_QUALIFIER constexpr
-#else
-#define REDUCE_TENSOR_SHAPE_QUALIFIER const
-#endif
-
 // Swapped 4-face REDUCE_ROW unpacks a whole tile with one UNPACR per operand; every other path posts one per face.
 // Must match full_tile in _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
 inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& tensor_shape)
@@ -57,8 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
-    REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
 
     {
         START_PERF_MEASURE("INIT")
@@ -80,7 +72,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // Nothing to do in this run type.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -123,8 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
 #endif
-    REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
     constexpr bool is_int_fpu_en  = false;
     constexpr bool sync_with_pack = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
@@ -139,7 +129,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // Nothing to do in this run type.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -221,8 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
-    REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
@@ -244,7 +232,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Nothing to do in this run type.
         }
         else
         {
