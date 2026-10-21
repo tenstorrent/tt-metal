@@ -8,17 +8,22 @@ import ttnn
 
 
 @pytest.mark.parametrize("predicate_dtype", [ttnn.uint16, ttnn.float32])
-@pytest.mark.parametrize("value_dtypes", [(ttnn.float32, ttnn.float32), (ttnn.bfloat16, ttnn.bfloat16),
-                                         (ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "value_dtypes",
+    [
+        (ttnn.float32, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+    ],
+)
 @pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint16])
 @pytest.mark.parametrize("broadcast", ["none", "row", "column"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_where_float_values_integer_output(
     device, predicate_dtype, value_dtypes, output_dtype, broadcast, memory_config
 ):
-    if device.arch() == ttnn.device.Arch.QUASAR and (
-        predicate_dtype == ttnn.uint16 or output_dtype == ttnn.uint16
-    ):
+    if device.arch() == ttnn.device.Arch.QUASAR and (predicate_dtype == ttnn.uint16 or output_dtype == ttnn.uint16):
         pytest.skip("UINT16 typecast is not supported on Quasar")
     z = torch.arange(1024).reshape(32, 32)
     predicate = (z % 3 != 0).to(torch.int32)
@@ -40,8 +45,7 @@ def test_where_float_values_integer_output(
         device=device,
         memory_config=memory_config,
     )
-    float_out = ttnn.from_torch(torch.zeros((32, 32)), dtype=ttnn.float32,
-                                layout=ttnn.TILE_LAYOUT, device=device)
+    float_out = ttnn.from_torch(torch.zeros((32, 32)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     for lhs, rhs, host_lhs, host_rhs in [(x, y, a, b), (y, x, b, a)]:
         expected = torch.where(predicate.bool(), host_lhs, host_rhs)
         control = ttnn.where(p, lhs, rhs, output_tensor=float_out)
