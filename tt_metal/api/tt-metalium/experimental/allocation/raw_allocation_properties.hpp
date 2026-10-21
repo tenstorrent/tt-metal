@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-namespace tt::tt_metal::experimental {
+#include <variant>
 
-// Placeholder for the properties a RawAllocationParameter requires of a RawAllocation.
-// TODO: Define allocation size, node coverage, and matching rules.
-struct RawAllocationProperties {};
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+
+namespace tt::tt_metal::experimental {
 
 // Describes lockstep allocation across all banks of a common type.
 // The resulting allocation will have a common starting address and extent across all banks within a device.
@@ -40,5 +39,7 @@ struct RangeLockstepAllocationProperties {
 
     // MemoryResource resource = SRAM;
 };
+
+using RawAllocationProperties = std::variant<LockstepAllocationProperties, RangeLockstepAllocationProperties>;
 
 }  // namespace tt::tt_metal::experimental
