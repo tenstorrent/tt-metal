@@ -24,6 +24,7 @@
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
     pytest --timeout 60 models/tt_transformers/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
+    pytest --timeout 60 models/tt_transformers/tests/test_row_shard_prefill_dispatch.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
