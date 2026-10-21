@@ -152,7 +152,20 @@ HostMeshSocket::HostMeshSocket(
         fifo_size,
         page_size);
     TT_FATAL(!config.socket_connection_config.empty(), "HostMeshSocket requires at least one connection");
-    impl_->geometry = RingGeometry{.page_size = page_size, .num_pages = fifo_size / page_size};
+    // The host rings (and so the host hop's credit ring) are as deep as asked for, never
+    // shallower than the socket's fifo.
+    uint32_t host_ring_pages = transport.host_ring_pages;
+    if (host_ring_pages == 0) {
+        host_ring_pages = std::max<uint32_t>(fifo_size / page_size, (16u << 20) / page_size);
+    }
+    TT_FATAL(
+        host_ring_pages >= fifo_size / page_size,
+        "host_ring_pages ({}) must be at least the socket fifo ({} pages of {} B)",
+        host_ring_pages,
+        fifo_size / page_size,
+        page_size);
+    const uint32_t host_ring_bytes = host_ring_pages * page_size;
+    impl_->geometry = RingGeometry{.page_size = page_size, .num_pages = host_ring_pages};
 
     const auto context =
         config.distributed_context ? config.distributed_context : multihost::DistributedContext::get_current_world();
@@ -203,7 +216,9 @@ HostMeshSocket::HostMeshSocket(
 
     // Same allocation D2D makes, so a receiver kernel has a socket-owned landing
     // buffer to pull into and get_data_buffer() means the same thing on both.
-    if (impl_->endpoint == SocketEndpoint::RECEIVER) {
+    // Not under HOST_DMA: there the H2D socket's own L1 ring is where pages land
+    // and the kernel reads them in place, so a second ring would only cost L1.
+    if (impl_->endpoint == SocketEndpoint::RECEIVER && transport.h2d_mode != H2DMode::HOST_DMA) {
         impl_->data_buffer = create_socket_data_buffer(device, config);
     }
 
@@ -225,10 +240,11 @@ HostMeshSocket::HostMeshSocket(
         tp.max_batch_pages = transport.max_batch_pages;
 
         if (is_sender) {
+            // The D2H ring lives in host memory, so it is the deep one.
             connection.d2h = std::make_unique<D2HSocket>(
                 device,
                 wire.sender_core,
-                fifo_size,
+                host_ring_bytes,
                 D2HSocket::ExternalConfigBuffer{
                     .address = static_cast<uint32_t>(impl_->config_buffer_address),
                 },
@@ -236,15 +252,18 @@ HostMeshSocket::HostMeshSocket(
             connection.d2h->set_page_size(page_size);
             tp.ring = connection.d2h->host_fifo().data();
         } else {
+            // DEVICE_PULL: the device's ring is the host ring, so it is deep too. HOST_DMA: the
+            // device ring is fifo_size of L1 and the deep host ring stages in front of it.
             connection.h2d = std::make_unique<H2DSocket>(
                 device,
                 wire.receiver_core,
                 config.socket_mem_config.socket_storage_type,
-                fifo_size,
+                transport.h2d_mode == H2DMode::HOST_DMA ? fifo_size : host_ring_bytes,
                 transport.h2d_mode,
                 H2DSocket::ExternalConfigBuffer{
                     .address = static_cast<uint32_t>(impl_->config_buffer_address),
-                });
+                },
+                transport.h2d_mode == H2DMode::HOST_DMA ? host_ring_bytes : 0);
             connection.h2d->set_page_size(page_size);
             tp.ring = connection.h2d->host_fifo().data();
         }
@@ -299,6 +318,10 @@ std::shared_ptr<MeshBuffer> HostMeshSocket::get_data_buffer() const {
     // Unlike D2D this is not the FIFO -- that is the pinned host ring the NIC
     // reaches -- but it is the same size and shape, so a receiver kernel pulls
     // into it exactly where a D2D kernel would find its pages.
+    TT_FATAL(
+        impl_->transport.h2d_mode != H2DMode::HOST_DMA,
+        "HOST_DMA lands pages in the H2D socket's L1 ring; the kernel reads them at socket.read_ptr, there is "
+        "no separate data buffer.");
     TT_FATAL(impl_->data_buffer, "Cannot access the data buffer for a sender socket.");
     return impl_->data_buffer;
 }

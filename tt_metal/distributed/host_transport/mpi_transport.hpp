@@ -43,19 +43,17 @@ public:
     std::string describe() const override;
 
 private:
-    // Messages in flight before the relay is told to wait. This is what makes the
-    // batching adaptive: with the pipe this deep, pages that arrive while a message
-    // is out stay in the ring and leave together when a slot frees, so the message
-    // size settles wherever the link's bandwidth-delay product puts it. Hand every
-    // poll's pages straight to MPI instead and the backlog forms as a queue of
-    // one-page messages, each costing the receiver a rendezvous round trip.
-    static constexpr size_t kMaxInFlight = 2;
+    // Bookkeeping cap only; the relay's credit gate is the real limit on what is
+    // in flight.
+    static constexpr size_t kMaxOutstanding = 1024;
 
     // The contiguous ring bytes from page `first` for `pages` pages; never crosses the wrap.
     std::span<std::byte> run_span(uint64_t first, uint32_t pages) const;
     void arm_credit_recv();
-    void post_receive();
+    void post_receives();
     bool retire_credit_send();
+    // Registers the whole ring with the NIC as one region before any page moves.
+    void warm_ring();
 
     RingGeometry geom_;
     bool is_sender_;
@@ -65,16 +63,17 @@ private:
     multihost::Tag payload_tag_;
     multihost::Tag credit_tag_;
 
-    // Front-retired only, so the count stays monotonic. Each entry is one message
+    // Front-retired only, so the counts stay monotonic. Each entry is one message
     // and the number of pages it carries; the pages a message holds are its
     // position in the stream, so no index goes on the wire.
     std::deque<std::pair<multihost::RequestPtr, uint32_t>> pending_send_;
-    // One receive at a time: a message's size is only known once it has landed,
-    // and the next one starts where it ended.
-    multihost::RequestPtr payload_recv_;
+    // Receives are posted from a probe of each arrived message's size, so any
+    // number can be outstanding and each starts where the previous one ends.
+    std::deque<std::pair<multihost::RequestPtr, uint32_t>> pending_recv_;
     uint64_t sent_ = 0;
     uint64_t released_ = 0;
     uint64_t delivered_ = 0;
+    uint64_t posted_ = 0;
     uint64_t consumed_ = 0;
 
     multihost::RequestPtr credit_recv_;

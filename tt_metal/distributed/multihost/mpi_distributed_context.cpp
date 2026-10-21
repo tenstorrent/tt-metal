@@ -577,8 +577,7 @@ void MPIContext::reduce_scatter(
         comm_));              // communicator
 }
 
-void MPIContext::scan(
-    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+void MPIContext::scan(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
@@ -701,6 +700,18 @@ std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
     int size_bytes = 0;
     MPI_Status status;
     MPI_CHECK(MPI_Probe(*source, *tag, comm_, &status));
+    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    return static_cast<std::size_t>(size_bytes);
+}
+
+std::optional<std::size_t> MPIContext::try_snoop_incoming_msg_size(Rank source, Tag tag) const {
+    int flag = 0;
+    MPI_Status status;
+    MPI_CHECK(MPI_Iprobe(*source, *tag, comm_, &flag, &status));
+    if (flag == 0) {
+        return std::nullopt;
+    }
+    int size_bytes = 0;
     MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
     return static_cast<std::size_t>(size_bytes);
 }

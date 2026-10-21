@@ -18,14 +18,15 @@ namespace {
 
 // One message per contiguous run of pages, never across the ring wrap, so no
 // framing is needed: point-to-point delivery between a rank pair with one tag is
-// ordered, the receiver has exactly one receive posted from the page after the
-// last one that landed to the end of the ring, and the message's byte count says
-// how many pages it carried. Both sides agree on page index without putting it on
-// the wire.
+// ordered, so the receiver probes each arrived message's size, posts a receive of
+// exactly that length at the next page, and the message lands where the sender
+// took it from. Both sides agree on page index without putting it on the wire,
+// and any number of messages can be outstanding on both sides.
 //
-// The batching is whatever the relay found ready at this poll: one page goes out
-// on its own, and when the link falls behind the pages that pile up meanwhile go
-// out together. Nothing is held back waiting for company.
+// The batching is whatever the relay found ready at this poll, up to the end of
+// the ring: one page goes out on its own, and when the link falls behind the
+// pages that pile up meanwhile go out together. Nothing is held back waiting for
+// company.
 constexpr int kPayloadTagOffset = 0;
 constexpr int kCreditTagOffset = 1;
 
@@ -43,12 +44,27 @@ MpiTransport::MpiTransport(const TransportParams& params) :
     TT_FATAL(ring_ != nullptr, "MpiTransport needs a ring");
     TT_FATAL(geom_.page_size != 0 && geom_.num_pages != 0, "MpiTransport needs a ring geometry");
 
+    warm_ring();
     if (is_sender_) {
         // One standing receive for the peer's credit; re-posted on completion.
         arm_credit_recv();
     } else {
-        post_receive();
+        post_receives();
     }
+}
+
+void MpiTransport::warm_ring() {
+    // One message the size of the whole ring, sender to receiver, before any page: the data
+    // is meaningless and no counter moves, but it leaves each side's ring registered with
+    // the NIC as a single region. Registered piecemeal instead, as the first lap of real
+    // pages would do, UCX's registration cache merges each new page into the growing
+    // region by re-registering the whole thing, and with a ring of megabytes that is
+    // ~150 us on every message for as long as the socket lives. Measured here: 176 us per
+    // 14 KiB round trip without this, 26 us with the cache bypassed.
+    auto whole = std::span<std::byte>(ring_, geom_.fifo_bytes());
+    multihost::RequestPtr r =
+        is_sender_ ? context_->isend(whole, peer_, payload_tag_) : context_->irecv(whole, peer_, payload_tag_);
+    (void)r->wait();
 }
 
 std::span<std::byte> MpiTransport::run_span(uint64_t first, uint32_t pages) const {
@@ -62,22 +78,39 @@ void MpiTransport::arm_credit_recv() {
         std::span<std::byte>(reinterpret_cast<std::byte*>(&credit_inbox_), sizeof(credit_inbox_)), peer_, credit_tag_);
 }
 
-void MpiTransport::post_receive() {
-    // The buffer runs from the next page to the end of the ring, which covers any
-    // run the sender may form (it splits at the wrap too). It overlaps pages the
-    // device has not read yet, but only received bytes are written and the sender
-    // is credit gated to a ring ahead of consumed, so nothing live is touched.
-    // Skipped while the ring is full: nothing can arrive until a credit goes out.
-    if (payload_recv_ || delivered_ >= consumed_ + geom_.num_pages) {
-        return;
+void MpiTransport::post_receives() {
+    // A receive per message whose envelope has arrived, each exactly the message's
+    // length at the next ring page. An eager message is already buffered and
+    // copies on match; a rendezvous one starts its transfer on match. Either way
+    // nothing waits for an earlier message's data, so the link stays full.
+    while (pending_recv_.size() < kMaxOutstanding) {
+        const auto bytes = context_->try_snoop_incoming_msg_size(peer_, payload_tag_);
+        if (!bytes.has_value()) {
+            return;
+        }
+        TT_FATAL(
+            *bytes != 0 && *bytes % geom_.page_size == 0,
+            "mpi receiver sees a {} B message on a {} B page ring",
+            *bytes,
+            geom_.page_size);
+        const auto pages = static_cast<uint32_t>(*bytes / geom_.page_size);
+        const uint32_t slot = static_cast<uint32_t>(posted_ % geom_.num_pages);
+        TT_FATAL(
+            slot + pages <= geom_.num_pages && posted_ + pages <= consumed_ + geom_.num_pages,
+            "mpi receiver: {}-page message at slot {} of {} (posted={} consumed={}) breaks the ring",
+            pages,
+            slot,
+            geom_.num_pages,
+            posted_,
+            consumed_);
+        pending_recv_.emplace_back(context_->irecv(run_span(posted_, pages), peer_, payload_tag_), pages);
+        posted_ += pages;
     }
-    const uint32_t slot = static_cast<uint32_t>(delivered_ % geom_.num_pages);
-    payload_recv_ = context_->irecv(run_span(delivered_, geom_.num_pages - slot), peer_, payload_tag_);
 }
 
 bool MpiTransport::can_send(uint32_t /*pages*/) const {
     // A batch that straddles the wrap is two messages; let it through whole.
-    return pending_send_.size() < kMaxInFlight;
+    return pending_send_.size() + 2 <= kMaxOutstanding;
 }
 
 bool MpiTransport::send(uint64_t first_page, uint32_t pages) {
@@ -125,12 +158,7 @@ bool MpiTransport::post_credit(uint64_t consumed_pages) {
     return true;
 }
 
-void MpiTransport::set_consumed(uint64_t consumed_pages) {
-    consumed_ = consumed_pages;
-    if (!is_sender_) {
-        post_receive();
-    }
-}
+void MpiTransport::set_consumed(uint64_t consumed_pages) { consumed_ = consumed_pages; }
 
 void MpiTransport::poll() {
     if (is_sender_) {
@@ -145,25 +173,11 @@ void MpiTransport::poll() {
             arm_credit_recv();
         }
     } else {
-        // Drain every message that has landed, not just one: a message that arrived
-        // before its receive was posted sits in MPI's unexpected queue and matches
-        // the moment the next receive goes up, so one poll can retire a whole run
-        // of them. Stopping at one would put a relay poll (and its back-off sleep)
-        // between every two messages.
-        while (payload_recv_) {
-            const auto status = payload_recv_->test();
-            if (!status.has_value()) {
-                break;
-            }
-            const uint64_t bytes = static_cast<uint64_t>(status->count);
-            TT_FATAL(
-                bytes != 0 && bytes % geom_.page_size == 0,
-                "mpi receiver got a {} B message on a {} B page ring",
-                bytes,
-                geom_.page_size);
-            delivered_ += bytes / geom_.page_size;
-            payload_recv_.reset();
-            post_receive();
+        post_receives();
+        // Front-retired only: delivery order is the page order.
+        while (!pending_recv_.empty() && pending_recv_.front().first->test().has_value()) {
+            delivered_ += pending_recv_.front().second;
+            pending_recv_.pop_front();
         }
         retire_credit_send();
     }
@@ -177,10 +191,11 @@ std::string MpiTransport::describe() const {
                             peer_consumed_,
                             pending_send_.size())
                       : fmt::format(
-                            "mpi receiver delivered={} consumed={} recv_posted={}",
+                            "mpi receiver delivered={} posted={} consumed={} recv_outstanding={}",
                             delivered_,
+                            posted_,
                             consumed_,
-                            payload_recv_ != nullptr);
+                            pending_recv_.size());
 }
 
 MpiTransport::~MpiTransport() {
@@ -196,8 +211,8 @@ MpiTransport::~MpiTransport() {
     for (auto& [r, pages] : pending_send_) {
         r->cancel();
     }
-    if (payload_recv_) {
-        payload_recv_->cancel();
+    for (auto& [r, pages] : pending_recv_) {
+        r->cancel();
     }
     if (credit_recv_) {
         credit_recv_->cancel();

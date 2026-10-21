@@ -130,15 +130,18 @@ bool RelaySender::poll() {
         return progress;
     }
 
-    // Everything that is ready goes now: a lone page leaves at once, and when the
-    // link is behind the pages that accumulated meanwhile leave together.
-    const uint32_t n = std::min({static_cast<uint32_t>(available - awaiting_pop), room, max_batch_pages_});
+    // Everything that is ready goes now, as one message up to the end of the ring:
+    // a lone page leaves at once, and when the link is behind the pages that
+    // accumulated meanwhile leave together. What lies past the wrap goes next poll.
+    const uint32_t to_wrap = geom_.num_pages - static_cast<uint32_t>(forwarded % geom_.num_pages);
+    const uint32_t n = std::min({static_cast<uint32_t>(available - awaiting_pop), room, to_wrap, max_batch_pages_});
     if (n == 0 || !transport_.can_send(n)) {
         return progress;
     }
     if (!transport_.send(forwarded, n)) {
         return progress;
     }
+    sends_++;
 
     const uint64_t total = forwarded + n;
     forwarded_.store(total, std::memory_order_release);
@@ -157,12 +160,17 @@ bool RelaySender::poll() {
 }
 
 std::string RelaySender::describe() const {
+    const uint64_t forwarded = forwarded_.load(std::memory_order_acquire);
+    const uint64_t sends = sends_.load(std::memory_order_acquire);
     return fmt::format(
-        "sender forwarded={} retired={} unforwarded={} ring_pages={} | {}",
-        forwarded_.load(std::memory_order_acquire),
+        "sender forwarded={} retired={} unforwarded={} ring_pages={} sends={} pages_per_send={:.1f} polls={} | {}",
+        forwarded,
         retired_.load(std::memory_order_acquire),
         unforwarded_.load(std::memory_order_acquire),
         geom_.num_pages,
+        sends,
+        sends ? static_cast<double>(forwarded) / static_cast<double>(sends) : 0.0,
+        polls_.load(std::memory_order_acquire),
         transport_.describe());
 }
 
@@ -190,8 +198,14 @@ bool RelayReceiver::poll() {
     // Refresh first: commit_pages() bounds against the cached bytes_acked, and a
     // stale value rejects a legal commit.
     const uint32_t acked_wire = socket_.bytes_acked_snapshot();
-    consumed_bytes_ += acked_wire - last_acked_wire_;
-    last_acked_wire_ = acked_wire;
+    if (socket_.decoupled_host_ring()) {
+        // The host ring frees as the DMA worker drains it into L1, not as the device
+        // consumes L1: that is what lets the peer run a whole host ring ahead.
+        consumed_bytes_ = socket_.host_ring_released_bytes();
+    } else {
+        consumed_bytes_ += acked_wire - last_acked_wire_;
+        last_acked_wire_ = acked_wire;
+    }
     const uint64_t consumed_pages = consumed_bytes_ / geom_.page_size;
     if (sampling_) {
         std::lock_guard<std::mutex> lock(latency_mutex_);

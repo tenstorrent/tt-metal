@@ -4,9 +4,14 @@
 
 #pragma once
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -129,13 +134,20 @@ public:
      */
     static uint32_t required_config_buffer_size();
 
+    /**
+     * @param host_ring_bytes HOST_DMA only: depth of the pinned staging ring the producer fills
+     *                        (commit_pages) and the DMA engine drains into the fifo_size L1 ring.
+     *                        0 (default): same as fifo_size. Deeper lets the producer run ahead
+     *                        of the device by more than L1 can hold.
+     */
     H2DSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& recv_core,
         BufferType buffer_type,
         uint32_t fifo_size,
         H2DMode h2d_mode,
-        std::optional<ExternalConfigBuffer> external_config = std::nullopt);
+        std::optional<ExternalConfigBuffer> external_config = std::nullopt,
+        uint32_t host_ring_bytes = 0);
 
     /**
      * @brief Constructs an H2DSocket targeting an L2CPU receiver.
@@ -248,6 +260,11 @@ public:
     // DEVICE_PULL only.
     std::span<std::byte> host_fifo() const;
     void commit_pages(uint32_t num_pages);
+    // HOST_DMA with the worker: the host ring is released as the engine drains it into L1, not
+    // as the device consumes L1, so a producer that paces on this can run ahead by a whole host
+    // ring. Absolute bytes.
+    bool decoupled_host_ring() const { return h2d_mode_ == H2DMode::HOST_DMA && dma_async_; }
+    uint64_t host_ring_released_bytes() const { return moved_.load(std::memory_order_acquire); }
 
     uint32_t bytes_acked_snapshot();
 
@@ -374,6 +391,34 @@ private:
     // HOST_DMA debug (TT_H2D_DMA_DEBUG): read each committed span back and report when it landed.
     bool dma_debug_ = false;
     uint64_t dma_commits_ = 0;
+    // HOST_DMA: commit_pages() queues the span to a worker instead of running the DMA inline.
+    // UMD's DMA write is synchronous (it busy-polls the engine), so done on the relay thread it
+    // would stall every receive and credit for the length of the transfer; the worker keeps the
+    // engine busy back to back and rings the doorbell after each span has landed. Off with
+    // TT_H2D_DMA_ASYNC=0.
+    // A span of the host staging ring, never across its wrap. The worker moves it into the L1
+    // ring as room appears there, in pieces no larger than the L1 room and never across the
+    // L1 wrap, ringing the doorbell after each piece.
+    struct DmaJob {
+        uint32_t offset = 0;
+        uint32_t bytes = 0;
+    };
+    void dma_enqueue(DmaJob job);
+    void dma_worker_run();
+    void dma_worker_flush();
+    void dma_worker_stop() noexcept;
+    bool dma_async_ = true;
+    uint32_t host_ring_bytes_ = 0;    // staging ring depth; == fifo_size_ unless decoupled
+    uint64_t staged_ = 0;             // bytes the producer has committed into the host ring
+    std::atomic<uint64_t> moved_{0};  // bytes the worker has moved out of it into L1
+    std::thread dma_thread_;
+    std::mutex dma_mutex_;
+    std::condition_variable dma_cv_;
+    std::condition_variable dma_done_cv_;
+    std::deque<DmaJob> dma_jobs_;
+    std::atomic<bool> dma_stop_{false};
+    uint64_t dma_enqueued_ = 0;
+    uint64_t dma_done_ = 0;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
     std::unique_ptr<NamedShm> shm_;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
