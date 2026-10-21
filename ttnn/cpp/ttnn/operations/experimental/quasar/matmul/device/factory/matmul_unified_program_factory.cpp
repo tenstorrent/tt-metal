@@ -194,6 +194,13 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         }
     }
     // ---- Reader ----
+    // WH/BH have two NoCs. When both operands are multicast the reader moves A's traffic to NOC_1 and keeps B's (and
+    // the bias's) on NOC_0, which DRAM reads prefer, as legacy matmul does; both DM kernels then run in dynamic NoC
+    // mode, since the writer also uses NOC_1. Otherwise one operand is read by every core, and NOC_1 reads cost more
+    // than the second NoC saves. Quasar has one NoC.
+    const bool two_nocs = device.arch() != tt::ARCH::QUASAR && plan.A_mcast_num_dests > 0 && plan.B_mcast_num_dests > 0;
+    const tt::tt_metal::NOC A_noc = two_nocs ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    const tt::tt_metal::NOC B_noc = tt::tt_metal::NOC::NOC_0;
     std::vector<std::string> mcast_semaphores;
     for (uint32_t thread = 0; thread < QUASAR_NUM_READER_THREADS; ++thread) {
         for (const char* name : MCAST_SEMAPHORES) {
@@ -235,6 +242,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"num_reader_threads", plan.num_reader_threads},
                 {"A_mcast_num_dests", plan.A_mcast_num_dests},
                 {"B_mcast_num_dests", plan.B_mcast_num_dests},
+                {"A_noc_id", static_cast<uint32_t>(A_noc)},
+                {"B_noc_id", static_cast<uint32_t>(B_noc)},
             },
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -245,6 +254,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                   "A_mcast_receiver",
                   "A_mcast_sender_x",
                   "A_mcast_sender_y",
+                  "A_mcast_start_x",
+                  "A_mcast_start_y",
                   "A_mcast_end_x",
                   "A_mcast_end_y",
                   "B_mcast_receiver",
@@ -282,6 +293,12 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .runtime_arg_schema = {.runtime_arg_names = {"first_batch", "num_batches", "first_C_slice", "num_C_slices"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
+    if (two_nocs) {
+        std::get<DataMovementHardwareConfig>(reader.hw_config).config_1xx->noc_mode =
+            tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+        std::get<DataMovementHardwareConfig>(writer.hw_config).config_1xx->noc_mode =
+            tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+    }
 
     // FUSE_BIAS is a define, as in the other matmul kernels: the bias DFB and tensor exist only with a bias.
     if (plan.has_bias) {
@@ -392,8 +409,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / cores_per_batch_group;
     const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % cores_per_batch_group;
     // A is multicast along a core's row of the core rectangle and B down its column, each led by its first core, or
-    // over the whole rectangle from its first core. The reader is on NOC_0 (Quasar has one NoC), which takes a
-    // multicast rectangle from its lowest coordinates, the first core's, to its highest.
+    // over the whole rectangle from its first core. NOC_0 takes a multicast rectangle from its lowest coordinates, the
+    // first core's, to its highest; NOC_1 from its highest to its lowest.
     const CoreRange core_grid = config.cores.bounding_box();
     for (uint32_t core = 0; core < num_active_cores; ++core) {
         const uint32_t batch_group = core / cores_per_batch_group;
@@ -421,6 +438,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             (plan.A_mcast_num_dests == 0 || (A_sender.x <= A_end.x && A_sender.y <= A_end.y)) &&
                 (plan.B_mcast_num_dests == 0 || (B_sender.x <= B_end.x && B_sender.y <= B_end.y)),
             "Multicast needs a group's first core at its lowest NoC coordinates");
+        const CoreCoord A_start = two_nocs ? A_end : A_sender;  // NOC_1 takes the rectangle from its far corner
+        const CoreCoord A_stop = two_nocs ? A_sender : A_end;
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             logical,
@@ -431,8 +450,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
              {"A_mcast_receiver", plan.A_mcast_num_dests > 0 && logical != A_first ? 1u : 0u},
              {"A_mcast_sender_x", static_cast<uint32_t>(A_sender.x)},
              {"A_mcast_sender_y", static_cast<uint32_t>(A_sender.y)},
-             {"A_mcast_end_x", static_cast<uint32_t>(A_end.x)},
-             {"A_mcast_end_y", static_cast<uint32_t>(A_end.y)},
+             {"A_mcast_start_x", static_cast<uint32_t>(A_start.x)},
+             {"A_mcast_start_y", static_cast<uint32_t>(A_start.y)},
+             {"A_mcast_end_x", static_cast<uint32_t>(A_stop.x)},
+             {"A_mcast_end_y", static_cast<uint32_t>(A_stop.y)},
              {"B_mcast_receiver", plan.B_mcast_num_dests > 0 && logical != B_first ? 1u : 0u},
              {"B_mcast_sender_x", static_cast<uint32_t>(B_sender.x)},
              {"B_mcast_sender_y", static_cast<uint32_t>(B_sender.y)},

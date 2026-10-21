@@ -12,6 +12,7 @@
 // K_chunks_per_C_slice_padded rounds the K chunks up to the reader threads; the extra ones carry credits only.
 // With multicast, the first core of a row (or of all the cores) reads the A slices and multicasts them to the rest,
 // and the first core of a column (or of all) does the same with B; a receiving core reads none of that operand.
+// A's traffic and B's (with the bias's) may use different NoCs where there are two (WH/BH); Quasar has one.
 // FUSE_BIAS: before a C slice's K chunks, one reader thread pushes the bias tiles of the C slice's columns.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
@@ -47,18 +48,22 @@ template <
     uint32_t B_borrowed,
     uint32_t num_reader_threads,  // more than one only with copied A and B
     uint32_t A_mcast_num_dests,   // cores an A sender multicasts to (its row minus itself); 0 = no A multicast
-    uint32_t B_mcast_num_dests>   // cores a B sender multicasts to (its column minus itself); 0 = no B multicast
+    uint32_t B_mcast_num_dests,   // cores a B sender multicasts to (its column minus itself); 0 = no B multicast
+    uint32_t A_noc_id,            // NoC of A's reads, multicasts and handshakes
+    uint32_t B_noc_id>            // NoC of B's and the bias's
 TT_KERNEL void reader(
     uint32_t first_batch,
     uint32_t num_batches,
     uint32_t first_C_slice,
     uint32_t num_C_slices,
     uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its multicast group
-    uint32_t A_mcast_sender_x,  // NoC coordinates of that core, which multicasts to the rectangle up to A_mcast_end_x/y
+    uint32_t A_mcast_sender_x,  // NoC coordinates of that core
     uint32_t A_mcast_sender_y,
+    uint32_t A_mcast_start_x,  // the multicast rectangle's corners in the order A's NoC takes them
+    uint32_t A_mcast_start_y,
     uint32_t A_mcast_end_x,
     uint32_t A_mcast_end_y,
-    uint32_t B_mcast_receiver,  // the same for B
+    uint32_t B_mcast_receiver,  // the same for B, whose rectangle starts at the sender
     uint32_t B_mcast_sender_x,
     uint32_t B_mcast_sender_y,
     uint32_t B_mcast_end_x,
@@ -73,7 +78,8 @@ TT_KERNEL void reader(
     constexpr uint32_t C_slices_across_N = (N_tiles + C_slice_N_tiles - 1) / C_slice_N_tiles;
     const uint32_t thread = get_my_thread_id();
 
-    Noc noc;
+    Noc A_noc(A_noc_id);
+    Noc B_noc(B_noc_id);
     DataflowBuffer A_slice(dfb::A_slice);
     DataflowBuffer B_slice(dfb::B_slice);
 
@@ -140,14 +146,14 @@ TT_KERNEL void reader(
                 for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
                      ++n_tile) {
                     const uint32_t bias_N_tile = C_slice_first_N_tile + n_tile;  // bias is one tile row: page = N tile
-                    noc.async_read(
+                    B_noc.async_read(
                         bias,
                         bias_row,
                         bias_tile_bytes,
                         {.page_id = bias_N_tile},
                         {.offset_bytes = n_tile * bias_tile_bytes});
                 }
-                noc.async_read_barrier();
+                B_noc.async_read_barrier();
                 bias_row.push_back(C_slice_N_padded_tiles);
             }
 #endif
@@ -162,7 +168,10 @@ TT_KERNEL void reader(
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
                 if constexpr (A_mcast_num_dests > 0 || B_mcast_num_dests > 0) {
                     // This thread's last multicast may still be reading the entries refilled below.
-                    noc.async_writes_flushed();
+                    A_noc.async_writes_flushed();
+                    if constexpr (B_noc_id != A_noc_id) {
+                        B_noc.async_writes_flushed();
+                    }
                 }
 
                 if constexpr (!A_borrowed) {
@@ -171,7 +180,7 @@ TT_KERNEL void reader(
                     A_slice.reserve_back(A_slice_tiles);
                     if (A_mcast_num_dests > 0 && A_mcast_receiver) {
                         A_data_ready.set(INVALID);
-                        A_receivers_ready.up(noc, A_mcast_sender_x, A_mcast_sender_y, /*value=*/1);
+                        A_receivers_ready.up(A_noc, A_mcast_sender_x, A_mcast_sender_y, /*value=*/1);
                     }
                     for (uint32_t m_tile = 0; m_tile < A_rows_to_read && C_slice_first_M_tile + m_tile < M_tiles;
                          ++m_tile) {
@@ -179,7 +188,7 @@ TT_KERNEL void reader(
                             A_batch_first_tile + (C_slice_first_M_tile + m_tile) * K_tiles + K_chunk_first_K_tile;
                         const uint32_t A_row_offset_bytes = m_tile * K_chunk_tiles * A_tile_bytes;
                         for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
-                            noc.async_read(
+                            A_noc.async_read(
                                 A,
                                 A_slice,
                                 A_tile_bytes,
@@ -194,7 +203,7 @@ TT_KERNEL void reader(
                     B_slice.reserve_back(B_slice_tiles);
                     if (B_mcast_num_dests > 0 && B_mcast_receiver) {
                         B_data_ready.set(INVALID);
-                        B_receivers_ready.up(noc, B_mcast_sender_x, B_mcast_sender_y, /*value=*/1);
+                        B_receivers_ready.up(B_noc, B_mcast_sender_x, B_mcast_sender_y, /*value=*/1);
                     }
                     for (uint32_t k_tile = 0; k_tile < B_rows_to_read; ++k_tile) {
                         const uint32_t B_row_first_tile =
@@ -202,7 +211,7 @@ TT_KERNEL void reader(
                         const uint32_t B_row_offset_bytes = k_tile * C_slice_N_padded_tiles * B_tile_bytes;
                         for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
                              ++n_tile) {
-                            noc.async_read(
+                            B_noc.async_read(
                                 B,
                                 B_slice,
                                 B_tile_bytes,
@@ -211,7 +220,10 @@ TT_KERNEL void reader(
                         }
                     }
                 }
-                noc.async_read_barrier();
+                A_noc.async_read_barrier();
+                if constexpr (B_noc_id != A_noc_id) {
+                    B_noc.async_read_barrier();
+                }
                 if constexpr (!A_borrowed && A_last_K_tile_valid_columns > 0) {
                     // K is not a tile multiple: in the last K chunk each row's last tile is A's last K tile, whose
                     // padding columns are zeroed once the reads have landed so they add nothing to C.
@@ -230,20 +242,20 @@ TT_KERNEL void reader(
                     } else {
                         A_receivers_ready.wait(A_mcast_num_dests);
                         A_receivers_ready.set(0);
-                        noc.async_write_multicast(
+                        A_noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(A_slice.get_write_ptr()),
                             MulticastEndpoint{},
                             A_slice_tiles * A_tile_bytes,
                             A_mcast_num_dests,
                             {},
-                            {.noc_x_start = A_mcast_sender_x,
-                             .noc_y_start = A_mcast_sender_y,
+                            {.noc_x_start = A_mcast_start_x,
+                             .noc_y_start = A_mcast_start_y,
                              .noc_x_end = A_mcast_end_x,
                              .noc_y_end = A_mcast_end_y,
                              .addr = A_slice.get_write_ptr()},
                             /*linked=*/true);
                         A_data_ready.set_multicast(
-                            noc, A_mcast_sender_x, A_mcast_sender_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
+                            A_noc, A_mcast_start_x, A_mcast_start_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
                     }
                 }
                 if constexpr (B_mcast_num_dests > 0) {
@@ -252,7 +264,7 @@ TT_KERNEL void reader(
                     } else {
                         B_receivers_ready.wait(B_mcast_num_dests);
                         B_receivers_ready.set(0);
-                        noc.async_write_multicast(
+                        B_noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(B_slice.get_write_ptr()),
                             MulticastEndpoint{},
                             B_slice_tiles * B_tile_bytes,
@@ -265,7 +277,7 @@ TT_KERNEL void reader(
                              .addr = B_slice.get_write_ptr()},
                             /*linked=*/true);
                         B_data_ready.set_multicast(
-                            noc, B_mcast_sender_x, B_mcast_sender_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
+                            B_noc, B_mcast_sender_x, B_mcast_sender_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
                     }
                 }
 
@@ -280,7 +292,11 @@ TT_KERNEL void reader(
         }
     }
     if constexpr (A_mcast_num_dests > 0 || B_mcast_num_dests > 0) {
-        noc.async_write_barrier();
-        noc.async_atomic_barrier();
+        A_noc.async_write_barrier();
+        A_noc.async_atomic_barrier();
+        if constexpr (B_noc_id != A_noc_id) {
+            B_noc.async_write_barrier();
+            B_noc.async_atomic_barrier();
+        }
     }
 }
