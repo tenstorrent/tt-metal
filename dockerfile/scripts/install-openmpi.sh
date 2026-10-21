@@ -125,6 +125,24 @@ if ! grep -q '^mca:pml:ucx:' <<<"${OMPI_INFO_OUT}"; then
 fi
 echo "==> Verified: pml/ucx present"
 
+# Default the PML to ob1 (TCP / shared memory) in the installed MCA params file.
+# pml/ucx stays compiled in but is opt-in (OMPI_MCA_pml=ucx or --mca pml ucx):
+# ULFM fault tolerance is only supported on ob1 and forcing pml/ucx under
+# "mpirun --with-ft ulfm" segfaults, so existing ULFM launch paths keep the
+# behaviour they had before UCX was added. One-sided (osc/ucx) is unaffected.
+MCA_PARAMS_CONF="${OMPI_PREFIX}/etc/openmpi-mca-params.conf"
+cat >> "${MCA_PARAMS_CONF}" <<'MCA_EOF'
+
+# tt-metal defaults (dockerfile/scripts/install-openmpi.sh):
+# UCX is opt-in for point-to-point; override with OMPI_MCA_pml=ucx / --mca pml ucx.
+pml = ob1
+MCA_EOF
+if ! grep -qx 'pml = ob1' "${MCA_PARAMS_CONF}"; then
+    echo "[ERROR] failed to set default pml = ob1 in ${MCA_PARAMS_CONF}" >&2
+    exit 1
+fi
+echo "==> Verified: default pml = ob1 set in ${MCA_PARAMS_CONF} (pml/ucx is opt-in)"
+
 echo "OpenMPI ${OMPI_VERSION} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then
     "${OMPI_PREFIX}/bin/mpicc" --version || true
