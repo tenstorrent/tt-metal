@@ -106,9 +106,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     the scalar form rejects a longer write, the tensor form writes only the row's pages.
                     Entry ``q`` names the physical page holding global positions ``[q * page, (q + 1) * page)``
                     in the pool of the chip at SP coordinate ``(q * page // chunk_local) % sp`` with
-                    ``chunk_local`` the per-chip chunk (``input_rows`` with a window, else the per-chip input seq) and
-                    ``sp`` the mesh extent along ``cluster_axis``: every
-                    write of a request must use the same ``chunk_local``. -1 is unmapped and its rows are not
+                    ``chunk_local`` the rows the call writes per chip (the input row window when one is given, else the
+                    per-chip input seq) and ``sp`` the mesh extent along ``cluster_axis``: every write of a request must
+                    use the same ``chunk_local``. -1 is unmapped and its rows are not
                     written; neither is an entry outside the pool, which is invalid. The tensor form does not check
                     ``slot_idx`` against the table's rows: a row past them is read from beyond the table, and its
                     writes land on arbitrary pool pages. The table's width is part of the program key, so a

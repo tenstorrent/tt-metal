@@ -2340,9 +2340,10 @@ def test_update_padded_kv_cache_paged_table_swap(mesh_device, path):
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_paged_row_end(mesh_device):
     """A metadata-path write that runs past the end of its table row (the host cannot bound it there) writes only the
-    pages the row maps. The row ends inside chip 0's window of the chunk, its width is not a whole DRAM read group, and
-    the padding after it in the row's DRAM page holds a valid page id: a wider table freed just before leaves it there,
-    and the narrow table reuses its memory. A lookup past the row's end would find that page and write it."""
+    pages the row maps. The row ends inside the table window chip 0 loads for the chunk, its width is not a whole
+    DRAM read group, and the padding after it in the row's DRAM page holds a valid page id: a wider table freed just
+    before leaves it there, and the narrow table reuses its memory. A lookup past the row's end would find that page
+    and write it."""
     sp_axis, tp_axis = 0, 1
     sp = mesh_device.shape[sp_axis]
     C, page_size, width = 128, 32, 18
@@ -2371,7 +2372,8 @@ def test_update_padded_kv_cache_paged_row_end(mesh_device):
     concat_dims[sp_axis] = 2
     concat_dims[tp_axis] = 1
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
-    # The chunk covers [512, 768): chip 0 writes pages 16-19, of which 18-19 lie past the row's end inside its window.
+    # The chunk covers [512, 768): chip 0 writes pages 16-19, of which 18-19 lie past the row's end inside its table
+    # window.
     kv_actual = 512
     torch.manual_seed(0)
     tt_input = _make_input(
@@ -2562,7 +2564,7 @@ def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is
     tt_input = _make_input(
         torch.randn(1, 1, C * sp, head_dim, dtype=torch.bfloat16), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, shard
     )
-    # A mid-slab start: the boundary chip's write straddles two slabs and loads both page windows; the slowest-chip
+    # A mid-slab start: the boundary chip's write straddles two slabs and loads both table windows; the slowest-chip
     # time includes it.
     kv_actual = 5 * C * sp + C // 2
 

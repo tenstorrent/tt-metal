@@ -12,9 +12,8 @@
 // layer l is entry pool_entry(p, l, num_layers). A request's row of the INT32 table maps every GLOBAL logical page q
 // (sequence positions [q * page, (q + 1) * page)) to a physical page in the pool of the chip at SP coordinate
 // (q * page / chunk_local) % sp along the cluster axis, or -1 when unmapped: positions are placed block-cyclically over
-// the sp coordinates in slabs of chunk_local (a chip's share of one chunk: the per-chip input seq of a write, or its
-// input row window), so every
-// write and read of a request must use the same chunk_local.
+// the sp coordinates in slabs of chunk_local (the rows a write puts on each chip: its input row window when it has one,
+// else the per-chip input seq), so every write and read of a request must use the same chunk_local.
 // One replicated row serves the whole mesh; each chip reads only its own entries.
 //
 // This is not the page-table format of paged_update_cache / SDPA, whose INT32 entries are device-local blocks of a
