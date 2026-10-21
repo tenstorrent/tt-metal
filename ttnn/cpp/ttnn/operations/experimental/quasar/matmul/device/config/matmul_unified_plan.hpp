@@ -107,6 +107,10 @@ struct MatmulUnifiedPlan {
     // DFB sizing; entry sizes are in bytes. Every entry holds one tile; C_slice / C_partials hold
     // C_entries_per_thread entries per thread (see above).
     bool packer_l1_acc_en = false;
+    // With packer L1 accumulation in C's own format and no activation on the finished sum, every K chunk adds
+    // straight onto the C slice's entries: no partials round trip, and the C slice is reserved once.
+    bool accumulate_in_C_slice = false;
+    bool has_fused_activation = false;
     tt::DataFormat A_format{};
     tt::DataFormat B_format{};
     tt::DataFormat C_format{};

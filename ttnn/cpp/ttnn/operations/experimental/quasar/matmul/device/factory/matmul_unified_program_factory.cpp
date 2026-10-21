@@ -361,6 +361,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"num_compute_threads", plan.num_compute_threads},
                 {"C_entries_per_thread", plan.C_entries_per_thread},
                 {"packer_l1_acc", plan.packer_l1_acc_en ? 1u : 0u},
+                {"accumulate_in_C_slice", plan.accumulate_in_C_slice ? 1u : 0u},
                 {"partials_format_differs", plan.C_partials_format != plan.C_format ? 1u : 0u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_C_slices"}},

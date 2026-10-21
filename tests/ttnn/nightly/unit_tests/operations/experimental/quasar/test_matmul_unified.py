@@ -802,6 +802,33 @@ def test_packer_l1_acc(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
     _check(out, _golden(a, b))
 
 
+@pytest.mark.parametrize("K_tiles", [2, 4], ids=["two_K_chunks", "four_K_chunks"])
+@pytest.mark.parametrize("C_slices_per_core", [1, 2], ids=["one_C_slice", "two_C_slices"])
+def test_accumulate_in_C_slice_then_another_op(device, K_tiles, C_slices_per_core):
+    """With packer_l1_acc and a bf16 C every K chunk adds straight onto the C slice, which goes to the writer one
+    subblock at a time on the last K chunk; the next program on the same cores must not find L1 accumulation on."""
+    M, K, N = 2 * TILE, K_tiles * TILE, 4 * C_slices_per_core * TILE
+    torch.manual_seed(12)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=1,
+        subblock_M_tiles=2,
+        subblock_N_tiles=1,
+    )
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out_t = ttnn.experimental.quasar.matmul(
+        a_t, b_t, program_config=config, compute_kernel_config=_hifi4(device, packer_l1_acc=True)
+    )
+    relu_t = ttnn.relu(out_t)
+    golden = _golden(a, b)
+    _check(ttnn.to_torch(out_t), golden)
+    _check(ttnn.to_torch(relu_t), torch.relu(golden))
+
+
 # ----------------------------------------------------------------------------------------------------
 # Fused bias and activation: applied to the finished sum in DST, once, before the final pack
 # ----------------------------------------------------------------------------------------------------
