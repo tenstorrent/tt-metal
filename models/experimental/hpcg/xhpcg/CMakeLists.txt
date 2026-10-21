@@ -6,14 +6,15 @@
 # with its user-replaceable functions replaced by the files in src/ (which call the P150 implementation in tt/).
 #
 #   cmake -S models/experimental/hpcg/xhpcg -B build_xhpcg -G Ninja -DCMAKE_CXX_COMPILER=clang++-20 \
-#         -DTT-NN_DIR=$TT_METAL_HOME/build/lib/cmake/tt-nn
+#         "-DCMAKE_PREFIX_PATH=$TT_METAL_HOME/build/lib/cmake;$TT_METAL_HOME/build/share/cmake"
 #   cmake --build build_xhpcg -j
-#   TT_METAL_HOME=... build_xhpcg/xhpcg --nx=104 --rt=60     (run from any directory; it writes its report there)
+#   TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME TT_METAL_INSPECTOR=0 build_xhpcg/xhpcg --nx=104 --rt=60
+#   (run from any directory; it writes its report there)
 
 cmake_minimum_required(VERSION 3.24)
 project(xhpcg LANGUAGES CXX)
 
-find_package(TT-NN CONFIG REQUIRED)  # TT-Metal's install tree: TT-NN_DIR=<tt-metal>/build/lib/cmake/tt-nn
+find_package(TT-NN CONFIG REQUIRED)  # TT-Metal's build tree, found through CMAKE_PREFIX_PATH (above)
 find_package(OpenMP)
 if(NOT OpenMP_CXX_FOUND)
     # clang without its own OpenMP runtime: GCC's (libgomp), which clang supports

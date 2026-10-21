@@ -39,8 +39,10 @@ log (`hpcg*.txt`) in the current directory.
 
 ## Limits
 
-- **fp32.** The card computes in fp32 (its compute cores have no fp64). HPCG's TestSymmetry measures in units of
-  fp64 rounding and fails for any fp32 solver, so the report says INVALID.
+- **fp32.** The card computes in fp32 (its compute cores have no fp64); HPCG's rules require fp64.
+- **TestCG fails.** Without the preconditioner, CG needs 17 iterations at 104³ and 16 at 192³; HPCG allows 12
+  (with the preconditioner it needs 2, as allowed). This is why the report says INVALID. TestSymmetry passes
+  (departure 0 at 104³, 0.079 at 192³). The cause is not yet confirmed; fp32 rounding is the likely one.
 - **One card, cubic grids.** One process; nx = ny = nz, a multiple of 8.
 - **Per-kernel times.** HPCG's report splits the CG time into DDOT, WAXPBY, SpMV and MG. The iteration runs as one
   trace, so only the total is measured; the split entries stay 0.
