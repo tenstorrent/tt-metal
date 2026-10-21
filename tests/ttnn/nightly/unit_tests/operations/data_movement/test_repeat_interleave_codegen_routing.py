@@ -164,3 +164,106 @@ def test_forced_codegen_refuses_non_default_tile(device, expect_error, tile):
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, 2, 1)
+
+
+# Hand-added: bfloat8_b is in codegen scope for TILE outer dims only. Page replication moves each
+# shared-exponent block whole, so the result is bit-identical to repeating the dequantized values.
+# The input is signed and spans several decades per row, with exact zeros and an outlier in each
+# row, so a re-blocked exponent or a sign/zero mishandling would show up as a changed value.
+def _make_block_float_input(shape):
+    scale = 10.0 ** torch.randint(-3, 4, shape[:-1] + [1]).to(torch.float32)
+    x = (torch.rand(shape, dtype=torch.float32) * 2 - 1) * scale
+    x[..., ::7] = 0.0
+    x[..., 1::11] *= 64
+    return x.to(torch.bfloat16)
+
+
+def _bf8_id(shape, kwargs):
+    return f"{shape}|dim={kwargs['dim']}&repeats={kwargs['repeats']}|tile-bfloat8_b"
+
+
+_BF8_OUTER = [
+    ([1, 1, 32, 32], {"repeats": 2, "dim": 0}),
+    ([2, 3, 32, 64], {"repeats": 3, "dim": 1}),
+    ([2, 3, 32, 64], {"repeats": 3, "dim": -4}),
+    # H and W are not tile multiples, so the repeated pages carry tile padding.
+    ([2, 3, 4, 8], {"repeats": 3, "dim": 1}),
+    ([3, 64, 32], {"repeats": 2, "dim": -3}),
+    # More pages than cores, and an output page count that is not a multiple of the reader batch.
+    ([3, 5, 64, 96], {"repeats": 3, "dim": 1}),
+]
+_BF8_OUTER_IDS = [_bf8_id(shape, kwargs) for shape, kwargs in _BF8_OUTER]
+
+
+@pytest.mark.parametrize("shape,kwargs", _BF8_OUTER, ids=_BF8_OUTER_IDS)
+def test_repeat_interleave_bfloat8_b_outer_dim_is_exact_on_codegen(device, shape, kwargs):
+    xt = ttnn.from_torch(_make_block_float_input(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    golden = torch.repeat_interleave(ttnn.to_torch(xt).float(), kwargs["repeats"], dim=kwargs["dim"])
+    # The forced leg throws outside the gate, so it also proves bfloat8_b TILE is admitted.
+    forced = _force_codegen(xt, **kwargs)
+    assert forced.dtype == ttnn.bfloat8_b
+    assert torch.equal(ttnn.to_torch(forced).float(), golden)
+    # Native is bit-identical here, so the values cannot tell the routed leg apart from a fallback;
+    # the forced call above cached the codegen program, so an unchanged count means codegen served it.
+    entries_before = device.num_program_cache_entries()
+    assert entries_before > 0, "program cache is disabled; the routing assertion below would be vacuous"
+    routed = ttnn.repeat_interleave(xt, **kwargs)
+    msg = "auto did not route a bfloat8_b TILE outer-dim repeat to codegen (program cache grew)"
+    assert device.num_program_cache_entries() == entries_before, msg
+    assert torch.equal(ttnn.to_torch(routed).float(), golden)
+
+
+# bfloat8_b pages are not a power of two (1088 B), so every input/output buffer-type pairing is
+# worth running.
+@pytest.mark.parametrize(
+    "in_mem,out_mem",
+    [("dram", "dram"), ("l1", "l1"), ("l1", "dram"), ("dram", "l1")],
+    ids=["dram_dram", "l1_l1", "l1_dram", "dram_l1"],
+)
+def test_repeat_interleave_bfloat8_b_outer_dim_memory_configs(device, in_mem, out_mem):
+    mems = {"dram": ttnn.DRAM_MEMORY_CONFIG, "l1": ttnn.L1_MEMORY_CONFIG}
+    shape, kwargs = [2, 3, 32, 64], {"repeats": 3, "dim": 1}
+    xt = ttnn.from_torch(
+        _make_block_float_input(shape),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mems[in_mem],
+    )
+    golden = torch.repeat_interleave(ttnn.to_torch(xt).float(), kwargs["repeats"], dim=kwargs["dim"])
+    out = _force_codegen(xt, **kwargs, memory_config=mems[out_mem])
+    assert out.dtype == ttnn.bfloat8_b
+    assert out.memory_config().buffer_type == mems[out_mem].buffer_type
+    assert torch.equal(ttnn.to_torch(out).float(), golden)
+
+
+# Route only, no value assertion: native re-blocks the shared exponents when it interleaves within
+# a tile, so its bfloat8_b values are not a golden for a sub-tile dim.
+_BF8_SUB_TILE = [
+    ([1, 1, 32, 64], {"repeats": 2, "dim": 3}),
+    ([1, 1, 64, 32], {"repeats": 2, "dim": 2}),
+    ([2, 3, 4, 8], {"repeats": 2, "dim": 2}),
+    ([2, 3, 4, 8], {"repeats": 2, "dim": 3}),
+]
+
+
+@pytest.mark.parametrize("shape,kwargs", _BF8_SUB_TILE, ids=[_bf8_id(shape, kwargs) for shape, kwargs in _BF8_SUB_TILE])
+def test_repeat_interleave_bfloat8_b_sub_tile_dim_routes_to_native(device, expect_error, shape, kwargs):
+    xt = ttnn.from_torch(_make_block_float_input(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Primes the cache with the native program, so an unchanged count means native served the call.
+    _force_native(xt, **kwargs)
+    entries_before = device.num_program_cache_entries()
+    assert entries_before > 0, "program cache is disabled; the routing assertion below would be vacuous"
+    ttnn.repeat_interleave(xt, **kwargs)
+    msg = "auto routed a bfloat8_b sub-tile repeat to codegen (program cache grew); expected native fallback"
+    assert device.num_program_cache_entries() == entries_before, msg
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, **kwargs)
+
+
+def test_forced_codegen_refuses_bfloat4_b(device, expect_error):
+    xt = ttnn.from_torch(
+        _make_block_float_input([2, 3, 32, 64]), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, 3, 1)
