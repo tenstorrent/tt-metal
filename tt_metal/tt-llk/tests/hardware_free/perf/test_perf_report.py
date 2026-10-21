@@ -1089,6 +1089,104 @@ def test_tt1xx_l1_slot_still_decodes_through_the_tables(monkeypatch):
     assert counters.decode_config_word(word) == (3, "L1", 2, "L1_0_UNPACKER_0", 0)
 
 
+def _fake_zone_l1(monkeypatch, zone, sync_word):
+    """L1 holding one zone's readout (one FPU counter, count 42) under `sync_word`; every other word reads 0."""
+    import helpers.counters as counters
+
+    monkeypatch.setitem(counters.COUNTER_BANK_NAMES, 1, "FPU")
+    monkeypatch.setitem(counters.COUNTER_NAMES, "FPU", {5: "FPU_COUNTER"})
+    words = {counters._zone_sync_ctrl_addr(zone): sync_word}
+    words[counters._zone_config_addr(zone)] = (
+        counters.PERF_CFG_VALID_BIT | 5 << counters.PERF_CFG_COUNTER_SHIFT | 1
+    )
+    data = counters._zone_data_addr(zone)
+    words[data + 4] = 1000  # FPU bank cycles
+    words[data + 4 * TestConfig._PERF_COUNTERS_BANK_CYCLES_WORDS] = 42
+    monkeypatch.setattr(
+        counters,
+        "read_words_from_device",
+        lambda location, addr, word_count: [
+            words.get(addr + 4 * i, 0) for i in range(word_count)
+        ],
+    )
+    return counters
+
+
+def test_counted_zone_reads_this_launchs_readout(monkeypatch):
+    counters = _fake_zone_l1(monkeypatch, 1, 0xFF | 7 << 8)
+    df = counters.read_counters(zones=0b10, token=7)
+    assert df[["zone", "bank", "counter_name", "cycles", "count"]].values.tolist() == [
+        ["ZONE_1", "FPU", "FPU_COUNTER", 1000, 42]
+    ]
+
+
+@pytest.mark.parametrize(
+    "sync_word", [0, 0xFF | 6 << 8, 0x7F | 7 << 8], ids=["unread", "older", "partial"]
+)
+def test_counted_zone_without_its_readout_fails(monkeypatch, sync_word):
+    """#58719: a counted window without this launch's readout must fail the test, not reach the report blank."""
+    counters = _fake_zone_l1(monkeypatch, 1, sync_word)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        counters.CounterReadoutMissing, match="ZONE_1"
+    ):
+        counters.read_counters(zones=0b10, token=7)
+
+
+def test_unused_zone_is_skipped_without_a_token(monkeypatch):
+    counters = _fake_zone_l1(monkeypatch, 1, 0)
+    assert counters.read_counters().empty
+
+
+def test_launch_word_matches_the_device_headers(monkeypatch):
+    """The host's launch word (test_config.py) and the no counter code scan mirror counters.h, whose Wormhole and
+    Blackhole register is metal's STREAM_SCRATCH_1 of overlay stream 0."""
+    import re
+
+    from helpers.chip_architecture import ChipArchitecture
+    from helpers.counters import _parse_uint
+    from helpers.perf.no_counter_code import REGISTERS
+
+    text = LLK_COUNTERS_HEADER.read_text()
+    assert _parse_uint(text, "LAUNCH_TOKEN_SHIFT") == TestConfig._LAUNCH_TOKEN_SHIFT
+    indices = re.search(
+        r"#if defined\(ARCH_WORMHOLE\)\s*constexpr std::uint32_t LAUNCH_WORD_SCRATCH_INDEX = (\d+);\s*"
+        r"#else\s*constexpr std::uint32_t LAUNCH_WORD_SCRATCH_INDEX = (\d+);",
+        text,
+    )
+    assert indices, "counters.h LAUNCH_WORD_SCRATCH_INDEX not found"
+    monkeypatch.setattr(TestConfig, "runs_on_ttsim", staticmethod(lambda: False))
+    metal = LLK_COUNTERS_HEADER.parents[4] / "hw" / "inc" / "internal" / "tt-1xx"
+    for arch, chip, index in (
+        ("wormhole", ChipArchitecture.WORMHOLE, indices.group(1)),
+        ("blackhole", ChipArchitecture.BLACKHOLE, indices.group(2)),
+    ):
+        overlay = (metal / arch / "noc" / "noc_overlay_parameters.h").read_text()
+        base = int(
+            re.search(
+                r"#define NOC_OVERLAY_START_ADDR (0x[0-9A-Fa-f]+)", overlay
+            ).group(1),
+            16,
+        )
+        scratch = int(
+            re.search(r"#define STREAM_SCRATCH_1_REG_INDEX (\d+)", overlay).group(1)
+        )
+        assert int(index) == scratch
+        assert _parse_uint(text, "LAUNCH_WORD_OVERLAY_BASE") == base
+        monkeypatch.setattr(TestConfig, "CHIP_ARCH", chip)
+        assert TestConfig.counted_zones_address() == base + scratch * 4
+        assert base + scratch * 4 in REGISTERS[arch]
+    monkeypatch.setattr(TestConfig, "CHIP_ARCH", ChipArchitecture.QUASAR)
+    quasar_word = TestConfig.counted_zones_address()
+    assert (
+        quasar_word
+        == TestConfig.PERF_COUNTERS_ZONES_BASE
+        + TestConfig.PERF_COUNTERS_MAX_ZONES * TestConfig.PERF_COUNTERS_ZONE_SIZE
+    )
+    assert (
+        quasar_word + 4 <= 0x16AFF0
+    )  # counters.h: the layout ends below the profiler region
+
+
 def test_l1_client_rows_yield_their_own_metric():
     from helpers.metrics import compute_metrics
     from tt_llk_perf import metrics as mc
