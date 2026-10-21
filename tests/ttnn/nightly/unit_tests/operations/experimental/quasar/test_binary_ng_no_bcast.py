@@ -29,8 +29,10 @@ add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run)
 """
 
 import pytest
+import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _on_quasar,
     _run,
@@ -410,3 +412,33 @@ def test_no_bcast_mixed_interleaved_out(device, op_name, a_mem, b_mem, out_mem, 
     # count grows. bf16 add => FPU compute kernel; bf16 multiply => SFPU kernel. Grids fit the Quasar 8x4.
     pcc = 0.99 if op_name == "multiply" else None
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, shape=shape, pcc=pcc)
+
+
+@pytest.mark.parametrize("tiles_per_core", [5, 9, 16], ids=lambda t: f"{t}tiles_per_core")
+@pytest.mark.parametrize(
+    "a_dtype, b_dtype",
+    [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)],
+    ids=["fp32_bf16", "bf16_fp32"],
+)
+def test_no_bcast_sharded_mixed_fp32_bf16_add(device, a_dtype, b_dtype, tiles_per_core):
+    num_cores = 4
+    shard = [tiles_per_core * 32, 32]
+    shape = (num_cores * shard[0], shard[1])
+    mem_config = _height_sharded_config(shard, ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, num_cores - 1))}))
+
+    torch.manual_seed(0)
+    a = torch.randn(shape, dtype=torch.float32)
+    b = torch.randn(shape, dtype=torch.float32)
+    a_tt = ttnn.from_torch(a, dtype=a_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    b_tt = ttnn.from_torch(b, dtype=b_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+
+    # Golden from the values the device holds (bf16 operands are rounded on upload).
+    golden = ttnn.to_torch(a_tt).float() + ttnn.to_torch(b_tt).float()
+    out = ttnn.to_torch(ttnn.experimental.quasar.add(a_tt, b_tt, memory_config=mem_config, dtype=ttnn.float32)).float()
+
+    assert_with_pcc(out, golden, 0.9999)
+    # Per-tile check so a failure names the corrupted tile rather than just a low PCC.
+    out_tiles = out.reshape(num_cores * tiles_per_core, 32, 32)
+    golden_tiles = golden.reshape(num_cores * tiles_per_core, 32, 32)
+    bad = [i for i in range(out_tiles.shape[0]) if not torch.allclose(out_tiles[i], golden_tiles[i], atol=1e-2)]
+    assert not bad, f"wrong tiles (global index): {bad}"
