@@ -45,6 +45,6 @@ of those `diagnostic` in a comment on its line.
 ## Rules
 
 - No device except through the gate command in the brief (`scripts/run_safe_pytest.sh`, foreground).
-- Never change a threshold, a frozen test, a golden, `tasks.yaml`, `state.json` or `results/`.
+- Never change a limit, a frozen test, a golden, `tasks.yaml`, `state.json` or `results/`.
 - No refactoring beyond moving switches. If a value is unclear, leave it and list it in `BREADCRUMBS.md`.
 - Finish with a list in `bringup/BREADCRUMBS.md`: every switch, its default, where it was before.

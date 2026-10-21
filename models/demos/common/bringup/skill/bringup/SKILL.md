@@ -253,24 +253,34 @@ Owner rules on precision (keep them, word for word in substance):
 2. Every device test runs the shipped realistic settings; the CPU reference is full precision; the margin is the real
    reference's precision (its real dtypes, roundings and accumulation, e.g. fp32 accumulation wherever the reference
    accumulates in fp32).
+3. Bit-identity with an older device path is never a criterion and never a reason to reject an op or fusion; a change
+   is judged by speed and the accuracy metrics only (determinism of the same path stays required).
+4. Bring-up ops before stock TTNN ops when they do the job (e.g. ttnn.bringup.rms_norm is much faster than stock
+   ttnn.rms_norm).
+5. Packer L1 accumulation adds in the packed format; it is not a substitute for fp32 accumulation unless the packer
+   writes fp32.
+6. A deferred part of an owner rule is queued at once as a framework task or fix job, never left only in a hand-off
+   document.
 
 Owner rule (stated many times; F80, F128). The device is always compared with the CPU reference at FULL precision
 (fp32, every quantize-dequantize of the shipped code off: `numerics: native`), never with the reference's rounded
 arithmetic. The reference at its shipped precision (its dtypes and roundings, `numerics: official`) only measures how
 far a real implementation may land from the truth, and every limit is calib x that, per step and end to end:
 - per step (component, swap): the noise floor below;
-- end to end (ladder per layer, state and top-k overlap, final hidden, top-5; the contract's KV read-back; X.3; Z.1):
-  calib (`e2e.calib`, 2.0) x the official golden's drift from the full-precision golden on the same rung
-  (`<rung>-official`, `drift.json`; G tasks make all three with `generate_golden --set`; testing/e2e_limits.py).
-There is no fixed end-to-end bar and no silent fallback: a model whose hooks.reference has no `numerics` switch stops
-(unless `reference.no_rounding: true`), and a selftest fails if any generated device gate holds a fixed accuracy
-number. Never propose a waiver, a golden that follows the device's numerics, or a "match the rounded reference" check:
-check first that the comparison is against full precision with the drift as margin. A deferred part of an owner rule
-is queued at once (a framework task or a fix job), never left in a hand-off (F80 deferred the end-to-end half; it was
-lost for five days).
+- end to end (ladder per layer, state, final hidden, top-5; the contract's KV read-back; X.3; Z.1): calib
+  (`e2e.calib`, 2.0) x the official reference's drift from the full-precision golden, measured the way the device runs
+  that rung (F134: the golden's prefix loaded, a gapped run fed from the golden; `drift-<rung>.json`, written by the G
+  task with `generate_golden --set` and pinned in every end-to-end gate; testing/e2e_limits.py). Float tensors gate on
+  their rel L2 (`err_layer_L*`, `err_state_*`, `err_final_hidden`), selections on the missed fraction or overlap; PCC
+  is a diagnostic (F135). A reference whose official numerics move no layer stops the goldens ("no margin source",
+  F136).
+There is no fixed accuracy number anywhere and no silent fallback (F138): a model whose hooks.reference has no
+`numerics` parameter stops, a test without a noise floor fails, and the ledger and every gate refuse an accuracy
+metric gated on a number. Never propose a golden that follows the device's numerics, a "match the rounded reference"
+check or a fixed number; propose a waiver only for a device-format limit on a correct target, with the evidence, for
+the owner to sign. (F80 deferred the end-to-end half; it was lost for five days: owner rule 6.)
 
-Per step. Every accuracy limit of the component and swap tests is calib (2.0; 3.5 for the low
-precision kinds) x the step's noise floor on the same comparison: the larger of the official code's own arithmetic
+Per step. Every accuracy limit of the component and swap tests is calib (2.0) x the step's noise floor on the same comparison: the larger of the official code's own arithmetic
 on the same inputs (task R.5 taps it per step; the reference role writes the hook and `official_taps.yaml`) and the
 input nudge (the fp32 step on its inputs moved inside their official dtype's rounding cell; testing/noise_floor.py),
 and never below one rounding of the output to its official dtype. A selection flip must be explained by the nudge. The
@@ -284,8 +294,8 @@ floor and no bug or lower-precision choice explains it at the device's normal se
 emulation (multi-pass or split matmuls, exact kernels, CPU-side arithmetic): no production run would ever allow
 them, and a model brought up that way is useless. Leave the step as it is, with a note (a known_issues entry with
 the evidence; the owner's waiver in `tests.waivers`, reported on the dashboard and in the end-of-run report), keep
-the run going, and debug it once the full bring-up produces output tokens, where its real effect shows. The gate metrics read `>= limit` (the `<metric>_limit` the test
-records). A fixed bar either lets real errors through or, when the reference's own dtypes cannot meet it, makes the
+the run going, and debug it once the full bring-up produces output tokens, where its real effect shows. The gate metrics read `<= limit` / `>= limit` (the `<metric>_limit`
+the test records). A fixed bar either lets real errors through or, when the reference's own dtypes cannot meet it, makes the
 agents raise the device precision above the reference to clear it, which the owner rejects: match the reference's
 precision, never exceed it to pass a test. When a gate fails on a fixed number, the number is the bug: fix the
 framework (a pause, a selftest), then queue a fix job that takes back any precision raise it forced.
@@ -330,10 +340,11 @@ Never:
 - edit anything in the tree while an agent step runs, except your own files (above). `python -m
   models.demos.common.bringup.orchestrator pause --spec <spec>` stops it before its next task; the path check would
   charge your edit to the running agent;
-- approve the intake, plan or performance picks for the person, loosen a threshold, or edit a frozen test. When the
+- approve the intake, plan or performance picks for the person, loosen a limit, or edit a frozen test. When the
   person delegates the picks, add each as a perf task (step `perf`, role `perf`, `brief.details` with the exact
-  change, deps on X.2 or the previous pick, gate = an accuracy rung plus the profile with a time threshold below the
-  X.1 baseline); perf tasks do not void the plan approval;
+  change, deps on X.2 or the previous pick, gate = an accuracy rung with every accuracy metric `<= limit` / `>= limit`
+  (never a number; the gate refuses one) plus the profile with a time threshold below the X.1 baseline); perf tasks do
+  not void the plan approval;
 - brief a perf pick to measure anything beyond the e2e chunk time and the changed section's time, before and after,
   from the plain profile (minutes). Per-op mode (BRINGUP_PROFILE_OPS) syncs after every ttnn call, about a minute per
   layer: it runs on the representative layers only, never the whole model (Xing P.3: a per-op before/after over 40

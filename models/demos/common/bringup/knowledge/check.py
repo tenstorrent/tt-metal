@@ -109,7 +109,25 @@ def check_known_issues(path: Path) -> tuple[list[str], int]:
                 errs.append(f"{sec}: entry {it[:60]!r} lacks {miss}")
             if body_len(it) > SHARED_MAX_CHARS:
                 errs.append(f"{sec}: entry {it[:60]!r} is {body_len(it)} chars (max {SHARED_MAX_CHARS})")
+            errs += [f"{sec}: entry {it[:60]!r}: {e}" for e in precision_raise(it)]
     return errs, sum(len(v) for v in ent.values())
+
+
+RAISE = re.compile(
+    r"\bHiFi4\b|fp32 (acc|accumulation|dest|intermediates?)\b|high_precision|exact (exp|kernels?|matmuls?)\b", re.I
+)
+REASON = ("only where the reference", "owner")
+
+
+def precision_raise(entry: str) -> list[str]:
+    """F141 (owner, audit V19): a Fix that raises precision (HiFi4, fp32, exact) says it is only where the reference
+    computes that way, or cites the owner's decision; never above the reference."""
+    fix = entry.split("Fix:", 1)[1].split("Applies to:", 1)[0] if "Fix:" in entry else ""
+    if RAISE.search(fix) and not any(r in fix.lower() for r in REASON):
+        return [
+            "its Fix raises precision (HiFi4 / fp32 / exact) without 'only where the reference ...' or the owner's decision"
+        ]
+    return []
 
 
 def check_model_known_issues(path: Path) -> tuple[list[str], int]:

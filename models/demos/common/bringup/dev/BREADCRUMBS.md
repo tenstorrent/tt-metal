@@ -1592,3 +1592,20 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   - Not done: the 122 existing math cases (their tests read case["pcc"] / ["rtol"]) are F140's migration.
   - Selftests: test_fork_cases.py (the floor on a matmul: correct passes, 1 % scale fails, bfp8 wider; the lint; the
     legacy cases as xfail strict until F140).
+- F141 (owner, 2026-10-21; audit section 3, V15, V16, V19, V25, V27-V29): the text says what the framework does.
+  - Skill accuracy section: the owner's six precision rules (no max-precision device path; shipped settings vs the
+    full-precision reference with the real reference's precision as margin; bit-identity never a criterion; bring-up
+    ops before stock TTNN; packer L1 accumulation is not fp32 accumulation unless the packer writes fp32; a deferred
+    part of an owner rule queued at once); the end-to-end margin as F134 / F135 / F136 build it; no fixed number
+    anywhere (F138); waivers only for a device-format limit on a correct target, owner-signed; perf picks gate
+    accuracy on `limit` only. Agents: rule 7 (packer L1), rule 16 (bring-up ops, the rms_norm example), the test role
+    (no numeric THRESHOLD). Briefs: test, reference (numerics, R.5) and fix roles. README, serving-contract, the
+    settings audit, the prior's test text, the accept message, the spec template (no `thresholds:`, which F138
+    refuses), golden.py's docstring.
+  - Knowledge: K-22, K-25, K-27, K-30, K-31, K-39, K-47 and repo_map's routed experts no longer prescribe raises above
+    the reference; knowledge/check.py refuses a shared entry whose Fix raises precision (HiFi4, fp32 accumulation /
+    dest / intermediates, high_precision, exact kernels) without "only where the reference ..." or the owner's decision.
+  - Dashboard: CPU-bridged runs are marked provisional (trail label, final row); per-layer limits came with F138.
+  - Selftests: test_text_guard.py (no stale phrase in agents / skills / briefs / README / templates / knowledge /
+    orchestrator text; the six owner rules present in the skill), test_dashboard_limits.py (the trail's limits, no
+    fixed line).
