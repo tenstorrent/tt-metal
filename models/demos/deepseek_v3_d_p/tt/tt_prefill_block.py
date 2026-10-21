@@ -211,7 +211,7 @@ class TtPrefillBlock(LightweightModule):
         # Build FFN or MoE cache
         if is_moe:
             # Use static method (no device copy!)
-            mesh_config = extract_mesh_config(mesh_device)
+            mesh_config = extract_mesh_config(mesh_device, sp_axis)
             sp_factor = mesh_device.shape[sp_axis]
             seq_len_per_chip = seq_len // sp_factor
             experts_per_chip, _, _, _ = compute_constants(
@@ -241,6 +241,7 @@ class TtPrefillBlock(LightweightModule):
                 routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
                 latent_weights=state_dict.get("latent_weights"),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                sp_axis=sp_axis,
             )
         else:
             # Use static method (no device copy!)
@@ -249,6 +250,7 @@ class TtPrefillBlock(LightweightModule):
                 mesh_device=mesh_device,
                 cache_path=cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                tp_axis=tp_axis,
             )
 
         logger.info(f"Cache built for layer {layer_idx}")
@@ -297,8 +299,8 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
-        # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
-        # axis independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
+        # Per-axis CCL topology. A (mesh axis 0, mesh axis 1) tuple configures each mesh axis
+        # independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
         # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
         # on cluster_axis=tp_axis) must stay Linear even when the SP-axis MoE dispatch/combine
         # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
@@ -306,9 +308,10 @@ class TtPrefillBlock(LightweightModule):
         # has no physical fabric edge. MoE receives the full `topology` and splits row/col itself.
         assert (
             not isinstance(topology, tuple) or len(topology) == 2
-        ), f"per-axis topology must be a 2-tuple (sp_axis_0, tp_axis_1), got {topology!r}"
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
-        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
+        ), f"per-axis topology must be a 2-tuple (mesh axis 0, mesh axis 1), got {topology!r}"
+        tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis
+        self.tp_axis = tp_axis
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -441,6 +444,7 @@ class TtPrefillBlock(LightweightModule):
                 emb_dim=emb_dim,
                 num_links=num_links,
                 topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
+                tp_axis=tp_axis,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
                 # Same rule as the MoE shared expert in _build_moe: only Kimi-K3 names a
@@ -475,7 +479,7 @@ class TtPrefillBlock(LightweightModule):
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
     ):
-        mesh_config = extract_mesh_config(mesh_device)
+        mesh_config = extract_mesh_config(mesh_device, sp_axis)
         sp_factor = mesh_device.shape[sp_axis]
         seq_len_per_chip = seq_len // sp_factor
 
@@ -556,6 +560,7 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            sp_axis=sp_axis,
         )
 
     def set_trace_controller(self, controller):
@@ -814,11 +819,11 @@ class TtPrefillBlock(LightweightModule):
 
     def _dense_ffn_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
         """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally)."""
-        if self.mesh_device.shape[1] > 1:
+        if self.mesh_device.shape[self.tp_axis] > 1:
             gathered = ttnn.all_gather(
                 ffn_norm_out,
                 dim=-1,
-                cluster_axis=1,
+                cluster_axis=self.tp_axis,
                 num_links=self.num_links,
                 topology=self.topology,
             )
