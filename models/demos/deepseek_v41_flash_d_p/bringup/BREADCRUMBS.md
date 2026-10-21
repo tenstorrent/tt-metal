@@ -2355,3 +2355,49 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   steps no longer use it (they call `self._fp8_linear`). reference/test_numerics.py makes every K quantizer raise
   under native.
 - Reran the gate unchanged (result in the summary below / results/FIX.6.json).
+
+## FIX.7 (overseer fix, attempt 1): official numerics at the GPU's dtype (bf16 activations)
+- `DS41Reference(numerics="official", dtype=torch.bfloat16)` now computes like DeepSeek's GPU code (generate.py's bf16
+  default dtype): arithmetic stays fp32, and a value is rounded to bf16 exactly where model.py holds it in bf16
+  (`_r`; ds41_ref.py docstring "Numerics" lists every point): streams at every unpack (so an fp32 golden input reads as
+  the GPU's bf16 stream), engram rows, every fp8 / fp4 / bf16 GEMM output, every RMSNorm output, the hc_pre collapses,
+  RoPE'd q / kv / index q / latent / index key, sparse_attn's bf16 P (kernels.attend on bf16 q) and output, the
+  inverse-RoPE'd output, wo_a, hc_post outputs, the experts' h before w2, moe_add. fp32 stays where model.py computes
+  in fp32: mHC mixes + Sinkhorn, ratio-2 compressor wkv / wgate / pooling (and compress_partial), router, the routed
+  experts' fp32 sum, attention scores / softmax statistics, pending pre, logits. DS41-38's compressor bf16 points
+  (bf16 latent before and after the norm, bf16 wk / k_norm, RoPE into bf16) are exactly these.
+- `_mm16`: the GEMMs model.py runs on bf16 x and a bf16 weight (wo_a, ratio-1 compressor wkv, indexer wk /
+  weights_proj) and the index-score einsum + relu x weights + head sum run on bf16 tensors (K.linear / K.grouped_out
+  / K.index_score_tile tiles, DS41-1). First version used fp32 GEMMs rounded once: every step bit-exact except
+  attention (99.9 % equal, rel 9e-5..1.6e-4), block outputs vs the oracle rel 3.6e-4 / 3.3e-3 / 7.7e-3 / 1.1e-2 at
+  L0-L3. Cause: CPU bf16 einsum and fp32 + one rounding differ on 0.03 % of outputs (both rel 1.659e-3 vs fp64,
+  probe of [256, 8, 4096] x [8, 1024, 4096]); fp8 q-dq flips grow it (DS41-91). With `_mm16` everything is bit-exact.
+- native and official fp32 are untouched: `_r` is the identity there, `_mm16` is the old `mm(x.float(), w)` /
+  `K.grouped_out(o, w)`. Checked against a copy of the pre-FIX.7 ds41_ref.py, real checkpoint, 512 tokens, spec layers:
+  native 144 / 144 boundaries and official fp32 144 / 144 equal bit for bit. native refuses dtype bf16;
+  `with_numerics("native")` is always fp32, `with_numerics("official", dtype)` picks the official dtype.
+- Gate (CPU): R.2 official L00-L24 maxabs 0, logits pcc 1.0, top1 1.0; R.3 official and native chunked vs one-shot
+  hidden pcc 1.000000000 / 0.999998146, state min 1.000000000, graph replay 0 for all 8 block types.
+- reference/test_official_bf16.py (CPU, 4 tests, both checkpoints pass): (1) every step of layers 0-3 on the oracle's
+  own inputs (official_taps.capture: build_oracle at bf16 = hooks.hf_model(spec, None)'s configuration, first 4
+  blocks, one-shot 512 tokens) equals model.py at bf16: rel 0, equal 1.000000, indexer top-k overlap 1.0; control: the
+  fp32 official misses L0 attn_norm by 1.68e-3 (0.86 bf16 roundings, bound 0.5). (2) block outputs end to end: rel 0
+  at L0-L3 (bound 3 roundings). (3) native from the bf16 ref == native built at fp32 (bytes), native at bf16 refused.
+  (4) report of official vs native at 4096 (below).
+- The new margins, scaled quietbox_2x2, rel = ||official - native|| / ||native||:
+  | 4096 one-shot | L0 | L1 | L2 | L3 | L14 | L20 | L21 | L24 | final_norm |
+  |---|---|---|---|---|---|---|---|---|---|
+  | official bf16 | .0286 | .0361 | .0528 | .0752 | .1213 | .1838 | .1718 | .1983 | .2165 |
+  | official fp32 | .0285 | .0354 | .0523 | .0738 | .1204 | .1836 | .1703 | .1962 | .2145 |
+  reference.drift.compute(s4096) (the framework's margin, chunked 2048 as the ladder, gapped runs fed from the native
+  golden; run with the file write skipped, nothing written into the golden), layer_L*: bf16 / fp32
+  L0 .0281 / .0273, L1 .0367 / .0355, L2 .0535 / .0526, L3 .0779 / .0762, L14 .0602 / .0622, L20 .0260 / .0254,
+  L21 .0632 / .0629, L24 .0225 / .0218 (rel_res one bf16 rounding .00166); states: window_kv .029-.067,
+  compress_kv .095-.104, index_k .116-.120, topk_idx overlap .886-.952, candidates_L20 1.0.
+  bf16 activations move the margin by -3 % .. +4 % of itself; the fp8 / fp4 roundings dominate it (DS41-90).
+- Not done here: drift files / official goldens are not regenerated (outside this step's paths); the next G task's
+  `reference.drift --rung <rung>` and `generate_golden --numerics official` now run at the spec's shipped bf16.
+- Gotcha: run_safe_pytest.sh only in the foreground (the real-checkpoint 4096 report runs > 10 min, so only the
+  scaled one ran here; the 512-token tests run in 7.5 min on the real checkpoint).
+- Re-run: the gate in the FIX.7 brief; `BRINGUP_SCALED=0|1 scripts/run_safe_pytest.sh --no-precompile --run-all
+  models/demos/deepseek_v41_flash_d_p/reference/test_official_bf16.py -s` (`-k "not margins"` for the 512-token part).

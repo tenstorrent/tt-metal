@@ -5,6 +5,8 @@
 #
 # Packed boundaries (in / x / out [S, 4H + 4]) hold bf16 streams and the fp32 pending pre weights in model.py; one
 # dtype per input, so they are marked bf16 (the streams: 4H of the 4H + 4 columns).
+# FIX.7: DS41Reference(numerics='official', dtype=bfloat16) rounds to bf16 at these points (ds41_ref.py "Numerics");
+# on the oracle's own inputs every step equals model.py at bf16 bit for bit (reference/test_official_bf16.py).
 steps:
   engram_rows: {inputs: [], out: bf16}                    # ParallelEngramEmbedding: fp8 x e8m0 rows .to(bf16)
   engram_kv: {inputs: [bf16], out: bf16}                  # fp8 Linear: act_quant(bf16 rows) -> fp8_gemm -> bf16

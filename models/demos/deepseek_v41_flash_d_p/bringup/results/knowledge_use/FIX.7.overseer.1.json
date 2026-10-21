@@ -1,0 +1,56 @@
+{
+ "used": [
+  {
+   "id": "DS41-1",
+   "how": "the bf16 path keeps kernels.py's fixed GEMM tiles (K.linear / K.grouped_out / K.index_score_tile) and runs model.py's bf16 x bf16 GEMMs on bf16 tensors (_mm16), so official bf16 equals the bf16 oracle bit for bit (a summation-order difference alone grew to rel 1.1e-2 at L3 through the fp8 quantizers)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-38",
+   "how": "its list of model.py's compressor bf16 points (bf16 latent before / after the norm, bf16 wk GEMM + k_norm, RoPE copied into bf16) is what _compressor rounds at; per step the compressor is bit-exact with the bf16 oracle",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-90",
+   "how": "the FIX.6 native vs official fp32 margins are the comparison column of the new bf16 margins (one-shot and drift.compute at s4096): bf16 moves them by -3 % .. +4 %",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "A CPU bf16 GEMM (oneDNN, fp32 accumulation) and an fp32 GEMM rounded once to bf16 differ on ~0.03 % of outputs; behind fp8 / fp4 quantizers that is not 'a last-bit difference' but rel 1e-2 after 4 layers: a reference emulating a bf16 configuration must run the bf16 GEMMs as bf16 tensors to match the oracle (written as DS41-91)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.7",
+   "answer": "done",
+   "evidence": "DS41Reference(numerics='official', dtype=bf16) rounds to bf16 at every point model.py holds bf16 (_r) and runs its bf16 x bf16 GEMMs on bf16 tensors (_mm16); fp32 for mHC / Sinkhorn, ratio-2 compressor, router, expert sum, attention softmax statistics, logits. reference/test_official_bf16.py (both checkpoints PASS): layers 0-3, 512 tokens, every step on the oracle's inputs rel 0 (bit for bit) vs model.py at bf16 (official_taps.capture -> build_oracle(dtype=bf16), the configuration of hooks.hf_model(spec, None), first 4 blocks instead of all 40: same code and weights for those blocks, 4 vs 40 layers of load), block outputs rel 0 end to end; fp32 control misses by 0.86 roundings. native and official fp32 bit-identical to the pre-FIX.7 file (144/144 boundaries each); gate: R.2 maxabs 0 all 25 layers, logits pcc 1.0; R.3 pcc 1.000000000, replay 0. New margins at s4096 (scaled), official bf16 vs native one-shot: L0 .0286 L1 .0361 L2 .0528 L3 .0752 L14 .1213 L20 .1838 L21 .1718 L24 .1983 final_norm .2165; drift.compute(s4096) layer_L*: .0281 .0367 .0535 .0779 .0602 .0260 .0632 .0225 (fp32 official: .0273 .0355 .0526 .0762 .0622 .0254 .0629 .0218)."
+  }
+ ],
+ "cited_only": [
+  "DS41-91"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.7",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-21T17:45:28",
+  "head": "cb32b7483ae",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/official_taps.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.7.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/reference/ds41_ref.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/test_official_bf16.py"
+  ]
+ }
+}
