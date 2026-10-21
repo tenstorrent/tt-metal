@@ -10,6 +10,7 @@
 
 #include <cstdint>
 
+#include "build.h"
 #include "llk_pack.h"
 #include "llk_pack_untilize.h"
 
@@ -279,7 +280,7 @@ inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t tile_dst_rt_offset          = 0)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, src_datum_size, dst_datum_size>(
+    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, src_datum_size, dst_datum_size, is_fp32_dest_acc_en>(
         address, num_faces, tile_dst_rt_offset);
 }
 

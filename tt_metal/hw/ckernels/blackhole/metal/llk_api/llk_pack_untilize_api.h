@@ -113,7 +113,7 @@ inline void llk_pack_untilize_impl(
         StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense, 0, 0, DST_ACCUM_MODE>(
             pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += page_stride;

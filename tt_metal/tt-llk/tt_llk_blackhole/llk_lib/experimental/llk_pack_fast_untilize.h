@@ -326,6 +326,8 @@ inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, c
         const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM);
         _llk_pack_fast_untilize_program_output_row_stride_(output_row_stride);
     }
+    // The per-call address write (program_packer_destination<false>) leaves byte 3 as it is, so bit 31 stays set from here.
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
     // Calls start from these counters and leave them so.
     TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1011);
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0111);
@@ -368,7 +370,7 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
     LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the block's chunk width differs from the init's");
 
-    program_packer_destination(address);
+    program_packer_destination<false>(address);
 
     // Phase 1 emits top strip rows and keeps the pack stream open; phase 2 emits the bottom strip rows and closes it.
     if (unit_dim != prev_unit_dim)
@@ -413,7 +415,7 @@ inline void _llk_pack_fast_untilize_emit_phase_(
     {
         const std::uint32_t out_row = phase_base_row + run * rows_per_run;
         _llk_pack_fast_untilize_reset_output_row_counter_();
-        program_packer_destination(address + out_row * output_row_stride_16B);
+        program_packer_destination<false>(address + out_row * output_row_stride_16B);
         ckernel_template::run();
     }
 }
@@ -464,7 +466,7 @@ inline void _llk_pack_fast_untilize_block_strided_(
     {
         // Single base; phase 1 leaves the stream open and phase 2 continues the
         // y_dst carry into output rows 16..31. Matches the original strided path.
-        program_packer_destination(address);
+        program_packer_destination<false>(address);
         _llk_pack_fast_untilize_select_phase_<fast_untilize_strip_rows(block_ct_dim)>();
         ckernel_template::run();
         _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
@@ -529,7 +531,7 @@ inline void _llk_pack_fast_untilize_pass_block_(
         prev_unit_dim = unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
     }
     // The bottom strip is the DEST window itself and the counters start at zero.
-    program_packer_destination(address + pass * FAST_UNTILIZE_PHASE_ROWS * output_row_stride_16B);
+    program_packer_destination<false>(address + pass * FAST_UNTILIZE_PHASE_ROWS * output_row_stride_16B);
     ckernel_template::run();
 }
 
@@ -562,7 +564,7 @@ inline void _llk_pack_fast_untilize_pass_block_strided_(
     for (std::uint32_t row = 0; row < FAST_UNTILIZE_PHASE_ROWS; row += rows_per_run)
     {
         _llk_pack_fast_untilize_reset_output_row_counter_();
-        program_packer_destination(address + (pass * FAST_UNTILIZE_PHASE_ROWS + row) * output_row_stride_16B);
+        program_packer_destination<false>(address + (pass * FAST_UNTILIZE_PHASE_ROWS + row) * output_row_stride_16B);
         ckernel_template::run();
     }
     _llk_pack_fast_untilize_restore_pack_counters_<true>();

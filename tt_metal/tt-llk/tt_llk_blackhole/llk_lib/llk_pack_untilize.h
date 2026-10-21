@@ -504,6 +504,9 @@ inline void _llk_pack_untilize_init_sized_(
         !(block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row && static_cast<DataFormat>(pack_dst_format) == DataFormat::Fp8_e4m3),
         "an Fp8_e4m3 output needs blocks of two or more tiles when a row has several blocks");
 
+    // The per-call address write (program_packer_destination<false>) leaves byte 3 as it is, so bit 31 stays set from here.
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+
     if constexpr (narrow_row)
     {
         // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
@@ -701,6 +704,9 @@ inline void _llk_pack_untilize_init_(
         !(block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row && static_cast<DataFormat>(pack_dst_format) == DataFormat::Fp8_e4m3),
         "an Fp8_e4m3 output needs blocks of two or more tiles when a row has several blocks");
 
+    // The per-call address write (program_packer_destination<false>) leaves byte 3 as it is, so bit 31 stays set from here.
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+
     if constexpr (narrow_row)
     {
         // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
@@ -832,6 +838,7 @@ inline void _llk_pack_untilize_init_(
  * @param address: L1 destination base address for the block.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @tparam src_datum_size, dst_datum_size: As for @ref _llk_pack_untilize_init_, and the same values.
+ * @tparam fp32_dest: True when DEST holds 32-bit data.
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
@@ -843,7 +850,8 @@ template <
     std::uint32_t tile_dst_ct_offset = 0,
     bool dense                       = false,
     std::uint32_t src_datum_size     = 0,
-    std::uint32_t dst_datum_size     = 0>
+    std::uint32_t dst_datum_size     = 0,
+    bool fp32_dest                   = false>
 inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
@@ -856,7 +864,7 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     if constexpr ((src_datum_size == 4) && (dst_datum_size == 2) && (block_ct_dim == 3) && (full_ct_dim != block_ct_dim) && !narrow_row && !dense)
     {
         // The counter form of _llk_pack_untilize_init_sized_: W starts one tile early, as its first INCADCZW steps it.
-        program_packer_destination(address);
+        program_packer_destination<false>(address);
         const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
         TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
         TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF);
@@ -877,7 +885,15 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     For input widths greater than 8 tiles, input is split into blocks, each block the size of block_ct_dim;
     a row may also be split into blocks of different widths. This function is called for each block.
     */
-    program_packer_destination(address);
+    // With 32-bit DEST and three-tile blocks the full address write is faster end to end.
+    if constexpr (fp32_dest && (block_ct_dim == 3))
+    {
+        program_packer_destination(address);
+    }
+    else
+    {
+        program_packer_destination<false>(address);
+    }
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
 
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
