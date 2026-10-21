@@ -33,7 +33,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
-from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -78,6 +78,7 @@ from helpers.test_variant_parameters import (
     DestSync,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
+from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
 from helpers.utils import passed_test
 
 SUPPORTED_FAST_MODE_OPS = [

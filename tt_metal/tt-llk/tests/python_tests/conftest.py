@@ -11,6 +11,9 @@ working for existing tests.
 
 pytest_plugins = ["helpers.llk_pytest_plugin", "fuser.pytest_plugin"]
 
+from contextlib import contextmanager  # noqa: E402
+
+import pytest  # noqa: E402
 from helpers.llk_pytest_plugin import (  # noqa: E402
     blackhole_only,
     quasar_only,
@@ -20,13 +23,29 @@ from helpers.llk_pytest_plugin import (  # noqa: E402
     skip_for_wormhole,
     wormhole_only,
 )
+from helpers.ulp_domains import Problem, TableError  # noqa: E402
 
 __all__ = [
     "blackhole_only",
+    "problem_id",
     "quasar_only",
+    "refused",
     "skip_for_blackhole",
     "skip_for_coverage",
     "skip_for_quasar",
     "skip_for_wormhole",
     "wormhole_only",
 ]
+
+
+@contextmanager
+def refused(problem: Problem):
+    """The block raises a ``TableError`` whose problem is *problem*."""
+    with pytest.raises(TableError) as caught:  # allow-pytest.raises: host-only test
+        yield
+    assert caught.value.problem is problem, caught.value
+
+
+def problem_id(value) -> str:
+    """A parametrize id: the ``Problem`` member's name, nothing for other values."""
+    return value.name if isinstance(value, Problem) else ""

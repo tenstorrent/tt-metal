@@ -1094,8 +1094,8 @@ def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
     """`sweep_cells` applies only the Dest promotion off Wormhole, not Blackhole's or
     Quasar's format support. A ULP row naming another `arch` would bind on that arch and
     send those unsupported cells to the device: add the filters with the row."""
-    from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
-    from helpers.ulp_table import MEASURED_ARCH
+    from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
+    from helpers.ulp_table import MEASURED_ARCH, Metric
 
     elsewhere = [
         (op.name, key)
@@ -1279,8 +1279,10 @@ def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatc
     everywhere (Erfc, SigmoidAppx, ...) with recorded figures that no gate run ever
     re-measured."""
     import test_unary_sfpu_ulp as sweep
-    from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
+    from helpers import ulp_sweep
+    from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
     from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+    from helpers.ulp_table import Metric
 
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     emitted = set(sweep._sweep_ops())

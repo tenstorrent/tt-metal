@@ -1285,6 +1285,7 @@ def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> "WriteReport
     ``ValueError``, not an :class:`EmitRefused`): the table on disk does not load, or
     the rewrite would not read back, or would not resolve, once written."""
     import pytest
+    from helpers.ulp_table import MEASURED_ARCH
 
     if arch != MEASURED_ARCH:
         raise WrongArch(arch)

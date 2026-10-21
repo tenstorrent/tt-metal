@@ -46,19 +46,16 @@ from helpers.golden_generators import (
 from helpers.llk_params import FastMode, format_dict
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
-    FLUSH_SUBNORMAL_OUTPUTS,
-    Metric,
     accuracy_contract,
     domains_of,
-    usable_budget_ceiling,
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     sfpu_unary_ops,
 )
 from helpers.stimuli_generator import generate_stimuli
-from helpers.ulp import ulp_distance, ulp_stats
-from helpers.ulp_domains import largest_figure, partition
+from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance, ulp_stats
+from helpers.ulp_domains import partition, usable_budget_ceiling
 from helpers.ulp_sweep import (
     band_mask,
     domain_figures,
@@ -74,7 +71,7 @@ from helpers.ulp_sweep import (
     sweep_cells,
     sweep_spec,
 )
-from helpers.ulp_table import MEASURED_ARCH
+from helpers.ulp_table import MEASURED_ARCH, Metric
 from helpers.utils import _record_ulp_measurement, passed_test
 from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
 
@@ -214,7 +211,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         arch=arch,
     )
     ceiling = usable_budget_ceiling(out_fmt)
-    gated = contract.metric == Metric.ULP or any(d.gated(ceiling) for d in domains)
+    gated = contract.metric == Metric.ULP or any(
+        d.ulp is not None and d.ulp <= ceiling for d in domains
+    )
 
     # No OverflowError skip. cosh/sinh were the last goldens that could raise on a finite
     # input; they go through torch now. Some still call `math.*` (atan, asinh, the tanh
