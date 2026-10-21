@@ -107,7 +107,7 @@ void DeepseekV4PrefillIndexerSelectOperation::validate_on_program_cache_miss(
 
 DeepseekV4PrefillIndexerSelectOperation::spec_return_value_t
 DeepseekV4PrefillIndexerSelectOperation::compute_output_specs(
-    const DeepseekV4PrefillIndexerSelectParams& /*attrs*/, const DeepseekV4PrefillIndexerSelectInputs& t) {
+    const DeepseekV4PrefillIndexerSelectParams& attrs, const DeepseekV4PrefillIndexerSelectInputs& t) {
     const uint32_t T = t.q.logical_shape()[2];
     const auto grid = t.q.device()->compute_with_storage_grid_size();
     const uint32_t splits =
@@ -119,22 +119,35 @@ DeepseekV4PrefillIndexerSelectOperation::compute_output_specs(
             shape, tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), dram));
     };
     // Scratch page (peer, query, value / index) holds one fp32 tile.
-    const uint32_t scratch_pages = std::max<uint32_t>(1, (splits - 1) * T * 2);
-    return {rm(ttnn::Shape({1, 1, T, dis::TOPK})), rm(ttnn::Shape({1, 1, scratch_pages, tt::constants::TILE_HW}))};
+    const uint32_t scratch_pages = attrs.candidates ? 1 : std::max<uint32_t>(1, (splits - 1) * T * 2);
+    // Candidate scratch page (split, query, survivor tile) holds one fp32 tile.
+    const uint32_t rows = attrs.candidates ? 1 : T;
+    const uint32_t cand_rows = attrs.candidates ? T : 1;
+    const uint32_t cand_scratch_pages = attrs.candidates ? splits * T * dis::CAND_SURV_TILES : 1;
+    return {
+        rm(ttnn::Shape({1, 1, rows, dis::TOPK})),
+        rm(ttnn::Shape({1, 1, scratch_pages, tt::constants::TILE_HW})),
+        rm(ttnn::Shape({1, 1, cand_rows, dis::CAND_TOPK})),
+        rm(ttnn::Shape({1, 1, cand_scratch_pages, tt::constants::TILE_HW}))};
 }
 
 DeepseekV4PrefillIndexerSelectOperation::tensor_return_value_t
 DeepseekV4PrefillIndexerSelectOperation::create_output_tensors(
     const DeepseekV4PrefillIndexerSelectParams& attrs, const DeepseekV4PrefillIndexerSelectInputs& t) {
     const auto specs = compute_output_specs(attrs, t);
-    return {create_device_tensor(specs[0], t.q.device()), create_device_tensor(specs[1], t.q.device())};
+    auto* device = t.q.device();
+    return {
+        create_device_tensor(specs[0], device),
+        create_device_tensor(specs[1], device),
+        create_device_tensor(specs[2], device),
+        create_device_tensor(specs[3], device)};
 }
 
 ttsl::hash::hash_t DeepseekV4PrefillIndexerSelectOperation::compute_program_hash(
     const DeepseekV4PrefillIndexerSelectParams& attrs, const DeepseekV4PrefillIndexerSelectInputs& t) {
     // idx_keys' entry count E rides on a runtime arg, so a longer buffer reuses the program.
     return tt::tt_metal::operation::hash_operation<DeepseekV4PrefillIndexerSelectOperation>(
-        attrs.compress_ratio, attrs.compute_kernel_config, t.q.logical_shape(), t.start.dtype());
+        attrs.compress_ratio, attrs.candidates, attrs.compute_kernel_config, t.q.logical_shape(), t.start.dtype());
 }
 
 Tensor deepseek_v4_prefill_indexer_select(
@@ -143,11 +156,13 @@ Tensor deepseek_v4_prefill_indexer_select(
     const Tensor& idx_keys,
     const Tensor& start,
     uint32_t compress_ratio,
+    bool candidates,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using OperationType = ttnn::prim::DeepseekV4PrefillIndexerSelectOperation;
     auto outputs = ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .compress_ratio = compress_ratio,
+            .candidates = candidates,
             .compute_kernel_config = compute_kernel_config,
         },
         OperationType::tensor_args_t{
@@ -156,7 +171,7 @@ Tensor deepseek_v4_prefill_indexer_select(
             .idx_keys = idx_keys,
             .start = start,
         });
-    return outputs[0];
+    return candidates ? outputs[2] : outputs[0];
 }
 
 }  // namespace ttnn::prim

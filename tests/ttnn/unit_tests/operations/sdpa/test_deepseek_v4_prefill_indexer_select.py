@@ -8,12 +8,17 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from ttnn.operations.transformer_golden import MASKED_INDEX, deepseek_v4_prefill_indexer_scores
+from ttnn.operations.transformer_golden import (
+    MASKED_INDEX,
+    deepseek_v4_prefill_indexer_candidate_scores,
+    deepseek_v4_prefill_indexer_scores,
+)
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import to_dev
 
 pytestmark = pytest.mark.use_module_device
 
 TOPK = 512
+CAND_TOPK, CAND_BLOCK = 2048, 8
 H, D = 32, 128  # DeepSeek V4.1 index_n_heads, index_head_dim
 
 
@@ -109,6 +114,66 @@ def test_deepseek_v4_prefill_indexer_select(device, T, E, start, rate):
     q, weights, keys = make_inputs(T, E)
     indices = run(device, q, weights, keys, start, rate)
     check(indices, q, weights, keys, start, rate)
+
+
+def check_candidates(cand, q, weights, keys, start, rate):
+    """Per query: exactly min(2048, visible blocks) distinct visible candidate blocks, the rest sentinels, the
+    newest block kept, and block scores that match the reference top-2048's up to bf16 near-ties at the cut."""
+    blocks = deepseek_v4_prefill_indexer_candidate_scores(
+        deepseek_v4_prefill_indexer_scores(q, weights, keys, start, rate)
+    )
+    T = blocks.shape[0]
+    limits = ((start + torch.arange(T) + 1) // rate).clamp(max=keys.shape[2])
+    worst_recall = 1.0
+    for s in range(T):
+        row = cand[s]
+        valid = row[row != MASKED_INDEX]
+        visible = (int(limits[s]) + CAND_BLOCK - 1) // CAND_BLOCK
+        n = min(CAND_TOPK, visible)
+        assert valid.numel() == n, f"query {s}: {valid.numel()} valid candidate slots, expected {n}"
+        if n == 0:
+            continue
+        assert valid.unique().numel() == n, f"query {s}: duplicate candidate blocks"
+        assert int(valid.max()) < visible, f"query {s}: selected a candidate block it cannot see"
+        assert visible - 1 in set(valid.tolist()), f"query {s}: newest candidate block dropped"
+        finite = blocks[s, :visible].clone()
+        finite[visible - 1] = float("-inf")
+        ref_values, ref_idx = blocks[s, :visible].topk(n)
+        if n < visible:
+            tol = 4e-2 * finite.abs().max() + 1e-6
+            got = blocks[s, valid]
+            assert got.min() >= ref_values[-1] - tol, f"query {s}: block {got.min()} below the cut {ref_values[-1]}"
+        recall = len(set(valid.tolist()) & set(ref_idx.tolist())) / n
+        worst_recall = min(worst_recall, recall)
+    assert worst_recall >= 0.9, f"worst per-query candidate recall {worst_recall}"
+    return worst_recall
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "T, E, start, rate",
+    [
+        (32, 512, 0, 1),  # first chunk: every visible block kept, the newest one partial
+        (32, 600, 0, 4),  # queries 0..2 see nothing
+        (64, 1536, 1400, 1),  # three blocks
+        (256, 8192, 8000, 1),  # split query tiles, every block kept
+        (32, 20000, 19900, 1),  # maximum split, more visible blocks than candidates
+        (128, 40000, 75000, 2),  # splits that start mid candidate chunk, many chunks
+        (4096, 2048, 0, 2),  # one query tile per core
+        (8192, 1024, 0, 8),  # more query tiles than cores
+    ],
+)
+def test_deepseek_v4_prefill_indexer_select_candidates(device, T, E, start, rate):
+    q, weights, keys = make_inputs(T, E, seed=3)
+    cand = ttnn.transformer.deepseek_v4_prefill_indexer_select_candidates(
+        to_tile(q, device),
+        to_tile(weights, device),
+        to_dev(keys, device, ttnn.bfloat16),
+        start_tensor(start, device),
+        compress_ratio=rate,
+    )
+    cand = ttnn.to_torch(cand).to(torch.int64).reshape(T, CAND_TOPK) & 0xFFFFFFFF
+    check_candidates(cand, q, weights, keys, start, rate)
 
 
 @run_for_blackhole()

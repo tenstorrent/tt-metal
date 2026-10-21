@@ -23,7 +23,43 @@ constexpr uint32_t SENTINEL = 0xFFFFFFFFu;
 constexpr uint32_t START_PAGE_BYTES = 64;
 constexpr uint32_t TOKEN_PAGE_BYTES = 16;
 
-// Reader -> compute mailbox, one page per work unit (uint32 words).
+// Candidate mode (the two-level select's level one): each query also keeps its best CAND_TOPK blocks of CAND_BLOCK
+// entries, a block scored by its best entry, the block holding the query's newest entry always kept.
+constexpr uint32_t CAND_TOPK = 2048;
+constexpr uint32_t CAND_BLOCK = 8;
+constexpr uint32_t CAND_PER_BLOCK = TOPK / CAND_BLOCK;              // candidate blocks per 512-entry block
+constexpr uint32_t CAND_CHUNK_BLOCKS = CAND_TOPK / CAND_PER_BLOCK;  // 512-entry blocks per candidate top-k chunk
+constexpr uint32_t CAND_ROW_BYTES = CAND_TOPK * sizeof(uint16_t);   // one query's staged block maxima (bf16)
+constexpr uint32_t CAND_SURV_TILES = 4;                             // fp32 [values x 2, indices x 2] tiles
+static_assert(CAND_CHUNK_BLOCKS % GROUP_BLOCKS == 0, "candidate chunks must close on group boundaries");
+constexpr uint16_t BF16_NEG_INF = 0xFF80u;
+constexpr uint16_t BF16_POS_INF = 0x7F80u;
+constexpr uint32_t NEGINF_TILES = 2;  // the all -inf seed chunk covers CAND_TOPK bf16 entries
+
+// Candidate blocks a query with `limit` visible entries keeps, at most CAND_TOPK of them, from candidate chunk
+// `chunk` of a split that scans 512-entry blocks [first_block, end_block): 0 when the split shows it none of the
+// chunk's blocks.
+inline uint32_t cand_active(uint32_t limit, uint32_t chunk, uint32_t first_block, uint32_t end_block) {
+    const uint32_t visible = (limit + CAND_BLOCK - 1) / CAND_BLOCK;
+    const uint32_t lo = first_block * CAND_PER_BLOCK;
+    const uint32_t split_hi = end_block * CAND_PER_BLOCK;
+    const uint32_t hi = visible < split_hi ? visible : split_hi;
+    const uint32_t base = chunk * CAND_TOPK;
+    if (hi <= lo || hi <= base) {
+        return 0;
+    }
+    return hi - base < CAND_TOPK ? hi - base : CAND_TOPK;
+}
+
+// Whether candidate chunk `chunk` is the split's last one with blocks visible to the query.
+inline bool cand_last_chunk(uint32_t limit, uint32_t chunk, uint32_t end_block) {
+    const uint32_t visible = (limit + CAND_BLOCK - 1) / CAND_BLOCK;
+    const uint32_t split_hi = end_block * CAND_PER_BLOCK;
+    const uint32_t hi = visible < split_hi ? visible : split_hi;
+    return (chunk + 1) * CAND_TOPK >= hi;
+}
+
+// Reader -> compute mailbox (and its copy to the writer), one page per work unit (uint32 words).
 namespace meta_word {
 enum : uint32_t {
     NUM_BLOCKS,   // blocks this split scans
@@ -59,7 +95,7 @@ namespace reader_common_arg {
 enum : uint32_t { Q_ADDRESS, W_ADDRESS, KEYS_ADDRESS, START_ADDRESS, NUM_ENTRIES, END };
 }
 namespace writer_common_arg {
-enum : uint32_t { OUTPUT_ADDRESS, SCRATCH_ADDRESS, END };
+enum : uint32_t { OUTPUT_ADDRESS, SCRATCH_ADDRESS, CAND_OUTPUT_ADDRESS, CAND_SCRATCH_ADDRESS, END };
 }
 
 namespace reader_ct_arg {
@@ -92,6 +128,14 @@ enum : uint32_t {
     CB_DONE,
     CB_PLAN,
     SEMAPHORE,
+    CANDIDATES,  // 1: candidate mode
+    CB_SCORES,
+    CB_GROUP,
+    CB_GROUP_ACK,
+    CB_STAGE,
+    CB_CSURV_IN,
+    CB_CSURV_OUT,
+    CB_CAND_OUT,
     END,
 };
 }
@@ -114,6 +158,13 @@ enum : uint32_t {
     CB_OUT,
     CB_META,
     CB_DONE,
+    CANDIDATES,
+    CB_GROUP,
+    CB_GROUP_ACK,
+    CB_STAGE,
+    CB_CSURV_IN,
+    CB_CSURV_OUT,
+    CB_CAND_OUT,
     END,
 };
 }
