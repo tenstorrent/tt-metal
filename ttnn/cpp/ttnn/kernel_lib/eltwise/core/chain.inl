@@ -977,15 +977,19 @@ constexpr bool rejects_constructor_args() {
     }
 }
 
-template <bool Missing, bool Mismatch>
+// Instantiated by an element's rejecting constructor: `Self` is the element, `BoundBuffers` a std::tuple of
+// the DataflowBuffer types its specs name (in spec order), `Args` the caller's constructor arguments.
+template <class Self, class BoundBuffers, class... Args>
 constexpr void require_bound_dataflow_buffers() {
+    constexpr bool missing = rejects_constructor_args<Self, BoundBuffers, Args...>();
+    constexpr bool mismatch = leading_mismatched_buffers<BoundBuffers, Args...>();
     static_assert(
-        !Mismatch,
+        !mismatch,
         "eltwise_chain: this DataflowBuffer does not match the element's spec (its access patterns differ, or it is "
         "const): pass the DFBBindingToken to input()/output(), not its id, so the spec names the buffer that token "
         "deduces.");
     static_assert(
-        Mismatch || !Missing,
+        mismatch || !missing,
         "eltwise_chain: chain elements take the DataflowBuffer of each input(...) / output(...) spec as "
         "leading constructor arguments, in spec order — e.g. CopyTile<input(dfb::in)>{in}, "
         "BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b}, PackTile<output(dfb::out)>{out}.");
@@ -1064,11 +1068,11 @@ struct detail::CopyTileImpl : InputStream<DataflowBufferType>, CopyTileTag {
     // defaults them to NO_PREV_DFB.
     static constexpr uint32_t reconfig_srca_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<CopyTileImpl, std::tuple<DataflowBufferType>, Args...>(), int> = 0>
+    // The DataflowBuffer(s) this element binds, in spec order.
+    using BoundBuffers = std::tuple<DataflowBufferType>;
+    template <class... Args, std::enable_if_t<rejects_constructor_args<CopyTileImpl, BoundBuffers, Args...>(), int> = 0>
     CopyTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<
-            rejects_constructor_args<CopyTileImpl, std::tuple<DataflowBufferType>, Args...>(),
-            leading_mismatched_buffers<std::tuple<DataflowBufferType>, Args...>()>();
+        require_bound_dataflow_buffers<CopyTileImpl, BoundBuffers, Args...>();
     }
     ALWI explicit CopyTileImpl(DataflowBufferType& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
     ALWI CopyTileImpl(DataflowBufferType& in, uint32_t base) noexcept : Base(in, base) {
@@ -1188,11 +1192,11 @@ struct detail::PackTileImpl : OutputStream<DataflowBufferType>, PackTileTag {
     // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
     static constexpr uint32_t reconfig_pack_dfb = (Reconfig == DataFormatReconfig::Enabled) ? Cb : NO_PREV_DFB;
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<PackTileImpl, std::tuple<DataflowBufferType>, Args...>(), int> = 0>
+    // The DataflowBuffer(s) this element binds, in spec order.
+    using BoundBuffers = std::tuple<DataflowBufferType>;
+    template <class... Args, std::enable_if_t<rejects_constructor_args<PackTileImpl, BoundBuffers, Args...>(), int> = 0>
     PackTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<
-            rejects_constructor_args<PackTileImpl, std::tuple<DataflowBufferType>, Args...>(),
-            leading_mismatched_buffers<std::tuple<DataflowBufferType>, Args...>()>();
+        require_bound_dataflow_buffers<PackTileImpl, BoundBuffers, Args...>();
     }
     ALWI explicit PackTileImpl(DataflowBufferType& out) noexcept : Base(out) { check_bound_dataflow_buffer<Cb>(out); }
     ALWI PackTileImpl(DataflowBufferType& out, uint32_t base) noexcept : Base(out, base) {
@@ -1338,11 +1342,11 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
 
     // Leading arguments: the DataflowBuffers of AInput and BInput, in that order (pass the same
     // object twice when both specs name one buffer). Optional per-side tile bases follow.
-    template <class... Args, std::enable_if_t<rejects_constructor_args<BinaryFpuImpl, std::tuple<DataflowBufferA, DataflowBufferB>, Args...>(), int> = 0>
+    // The DataflowBuffer(s) this element binds, in spec order.
+    using BoundBuffers = std::tuple<DataflowBufferA, DataflowBufferB>;
+    template <class... Args, std::enable_if_t<rejects_constructor_args<BinaryFpuImpl, BoundBuffers, Args...>(), int> = 0>
     BinaryFpuImpl(Args&&...) noexcept : a(MissingDataflowBuffer{}), b(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<
-            rejects_constructor_args<BinaryFpuImpl, std::tuple<DataflowBufferA, DataflowBufferB>, Args...>(),
-            leading_mismatched_buffers<std::tuple<DataflowBufferA, DataflowBufferB>, Args...>()>();
+        require_bound_dataflow_buffers<BinaryFpuImpl, BoundBuffers, Args...>();
     }
     ALWI BinaryFpuImpl(DataflowBufferA& in_a, DataflowBufferB& in_b) noexcept : a(in_a), b(in_b) {
         check_bound(in_a, in_b);
@@ -1543,11 +1547,11 @@ struct detail::DestReuseBinaryImpl : InputStream<DataflowBufferType>, DestReuseB
                                                                                                           : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<DestReuseBinaryImpl, std::tuple<DataflowBufferType>, Args...>(), int> = 0>
+    // The DataflowBuffer(s) this element binds, in spec order.
+    using BoundBuffers = std::tuple<DataflowBufferType>;
+    template <class... Args, std::enable_if_t<rejects_constructor_args<DestReuseBinaryImpl, BoundBuffers, Args...>(), int> = 0>
     DestReuseBinaryImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<
-            rejects_constructor_args<DestReuseBinaryImpl, std::tuple<DataflowBufferType>, Args...>(),
-            leading_mismatched_buffers<std::tuple<DataflowBufferType>, Args...>()>();
+        require_bound_dataflow_buffers<DestReuseBinaryImpl, BoundBuffers, Args...>();
     }
     ALWI explicit DestReuseBinaryImpl(DataflowBufferType& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
     ALWI DestReuseBinaryImpl(DataflowBufferType& in, uint32_t base) noexcept : Base(in, base) {

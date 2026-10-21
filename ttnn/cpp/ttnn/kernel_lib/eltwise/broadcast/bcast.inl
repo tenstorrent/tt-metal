@@ -65,11 +65,11 @@ struct detail::UnaryBcastImpl : InputStream<DataflowBufferType>, UnaryBcastTag {
     static constexpr uint32_t reconfig_srca_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
     static constexpr uint32_t reconfig_srcb_dfb = Input.reconfig == DataFormatReconfig::Enabled ? Cb : NO_PREV_DFB;
 
-    template <class... Args, std::enable_if_t<rejects_constructor_args<UnaryBcastImpl, std::tuple<DataflowBufferType>, Args...>(), int> = 0>
+    // The DataflowBuffer(s) this element binds, in spec order.
+    using BoundBuffers = std::tuple<DataflowBufferType>;
+    template <class... Args, std::enable_if_t<rejects_constructor_args<UnaryBcastImpl, BoundBuffers, Args...>(), int> = 0>
     UnaryBcastImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
-        require_bound_dataflow_buffers<
-            rejects_constructor_args<UnaryBcastImpl, std::tuple<DataflowBufferType>, Args...>(),
-            leading_mismatched_buffers<std::tuple<DataflowBufferType>, Args...>()>();
+        require_bound_dataflow_buffers<UnaryBcastImpl, BoundBuffers, Args...>();
     }
     ALWI explicit UnaryBcastImpl(DataflowBufferType& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
     ALWI UnaryBcastImpl(DataflowBufferType& in, uint32_t base) noexcept : Base(in, base) {

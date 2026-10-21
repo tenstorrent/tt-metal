@@ -137,7 +137,7 @@ static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incor
 // Byte-offset (L1 units) of the current FIFO cursor from slot.base_addr.
 // cursor_entry_idx and the former byte offset advance in lockstep:
 //   entry += n * stride_size_tiles;  offset += n * stride_size;
-// so offset is recoverable without storing it (saves 4B/slot on pack TLS).
+// so offset is recoverable without storing it (saves 4B/slot in compute-TRISC TLS).
 inline __attribute__((always_inline)) uint32_t
 dfb_slot_cursor_offset_units(const LocalDFBInterface& intf, const DFBTCSlot& slot, uint32_t entry_idx) {
     const uint32_t delta_entries = entry_idx - static_cast<uint32_t>(slot.base_entry_idx);
