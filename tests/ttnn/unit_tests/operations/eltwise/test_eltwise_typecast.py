@@ -33,6 +33,34 @@ def _make_fp32_to_int32_input(shape):
     return make_typecast_test_input(shape, torch.float32, in_low, in_high)
 
 
+@pytest.mark.parametrize("memory_config", mem_configs)
+def test_typecast_uint16_truncates_toward_zero(device, memory_config):
+    """uint16 truncates toward zero like int32/uint32.
+
+    A +0.5 bias used to make device uint16 round half up, so 0.5 -> 1 and
+    4.5 -> 5 disagreed with every other integer destination.
+    """
+    values = [0.5, 1.5, 2.5, 3.5, 4.5, 0.25, 0.75, 0.9, 1.99, 0.0, -0.5, -1.5, 1e-8]
+    expected = [min(max(int(v), 0), 65535) for v in values]
+
+    torch_input = torch.zeros(TILE_HEIGHT * TILE_WIDTH, dtype=torch.bfloat16)
+    torch_input[: len(values)] = torch.tensor(values, dtype=torch.bfloat16)
+    torch_input = torch_input.reshape(TILE_HEIGHT, TILE_WIDTH)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        ttnn.bfloat16,
+        layout=npu_layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    result = ttnn.to_torch(ttnn.typecast(tt_input, ttnn.uint16))
+    result = result.flatten().to(torch.int64).tolist()
+
+    assert result[: len(values)] == expected
+    assert set(result[len(values) :]) == {0}
+
+
 @pytest.mark.parametrize("num_tiles", [1, 128])
 @pytest.mark.parametrize("memory_config", mem_configs)
 def test_typecast_uint32_to_fp32_rounding(device, num_tiles, memory_config):

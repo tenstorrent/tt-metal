@@ -102,10 +102,9 @@ def _is_block_float(fmt: DataFormat) -> bool:
 def _whole_number_float_spec(high: int) -> StimuliSpec:
     """Float stimuli restricted to whole numbers in ``[0, high)``.
 
-    Whole numbers make float->int conversions exact regardless of whether the
-    kernel truncates (int32/uint32) or rounds (uint16/uint8), and keep the
-    values inside the range each format represents exactly so the golden is
-    lossless. A small ``high`` is used when a block-float format is involved so
+    Whole numbers make float->int conversions exact regardless of the rounding
+    each kernel implements, and keep the values inside the range each format
+    represents exactly so the golden is lossless. A small ``high`` is used when a block-float format is involved so
     the shared-exponent quantization is (near-)exact within each 16-elem block.
     """
 
@@ -333,6 +332,68 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
         f"{failing_exponents}; first (input bits, expected, got): "
         f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
     )
+
+
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float32, DataFormat.UInt16)],
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_fp32_to_uint16_truncates(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    """uint16 truncates toward zero and saturates, like every other integer
+    destination. The kernel used SFP_STOCH_RND with RND_NEAREST, which rounds
+    ties away from zero, so 0.5 -> 1 and 4.5 -> 5 disagreed with
+    int32/uint32 for the same input. Both destination accumulations are
+    covered: the 16-bit one used to take a separate SFPLOADMACRO path.
+    """
+    values = [0.5, 1.5, 2.5, 3.5, 4.5, 0.25, 0.75, -0.5, -1.5, 1e-8]
+    if dest_acc == DestAccumulation.Yes:
+        # The saturation edge is only asserted for the 32-bit destination: with a
+        # 16-bit Dest the readback of 0xFFF0..0xFFFF already returns 0xFF00 on the
+        # pre-fix kernel too, so that is the Dest readback path, not rounding.
+        values += [65535.5, 65534.75]
+    golden = [min(max(math.trunc(v), 0), 65535) for v in values]
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    dtype = src_A.dtype
+    src_A = torch.zeros(src_A.numel(), dtype=torch.float32)
+    src_A[: len(values)] = torch.tensor(values, dtype=torch.float32)
+    src_A = src_A.to(dtype)
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
+    result = [int(v) for v in configuration.run().result]
+    assert len(result) > len(values)
+
+    mismatches = [
+        (v, g, r) for v, g, r in zip(values, golden, result) if g != r
+    ]
+    assert not mismatches, (
+        "fp32->uint16 must truncate toward zero: "
+        f"{len(mismatches)} mismatches (input, expected, got): {mismatches}"
+    )
+    padding = set(result[len(values) :])
+    assert padding == {0}, f"zero padding converted to {sorted(padding)}"
+
 
 
 def _build_typecast_config(
