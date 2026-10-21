@@ -20,8 +20,9 @@ struct RawAllocationImpl;
 // to represent "any" allocation.
 // Currently, details of RawAllocation is only visible to the implementation details of tt_metal runtime.
 struct RawAllocation {
-    // An allocation that owns no resource
-    RawAllocation();
+    // No default constructor for now to reduce states & ease implementation.
+    // This could be added to express an allocation that owns no resource
+    RawAllocation() = delete;
     // Internal constructor
     explicit RawAllocation(RawAllocationImpl&& impl);
     ~RawAllocation();

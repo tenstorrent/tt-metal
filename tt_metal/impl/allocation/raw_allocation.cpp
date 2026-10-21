@@ -10,8 +10,6 @@
 
 namespace tt::tt_metal::experimental {
 
-RawAllocation::RawAllocation() : pimpl_(std::make_unique<RawAllocationImpl>()) {}
-
 RawAllocation::RawAllocation(RawAllocationImpl&& impl) : pimpl_(std::make_unique<RawAllocationImpl>(std::move(impl))) {}
 
 RawAllocation::~RawAllocation() = default;
