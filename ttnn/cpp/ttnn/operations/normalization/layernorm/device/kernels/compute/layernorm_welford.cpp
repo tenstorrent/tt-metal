@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -477,9 +478,14 @@ void kernel_main() {
             } else {
                 mul_bcast_cols_init(dfb_xmm, dfb_ex2pe);
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE)
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                    dfb_xmm, dfb_ex2pe, block.to_global(0), 0, 0, block.size());
+#else
                 for (auto i : block.local()) {
                     mul_tiles_bcast_cols(dfb_xmm, dfb_ex2pe, block.to_global(i), 0, i);
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 for (auto i : block.local()) {
@@ -517,9 +523,14 @@ void kernel_main() {
                 }
                 dfb_fusion_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE)
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                    dfb_fusion, dfb_gamma, 0, block.to_global(0), 0, block.size());
+#else
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_fusion, dfb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                 }
+#endif
                 tile_regs_commit();
                 // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
                 dfb_fusion_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
@@ -549,9 +560,14 @@ void kernel_main() {
                 }
                 dfb_fusion_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE)
+                any_tiles_bcast_block<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(
+                    dfb_fusion, dfb_beta, 0, block.to_global(0), 0, block.size());
+#else
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(dfb_fusion, dfb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
                 }
+#endif
                 tile_regs_commit();
                 dfb_fusion_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
