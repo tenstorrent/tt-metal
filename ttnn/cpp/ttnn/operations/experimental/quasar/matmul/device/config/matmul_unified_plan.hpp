@@ -238,23 +238,25 @@ constexpr ArchCostModel BLACKHOLE_COST_MODEL{
 
 constexpr ArchCostModel QUASAR_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .unpack_A_tile_cycles = 12.5,
-    .unpack_B_tile_cycles = 12.4,
-    .subblock_cycles = 76.8,
+    .unpack_A_tile_cycles = 13.5,
+    .unpack_B_tile_cycles = 9.7,
+    .subblock_cycles = 0.0,
     .tile_pack_cycles = 0.0,
     .tile_reload_cycles = 8.5,
-    .K_chunk_cycles = 190.3,
-    .tile_read_cycles = 35.5,
+    .K_chunk_cycles = 164.3,
+    .tile_read_cycles = 37.9,
     .core_tile_read_cycles = 5.8,
-    .tile_mcast_cycles = 0.0,
-    .tile_write_cycles = 29.2,
+    .tile_mcast_cycles = 0.7,
+    .tile_write_cycles = 19.9,
     .K_chunk_read_cycles = 0.0,
-    .K_chunk_mcast_cycles = 220.9,
-    .read_latency_cycles = 321.0,
-    .C_slice_cycles = 48.8,
+    .K_chunk_mcast_cycles = 163.7,
+    .read_latency_cycles = 378.9,
+    .C_slice_cycles = 0.0,
     .A_pad_tile_cycles = 1000.0,
-    .overlap_exponent = 9.5,
-    .dram_tile_cycles = 4.0,
+    .overlap_exponent = 6.9,
+    // Fitted on the cycle simulator, which has no DRAM model. QSR1.A1 (1.0 TB/s GDDR7 at 75%, 1.4 GHz) would be ~3.8
+    // cycles per 2 KB tile; with it the picks avoid layouts that re-read A and B, which the simulator cannot show.
+    .dram_tile_cycles = 0.0,
 };
 
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
