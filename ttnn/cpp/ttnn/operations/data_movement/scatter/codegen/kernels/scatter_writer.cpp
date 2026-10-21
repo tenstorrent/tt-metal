@@ -11,8 +11,8 @@
 //
 // Multicore: strided row assignment, same as reader.
 //
-// Divergence from the prototype template: each batch ends with async_writes_flushed() and one
-// async_write_barrier() closes the kernel, instead of a barrier per batch.
+// Each batch ends with async_writes_flushed(), which is all that reclaiming its CB slot needs; one
+// async_write_barrier() closes the kernel, since nothing reads the destination before the program ends.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
