@@ -4,6 +4,7 @@
 import json
 import math
 
+import pytest
 import torch
 from safetensors.torch import save_file
 
@@ -143,3 +144,111 @@ def test_limits_fail_a_bin_without_gold_tokens(monkeypatch):
     ]
     assert rows[:3] == [(1.0, True), (None, False), (0.0, True)]
     assert rows[3:] == [(1.0, True), (0.0, True), (0.0, True)]
+
+
+def _fake_trace(tmp_path, hidden, token_ids, shard_rows):
+    """A prepared GPU trace directory whose source capture holds ``hidden`` as its final-layer stream."""
+    source, prepared = tmp_path / "source", tmp_path / "prepared"
+    (source / "decoder_io").mkdir(parents=True)
+    prepared.mkdir()
+    chunks = []
+    for start in range(0, len(hidden), shard_rows):
+        path = f"decoder_io/rows_{start}.safetensors"
+        save_file({"decoder_output_layer_1": hidden[start : start + shard_rows].contiguous()}, str(source / path))
+        chunks.append(dict(row_start=start, row_end=min(start + shard_rows, len(hidden)), path=path))
+    stream = dict(row_count=len(hidden), shape_tail=[hidden.shape[-1]], chunks=chunks)
+    (source / "index.json").write_text(json.dumps({"tensor_streams": {"decoder_output_layer_1": stream}}))
+    metadata = dict(n_layers=2, token_ids=token_ids)
+    (source / "metadata.json").write_text(json.dumps(metadata))
+    (prepared / "metadata.json").write_text(json.dumps(dict(metadata, source_trace_dir=str(source))))
+    return prepared
+
+
+def _flatten(report, prefix=""):
+    """A report's numbers keyed by their path, for an approximate comparison."""
+    if isinstance(report, dict):
+        return {
+            key: value for name, item in report.items() for key, value in _flatten(item, f"{prefix}{name}.").items()
+        }
+    if isinstance(report, list):
+        return {key: value for i, item in enumerate(report) for key, value in _flatten(item, f"{prefix}{i}.").items()}
+    return {prefix: report}
+
+
+class IdentifiedHead(LinearHead):
+    identity = {"model": "fake", "checkpoint": "snapshot-a", "format": str(likelihood.REFERENCE_FORMAT)}
+
+
+def test_stored_reference_scores_match_on_the_fly_scoring(tmp_path):
+    from models.demos.gemma4_d_p.tests.scripts.prepare_likelihood_reference import prepare_likelihood_reference
+
+    head = IdentifiedHead(hidden=16, vocab=64)
+    generator = torch.Generator().manual_seed(1)
+    hidden = torch.randn(96, 16, generator=generator).bfloat16()
+    token_ids = torch.randint(0, 64, (96,), generator=generator).tolist()
+    trace = _fake_trace(tmp_path, hidden, token_ids, shard_rows=32)
+
+    # A candidate at a 64-token context: every 16th position plus the last chunk, as the test samples them.
+    positions = torch.tensor(sample_positions(context_len=64, chunk_size=16, stride=16))
+    candidate = (hidden[positions].float() + 0.3 * torch.randn(len(positions), 16, generator=generator)).bfloat16()
+    save_samples(
+        tmp_path / "run.safetensors", positions, candidate, likelihood.next_tokens(token_ids, positions.tolist())
+    )
+
+    on_the_fly = likelihood.compare(trace, tmp_path / "run.safetensors", head)
+    assert on_the_fly.pop("reference") == "computed"
+    stored = prepare_likelihood_reference(trace, head=head)
+    assert stored == trace / likelihood.REFERENCE_SCORES
+    scores = likelihood.load_reference_scores(trace, positions, head.identity)
+    assert scores is not None and torch.equal(scores.positions, positions)
+    report = likelihood.compare(trace, tmp_path / "run.safetensors", head)
+    assert report.pop("reference") == "stored"
+    # The reference logits come from other row batches than on the fly, so fp32 rounding can differ in the last bits.
+    assert _flatten(report) == pytest.approx(_flatten(on_the_fly), rel=1e-6, abs=1e-9)
+    assert on_the_fly["all"]["mean_abs_delta_nll"] > 0
+
+
+def _stored_trace(tmp_path, head, rows=32):
+    from models.demos.gemma4_d_p.tests.scripts.prepare_likelihood_reference import prepare_likelihood_reference
+
+    hidden = torch.randn(rows, 8, generator=torch.Generator().manual_seed(2)).bfloat16()
+    trace = _fake_trace(tmp_path, hidden, list(range(rows)), shard_rows=16)
+    assert likelihood.load_reference_scores(trace, list(range(rows)), head.identity) is None  # no file yet
+    prepare_likelihood_reference(trace, head=head)
+    assert likelihood.load_reference_scores(trace, list(range(rows)), head.identity) is not None
+    return trace
+
+
+@pytest.mark.parametrize("key", sorted(IdentifiedHead.identity))
+def test_reference_scores_for_another_head_are_ignored(tmp_path, key):
+    head = IdentifiedHead(hidden=8, vocab=32)
+    trace = _stored_trace(tmp_path, head)
+    changed = dict(head.identity, **{key: head.identity[key] + "-other"})
+    assert likelihood.load_reference_scores(trace, list(range(32)), changed) is None
+
+
+def test_reference_scores_for_another_document_are_ignored(tmp_path):
+    head = IdentifiedHead(hidden=8, vocab=32)
+    trace = _stored_trace(tmp_path, head)
+    for metadata_path in (trace / "metadata.json", tmp_path / "source" / "metadata.json"):
+        metadata = json.loads(metadata_path.read_text())
+        metadata_path.write_text(json.dumps(dict(metadata, token_ids=list(range(1, 33)))))
+    assert likelihood.load_reference_scores(trace, list(range(32)), head.identity) is None
+
+
+def test_reference_scores_missing_a_position_are_ignored(tmp_path):
+    head = IdentifiedHead(hidden=8, vocab=32)
+    trace = _stored_trace(tmp_path, head)
+    assert likelihood.load_reference_scores(trace, [0, 31, 32], head.identity) is None
+
+
+def test_head_without_identity_computes_the_reference(tmp_path):
+    trace = _stored_trace(tmp_path, IdentifiedHead(hidden=8, vocab=32))
+    positions = torch.arange(16)
+    hidden = torch.randn(16, 8, generator=torch.Generator().manual_seed(3)).bfloat16()
+    save_samples(
+        tmp_path / "run.safetensors", positions, hidden, likelihood.next_tokens(list(range(32)), positions.tolist())
+    )
+    # Same weights, but nothing says so: the stored file must not be trusted.
+    report = likelihood.compare(trace, tmp_path / "run.safetensors", LinearHead(hidden=8, vocab=32))
+    assert report["reference"] == "computed"

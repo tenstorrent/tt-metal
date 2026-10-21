@@ -178,6 +178,14 @@ Each dataset in `DATASETS` names a GPU trace prepared with [`prepare_gpu_referen
 
 The KV PCC checks what decode will read. The likelihood check tests whether prefill's own predictions changed. The test keeps slot 0's final decoder hidden states at every 16th position and over the whole last chunk, and writes them to `hidden_samples.safetensors`. The [likelihood tool](../tests/scripts/likelihood.py) applies the HF model's final norm and tied LM head, with its logit softcap, in fp32 on the host. It scores the result against the same positions of the GPU capture's final-layer stream.
 
+The GPU capture's side of that comparison never changes, so it is stored once per dataset as `likelihood_reference.safetensors` in the trace directory: for every position, the reference's argmax, gold-token log-probability, top-20 tokens and log-probabilities and tail mass (about 50 MB). With the file present, the test computes only TT's logits, which cuts likelihood scoring at 256K from about 240 s to about 145 s. The file records the model, checkpoint snapshot, softcap, top-k and a hash of the document's tokens. If any of them differ, the test ignores the file and computes the reference on the fly, so a stale file costs time but never changes a result. The report's `reference` field says which path was used. Create the file for a new dataset, or after a checkpoint change, with (about 17 minutes on a galaxy host):
+
+```bash
+python -m models.demos.gemma4_d_p.tests.scripts.prepare_likelihood_reference /path/to/gpu_traces/gemma4_d_p/<dataset>
+```
+
+Every copy of a trace that the test reads, such as the Weka one, needs its own file.
+
 The test prints the report and writes it to `likelihood.json`. Each depth bin (0–8K, 8K–64K, 64K–256K) shows:
 
 - the mean gold-token NLL under both runs, and its mean and mean absolute difference (ΔNLL);

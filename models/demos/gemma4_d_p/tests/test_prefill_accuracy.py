@@ -127,6 +127,11 @@ def prefill(runtime, kv_cache, token_ids, sampler):
         sampler.add_chunk(runtime.output, start, start + chunk)
 
 
+def _timed(function, *args):
+    started = time.perf_counter()
+    return function(*args), time.perf_counter() - started
+
+
 def compare_kv(kv_cache, context_len, trace_dir, output_dir):
     staging = {}
 
@@ -192,17 +197,17 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
 
     # Scoring only needs the saved hidden states, so it runs on the host while the KV is read back.
     with ThreadPoolExecutor(1) as scorer:
-        likelihood = scorer.submit(compare, dataset.trace_dir, output_dir)
+        likelihood = scorer.submit(_timed, compare, dataset.trace_dir, output_dir)
         started = time.perf_counter()
         kv = compare_kv(kv_cache, context_len, dataset.trace_dir, output_dir)
         kv_seconds = time.perf_counter() - started
-        likelihood = likelihood.result()
+        likelihood, likelihood_seconds = likelihood.result()
     (output_dir / "likelihood.json").write_text(json.dumps(likelihood, indent=2) + "\n")
 
     overall, worst = kv["error_metrics"]["overall"], kv["worst_head"]
     print(
         f"\n{name}: {context_len} tokens; prefill {prefill_seconds:.0f} s, KV comparison {kv_seconds:.0f} s, "
-        f"report in {output_dir}"
+        f"likelihood scoring {likelihood_seconds:.0f} s ({likelihood['reference']} reference), report in {output_dir}"
     )
     print(f"{'Layer':>7} {'PCC':>12} {'Relative RMSE':>16} {'RMSE':>12}")
     for entry in kv["error_metrics"]["layers"]:

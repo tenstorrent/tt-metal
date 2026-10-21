@@ -13,9 +13,14 @@ prompt position, whose logits are a served request's first output token, is repo
 Each argument is a directory or file holding ``hidden_samples.safetensors`` (a TT run or a CPU reference). The
 reference may instead be a GPU trace directory, whose final-layer stream covers every position; the candidate's saved
 positions decide which are scored.
+
+A GPU trace's side of the comparison never changes, so ``prepare_likelihood_reference.py`` stores it once as
+``likelihood_reference.safetensors`` in the trace directory. When that file matches the checkpoint and the document,
+only the candidate's logits are computed.
 """
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -34,6 +39,9 @@ SAMPLE_STRIDE = 16
 TOP_K = 20
 DEPTH_BINS = ((0, 8192), (8192, 65536), (65536, 262144))
 SCORE_BATCH = 256
+REFERENCE_SCORES = "likelihood_reference.safetensors"
+# Bump when ReferenceScores or the scoring math changes, so stored scores are recomputed rather than misread.
+REFERENCE_FORMAT = 1
 _NORM_KEY = "model.language_model.norm.weight"
 _EMBED_KEY = "model.language_model.embed_tokens.weight"
 
@@ -176,6 +184,16 @@ class FinalHead:
         # Gemma4 ties the LM head to the token embedding.
         self.lm_head = state.pop(_EMBED_KEY).float()
         self.softcap = config.final_logit_softcapping
+        from models.demos.gemma4_d_p.utils.partial_weights import resolve_checkpoint_dir
+
+        # What stored reference scores must match: the same weights (checkpoint snapshot), softcap and top-k.
+        self.identity = dict(
+            model=str(hf_model_id),
+            checkpoint=resolve_checkpoint_dir(hf_model_id).name,
+            softcap=str(self.softcap),
+            top_k=str(TOP_K),
+            format=str(REFERENCE_FORMAT),
+        )
 
     @torch.no_grad()
     def logprobs(self, hidden):
@@ -185,35 +203,133 @@ class FinalHead:
         return torch.log_softmax(logits, dim=-1)
 
 
-def topk_kl(reference, candidate, k=TOP_K):
-    """KL(reference || candidate) over the reference's top-k tokens plus one bucket for the rest."""
-    ids = reference.topk(k, dim=-1).indices
-    p, q = reference.gather(-1, ids).double(), candidate.gather(-1, ids).double()
-    # Sum the tail directly: 1 - sum(top-k) rounds to zero or below when the top-k holds nearly all the mass.
-    p_tail, q_tail = (lp.scatter(-1, ids, -math.inf).logsumexp(-1).double() for lp in (reference, candidate))
+def _tail_logprob(logprobs, ids):
+    """Log of the mass outside ``ids``, summed directly: 1 - sum(top-k) rounds to zero or below when the top-k holds
+    nearly all the mass."""
+    return logprobs.scatter(-1, ids, -math.inf).logsumexp(-1)
+
+
+def _kl(p, q, p_tail, q_tail):
+    """KL(p || q) over k buckets (log-probabilities [n, k]) plus one tail bucket each."""
+    p, q, p_tail, q_tail = (x.double() for x in (p, q, p_tail, q_tail))
     tail = torch.where(p_tail == -math.inf, 0.0, p_tail.exp() * (p_tail - q_tail))
     return (p.exp() * (p - q)).sum(-1) + tail
 
 
+def topk_kl(reference, candidate, k=TOP_K):
+    """KL(reference || candidate) over the reference's top-k tokens plus one bucket for the rest."""
+    ids = reference.topk(k, dim=-1).indices
+    return _kl(
+        reference.gather(-1, ids),
+        candidate.gather(-1, ids),
+        _tail_logprob(reference, ids),
+        _tail_logprob(candidate, ids),
+    )
+
+
+class ReferenceScores(NamedTuple):
+    """The reference's side of the comparison at each position: all scoring needs from its logits."""
+
+    positions: torch.Tensor  # int64 [n]
+    next_tokens: torch.Tensor  # int64 [n], -1 past the end of the document
+    gold_logprob: torch.Tensor  # float32 [n], log-probability of the gold next token (unused where there is none)
+    top1: torch.Tensor  # int64 [n], argmax token
+    top_ids: torch.Tensor  # int64 [n, k], the top-k tokens
+    top_logprobs: torch.Tensor  # float32 [n, k], their log-probabilities
+    tail_logprob: torch.Tensor  # float32 [n], log of the mass outside the top-k (-inf when there is none)
+
+
+def reference_scores(head, samples, batch=SCORE_BATCH, k=TOP_K):
+    """Score a reference's hidden states once, keeping only what comparisons read."""
+    parts = []
+    for start in range(0, len(samples.positions), batch):
+        rows = slice(start, start + batch)
+        lp = head.logprobs(samples.hidden[rows])
+        top = lp.topk(k, dim=-1)
+        gold = samples.next_tokens[rows].clamp_min(0).unsqueeze(-1)
+        parts.append(
+            (
+                lp.gather(-1, gold).squeeze(-1),
+                lp.argmax(-1),
+                top.indices,
+                top.values,
+                _tail_logprob(lp, top.indices),
+            )
+        )
+    gold_logprob, top1, top_ids, top_logprobs, tail_logprob = (torch.cat(part) for part in zip(*parts))
+    return ReferenceScores(
+        samples.positions, samples.next_tokens, gold_logprob, top1, top_ids, top_logprobs, tail_logprob
+    )
+
+
+def select_reference(scores, positions):
+    positions = torch.as_tensor(positions, dtype=torch.int64)
+    index = torch.searchsorted(scores.positions, positions).clamp_max(len(scores.positions) - 1)
+    if not torch.equal(scores.positions[index], positions):
+        raise ValueError("The reference scores do not cover every compared position")
+    return ReferenceScores(*(field[index] for field in scores))
+
+
+def document_sha(token_ids):
+    return hashlib.sha256(torch.tensor(token_ids, dtype=torch.int64).numpy().tobytes()).hexdigest()
+
+
+def save_reference_scores(path, scores, identity, token_ids):
+    tensors = {name: value.contiguous() for name, value in scores._asdict().items()}
+    tensors["top_ids"] = tensors["top_ids"].to(torch.int32)
+    save_file(tensors, str(path), metadata=dict(identity, document_sha256=document_sha(token_ids)))
+
+
+def load_reference_scores(trace_dir, positions, identity):
+    """The stored reference scores of a GPU trace at ``positions``, or None when absent or stale."""
+    path = Path(trace_dir) / REFERENCE_SCORES
+    if not path.is_file():
+        return None
+    _, metadata, _ = gpu_final_layer_stream(trace_dir)
+    expected = dict(identity, document_sha256=document_sha(metadata["token_ids"]))
+    with safe_open(str(path), framework="pt") as tensors:
+        stored = tensors.metadata() or {}
+        if any(stored.get(key) != value for key, value in expected.items()):
+            mismatch = sorted(key for key, value in expected.items() if stored.get(key) != value)
+            logger.warning(f"Ignoring {path}: it does not match the current {', '.join(mismatch)}")
+            return None
+        scores = ReferenceScores(*(tensors.get_tensor(name) for name in ReferenceScores._fields))
+    scores = scores._replace(top_ids=scores.top_ids.to(torch.int64))
+    try:
+        return select_reference(scores, positions)
+    except ValueError:
+        logger.warning(f"Ignoring {path}: it does not cover every compared position")
+        return None
+
+
 def score_positions(head, reference, candidate, batch=SCORE_BATCH):
-    """Per-position gold NLL under both runs, top-1 agreement and top-k KL."""
+    """Per-position gold NLL under both runs, top-1 agreement and top-k KL.
+
+    ``reference`` is either the reference's hidden states (Samples) or its stored ReferenceScores.
+    """
+    if isinstance(reference, Samples):
+        if not torch.equal(reference.positions, candidate.positions):
+            raise ValueError("Reference and candidate must cover the same positions of the same document")
+        reference = reference_scores(head, reference, batch)
     gold = reference.next_tokens
     if not torch.equal(reference.positions, candidate.positions) or not torch.equal(gold, candidate.next_tokens):
         raise ValueError("Reference and candidate must cover the same positions of the same document")
     has_gold = gold >= 0
-    nll_ref, nll_cand, top1, kl = [], [], [], []
+    nll_cand, top1, kl = [], [], []
     for start in range(0, len(gold), batch):
         rows = slice(start, start + batch)
-        lp_ref, lp_cand = head.logprobs(reference.hidden[rows]), head.logprobs(candidate.hidden[rows])
+        lp_cand = head.logprobs(candidate.hidden[rows])
         index = gold[rows].clamp_min(0).unsqueeze(-1)
-        nll_ref.append(-lp_ref.gather(-1, index).squeeze(-1).double())
         nll_cand.append(-lp_cand.gather(-1, index).squeeze(-1).double())
-        top1.append(lp_ref.argmax(-1) == lp_cand.argmax(-1))
-        kl.append(topk_kl(lp_ref, lp_cand))
+        top1.append(reference.top1[rows] == lp_cand.argmax(-1))
+        # KL(reference || candidate) over the reference's top-k tokens plus one bucket for the rest.
+        ids = reference.top_ids[rows]
+        q, q_tail = lp_cand.gather(-1, ids), _tail_logprob(lp_cand, ids)
+        kl.append(_kl(reference.top_logprobs[rows], q, reference.tail_logprob[rows], q_tail))
     nan = torch.tensor(math.nan, dtype=torch.float64)
     return dict(
         positions=reference.positions,
-        nll_reference=torch.where(has_gold, torch.cat(nll_ref), nan),
+        nll_reference=torch.where(has_gold, -reference.gold_logprob.double(), nan),
         nll_candidate=torch.where(has_gold, torch.cat(nll_cand), nan),
         top1_agree=torch.cat(top1),
         topk_kl=torch.cat(kl),
@@ -278,7 +394,13 @@ def check_limits(report, limits):
 def compare(reference, candidate, head=None):
     """Compare a candidate run with a reference (a run, a CPU reference or a GPU trace)."""
     candidate_samples = load_samples(candidate)
+    head = head or FinalHead()
     if _samples_path(reference) is None:
+        # Stored scores are used only for a head that can say which weights they must come from.
+        identity = getattr(head, "identity", None)
+        stored = load_reference_scores(reference, candidate_samples.positions, identity) if identity else None
+        if stored is not None:
+            return dict(summarize(score_positions(head, stored, candidate_samples)), reference="stored")
         reference_samples = load_gpu_samples(reference, candidate_samples.positions)
     else:
         # Runs at different chunk sizes sample different last chunks; score the positions both hold.
@@ -286,7 +408,7 @@ def compare(reference, candidate, head=None):
         shared = candidate_samples.positions[torch.isin(candidate_samples.positions, reference_samples.positions)]
         reference_samples = select_positions(reference_samples, shared)
         candidate_samples = select_positions(candidate_samples, shared)
-    return summarize(score_positions(head or FinalHead(), reference_samples, candidate_samples))
+    return dict(summarize(score_positions(head, reference_samples, candidate_samples)), reference="computed")
 
 
 def _tokens(count):
