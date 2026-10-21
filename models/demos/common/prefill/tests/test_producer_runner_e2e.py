@@ -182,8 +182,6 @@ SCENARIOS = {
             "PREFILL_TRACE_DIR": GLM53_TRACE,
             "PREFILL_MTP_TRACE_DIR": GLM53_MTP_TRACE,
             "PREFILL_MTP_LEVELS": "4",
-            # MTP runs keep the bf16 KVPE cache; the runner defaults GLM to scaled FP8.
-            "PREFILL_SCALED_FP8_KV_CACHE": "0",
             "TT_GLM53_MTP_TTNN_CACHE": GLM53_MTP_TTNN_CACHE,
             "PREFILL_HF_MODEL": GLM53_HF_MODEL,
             "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
