@@ -1088,6 +1088,54 @@ def test_tt1xx_l1_slot_still_decodes_through_the_tables(monkeypatch):
     assert counters.decode_config_word(word) == (3, "L1", 2, "L1_0_UNPACKER_0", 0)
 
 
+def _fake_zone_l1(monkeypatch, zone, sync_word):
+    """L1 holding one zone's readout (one FPU counter, count 42) under `sync_word`; every other word reads 0."""
+    import helpers.counters as counters
+
+    monkeypatch.setitem(counters.COUNTER_BANK_NAMES, 1, "FPU")
+    monkeypatch.setitem(counters.COUNTER_NAMES, "FPU", {5: "FPU_COUNTER"})
+    words = {counters._zone_sync_ctrl_addr(zone): sync_word}
+    words[counters._zone_config_addr(zone)] = (
+        counters.PERF_CFG_VALID_BIT | 5 << counters.PERF_CFG_COUNTER_SHIFT | 1
+    )
+    data = counters._zone_data_addr(zone)
+    words[data + 4] = 1000  # FPU bank cycles
+    words[data + 4 * TestConfig._PERF_COUNTERS_BANK_CYCLES_WORDS] = 42
+    monkeypatch.setattr(
+        counters,
+        "read_words_from_device",
+        lambda location, addr, word_count: [
+            words.get(addr + 4 * i, 0) for i in range(word_count)
+        ],
+    )
+    return counters
+
+
+def test_counted_zone_reads_this_launchs_readout(monkeypatch):
+    counters = _fake_zone_l1(monkeypatch, 1, 0xFF | 7 << 8)
+    df = counters.read_counters(zones=0b10, token=7)
+    assert df[["zone", "bank", "counter_name", "cycles", "count"]].values.tolist() == [
+        ["ZONE_1", "FPU", "FPU_COUNTER", 1000, 42]
+    ]
+
+
+@pytest.mark.parametrize(
+    "sync_word", [0, 0xFF | 6 << 8, 0x7F | 7 << 8], ids=["unread", "older", "partial"]
+)
+def test_counted_zone_without_its_readout_fails(monkeypatch, sync_word):
+    """#58719: a counted window without this launch's readout must fail the test, not reach the report blank."""
+    counters = _fake_zone_l1(monkeypatch, 1, sync_word)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        counters.CounterReadoutMissing, match="ZONE_1"
+    ):
+        counters.read_counters(zones=0b10, token=7)
+
+
+def test_unused_zone_is_skipped_without_a_token(monkeypatch):
+    counters = _fake_zone_l1(monkeypatch, 1, 0)
+    assert counters.read_counters().empty
+
+
 def test_l1_client_rows_yield_their_own_metric():
     from helpers.metrics import compute_metrics
     from tt_llk_perf import metrics as mc
