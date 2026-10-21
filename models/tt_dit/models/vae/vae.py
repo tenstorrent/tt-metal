@@ -463,9 +463,10 @@ class VaeAttention(Module):
     # profile 2026-10-21). Each query row's softmax and P@V depend on that row and the full K/V only, so a chip
     # can compute just the rows it keeps: its spatial shard, split again across the TP group, with the TP group's
     # rows all-gathered before ``to_out`` (which needs them replicated). Bit-identical to the replicated path
-    # (same K/V, same k chunking, per-row math); 32x less attention work on a 4x8 mesh. Off until the device
-    # parity test (test_decode_local_query_attention_bit_identical) has run on the shipped TP4 x H8 decoder.
-    local_queries: bool = False
+    # (same K/V, same k chunking, per-row math; test_decode_local_query_attention_bit_identical: max |d| 0 at
+    # 1024x1024, 1344x768 and 2048x2048 on the TP4 x H8 decoder, 2026-10-21); 32x less attention work on a 4x8 mesh
+    # (2048x2048 decode 0.39 -> 0.31 s). Set False for the replicated path.
+    local_queries: bool = True
 
     def __init__(
         self,
