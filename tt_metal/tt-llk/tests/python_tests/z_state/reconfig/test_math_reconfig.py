@@ -1,79 +1,34 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from itertools import product
-
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
 )
 from helpers.param_config import parametrize
+from helpers.reconfig_formats import RECONFIG_FORMATS, reconfig_dest_acc
 from helpers.tensix import TensixState
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
 
 
-def generate_valid_formats(
-    formats: list[DataFormat],
-) -> list[tuple[DataFormat, DataFormat, DataFormat, DataFormat]]:
-    groups = [
-        [f for f in formats if f.is_exponent_A()],
-        [f for f in formats if f.is_exponent_B()],
-        [f for f in formats if f.is_integer()],
-    ]
-
-    return [
-        combo
-        for prev_group in groups
-        for next_group in groups
-        for combo in product(prev_group, prev_group, next_group, next_group)
-    ]
-
-
-def get_valid_dest_acc(
-    formats: tuple[DataFormat, DataFormat, DataFormat, DataFormat],
-) -> list[DestAccumulation]:
-    # int8/int32 math requires FP32 dest accumulation (tt-metal#34499): the reconfig path now asserts
-    # this at runtime keyed on the format, so only exercise dest_acc=Yes when an integer format is involved.
-    return (
-        [DestAccumulation.Yes]
-        if any(f.is_integer() for f in formats)
-        else [DestAccumulation.No, DestAccumulation.Yes]
-    )
-
-
 @parametrize(
-    formats=generate_valid_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8,
-            DataFormat.Bfp8_b,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Tf32,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-            DataFormat.Int8,
-            DataFormat.UInt8,
-        ]
-    ),
-    dest_acc=lambda formats: get_valid_dest_acc(formats),
+    prev_a=RECONFIG_FORMATS,
+    next_b=RECONFIG_FORMATS,
+    dest_acc=lambda prev_a, next_b: reconfig_dest_acc(prev_a, next_b),
 )
 def test_math_reconfig(
-    formats,
+    prev_a,
+    next_b,
     dest_acc,
 ):
-    prev_a, prev_b, next_a, next_b = formats
-
     # tt-metal#34499: reconfig now always re-derives INT8_math_enabled from the new format, so a reconfig
     # (run idx 1) must land in the same ALU state as a fresh hw_configure for the new formats (run idx 0),
     # with no to_from_int8 opt-in flag -- including across an int8 boundary.
     configuration = TestConfig(
         "sources/state/reconfig/math_reconfig_test.cpp",
-        FormatConfig(
-            prev_a, prev_b, next_a, next_b, DataFormat.Float32
-        ),  # ikr, but there is no less painful way to do this right now
+        # The kernel takes prev_b and next_a from the inferred unpack_A_dst and pack_src.
+        InputOutputFormat(prev_a, next_b),
         runtimes=[
             CONFIGURE_TEST_RUN_IDX(0),
         ],
