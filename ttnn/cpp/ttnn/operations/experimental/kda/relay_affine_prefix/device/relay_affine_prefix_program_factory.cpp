@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/kda/relay_affine_prefix/device/relay_affine_prefix_device_operation.hpp"
+#include "ttnn/operations/experimental/kda/relay_affine_prefix/device/relay_affine_prefix_program_factory.hpp"
 
-#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -25,8 +24,6 @@ constexpr uint32_t cb_ein = 2;
 constexpr uint32_t cb_eout = 3;
 constexpr uint32_t cb_chron = 4;
 constexpr uint32_t cb_stage = 5;
-// Tile-column buffers per sender: later columns are read out of their head cores while earlier ones are on the link.
-constexpr uint32_t sender_slots = 4;
 // On the head cores: the sender releases a head once it has read the head's last column.
 constexpr uint32_t ack_semaphore_id = 0;
 // On the sender cores, ids 0, 1, ...: per head the sender serves, the head's finished columns.
@@ -54,9 +51,6 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t state_tiles = kt * kt;
     const uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
     const uint32_t summary_tile = tt::constants::TILE_HW * sizeof(uint16_t);
-    const uint32_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    // Fabric packets of whole FP32 tiles, up to three.
-    const uint32_t chunk_bytes = std::min(3 * state_tile, payload / state_tile * state_tile);
     const uint32_t heads_per_link = (batch_heads + attrs.num_links - 1) / attrs.num_links;
 
     const std::vector<CoreCoord> head_cores(attrs.cores.begin(), attrs.cores.begin() + batch_heads);
@@ -71,9 +65,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         kda_factory_detail::sharded_cb_descriptor(cb_ein, in.entry_landing),
         kda_factory_detail::sharded_cb_descriptor(cb_eout, in.state_staging),
         kda_factory_detail::cb_descriptor(cb_chron, 1, 64, tt::DataFormat::UInt32, head_set),
-        // One page: the sender addresses its unit buffers itself.
+        // One page: the sender addresses its slots itself.
         kda_factory_detail::cb_descriptor(
-            cb_stage, 1, sender_slots * kt * state_tile, tt::DataFormat::Float32, sender_set),
+            cb_stage, 1, relay_affine_prefix_sender_slots * kt * state_tile, tt::DataFormat::Float32, sender_set),
     };
     desc.semaphores.push_back(
         tt::tt_metal::SemaphoreDescriptor{.id = ack_semaphore_id, .core_ranges = head_set, .initial_value = 0});
@@ -98,13 +92,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     }
     std::vector<uint32_t> sender_ct = {cb_stage};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
-    sender_ct.insert(sender_ct.end(), {kt * state_tile, chunk_bytes, kt, sender_slots, ack_semaphore_id});
+    sender_ct.insert(
+        sender_ct.end(),
+        {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, relay_affine_prefix_sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
-
-    const auto arch = mesh->arch();
-    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        ttnn::get_compute_kernel_config_args(arch, attrs.compute_kernel_config);
-    (void)packer_l1_acc;
 
     tt::tt_metal::KernelDescriptor reader{
         .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_affine_prefix.cpp",
@@ -123,12 +114,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         .core_ranges = head_set,
         .compile_time_args = {cb_a, cb_b, cb_ein, cb_eout, kt},
         // The matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
-        .config =
-            tt::tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode},
+        .config = kda_factory_detail::compute_config_descriptor(mesh->arch(), attrs.compute_kernel_config),
     };
     tt::tt_metal::KernelDescriptor sender{
         .kernel_source = std::string(kernel_dir) + "dataflow/sender_relay_affine_prefix.cpp",
@@ -144,7 +130,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto [arrival_address, final_address] = attrs.semaphore_addresses;
     for (uint32_t h = 0; h < batch_heads; ++h) {
         const auto& core = head_cores[h];
-        const auto sender = mesh->worker_core_from_logical_core(sender_cores[h % attrs.num_links]);
+        const auto sender_core = mesh->worker_core_from_logical_core(sender_cores[h % attrs.num_links]);
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
         reader_rt.push_back(in.packed.buffer());
         reader_rt.push_back(in.initial_state.buffer());
@@ -160,8 +146,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         writer_rt.push_back(in.final_landing.buffer());
         writer_rt.push_back(final_address);
         writer_rt.push_back(first_notify_semaphore_id + h / attrs.num_links);
-        writer_rt.push_back(static_cast<uint32_t>(sender.x));
-        writer_rt.push_back(static_cast<uint32_t>(sender.y));
+        writer_rt.push_back(static_cast<uint32_t>(sender_core.x));
+        writer_rt.push_back(static_cast<uint32_t>(sender_core.y));
         writer.emplace_runtime_args(core, writer_rt);
     }
     desc.kernels = {std::move(reader), std::move(writer), std::move(compute), std::move(sender)};

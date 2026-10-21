@@ -4,6 +4,7 @@
 #include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <string>
 
@@ -23,24 +24,36 @@ using tt::tt_metal::CoreRangeSet;
 constexpr uint32_t cb_copy = 20;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/";
 
-}  // namespace
-
-tt::tt_metal::CoreRangeSet projection_cores(const ProjectionProgramConfig& program_config) {
-    if (program_config.allowed_worker_cores) {
-        return *program_config.allowed_worker_cores;
-    }
-    const auto& grid = program_config.compute_with_storage_grid_size;
-    return CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+// The program config with allowed_worker_cores filled in (the compute_with_storage_grid_size block from (0, 0) unless
+// given).
+ProjectionProgramConfig normalized(const ProjectionProgramConfig& program_config, const Tensor& a) {
+    ttnn::operations::matmul::MatmulProgramConfig config = program_config;
+    ttnn::operations::matmul::normalize_program_config(config, a.device()->compute_with_storage_grid_size());
+    return std::get<ProjectionProgramConfig>(config);
 }
+
+}  // namespace
 
 void check_projection(
     const Tensor& a, const Tensor& w, const ProjectionProgramConfig& program_config, std::string_view name) {
+    constexpr std::array accepted = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::BFLOAT8_B};
+    for (const auto& [tensor, tensor_name] : {std::pair{&a, "projection input"}, std::pair{&w, "projection weight"}}) {
+        check_layout(*tensor, tt::tt_metal::Layout::TILE, name, tensor_name);
+        check_interleaved(*tensor, name, tensor_name);
+        check_dtype_in(*tensor, accepted, "BFLOAT16 or BFLOAT8_B", name, tensor_name);
+    }
     const uint32_t mt = a.physical_volume() / a.padded_shape()[-1] / tt::constants::TILE_HEIGHT;
     const uint32_t kt = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t nt = w.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    const auto box = projection_cores(program_config).bounding_box();
+    const auto box = normalized(program_config, a).allowed_worker_cores->bounding_box();
     const auto grid = a.device()->compute_with_storage_grid_size();
     TT_FATAL(w.padded_shape()[-2] == a.padded_shape()[-1], "{}: the projection's A and W K differ", name);
+    // The descriptor builder places the matmul's grid at (0, 0).
+    TT_FATAL(
+        box.start_coord == tt::tt_metal::CoreCoord(0, 0),
+        "{}: the projection's cores {} must start at (0, 0)",
+        name,
+        box);
     TT_FATAL(
         kt % program_config.in0_block_w == 0,
         "{}: K={} tiles must split into {}-tile blocks",
@@ -64,8 +77,7 @@ tt::tt_metal::ProgramDescriptor projection_program(
     const ProjectionProgramConfig& program_config,
     uint32_t output_column,
     const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto config = program_config;
-    config.allowed_worker_cores = projection_cores(program_config);
+    const auto config = normalized(program_config, a);
     tt::tt_metal::ProgramDescriptor desc;
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> no_signaler;
     ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
@@ -79,7 +91,7 @@ tt::tt_metal::ProgramDescriptor projection_program(
         config,
         /*untilize_out=*/false,
         no_signaler,
-        output_column > 0 ? std::optional<uint32_t>(output_column * tt::constants::TILE_WIDTH) : std::nullopt);
+        output_column * tt::constants::TILE_WIDTH);
     return desc;
 }
 

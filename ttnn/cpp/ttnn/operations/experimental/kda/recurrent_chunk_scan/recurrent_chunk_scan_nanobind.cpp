@@ -112,9 +112,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             leading = B * H * G
 
-        The operation applies the same state update as ``recurrent_chunk_scan`` without
-        producing token outputs. Each defined head or tail pair describes its
-        segment's state transition:
+        The operation applies the same state update as ``recurrent_chunk_scan`` and,
+        unless ``emit_outputs`` is set, produces no token outputs. Each defined head or
+        tail pair describes its segment's state transition:
 
             S_after = A @ S_before + B
 
@@ -169,11 +169,21 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 layout the distributed prefix gathers. A rank with no valid chunk writes the
                 identity ``(I, 0)``; the tail is not written.
                 Requires an interleaved ``memory_config``. Defaults to False.
+            emit_outputs (bool, optional): With ``packed_head``, also return each chunk's
+                zero-seeded output ``F(0)`` ``[B*H,N,32,V]`` and identity-seeded output
+                ``F(I)`` ``[B*H,N,32,K]``, and the last segment's ``A`` and ``B``
+                ``[B*H,K,V]``, all FLOAT32: a chunk's output is
+                ``F(0) + (F(I) - F(0)) @ entry`` and the final state ``A @ entry + B``, where entry is
+                the group's entry state before the chronological reset chunk and the
+                tail's entry state from it on. Defaults to False.
+            emit_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the
+                emitted ``F(0)`` and ``F(I)``. Defaults to ``memory_config``.
 
         Returns:
             tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
                 tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``. With
-                ``packed_head``, the single packed head transform.
+                ``packed_head``, the single packed head transform, followed by ``F(0)``,
+                ``F(I)``, ``A`` and ``B`` with ``emit_outputs``.
 
         Note:
             Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
@@ -181,8 +191,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             are unspecified; consumers must use the same chronology and geometry.
 
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
-            accepted as part of the shared prepared-chunk protocol but do not contribute
-            to the state-only summary. All inputs must be interleaved TILE-layout tensors
+            accepted as part of the shared prepared-chunk protocol and are read only with
+            ``emit_outputs``. All inputs must be interleaved TILE-layout tensors
             on the same device and are not modified.
         )doc",
         &ttnn::experimental::kda::summarize_chunk_recurrence,
@@ -202,7 +212,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("actual_end") = nb::none(),
-        nb::arg("packed_head") = false);
+        nb::arg("packed_head") = false,
+        nb::arg("emit_outputs") = false,
+        nb::arg("emit_memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

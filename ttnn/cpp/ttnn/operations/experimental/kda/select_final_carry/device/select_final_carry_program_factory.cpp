@@ -17,6 +17,7 @@
 
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 
 namespace ttnn::experimental::prim {
@@ -68,7 +69,7 @@ tt::tt_metal::ProgramDescriptor build_program(
             ? static_cast<uint32_t>(attrs.cores->size())
             : std::min<uint32_t>(grid.x * grid.y, (state_tiles + tiles_per_copy_worker - 1) / tiles_per_copy_worker);
     CoreRangeSet all_cores = attrs.cores
-                                 ? CoreRangeSet(ttsl::Span<const CoreCoord>(*attrs.cores)).merge_ranges()
+                                 ? kda_factory_detail::merged_core_set(*attrs.cores)
                                  : tt::tt_metal::num_cores_to_corerangeset(copy_workers, grid, /*row_wise=*/true);
     const auto copy_cores =
         attrs.cores ? *attrs.cores : tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);

@@ -186,6 +186,8 @@ def reconstruct_convolution_at_sp_rank(
 
 # Convolution-state NRMSE bar for K3's bfloat8_b projections: q/k/v feed the convolution state directly.
 KIMI_K3_CONVOLUTION_NRMSE = 0.009
+# Output NRMSE bar for K3 (Galaxy SP8xTP4 synthetic: 1.84e-2).
+KIMI_K3_OUTPUT_NRMSE = 0.02
 
 
 @dataclass(frozen=True)
