@@ -8,12 +8,12 @@
 // node and scatter-write DISJOINT regions of the output shard.
 //
 // Resource model (see untilize_with_halo_program_factory.cpp):
-//   tensor::out             - output shard (borrowed-memory address source via
-//                             get_bank_base_address(); both readers scatter-write it).
+//   tensor::out             - output shard (borrowed-memory address source: its raw L1 base,
+//                             the same on every core; both readers scatter-write it).
 //   tensor::in              - input shard (skip_untilize path only): read directly by
-//                             base pointer.
-//   tensor::gather_config   - gather config (L1 path): read by base pointer.
-//   tensor::padding_config  - padding config (L1 path): read by base pointer.
+//                             base pointer (LocalTensorAccessor).
+//   tensor::gather_config   - gather config (L1 path): read by base pointer (LocalTensorAccessor).
+//   tensor::padding_config  - padding config (L1 path): read by base pointer (LocalTensorAccessor).
 //   dfb::untilize_out       - untilized tiles produced by compute (tiled path): the
 //                             gather source FIFO this reader consumes.
 //   dfb::pad_fill / dfb::pad_read
@@ -33,6 +33,9 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "internal/tensor/transfer_noc_addr.h"
+#include "internal/local_mem/address_access.h"
 #include "experimental/kernel_args.h"
 
 constexpr uint16_t TILE_SIZE = 32;
@@ -249,7 +252,9 @@ void kernel_main() {
 
     // Output shard base (borrowed-memory address source; both readers scatter-write here).
     TensorAccessor out_acc(tensor::out);
-    const uint32_t out_base_l1_addr = out_acc.get_bank_base_address();
+    // Raw: same L1 address on another core (scatter-write destination; no handle form yet). Also this core's
+    // padding-fill base.
+    const uint32_t out_base_l1_addr = tensor_accessor::detail::TransferAccess::bank_base(out_acc);
 
     // Gather/padding config base L1 addresses.
     uint32_t gather_config_l1_addr;
@@ -280,11 +285,14 @@ void kernel_main() {
     noc.async_read_barrier();
 #else
     // L1 config: the config tensor is sharded one shard per core; read the local shard directly.
-    TensorAccessor gather_config_acc(tensor::gather_config);
-    gather_config_l1_addr = gather_config_acc.get_bank_base_address();
+    // Raw address: shared with the DRAM-scratch path above and read through raw pointers below.
+    LocalTensorAccessor<uint16_t> gather_config_shard(tensor::gather_config);
+    gather_config_l1_addr =
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(gather_config_shard.local_mem()));
 #ifdef ENABLE_PADDING
-    TensorAccessor padding_config_acc(tensor::padding_config);
-    padding_config_l1_addr = padding_config_acc.get_bank_base_address();
+    LocalTensorAccessor<uint16_t> padding_config_shard(tensor::padding_config);
+    padding_config_l1_addr =
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(padding_config_shard.local_mem()));
 #endif
 #endif
 
@@ -404,8 +412,9 @@ void kernel_main() {
 #else
         {
             // skip_untilize: the resident input shard is the gather source (read directly).
-            TensorAccessor in_acc(tensor::in);
-            in_base_l1_addr = in_acc.get_bank_base_address();
+            // Raw address: write_stick_async takes the source as a raw L1 address (shared with the DFB path).
+            LocalTensorAccessor<uint16_t> in_shard(tensor::in);
+            in_base_l1_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in_shard.local_mem()));
             while (number_of_segments_remaining) {
                 const uint16_t destination_noc_x = config[current_config_index++];
                 const uint16_t destination_noc_y = config[current_config_index++];

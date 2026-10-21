@@ -30,6 +30,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #ifdef DSMC_REDUCE
 #include "api/semaphore.h"
@@ -200,12 +201,14 @@ void kernel_main() {
 
 #ifdef DSMC_STREAMS_W
     DataflowBuffer dfb_w(dfb::w);
-    const uint32_t w_addr = TensorAccessor(tensor::in1).get_bank_base_address();
+    // Raw: DRAM bank-relative base for AllocatorBank.
+    const uint32_t w_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in1));
     Ring ring;
 #endif
 #ifdef DSMC_STREAM1
     DataflowBuffer dfb_x(dfb::x);
-    const uint32_t x_addr = TensorAccessor(tensor::in0).get_bank_base_address();
+    // Raw: same L1 address on the activation shard cores (no handle form yet).
+    const uint32_t x_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in0));
     dfb_x.reserve_back(nblk * KB);
     const uint32_t xl1 = dfb_x.get_write_ptr();
     XQueue xq;
@@ -302,7 +305,8 @@ void kernel_main() {
 #endif
     {
         DataflowBuffer dfb_out(dfb::out);
-        const uint32_t out_addr = TensorAccessor(tensor::output).get_bank_base_address();
+        // Raw: same L1 address on the output shard cores (no handle form yet).
+        const uint32_t out_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::output));
         dfb_out.wait_front(MAXOWN);
         const uint32_t l1 = dfb_out.get_read_ptr();
         for (uint32_t i = 0; i < nown; i++) {
