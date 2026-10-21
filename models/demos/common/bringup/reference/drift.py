@@ -1,27 +1,46 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""F128 (owner): the end-to-end margin. The rung's golden at the reference's own shipped precision (``-official``) is
-compared with its full-precision golden (the target) by the same metrics the ladder and the contract use; the device
-may then miss the full-precision golden by calib x that drift (testing/e2e_limits.py), never by a fixed bar.
+"""F128 (owner): the end-to-end margin; F134: measured on the comparison it gates. The reference at its own shipped
+precision (numerics official, ``reference.shipped_dtype``) is run the way the device runs the rung (testing/ladder.py):
+the golden's state prefix loaded for a ``prefix_from_golden`` rung, each run of a gapped layer subset started from the
+golden block input of its first layer; its layer outputs, states, final hidden and top-5 are compared with the
+full-precision golden (the target) by the metrics the ladder uses. The device may then miss the golden by calib x that
+drift (testing/e2e_limits.py), never by a fixed bar.
 
     python -m models.demos.common.bringup.reference.drift --rung s55296
 
-Writes ``drift.json`` into the full-precision golden: {metric: {"drift": value, "res": resolution floor}}; the floor
-of a float metric is the same metric for the target rounded once to the dtype the official golden stores that tensor
-in (bf16, or fp32 for golden.keep_fp32: no output in that dtype can do better; F133), of an overlap one miss among
-the selected entries (rows for top-5). Records drift_<metric> for the gate.
+Writes ``drift-<rung>.json`` into the full-precision golden: {metric: {"drift": value, "res": resolution floor,
+"region": [axis, lo, hi] | null}}. A float metric's floor is the same metric for the target rounded once to the dtype
+the official golden would store that tensor in (bf16, or fp32 for golden.keep_fp32; F133), an overlap's one miss among
+the selected entries (rows for top-5). A state of a prefix rung is compared over the positions the device computed
+(``region``, along the axis the reference's state_tensors slices; the ladder applies the same region). On the contract
+rung, ``contract_state_<name>_L<i>`` entries: the state as the contract reads it back (every chunk, the last ending
+``tests.contract_tail_pad`` early; growing states over [0, that length rounded down to 32), fixed ones at it).
+Records drift_<rung>_<metric> and drift_metrics for the gate. A G task's pass pins every drift file into the frozen
+block of each task gated on an end-to-end limit (pin()): a drift changed outside its G task fails those gates.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import re
+from pathlib import Path
 
 import torch
 
 from models.demos.common.bringup.core import metrics
-from models.demos.common.bringup.reference.golden import Golden, load_spec, official_dir, rung_dir
+from models.demos.common.bringup.reference.golden import Golden, load_spec, reference_at, store_dtype
+
+BLOCK = 32  # the contract reads its KV back in 32-token blocks (testing/contract.py)
+# a gate on an end-to-end limit (ladder, quick profile, contract): its task pins the drift files (F134)
+E2E_METRIC = re.compile(r"^(pcc|err|overlap)_(layer|state|final_hidden|producer_kv|contract_state)|^top5_overlap")
+
+
+def drift_path(golden_dir, rung: str) -> Path:
+    return Path(golden_dir) / f"drift-{rung}.json"
 
 
 def stored(t: torch.Tensor) -> str:
@@ -29,11 +48,16 @@ def stored(t: torch.Tensor) -> str:
     return "fp32" if t.dtype == torch.float32 else "bf16"
 
 
-def _pcc_entry(official: torch.Tensor, target: torch.Tensor) -> dict:
+def narrow(t: torch.Tensor, region) -> torch.Tensor:
+    return t if not region else t.narrow(region[0], region[1], region[2] - region[1])
+
+
+def _pcc_entry(official: torch.Tensor, target: torch.Tensor, region=None) -> dict:
     from models.demos.common.bringup.testing.noise_floor import round_to
 
-    t = target.float()
-    return {"drift": metrics.pcc(official.float(), t), "res": metrics.pcc(round_to(t, stored(official)), t)}
+    t = narrow(target.float(), region)
+    o = narrow(official.reshape(target.shape), region)
+    return {"drift": metrics.pcc(o.float(), t), "res": metrics.pcc(round_to(t, stored(o)), t), "region": region}
 
 
 def _overlap_res(ids: torch.Tensor) -> float:
@@ -41,27 +65,199 @@ def _overlap_res(ids: torch.Tensor) -> float:
     return 1.0 - 1.0 / max(int((ids >= 0).sum().item()), 1)
 
 
-def drift(target: Golden, official: Golden, layers: list[int], full_stack: bool) -> dict:
-    from models.demos.common.bringup.testing.ladder import index_overlap
+def _region(full: torch.Tensor, part: torch.Tensor, lo: bool) -> list | None:
+    """The positions one slice of the reference's state covers: the axis on which state_tensors at two lengths
+    differ; [axis, size at the shorter length, size at the longer] (lo) or [axis, 0, size at the shorter]."""
+    axes = [d for d in range(full.dim()) if full.shape[d] != part.shape[d]]
+    if not axes:
+        return None
+    if len(axes) > 1 or full.dim() != part.dim():
+        raise SystemExit(f"state_tensors slices {tuple(full.shape)} -> {tuple(part.shape)}: not one position axis")
+    a = axes[0]
+    return [a, part.shape[a], full.shape[a]] if lo else [a, 0, part.shape[a]]
 
-    last = target.n_chunks - 1
+
+def replay(s, ref, g: Golden, layers: list[int], first: int, tail_at: int | None = None) -> dict:
+    """The official reference over the golden's tokens as the ladder feeds the device: from chunk ``first`` (the
+    golden's state prefix loaded before it), each run of the layer subset after a gap from the golden block input of
+    its first layer (written into the block input forward_chunk records, which run_block hands to the steps).
+    ``tail_at``: also the last chunk ending there, from the state before it (the contract)."""
+    from models.demos.common.bringup.reference.generate_golden import run_starts
+
+    seq, chunk = g.seq, g.chunk
+    last, tokens = g.n_chunks - 1, g.tokens()
+    starts = set(run_starts(layers)) - {0}
+    ends_at_last = layers[-1] == s.num_layers - 1
+    state = ref.new_state(seq)
+    if first:
+        for i in layers:
+            ref.load_state(state, i, g.state(i, at=first * chunk), first * chunk)
+    out, fed, firsts, ins = {"trail": {}}, set(), {}, {}
+    out["first_step"] = {i: ref.block_graph(i)[0] for i in starts}
+
+    def run(c: int, end: int, st, keep: bool):
+        s0 = c * chunk
+
+        def rec(name, t):
+            if not name.startswith("L"):
+                if keep and name == "final_norm":
+                    out["final_norm"] = t.detach().clone()
+                return
+            li, key = name[1:].split(".", 1)
+            li = int(li)
+            if key == "in" and li in starts:
+                t.copy_(g.layer(c, li)["in"][: end - s0].reshape(t.shape).to(t.dtype))
+                fed.add((c, li))
+            if keep and li in layers and key == "out":
+                out["trail"][li] = t.detach().clone()
+            if keep and key == "in" and li in starts:
+                ins[li] = t.detach().clone()
+            if keep and li in starts and key == out["first_step"][li].output:
+                firsts[li] = t.detach().clone()
+
+        _, logits = ref.forward_chunk(tokens[s0:end], s0, st, rec, logits_last_n=(end - s0) if ends_at_last else 0)
+        if keep and logits is not None:
+            out["logits"] = logits.float()
+
+    before = None
+    for c in range(first, g.n_chunks):
+        if tail_at is not None and c == last:
+            before = copy.deepcopy(state)
+        run(c, (c + 1) * chunk, state, c == last)
+    missing = sorted({li for li in starts} - {li for _, li in fed})
+    if missing:
+        raise SystemExit(f"forward_chunk recorded no block input L<i>.in for layers {missing}: cannot feed them (F134)")
+    for li in starts:  # the feed must reach the steps: the first step from the golden input gives the recorded output
+        st0 = out["first_step"][li]
+        if tuple(st0.inputs) != ("in",) or st0.stateful or li not in firsts:
+            print(f"note: layer {li}'s first step {st0.name} reads more than its block input; the feed is not checked")
+            continue
+        ctx = ref.chunk_context(li, last * chunk, chunk, state)
+        ctx.extra.setdefault("tokens", tokens[last * chunk : (last + 1) * chunk])
+        y = ref.component(li, st0.name)(ctx, ins[li])
+        if not torch.equal(y.reshape(firsts[li].shape), firsts[li]):
+            raise SystemExit(
+                f"layer {li}: the reference's forward_chunk does not run the block from the block input it records, so "
+                "a gapped subset cannot be replayed; run each block through run_block (reference/interface.py; F134)"
+            )
+    out["state"] = state
+    if before is not None:
+        run(last, tail_at, before, False)
+        out["tail_state"] = before
+    return out
+
+
+def entries(s, ref, g: Golden, layers: list[int], rep: dict, first: int) -> dict:
+    """The ladder's metrics, the replay against the target; states of a prefix rung over the positions computed."""
+    from models.demos.common.bringup.testing.ladder import index_overlap, sampled_rows
+
+    keep, fixed = tuple(s.get("golden.keep_fp32", [])), set(g.state_fixed)
+    last, seq, start = g.n_chunks - 1, g.seq, first * g.chunk
     out = {}
     for i in layers:
-        out[f"pcc_layer_L{i:02d}"] = _pcc_entry(official.layer(last, i)["out"], target.layer(last, i)["out"])
-        want, got = target.state(i), official.state(i)
-        for name, t in want.items():
-            if t.is_floating_point():
-                out[f"pcc_state_{name}_L{i:02d}"] = _pcc_entry(got[name], t)
+        out[f"pcc_layer_L{i:02d}"] = _pcc_entry(store_dtype(rep["trail"][i], keep, "out"), g.layer(last, i)["out"])
+        got = ref.state_tensors(rep["state"], i, seq)
+        pre = ref.state_tensors(rep["state"], i, start) if start else {}
+        for name, want in g.state(i).items():
+            region = _region(got[name], pre[name], True) if start and name not in fixed else None
+            o = got[name]
+            if want.is_floating_point():
+                out[f"pcc_state_{name}_L{i:02d}"] = _pcc_entry(store_dtype(o, keep, name), want, region)
             else:
-                out[f"overlap_state_{name}_L{i:02d}"] = {"drift": index_overlap(got[name], t), "res": _overlap_res(t)}
-    if full_stack:
-        gt, go = target.model(last), official.model(last)
-        out["pcc_final_hidden"] = _pcc_entry(go["final_norm"], gt["final_norm"])
-        top1 = gt["top32_ids"][:, 0].long()
+                w, o = narrow(want, region), narrow(o.reshape(want.shape), region)
+                out[f"overlap_state_{name}_L{i:02d}"] = {
+                    "drift": index_overlap(o, w),
+                    "res": _overlap_res(w),
+                    "region": region,
+                }
+    if layers[-1] == s.num_layers - 1:
+        gm = g.model(last)
+        out["pcc_final_hidden"] = _pcc_entry(store_dtype(rep["final_norm"], keep, "final_norm"), gm["final_norm"])
+        rows = sampled_rows(g.chunk)
+        top1 = gm["top32_ids"][rows][:, 0].long()
+        top5 = rep["logits"][rows].topk(5, dim=-1).indices
         out["top5_overlap"] = {
-            "drift": float((go["top32_ids"][:, :5].long() == top1[:, None]).any(-1).float().mean()),
+            "drift": float((top5 == top1[:, None]).any(-1).float().mean()),
             "res": 1.0 - 1.0 / max(top1.numel(), 1),
+            "region": None,
         }
+    return out
+
+
+def contract_entries(s, ref, g: Golden, layers: list[int], rep: dict, tail_at: int) -> dict:
+    """The states as the contract reads them back: growing ones over [0, tail_at rounded down to BLOCK) of the full
+    run, fixed ones after the last chunk ending at tail_at."""
+    keep, fixed = tuple(s.get("golden.keep_fp32", [])), set(g.state_fixed)
+    length = tail_at - tail_at % BLOCK
+    out = {}
+    for i in layers:
+        full = ref.state_tensors(rep["state"], i, g.seq)
+        part = ref.state_tensors(rep["state"], i, length)
+        tail = ref.state_tensors(rep["tail_state"], i, tail_at)
+        want_at = g.state(i, at=tail_at) if fixed & set(full) else {}
+        for name, want in g.state(i).items():
+            if not want.is_floating_point():
+                continue
+            if name in fixed:
+                o, w, region = tail[name], want_at[name], None
+            else:
+                region = _region(full[name], part[name], False)
+                o, w = full[name], want
+            out[f"contract_state_{name}_L{i:02d}"] = _pcc_entry(store_dtype(o, keep, name), w, region)
+    return out
+
+
+def compute(s, rung_name: str) -> dict:
+    """The drift entries of one rung (and the contract's, on the contract rung)."""
+    from models.demos.common.bringup.testing.contract import contract_rung
+    from models.demos.common.bringup.testing.ladder import rung_layers
+
+    rung = s.rung(rung_name)
+    g = Golden.for_rung(s, rung_name)
+    if g.manifest.get("numerics", "official") != "native":
+        raise SystemExit(f"{g.dir}: numerics {g.manifest.get('numerics', 'official')!r}, want 'native' (F128)")
+    layers = rung_layers(s, rung, g)
+    first = g.n_chunks - 1 if rung.get("prefix_from_golden") else 0
+    dtype = getattr(torch, str(s.get("reference.shipped_dtype")))
+    run_layers = None if layers[-1] == s.num_layers - 1 else list(range(max(layers) + 1))
+    ref = reference_at(s, "official", layers=run_layers, dtype=dtype)
+    tail = None
+    if contract_rung(s) == rung_name:
+        tail = g.seq - int(s.get("tests.contract_tail_pad"))
+    rep = replay(s, ref, g, layers, first, tail if first == 0 else None)
+    out = entries(s, ref, g, layers, rep, first)
+    if tail is not None:
+        if first:  # the contract runs every chunk even when the ladder's rung starts after a golden prefix
+            rep = replay(s, ref, g, layers, 0, tail)
+        out.update(contract_entries(s, ref, g, layers, rep, tail))
+    return out
+
+
+def readers(s, rung_name: str) -> list[str]:
+    """The rungs that read this rung's golden: itself and every rung with ``golden: <it>``."""
+    return [r["name"] for r in s.data["ladder"] if r["name"] == rung_name or r.get("golden") == rung_name]
+
+
+def pin(spec, ledger) -> list[str]:
+    """F134: every drift file of the spec's goldens pinned in the frozen block of each device task gated on an
+    end-to-end limit. Returns the pinned tasks."""
+    from models.demos.common.bringup.core import freeze
+    from models.demos.common.bringup.reference.golden import rung_dir
+
+    dirs = {rung_dir(spec, r) for r in spec.data.get("ladder") or []}
+    files = sorted(str(p) for d in dirs for p in Path(d).glob("drift-*.json"))
+    if not files:
+        return []
+    pins = freeze.hash_paths(spec.repo, files)
+    out = []
+    for tid, t in ledger.tasks().items():
+        conds = (t.get("gate") or {}).get("metrics") or {}
+        if not (t.get("device") and any(E2E_METRIC.match(k) and str(c).endswith("limit") for k, c in conds.items())):
+            continue
+        frozen = dict(t.get("frozen") or {})
+        frozen["files"] = {k: v for k, v in (frozen.get("files") or {}).items() if "/drift-" not in k} | pins
+        ledger.update_task_def(tid, frozen=frozen)
+        out.append(tid)
     return out
 
 
@@ -71,20 +267,16 @@ def main(argv=None) -> None:
     ap.add_argument("--rung", required=True)
     a = ap.parse_args(argv)
     spec = load_spec(a.spec)
-    rung = spec.rung(a.rung)
-    target, official = Golden(rung_dir(spec, rung)), Golden(official_dir(spec, rung))
-    for g, want in ((target, "native"), (official, "official")):
-        if g.manifest.get("numerics", "official") != want:
-            raise SystemExit(f"{g.dir}: numerics {g.manifest.get('numerics', 'official')!r}, want {want!r} (F128)")
-    layers = [i for i in target.layers if i in official.layers]
-    d = drift(target, official, layers, max(layers) == spec.num_layers - 1)
-    (target.dir / "drift.json").write_text(json.dumps(d, indent=1, sort_keys=True))
+    d = compute(spec, a.rung)
+    p = drift_path(Golden.for_rung(spec, a.rung).dir, a.rung)
+    p.write_text(json.dumps(d, indent=1, sort_keys=True))
     for k, v in d.items():
-        metrics.record(f"drift_{k}", v["drift"])
-    metrics.record("drift_metrics", len(d))
+        metrics.record(f"drift_{a.rung}_{k}", v["drift"])
+    metrics.record(f"drift_metrics_{a.rung}", len(d))
     worst = min(d, key=lambda k: d[k]["drift"])
     print(
-        f"drift of the official reference from full precision: {len(d)} metrics, worst {worst} {d[worst]['drift']:.6f}"
+        f"drift of the official reference fed as the device on {a.rung}: {len(d)} metrics, worst {worst} "
+        f"{d[worst]['drift']:.6f} -> {p.name}"
     )
 
 

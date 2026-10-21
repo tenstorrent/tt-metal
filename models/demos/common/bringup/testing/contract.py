@@ -172,7 +172,7 @@ def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str]) -> N
     back. A key that is a state name maps to itself; one that maps to no state with a drift is a failure, never a
     skipped check."""
     names = kv_state_names(s, adapter)
-    states = {m.group(1) for m in map(E.STATE_KEY.match, drift) if m}
+    states = {m.group(2) for m in map(E.STATE_KEY.match, drift) if m and m.group(1) == "contract_state"}
     for k, v in mins.items():
         name = k if k in states else names.get(k)
         if name not in states:
@@ -181,7 +181,7 @@ def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str]) -> N
                 "kv_state_names() -> {producer key: state name} (testing/contract.py, F131)"
             )
             continue
-        lim = E.state_limit(drift, name)
+        lim = E.state_limit(drift, name, "contract_state")
         metrics.record(f"pcc_producer_kv_{k}_limit", lim)
         if v < lim:
             failed.append(f"producer read-back PCC {k} ({name}) {v:.5f} < limit {lim:.5f}")
@@ -293,7 +293,7 @@ def run_contract_test(s, mesh) -> list[str]:
         metrics.record("producer_vs_independent_pcc_gap", gap)
         if gap > 1e-4:
             failed.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
-    drift = E.load(g.dir)  # F128: each state's limit = calib x the reference's own drift on its worst layer
+    drift = E.load(g.dir, rung["name"])  # F128 / F134: calib x the reference's drift as the contract reads it back
     producer_limits(s, adapter, mins, drift, failed)
     if s.state_fixed:
         if not hasattr(hooks, "contract_state_pcc"):
@@ -304,7 +304,7 @@ def run_contract_test(s, mesh) -> list[str]:
                 failed.append("fixed-size state read-back: hooks.contract_state_pcc returned nothing")
             for k, v in fixed.items():
                 metrics.record(f"pcc_contract_state_{k}", v)
-                lim = E.state_limit(drift, k)  # F128: the hook's keys are golden state names
+                lim = E.state_limit(drift, k, "contract_state")  # F128: the hook's keys are golden state names
                 metrics.record(f"pcc_contract_state_{k}_limit", lim)
                 if v < lim:
                     failed.append(f"fixed-size state read-back PCC {k} {v:.5f} < limit {lim:.5f}")

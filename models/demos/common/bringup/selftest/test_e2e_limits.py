@@ -8,6 +8,7 @@ import ast
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -35,20 +36,33 @@ def test_the_limit_is_calib_times_the_reference_drift_and_never_below_resolution
 
 def test_a_rung_without_its_drift_fails_instead_of_falling_back(tmp_path):
     with pytest.raises(FileNotFoundError, match="F128"):
-        E.load(tmp_path)
+        E.load(tmp_path, "s256")
 
 
 class _G:
-    """A golden in memory: layer outs, states and the model outputs of the last chunk."""
+    """A golden in memory: layer outs and states of the last chunk."""
 
-    def __init__(self, out, state, n_chunks=2):
-        self.n_chunks, self._out, self._state = n_chunks, out, state
+    n_chunks, seq, chunk, state_fixed = 2, 64, 32, []
+
+    def __init__(self, out, state):
+        self._out, self._state = out, state
 
     def layer(self, c, i):
         return {"out": self._out[i]}
 
-    def state(self, i):
+    def state(self, i, at=None):
         return self._state[i]
+
+
+class _Ref:
+    def state_tensors(self, state, i, length):
+        return state[i]
+
+
+def _entries(target, official_out, official_state, keep=()):
+    s = SimpleNamespace(get=lambda k, d=None: {"golden.keep_fp32": list(keep)}.get(k, d), num_layers=99)
+    rep = {"trail": {0: official_out}, "state": {0: official_state}}
+    return D.entries(s, _Ref(), target, [0], rep, 0)
 
 
 def test_drift_measures_the_official_reference_against_full_precision():
@@ -58,9 +72,7 @@ def test_drift_measures_the_official_reference_against_full_precision():
     idx = torch.stack([torch.randperm(100, generator=g)[:10] for _ in range(8)])
     flipped = idx.clone()
     flipped[:4, 0] = 500
-    target = _G({0: full}, {0: {"kv": full, "topk": idx}})
-    official = _G({0: rounded}, {0: {"kv": rounded, "topk": flipped}})
-    d = D.drift(target, official, [0], full_stack=False)
+    d = _entries(_G({0: full}, {0: {"kv": full, "topk": idx}}), rounded, {"kv": rounded, "topk": flipped})
     assert 0.99 < d["pcc_layer_L00"]["drift"] < 0.9999 and d["pcc_layer_L00"]["res"] > 0.9999
     assert d["overlap_state_topk_L00"]["drift"] == pytest.approx(1 - 4 / 80)
     assert set(d) == {"pcc_layer_L00", "pcc_state_kv_L00", "overlap_state_topk_L00"}
@@ -74,8 +86,7 @@ def test_the_drift_floor_is_one_rounding_in_the_stored_dtype_and_one_miss_per_se
     full = torch.randn(256, 64, generator=g)
     idx = torch.stack([torch.randperm(4096, generator=g)[:1000] for _ in range(100)])
     target = _G({0: full}, {0: {"rec": full, "topk": idx}})
-    official = _G({0: full.bfloat16()}, {0: {"rec": full.clone(), "topk": idx.clone()}})
-    d = D.drift(target, official, [0], full_stack=False)
+    d = _entries(target, full.clone(), {"rec": full.clone(), "topk": idx.clone()}, keep=("rec",))
     assert 1 - d["pcc_layer_L00"]["res"] > 1e-7  # stored bf16: a bf16 floor
     assert 1 - d["pcc_state_rec_L00"]["res"] < 1e-12  # kept fp32
     assert E.limit(d, "overlap_state_topk_L00") > 0.9999

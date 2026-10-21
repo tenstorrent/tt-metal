@@ -47,6 +47,12 @@ def rung_dir(spec: Spec, rung: dict) -> Path:
 
 
 DERIVED = ("manifest.json", "drift.json", "official_floor.json")  # written after the golden; not in content_hash
+
+
+def derived(name: str) -> bool:
+    return name in DERIVED or (name.startswith("drift-") and name.endswith(".json"))  # F134: drift-<rung>.json
+
+
 OFFICIAL_SUFFIX = "-official"  # F128: the same rung at the reference's own shipped precision (the margin's source)
 
 
@@ -85,7 +91,7 @@ def reference_at(spec: Spec, numerics: str, *, layers=None, dtype=torch.float32)
 
 def content_hash(d: Path) -> str:
     h = hashlib.sha256()
-    for f in sorted(p for p in d.rglob("*") if p.is_file() and p.name not in DERIVED):
+    for f in sorted(p for p in d.rglob("*") if p.is_file() and not derived(p.name)):
         h.update(f"{f.relative_to(d)}\0{sha256_file(f)}\n".encode())
     return h.hexdigest()
 
