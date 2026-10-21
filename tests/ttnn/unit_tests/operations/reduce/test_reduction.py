@@ -1197,3 +1197,24 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     tt_out = ttnn.to_torch(ttnn.sum(tt_a, dim=-1, keepdim=True, scalar=1.0))
 
     assert torch.all(tt_out == 2**25 + 1)
+
+
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize(
+    "shape, dim",
+    [((2, 3, 37, 45), -1), ((2, 3, 37, 45), None), ((1, 1, 32, 40), -1), ((1, 1, 64, 7), -2), ((1, 1, 1, 1), None)],
+)
+def test_max_min_bfloat8_b_unaligned_width(device, op, shape, dim):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape) * 4
+    if shape == (1, 1, 1, 1):
+        torch_input = -torch_input.abs() - 1 if op == "max" else torch_input.abs() + 1
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_input).float()
+    dims = tuple(range(len(shape))) if dim is None else (dim,)
+    expected = torch.amax(stored, dim=dims, keepdim=True) if op == "max" else torch.amin(stored, dim=dims, keepdim=True)
+
+    tt_output = getattr(ttnn, op)(tt_input, dim=dim, keepdim=True)
+    assert tt_output.dtype == ttnn.bfloat8_b
+    output = ttnn.to_torch(tt_output).float().reshape(expected.shape)
+    assert torch.allclose(output, expected, rtol=0.02, atol=0.02), f"max abs diff {(output - expected).abs().max()}"
