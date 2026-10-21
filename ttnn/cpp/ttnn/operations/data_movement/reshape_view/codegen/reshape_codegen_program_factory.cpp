@@ -153,7 +153,6 @@ ProgramDescriptor build_tile_mapped(
     reader.kernel_source = op_kernel("reader_reshape_tile_mapped_pipelined.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    // Half-depth batches keep a slot free for the tile the writer still holds across rows.
     TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
     reader.named_compile_time_args = {
@@ -161,6 +160,7 @@ ProgramDescriptor build_tile_mapped(
         {"tile_bytes", tile_bytes},
         {"map_cb", kCbMap},
         {"input_cb", kCbMappedInput},
+        // Half-depth batches keep a slot free for the tile the writer still holds across rows.
         {"read_batch", std::max<uint32_t>(1, input_depth / 2)},
         {"input_cb_depth", input_depth},
     };
