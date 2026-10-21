@@ -44,5 +44,6 @@ device_config:
 # device and sequence length.
 remote_rollout_config:
   mesh_shape: [1, 2]
-  max_batch_size: 32
+  # max_batch_size: 8 makes some slots diverge on Blackhole (#55425).
+  max_batch_size: 16
   max_seq_len: 2048
