@@ -54,6 +54,70 @@ inline void llk_unpack_AB_matmul_impl(
     WAYPOINT("UPMD");
 }
 
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// Per source, the LLK reads only face_r_dim, total_num_faces() and total_row_dim() < TILE_R_DIM (unpack face by
+// face). The face grid below gives back all three exactly: 4 faces -> 2x2, 1 face -> 1x1, and 2 faces -> 1x2
+// when partial (16x32, 8x32, ...) or 2x1 when not (32x16). unpA (SrcA) is in1, unpB (SrcB) is in0.
+inline void llk_unpack_AB_matmul_init_impl(
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t unpA_face_r_dim,
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpA_num_faces,
+    const std::uint32_t unpB_num_faces,
+    const bool partial_face_a,
+    const bool partial_face_b) {
+    const auto shape_from_legacy =
+        [](const std::uint32_t face_r_dim, const std::uint32_t num_faces, const bool partial_face) {
+            const std::uint8_t num_faces_r_dim = (num_faces == 4 || (num_faces == 2 && !partial_face)) ? 2 : 1;
+            const std::uint8_t num_faces_c_dim = (num_faces == 4 || (num_faces == 2 && partial_face)) ? 2 : 1;
+            return ckernel::make_tensor_shape(
+                static_cast<std::uint8_t>(face_r_dim),
+                static_cast<std::uint8_t>(FACE_C_DIM),
+                num_faces_r_dim,
+                num_faces_c_dim);
+        };
+    const ckernel::TensorShape in0_tensor_shape = shape_from_legacy(unpB_face_r_dim, unpB_num_faces, partial_face_b);
+    const ckernel::TensorShape in1_tensor_shape = shape_from_legacy(unpA_face_r_dim, unpA_num_faces, partial_face_a);
+    LLK_ASSERT(
+        (in1_tensor_shape.total_row_dim() < TILE_R_DIM) == partial_face_a &&
+            (in0_tensor_shape.total_row_dim() < TILE_R_DIM) == partial_face_b,
+        "matmul partial_face does not match face_r_dim / num_faces");
+    llk_unpack_AB_matmul_init_impl(transpose, ct_dim, rt_dim, kt_dim, in0_tensor_shape, in1_tensor_shape);
+}
+
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// The execute reads only total_row_dim() < TILE_R_DIM from each shape, so 16x32 (partial) or 32x32 (not partial)
+// gives back the passed flag exactly. partial_face_a is SrcA (in1), partial_face_b is SrcB (in0), as on main.
+inline void llk_unpack_AB_matmul_impl(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const bool partial_face_a,
+    const bool partial_face_b,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    constexpr ckernel::TensorShape partial_shape = ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, 2);  // 16x32
+    llk_unpack_AB_matmul_impl(
+        base_address_a,
+        base_address_b,
+        tile_index_a,
+        tile_index_b,
+        tile_size_a,
+        tile_size_b,
+        partial_face_b ? partial_shape : ckernel::DEFAULT_TENSOR_SHAPE,  // in0 -> SrcB
+        partial_face_a ? partial_shape : ckernel::DEFAULT_TENSOR_SHAPE,  // in1 -> SrcA
+        ct_dim,
+        rt_dim,
+        kt_dim);
+}
+
 // Matmul in1 maps to hardware SrcA. CB page sizes already use unpacker address units.
 inline void llk_unpack_AB_matmul_set_in1_column_stride(
     const std::uint32_t in1_cb_id, const std::uint32_t stride_tiles) {
