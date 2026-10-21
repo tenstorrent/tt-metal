@@ -10,8 +10,8 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity, MathOperation
 
-from .chain import Chain, Registers
-from .fidelity import (
+from ..chain import Chain, Registers
+from ..fidelity import (
     fidelity_phases,
     flush_pre_carry_denormals,
     min_normal_exponent,
@@ -19,7 +19,7 @@ from .fidelity import (
     resolve_non_finite,
     warn_unmodelled_split,
 )
-from .golden import Golden, OpConfig
+from ..golden import Golden, OpConfig
 
 
 class EltwiseBinaryGolden(Golden):

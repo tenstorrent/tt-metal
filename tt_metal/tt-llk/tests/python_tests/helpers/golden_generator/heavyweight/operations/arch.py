@@ -28,10 +28,10 @@ from ..data_transfer_blocks import (
     QuasarDataTransferBlocks,
     WormholeDataTransferBlocks,
 )
-from .datacopy import DataCopyGolden
-from .eltwise import EltwiseBinaryGolden
-from .matmul import MatmulGolden
-from .reuse_dest import EltwiseBinaryReuseDestGolden
+from .pipelines.datacopy import DataCopyGolden
+from .pipelines.eltwise import EltwiseBinaryGolden
+from .pipelines.matmul import MatmulGolden
+from .pipelines.reuse_dest import EltwiseBinaryReuseDestGolden
 
 
 @dataclass(frozen=True)

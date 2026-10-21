@@ -3,8 +3,8 @@
 
 """Datacopy."""
 
-from .chain import Chain
-from .golden import Golden, OpConfig
+from ..chain import Chain
+from ..golden import Golden, OpConfig
 
 
 class DataCopyGolden(Golden):

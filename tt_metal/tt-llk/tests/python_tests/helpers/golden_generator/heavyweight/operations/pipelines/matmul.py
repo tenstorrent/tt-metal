@@ -16,15 +16,15 @@ from helpers.tile_constants import (
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 
-from ..data_transfer_blocks.l1_codec import datums_per_tile
-from .chain import Chain, Registers
-from .fidelity import (
+from ...data_transfer_blocks.l1_codec import datums_per_tile
+from ..chain import Chain, Registers
+from ..fidelity import (
     fidelity_phases,
     operand_halves,
     resolve_non_finite,
     warn_unmodelled_split,
 )
-from .golden import Golden, OpConfig
+from ..golden import Golden, OpConfig
 
 #: Datums along one edge of a tile. Aliased from the shared tile constants so
 #: there is one definition of 32 rather than another literal here.
