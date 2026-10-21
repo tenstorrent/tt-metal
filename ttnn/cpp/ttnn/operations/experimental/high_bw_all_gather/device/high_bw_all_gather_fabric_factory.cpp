@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <set>
@@ -245,6 +247,20 @@ std::pair<std::vector<Coord>, std::vector<Coord>> hamiltonian_decomposition(uint
     TT_THROW("high_bw_all_gather: no Hamiltonian decomposition found for a {}x{} torus", rows, cols);
 }
 
+// The search depends only on the torus shape (fixed seed), so one result per shape serves every program: a program
+// cache miss for a new shape or dtype no longer searches again (8x4: 0.4 ms, 8x8: ~230 ms).
+const std::pair<std::vector<Coord>, std::vector<Coord>>& cached_hamiltonian_decomposition(
+    uint32_t rows, uint32_t cols) {
+    static std::mutex mutex;
+    static std::map<std::pair<uint32_t, uint32_t>, std::pair<std::vector<Coord>, std::vector<Coord>>> cycles_of_shape;
+    std::lock_guard lock(mutex);
+    auto it = cycles_of_shape.find({rows, cols});
+    if (it == cycles_of_shape.end()) {
+        it = cycles_of_shape.emplace(std::pair{rows, cols}, hamiltonian_decomposition(rows, cols)).first;
+    }
+    return it->second;
+}
+
 // A link worker's downstream sends back into this chip (the opposite direction) iff it has outgoing shards; then this
 // link worker signals it that this chip has started the call.
 bool signals_started_to_downstream(const GatherPlan& plan, uint32_t chip_index, uint32_t ring, uint32_t direction) {
@@ -320,7 +336,7 @@ GatherPlan build_gather_plan(
         const bool torus = is_2d && axis_topology[0] == tt::tt_fabric::Topology::Ring &&
                            axis_topology[1] == tt::tt_fabric::Topology::Ring && mesh_rows >= 3 && mesh_cols >= 3;
         if (torus) {
-            auto [cycle_a, cycle_b] = hamiltonian_decomposition(mesh_rows, mesh_cols);
+            const auto& [cycle_a, cycle_b] = cached_hamiltonian_decomposition(mesh_rows, mesh_cols);
             rings_of_group.push_back({cycle_a, cycle_b});
             closed_ring = true;
         } else {
