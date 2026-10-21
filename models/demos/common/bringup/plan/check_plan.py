@@ -19,15 +19,13 @@ import json
 import re
 from pathlib import Path
 
-import torch
-
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.plan import approvals, components
 from models.demos.common.bringup.plan.boxes import check_boxes, scaling_applies, table
 from models.demos.common.bringup.plan.memory import check_plan, checkpoint_tensors, load_plan
 from models.demos.common.bringup.plan.scale import kept_counts, load_scaling, plan_cut
-from models.demos.common.bringup.reference.golden import hf_path, load_spec
+from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, hf_path, load_spec, reference_at
 
 
 def text_config(hf_dir) -> dict:
@@ -85,8 +83,8 @@ def main(argv=None):
     for e in res["errors"]:
         print(f"PLAN ERROR {e}")
 
-    ref = spec.hooks().reference(
-        spec, layers=sorted({spec.representative_layer(b) for b in spec.data["block_types"]}), dtype=torch.float32
+    ref = reference_at(
+        spec, TARGET_NUMERICS, layers=sorted({spec.representative_layer(b) for b in spec.data["block_types"]})
     )
     comp_errs = components.validate(spec, ref)
     for e in comp_errs:

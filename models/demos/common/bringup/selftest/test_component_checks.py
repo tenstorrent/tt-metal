@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from models.demos.common.bringup.core.runs import IMPL_ENV, FreezeError, freeze_task
+from models.demos.common.bringup.reference.golden import reference_at
 from models.demos.common.bringup.selftest.conftest import got
 from models.demos.common.bringup.selftest.test_device_side import _load, gspec, noise  # noqa: F401 (fixtures)
 from models.demos.common.bringup.testing import component_checks as CC
@@ -62,7 +63,7 @@ def test_second_inputs(gspec):
     from models.demos.common.bringup.testing.harness import component_golden
 
     g, c = component_golden(s)
-    ref = s.hooks().reference(s, layers=[0], dtype=torch.float32)
+    ref = reference_at(s, "native", layers=[0])
     names = {st.name: st for st in ref.block_graph(0)}
     att = [x.name for x in CC.cases(s, ref, 0, names["attention"], g, c, "float")]
     assert att[0] == "golden" and "mixed" in att and "big" in att

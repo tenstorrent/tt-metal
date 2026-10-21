@@ -26,12 +26,11 @@ from __future__ import annotations
 
 import argparse
 
-import torch
 import yaml
 
 from models.demos.common.bringup.intake import trim_checkpoint
 from models.demos.common.bringup.plan.boxes import scaling_applies
-from models.demos.common.bringup.reference.golden import load_spec, rung_dir
+from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, load_spec, reference_at, rung_dir
 from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing.templates import component_test_path, swap_test_path
 
@@ -70,7 +69,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     with the rest once R.3 has passed and the block graphs are known)."""
     if ref is None and not early:
         reps = sorted({spec.representative_layer(bt) for bt in spec.data["block_types"]})
-        ref = spec.hooks().reference(spec, layers=reps, dtype=torch.float32)
+        ref = reference_at(spec, TARGET_NUMERICS, layers=reps)
     model_dir = rel(spec, spec.model_dir)
     ref_paths = [f"{model_dir}/reference", f"{model_dir}/bringup/hooks.py", f"{model_dir}/__init__.py"]
     impl_paths = [f"{model_dir}/tt", f"{model_dir}/bringup/hooks.py"]
@@ -153,12 +152,16 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "reference",
         ["R.2"],
         f"{real}{PY}.reference.check_reference --seq {first['seq']} --chunk {first['chunk']}",
-        {
-            "pcc_hidden": ">= 0.99999",
-            "pcc_state_min": ">= 0.99999",
-            "graph_errors": "== 0",
-            "boundaries_missing": "== 0",
-            "graph_replay_maxabs": "<= 0",
+        {  # F132: the full-precision target and the official arithmetic (official_), both self-consistent
+            f"{pre}{k}": v
+            for pre in ("", "official_")
+            for k, v in {
+                "pcc_hidden": ">= 0.99999",
+                "pcc_state_min": ">= 0.99999",
+                "graph_errors": "== 0",
+                "boundaries_missing": "== 0",
+                "graph_replay_maxabs": "<= 0",
+            }.items()
         },
         paths=ref_paths,
     )

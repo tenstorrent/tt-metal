@@ -45,6 +45,7 @@ from models.demos.common.bringup.dev.f49_mutation_proof import (  # noqa: E402
     run,
     verdict,
 )
+from models.demos.common.bringup.reference.golden import reference_at
 from models.demos.common.bringup.testing import component as COMP  # noqa: E402
 from models.demos.common.bringup.testing import mutate as MU  # noqa: E402
 from models.demos.common.bringup.testing.component import run_component_test  # noqa: E402
@@ -231,11 +232,7 @@ def main(argv=None):
         step, layer = t["step"], t["layer"]
         mod = load_test(t["path"])
         want = g.layer(c, layer)[
-            next(
-                st.output
-                for st in hooks.reference(spec, layers=[layer], dtype=torch.float32).block_graph(layer)
-                if st.name == step
-            )
+            next(st.output for st in reference_at(spec, "native", layers=[layer]).block_graph(layer) if st.name == step)
         ]
         is_float = want.is_floating_point()
         plan = [("reference", "reference", None)]

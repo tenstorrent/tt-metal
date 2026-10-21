@@ -45,6 +45,7 @@ sys.path.insert(0, str(REPO))
 from models.demos.common.bringup.core import metrics  # noqa: E402
 from models.demos.common.bringup.core.runs import IMPL_ENV  # noqa: E402
 from models.demos.common.bringup.core.spec import Spec  # noqa: E402
+from models.demos.common.bringup.reference.golden import reference_at
 from models.demos.common.bringup.testing import mutate as MU  # noqa: E402
 from models.demos.common.bringup.testing.component import run_swap_test  # noqa: E402
 from models.demos.common.bringup.testing.templates import tests_dir  # noqa: E402
@@ -189,7 +190,7 @@ def main(argv=None):
         bt, sw = t["block_type"], t["swapped"]
         step = sw[-1]
         reviewed = load_test(t["path"]).test_swap if t["path"].name in reviewed_names else None
-        ref = hooks.reference(spec, layers=[spec.representative_layer(bt)], dtype=torch.float32)
+        ref = reference_at(spec, "native", layers=[spec.representative_layer(bt)])
         out_name = next(st.output for st in ref.block_graph(spec.representative_layer(bt)) if st.name == step)
         from models.demos.common.bringup.testing.harness import component_golden
 
