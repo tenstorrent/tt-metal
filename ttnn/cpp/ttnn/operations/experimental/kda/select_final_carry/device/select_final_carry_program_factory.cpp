@@ -4,6 +4,7 @@
 #include "ttnn/operations/experimental/kda/select_final_carry/device/select_final_carry_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -43,8 +44,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     const SelectFinalCarryInputs& in,
     const Tensor& output,
     const ttnn::MeshCoordinate& coord,
-    const tt::tt_metal::GlobalSemaphore& barrier,
-    const tt::tt_metal::GlobalSemaphore& arrival) {
+    uint32_t barrier_address,
+    uint32_t arrival_address) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* mesh = in.prefix_final.device();
     const uint32_t axis = attrs.sequence_parallel_axis;
@@ -60,10 +61,16 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t packet_pages = std::min<uint32_t>(2, max_payload / page_size);
 
     const auto grid = mesh->compute_with_storage_grid_size();
+    // Given cores all copy (and the first num_links send); otherwise enough cores from the grid's start copy.
     const uint32_t copy_workers =
-        std::min<uint32_t>(grid.x * grid.y, (state_tiles + tiles_per_copy_worker - 1) / tiles_per_copy_worker);
-    CoreRangeSet all_cores = tt::tt_metal::num_cores_to_corerangeset(copy_workers, grid, /*row_wise=*/true);
-    const auto copy_cores = tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);
+        attrs.cores
+            ? static_cast<uint32_t>(attrs.cores->size())
+            : std::min<uint32_t>(grid.x * grid.y, (state_tiles + tiles_per_copy_worker - 1) / tiles_per_copy_worker);
+    CoreRangeSet all_cores = attrs.cores
+                                 ? CoreRangeSet(ttsl::Span<const CoreCoord>(*attrs.cores)).merge_ranges()
+                                 : tt::tt_metal::num_cores_to_corerangeset(copy_workers, grid, /*row_wise=*/true);
+    const auto copy_cores =
+        attrs.cores ? *attrs.cores : tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);
 
     // The tail can only separate from the prefix on a line of several ranks. Two ranks are one pair of chips
     // either way; as a ring both neighbors would be the same chip and every count would arrive twice.
@@ -74,11 +81,15 @@ tt::tt_metal::ProgramDescriptor build_program(
         forward = ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, 1, topology, axis);
         backward = ttnn::ccl::get_physical_neighbor_from_physical_coord(in.prefix_final, coord, -1, topology, axis);
         TT_FATAL(forward || backward, "select_final_carry: no fabric neighbor on the sequence-parallel line");
-        const auto sub_device = mesh->get_sub_device_ids().at(0);
-        CoreRangeSet fabric_range;
-        std::tie(fabric_range, fabric_cores) =
-            ttnn::ccl::choose_worker_cores(attrs.num_links, 1, mesh, sub_device, CoreCoord(0, 0), std::nullopt);
-        all_cores = all_cores.merge(fabric_range);
+        if (attrs.cores) {
+            fabric_cores.assign(attrs.cores->begin(), attrs.cores->begin() + attrs.num_links);
+        } else {
+            const auto sub_device = mesh->get_sub_device_ids().at(0);
+            CoreRangeSet fabric_range;
+            std::tie(fabric_range, fabric_cores) =
+                ttnn::ccl::choose_worker_cores(attrs.num_links, 1, mesh, sub_device, CoreCoord(0, 0), std::nullopt);
+            all_cores = all_cores.merge(fabric_range);
+        }
     }
     const uint32_t ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(in.prefix_final, coord, axis);
     const auto [targets_forward, targets_backward] =
@@ -91,7 +102,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     const auto state_format = tt::tt_metal::datatype_to_dataformat_converter(in.prefix_final.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = 4 * packet_pages * page_size,
+        // Two of the reader's eight-packet batches (reader_select_final_carry.cpp).
+        .total_size = 2 * 8 * packet_pages * page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = tiles_cb, .data_format = state_format, .page_size = page_size}}},
@@ -135,6 +147,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     reader.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     reader.compile_time_args = std::move(reader_args);
+    if (attrs.prefix_on_last_rank) {
+        reader.defines = {{"PREFIX_ON_LAST_RANK", "1"}};
+    }
     reader.config = tt::tt_metal::ReaderConfigDescriptor{};
     tt::tt_metal::KernelDescriptor writer;
     writer.kernel_source = std::string(kernel_dir) + "writer_select_final_carry.cpp";
@@ -176,12 +191,12 @@ tt::tt_metal::ProgramDescriptor build_program(
                 const uint32_t connections = uint32_t(forward.has_value()) + uint32_t(backward.has_value());
                 writer_rt.insert(
                     writer_rt.end(),
-                    {static_cast<uint32_t>(arrival.address()),
+                    {arrival_address,
                      static_cast<uint32_t>(drain_core.x),
                      static_cast<uint32_t>(drain_core.y),
                      uint32_t(link == 0),
                      attrs.num_links,
-                     static_cast<uint32_t>(barrier.address()),
+                     barrier_address,
                      static_cast<uint32_t>(worker.x),
                      static_cast<uint32_t>(worker.y),
                      connections});
@@ -221,19 +236,27 @@ tt::tt_metal::WorkloadDescriptor SelectFinalCarryProgramFactory::create_workload
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor workload;
     auto* mesh = in.prefix_final.device();
-    const auto sub_device = mesh->get_sub_device_ids().at(0);
-    const auto cores = mesh->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device);
-    // Both counters persist across replays, so they live where a fabric mux cannot clobber them.
-    const auto semaphore_memory = ttnn::ccl::prefer_l1_small_buffer_type(*mesh);
-    workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh, cores, 0, semaphore_memory));
-    workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh, cores, 0, semaphore_memory));
-    // The zeroed counters must land before any device's program can increment a peer's.
-    tt::tt_metal::distributed::Synchronize(
-        *mesh, std::nullopt, ttsl::SmallVector<tt::tt_metal::SubDeviceId>{sub_device});
+    std::array<uint32_t, 2> semaphores{};
+    if (attrs.semaphore_addresses) {
+        semaphores = *attrs.semaphore_addresses;
+    } else {
+        const auto sub_device = mesh->get_sub_device_ids().at(0);
+        const auto cores = mesh->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device);
+        // Both counters persist across replays, so they live where a fabric mux cannot clobber them.
+        const auto semaphore_memory = ttnn::ccl::prefer_l1_small_buffer_type(*mesh);
+        for (auto& address : semaphores) {
+            workload.semaphores.push_back(
+                ttnn::global_semaphore::create_global_semaphore(mesh, cores, 0, semaphore_memory));
+            address = static_cast<uint32_t>(workload.semaphores.back().address());
+        }
+        // The zeroed counters must land before any device's program can increment a peer's.
+        tt::tt_metal::distributed::Synchronize(
+            *mesh, std::nullopt, ttsl::SmallVector<tt::tt_metal::SubDeviceId>{sub_device});
+    }
     for (const auto& coord : tensor_coords.coords()) {
         workload.programs.push_back(
             {ttnn::MeshCoordinateRange(coord),
-             build_program(attrs, in, outputs[0], coord, workload.semaphores[0], workload.semaphores[1])});
+             build_program(attrs, in, outputs[0], coord, semaphores[0], semaphores[1])});
     }
     return workload;
 }
