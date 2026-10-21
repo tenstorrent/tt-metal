@@ -20,9 +20,12 @@
 
 using namespace ckernel;
 
+// Set by the last _llk_math_reduce_init_: the unpack thread was initialised with the same col_pair
+inline bool reduce_col_pair_state = false;
+
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
-inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape);
+inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape, const bool col_pair);
 
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
@@ -123,6 +126,27 @@ inline void reduce_row_pool_all_faces_release(const std::uint32_t num_faces_c_di
     for (std::uint32_t col_num = 0; col_num < num_faces_c_dim; col_num++)
     {
         reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+    }
+}
+
+// The two faces of a face row sit in one SrcA bank (rows 0 and 16). Their pools go to different DEST rows, so the phases
+// of the two chains alternate; per DEST row the phase order is the one of the face-by-face loop.
+template <MathFidelity math_fidelity>
+inline void reduce_col_pool_pair()
+{
+    constexpr std::uint32_t phases = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
+    for (std::uint32_t phase = 0; phase < phases; phase++)
+    {
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
+        // The second face pools into DEST face 1 (dst field 16, the D counter value 8 of the face-by-face loop)
+        if (phase + 1 < phases)
+        {
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 16);
+        }
+        else
+        {
+            TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 16);
+        }
     }
 }
 
@@ -505,7 +529,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false, int col_pair_static = -1>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
@@ -580,6 +604,18 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
+        // col_pair_static 1: the caller's init opted in, so the state need not be read
+        if constexpr (type != PoolType::MAX && math_fidelity != MathFidelity::LoFi && col_pair_static != 0)
+        {
+            if ((col_pair_static == 1 || reduce_col_pair_state) && reduce_col_paired<type, dim>(tensor_shape))
+            {
+                for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
+                {
+                    reduce_col_pool_pair<math_fidelity>();
+                }
+                return;
+            }
+        }
         for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
         {
             // Just pool
@@ -682,7 +718,7 @@ inline void _llk_math_reduce_block_(
  * @param tensor_shape: Tile shape determining dest stride for REDUCE_ROW.
  */
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
-inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
+inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape, const bool col_pair)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
@@ -782,6 +818,28 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
                 .set(ADDR_MOD_1);
         }
 
+        if constexpr (dim == ReduceDim::REDUCE_COL && type != PoolType::MAX)
+        {
+            if (col_pair)
+            {
+                addr_mod_t {
+                    .srca = {.incr = FACE_R_DIM},
+                }
+                    .set(ADDR_MOD_2);
+
+                addr_mod_t {
+                    .srca     = {.clr = 1},
+                    .fidelity = {.incr = 1},
+                }
+                    .set(ADDR_MOD_3);
+
+                addr_mod_t {
+                    .srca     = {.clr = 1},
+                    .fidelity = {.clr = 1},
+                }
+                    .set(ADDR_MOD_4);
+            }
+        }
     }
 }
 
@@ -796,7 +854,7 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @note Call @ref _llk_math_reduce_ with matching template args after this function,
  *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool col_pair = false>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
     // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum).
@@ -805,7 +863,14 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
-    reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
+    static_assert(!col_pair || math_fidelity != MathFidelity::LoFi, "the column pair layout is not used at LoFi");
+    bool pair = false;
+    if constexpr (dim == ReduceDim::REDUCE_COL && type != PoolType::MAX && math_fidelity != MathFidelity::LoFi)
+    {
+        pair                  = col_pair && reduce_col_paired<type, dim>(tensor_shape);
+        reduce_col_pair_state = pair;
+    }
+    reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape, pair);
     reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

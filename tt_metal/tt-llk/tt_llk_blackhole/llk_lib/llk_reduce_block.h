@@ -23,4 +23,11 @@ constexpr bool reduce_block_holds_scaler(const TensorShape& tensor_shape)
            (tensor_shape.face_r_dim == FACE_R_DIM);
 }
 
+// Unpack and math must agree on the COL pair layout (two faces of a face row per SrcA bank); both inits opt in with col_pair.
+template <PoolType pool_type, ReduceDim reduce_dim>
+constexpr bool reduce_col_paired(const TensorShape& tensor_shape)
+{
+    return (reduce_dim == ReduceDim::REDUCE_COL) && (pool_type != PoolType::MAX) && (tensor_shape.total_num_faces() == 4) &&
+           (tensor_shape.face_r_dim == FACE_R_DIM);
+}
 }

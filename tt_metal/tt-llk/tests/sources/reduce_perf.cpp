@@ -55,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             /* num_faces */ 4,
             /* num_faces */ 4);
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, (MATH_FIDELITY != ckernel::MathFidelity::LoFi)>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, (MATH_FIDELITY != ckernel::MathFidelity::LoFi)>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {

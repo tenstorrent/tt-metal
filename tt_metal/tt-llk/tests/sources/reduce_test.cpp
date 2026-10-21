@@ -43,7 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
+    _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, (MATH_FIDELITY != ckernel::MathFidelity::LoFi)>(tensor_shape);
     for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
     {
         _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[0]));
@@ -73,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, (MATH_FIDELITY != ckernel::MathFidelity::LoFi)>(tensor_shape);
 
     if (params.IS_REDUCE_TO_ONE)
     {
