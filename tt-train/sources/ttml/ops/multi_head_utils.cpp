@@ -92,14 +92,20 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create
 
     autograd::GradFunction grad_q = [out_q, out_k, out_v, qs, kvs]() {
         // (B, heads, S, head_dim) -> (B, 1, S, heads * head_dim)
-        auto grad_q = ttnn::experimental::nlp_concat_heads(out_q->get_grad());
-        auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
-        auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
-        if (kvs) {
-            qs->add_grad(grad_q);
-            kvs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3));
-        } else {
+        if (!kvs) {
+            auto grad_q = ttnn::experimental::nlp_concat_heads(out_q->get_grad());
+            auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
+            auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
             qs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3));
+            return;
+        }
+        if (qs->get_requires_grad()) {
+            qs->add_grad(ttnn::experimental::nlp_concat_heads(out_q->get_grad()));
+        }
+        if (kvs->get_requires_grad()) {
+            auto grad_k = ttnn::experimental::nlp_concat_heads(out_k->get_grad());
+            auto grad_v = ttnn::experimental::nlp_concat_heads(out_v->get_grad());
+            kvs->add_grad(ttnn::concat(std::vector<ttnn::Tensor>({grad_k, grad_v}), /* dim */ 3));
         }
     };
 
