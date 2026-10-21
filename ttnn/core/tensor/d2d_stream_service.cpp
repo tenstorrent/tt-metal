@@ -33,7 +33,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
@@ -47,6 +46,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <internal/mesh_device.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
@@ -156,6 +156,22 @@ std::map<distributed::MeshCoordinate, DeviceAddr> collect_backing_addrs(
     return addrs;
 }
 
+// Looks up `core` on `mesh`. Fails if the chip has no PCIe device of its own.
+PCIeCoreLocation resolve_pcie_core(distributed::MeshDevice& mesh, const distributed::MeshCoreCoord& core) {
+    const auto logical_device_id = mesh.get_device(core.device_coord)->id();
+    const auto pcie_device_id = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(logical_device_id));
+    TT_FATAL(
+        pcie_device_id.has_value(),
+        "Failed to resolve physical PCIe device for logical chip id {} (mesh coord {}).",
+        logical_device_id,
+        core.device_coord);
+    return PCIeCoreLocation{
+        .pcie_device_id = static_cast<uint32_t>(pcie_device_id.value()),
+        .core = core,
+        .virtual_core = mesh.worker_core_from_logical_core(core.core_coord),
+    };
+}
+
 // One D2DReceiverDescriptor entry per coord of a receiver.
 std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
     distributed::MeshDevice& mesh,
@@ -176,12 +192,12 @@ std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
     for (const auto& [coord, core] : service_cores) {
         const auto gate = stage_gate_addrs.find(coord);
         out.push_back(D2DReceiverCoordDescriptor{
-            .service_core = distributed::PCIeCoreLocation::resolve(mesh, distributed::MeshCoreCoord(coord, core)),
+            .service_core = resolve_pcie_core(mesh, distributed::MeshCoreCoord(coord, core)),
             .fabric_node_id = socket.get_fabric_node_id(SocketEndpoint::RECEIVER, coord),
             .sender_fabric_node_id = socket.get_fabric_node_id(SocketEndpoint::SENDER, coord),
             .backing_tensor_addr = backing_addrs.at(coord),
             .stage_gate_base_addr = gate == stage_gate_addrs.end() ? 0 : gate->second,
-            .metadata_core = metadata_worker ? std::optional(distributed::PCIeCoreLocation::resolve(
+            .metadata_core = metadata_worker ? std::optional(resolve_pcie_core(
                                                    mesh, distributed::MeshCoreCoord(coord, *metadata_worker)))
                                              : std::nullopt,
         });

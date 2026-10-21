@@ -14,23 +14,36 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
 
 #include "ttnn/tensor/d2d_stream_service.hpp"
 
 namespace ttnn {
 
+// A core, described so that another process on the same host can reach it over PCIe.
+struct PCIeCoreLocation {
+    // Physical PCIe device number (/dev/tenstorrent/N), not the UMD logical chip id. The logical id
+    // depends on TT_VISIBLE_DEVICES, so two processes can disagree on it. The physical number is the
+    // same in every process on the host.
+    uint32_t pcie_device_id = 0;
+    tt::tt_metal::distributed::MeshCoreCoord core;  // mesh coord + logical core
+    tt::tt_metal::CoreCoord virtual_core;           // virtual (translated) NoC coords
+
+    bool operator==(const PCIeCoreLocation&) const = default;
+};
+
 // One coord of a D2D receiver.
 struct D2DReceiverCoordDescriptor {
-    tt::tt_metal::distributed::PCIeCoreLocation service_core;
+    PCIeCoreLocation service_core;
     tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_metal::DeviceAddr backing_tensor_addr = 0;
     tt::tt_metal::DeviceAddr stage_gate_base_addr = 0;  // service-core L1 of gate 0; 0 without gates
     // A receiver worker core holding the metadata (every receiver worker core gets a copy).
     // Empty without metadata.
-    std::optional<tt::tt_metal::distributed::PCIeCoreLocation> metadata_core;
+    std::optional<PCIeCoreLocation> metadata_core;
 
     bool operator==(const D2DReceiverCoordDescriptor&) const = default;
 };

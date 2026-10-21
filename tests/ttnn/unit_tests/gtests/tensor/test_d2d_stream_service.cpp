@@ -2856,7 +2856,7 @@ TEST_F(D2DStreamServiceTest, StageGateWorkerKeepOpenRowPair) {
 
 TEST(D2DPipelineDescriptorTest, RoundTrip) {
     using tt::tt_metal::distributed::MeshCoreCoord;
-    using tt::tt_metal::distributed::PCIeCoreLocation;
+    using ttnn::PCIeCoreLocation;
     ttnn::D2DPipelineDescriptor desc;
     // With `with_extras`, the receiver has metadata and stage gates; without, it has neither.
     const auto receiver = [](int sender_rank, uint32_t pcie_device_id, uint32_t mesh_id, bool with_extras) {
