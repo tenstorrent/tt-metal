@@ -831,7 +831,8 @@ class MiMoV2ForCausalLM:
 
     def warmup_model_decode(self, kv_cache=None, enable_trace=False, max_batch_size=None, **kwargs):
         """``enable_trace``: capture each replica's decode trace (every slot idle, so no KV is written); otherwise
-        compile the eager step."""
+        compile the eager step. The plugin always runs the eager pass first; with MTP the verify and draft programs
+        compile in their own captures, so that pass is the same as without it."""
         for lane, model in enumerate(self.models):
             if enable_trace:
                 if model.decode_trace is None:
@@ -846,8 +847,6 @@ class MiMoV2ForCausalLM:
                 if model.mtp is not None and model.verify_trace is None:
                     model.capture_spec_traces()
                     logger.info(f"MiMo vLLM: replica {lane} verify and MTP draft traces captured")
-            elif model.mtp is not None:
-                raise ValueError("speculative decoding replays its verify and draft traces: trace_mode decode_only")
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))

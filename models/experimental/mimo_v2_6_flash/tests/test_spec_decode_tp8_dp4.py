@@ -56,6 +56,8 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
         specs.append(((num_blocks, 1, BLOCK_SIZE, dims.head_dim), torch.bfloat16, i))
     kv = model.allocate_kv_cache_per_layer(specs)
     model.warmup_model_prefill(kv)
+    # The plugin's two passes: eager, then trace capture.
+    model.warmup_model_decode(kv, enable_trace=False)
     model.warmup_model_decode(kv, enable_trace=True)
     page_table = 1 + torch.arange(rows * width, dtype=torch.int32).reshape(rows, width)
 
