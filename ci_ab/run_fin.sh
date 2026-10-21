@@ -59,6 +59,7 @@ while read -r tag A B rts; do
     echo "   images $A $ha $B $hb"; [[ $ha == $hb ]] && echo "== VOID $tag: $A and $B images identical"
   fi
   if [[ $A == *_fn || $A == *_bits ]]; then run $tag A 1 $A $rts; [[ $B != $A ]] && run $tag B 2 $B $rts; grep -a -E "^(FAILED|ERROR) " $SL/out/run_${tag}_*.log | cut -c1-300 | head -20; continue; fi
+  if [[ ${RA_ONCE:-0} == 1 ]]; then run $tag A 1 $A $rts || { stop=1; continue; }; run $tag B 2 $B $rts || stop=1; continue; fi
   for b in $(seq 1 ${RA_BLOCKS:-2}); do for s in A B B A; do k=$((k+1)); L=$A; [[ $s == B ]] && L=$B; run $tag $s $k $L $rts || { stop=1; break 2; }; done; done
 done < ${RA_LINES:-$S/lines.txt}
 for L in $(awk '{print $2; print $3}' ${RA_LINES:-$S/lines.txt} | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
