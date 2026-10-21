@@ -555,9 +555,10 @@ Tensor scatter(
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
-    // Three gates, in order: static scope and output placement, perf demotion, and the L1 that is
-    // free right now.
+    // Four gates, in order: architecture (the codegen kernels are built for Wormhole and Blackhole
+    // only), static scope and output placement, perf demotion, and the L1 that is free right now.
     const bool use_codegen =
+        ttnn::operations::data_movement::codegen_supported_on_arch(input_tensor) &&
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
         !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config) &&
