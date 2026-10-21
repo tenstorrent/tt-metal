@@ -270,7 +270,8 @@ class TtDecoderLayer(LightweightModule):
             return ttnn.multiply(y, 1.0 / rows, output_tensor=y)
 
         streams = self._hc_call(self.attn_hc, streams, attention, self.input_norm_w)
-        streams = self._hc_call(self.ffn_hc, streams, self.mlp, self.post_norm_w)
+        ffn = (lambda t: self.mlp(t, prefill=True)) if self.is_moe else self.mlp  # the router's composite path on slabs
+        streams = self._hc_call(self.ffn_hc, streams, ffn, self.post_norm_w)
         return streams, new_state
 
     # ------------------------------------------------------------------- decode
