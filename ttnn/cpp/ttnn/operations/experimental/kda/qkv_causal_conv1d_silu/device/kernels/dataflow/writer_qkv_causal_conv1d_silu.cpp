@@ -9,6 +9,7 @@
 #include "api/scratchpad.h"
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/local_mem/address_access.h"
 #include "experimental/kernel_args.h"
 
 using namespace qkv_conv;
@@ -46,7 +47,8 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
             const auto exchange_buffer = TensorAccessor(tensor::exchange_buffer);
             Scratchpad<uint32_t> scratch(scratch::staging);
             constexpr StagingScratch layout{max_staged_ct};
-            const uint32_t scratch_base = scratch.get_base_address();
+            // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
+            const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
             const uint32_t base = align_up(scratch_base, read_alignment);
             const uint32_t offset = base - scratch_base;
 

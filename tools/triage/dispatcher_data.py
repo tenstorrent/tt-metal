@@ -452,7 +452,9 @@ class DispatcherData:
             pass
         try:
             go_message_index = int(mailboxes.go_message_index)
-            go_data = int(mailboxes.go_messages[go_message_index].signal)
+            # The go message for the launch message slot the core is on.
+            go_ring = mailboxes.go_messages[go_message_index].slot
+            go_data = int(go_ring[launch_msg_rd_ptr % len(go_ring)].signal)
         except TimeoutDeviceRegisterError:
             raise
         except Exception:

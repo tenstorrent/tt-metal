@@ -144,8 +144,8 @@ batch size. Knobs:
 
 - `QWEN36_SPEC=0` — plain decode.
 - `QWEN36_SPEC_DRAFT_LEN=<K>` — override K (must keep B x (K+1) <= 32).
-- `QWEN36_TRACED_DRAFT=0` / `QWEN36_TRACED_RESEED=0` — run the draft chain / MTP
-  reseed eagerly (debugging; same tokens, slower).
+- `QWEN36_SPEC_EAGER_DRAFTER=1` — run the drafter eagerly instead of as a recorded
+  trace (default 0; for A/B, same tokens).
 - `QWEN36_SPEC_TIMING=1` — per-phase timing lines.
 - `QWEN36_SPEC_BATCH_DISTINCT=1` — distinct prompts per user in the batched demo
   cases.
