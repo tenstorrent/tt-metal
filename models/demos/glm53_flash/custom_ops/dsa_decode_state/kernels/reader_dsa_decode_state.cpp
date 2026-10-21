@@ -20,12 +20,12 @@ void kernel_main() {
     constexpr uint32_t Lq_t = get_compile_time_arg_val(0);
     constexpr uint32_t L_t = get_compile_time_arg_val(1);
     constexpr uint32_t D_t = get_compile_time_arg_val(2);
-    constexpr uint32_t Ws_t = get_compile_time_arg_val(3);      // stem row width in tiles
-    constexpr uint32_t qa_t = get_compile_time_arg_val(4);      // stem column offsets in tiles
+    constexpr uint32_t Ws_t = get_compile_time_arg_val(3);  // stem row width in tiles
+    constexpr uint32_t qa_t = get_compile_time_arg_val(4);  // stem column offsets in tiles
     constexpr uint32_t kva_t = get_compile_time_arg_val(5);
     constexpr uint32_t k_t = get_compile_time_arg_val(6);
     constexpr uint32_t g_t = get_compile_time_arg_val(7);
-    constexpr uint32_t P = get_compile_time_arg_val(8);         // in-pool positions (ring slots)
+    constexpr uint32_t P = get_compile_time_arg_val(8);            // in-pool positions (ring slots)
     constexpr uint32_t pool_blocks = get_compile_time_arg_val(9);  // pool blocks per user (identity table)
     constexpr uint32_t Bt = get_compile_time_arg_val(10);
 

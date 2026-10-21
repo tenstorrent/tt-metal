@@ -35,36 +35,36 @@
 namespace {
 
 // CB plan (kept in sync with the program factory and the dataflow kernels)
-constexpr uint32_t cb_qa = 0;        // bf16 TILE Lq_t: role A stem block [32, Lq]
-constexpr uint32_t cb_wq = 1;        // fp32 TILE 2x4: q_a norm weight (row 0), streamed in chunks of 4
-constexpr uint32_t cb_kva = 2;       // bf16 TILE L_t: role B stem block [32, L]
-constexpr uint32_t cb_kblk = 3;      // bf16 TILE D_t: indexer k block [32, D]
-constexpr uint32_t cb_gblk = 4;      // bf16 TILE D_t: indexer gate block [32, D]
-constexpr uint32_t cb_wkva = 5;      // fp32 TILE L_t: kv_a norm weight (row 0)
-constexpr uint32_t cb_wk = 6;        // fp32 TILE D_t: k LayerNorm weight (row 0)
-constexpr uint32_t cb_bk = 7;        // fp32 TILE D_t: k LayerNorm bias (row 0)
-constexpr uint32_t cb_ape = 8;       // fp32 TILE D_t: ape block (rows < P: ape, rows >= P: -1e9)
-constexpr uint32_t cb_sel = 9;       // bf16 TILE 33: E_0..E_31 (1 at (0, r)), tile 32 all ones
-constexpr uint32_t cb_lat_old = 10;  // bf16 TILE L_t: the user's latent page
-constexpr uint32_t cb_ring_old = 11; // bf16 TILE 2*D_t: ring_k block (0..D_t), ring_g block (D_t..)
-constexpr uint32_t cb_pool_old = 12; // bf16 TILE D_t: the user's current pool block
-constexpr uint32_t cb_selrow = 13;   // bf16 TILE 3: E_{lat row}, E_{ring slot}, E_{pool row} (reader-selected)
-constexpr uint32_t cb_qout = 14;     // bf16 TILE 2x4: role A output chunks
-constexpr uint32_t cb_lat_new = 15;  // bf16 TILE L_t
-constexpr uint32_t cb_ring_new = 16; // bf16 TILE 2*D_t
-constexpr uint32_t cb_pool_new = 17; // bf16 TILE D_t
-constexpr uint32_t cb_tmp = 18;      // fp32 8 (two 4-tile slots)
-constexpr uint32_t cb_inv = 19;      // fp32 1
-constexpr uint32_t cb_normed = 20;   // fp32 L_t: normed latent block
-constexpr uint32_t cb_knorm = 21;    // fp32 D_t: layernormed k block
-constexpr uint32_t cb_rows = 22;     // fp32 L_t + 2*D_t: lifted rows (latent, k, g)
-constexpr uint32_t cb_selT = 23;     // fp32 3: E_s^T for the latent row, the ring slot, the pool row
-constexpr uint32_t cb_keep = 24;     // fp32 3: column masks 1 - e_s
-constexpr uint32_t cb_ringf = 25;    // fp32 2*D_t: updated ring k / g blocks (fp32 copies)
-constexpr uint32_t cb_pscr = 26;     // fp32 2*D_t: pooling scratch
-constexpr uint32_t cb_prow = 27;     // fp32 D_t: pooled row (all rows equal)
-constexpr uint32_t cb_run = 28;      // fp32 2: running row-sum (ping-pong)
-constexpr uint32_t cb_meta_w = 29;   // (writer only)
+constexpr uint32_t cb_qa = 0;         // bf16 TILE Lq_t: role A stem block [32, Lq]
+constexpr uint32_t cb_wq = 1;         // fp32 TILE 2x4: q_a norm weight (row 0), streamed in chunks of 4
+constexpr uint32_t cb_kva = 2;        // bf16 TILE L_t: role B stem block [32, L]
+constexpr uint32_t cb_kblk = 3;       // bf16 TILE D_t: indexer k block [32, D]
+constexpr uint32_t cb_gblk = 4;       // bf16 TILE D_t: indexer gate block [32, D]
+constexpr uint32_t cb_wkva = 5;       // fp32 TILE L_t: kv_a norm weight (row 0)
+constexpr uint32_t cb_wk = 6;         // fp32 TILE D_t: k LayerNorm weight (row 0)
+constexpr uint32_t cb_bk = 7;         // fp32 TILE D_t: k LayerNorm bias (row 0)
+constexpr uint32_t cb_ape = 8;        // fp32 TILE D_t: ape block (rows < P: ape, rows >= P: -1e9)
+constexpr uint32_t cb_sel = 9;        // bf16 TILE 33: E_0..E_31 (1 at (0, r)), tile 32 all ones
+constexpr uint32_t cb_lat_old = 10;   // bf16 TILE L_t: the user's latent page
+constexpr uint32_t cb_ring_old = 11;  // bf16 TILE 2*D_t: ring_k block (0..D_t), ring_g block (D_t..)
+constexpr uint32_t cb_pool_old = 12;  // bf16 TILE D_t: the user's current pool block
+constexpr uint32_t cb_selrow = 13;    // bf16 TILE 3: E_{lat row}, E_{ring slot}, E_{pool row} (reader-selected)
+constexpr uint32_t cb_qout = 14;      // bf16 TILE 2x4: role A output chunks
+constexpr uint32_t cb_lat_new = 15;   // bf16 TILE L_t
+constexpr uint32_t cb_ring_new = 16;  // bf16 TILE 2*D_t
+constexpr uint32_t cb_pool_new = 17;  // bf16 TILE D_t
+constexpr uint32_t cb_tmp = 18;       // fp32 8 (two 4-tile slots)
+constexpr uint32_t cb_inv = 19;       // fp32 1
+constexpr uint32_t cb_normed = 20;    // fp32 L_t: normed latent block
+constexpr uint32_t cb_knorm = 21;     // fp32 D_t: layernormed k block
+constexpr uint32_t cb_rows = 22;      // fp32 L_t + 2*D_t: lifted rows (latent, k, g)
+constexpr uint32_t cb_selT = 23;      // fp32 3: E_s^T for the latent row, the ring slot, the pool row
+constexpr uint32_t cb_keep = 24;      // fp32 3: column masks 1 - e_s
+constexpr uint32_t cb_ringf = 25;     // fp32 2*D_t: updated ring k / g blocks (fp32 copies)
+constexpr uint32_t cb_pscr = 26;      // fp32 2*D_t: pooling scratch
+constexpr uint32_t cb_prow = 27;      // fp32 D_t: pooled row (all rows equal)
+constexpr uint32_t cb_run = 28;       // fp32 2: running row-sum (ping-pong)
+constexpr uint32_t cb_meta_w = 29;    // (writer only)
 
 constexpr uint32_t DST_TILES = 4;
 constexpr uint32_t ONES = 32;
@@ -73,7 +73,8 @@ constexpr uint32_t ONE_BITS = 0x3F800000u;
 inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
 // o[o_off + i] = A[a_off + i] * B[b_same ? b_off : b_off + i], n tiles (elementwise, any formats)
-void mul_blocks(uint32_t a, uint32_t a_off, uint32_t b, uint32_t b_off, bool b_same, uint32_t o, uint32_t o_off, uint32_t n) {
+void mul_blocks(
+    uint32_t a, uint32_t a_off, uint32_t b, uint32_t b_off, bool b_same, uint32_t o, uint32_t o_off, uint32_t n) {
     reconfig_data_format(a, b);
     mul_init(a, b);
     for (uint32_t i0 = 0; i0 < n; i0 += DST_TILES) {
@@ -92,7 +93,8 @@ void mul_blocks(uint32_t a, uint32_t a_off, uint32_t b, uint32_t b_off, bool b_s
 }
 
 // o[o_off + i] = A[a_off + i] * row 0 of B[b_off + i] broadcast over the rows (sub/add variants below)
-void mul_bcast_row_blocks(uint32_t a, uint32_t a_off, uint32_t b, uint32_t b_off, uint32_t o, uint32_t o_off, uint32_t n) {
+void mul_bcast_row_blocks(
+    uint32_t a, uint32_t a_off, uint32_t b, uint32_t b_off, uint32_t o, uint32_t o_off, uint32_t n) {
     reconfig_data_format(a, b);
     mul_bcast_rows_init(a, b);
     for (uint32_t i0 = 0; i0 < n; i0 += DST_TILES) {
@@ -184,8 +186,16 @@ void select_row(uint32_t x, uint32_t r, uint32_t o, uint32_t o_off, uint32_t n) 
 }
 
 // new[i] = old[i] * keep (column broadcast, keeps every row but s) + E_s^T @ row[i], packed to `o`. n tiles.
-void place_row(uint32_t old, uint32_t old_off, uint32_t keep_off, uint32_t selT_off, uint32_t row, uint32_t row_off,
-               uint32_t o, uint32_t o_off, uint32_t n) {
+void place_row(
+    uint32_t old,
+    uint32_t old_off,
+    uint32_t keep_off,
+    uint32_t selT_off,
+    uint32_t row,
+    uint32_t row_off,
+    uint32_t o,
+    uint32_t o_off,
+    uint32_t n) {
     for (uint32_t i0 = 0; i0 < n; i0 += DST_TILES) {
         const uint32_t nn = min_u(n - i0, DST_TILES);
         tile_regs_acquire();
