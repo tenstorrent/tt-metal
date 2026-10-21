@@ -7,7 +7,9 @@ import torch
 import ttnn
 
 from models.experimental.ops.descriptors.fusion import Parallel, Sequential, clear_build_cache
-from tests.ttnn.unit_tests.operations.fused.parallel_sequential.test_parallel_sequential_global_cb import build_identity_op
+from tests.ttnn.unit_tests.operations.fused.parallel_sequential.test_parallel_sequential_global_cb import (
+    build_identity_op,
+)
 
 
 @pytest.mark.parametrize("persistent", [False, True])
