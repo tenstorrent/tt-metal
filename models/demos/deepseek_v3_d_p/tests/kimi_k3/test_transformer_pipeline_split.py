@@ -90,7 +90,9 @@ def _compose(mesh_device, tensor, sp_axis, tp_axis):
     ).reshape(-1, KimiK3Config.EMB_SIZE)[:SEQ_LEN]
 
 
-def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_first, is_last, sp_axis, tp_axis):
+def _build_rank(
+    mesh_device, config, cache, first_layer_idx, num_layers, *, is_first, is_last, sp_axis, tp_axis, kv_only=False
+):
     """One rank's slice, built the way the runner builds it.
 
     `state_dict={}` is the production path: every weight comes from the TTNN cache, which is keyed
@@ -112,6 +114,7 @@ def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_f
         tp_axis=tp_axis,
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
+        kv_only_last_layer=kv_only,
     )
 
 
@@ -121,7 +124,10 @@ def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_f
 @pytest.mark.parametrize(
     "mesh_device, device_params, sp_axis, tp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"]
 )
-def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_axis):
+# kv-only: the last rank's last layer built as the runner builds it (`kv_only_last_layer`), attention and
+# KV write only. Its decoder output does not exist, so only its KV slab is scored.
+@pytest.mark.parametrize("kv_only", [False, True], ids=["full", "kv-only"])
+def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_axis, kv_only):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M)
     if checkpoint is None or trace is None:
@@ -135,7 +141,15 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
     axes = dict(sp_axis=sp_axis, tp_axis=tp_axis)
     rank0 = _build_rank(mesh_device, config, cache, 0, BOUNDARY, is_first=True, is_last=False, **axes)
     rank1 = _build_rank(
-        mesh_device, config, cache, BOUNDARY, NUM_LAYERS - BOUNDARY, is_first=False, is_last=True, **axes
+        mesh_device,
+        config,
+        cache,
+        BOUNDARY,
+        NUM_LAYERS - BOUNDARY,
+        is_first=False,
+        is_last=True,
+        kv_only=kv_only,
+        **axes,
     )
 
     # The plane counts the runner would size the socket with. Asserted here so a mismatch is a
@@ -201,6 +215,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
 
     # KV first: it is the one oracle a residual-shaped self-consistency cannot fake. Rank 1's slabs
     # are written from reads that exist only if the inherited sealed set arrived.
+    kv_bad = []
     for name, model in (("rank0", rank0), ("rank1", rank1)):
         kvpe = caches[name]
         if kvpe is None:
@@ -226,15 +241,14 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
             logger.info(
                 f"split KV {name} slot {slot} (model layer {model_layer}): lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
             )
-            assert min(pcc_nope, pcc_pe) >= KV_CACHE_PCC, (
-                f"KV cache {name} slot {slot} (model layer {model_layer}) diverged: "
-                f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
-            )
+            if min(pcc_nope, pcc_pe) < KV_CACHE_PCC:
+                kv_bad.append(f"{name} slot {slot} (model layer {model_layer}): lora={pcc_nope:.6f} rope={pcc_pe:.6f}")
+    assert not kv_bad, "KV cache diverged: " + "; ".join(kv_bad)
 
     # Score everything before asserting: the shape of the curve is the diagnosis, and stopping at
     # the first shortfall hides it.
     scores = {}
-    for idx in range(NUM_LAYERS):
+    for idx in sorted(per_layer):
         want = trace.decoder_output(idx, 0, SEQ_LEN)
         _, message = comp_pcc(want, per_layer[idx], LAYER_PCC)
         scores[idx] = float(str(message).split()[-1])
@@ -253,7 +267,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_a
 
     # The shape assertion. An empty inherited set degrades monotonically through the second block
     # instead of recovering, and would clear a floor-only check on the strength of its early layers.
-    tail = min(scores[i] for i in range(RECOVERY_FROM, NUM_LAYERS))
+    tail = min(scores[i] for i in range(RECOVERY_FROM, NUM_LAYERS) if i in scores)
     assert tail >= RECOVERY_PCC, (
         f"no recovery by layer {RECOVERY_FROM}+ (min {tail:.6f} < {RECOVERY_PCC}); the second block "
         f"is not reading the first block's sealed snapshot"
