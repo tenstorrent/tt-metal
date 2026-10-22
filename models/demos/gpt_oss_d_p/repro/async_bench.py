@@ -14,9 +14,16 @@ served_model = os.environ.get("SERVED_MODEL_NAME", "gpt-oss-120b-4x2-chat")
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 nonce = time.time_ns()
 
+# Real text keeps MoE routing representative; a uniform prompt such as "hello " * N sends every
+# token to the same experts and does not measure the production prefill cost.
+with open(os.environ["PROMPT_TEXT_TRACE"]) as f:
+    base_ids = json.load(f)["token_ids"]
+text = tokenizer.decode(base_ids, skip_special_tokens=True)
+corpus = (text + "\n") * (target // max(1, len(base_ids)) + 3)
 
-def make_prompt(repeats):
-    return f"Unique request {nonce}. " + "hello " * repeats + "Briefly summarize the preceding text."
+
+def make_prompt(n_chars):
+    return f"Unique request {nonce}. " + corpus[:n_chars] + "\nBriefly summarize the preceding text."
 
 
 def token_count(prompt):
@@ -28,7 +35,7 @@ def token_count(prompt):
     return len(encoded["input_ids"])
 
 
-lo, hi = 1, target + 1024
+lo, hi = 1, len(corpus)
 while lo < hi:
     mid = (lo + hi + 1) // 2
     if token_count(make_prompt(mid)) <= target:

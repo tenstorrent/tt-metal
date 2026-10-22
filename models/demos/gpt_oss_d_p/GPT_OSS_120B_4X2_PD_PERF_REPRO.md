@@ -23,6 +23,17 @@ prefill. They still contend with prefill resources: compute-only throughput is
 about 25.1K tokens/s, versus about 21.8K tokens/s with migration enabled.
 That is approximately a 13% reduction in prefill throughput.
 
+Both the standalone and P/D measurements use a real-text prompt built by tiling
+the `longbook_qa_eng_prefill_5000` golden prompt. Do not benchmark with a
+uniform prompt such as `"hello " * N`: every token then routes to the same MoE
+experts, which does not represent the production prefill cost.
+
+The numbers above, and the chunk-size table below, were recorded with the
+earlier uniform `hello` prompt and must be re-measured with real text. For
+reference, a real-text 57,344-token prompt with 8K chunks measured about
+27.5K tokens/s standalone and a P/D TTFT of about 2.74 s. That TTFT was
+measured before the service-core validation fix on this branch.
+
 ## Revisions
 
 Use the following branches:
@@ -75,6 +86,8 @@ tt-gen/build-kv-manager/device_io/dmk.elf
 - Two Blackhole Galaxies connected through the cluster RDMA network.
 - Exactly 32 visible Tenstorrent PCIe devices on each host.
 - GPT-OSS 120B checkpoint and tokenizer.
+- The `longbook_qa_eng_prefill_5000` golden trace (`metadata.json` with
+  `token_ids`), used as the real-text prompt source.
 - Shared filesystem visible from both hosts.
 - Open MPI 5.0.7 ULFM.
 - Built tt-metal, tt-blaze, tt-gen Python adapter, native KV manager, and
@@ -97,6 +110,7 @@ export TT_DGEN_HOME=$ROOT/tt-gen
 export TT_GEN_NATIVE_BUILD=$TT_DGEN_HOME/build-kv-manager/kv_manager
 export RUN=$ROOT/run
 export MODEL=/path/to/gpt-oss-120b
+export PROMPT_TEXT_TRACE=/path/to/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000/metadata.json
 
 export PREFILL_HOST=<prefill-hostname>
 export PREFILL_IP=<prefill-rdma-ip>
@@ -177,15 +191,24 @@ runs process the same aligned token count. If only a shorter trace is
 available, report the harness's `processed` rate and use the same aligned
 length for the P/D request; do not compare different denominators.
 
-If no 65,536-token trace exists, generate one on a host with enough RAM:
+If no 65,536-token real-text trace exists, generate one on a host with enough
+RAM. The prompt tiles the longbook text past 65,536 tokens; the generator
+truncates it to exactly `--max-tokens`:
 
 ```bash
 python3 - <<'PY'
 import json
+import os
 from pathlib import Path
 
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(os.environ["MODEL"])
+base_ids = json.load(open(os.environ["PROMPT_TEXT_TRACE"]))["token_ids"]
+text = tokenizer.decode(base_ids, skip_special_tokens=True)
+corpus = (text + "\n") * (65536 // len(base_ids) + 3)
 Path("/tmp/gptoss-64k-prompt.json").write_text(
-    json.dumps({"prompt": "hello " * 70000 + "Briefly summarize the preceding text."})
+    json.dumps({"prompt": corpus + "\nBriefly summarize the preceding text."})
 )
 PY
 
@@ -394,13 +417,15 @@ Set `min_disagg_tokens=64` so the benchmark routes through P/D.
 
 ## Measurement
 
-Generate a unique prompt whose chat-templated input is exactly 65,536 tokens.
+Generate a unique real-text prompt whose chat-templated input is at most
+65,536 tokens. `async_bench.py` tiles the text from `$PROMPT_TEXT_TRACE`
+and prefixes a per-run nonce so prefix caching cannot reuse KV across requests.
 Request 32 output tokens with streaming and usage enabled:
 
 ```json
 {
   "model": "gpt-oss-120b-4x2-chat",
-  "messages": [{"role": "user", "content": "<65536-token unique prompt>"}],
+  "messages": [{"role": "user", "content": "<65536-token unique real-text prompt>"}],
   "max_tokens": 32,
   "stream": true,
   "stream_options": {"include_usage": true}
