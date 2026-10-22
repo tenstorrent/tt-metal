@@ -16,9 +16,7 @@ from models.ttt_compat.tests.multimodal.utils import load_partial_weights
 from models.ttt_compat.tt.ccl import TT_CCL
 from models.ttt_compat.tt.common import Mode, get_single_rot_mat
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import (
-    TtLlamaCrossAttentionTransformerText,
-)
+from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import TtLlamaCrossAttentionTransformerText
 from models.ttt_compat.tt.rope import get_rot_mats
 
 

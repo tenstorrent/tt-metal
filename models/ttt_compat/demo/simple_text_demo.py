@@ -21,12 +21,7 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.ttt_compat.tt.common import (
-    PagedAttentionConfig,
-    create_tt_model,
-    preprocess_inputs_prefill,
-    sample_host,
-)
+from models.ttt_compat.tt.common import PagedAttentionConfig, create_tt_model, preprocess_inputs_prefill, sample_host
 from models.ttt_compat.tt.generator import Generator, SamplingParams, create_submeshes
 from models.ttt_compat.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.ttt_compat.tt.prefetcher import is_prefetcher_supported
