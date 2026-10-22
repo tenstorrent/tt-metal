@@ -738,7 +738,9 @@ def test_binary_nan_sign_is_relaxed_only_where_sfpmad_emits_it():
 
     binary_max_min is the counter-case and the reason this is not a blanket relaxation: a bare
     SFPSWAP(VEC_MIN_MAX) *selects* an operand, so the NaN it returns is the datum it was handed and
-    its sign is real on both arches.
+    its sign is real on both arches. (Blackhole's SFPLOADMACRO path makes the selection through
+    SFPMAD, so its NaN is always +NaN; BinarySFPUGolden._max/_min model that sign exactly, so it
+    stays asserted there too.)
 
     A genuine infinity is never relaxed on either path -- `0 - (-inf)` is `+inf` by IEEE, and that
     is the assertion the per-lane mask exists to keep.

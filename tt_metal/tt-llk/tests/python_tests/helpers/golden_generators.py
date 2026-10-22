@@ -4040,8 +4040,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     # The ops whose NaN result is a selected operand rather than a computed one: binary_max_min
     # returns one of its inputs, so its NaN is the datum it was handed and the sign can be
-    # asserted. Everything else builds the result through the datapath, where an emitted NaN's
-    # sign is not the operand's. An exclusion list, so the composition ops (div, fmod, remainder,
+    # asserted (on Blackhole the selection goes through SFPMAD, and _max/_min model the +NaN
+    # that it emits). Everything else builds the result through the datapath, where an emitted
+    # NaN's sign is not the operand's. An exclusion list, so the composition ops (div, fmod, remainder,
     # xlogy, pow, atan2) can't be silently dropped -- their NaN is as computed as add's.
     _NAN_SIGN_SELECTED_OPS = frozenset(
         {
@@ -4198,11 +4199,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # calculate_binary_max_min swaps under the total order, then keeps the discarded
         # operand where that one is NaN. So a NaN in either operand propagates, and the NaN
         # returned is the selected operand's, sign included: the minimum under the total
-        # order when both are NaN.
+        # order when both are NaN. Blackhole's SFPLOADMACRO path makes that selection through
+        # SFPMAD, which emits the canonical NaN, so there every NaN result is +NaN.
         if self._is_float(t1):
             lo = sfpu_min_elementwise(t1, t2)
             hi = sfpu_max_elementwise(t1, t2)
-            return torch.where(torch.isnan(lo), lo, hi).to(t1.dtype)
+            return self._max_min_nan(torch.where(torch.isnan(lo), lo, hi)).to(t1.dtype)
         wide = self._wide_dtype(t1)
         return torch.maximum(t1.to(wide), t2.to(wide)).to(t1.dtype)
 
@@ -4211,9 +4213,15 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         if self._is_float(t1):
             lo = sfpu_min_elementwise(t1, t2)
             hi = sfpu_max_elementwise(t1, t2)
-            return torch.where(torch.isnan(hi), hi, lo).to(t1.dtype)
+            return self._max_min_nan(torch.where(torch.isnan(hi), hi, lo)).to(t1.dtype)
         wide = self._wide_dtype(t1)
         return torch.minimum(t1.to(wide), t2.to(wide)).to(t1.dtype)
+
+    @staticmethod
+    def _max_min_nan(result):
+        if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+            return torch.where(torch.isnan(result), float("nan"), result)
+        return result
 
     def _fmod(self, t1, t2):
         # fmod(a, b) = a - trunc(a/b) * b (result takes the sign of a). Computed in
