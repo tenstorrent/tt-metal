@@ -33,16 +33,10 @@ MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configura
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=256000
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 # Measured the way run_multirank_pcc.sh measures the plain Kimi legs, so the two sets of numbers compare:
 # throwaway chunks first. DFlash is traced-only, so without them every rank captures its trace when the
 # first timed chunk arrives.
 WARMUP_CHUNKS=10
-# Start, ~50k, midpoint and end: run_multirank_pcc.sh's probes over this leg's one window. The window that
-# the throughput probe averages over runs forward from each of these, so the first three carry a rate and
-# the last a latency.
-PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((REAL_CHUNKS / 2 - 1))" \
-  "$((REAL_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 # Verifier threshold is the sibling KV leg's value for this trace and depth -- run_multirank_pcc.sh gates
 # the same cache on the same golden, so the two legs must not disagree on what a passing verifier is.
 # The drafter gate is held at that same value and never above it: an unnormalized V carries the verifier's
@@ -85,11 +79,23 @@ case "${MODEL}" in
   kimi_k3) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark.json" ;;
   # Traced K3 holds one KDA slot, so its multi-user leg (64 slots, as Kimi-K2.7's allocates 68) runs eager.
   kimi_k3_eager) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark_eager.json" ;;
+  # The same at K3's full 1M context, as K3's own SC4 leg runs eager with its slot ceiling at 1M.
+  kimi_k3_eager_1m) MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark_eager_1m.json" ;;
   *)
-    echo "unknown model key '${MODEL}' (expected kimi27, kimi_k3 or kimi_k3_eager -- only those ship a drafter)" >&2
+    echo "unknown model key '${MODEL}' (expected kimi27, kimi_k3, kimi_k3_eager or kimi_k3_eager_1m -- only those ship a drafter)" >&2
     exit 2
     ;;
 esac
+
+# A manifest that pins its own depth (the 1M leg) is timed to that depth instead of 256k.
+MANIFEST_MAX_SEQ_LEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"].get("PREFILL_MAX_SEQ_LEN", ""))' "${MANIFEST}")
+MAX_SEQ_LEN="${MANIFEST_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}"
+REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+# Start, ~50k, midpoint and end: run_multirank_pcc.sh's probes over this leg's one window. The window that
+# the throughput probe averages over runs forward from each of these, so the first three carry a rate and
+# the last a latency.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((REAL_CHUNKS / 2 - 1))" \
+  "$((REAL_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 # ttrun writes the allocated hosts here in CI, rank 0 first -- the same file the sibling KV leg reads.
