@@ -23,7 +23,7 @@ fp32 DEST (up to 4 tiles), for HiFi2/HiFi4, across the full 32x32 tile
 (num_faces=4), the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny tiles", and
 1x32 to 8x32 tiles with short faces.
 
-Before the measured op, the kernel unpacks POISON_TILES full tiles of 100.0
+Before the measured op, the kernel unpacks POISON_TILES full tiles of POISON_VALUE
 into both SrcA banks. With a short face, the reduce adds those stale rows
 unless the unpacker zeroes them, so the golden check fails.
 """
@@ -59,9 +59,10 @@ FORMATS = [
 # The reduce collapses every element to [0] regardless of tile geometry.
 TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [1, 32], [2, 32], [4, 32], [8, 32]]
 
-# The kernel unpacks POISON_TILES full 32x32 tiles of 100.0 before the measured op,
+# The kernel unpacks POISON_TILES full 32x32 tiles of POISON_VALUE before the measured op,
 # so the unpackers must zero the SrcA rows that short faces leave stale.
 POISON_TILES = 2
+POISON_VALUE = 100.0
 
 
 def _dest_acc(output_format):
@@ -130,7 +131,9 @@ def test_sum_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
     golden_scalar = float(src_A.to(torch.float32).sum().item())
 
     # The poison follows the input tiles in buffer_A; the kernel reads it as full tiles.
-    poison = torch.full((POISON_TILES * MAX_TILE_ELEMENTS,), 100.0, dtype=src_A.dtype)
+    poison = torch.full(
+        (POISON_TILES * MAX_TILE_ELEMENTS,), POISON_VALUE, dtype=src_A.dtype
+    )
 
     configuration = TestConfig(
         "sources/sum_reduce_scalar_test.cpp",

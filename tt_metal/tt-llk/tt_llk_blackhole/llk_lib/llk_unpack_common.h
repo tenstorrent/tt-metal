@@ -352,7 +352,8 @@ inline void _llk_unpack_set_srcb_dummy_valid_()
  * @brief Zero both banks of one source register.
  *
  * A face shorter than the rows the math op reads fills only its own rows. The rest keep the previous op's data.
- * Unpacks never write those rows, so zeroing both banks once at init keeps them zero for every later tile.
+ * Unpacks never write those rows, so zeroing both banks once at init keeps them zero for this op.
+ * Math moves (MOVD2A, MOVD2B, MOVB2A) do write them, so re-run the init after any op that writes SrcA or SrcB.
  * Without Stall_Clr_Cntrl the clear waits for the Matrix Unit to release both banks, so it cannot zero operands
  * the previous op still uses. The stalls keep the unpackers from writing during the clear, which drops those writes.
  *

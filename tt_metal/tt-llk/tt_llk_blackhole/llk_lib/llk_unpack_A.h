@@ -296,7 +296,8 @@ inline void _llk_unpack_A_mop_config_(
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note On the plain path, a face shorter than 16 rows waits for math and zeroes both SrcA banks
- *       (see @ref _llk_unpack_A_mop_config_).
+ *       (see @ref _llk_unpack_A_mop_config_). Re-run this init after any op that writes SrcA, for example a
+ *       MOVD2A or MOVB2A.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.

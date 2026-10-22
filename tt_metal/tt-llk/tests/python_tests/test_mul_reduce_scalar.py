@@ -27,7 +27,7 @@ rows unless the unpacker zeroes them, so the golden check fails.
 
 The element-wise op is a parameter. ELWADD and ELWSUB pass stale SrcB rows
 through to DEST, so they check that the unpacker also zeroes SrcB. For them,
-B ~ U[0, 0.25], so A - B stays positive and the sum stays in range.
+B ~ U[0, 0.25], so the sum stays positive and away from cancellation.
 """
 
 import pytest
@@ -110,7 +110,9 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("mul_reduce_scalar is a Blackhole-only experimental LLK")
     if math_op != MathOperation.Elwmul and tile_dimensions[0] == 8:
-        pytest.skip("The ELWADD/ELWSUB MOP reads the stale rows 8-15 of an 8-row face")
+        pytest.skip(
+            "The ELWADD/ELWSUB MOP reads the stale rows 8-15 of an 8-row face (#60970, remove with #62117)"
+        )
 
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
