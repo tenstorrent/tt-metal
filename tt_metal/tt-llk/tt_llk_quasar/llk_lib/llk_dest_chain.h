@@ -79,18 +79,18 @@ inline void signal()
 {
     if constexpr (FROM != TO)
     {
-        constexpr bool HOLD = DST == DstSync::SyncFull;
+        constexpr bool FULL = DST == DstSync::SyncFull;
         if constexpr (FROM == THIS_UNIT)
         {
             if (state.holder_has_bit)
             {
-                _llk_dest_dvalid_signal_<FROM, TO, true /*HAS_BIT*/, HOLD>();
+                _llk_dest_dvalid_signal_<FROM, TO, true /*HAS_BIT*/, FULL>();
             }
             else
             {
-                _llk_dest_dvalid_signal_<FROM, TO, false /*HAS_BIT*/, HOLD>();
+                _llk_dest_dvalid_signal_<FROM, TO, false /*HAS_BIT*/, FULL>();
             }
-            if constexpr (!HOLD)
+            if constexpr (!FULL)
             {
                 state.bank ^= 1;
             }
@@ -219,7 +219,8 @@ inline void _llk_dest_chain_leave_()
  * @brief Take dest from the current holder.
  *
  * A take after PACK's turn in SyncHalf ends the use of PACK's bank and opens the other bank for the taker.
- * In SyncFull dest is one handoff list on bank 0 and any unit, PACK included, hands to the next taker.
+ * In SyncFull dest is one handoff list, every unit on bank 0, and any unit, PACK included, hands to the next taker;
+ * each handoff pulses both banks so the upper half of Dest is handed over too.
  *
  * @note Call on every thread before UNIT's dest accesses, after @ref _llk_dest_chain_join_.
  * @note Issue at least one gated dest access in each turn before handing off to another unit.

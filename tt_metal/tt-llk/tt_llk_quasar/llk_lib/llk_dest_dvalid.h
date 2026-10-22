@@ -131,15 +131,22 @@ inline void _llk_dest_dvalid_leave_()
 /**
  * @brief Hand dest to NEXT after UNIT finishes.
  * @tparam HAS_BIT: false when UNIT was admitted on an empty bank, so it has no own bit to clear
- * @tparam HOLD_BANK: keep UNIT on its bank, otherwise the pulse moves it to the other one
+ * @tparam BOTH_BANKS: SyncFull. An access is gated by the dvalid bits of the bank its address falls in, so a section
+ *         that uses the upper half of Dest needs both banks handed over: the pulse moves UNIT to bank 1, a second pulse
+ *         applies the same toggle there and moves UNIT back to bank 0 (legacy _llk_pack_dest_dvalid_section_done_ also
+ *         pulses both banks). Otherwise one pulse, which moves UNIT to the other bank (SyncHalf).
  */
-template <dest_dvalid_client UNIT, dest_dvalid_client NEXT, bool HAS_BIT, bool HOLD_BANK>
+template <dest_dvalid_client UNIT, dest_dvalid_client NEXT, bool HAS_BIT, bool BOTH_BANKS>
 inline void _llk_dest_dvalid_signal_()
 {
     static_assert(UNIT != dest_dvalid::NONE && NEXT != dest_dvalid::NONE && UNIT != NEXT, "a signal needs an owner and a successor");
     constexpr std::uint32_t OWN = HAS_BIT ? dest_dvalid::bit_of(UNIT) : 0;
-    _llk_dest_dvalid_write_release_<UNIT, OWN ^ dest_dvalid::bit_of(NEXT), HOLD_BANK>();
+    _llk_dest_dvalid_write_release_<UNIT, OWN ^ dest_dvalid::bit_of(NEXT), false /*HOLD_BANK*/>();
     _llk_dest_dvalid_pulse_<UNIT>();
+    if constexpr (BOTH_BANKS)
+    {
+        _llk_dest_dvalid_pulse_<UNIT>();
+    }
 }
 
 /**
