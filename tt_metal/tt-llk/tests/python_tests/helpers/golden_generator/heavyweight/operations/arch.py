@@ -4,9 +4,10 @@
 """The architectures an operation can run on, and the per-op factories.
 
 An operation does not have a subclass per architecture. What differs between
-architectures is **data** -- which blocks to use, and how the FPU splits a
-mantissa per fidelity phase -- so each architecture states those once here and
-every operation takes one as an argument.
+architectures is **data** -- which blocks to use -- so each architecture states
+that once here and every operation takes one as an argument. Everything an
+operation needs to know about the hardware itself it asks the blocks: the FPU
+carries its own multiplier width, the packer its own edge-mask polarity.
 
 Before this, each fact was restated once per operation: `blocks` appeared in
 five files and the Quasar mantissa split in three. The file count grew as
@@ -20,7 +21,7 @@ The familiar names are kept as factories at the bottom, so
 
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Optional, Tuple
+from typing import Callable
 
 from ..data_transfer_blocks import (
     BlackholeDataTransferBlocks,
@@ -43,28 +44,16 @@ class ArchProfile:
 
     #: The data-transfer blocks for this architecture. A callable, because the
     #: blocks are constructed per golden rather than shared.
+    #:
+    #: This and a name are all that is left: everything else an operation used
+    #: to be told about the architecture turned out to belong to a unit behind
+    #: this field. The FPU's per-phase mantissa split was the last of them --
+    #: see :class:`...data_transfer_blocks.units.Fpu`, which an operation
+    #: reaches as ``self.fpu``.
     blocks: Callable[[], DataTransferBlocks]
 
-    #: Explicit mantissa bits the multiplier takes from each operand per
-    #: fidelity phase, as (srcA, srcB). ``None`` means this architecture's
-    #: split is not modelled, so a multiply is computed exactly and
-    #: ``math_fidelity`` is ignored -- which warns rather than passing quietly.
-    #:
-    #: Quasar multiplies 7x7 bits per phase, so a src datum's 10 explicit bits
-    #: split 7 high / 3 low on **both** operands. That symmetry is a Quasar
-    #: property: Wormhole and Blackhole split 4/6, and their SrcA additionally
-    #: drops its least significant bit at every fidelity, so even HiFi4 is not
-    #: the exact product there.
-    mantissa_split: Optional[Tuple[int, int]] = None
 
-
-QUASAR = ArchProfile(
-    name="Quasar",
-    blocks=QuasarDataTransferBlocks,
-    mantissa_split=(7, 7),
-)
-
-#: Wormhole and Blackhole leave the split unmodelled -- see the field above.
+QUASAR = ArchProfile(name="Quasar", blocks=QuasarDataTransferBlocks)
 WORMHOLE = ArchProfile(name="Wormhole", blocks=WormholeDataTransferBlocks)
 BLACKHOLE = ArchProfile(name="Blackhole", blocks=BlackholeDataTransferBlocks)
 

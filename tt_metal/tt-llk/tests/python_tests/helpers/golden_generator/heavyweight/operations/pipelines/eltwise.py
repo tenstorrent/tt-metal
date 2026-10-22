@@ -11,14 +11,6 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity, MathOperation
 
 from ..chain import Chain, Registers
-from ..fidelity import (
-    fidelity_phases,
-    flush_pre_carry_denormals,
-    min_normal_exponent,
-    operand_halves,
-    resolve_non_finite,
-    warn_unmodelled_split,
-)
 from ..golden import Golden, OpConfig
 
 
@@ -49,17 +41,15 @@ class EltwiseBinaryGolden(Golden):
     def models_fidelity(self, cfg: OpConfig) -> bool:
         """Whether this op runs the multiply as accumulated partial products.
 
-        Needs the input format, not just the operation: the fidelity split is a
-        property of the **float** multiplier. It slices a mantissa, and an
-        integer datum has none to slice -- applying it anyway truncates the
-        operand's low bits, so an Int16 ``3 * 10922`` came back 32640 instead
-        of 32766. The FPU's integer path does not decompose into phases, so an
-        integer multiply takes the single exact product in :meth:`apply`.
+        Two questions, each answered where it belongs. Whether the operation is
+        a multiply at all is this op's: add and subtract are exact, because the
+        FPU splits only multiplies into phases. Whether a multiply on *these*
+        datums decomposes is the FPU's, and it needs the input format to say
+        so -- the decomposition slices a mantissa, which an integer datum does
+        not have.
         """
-        return (
-            self.operation is MathOperation.Elwmul
-            and self.mantissa_split is not None
-            and not cfg.in_formats[0].is_integer()
+        return self.operation is MathOperation.Elwmul and self.fpu.models_fidelity(
+            cfg.in_formats[0]
         )
 
     def build_chain(self, cfg: OpConfig) -> Chain:
@@ -79,7 +69,7 @@ class EltwiseBinaryGolden(Golden):
         when a fidelity phase has already written Dest.
         """
         if self.models_fidelity(cfg):
-            for phase in fidelity_phases(self.math_fidelity):
+            for phase in self.fpu.phases(self.math_fidelity):
                 chain.then(
                     self.src_to_dest(
                         cfg,
@@ -94,7 +84,7 @@ class EltwiseBinaryGolden(Golden):
                 )
         else:
             if self.operation is MathOperation.Elwmul:
-                warn_unmodelled_split(self.op_name, type(self).__name__)
+                self.fpu.warn_split_unmodelled(self.op_name)
             chain.then(
                 self.src_to_dest(
                     cfg, self.apply, reads=("srcA", "srcB"), accumulate=accumulate
@@ -109,42 +99,21 @@ class EltwiseBinaryGolden(Golden):
     ) -> torch.Tensor:
         """One fidelity phase: the partial product of the chosen operand halves.
 
-        Each product is a lane result written to Dest, so the FPU's pre-carry
-        denormal flush applies to it -- see
-        :func:`.fidelity.flush_pre_carry_denormals` for the rule and why a
-        matmul is exempt. Pass `dest_format` to model it; ``None`` skips it.
+        The window each operand contributes and the flush that follows are the
+        FPU's; what this adds is that each product here *is* a lane result
+        written to Dest, which is why the flush applies at all -- a matmul,
+        whose products never become lane results, passes ``None`` instead.
         """
-        a, b = operand_halves(regs["srcA"], regs["srcB"], self.mantissa_split, phase)
-        a, b = resolve_non_finite(a, b, regs["srcA"], regs["srcB"], phase)
-        product = a * b
-        if dest_format is None:
-            return product
-        return flush_pre_carry_denormals(
-            product, regs["srcA"], regs["srcB"], min_normal_exponent(dest_format)
-        )
+        a, b = self.fpu.operand_halves(regs["srcA"], regs["srcB"], phase)
+        return self.fpu.flush_pre_carry(a * b, regs["srcA"], regs["srcB"], dest_format)
 
     def apply(self, regs: Registers) -> torch.Tensor:
-        """The operation, computed in a type exact for the operands it was given.
+        """The whole operation in one FPU step, where it does not split.
 
-        The unpacker already landed the operands in the register's own dtype, so
-        an integer input really is an integer tensor here. Computing it in
-        float32 would be exact for Int8 but not for Int16 -- 32767 * 32767 loses
-        its low bit past float32's 2**24 -- and the point of the model is that
-        the type is the hardware's, not the convenient one. int64 covers every
-        product reachable through SrcA/SrcB, since Int32 never lands in one.
+        Add and subtract always come here; a multiply only where the
+        architecture's split is not modelled, in which case the FPU returns the
+        exact product at every fidelity -- LoFi included, since LoFi is one
+        phase and not zero. Where the split *is* modelled, as on Quasar, a
+        multiply goes through :meth:`partial_product` and never arrives here.
         """
-        a, b = regs["srcA"], regs["srcB"]
-        wide = torch.int64 if not a.dtype.is_floating_point else torch.float32
-        a, b = a.to(wide), b.to(wide)
-        if self.operation is MathOperation.Elwadd:
-            return a + b
-        if self.operation is MathOperation.Elwsub:
-            return a - b
-        if self.operation is MathOperation.Elwmul:
-            # The exact product, reached only where mantissa_split is None --
-            # i.e. on an architecture whose split is not modelled, at every
-            # fidelity. Where the split *is* modelled, as on Quasar, the
-            # multiply always goes through partial_product and never arrives
-            # here, LoFi included: LoFi is one phase, not zero.
-            return a * b
-        raise ValueError(f"{self.operation} is not an element-wise binary op")
+        return self.fpu.elementwise(self.operation, regs["srcA"], regs["srcB"])
