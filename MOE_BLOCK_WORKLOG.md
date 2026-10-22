@@ -439,3 +439,24 @@ start after it), and h-all as one [MT][POMAX] block a column (11 kernel_lib roun
 | floor / 2x target | 95 / 190 - **1.72x** | 212 / 424 - **1.78x** |
 K3 per chip: gather ends 222-253 us (was 300-334), engine 326-377. Engine alone: K3 318 us (133 TFLOP/s), GLM 99.
 Both x chains are within 2x of their floors.
+
+### Down + SE reduce-scatter: the matmul_reduce_scatter op ported (the bar)
+Ported from malimpic/2026_10_15_1521_run1_matmul_reduce_scatter: ttnn/ttnn/operations/matmul_reduce_scatter (op +
+design docs, no perf_experiments / agent logs), kernel_lib/perf_instrumentation.hpp (profiler zones), its acceptance
+test (the codegen harness's topology helpers inlined: eval.golden_tests is not in this tree; the harness-bound perf test
+dropped). Its Ethernet-port placement imports _chip_maps / _worker_nearest_noc1 from bringup/combine_rf. kernel_lib
+helpers it uses (matmul_block_helpers, mcast_args, eltwise convenience) and _op_contract.py are identical to ours.
+Acceptance on the LoudBox: line 10 passed (links 1 / 2, every partial exactly once, repeated calls), the 1 x 8 snake
+ring under TORUS_XY 20 passed (ring_balanced + Linear, 1 / 2 links). (Line and ring must run in separate processes:
+the module-scoped meshes cannot change the fabric config while one is open.)
+As-is on the SE down shapes (models/demos/moe_block/tests/test_mrs_bar.py): h [640, I] bf16 @ W [I, H] bf8 per chip,
+reduced over TP (the 4-chip line, 2 links), the model's fabric payload (8256 B), HiFi2:
+| down + RS, us (worst PCC) | GLM-Flash (I 512, H 4096, scatter rows) | K3 (I 1536, H 7168, scatter width) |
+|---|---|---|
+| stock ttnn reduce_scatter alone (no matmul) | 116 | 190 |
+| fabric_rs alone (bringup) | 98 | - |
+| **matmul_reduce_scatter (down + RS fused)** | **118** (0.99998) | **187** (0.99998) |
+| floor (end link 3 shards at 47.2 GB/s; down compute overlaps) | 83 | 146 |
+| ratio | 1.42x | 1.28x |
+The fused op costs what the stock reduce-scatter alone does. Whole head so far, sequential: GLM 163 + 118 = 281
+(target 360), K3 377 + 187 = 564 (target 660); left for router / logits RS / top-k / routing prep / K3 latent: 79 / 96.

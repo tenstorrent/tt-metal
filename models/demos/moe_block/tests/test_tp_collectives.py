@@ -73,6 +73,8 @@ CASES = {
     "k3_lat_a2a": ((2560, 896), "a2a", (2, 3)),
     "glm_tail_a2a": ((640, 4096), "a2a", (3, 2)),
     "k3_se_rs_rows": ((2560, 7168), "rs", 2),
+    "glm_se_rs_rows640": ((640, 4096), "rs", 2),  # (the SE reduce-scatter at Galaxy per-chip rows)
+    "k3_se_rs640": ((640, 7168), "rs", 3),
 }
 
 
