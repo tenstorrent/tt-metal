@@ -358,7 +358,9 @@ def get_line_view_1d(manifest: dict) -> LineView1D:
                 channel = lookup(manifest, channel_where, "string")
                 through_mesh, through_chip, through_router = _split_router_path(channel, channel_where)
                 if (through_mesh, through_chip) != (mesh_key, chip_key) or through_router not in routers:
-                    raise ManifestError(f"{channel_where} is {channel!r}, which isn't a channel of a router on its chip")
+                    raise ManifestError(
+                        f"{channel_where} is {channel!r}, which isn't a channel of a router on its chip"
+                    )
                 forwards_through[path] = get_router_path(through_mesh, through_chip, through_router)
     return LineView1D(peers, forwards_through)
 

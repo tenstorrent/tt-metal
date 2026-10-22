@@ -59,16 +59,16 @@ class DecodedRouter:
     elements: dict[str, ElementValue]  # by the reference's path in the router
 
 
-def _decode_l1(node, item: dict, loaded: Input, types: Types, where: str):
+def _decode_l1(node, item: dict, snapshot: Input, types: Types, where: str):
     """An area's or region's value, once its snapshot entry is shown to copy its manifest node's address and size."""
     copied = (item.get("address"), item.get("size"))
     expected = (node.get("address"), node.get("size")) if isinstance(node, dict) else None
     if copied != expected or not isinstance(item.get("offset"), int):
         raise InputError(
-            f"snapshot {loaded.snapshot_path} has {where} as {item}, but the manifest has {node}, so the snapshot wasn't "
+            f"snapshot {snapshot.json_path} has {where} as {item}, but the manifest has {node}, so the snapshot wasn't "
             "taken with this manifest's layout"
         )
-    return decode_value(node, loaded.raw, item["offset"], types, where)
+    return decode_value(node, snapshot.bin, item["offset"], types, where)
 
 
 def _decode_word(schema: str, word: int | None, bits: int, types: Types, where: str):
@@ -90,25 +90,25 @@ def _get_register_bits(manifest: dict, where: str) -> dict[str, int]:
     return widths
 
 
-def decode_router(loaded: Input, types: Types, path: str) -> DecodedRouter:
+def decode_router(snapshot: Input, types: Types, path: str) -> DecodedRouter:
     """
     The snapshot's router at `path`, such as M0/C0/E1, decoded. If capture stopped part way through the router, what it
     read before then is decoded, and a value it never read is None. Raises InputError when the snapshot and the
     manifest disagree about the router, and ManifestError when the manifest describes something decode can't use.
     """
-    entry = loaded.snapshot["routers"].get(path)
+    entry = snapshot.json["routers"].get(path)
     if entry is None:
-        raise InputError(f"snapshot {loaded.snapshot_path} has no router {path}")
-    router, router_where = get_router(loaded.manifest, path)
+        raise InputError(f"snapshot {snapshot.json_path} has no router {path}")
+    router, router_where = get_router(snapshot.manifest, path)
     leaves = {leaf.path: leaf for leaf in walk_router(router, router_where)}
-    arch_where = f"archs.{lookup(loaded.manifest, 'run.arch', 'string')}"
+    arch_where = f"archs.{lookup(snapshot.manifest, 'run.arch', 'string')}"
     areas_where = f"{arch_where}.areas"
-    areas = lookup(loaded.manifest, areas_where, "object")
+    areas = lookup(snapshot.manifest, areas_where, "object")
     registers_where = f"{arch_where}.stream_registers"
-    register_bits = _get_register_bits(loaded.manifest, registers_where)
+    register_bits = _get_register_bits(snapshot.manifest, registers_where)
 
     decoded_areas = {
-        name: _decode_l1(areas.get(name), item, loaded, types, f"{areas_where}.{name}")
+        name: _decode_l1(areas.get(name), item, snapshot, types, f"{areas_where}.{name}")
         for name, item in entry["areas"].items()
     }
     regions = {}
@@ -116,10 +116,10 @@ def decode_router(loaded: Input, types: Types, path: str) -> DecodedRouter:
         leaf = leaves.get(region_path)
         if leaf is None or leaf.kind is not LeafKind.REGION:
             raise InputError(
-                f"snapshot {loaded.snapshot_path} has a region {region_path} in {path}, which the manifest's router "
+                f"snapshot {snapshot.json_path} has a region {region_path} in {path}, which the manifest's router "
                 "doesn't have"
             )
-        regions[region_path] = _decode_l1(leaf.node, item, loaded, types, leaf.where)
+        regions[region_path] = _decode_l1(leaf.node, item, snapshot, types, leaf.where)
 
     streams, elements = {}, {}
     for leaf in leaves.values():

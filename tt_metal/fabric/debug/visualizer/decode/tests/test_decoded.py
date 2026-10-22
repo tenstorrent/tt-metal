@@ -117,8 +117,8 @@ class TemporaryDirectoryTest(unittest.TestCase):
 
 class DecodeSnapshotTest(TemporaryDirectoryTest):
     def test_the_file_lists_its_source_and_decodes_each_router(self):
-        loaded = load_input(self.snapshot_path, Checkout(SHA, False))
-        decoded = json.loads(json.dumps(decode_snapshot(loaded, Checkout(SHA, False), DECODED_AT)))
+        snapshot = load_input(self.snapshot_path, Checkout(SHA, False))
+        decoded = json.loads(json.dumps(decode_snapshot(snapshot, Checkout(SHA, False), DECODED_AT)))
         self.assertEqual(
             {key: decoded[key] for key in ("kind", "decoded_version", "decoded_at", "decoder")},
             {
@@ -132,10 +132,10 @@ class DecodeSnapshotTest(TemporaryDirectoryTest):
             decoded["sources"],
             [
                 {
-                    "snapshot": {"file": str(self.snapshot_path.resolve()), "sha256": loaded.snapshot_sha256},
+                    "snapshot": {"file": str(self.snapshot_path.resolve()), "sha256": snapshot.json_sha256},
                     "manifest": {
                         "file": str(self.manifest_path.resolve()),
-                        "sha256": loaded.snapshot["manifest"]["sha256"],
+                        "sha256": snapshot.json["manifest"]["sha256"],
                         "run": MANIFEST["run"],
                     },
                     "capture": {"host": "test"},

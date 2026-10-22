@@ -10,7 +10,7 @@ them together.
 
 ## What it takes and returns
 
-`get_health(loaded, decoded)` takes the loaded snapshot and a router decoded by [`routers.py`](../routers.py), and
+`get_health(snapshot, router)` takes the loaded snapshot and a router decoded by [`routers.py`](../routers.py), and
 gives a `Health`:
 
 | Field | What it holds |

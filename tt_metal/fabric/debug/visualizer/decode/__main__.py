@@ -82,8 +82,8 @@ def main(argv: list) -> int:
         started = time.monotonic()
         out_path = (args.out_dir or snapshot_path.parent) / get_decoded_name(snapshot_path)
         try:
-            loaded = load_input(snapshot_path, checkout, manifests)
-            decoded = decode_snapshot(loaded, checkout, datetime.datetime.now(datetime.timezone.utc))
+            snapshot = load_input(snapshot_path, checkout, manifests)
+            decoded = decode_snapshot(snapshot, checkout, datetime.datetime.now(datetime.timezone.utc))
             write_decoded(decoded, out_path)
         except (ValueError, OSError) as error:
             failed += 1
@@ -94,7 +94,7 @@ def main(argv: list) -> int:
             f"{out_path}: {len(decoded['routers'])} routers, {len(errors)} with capture errors; "
             f"decoded in {time.monotonic() - started:.1f} s"
         )
-        for warning in loaded.warnings:
+        for warning in snapshot.warnings:
             print(f"  warning: {warning}")
         for path, error in errors.items():
             where = f" {error['path']}" if error.get("path") is not None else ""

@@ -39,37 +39,37 @@ def get_decoded_name(snapshot_path: pathlib.Path) -> str:
     )
 
 
-def _get_source(loaded: Input) -> dict:
+def _get_source(snapshot: Input) -> dict:
     return {
-        "snapshot": {"file": str(loaded.snapshot_path.resolve()), "sha256": loaded.snapshot_sha256},
+        "snapshot": {"file": str(snapshot.json_path.resolve()), "sha256": snapshot.json_sha256},
         "manifest": {
-            "file": str(loaded.manifest_path.resolve()),
-            "sha256": loaded.snapshot["manifest"]["sha256"],
-            "run": loaded.manifest["run"],
+            "file": str(snapshot.manifest_path.resolve()),
+            "sha256": snapshot.json["manifest"]["sha256"],
+            "run": snapshot.manifest["run"],
         },
-        "capture": loaded.snapshot["capture"],
-        "warnings": list(loaded.warnings),
+        "capture": snapshot.json["capture"],
+        "warnings": list(snapshot.warnings),
     }
 
 
-def decode_snapshot(loaded: Input, checkout: Checkout | None, decoded_at: datetime.datetime) -> dict:
+def decode_snapshot(snapshot: Input, checkout: Checkout | None, decoded_at: datetime.datetime) -> dict:
     """
     The decoded file for a loaded snapshot. `checkout` is decode's own, recorded as the decoder, and `decoded_at` is
     when the decode ran. Raises ManifestError or InputError, as decode_router and get_health do.
     """
-    types = get_types_from_manifest(loaded.manifest)
+    types = get_types_from_manifest(snapshot.manifest)
     routers = {}
-    for path in loaded.snapshot["routers"]:
-        decoded = decode_router(loaded, types, path)
+    for path in snapshot.json["routers"]:
+        decoded = decode_router(snapshot, types, path)
         values = dataclasses.asdict(decoded)
         del values["path"]  # the router's key
-        routers[path] = {"source": 0, **values, "health": dataclasses.asdict(get_health(loaded, decoded))}
+        routers[path] = {"source": 0, **values, "health": dataclasses.asdict(get_health(snapshot, decoded))}
     return {
         "kind": "fabric_decoded",
         "decoded_version": DECODED_VERSION,
         "decoded_at": _utc_text(decoded_at),
         "decoder": None if checkout is None else {"git_sha": checkout.sha, "git_dirty": checkout.dirty},
-        "sources": [_get_source(loaded)],
+        "sources": [_get_source(snapshot)],
         "routers": routers,
     }
 

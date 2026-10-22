@@ -40,12 +40,12 @@ class Checkout:
 
 @dataclass(frozen=True)
 class Input:
-    """All the inputs to the decoder, checked to belong together."""
+    """All the inputs to the decoder, checked to belong together: a snapshot's .json and .bin, and its manifest."""
 
-    snapshot_path: pathlib.Path
-    snapshot_sha256: str  # of the .json's bytes
-    snapshot: dict
-    raw: bytes  # the .bin
+    json_path: pathlib.Path  # the snapshot's .json
+    json_sha256: str  # of the .json's bytes
+    json: dict  # the .json, parsed
+    bin: bytes  # the .bin
     manifest_path: pathlib.Path
     manifest: dict
     warnings: tuple[str, ...]
@@ -196,10 +196,10 @@ def load_input(
     manifest_path, manifest_bytes = _find_manifest(snapshot_path, snapshot, manifest_paths)
     manifest = _parse_json(manifest_bytes, manifest_path, "manifest")
     return Input(
-        snapshot_path=snapshot_path,
-        snapshot_sha256=hashlib.sha256(snapshot_bytes).hexdigest(),
-        snapshot=snapshot,
-        raw=raw,
+        json_path=snapshot_path,
+        json_sha256=hashlib.sha256(snapshot_bytes).hexdigest(),
+        json=snapshot,
+        bin=raw,
         manifest_path=manifest_path,
         manifest=manifest,
         warnings=tuple(get_build_warnings(manifest, checkout)),

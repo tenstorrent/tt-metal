@@ -63,14 +63,14 @@ class _Sample:
     heartbeat: int | None
 
 
-def _get_samples(entry: dict, decoded: DecodedRouter) -> list[_Sample]:
+def _get_samples(entry: dict, router: DecodedRouter) -> list[_Sample]:
     """
     The liveness rounds, then the main pass. The main pass reads the core registers first and the heartbeat area with
     the other areas, a little later; its sample takes the first read's time.
     """
     samples = [_Sample(s["t_ns"], s.get("core_registers", {}), s.get("heartbeat")) for s in entry["liveness"]]
     if entry["started_ns"] is not None:
-        samples.append(_Sample(entry["started_ns"], entry["core_registers"], decoded.areas.get(HEARTBEAT)))
+        samples.append(_Sample(entry["started_ns"], entry["core_registers"], router.areas.get(HEARTBEAT)))
     return samples
 
 
@@ -81,9 +81,9 @@ def _get_reset_masks(manifest: dict, where: str) -> list[int]:
     raise ManifestError(f"{where} has no {SOFT_RESET}")
 
 
-def _get_eriscs(router: dict, where: str, masks: list[int], samples: list[_Sample]) -> dict[str, EriscReset]:
+def _get_eriscs(router_node: dict, where: str, masks: list[int], samples: list[_Sample]) -> dict[str, EriscReset]:
     eriscs = {}
-    for key, erisc in lookup(router, "eriscs", "object", of="object", where=where).items():
+    for key, erisc in lookup(router_node, "eriscs", "object", of="object", where=where).items():
         physical_erisc = lookup(erisc, "physical_erisc", "integer", where=f"{where}.eriscs.{key}")
         if not 0 <= physical_erisc < len(masks):
             raise ManifestError(
@@ -122,23 +122,23 @@ def _get_heartbeat(area: dict, where: str, samples: list[_Sample]) -> Heartbeat:
     return Heartbeat(words, router_magic, changed)
 
 
-def get_health(loaded: Input, decoded: DecodedRouter) -> Health:
+def get_health(snapshot: Input, router: DecodedRouter) -> Health:
     """
     The health facts of a decoded router, from its snapshot entry's liveness samples and main pass. A router capture
     couldn't open has no samples. Raises ManifestError when the manifest lacks a name health reads.
     """
-    manifest = loaded.manifest
+    manifest = snapshot.manifest
     arch_where = f"archs.{lookup(manifest, 'run.arch', 'string')}"
-    entry = loaded.snapshot["routers"][decoded.path]
-    router, router_where = get_router(manifest, decoded.path)
-    samples = _get_samples(entry, decoded)
+    entry = snapshot.json["routers"][router.path]
+    router_node, router_where = get_router(manifest, router.path)
+    samples = _get_samples(entry, router)
 
     masks = _get_reset_masks(manifest, f"{arch_where}.core_registers")
     area = lookup(manifest, f"{arch_where}.areas.{HEARTBEAT}", ("object", "null"))
     heartbeat = None if area is None else _get_heartbeat(area, f"{arch_where}.areas.{HEARTBEAT}", samples)
     return Health(
         t_ns=tuple(sample.t_ns for sample in samples),
-        eriscs=_get_eriscs(router, router_where, masks, samples),
+        eriscs=_get_eriscs(router_node, router_where, masks, samples),
         wall_clock=_get_wall_clock(samples),
         heartbeat=heartbeat,
     )

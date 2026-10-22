@@ -8,13 +8,19 @@ code.
 ## What it takes and returns
 
 The caller passes the path of a snapshot's `.json` as capture wrote it, and decode's own checkout. It may also pass
-manifests to choose from. It gets back an `Input`: the parsed snapshot and the sha256 of its bytes, the `.bin`'s
-bytes, the manifest and the path it was found at, and the warnings.
+manifests to choose from. It gets back an `Input`, with fields named after the files they come from:
+
+| Field | What it holds |
+| --- | --- |
+| `json_path`, `json_sha256`, `json` | The snapshot's `.json`: its path, the sha256 of its bytes, and its contents, parsed |
+| `bin` | The `.bin`'s bytes |
+| `manifest_path`, `manifest` | The manifest: the path it was found at, and its contents, parsed |
+| `warnings` | The build identity warnings |
 
 ```python
 checkout = get_checkout(pathlib.Path(__file__).parent)  # once per decode
-loaded = load_input(snapshot_path, checkout)  # or load_input(snapshot_path, checkout, manifest_paths)
-loaded.manifest, loaded.raw, loaded.warnings
+snapshot = load_input(snapshot_path, checkout)  # or load_input(snapshot_path, checkout, manifest_paths)
+snapshot.json["routers"], snapshot.bin, snapshot.manifest, snapshot.warnings
 ```
 
 Anything that keeps the snapshot from being decoded raises `InputError`, naming the file and the reason.

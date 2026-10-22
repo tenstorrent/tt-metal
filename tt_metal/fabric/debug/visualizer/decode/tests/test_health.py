@@ -87,7 +87,7 @@ def health(entry=ENTRY, eriscs=None, main_pass_heartbeat=ROUTER_MAGIC | 17, mani
     described = manifest(eriscs or {"erisc0": 0, "erisc1": 1}, **manifest_options)
     if manifest_change is not None:
         manifest_change(described)
-    loaded = Input(
+    snapshot = Input(
         pathlib.Path("snapshot.json"),
         "0" * 64,
         {"routers": {PATH: entry}},
@@ -96,7 +96,7 @@ def health(entry=ENTRY, eriscs=None, main_pass_heartbeat=ROUTER_MAGIC | 17, mani
         described,
         (),
     )
-    return get_health(loaded, DecodedRouter(PATH, entry["error"], areas, {}, {}, {}))
+    return get_health(snapshot, DecodedRouter(PATH, entry["error"], areas, {}, {}, {}))
 
 
 def with_samples(*samples, started_ns=None, core_registers=None):

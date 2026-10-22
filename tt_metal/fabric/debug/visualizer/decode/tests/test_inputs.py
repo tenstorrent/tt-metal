@@ -82,12 +82,12 @@ class LoadInputTest(unittest.TestCase):
         return self.snapshot_path
 
     def test_a_snapshot_loads_with_its_bin_and_manifest(self):
-        loaded = load_input(self.write(), Checkout(SHA, False))
-        self.assertEqual(loaded.raw, RAW)
-        self.assertEqual(loaded.manifest_path, self.manifest_path)
-        self.assertEqual(loaded.manifest["run"]["arch"], "wormhole_b0")
-        self.assertEqual(loaded.snapshot_sha256, sha256(self.snapshot_path.read_bytes()))
-        self.assertEqual(loaded.warnings, ())
+        snapshot = load_input(self.write(), Checkout(SHA, False))
+        self.assertEqual(snapshot.bin, RAW)
+        self.assertEqual(snapshot.manifest_path, self.manifest_path)
+        self.assertEqual(snapshot.manifest["run"]["arch"], "wormhole_b0")
+        self.assertEqual(snapshot.json_sha256, sha256(self.snapshot_path.read_bytes()))
+        self.assertEqual(snapshot.warnings, ())
 
     def test_a_moved_snapshot_finds_its_manifest_beside_it(self):
         snapshot_path = self.write(lambda snapshot: snapshot["manifest"].update(file="/elsewhere/m.json"))
@@ -164,7 +164,7 @@ class LoadInputTest(unittest.TestCase):
         def unopened(snapshot):
             snapshot["routers"]["M0/C0/E0"].update(started_ns=None, error={"stage": "open"})
 
-        self.assertIsNone(load_input(self.write(unopened), None).snapshot["routers"]["M0/C0/E0"]["started_ns"])
+        self.assertIsNone(load_input(self.write(unopened), None).json["routers"]["M0/C0/E0"]["started_ns"])
 
     def test_a_file_that_isnt_json_is_refused(self):
         snapshot_path = self.write()

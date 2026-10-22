@@ -110,9 +110,11 @@ ENTRY = {
 
 
 def decode(entry=ENTRY, manifest=MANIFEST, path=PATH):
-    snapshot = {"routers": {PATH: entry}}
-    loaded = Input(pathlib.Path("snapshot.json"), "0" * 64, snapshot, RAW, pathlib.Path("manifest.json"), manifest, ())
-    return decode_router(loaded, get_types_from_manifest(manifest), path)
+    snapshot_json = {"routers": {PATH: entry}}
+    snapshot = Input(
+        pathlib.Path("snapshot.json"), "0" * 64, snapshot_json, RAW, pathlib.Path("manifest.json"), manifest, ()
+    )
+    return decode_router(snapshot, get_types_from_manifest(manifest), path)
 
 
 def changed(entry_change=None, manifest_change=None):

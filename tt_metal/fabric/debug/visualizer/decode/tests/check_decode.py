@@ -130,7 +130,7 @@ def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
     problems = []
     types = check_types(manifest, problems)
     with tempfile.TemporaryDirectory() as out_dir:
-        snapshot = take_snapshot(
+        taken = take_snapshot(
             manifest_path,
             pathlib.Path(out_dir),
             RandomDevice(),
@@ -141,9 +141,9 @@ def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
             sleep=lambda seconds: None,
         )
         started = time.monotonic()
-        loaded = load_input(snapshot.json_path, None)
+        snapshot = load_input(taken.json_path, None)
         decoded_path = pathlib.Path(out_dir) / "decoded.json"
-        write_decoded(decode_snapshot(loaded, None, datetime.datetime.now(datetime.timezone.utc)), decoded_path)
+        write_decoded(decode_snapshot(snapshot, None, datetime.datetime.now(datetime.timezone.utc)), decoded_path)
         seconds = time.monotonic() - started
         decoded = json.loads(decoded_path.read_text())
         size = decoded_path.stat().st_size
@@ -151,7 +151,7 @@ def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
     problems += [
         f"/{'/'.join(map(str, error.absolute_path))}: {error.message[:200]}" for error in validator.iter_errors(decoded)
     ]
-    if list(decoded["routers"]) != list(loaded.snapshot["routers"]):
+    if list(decoded["routers"]) != list(snapshot.json["routers"]):
         problems.append("the decoded routers aren't the snapshot's")
     for path, router in decoded["routers"].items():
         check_router(manifest, path, router, problems)
