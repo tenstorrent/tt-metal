@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -124,6 +125,10 @@ void kernel_main() {
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
+#ifdef ARCH_BLACKHOLE
+    // The block call reads slower than per-tile calls for runs under 4 tiles.
+    constexpr bool bcast_block = subblock_w_const >= 4 && !PER_TILE_HANDOFF_GAINS;
+#endif
 
     uint32_t index_subblock_w_offset = 0;
     uint32_t index_h_offset = 0;
@@ -271,9 +276,17 @@ void kernel_main() {
         dfb_ex_global_obj.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                sub_tiles_bcast_cols(dfb_in0, dfb_ex_global, index, 0, w);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (bcast_block) {
+                any_tiles_bcast_block<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+                    dfb_in0, dfb_ex_global, index_subblock_w_offset + index_h_offset, 0, 0, subblock_w);
+            } else
+#endif
+            {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    sub_tiles_bcast_cols(dfb_in0, dfb_ex_global, index, 0, w);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -315,9 +328,17 @@ void kernel_main() {
         dfb_ex_global_obj.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(dfb_xmm, dfb_ex_global, index, 0, w);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (bcast_block) {
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                    dfb_xmm, dfb_ex_global, index_subblock_w_offset + index_h_offset, 0, 0, subblock_w);
+            } else
+#endif
+            {
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    index = w + index_subblock_w_offset + index_h_offset;
+                    mul_tiles_bcast_cols(dfb_xmm, dfb_ex_global, index, 0, w);
+                }
             }
             tile_regs_commit();
 
@@ -364,9 +385,22 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    index = w + index_subblock_w_offset;
-                    mul_tiles_bcast_rows(dfb_im, dfb_gamma, index + index_h_offset, index, w);
+#ifdef ARCH_BLACKHOLE
+                if constexpr (bcast_block) {
+                    any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                        dfb_im,
+                        dfb_gamma,
+                        index_subblock_w_offset + index_h_offset,
+                        index_subblock_w_offset,
+                        0,
+                        subblock_w);
+                } else
+#endif
+                {
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        index = w + index_subblock_w_offset;
+                        mul_tiles_bcast_rows(dfb_im, dfb_gamma, index + index_h_offset, index, w);
+                    }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -403,9 +437,22 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(dfb_beta_src, dfb_beta, index + index_h_offset, index, w);
+#ifdef ARCH_BLACKHOLE
+                if constexpr (bcast_block) {
+                    any_tiles_bcast_block<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(
+                        dfb_beta_src,
+                        dfb_beta,
+                        index_subblock_w_offset + index_h_offset,
+                        index_subblock_w_offset,
+                        0,
+                        subblock_w);
+                } else
+#endif
+                {
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        index = w + index_subblock_w_offset;
+                        add_tiles_bcast_rows(dfb_beta_src, dfb_beta, index + index_h_offset, index, w);
+                    }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
