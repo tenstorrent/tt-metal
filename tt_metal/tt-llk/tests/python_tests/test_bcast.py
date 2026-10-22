@@ -111,7 +111,7 @@ def test_unpack_bcast(
     if tile_dimensions[0] < 16 and formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b not supported for tile height < 16")
 
-    # TODO: pgardner - known WH issue with row broadcast + dest accumulation
+    # Known WH issue with row broadcast + dest accumulation: https://github.com/tenstorrent/tt-llk/issues/1680
     if (
         get_chip_architecture() == ChipArchitecture.WORMHOLE
         and broadcast_type == BroadcastType.Row
@@ -119,7 +119,8 @@ def test_unpack_bcast(
         and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
     ):
         pytest.skip(
-            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b/Bfp8_b"
+            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b/Bfp8_b "
+            "(https://github.com/tenstorrent/tt-llk/issues/1680)"
         )
 
     # --- Tile geometry ---------------------------------------------------
