@@ -266,7 +266,7 @@ def test_kimi_k3_state_adapter_cost(
         "contract_import": lambda: import_state(contract, imported, geometry),
     }
     timing = {name: _summary(_trace_samples_ms(mesh_device, operation)) for name, operation in operations.items()}
-    layer_samples_ms, _, _ = _trace_wall_samples_ms(mesh_device, layer, hidden, _LAYER_REPETITIONS)
+    layer_samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden, _LAYER_REPETITIONS)
     layer_timing = _summary(layer_samples_ms)
     layer_median_ms = float(layer_timing["median_ms"])
     for name, entry in timing.items():

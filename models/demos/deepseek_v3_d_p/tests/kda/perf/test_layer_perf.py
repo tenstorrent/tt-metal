@@ -9,6 +9,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -194,6 +195,56 @@ def _profile_replay(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float,
     return wall_ms, sum(program["duration_ns"] for program in programs.values()) / 1e6
 
 
+@dataclass
+class _LayerTrace:
+    """A traced layer call and the device buffers it holds until released."""
+
+    state: KdaState
+    trace_id: int | None = None
+    output: ttnn.Tensor | None = None
+    next_state: KdaState | None = None
+
+
+def _capture_layer_trace(
+    mesh_device: ttnn.MeshDevice,
+    layer: ttKDA,
+    hidden: ttnn.Tensor,
+    actual_start: int = 0,
+    actual_end: int | None = None,
+) -> _LayerTrace:
+    """Capture one layer call in a trace after a warm-up call, and replay it once."""
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
+    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
+    trace = _LayerTrace(state=_allocate_state(layer))
+    try:
+        warm_output, warm_state = layer.forward(hidden, trace.state, actual_start_tt, actual_end_tt)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(warm_output)
+        deallocate_state(warm_state)
+
+        trace.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace.output, trace.next_state = layer.forward(hidden, trace.state, actual_start_tt, actual_end_tt)
+        ttnn.end_trace_capture(mesh_device, trace.trace_id, cq_id=0)
+        ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+    except BaseException:
+        _release_layer_trace(mesh_device, trace)
+        raise
+    return trace
+
+
+def _release_layer_trace(mesh_device: ttnn.MeshDevice, trace: _LayerTrace) -> None:
+    try:
+        if trace.trace_id is not None:
+            ttnn.release_trace(mesh_device, trace.trace_id)
+    finally:
+        if trace.output is not None:
+            ttnn.deallocate(trace.output)
+        if trace.next_state is not None:
+            deallocate_state(trace.next_state)
+        deallocate_state(trace.state)
+
+
 def _trace_wall_samples_ms(
     mesh_device: ttnn.MeshDevice,
     layer: ttKDA,
@@ -202,68 +253,46 @@ def _trace_wall_samples_ms(
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
     actual_start: int = 0,
     actual_end: int | None = None,
-    device_time: bool = False,
-) -> tuple[list[float], dict[str, float] | None, list[float] | None]:
-    state = None
-    warm_output = None
-    warm_state = None
-    trace_id = None
-    output = None
-    next_state = None
-    actual_start_tt = make_actual_start(mesh_device, actual_start)
-    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
+) -> tuple[list[float], dict[str, float] | None]:
+    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
     try:
-        state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(warm_output)
-        warm_output = None
-        deallocate_state(warm_state)
-        warm_state = None
-
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
         validation = (
             validate_first_replay(
-                next_state,
-                output,
+                trace.next_state,
+                trace.output,
                 nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
             )
             if validate_first_replay is not None
             else None
         )
 
-        if device_time:
-            _profile_replay(mesh_device, trace_id)  # exclude first-replay jitter
-            samples = [_profile_replay(mesh_device, trace_id) for _ in range(_TIMING_SAMPLES)]
-            return [wall for wall, _ in samples], validation, [device for _, device in samples]
-
         samples_ms = []
         for _ in range(_TIMING_SAMPLES):
             start = time.perf_counter()
             for _ in range(repetitions):
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
-        return samples_ms, validation, None
+        return samples_ms, validation
     finally:
-        try:
-            if trace_id is not None:
-                ttnn.release_trace(mesh_device, trace_id)
-        finally:
-            if warm_output is not None:
-                ttnn.deallocate(warm_output)
-            if warm_state is not None:
-                deallocate_state(warm_state)
-            if output is not None:
-                ttnn.deallocate(output)
-            if state is not None:
-                deallocate_state(state)
-            if next_state is not None:
-                deallocate_state(next_state)
+        _release_layer_trace(mesh_device, trace)
+
+
+def _trace_device_samples_ms(
+    mesh_device: ttnn.MeshDevice,
+    layer: ttKDA,
+    hidden: ttnn.Tensor,
+    actual_start: int = 0,
+    actual_end: int | None = None,
+) -> tuple[list[float], list[float]]:
+    """Return the host wall and device time (ms) of single profiled trace replays, never back to back."""
+    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
+    try:
+        _profile_replay(mesh_device, trace.trace_id)  # exclude first-replay jitter
+        samples = [_profile_replay(mesh_device, trace.trace_id) for _ in range(_TIMING_SAMPLES)]
+    finally:
+        _release_layer_trace(mesh_device, trace)
+    return [wall for wall, _ in samples], [device for _, device in samples]
 
 
 @pytest.mark.parametrize(
@@ -342,15 +371,15 @@ def test_synthetic_kimi_k3_perf(
     ), f"{layout} must run Galaxy's per-chip workload"
     if device_reference_ms is not None:
         require_realtime_profiler(f"the {layout} device-time gate")
-    samples_ms, _, device_samples_ms = _trace_wall_samples_ms(
-        mesh_device,
-        layer,
-        hidden_tt,
-        _REPETITIONS,
-        actual_start=actual_start,
-        actual_end=actual_end,
-        device_time=device_reference_ms is not None,
-    )
+    if device_reference_ms is not None:
+        samples_ms, device_samples_ms = _trace_device_samples_ms(
+            mesh_device, layer, hidden_tt, actual_start=actual_start, actual_end=actual_end
+        )
+    else:
+        samples_ms, _ = _trace_wall_samples_ms(
+            mesh_device, layer, hidden_tt, _REPETITIONS, actual_start=actual_start, actual_end=actual_end
+        )
+        device_samples_ms = None
     median_wall_ms = statistics.median(samples_ms)
     median_device_ms = None if device_samples_ms is None else statistics.median(device_samples_ms)
     result = {
