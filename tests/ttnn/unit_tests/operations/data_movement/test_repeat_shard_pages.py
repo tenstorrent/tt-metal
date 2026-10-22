@@ -142,6 +142,105 @@ def test_repeat_narrow_rows_rank_expansion(device, layout, grid, shard, shape, r
         assert result.memory_config() == _output_memory(output, None)
 
 
+@pytest.mark.parametrize(
+    "layout, grid, shard, shape, repeats, output_shard, preallocate, route",
+    [
+        # 3 words in a 16-byte page: the 6-row group does not fit in 3-row shards, so native declines and
+        # sharded_to_interleaved unshards the aligned page for codegen.
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [2, 1, 1, 1], None, False, "codegen"),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [1, 1, 2, 1], [8, 5], False, "native"),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [1, 1, 2, 1], [8, 5], True, "native"),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [1, 1, 2, 1], [6, 4], False, "native"),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, (1, 2), [3, 4], [2, 3, 3], [1, 1, 2, 1], [6, 4], True, "native"),
+        # 7 words over two 5-word shards: the partial final shard keeps its padding through the view.
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (2, 1), [4, 5], [1, 4, 7], [1, 1, 2, 1], None, False, "codegen"),
+    ],
+    ids=[
+        "block_aligned_outer_x2",
+        "width_sharded",
+        "width_sharded_pre",
+        "block_sharded",
+        "block_sharded_pre",
+        "partial",
+    ],
+)
+def test_repeat_rank_expansion_routes(device, layout, grid, shard, shape, repeats, output_shard, preallocate, route):
+    input_memory = _sharded(layout, _cores(*grid), shard)
+    output_memory = None if output_shard is None else _sharded(layout, _cores(*grid), output_shard)
+    result = _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route)
+    if output_memory is None:
+        _assert_derived_placement(result, input_memory)
+    else:
+        assert result.memory_config() == output_memory
+
+
+_NARROW_WIDTH = (ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(1, 1), [4, 5], [1, 4, 3])
+_NARROW_BLOCK = (ttnn.TensorMemoryLayout.BLOCK_SHARDED, _cores(1, 2), [4, 5])
+
+
+@pytest.mark.parametrize(
+    "source, repeats, output",
+    [
+        (_NARROW_WIDTH, [1, 1, 1, 2], None),
+        (_NARROW_WIDTH, [1, 1, 2], None),
+        (_NARROW_WIDTH, [2, 2, 1], None),
+        (_NARROW_WIDTH, [1, 1, 1], ttnn.DRAM_MEMORY_CONFIG),
+        (_NARROW_WIDTH, [1, 1, 1, 1], ttnn.DRAM_MEMORY_CONFIG),
+        (_NARROW_WIDTH, [1, 2, 1], _sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _cores(1, 1), [8, 5])),
+        (
+            _NARROW_WIDTH,
+            [1, 2, 1],
+            _sharded(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                [8, 5],
+            ),
+        ),
+        (
+            _NARROW_WIDTH,
+            [1, 2, 1],
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.DRAM,
+                ttnn.ShardSpec(_cores(1, 1), [8, 5], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        ),
+        ((*_NARROW_BLOCK, [1, 6, 3]), [1, 2, 1], None),
+        ((*_NARROW_BLOCK, [2, 4, 3]), [2, 1, 1], None),
+        ((*_NARROW_BLOCK, [2, 4, 3]), [2, 1, 1, 1], None),
+    ],
+    ids=[
+        "new_axis_last_dim",
+        "last_dim",
+        "two_axes",
+        "all_ones_dram",
+        "all_ones_new_axis_dram",
+        "block_output",
+        "other_grid_output",
+        "dram_sharded_output",
+        "uneven_block",
+        "block_split_rows",
+        "block_split_rows_new_axis",
+    ],
+)
+def test_repeat_unaligned_narrow_rows_off_native_throw(device, expect_error, source, repeats, output):
+    # Off the native path these 20-byte pages, wider than their 12-byte rows, would leave their shards through the
+    # row-major copy, which does not complete. Repeat throws first. The call runs only in a NO_DISPATCH capture, so
+    # this check cannot hang.
+    layout, grid, shard, shape = source
+    values = torch.arange(prod(shape), dtype=torch.int32).reshape(shape)
+    tensor = ttnn.from_torch(
+        values,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_sharded(layout, grid, shard),
+    )
+    kwargs = {} if output is None else {"memory_config": output}
+    with expect_error(RuntimeError, "does not complete"):
+        _route(lambda: ttnn.repeat(tensor, repeats, **kwargs))
+
+
 @pytest.mark.parametrize("output, preallocate", OUTPUTS)
 def test_repeat_narrow_row_wider_page(device, output, preallocate):
     # An 8-word row in a 9-word shard: the 36-byte page holds the 32-byte row and one padding word.

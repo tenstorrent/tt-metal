@@ -108,10 +108,11 @@ bool is_native_repeat_sharding(
     }
     if (input_spec.layout() == Layout::ROW_MAJOR) {
         const auto& shard = input_spec.memory_config().shard_spec()->shape;
-        // A row narrower than its shard is one padded page, and repeat's views keep that padding. It has no other
-        // route: codegen and the composite path unshard it first, and the row-major unshard cannot copy a page
-        // wider than its row. A split row whose final shard is partial stays on codegen or the composite path,
-        // which copy it exactly; the native kernels have not been verified on its padded last page.
+        // A row narrower than its shard is one padded page, and repeat's views keep that padding. Codegen and the
+        // composite path unshard it first: an L1-aligned page takes sharded_to_interleaved, but any other page takes
+        // a row-major copy that does not complete when the page is wider than the row, so repeat throws there.
+        // A split row whose final shard is partial stays on codegen or the composite path, which copy it exactly;
+        // the native kernels have not been verified on its padded last page.
         const bool narrow_row = input_spec.logical_shape()[-1] < shard[1];
         if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1]) {
             return false;

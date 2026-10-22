@@ -300,6 +300,25 @@ bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
 
 using repeat::interleaved_in;
 
+// sharded_to_interleaved takes only L1-aligned row-major shard pages; to_memory_config copies any other page, and that
+// copy does not complete when the page is wider than the row. Throw instead of moving such a tensor off its shards.
+void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
+    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || !tensor.memory_config().is_sharded() ||
+        !tensor.shard_spec().has_value()) {
+        return;
+    }
+    const uint32_t row_width = tensor.logical_shape()[-1];
+    const uint32_t shard_width = tensor.shard_spec()->shape[1];
+    TT_FATAL(
+        row_width >= shard_width ||
+            !repeat::is_unaligned_row_major_shard_page(tensor.memory_config(), tensor.element_size()),
+        "repeat: this call would move {}-element rows out of {}-element row-major shards whose page is not "
+        "L1-aligned, and that copy does not complete. Repeat along one axis other than the last into the input's "
+        "sharded layout and grid, or use a shard width whose page is L1-aligned.",
+        row_width,
+        shard_width);
+}
+
 // Gives a spec-less sharded output the spec native would land it in; the legs need it to plan the final write.
 // An ND-only config is a requested placement, not a spec-less one: it passes through untouched, and the
 // support gate (which needs a legacy shard_spec) sends it to native, which places it as requested.
@@ -355,6 +374,7 @@ ttnn::Tensor repeat_via_codegen(
 
     ttnn::Tensor working = tensor;
     if (plan.unshard_input) {
+        check_rows_can_leave_shards(working);
         working = ttnn::to_memory_config(working, interleaved_in(BufferType::DRAM), std::nullopt);
     }
 
@@ -531,6 +551,9 @@ ttnn::Tensor repeat_native(
                                   .value_or(MemoryConfig(TensorMemoryLayout::INTERLEAVED, all_ones_mc.buffer_type()));
             }
         }
+        if (all_ones_mc != working_tensor.memory_config()) {
+            check_rows_can_leave_shards(working_tensor);
+        }
         return finalize_into_preallocated(ttnn::to_memory_config(working_tensor, all_ones_mc), optional_output_tensor);
     }
 
@@ -583,6 +606,7 @@ ttnn::Tensor repeat_native(
             // DRAM-sharded fallback via to_memory_config (sharded_to_interleaved is L1-only);
             // use working_tensor to keep rank padding from match_input_rank.
             const MemoryConfig l1_interleaved{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+            check_rows_can_leave_shards(working_tensor);
             working_tensor = ttnn::to_memory_config(working_tensor, l1_interleaved, std::nullopt);
         }
         if (working_output_mem_config.is_sharded()) {
