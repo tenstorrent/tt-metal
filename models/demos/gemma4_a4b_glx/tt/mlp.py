@@ -18,6 +18,7 @@ import torch
 
 import ttnn
 
+from .ccl import all_reduce, partial_dtype
 from .settings import settings
 
 _FIDELITY = {"HiFi4": ttnn.MathFidelity.HiFi4, "HiFi2": ttnn.MathFidelity.HiFi2, "LoFi": ttnn.MathFidelity.LoFi}
@@ -80,8 +81,10 @@ class TtMLP:
         h = ttnn.mul(act, up)
         ttnn.deallocate(act)
         ttnn.deallocate(up)
-        partial = ttnn.linear(h, self.w_down, transpose_b=True, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        partial = ttnn.linear(
+            h, self.w_down, transpose_b=True, dtype=partial_dtype(), compute_kernel_config=self.mm_cfg
+        )
         ttnn.deallocate(h)
-        out = ttnn.all_reduce(partial, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = all_reduce(partial, TP_AXIS)
         ttnn.deallocate(partial)
         return out

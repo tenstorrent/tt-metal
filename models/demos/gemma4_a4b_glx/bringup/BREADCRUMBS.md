@@ -429,3 +429,36 @@ I re-applied the attempt above unchanged; it had passed under an older framework
 - Not done: real sparse dispatch (deepseek_prefill dispatch/combine). Its routed-expert ops have no GeluTanh
   activation, and this tt-metal has no `ttnn/ttnn/bringup` fork tree.
 - Re-run: `bfw perf accuracy --task P.2`, then `bfw perf try --task P.2`. Old path: `GEMMA4_A4B_GLX_PERF_P2=0`.
+
+## K.1 attempt 5: pulled-back chunk determinism (run 20261017-192425-gemma4-glx-followup-5)
+- Failure being fixed: `test_runner_contract.py:151` "config 0: e2's [0, 3008) != a2's". The pulled-back last chunk
+  [2048, 4000) rewrote rows [2048, 3008), which chunk [960, 3008) had already shipped, with other bytes from layer 1
+  on ("1950 identical, 870 differ").
+- Probe (chunk [960, 3008) vs [2048, 4000), same tokens, compared step by step):
+  - embed, norms, RoPE (composed) and SDPA (sliding and chunked global) are bit-identical at both offsets.
+  - The first op that differs is the o_proj `ttnn.all_reduce`: equal input, output differs by up to 0.5.
+  - Reason: reduce_scatter + all_gather sums each tile in an order that depends on where the tile sits.
+- Fix: new `tt/ccl.py` `all_reduce(t, axis)`: all_gather of the partials, then adds in mesh order on every chip.
+  It is used at o_proj (2 sites in `tt/attention.py`), MLP down (`tt/mlp.py`) and experts down (`tt/experts.py`).
+- New switch `ALL_REDUCE_IMPL`. All values were measured on ladder s16384, whose limit on bias_layer_L29 is 0.005.
+  | value | partials and adds | bias_layer_L29 | ladder s16384 |
+  | --- | --- | --- | --- |
+  | `gather_sum` (default) | bf16, the same precision as ttnn.all_reduce | 0.00336 | PASS |
+  | `gather_sum_fp32` | fp32 partials and adds, one rounding | 0.00522 | FAIL |
+  | `ttnn` | the old `ttnn.all_reduce` | 0.00387 | PASS |
+  | `gather_sum` with fp32 adds of bf16 partials (dropped) | | 0.00506 | FAIL |
+  - L29's bias is input drift that its post_ffn_norm amplifies (see L.s16384). It moves by +-0.0015 with any change
+    in rounding, so the fp32 variant is not "worse", just on the other side of the line.
+- Smoke test fix: `test_runner_smoke` decodes from keep = len(ids) - 1 = 24, which is not tile aligned. Attention
+  asserted "start 24 and S 2048 must be tile aligned".
+  - `TtSlidingAttention.__call__` (inherited by global) now handles a start inside a tile with pre = start % 32. It
+    runs `_forward` from start - pre, with x shifted down by pre rows. `_keep_rows` keeps the cache rows
+    [start - pre, start) as loaded: a where-select plus a disjoint add of bfp8 values, which is exact. The output is
+    rotated back.
+  - Server chunks are tile aligned (runtime._validate), so the serving path is unchanged.
+- Result: `bfw job check --task K.1` PASS.
+  - Runner contract: every config "2820 identical, 0 differ".
+  - Metrics: runner_reused_tokens 960, runner_kv_pcc_min 0.99337, runner_layout_failures 0,
+    runner_contract_failed 0, smoke_runner_ok 1 ('Paris<turn|>').
+  - All 61 regressions PASS.
+- Re-run: `bfw job check --task K.1`. Old path: `GEMMA4_A4B_GLX_ALL_REDUCE_IMPL=ttnn`.

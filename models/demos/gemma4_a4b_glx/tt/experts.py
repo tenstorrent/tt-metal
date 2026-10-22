@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 
+from .ccl import all_reduce, partial_dtype
 from .settings import settings
 
 _FIDELITY = {"HiFi4": ttnn.MathFidelity.HiFi4, "HiFi2": ttnn.MathFidelity.HiFi2, "LoFi": ttnn.MathFidelity.LoFi}
@@ -147,9 +148,9 @@ class TtExperts:
         return h
 
     def _down(self, hw, split):
-        part = ttnn.linear(hw, self.w_down, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        part = ttnn.linear(hw, self.w_down, dtype=partial_dtype(), compute_kernel_config=self.mm_cfg)
         ttnn.deallocate(hw)
-        red = ttnn.all_reduce(part, cluster_axis=EP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        red = all_reduce(part, EP_AXIS)
         ttnn.deallocate(part)
         if not split:
             return red

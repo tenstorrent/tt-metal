@@ -67,6 +67,15 @@ TABLE = {
         "chunk offset) or ttnn.experimental.rotary_embedding (fused; its core group 1 runs a default compute config, so "
         "a row's bits depend on where it falls in the chunk and a pulled-back rewrite differs)",
     ),
+    "ALL_REDUCE_IMPL": Setting(
+        "gather_sum",
+        ("gather_sum", "gather_sum_fp32", "ttnn"),
+        "2026-10-22 K.1: row-parallel sums (o_proj, MLP down, experts down) as all_gather + adds in mesh order, a "
+        "token's bits independent of its row in the chunk (gather_sum: bf16 partials and adds, ttnn.all_reduce's "
+        "precision; gather_sum_fp32: fp32 partials and adds, one rounding) or ttnn.all_reduce (ttnn; reduce_scatter + "
+        "all_gather, its summation order depends on the tile's place, so the pulled-back chunk rewrote shipped rows with "
+        "other bytes from layer 1 on)",
+    ),
     "PERF_P2": Setting(
         True,
         (True, False),

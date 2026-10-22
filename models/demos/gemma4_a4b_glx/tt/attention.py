@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 
+from .ccl import all_reduce, partial_dtype
 from .settings import settings
 
 _FIDELITY = {"HiFi4": ttnn.MathFidelity.HiFi4, "HiFi2": ttnn.MathFidelity.HiFi2, "LoFi": ttnn.MathFidelity.LoFi}
@@ -252,6 +253,54 @@ class TtSlidingAttention:
         ttnn.deallocate(vn)
         return k8, v8
 
+    def _keep_rows(self, t8, cache_t, slot: int, start: int, keep: int):
+        """bfp8 [1, h, s, D] with rows [0, keep) taken from the cache slot's rows [start, start+keep) (t8 freed). A
+        select of bfp8 values (exact in fp32 and tf32) plus a disjoint add of zeros; bfp8 blocks are per row, so
+        re-packing keeps every row's bytes."""
+        if not keep:
+            return t8
+        s = t8.shape[-2]
+        mask = self._pad_mask(s, keep)
+        inv = ttnn.rsub(mask, 1.0)  # 1 - {0, 1}: exact
+        old = self._masked(self._fp32(slot_rows(cache_t, slot, start, start + s)), mask)
+        newm = self._masked(self._fp32(t8), inv)
+        ttnn.deallocate(mask)
+        ttnn.deallocate(inv)
+        ttnn.add_(old, newm)
+        ttnn.deallocate(newm)
+        out = ttnn.typecast(old, ttnn.bfloat8_b)
+        ttnn.deallocate(old)
+        return out
+
+    def __call__(self, x, cache: TtKVCache, start: int, actual_end: int | None = None):
+        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S), rows at and past actual_end are pad (their
+        cache rows are written as zeros). Returns [1, 1, S, hidden] replicated.
+
+        The server's chunks start on a tile (runtime._validate). A start inside a tile (a decode step that recomputes
+        from the last prompt token over a loaded prefix) runs from the tile below it: x shifted down by pre = start %
+        32 rows (the last pre rows must be pad and drop out), the cache's rows [start - pre, start) kept as they are,
+        and the output rotated back (its last pre rows are pad)."""
+        pre = start % TILE
+        if not pre:
+            return self._forward(x, cache, start, actual_end)
+        s, h = x.shape[-2], x.shape[-1]
+        end = start + s if actual_end is None else actual_end
+        assert end - start <= s - pre, f"chunk [{start}, {end}) does not fit {s} rows from the tile at {start - pre}"
+        head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, pre, h])
+        body = ttnn.slice(x, [0, 0, 0, 0], [1, 1, s - pre, h])
+        xs = ttnn.concat([head, body], dim=2)
+        ttnn.deallocate(head)
+        ttnn.deallocate(body)
+        out = self._forward(xs, cache, start - pre, end, keep=pre)
+        ttnn.deallocate(xs)
+        real = ttnn.slice(out, [0, 0, pre, 0], [1, 1, s, h])
+        tail = ttnn.slice(out, [0, 0, 0, 0], [1, 1, pre, h])
+        ttnn.deallocate(out)
+        rot = ttnn.concat([real, tail], dim=2)
+        ttnn.deallocate(real)
+        ttnn.deallocate(tail)
+        return rot
+
     def new_cache(self, max_seq: int, slots: int = 1) -> TtKVCache:
         """An empty (zero) served-layout cache for this layer: `slots` KV slots of max_seq rows."""
         return TtKVCache(self.mesh, self.nkv * self.mesh.shape[TP_AXIS], self.d, max_seq, slots)
@@ -316,9 +365,8 @@ class TtSlidingAttention:
         ttnn.deallocate(tr)
         return out
 
-    def __call__(self, x, cache: TtKVCache, start: int, actual_end: int | None = None):
-        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S), rows at and past actual_end are pad (their
-        cache rows are written as zeros). Returns [1, 1, S, hidden] replicated."""
+    def _forward(self, x, cache: TtKVCache, start: int, actual_end: int | None = None, keep: int = 0):
+        """__call__ at a tile-aligned start; the cache rows [start, start+keep) are kept (not rewritten)."""
         s = x.shape[-2]
         end = start + s
         assert start % TILE == 0 and s % TILE == 0, f"start {start} and S {s} must be tile aligned"
@@ -341,6 +389,8 @@ class TtSlidingAttention:
         q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
         mask = self._pad_mask(s, n)
         k8, v8 = self._kv(k, v, cos, sin, mask)
+        k8 = self._keep_rows(k8, cache.k, cache.slot, start, keep)
+        v8 = self._keep_rows(v8, cache.v, cache.slot, start, keep)
         if mask is not None:
             ttnn.deallocate(mask)
         if end - start < self.rope_len:  # a full-range slice is the table itself: keep it
@@ -389,9 +439,9 @@ class TtSlidingAttention:
 
         concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
-        partial = ttnn.linear(concat, self.wo, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        partial = ttnn.linear(concat, self.wo, dtype=partial_dtype(), compute_kernel_config=self.mm_cfg)
         ttnn.deallocate(concat)
-        out = ttnn.all_reduce(partial, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = all_reduce(partial, TP_AXIS)
         ttnn.deallocate(partial)
         return out
 
@@ -456,9 +506,8 @@ class TtGlobalAttention(TtSlidingAttention):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
             )
 
-    def __call__(self, x, cache: TtKVCache, start: int, actual_end: int | None = None):
-        """x: [1, 1, S, hidden] bf16 replicated; positions [start, start+S), rows at and past actual_end are pad (their
-        cache rows are written as zeros). Returns [1, 1, S, hidden] replicated."""
+    def _forward(self, x, cache: TtKVCache, start: int, actual_end: int | None = None, keep: int = 0):
+        """__call__ at a tile-aligned start; the cache rows [start, start+keep) are kept (not rewritten)."""
         s = x.shape[-2]
         end = start + s
         assert start % TILE == 0 and s % TILE == 0, f"start {start} and S {s} must be tile aligned"
@@ -484,6 +533,8 @@ class TtGlobalAttention(TtSlidingAttention):
         q = self._norm_rope(q, self.q_norm, cos, sin, ttnn.bfloat16)
         mask = self._pad_mask(s, n)
         k8, v8 = self._kv(k, v, cos, sin, mask)
+        k8 = self._keep_rows(k8, cache.k, cache.slot, start, keep)
+        v8 = self._keep_rows(v8, cache.v, cache.slot, start, keep)
         if mask is not None:
             ttnn.deallocate(mask)
         if end - start < self.rope_len:  # a full-range slice is the table itself: keep it
@@ -538,8 +589,8 @@ class TtGlobalAttention(TtSlidingAttention):
 
         concat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn)
-        partial = ttnn.linear(concat, self.wo, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg)
+        partial = ttnn.linear(concat, self.wo, dtype=partial_dtype(), compute_kernel_config=self.mm_cfg)
         ttnn.deallocate(concat)
-        out = ttnn.all_reduce(partial, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = all_reduce(partial, TP_AXIS)
         ttnn.deallocate(partial)
         return out
