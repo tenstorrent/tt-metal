@@ -724,7 +724,9 @@ class TtPrefillBlock(LightweightModule):
         )
 
         if kv_only:
-            kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+            kv_cache = (
+                ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, self.mla.sp_axis) if return_kv_cache else None
+            )
             if return_indexer_indices:
                 return None, kv_cache, None
             return None, kv_cache
@@ -778,7 +780,7 @@ class TtPrefillBlock(LightweightModule):
                 return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
-        kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, self.mla.sp_axis) if return_kv_cache else None
         if return_indexer_indices:
             return x, kv_cache, mla_indices
         return x, kv_cache

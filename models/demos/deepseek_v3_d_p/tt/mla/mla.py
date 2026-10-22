@@ -741,11 +741,14 @@ class ttMLA:
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             )  # [slots, n1, n0 * rows_per_chip, width]
             rows = sharded.shape[2] // n0
-            # Row-major chip order (axis 0 outer), matching the coordinate order init_kvpe_cache declares.
-            host = torch.cat(
-                [sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0 in range(n0) for a1 in range(n1)],
-                dim=2,
+            # SP-major chip order (sp_coord*tp + tp_coord), the order the KV write uses: row-major on the mesh
+            # at sp_axis=0 (the coordinate order init_kvpe_cache declares), column-major at sp_axis=1.
+            chips = (
+                [(a0, a1) for a0 in range(n0) for a1 in range(n1)]
+                if sp_axis == 0
+                else [(a0, a1) for a1 in range(n1) for a0 in range(n0)]
             )
+            host = torch.cat([sharded[:, a1 : a1 + 1, a0 * rows : (a0 + 1) * rows] for a0, a1 in chips], dim=2)
         else:
             host = ttnn.to_torch(
                 storage,
