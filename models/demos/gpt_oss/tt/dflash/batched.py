@@ -986,12 +986,13 @@ class BatchedDraft:
         self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
         # (the context pass's 8-layer write: one core per (user, kv head))
         self.kv_write_ctx = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size, head_split=True)
-        # attention: block attention (b1's kernels, uniform), 16 users per program on 4 cores each
-        # (16 users x 1 history slice: the window bounds every core's history to ~33 chunks; vs 8 x 3: round 25.0 -> 24.8
-        # ms at ISL 256, 25.8 -> 25.4 at 1024)
+        # attention: block attention (b1's kernels, uniform), as many users per program as the grid holds on 1 history
+        # slice each (the window bounds every core's history to ~33 chunks; 16 x 1 vs 8 x 3: round 25.0 -> 24.8 ms at ISL
+        # 256, 25.8 -> 25.4 at 1024; the whole grid vs 64 cores: 256 users' round at 8K 65.9 -> 65.3 ms)
         from .block_attention import BlockAttention
 
-        per = min(users, 64 // BlockAttention.cores_needed(nkv, self.block, 1))  # (16 users per program at block 8)
+        grid = mesh.compute_with_storage_grid_size()
+        per = min(users, grid.x * grid.y // BlockAttention.cores_needed(nkv, self.block, 1))
         self.ba = _UserBlockAttention(
             mesh, users, self.block, nq, nkv, hd, block_size, per, 1, uniform=True, window=window or 0
         )
@@ -1236,18 +1237,26 @@ class _UserBlockAttention:
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         assert per * per_program <= len(cores)
         # one kernel set for the program's users (a set per user: 3 x per_program kernel groups to dispatch, the
-        # sliding-window program 57 us); the last program may hold fewer users
-        self.programs = [(p0, min(per_program, users - p0)) for p0 in range(0, users, per_program)]
+        # sliding-window program 57 us); the last program may hold fewer users: more history slices per user, up to
+        # the cores of a full program (its users' histories split over the same number of cores)
+        full = per * per_program
+        self.programs = []
+        for p0 in range(0, users, per_program):
+            n = min(per_program, users - p0)
+            s = slices
+            while s < 8 and BlockAttention.cores_needed(n_kv, block, s + 1) * n <= full:
+                s += 1
+            self.programs.append((p0, n, s))
         self.inst = {
-            n: BlockAttention(
+            (n, s): BlockAttention(
                 mesh,
                 block,
                 n_heads,
                 n_kv,
                 head_dim,
                 block_size,
-                cores[: per * n],
-                slices,
+                cores[: BlockAttention.cores_needed(n_kv, block, s) * n],
+                s,
                 q_rows=True,
                 min_chunks=min_chunks,
                 uniform=uniform,
@@ -1255,7 +1264,7 @@ class _UserBlockAttention:
                 swin=swin,
                 users=n,
             )
-            for n in sorted({n for _, n in self.programs})
+            for n, s in sorted({(n, s) for _, n, s in self.programs})
         }
 
     def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale, q_heads=None):
@@ -1265,8 +1274,8 @@ class _UserBlockAttention:
         shape = [1, 1, q.shape[2], (q_heads or q.shape[1]) * q.shape[3]]
         out = ttnn.empty(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
                          memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
-        for p0, n in self.programs:
-            inst = self.inst[n]
+        for p0, n, s in self.programs:
+            inst = self.inst[(n, s)]
             kernels, cbs, tio = inst.parts(
                 q, k_cache, v_cache, pos_ui, page_table, sinks, scale, wait=(self.WAIT_SEM, 0),
                 user=(p0, self.users), out=out,
@@ -1353,16 +1362,21 @@ class BatchedVerify:
         # 26.6, 16 x 1 18.4 / 21.2 / 28.7)
         from .block_attention import BlockAttention
 
-        # (block 8: 8 users per program on 3 history slices each; smaller blocks, more users: 1 slice, more users per
-        # program)
+        # (block 8: 8 users per program on 3 history slices each, 96 cores: 4 equal programs for 32 users (the whole
+        # grid, 9 + 9 + 9 + 5 users: round 21.5 -> 21.8 ms at ISL 4K); otherwise as many users per program as the grid
+        # holds: 3 slices at 32 users (plain step at 4K 10.36 -> 9.76 ms vs 96 cores), else 1 (64 users at ISL 16K
+        # 23.3 -> 22.2 ms, 256 at 8K 43.4 -> 40.7); 2 or 3 slices for every user: slower, e.g. 64 users at 16K 24.2 /
+        # 24.6 ms)
         slices = 3 if block == 8 or users <= 32 else 1
-        per = min(users, 96 // BlockAttention.cores_needed(self.local_kv_heads, block, slices))
+        grid = self.mesh.compute_with_storage_grid_size()
+        budget = 96 if block == 8 else grid.x * grid.y
+        per = min(users, budget // BlockAttention.cores_needed(self.local_kv_heads, block, slices))
         self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], per, slices
         )
         # sliding-window layers: the same block attention, windowed (row r attends [pos_r + 1 - window, pos_r]: at most
-        # 6 chunks), 16 users per program on 1 slice each (64 cores), instead of one decode SDPA per 32-row step (8
-        # SDPA calls + 8 Q slices + the concat per layer)
+        # 6 chunks), as many users per program as the grid holds on 1 slice each (vs 64 cores: 256 users' plain step
+        # 16.6 -> 16.3 ms), instead of one decode SDPA per 32-row step (8 SDPA calls + 8 Q slices + the concat per layer)
         windows = {l.self_attn.config.sliding_window for l in model.layers if l.self_attn.config.sliding_window}
         (window,) = windows
         self.swin_attn = _UserBlockAttention(
@@ -1373,7 +1387,7 @@ class BatchedVerify:
             self.local_kv_heads,
             hd,
             kv_cache[0][0].shape[2],
-            min(users, 64 // BlockAttention.cores_needed(self.local_kv_heads, block, 1)),
+            min(users, grid.x * grid.y // BlockAttention.cores_needed(self.local_kv_heads, block, 1)),
             1,
             swin=window,
         )
