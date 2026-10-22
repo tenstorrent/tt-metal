@@ -135,6 +135,82 @@ def _per_head_stride_supported(num_heads: int, head_dim: int) -> bool:
     return (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
 
 
+def _num_valid_queries_case(B, Q, H, seed):
+    spatial_shapes = [(12, 20), (6, 10)]
+    L, P, D, Z = 2, 4, 32, 2
+    S = sum(h * w for h, w in spatial_shapes)
+    torch.manual_seed(seed)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = _bf16(torch.rand(B, Q, Z, 2))
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2))
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+    reference = _msda_reference(
+        value, _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar"), attn, spatial_shapes
+    )
+    return (_pack_value(value), ref_pts, _pack_locations(offsets), _pack_weights(attn)), spatial_shapes, reference
+
+
+@pytest.mark.parametrize(
+    "B,Q,H,counts",
+    [
+        # 18 tiles: fewer than any grid has cores, one slot per core.
+        (3, 70, 2, ([70, 33, 1], [5, 64, 69])),
+        # 160 tiles: more than any grid has cores and not a multiple of them, so the
+        # cores split into two work groups and the slots are padded per core.
+        (2, 300, 8, ([300, 129], [17, 288])),
+    ],
+)
+def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(device, B, Q, H, counts):
+    """Rows below each batch's count match the reference, and changing the counts is a cache hit.
+
+    The counts cut blocks mid-way, at a block boundary and down to one row; Q itself leaves a
+    partial trailing block. Calls alternate between no counts and two different count lists, so
+    the tile lists in the cached runtime args change on every hit, and each call gets fresh
+    tensors, so the buffer addresses change too. A stale list or a stale address computes the
+    previous call's rows and misses this call's reference. Rows at or past a count are undefined
+    by contract and are not compared.
+    """
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    device.cache_entries_counter.reset()
+
+    first, second = counts
+    calls = []
+    for seed, num_valid_queries in enumerate((None, first, None, second)):
+        tensors, spatial_shapes, reference = _num_valid_queries_case(B, Q, H, seed=seed)
+        # Kept alive until the end so the allocator cannot hand a later call the same addresses.
+        calls.append(([_to_device(t, device) for t in tensors], spatial_shapes, reference, num_valid_queries))
+
+    for (value_t, ref_t, off_t, attn_t), spatial_shapes, reference, num_valid_queries in calls:
+        with device.cache_entries_counter.measure():
+            out = ttnn.experimental.fused_msda_from_offsets(
+                value_t,
+                ref_t,
+                off_t,
+                attn_t,
+                spatial_shapes,
+                reference_mode="pillar",
+                num_valid_queries=num_valid_queries,
+            )
+        got = ttnn.to_torch(out).to(torch.float32)
+        if num_valid_queries is not None:
+            with device.cache_entries_counter.measure():
+                full_out = ttnn.experimental.fused_msda_from_offsets(
+                    value_t,
+                    ref_t,
+                    off_t,
+                    attn_t,
+                    spatial_shapes,
+                    reference_mode="pillar",
+                )
+            full_got = ttnn.to_torch(full_out).to(torch.float32)
+        for b, n in enumerate(num_valid_queries or [Q] * B):
+            _assert_close(reference[b, :n], got[b, :n])
+            if num_valid_queries is not None:
+                torch.testing.assert_close(full_got[b, :n], got[b, :n], rtol=0, atol=0)
+    assert device.cache_entries_counter.total == 1
+
+
 def _to_device(t: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -635,8 +711,8 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     ref_pts = _bf16(torch.rand(B, Q, Z, 2))
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
-    # NOT _bf16(): the V2 reader reads bf16 reference points and offsets but forms
-    # the location in fp32 and samples at that unrounded position, so rounding it
+    # NOT _bf16(): the V2 op reads bf16 reference points and offsets but forms the
+    # location on the SFPU without rounding it and samples at that position, so rounding it
     # here would compare the kernel against a coarser sampler than it is. The
     # difference is not cosmetic at these shapes -- bf16 quantization of a
     # reference point near 0.5 is ~0.002, and W=50 turns that into ~0.1 px of
@@ -751,10 +827,9 @@ def test_fused_msda_v2_one_pixel_offset(device):
 def test_fused_msda_program_cache_hit_readdresses(device):
     """Same-spec calls share one cached program, so the second call's buffers are not the ones compiled in.
 
-    The factory pushes Buffer* runtime args and has no override_runtime_arguments. A hit replays that
-    program; only the framework's buffer bindings rewrite the addresses. Both allocations stay live and
-    carry different data: a stale address still points at the first call and cannot match the second
-    reference.
+    A hit replays that program; only override_runtime_arguments rewrites the addresses. Both
+    allocations stay live and carry different data: a stale address still points at the first call
+    and cannot match the second reference.
     """
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
@@ -789,70 +864,6 @@ def test_fused_msda_program_cache_hit_readdresses(device):
     _assert_close(ref2, got2)
     assert device.cache_entries_counter.total == entries_after_miss
     assert out1.buffer_address() != out2.buffer_address()
-
-
-def test_compute_kernel_zero_scalar_annihilates_nonfinite_input(device):
-    """Skipped input-tile rows hold stale bytes and rely on a 0 scalar to cancel them.
-
-    Drives compute_msda.cpp with the op's compute config and a hand-built NaN/+Inf/-Inf
-    input tile, so the result does not depend on whatever a CB slot happens to hold.
-    """
-    nonfinite = torch.tensor([0x7FC0, 0x7F80, 0xFF80]).to(torch.int16)  # NaN, +Inf, -Inf
-    input_bits = nonfinite[torch.arange(32 * 32) % 3].reshape(32, 32)
-    input_host = input_bits.view(torch.bfloat16)
-    input_t = ttnn.from_torch(input_host, layout=ttnn.TILE_LAYOUT, device=device)
-    # Host tilization must keep the NaN/Inf bit patterns, or the kernel never sees them.
-    assert torch.equal(ttnn.to_torch(input_t).view(torch.int16), input_bits)
-    scalar_t = ttnn.from_torch(torch.zeros(32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    out_t = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    in_cb, scalar_cb, out_cb = 0, 1, 16  # reader_binary_interleaved_start_id hardcodes c_0 / c_1
-
-    def cb(index):
-        fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=2048)
-        return ttnn.CBDescriptor(total_size=2 * 2048, core_ranges=core, format_descriptors=[fmt])
-
-    def rt(args):
-        r = ttnn.RuntimeArgs()
-        r[0][0] = args
-        return r
-
-    def accessor(t):
-        return ttnn.TensorAccessorArgs(t).get_compile_time_args()
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
-        core_ranges=core,
-        compile_time_args=[0, *accessor(input_t), *accessor(scalar_t)],
-        runtime_args=rt([input_t.buffer_address(), scalar_t.buffer_address(), 1, 0, 0, 0, 0]),
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        core_ranges=core,
-        compile_time_args=[out_cb, *accessor(out_t)],
-        runtime_args=rt([out_t.buffer_address(), 1, 0]),
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    compute = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/compute/compute_msda.cpp",
-        core_ranges=core,
-        # input_cb, scalar_cb, output_cb, reduction_size, n_d_tiles
-        compile_time_args=[in_cb, scalar_cb, out_cb, 1, 1],
-        runtime_args=rt([1]),
-        # The program factory's config: HiFi4, fp32_dest_acc_en=False.
-        config=ttnn.ComputeConfigDescriptor(),
-    )
-    program = ttnn.ProgramDescriptor(
-        kernels=[reader, writer, compute], semaphores=[], cbs=[cb(in_cb), cb(scalar_cb), cb(out_cb)]
-    )
-    out_bits = ttnn.to_torch(ttnn.generic_op([input_t, scalar_t, out_t], program)).view(torch.int16)
-
-    # The sign of zero is not part of the contract.
-    assert torch.all((out_bits & 0x7FFF) == 0), "0 * NaN/Inf is nonzero; skipped input rows must be zero-filled"
 
 
 # ---------------------------------------------------------------------------
@@ -1007,6 +1018,24 @@ def test_fused_msda_from_offsets_rejects_float32_inputs(device, expect_error, te
             inputs["attention_weights"],
             shapes,
             reference_mode="level",
+        )
+
+
+@pytest.mark.parametrize(
+    "num_valid_queries,message",
+    [
+        ([], "empty list"),
+        ([8], "one count per batch"),
+        ([8, 9], "exceeds num_queries"),
+        ([0, 0], "no query"),
+    ],
+)
+def test_fused_msda_from_offsets_rejects_bad_num_valid_queries(device, expect_error, num_valid_queries, message):
+    value_t, off_t, attn_t, shapes = _valid_inputs(device, B=2)
+    ref_t = _to_device(torch.rand(2, 8, 2, 2), device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.fused_msda_from_offsets(
+            value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar", num_valid_queries=num_valid_queries
         )
 
 

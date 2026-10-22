@@ -44,7 +44,9 @@ public:
 
     llrt::RunTimeOptions& get_rtoptions();
     const Hal& get_hal();
+    const Hal& get_hal() const;
     Cluster& get_cluster();
+    const Cluster& get_cluster() const;
     distributed::SystemMesh& get_system_mesh();
     const MetalEnvDescriptor& get_descriptor() const;
 
