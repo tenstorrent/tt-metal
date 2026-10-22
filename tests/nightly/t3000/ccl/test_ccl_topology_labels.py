@@ -24,7 +24,6 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 
 FABRIC_1D = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}]
 FABRIC_1D_RING = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}]
@@ -1401,7 +1400,6 @@ def _strided_reduce_scatter_async(tensor, mesh_device, dim, cluster_axis, persis
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-@skip_for_blackhole("strided_all_gather_async hung on a Blackhole 1x8 in both topologies; its nightly is WH-only")
 @pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_strided_all_gather_async_collapsed_shard_inner_axis(mesh_device, strict_ccl_topology):
@@ -1425,13 +1423,11 @@ def test_strided_all_gather_async_collapsed_shard_inner_axis(mesh_device, strict
     assert _placements(tt_again) == expected_placements
 
 
-@skip_for_blackhole("strided_all_gather_async hung on a Blackhole 1x8 in both topologies; its nightly is WH-only")
 @pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_strided_all_gather_async_nd_input_replicates_only_the_gathered_axis(mesh_device, strict_ccl_topology):
     """ShardTensor2dMesh dims=(2, 3) gathered on dim 3 along the columns: [Shard(2), Replicate]; the rows' Shard(2) is
-    untouched and the composed tensor is the original. Wormhole-only: the op's own nightly is skip_for_blackhole; on a
-    Blackhole 1x8 the op hung in both Linear and Ring topologies during bench."""
+    untouched and the composed tensor is the original."""
     torch.manual_seed(21)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32 * rows, 32 * cols])
