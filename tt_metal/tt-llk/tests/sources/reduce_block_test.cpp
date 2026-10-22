@@ -56,13 +56,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         const std::uint32_t n = std::min(block, tile_cnt - start);
         _llk_unpack_AB_reduce_block_<POOL_TYPE, REDUCE_DIM>(
-            L1_ADDRESS(params.buffer_A[start]),
-            L1_ADDRESS(params.buffer_B[0]),
-            n,
-            stride,
-            formats.unpack_A_src,
-            tensor_shape,
-            params.IS_REDUCE_TO_ONE && SCALAR_PAIR);
+            L1_ADDRESS(params.buffer_A[start]), L1_ADDRESS(params.buffer_B[0]), n, stride, formats.unpack_A_src, tensor_shape, SCALAR_PAIR);
     }
 }
 
@@ -108,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
             _llk_math_reduce_block_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                0, std::min(params.NUM_TILES_IN_BLOCK, tile_cnt - start), 1, tensor_shape);
+                0, std::min(params.NUM_TILES_IN_BLOCK, tile_cnt - start), 1, tensor_shape, SCALAR_PAIR);
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         }
     }
