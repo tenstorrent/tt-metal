@@ -24,7 +24,7 @@ from __future__ import annotations
 import ttnn
 
 from .ccl import dealloc
-from .common import DRAM
+from .common import DRAM, cast
 from .layout import HC
 from .settings import settings
 
@@ -51,13 +51,15 @@ class TtHcResidual:
     def __call__(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
         n = self.n
         # y bf16: the attention's bf16 reduce-scatter result under ATTN_GLUE=on (P.15); mhc_post reads it as is
-        assert x.dtype == ttnn.float32 and mix.dtype == ttnn.float32, (x.dtype, mix.dtype)
+        # x bf16: BF16_ACTIVATIONS=on (P.20), the new streams written bf16 by mhc_post (one rounding of the fp32 mix)
+        assert x.dtype in (ttnn.float32, ttnn.bfloat16) and mix.dtype == ttnn.float32, (x.dtype, mix.dtype)
         assert y.dtype in (ttnn.float32, ttnn.bfloat16), y.dtype
         rows, w = x.shape[-2], y.shape[-1]
         assert x.shape[-1] == n * w and mix.shape[-2] == rows and y.shape[-2] == rows, (x.shape, mix.shape, y.shape)
         assert mix.shape[-1] >= (2 + n) * n, mix.shape
         if self.mode == "fused":
             return self._fused(x, mix, y, rows)
+        assert x.dtype == ttnn.float32, "RESIDUAL_MIX=addcmul takes fp32 streams (BF16_ACTIVATIONS=off)"
         yf = _fp32(y)
         out = self._addcmul(x, mix, yf, rows, w)
         if yf is not y:
@@ -85,7 +87,8 @@ class TtHcResidual:
             )
         post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)
         comb = ttnn.slice(mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM)
-        yf = _fp32(y)  # stats_weight takes fp32 F only (mhc_post_ttnn README "Limits")
+        # stats_weight: fp32 X with fp32 F, or bf16 X (P.20) with bf16 F (mhc_post_ttnn README "Limits")
+        yf = _fp32(y) if x.dtype == ttnn.float32 else (y if y.dtype == ttnn.bfloat16 else cast(y, ttnn.bfloat16))
         out, row = ttnn.bringup.mhc_post(yf, x, post, comb, stats_weight=hc.fn_t, compute_kernel_config=hc.post_cfg)
         if yf is not y:
             dealloc(yf)

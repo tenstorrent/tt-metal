@@ -143,6 +143,19 @@ ALWI void sfpu_init() { MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType
 
 ALWI void copy_from(uint32_t cb, uint32_t tile, uint32_t dst) { copy_tile(cb, tile, dst); }
 
+// MHC_POST_STATS_X16 (P.20: bf16 X in cb_in, bf16 X' in cb_out / cb_xs): srcA / the packer to ``cb``'s format where
+// the CBs alternate fp32 / bf16; absent otherwise (the fp32 program does no reconfiguration).
+ALWI void srca_to(uint32_t cb) {
+#ifdef MHC_POST_STATS_X16
+    reconfig_data_format_srca(cb);
+#endif
+}
+ALWI void pack_to(uint32_t cb) {
+#ifdef MHC_POST_STATS_X16
+    pack_reconfig_data_format(cb);
+#endif
+}
+
 void kernel_main() {
     constexpr uint32_t n = n_streams;
     const uint32_t start = get_arg_val<uint32_t>(0);
@@ -171,6 +184,7 @@ void kernel_main() {
         cb_reserve_back(cb_ssc, bw);
         for (uint32_t c = 0; c < U.valid; ++c) {
             tile_regs_acquire();
+            srca_to(cb_cf);
             copy_init(cb_cf);  // srcA is on the fp32 unpack-to-dest format (hw_startup / after the matmul below)
             for (uint32_t t = 0; t < cf; ++t) {
                 copy_from(cb_cf, t, t);
@@ -191,6 +205,7 @@ void kernel_main() {
             }
 #endif
             STATS_SFPU(stats_sfpu::mix_half<0>);
+            srca_to(cb_cf);
             copy_init(cb_cf);
             for (uint32_t t = 0; t < cf; ++t) {
                 copy_from(cb_cf, cf + t, t);
@@ -198,12 +213,14 @@ void kernel_main() {
             STATS_SFPU(stats_sfpu::mix_half<1>);
             tile_regs_commit();
             tile_regs_wait();
+            pack_to(cb_out);
             for (uint32_t k = 0; k < n; ++k) {
                 pack_tile<true>(cf + k, cb_out, c * n + k);
             }
             for (uint32_t k = 0; k < n; ++k) {
                 pack_tile<true>(cf + k, cb_xs, c * n + k);
             }
+            pack_to(cb_ssc);
             pack_tile<true>(cf + n, cb_ssc, c);
             tile_regs_release();
         }

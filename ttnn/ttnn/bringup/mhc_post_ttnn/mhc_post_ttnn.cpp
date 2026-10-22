@@ -177,10 +177,15 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
     check_shapes(input_tensor, residual, post, comb, post_col, comb_col);
-    // F float32, or bfloat16 (fork option, deepseek_v41_flash_d_p P.19: unpacked to the fp32 DEST exactly)
-    if ((input_tensor.dtype() != DataType::FLOAT32 && input_tensor.dtype() != DataType::BFLOAT16) ||
-        residual.dtype() != DataType::FLOAT32) {
-        throw ValueErrorCpp("mhc_post: stats_weight needs a float32 residual and a float32 or bfloat16 input_tensor");
+    // F float32, or bfloat16 (fork option, deepseek_v41_flash_d_p P.19: unpacked to the fp32 DEST exactly); the
+    // residual float32, or bfloat16 with a bfloat16 F (P.20: X' bf16, the next hc row from the bf16 X')
+    const bool f_ok = input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16;
+    const bool x_ok = residual.dtype() == DataType::FLOAT32 ||
+                      (residual.dtype() == DataType::BFLOAT16 && input_tensor.dtype() == DataType::BFLOAT16);
+    if (!f_ok || !x_ok) {
+        throw ValueErrorCpp(
+            "mhc_post: stats_weight needs a float32 residual with a float32 or bfloat16 input_tensor, or a bfloat16 "
+            "residual with a bfloat16 input_tensor");
     }
     const int64_t C = dims(input_tensor).back();
     const int64_t n = dims(residual).back() / C;

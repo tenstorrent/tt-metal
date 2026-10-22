@@ -111,3 +111,24 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
      `device/mhc_post_ttnn_program_factory.{hpp,cpp}`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
      `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_coef_expand.hpp`,
      `kernels/mhc_post_stats_{reader,writer,compute}.cpp`, `tests/unit/test_mhc_post_mixes.py`.
+
+9. bf16 residual streams with `stats_weight` (deepseek_v41_flash_d_p P.20).
+   - What: with `stats_weight`, the residual X may be bfloat16 when F is bfloat16 (was refused: fp32 X only; the
+     plain program always took bf16 X). X tiles in bf16 pages (CB_IN, UnpackToDestFp32: exact in the fp32 DEST), X'
+     written bf16 (CB_OUT, the packer's one rounding of the fp32 mix) and kept bf16 for the projection (CB_XS: the
+     matmul reads the bf16 X' the next hc step reads), the sum of squares from the fp32 mix in DEST (before its
+     rounding: rel <= ~2e-5 from the bf16 X'^2 sum, inside the fp32 statistic's noise); srcA / the packer
+     reconfigured where the CBs alternate fp32 / bf16. Define MHC_POST_STATS_X16 (reader, writer, compute), present
+     only with bf16 X; fp32 X: every program, CT / RT arg, define and hash unchanged.
+   - Why: DeepSeek's GPU code keeps the mHC residual streams in bf16 (hc_post(...).type_as(x)); the stats pass is
+     DRAM-bound (DS41-80), so bf16 streams halve its reads and writes. Model (BF16_ACTIVATIONS=on, 2x2, chunk
+     53248-55296, plain profile vs FIX.10's): attn_residual 2.50 -> 1.80 ms, ffn_residual 2.87 -> 2.44 ms a chunk.
+   - Tests: `tests/unit/test_mhc_post_bf16_streams.py` (DS41 2x2 / 4x4 shapes and a small ragged one, sliced post /
+     comb and the packed mixes: X' = the fp32-X call's X' rounded to nearest (ties away) bit for bit, the sum-of-squares
+     column bit-identical to it, the plain program's X' equal, the projection vs float64 of bf16(X') @ W within 1.1 x
+     the fp32-X call's own error (measured 4.7e-3 vs 7.3e-3 at HiFi2); control: the fp32 X' projection is farther;
+     refusal of a bf16 X with an fp32 F). Regression, option off (2026-10-22, 2x2): unit + golden + model cases 408
+     passed (= the recorded 401 + 7 new).
+   - Needed by: deepseek_v41_flash_d_p P.20 (tt/residual.py, tt/engram_add.py, setting BF16_ACTIVATIONS).
+   - Files: `mhc_post_ttnn.cpp`, `device/mhc_post_stats_program_factory.cpp`,
+     `kernels/mhc_post_stats_{reader,writer,compute}.cpp`, `tests/unit/test_mhc_post_bf16_streams.py`.

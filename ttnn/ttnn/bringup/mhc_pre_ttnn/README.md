@@ -44,7 +44,8 @@ Realistic (use by default): every option below.
 
 `mhc_pre_xing` (fork addition, CHANGELOG 4):
 - `input_tensor`: the reduced row (..., T, 32) fp32, or a finished hc (..., T, n(n+2)) with `coefficients_given`.
-- `streams=None`: (..., T, n*C) fp32; given -> also returns y.
+- `streams=None`: (..., T, n*C) fp32 or (CHANGELOG 11) bf16; given -> also returns y, in the streams' dtype (bf16: the
+  fp32 sum rounded once by the packer, to nearest, ties away). Realistic (bf16 is unpacked to the fp32 DEST exactly).
 - `scale=[]` (3 values), `base=[]` (n(n+2) values), `norm_width=1.0` (> 0; the full n*H width), `n=4` (1..4).
 - `norm_eps=1e-6`, `hc_eps=1e-6`, `sinkhorn_iters=20`, `clamp_min=-30.0`, `clamp_max=30.0`.
 - `coefficients_given=False`: only collapse from a given hc (needs streams).
@@ -55,8 +56,8 @@ Realistic (use by default): every option below.
 - Returns `(hc or None, y or None)`.
 
 `mhc_pre_xing_pack` (fork addition, CHANGELOG 4):
-- `mix`: (..., T, 32) fp32 TILE (None only in engram mode); `streams`: (..., T, n*C) fp32 TILE; `n=4` (1..4). Returns mix with column n(n+2) = sum streams^2.
-- `engram_keys=None`, `engram_weight=None` (opt-in together, mix None; CHANGELOG 9): keys (..., T, >= n*C) fp32 (columns 0..n*C-1 read), weight (..., 32, n*C) fp32 with leading dims 1 (the weight row on all 32 rows). Returns a new row (..., T, 32) fp32 = [sum_c h_i w_i k_i | sum_c h_i^2 | sum_c k_i^2 | 0 ...]. Realistic (exact fp32 SFPU, as the op chain it replaces).
+- `mix`: (..., T, 32) fp32 TILE (None only in engram mode); `streams`: (..., T, n*C) fp32 or (CHANGELOG 11) bf16 TILE; `n=4` (1..4). Returns mix (fp32) with column n(n+2) = sum streams^2 (exact fp32 on the streams' values).
+- `engram_keys=None`, `engram_weight=None` (opt-in together, mix None; CHANGELOG 9): keys (..., T, >= n*C) fp32, or bf16 with bf16 streams (CHANGELOG 11) (columns 0..n*C-1 read), weight (..., 32, n*C) fp32 with leading dims 1 (the weight row on all 32 rows). Returns a new row (..., T, 32) fp32 = [sum_c h_i w_i k_i | sum_c h_i^2 | sum_c k_i^2 | 0 ...]. Realistic (exact fp32 SFPU, as the op chain it replaces).
 
 Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
 
@@ -73,10 +74,11 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 - `mhc_pre_xing(collapse_pre=)`, 2x2 p150, [1024, 4 x 2560] fp32 a chip (wall, 30 synced calls): 0.164 ms vs coefficients 0.028 + the multiply / addcmul collapse 0.765 ms; y bit-identical to the coefficients_given collapse, 4e-8 vs float64; deepseek_v41_flash_d_p attn / ffn_collapse 5.0 + 5.0 -> 0 ms a chunk (CHANGELOG.md change 8).
 - `mhc_pre_xing_pack` engram mode, 2x2, h [1024, 4 x 2560], k [1024, 5 x 2560] fp32: 0.424 ms vs 2.51 ms for the multiply / slice / ttnn.sum chain; every column <= 1.4e-7 vs float64 sums; deepseek_v41_flash_d_p engram_add 7.0 -> 1.78 ms a chunk with mhc_post's identity-comb add (CHANGELOG.md change 9).
 - Regression after changes 8-9: unit + golden 332 passed / 1 skipped (= 321 / 1 + 11 new), model cases 103 passed.
+- bf16 streams (CHANGELOG 11), deepseek_v41_flash_d_p P.20 (2x2, chunk 53248-55296, plain profile, BF16_ACTIVATIONS on vs off): attn_hc 2.65 -> 1.75 ms, ffn_hc 1.57 -> 1.12, engram_add 1.79 -> 1.34 ms a chunk; pack / engram rows bit-identical to the fp32 call on the same values, y = one nearest rounding of the fp32 y (tests/unit/test_xing_bf16_streams.py).
 
 ## Limits
 - `mhc_pre`: TILE only; X / W fp32 or bf16; fp32 DEST required (HiFi4 only declared); n(n+2)+1 <= 32 (n <= 4); C % 32 == 0; rank 2..4; outputs always DRAM interleaved. No memory-placement check on inputs; only DRAM interleaved tested.
-- `mhc_pre_xing` / `_pack`: every tensor fp32 TILE DRAM interleaved, rank 2..4, n 1..4, row last dim exactly 32.
+- `mhc_pre_xing` / `_pack`: every tensor fp32 TILE DRAM interleaved (the streams and the engram keys also bf16, the keys in the streams' dtype), rank 2..4, n 1..4, row last dim exactly 32.
 - `deepseek=True` with `coefficients_given=True` refused.
 - `collapse_pre`: fp32 TILE DRAM, last dim n..32, leading dims as the input's.
 - Engram mode: fp32 TILE DRAM only; one row's partials (n x column groups) <= 64; DRAM-bound at ~0.42 ms for the shape above (two DM batches of 2 B tiles a unit; the weight blocks add a few % reads).
@@ -100,7 +102,7 @@ Tests: `tests/test_mhc_pre_ttnn.py` + `tests/cases.py` (mhc_pre model cases), `t
 ## Used by
 - glm53_flash_d_p: `mhc_pre` in `tt/mhc_fused.py` (default; `GLM_MHC_IMPL=composite` keeps the op chains); O.1 cases.
 - xing40_a4b_d_p: `mhc_pre_xing_pack` -> `ttnn.all_reduce` axis 1 -> `mhc_pre_xing` in `tt/mhc.py`; collapse `mhc_pre_xing(coefficients_given=True)` in `tt/collapse.py` (`XING_HC_IMPL=composed` keeps the op chain); task P.2b, O.1 cases.
-- deepseek_v41_flash_d_p: `tt/mhc.py` (`mhc_pre_xing_pack` -> gather + add axis 1 -> `mhc_pre_xing(deepseek=True)`, setting HC_SINKHORN=sfpu_fp32; `fpu` for the source kernel) and `tt/norm.py` (`mhc_pre_xing_pack(n=1)` for the RMS statistic); task FIX.4. P.14 (setting MHC_FUSED=on): `mhc_pre_xing(deepseek=True, collapse_pre=)` (tt/mhc.py:TtHcMixes.fused), `mhc_pre_xing(coefficients_given=True)` (tt/collapse.py, the final collapse), the engram mode (tt/engram_add.py). P.19 (setting GLUE_FOLD=on): `mhc_pre_xing(..., partials=TP)` on the all_gathered rows (tt/mhc.py:TtHcMixes.fused). Model cases for these calls: none yet (task O.1).
+- deepseek_v41_flash_d_p: `tt/mhc.py` (`mhc_pre_xing_pack` -> gather + add axis 1 -> `mhc_pre_xing(deepseek=True)`, setting HC_SINKHORN=sfpu_fp32; `fpu` for the source kernel) and `tt/norm.py` (`mhc_pre_xing_pack(n=1)` for the RMS statistic); task FIX.4. P.14 (setting MHC_FUSED=on): `mhc_pre_xing(deepseek=True, collapse_pre=)` (tt/mhc.py:TtHcMixes.fused), `mhc_pre_xing(coefficients_given=True)` (tt/collapse.py, the final collapse), the engram mode (tt/engram_add.py). P.19 (setting GLUE_FOLD=on): `mhc_pre_xing(..., partials=TP)` on the all_gathered rows (tt/mhc.py:TtHcMixes.fused). P.20 (setting BF16_ACTIVATIONS=on): bf16 streams in every call (tt/mhc.py, tt/collapse.py, tt/engram_add.py with bf16 keys). Model cases for these calls: none yet (task O.1).
 
 ## History
 CHANGELOG.md; codegen worklogs: changelog.md, op_design.md, op_requirements.md, verification_report.md, verifier_report.json, l1_ledger.md, self_reflection.md.

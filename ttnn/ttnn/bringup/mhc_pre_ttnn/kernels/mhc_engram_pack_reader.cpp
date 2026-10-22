@@ -30,8 +30,13 @@ void kernel_main() {
     constexpr auto s_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr uint32_t nu = n * groups;
 
-    const auto h_acc = TensorAccessor(h_args, get_arg_val<uint32_t>(0), page);
-    const auto k_acc = TensorAccessor(k_args, get_arg_val<uint32_t>(1), page);
+#ifdef MHC_ENGRAM_X16
+    constexpr uint32_t in_page = page / 2;  // P.20: bf16 h / k tiles
+#else
+    constexpr uint32_t in_page = page;
+#endif
+    const auto h_acc = TensorAccessor(h_args, get_arg_val<uint32_t>(0), in_page);
+    const auto k_acc = TensorAccessor(k_args, get_arg_val<uint32_t>(1), in_page);
     const auto w_acc = TensorAccessor(w_args, get_arg_val<uint32_t>(2), page);
     const auto s_acc = TensorAccessor(s_args, get_arg_val<uint32_t>(3), page);
     const uint32_t start = get_arg_val<uint32_t>(4);
@@ -54,8 +59,8 @@ void kernel_main() {
         cb_reserve_back(cb_in, 2 * bw);
         const uint32_t base = get_write_ptr(cb_in);
         for (uint32_t c = 0; c < U.valid; ++c) {
-            noc_async_read_page(U.r * n * ct + U.i * ct + U.col0 + c, h_acc, base + 2 * c * page);
-            noc_async_read_page(U.r * kt + U.i * ct + U.col0 + c, k_acc, base + (2 * c + 1) * page);
+            noc_async_read_page(U.r * n * ct + U.i * ct + U.col0 + c, h_acc, base + 2 * c * in_page);
+            noc_async_read_page(U.r * kt + U.i * ct + U.col0 + c, k_acc, base + (2 * c + 1) * in_page);
         }
         noc_async_read_barrier();
         cb_push_back(cb_in, 2 * bw);

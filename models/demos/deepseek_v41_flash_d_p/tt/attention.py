@@ -61,7 +61,7 @@ import ttnn
 
 from . import ccl
 from .ccl import dealloc
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, sum_cols
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, dense_dtype, sum_cols
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads, rope_stock
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
@@ -641,7 +641,9 @@ class TtWindowAttention:
         )
         dealloc(oq)
         og = ttnn.reshape(og, [1, self.g_l, rows, self.hpg * self.d])
-        y = ttnn.matmul(og, self.wo_a, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it
+        ydt = ttnn.bfloat16 if (self.glue and bf16_activations()) else ttnn.float32
+        y = ttnn.matmul(og, self.wo_a, dtype=ydt, compute_kernel_config=self.ckc, memory_config=DRAM)
         dealloc(og)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:

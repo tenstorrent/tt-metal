@@ -218,14 +218,16 @@ def _rs_ok(t: ttnn.Tensor, dim: int, g: int) -> bool:
     return s[3] % (32 * g) == 0
 
 
-def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False) -> ttnn.Tensor:
+def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False, fp32: bool = True) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, W] fp32 TILE) over the TP axis, replicated on every chip of the row,
     bit-identical across them. Does not consume ``t``. stock: _gather_add. fabric: fabric_reduce_scatter of row
     blocks (exact SFPU add) -> fabric_all_gather of the rows; when R is not a multiple of 32 TP or W of 32 (the norms'
     [S/SP, 1] sum of squares, the engram gates' [S/SP, 12]), _gather_add on the fabric gather. fabric_bf16 (P.6): the
     RS (FPU add) and the row gather in bf16, the result typecast to fp32; ``t`` may be bf16 (partial_dtype).
     ``exact`` (an fp32 ``t``): the exact fp32 sum under fabric_bf16 too (the engram gate partials, MHC_FUSED=on: the
-    [S/SP, 32] row the fork writes is tile-aligned, where the old [S/SP, 12] row was not and stayed exact)."""
+    [S/SP, 32] row the fork writes is tile-aligned, where the old [S/SP, 12] row was not and stayed exact).
+    ``fp32`` False (BF16_ACTIVATIONS=on, P.20): the fabric_bf16 path's bf16 result as it is (no typecast back; the
+    consumer reads bf16); the other paths return fp32 either way."""
     tp = mesh.shape[TP_AXIS]
     if not fabric() or not _rs_ok(t, 2, tp):
         tf = _exact_input(t)
@@ -237,7 +239,7 @@ def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False) -> ttnn.Tensor:
         part = _rs_bf16(mesh, t, 2)
         out = all_gather(part, 2, TP_AXIS)
         dealloc(part)
-        return _to_fp32(out)
+        return _to_fp32(out) if fp32 else out
     part = ttnn.bringup.fabric_reduce_scatter(
         t,
         cluster_axis=TP_AXIS,

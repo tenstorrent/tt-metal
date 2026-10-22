@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 from .ccl import dealloc
-from .common import DRAM, TP_AXIS, cast, compute_config, dense_dtype
+from .common import DRAM, TP_AXIS, act_dtype, cast, compute_config, dense_dtype
 from .layout import streams_cols_to_chip_major
 
 BLOCKS = 5  # hc_mult keys + one value
@@ -61,7 +61,8 @@ class TtEngramKv:
     def __call__(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         assert rows.shape[-1] == self.k, (rows.shape, self.k)
         xq = cast(rows, ttnn.bfloat16)
-        out = ttnn.linear(xq, self.weight, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        # BF16_ACTIVATIONS=on (P.20): written bf16 (the GPU code's fp8 GEMM output), the engram add reads it as is
+        out = ttnn.linear(xq, self.weight, dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM)
         if xq is not rows:
             dealloc(xq)
         return out

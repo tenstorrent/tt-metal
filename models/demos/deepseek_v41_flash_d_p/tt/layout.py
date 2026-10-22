@@ -5,7 +5,8 @@
 columns (axis 1), both read from mesh.shape (2x2 here, 4x4 / 8x4 / 2x4 on the other boxes).
 
 Residual: chip (r, c) holds chunk rows [r S/SP, (r+1) S/SP) and hidden columns [w c, w (c+1)), w = H/TP, of every one
-of the 4 mHC streams, packed stream-major along the last dim: [1, 1, S/SP, 4 x w] fp32 (xing40's layout); local
+of the 4 mHC streams, packed stream-major along the last dim: [1, 1, S/SP, 4 x w] (bf16 under BF16_ACTIVATIONS=on,
+P.20; else fp32; xing40's layout); local
 column j*w + k = global flat column j*H + c*w + k of the reference's [S, 4H] streams. The pending pre [S, 4] (the last
 4 columns of the reference's packed block boundary, DS41-3) is row-split and replicated over TP.
 
@@ -45,9 +46,14 @@ def _composer(mesh):
     return ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=tuple(mesh.shape), dims=(2, 3))
 
 
-def streams_to_device(mesh, x: torch.Tensor, hidden: int, dtype=ttnn.float32) -> ttnn.Tensor:
+def streams_to_device(mesh, x: torch.Tensor, hidden: int, dtype=None) -> ttnn.Tensor:
     """Host streams [S, 4H] (or the packed boundary [S, 4H + 4]: the pending pre is dropped) -> device
-    [1, 1, S/SP, 4 x H/TP] per chip, TILE, DRAM."""
+    [1, 1, S/SP, 4 x H/TP] per chip, TILE, DRAM; ``dtype`` None = the model's stream dtype (BF16_ACTIVATIONS, P.20:
+    bf16, the GPU code's storage of the streams)."""
+    if dtype is None:
+        from .common import stream_dtype
+
+        dtype = stream_dtype()
     host = x.float()[:, : HC * hidden]
     s = host.shape[0]
     assert s % mesh.shape[0] == 0, f"{s} rows do not split over {mesh.shape[0]} mesh rows"

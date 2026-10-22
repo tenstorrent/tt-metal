@@ -30,7 +30,7 @@ import ttnn
 
 from . import ccl
 from .ccl import dealloc
-from .common import DRAM, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
+from .common import DRAM, TP_AXIS, act_dtype, attn_compute_config, bf16_activations, cast, dense_dtype, tp_sum
 from .norm import TtDistributedRmsNorm
 from .settings import settings
 
@@ -75,7 +75,9 @@ class TtAttnInProj:
         # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
         part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM)
-        out = tp_sum(self.mesh, part)
+        # BF16_ACTIVATIONS=on (P.20): the exchanged [wq_a | wkv] output stays bf16 (the GPU code's fp8 GEMM writes
+        # bf16); q_norm / kv_norm read it in place
+        out = tp_sum(self.mesh, part, fp32=not bf16_activations())
         dealloc(part)
         return out
 
@@ -88,7 +90,8 @@ class TtQa:
         self.mesh, self.proj = mesh, proj
         self.q0, self.q1 = proj.cols["wq_a"]
         assert q_norm.numel() == self.q1 - self.q0, (q_norm.shape, proj.cols)
-        self.norm = TtDistributedRmsNorm(mesh, q_norm.float(), eps, split=False)
+        # BF16_ACTIVATIONS=on (P.20): q_resid bf16 (the GPU code's q_norm .to(dtype)), read by wq_b and the indexer
+        self.norm = TtDistributedRmsNorm(mesh, q_norm.float(), eps, split=False, dtype=act_dtype())
 
     def with_proj(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step

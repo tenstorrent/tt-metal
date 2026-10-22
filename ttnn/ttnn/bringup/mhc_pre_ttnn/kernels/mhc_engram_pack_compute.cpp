@@ -17,6 +17,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "mhc_engram_pack_common.hpp"
 
 #ifdef TRISC_MATH
@@ -90,6 +91,13 @@ using namespace ckernel;
 
 ALWI void sfpu_init() { MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>())); }
 
+// MHC_ENGRAM_X16 (P.20: bf16 h / k in cb_in, UnpackToDestFp32 exact): srcA to ``cb``'s format before a copy from it
+ALWI void srca_to(uint32_t cb) {
+#ifdef MHC_ENGRAM_X16
+    reconfig_data_format_srca(cb);
+#endif
+}
+
 #define ENGRAM_SFPU(fn)                                                        \
     do {                                                                       \
         sfpu_init();                                                           \
@@ -118,9 +126,11 @@ void kernel_main() {
         cb_reserve_back(cb_acc, 3);
         tile_regs_acquire();
         for (uint32_t c = 0; c < U.valid; ++c) {
+            srca_to(cb_in);
             copy_init(cb_in);
             copy_tile(cb_in, 2 * c, 3);
             copy_tile(cb_in, 2 * c + 1, 4);
+            srca_to(cb_w);
             copy_init(cb_w);
             copy_tile(cb_w, c, 5);
             if (c == 0) {
@@ -141,6 +151,7 @@ void kernel_main() {
         cb_wait_front(cb_soa, 3);
         cb_reserve_back(cb_soa_out, 3);
         tile_regs_acquire();
+        srca_to(cb_soa);
         copy_init(cb_soa);
         for (uint32_t t = 0; t < 3; ++t) {
             copy_tile(cb_soa, t, t);
@@ -162,6 +173,7 @@ void kernel_main() {
     for (uint32_t j = 0; j < n_rooted; ++j) {
         cb_reserve_back(cb_fin, 1);
         tile_regs_acquire();
+        srca_to(cb_part);
         copy_init(cb_part);
         cb_wait_front(cb_part, nu);
         copy_tile(cb_part, 0, 0);
