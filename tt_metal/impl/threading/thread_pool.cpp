@@ -504,6 +504,22 @@ using threading_primitives::Completion;
 using threading_primitives::NumaAwareExecutor;
 using threading_primitives::ParallelJob;
 
+void run_on_caller(size_t num_calls, const std::function<void(size_t)>& fn) {
+    std::exception_ptr exception;
+    for (size_t call = 0; call < num_calls; call++) {
+        try {
+            fn(call);
+        } catch (...) {
+            if (!exception) {
+                exception = std::current_exception();
+            }
+        }
+    }
+    if (exception) {
+        std::rethrow_exception(exception);
+    }
+}
+
 // Custom Thread-Pool using the threading::Executor class.
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
@@ -558,6 +574,14 @@ public:
 
     void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) override {
         if (device_ids.empty()) {
+            return;
+        }
+        // One worker would run every call in order while the caller waits for it.
+        const uint32_t first_thread_id = phys_device_to_thread_id_.at(device_ids[0]);
+        if (std::all_of(device_ids.begin() + 1, device_ids.end(), [&](uint32_t device_id) {
+                return phys_device_to_thread_id_.at(device_id) == first_thread_id;
+            })) {
+            run_on_caller(device_ids.size(), fn);
             return;
         }
         auto owned = std::make_unique<ParallelJob>(fn, device_ids.size());
@@ -626,19 +650,7 @@ public:
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
     void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) override {
-        std::exception_ptr exception;
-        for (size_t call = 0; call < device_ids.size(); call++) {
-            try {
-                fn(call);
-            } catch (...) {
-                if (!exception) {
-                    exception = std::current_exception();
-                }
-            }
-        }
-        if (exception) {
-            std::rethrow_exception(exception);
-        }
+        run_on_caller(device_ids.size(), fn);
     }
 };
 
