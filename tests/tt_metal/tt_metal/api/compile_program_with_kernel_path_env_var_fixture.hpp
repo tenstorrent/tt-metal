@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -23,13 +24,13 @@ protected:
         }
 
         tt::tt_metal::UnitMeshAnyDispatchFixture::SetUp();
-        this->program_ = tt::tt_metal::CreateProgram();
+        this->program_.emplace(tt::tt_metal::CreateProgram(this->device()));
     }
 
     void create_kernel(const std::string& kernel_file) {
         tt::tt_metal::CoreCoord core(0, 0);
         tt::tt_metal::CreateKernel(
-            this->program_,
+            *this->program_,
             kernel_file,
             core,
             tt::tt_metal::DataMovementConfig{
@@ -54,7 +55,7 @@ protected:
         }
     }
 
-    tt::tt_metal::Program program_;
+    std::optional<tt::tt_metal::Program> program_;
 
 private:
     bool are_preconditions_satisfied() { return this->are_env_vars_set() && this->is_kernel_dir_valid(); }

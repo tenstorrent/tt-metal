@@ -441,7 +441,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreEndToEndTransfer) {
     };
     auto landing_buffer = distributed::MeshBuffer::create(landing_config, landing_local_config, md.get());
 
-    auto recv_program = CreateProgram();
+    auto recv_program = CreateProgram(*md);
     CreateKernel(
         recv_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",

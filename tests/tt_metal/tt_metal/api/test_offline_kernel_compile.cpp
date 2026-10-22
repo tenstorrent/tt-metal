@@ -74,9 +74,17 @@ struct ScopedTempDir {
 
 class OfflineKernelCompileMockFixture : public ::testing::Test {
 protected:
-    void SetUp() override { experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1); }
+    void SetUp() override {
+        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+        mesh_device_ = distributed::MeshDevice::create_unit_mesh(0);
+    }
 
-    void TearDown() override { experimental::disable_mock_mode(); }
+    void TearDown() override {
+        mesh_device_.reset();
+        experimental::disable_mock_mode();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
 };
 
 constexpr const char* kReaderKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
@@ -92,9 +100,10 @@ experimental::PrecompiledKernelConfig make_precompiled_config(const std::string&
 }
 
 Program create_precompiled_program(
+    distributed::MeshDevice& mesh_device,
     const experimental::PrecompiledKernelConfig& precompiled_config,
     const std::string& kernel_path = kReaderKernelPath) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     experimental::CreateKernelFromPrecompiled(
         program, kernel_path, CoreCoord{0, 0}, kReaderDmConfig, precompiled_config);
     return program;
@@ -129,7 +138,7 @@ void seed_precompiled_root(
 }
 
 TEST_F(OfflineKernelCompileMockFixture, CPU_MetadataFromProgramDerivesConfiguredCbMetadata) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const Tile tile({16, 32});
     const auto page_size = tile.get_tile_size(DataFormat::Float16_b);
     CircularBufferConfig cb_config(page_size, {{CBIndex::c_0, DataFormat::Float16_b}});
@@ -146,7 +155,7 @@ TEST_F(OfflineKernelCompileMockFixture, CPU_MetadataFromProgramDerivesConfigured
 }
 
 TEST_F(OfflineKernelCompileMockFixture, CPU_CBCompileConfigsFromProgramDeduplicatesOverlappingCbIndex) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const CoreRange left_core(CoreCoord{0, 0}, CoreCoord{0, 0});
     const CoreRange right_core(CoreCoord{1, 0}, CoreCoord{1, 0});
     const CoreRangeSet kernel_cores(std::vector<CoreRange>{left_core, right_core});
@@ -272,7 +281,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
     seed_precompiled_root(precompiled_root.path_, kReaderKernelPath, kReaderDmConfig);
 
     const auto precompiled_config = make_precompiled_config(precompiled_root.path_.string(), BinaryPolicy::Error);
-    Program program = create_precompiled_program(precompiled_config);
+    Program program = create_precompiled_program(*this->devices_[0], precompiled_config);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
@@ -301,7 +310,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
 
     // Reference program: built only to derive CB compile configs that mirror the runtime
     // CB layout. CBCompileConfigsFromProgram does not require the program to be compiled.
-    Program metadata_program = CreateProgram();
+    Program metadata_program = CreateProgram(*this->devices_[0]);
     CircularBufferConfig metadata_cb_config(kPageSize, {{CBIndex::c_0, kCbFormat}});
     metadata_cb_config.set_page_size(CBIndex::c_0, kPageSize);
     CreateCircularBuffer(metadata_program, CoreCoord{0, 0}, metadata_cb_config);
@@ -318,7 +327,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
     // Runtime program: same CB layout + precompiled kernel. Hash inputs must match offline
     // emission for the load-without-JIT contract to hold.
     const auto precompiled_config = make_precompiled_config(precompiled_root.path_.string(), BinaryPolicy::Error);
-    Program runtime_program = CreateProgram();
+    Program runtime_program = CreateProgram(*this->devices_[0]);
     CircularBufferConfig runtime_cb_config(kPageSize, {{CBIndex::c_0, kCbFormat}});
     runtime_cb_config.set_page_size(CBIndex::c_0, kPageSize);
     CreateCircularBuffer(runtime_program, CoreCoord{0, 0}, runtime_cb_config);
@@ -333,7 +342,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
 
 TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::JitCompile);
-    Program program = create_precompiled_program(precompiled_config);
+    Program program = create_precompiled_program(*this->devices_[0], precompiled_config);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
@@ -343,7 +352,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
 
 TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::Error);
-    Program program = create_precompiled_program(precompiled_config);
+    Program program = create_precompiled_program(*this->devices_[0], precompiled_config);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
