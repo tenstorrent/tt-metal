@@ -5,11 +5,9 @@
 #pragma once
 
 #include "metal/ttnn_all_includes.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 
-using ttnn::DeviceComputeKernelConfig;
 using ttnn::Tensor;
 
 struct QkvCausalConv1dSiluBackwardParams {
@@ -20,7 +18,6 @@ struct QkvCausalConv1dSiluBackwardParams {
     uint32_t channel_chunk_size;
     uint32_t row_splits;
     tt::tt_metal::MemoryConfig output_mem_config;
-    DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct QkvCausalConv1dSiluBackwardInputs {

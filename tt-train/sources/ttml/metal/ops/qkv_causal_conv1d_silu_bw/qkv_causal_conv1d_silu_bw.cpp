@@ -84,14 +84,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         .v_width = v_width,
         .channel_chunk_size = channel_chunk_size,
         .row_splits = row_splits,
-        .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
-        .compute_kernel_config = ttnn::init_device_compute_kernel_config(
-            input.device()->arch(),
-            std::nullopt,
-            tt::tt_metal::MathFidelity::HiFi4,
-            /*default_approx_mode=*/false,
-            /*default_fp32_acc=*/true,
-            /*default_l1_acc=*/false)};
+        .output_mem_config = ttnn::DRAM_MEMORY_CONFIG};
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);

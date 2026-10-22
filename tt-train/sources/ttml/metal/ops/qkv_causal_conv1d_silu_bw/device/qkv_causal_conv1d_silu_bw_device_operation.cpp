@@ -61,7 +61,6 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         "{}: row_splits must be in [1, row_count / 32]",
         op_name);
     TT_FATAL(!attrs.output_mem_config.is_sharded(), "{}: output memory layout must be INTERLEAVED", op_name);
-    TT_FATAL(!attrs.compute_kernel_config.packer_l1_acc, "{}: packer_l1_acc is unsupported", op_name);
 
     check_tensor(in.input, in.input, Layout::ROW_MAJOR, "input");
     check_tensor(in.input, in.history, Layout::ROW_MAJOR, "history");
