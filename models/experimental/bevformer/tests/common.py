@@ -70,7 +70,6 @@ from models.experimental.bevformer.reference.perception_transformer import Perce
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.reference.spatial_cross_attention import MSDeformableAttention3D
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # --- Camera rigs ------------------------------------------------------------------------------
 
@@ -424,8 +423,9 @@ def from_conv_layout(tt_tensor, nchw_shape):
 
 
 def assert_pcc(expected, actual, pcc):
-    passed, message = assert_with_pcc(expected, actual, pcc)
+    passed, message = comp_pcc(expected, actual, pcc)
     logger.info(f"PCC {message} (threshold {pcc})")
+    assert passed, f"PCC {message} is below {pcc}"
     return passed, message
 
 
@@ -526,8 +526,8 @@ def random_camera_features(batch_size, generator=None, spatial_shapes=SPATIAL_SH
 
 
 def camera_rows(value):
-    """The reference's camera features ``(num_cams, num_keys, bs, C)`` as the TTNN encoder takes
-    them, ``(bs * num_cams, num_keys, C)``."""
+    """The reference's camera features ``(num_cams, num_keys, bs, C)`` batch- and camera-major,
+    ``(bs * num_cams, num_keys, C)``, as the spatial cross-attention reads them."""
     num_cams, num_keys, bs, channels = value.shape
     return value.permute(2, 0, 1, 3).reshape(bs * num_cams, num_keys, channels).contiguous()
 
