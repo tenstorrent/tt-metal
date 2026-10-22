@@ -520,7 +520,8 @@ TEST(TensorSerializationFlatbufferAlignmentTest, ShardsAreAlignedForPinnedMemory
 // Write-side guards: `to_flatbuffer` writes shards that the topology labels as replicas once, so it has to check
 // the label against the data first. The tests below build host tensors straight from a `DistributedHostBuffer`
 // instead of going through `from_host_shards`, which opens the cluster to get a distributed context, so they need
-// no device. Every "Rejected" test is a negative control: the same dump succeeded before the guard it exercises.
+// no device. Every "Rejected" test exercises one guard: the dump throws with that guard's diagnostic and leaves no
+// file.
 
 using Placements = ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement>;
 constexpr ttnn::distributed::MeshMapperConfig::Replicate kReplicate{};
@@ -600,8 +601,8 @@ TEST(TopologyCheckTest, VerifyShardsMatchTopology) {
     EXPECT_NO_THROW(verify_shards_match_topology(tensor));
 }
 
-// Two distinct shards under the collapsed 1-D Replicate label the default mappers produce. Before the byte compare
-// this dump succeeded and wrote the (0,0) shard for both coordinates, so loading the file lost (0,1).
+// Two distinct shards under the collapsed 1-D Replicate label the default mappers produce: the byte compare rejects
+// the dump, since one copy standing for both coordinates would lose (0,1).
 TEST(TensorSerializationFlatbufferGuardTest, MislabelledReplicateRejected) {
     TemporaryFile test_file("mislabelled_replicate.tensorbin");
     const std::vector<MeshCoordinate> coords = all_coords(MeshShape(1, 2));
@@ -650,8 +651,8 @@ TEST(TensorSerializationFlatbufferGuardTest, IdenticalReplicasStillDeduplicated)
     }
 }
 
-// With the byte compare turned off, the mislabelled tensor is written the way it was before the check existed:
-// one copy, taken from the first replica, for the whole group.
+// With the byte compare turned off, the label is trusted: one copy, taken from the first replica, is written for
+// the whole group.
 TEST(TensorSerializationFlatbufferGuardTest, ReplicaCheckOptOutWritesFirstReplica) {
     auto restore_config = scoped_replica_check(false);
     TemporaryFile test_file("replica_check_opt_out.tensorbin");
@@ -681,8 +682,8 @@ TEST(TensorSerializationFlatbufferGuardTest, ReplicaSizeMismatchRejectedEvenWhen
     expect_dump_rejected(test_file, tensor, "sizes differ");
 }
 
-// The label lists (0,1) but only (0,0) holds a shard, as for a single shard taken out of a distributed tensor.
-// Before the guard this dumped one shard under a two-coordinate label.
+// The label lists (0,1) but only (0,0) holds a shard, as for a single shard taken out of a distributed tensor: a
+// two-coordinate label over one shard is rejected.
 TEST(TensorSerializationFlatbufferGuardTest, LabelCoordWithoutShardRejected) {
     TemporaryFile test_file("label_coord_without_shard.tensorbin");
     const TensorTopology label(MeshShape(2), Placements{shard_on(1)}, all_coords(MeshShape(1, 2)));
@@ -691,8 +692,8 @@ TEST(TensorSerializationFlatbufferGuardTest, LabelCoordWithoutShardRejected) {
     expect_dump_rejected(test_file, tensor, "has no shard there");
 }
 
-// Both coordinates hold a shard but the label only covers (0,0). Before the guard the (0,1) shard was silently
-// left out of the file.
+// Both coordinates hold a shard but the label only covers (0,0): a shard the label does not cover is rejected
+// rather than left out of the file.
 TEST(TensorSerializationFlatbufferGuardTest, ShardOutsideLabelRejected) {
     TemporaryFile test_file("shard_outside_label.tensorbin");
     const std::vector<MeshCoordinate> coords = all_coords(MeshShape(1, 2));
@@ -797,8 +798,8 @@ Tensor make_same_address_tensor(SameAddressViews& views, const TensorTopology& l
     return wrap_host_buffer(std::move(buffer), /*elements_per_shard=*/3, label);
 }
 
-// The address shortcut has to compare lengths too. Under a Replicate label the two views land in one group; without
-// the length check the second one reused the first one's record and the file claimed 12 bytes where 8 were written.
+// The address shortcut compares lengths too. Under a Replicate label the two views land in one group, where the
+// size check rejects them: one record cannot stand for both 8 and 12 bytes.
 TEST(TensorSerializationFlatbufferGuardTest, SameAddressDifferentLengthReplicasRejected) {
     TemporaryFile test_file("same_address_replicas.tensorbin");
     const TensorTopology label(MeshShape(2), Placements{kReplicate}, all_coords(MeshShape(1, 2)));

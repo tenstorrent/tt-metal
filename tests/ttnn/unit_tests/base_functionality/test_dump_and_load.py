@@ -113,9 +113,8 @@ def _load_shards(file_name):
 
 
 def test_dump_mislabelled_replicate_raises(tmp_path, expect_error):
-    """Negative control for the write-side replica check: before it, this dump succeeded and the loaded
-    tensor's second shard read back as a copy of the first. The tensor dumps once relabelled correctly.
-    """
+    """A collapsed Replicate label over two shards that differ is rejected by the write-side replica check and
+    leaves no file behind; the tensor dumps once relabelled correctly."""
     tensor, true_label, shards = _mislabelled_replicate_tensor()
     file_name = tmp_path / "mislabelled.tensorbin"
 
@@ -129,8 +128,8 @@ def test_dump_mislabelled_replicate_raises(tmp_path, expect_error):
 
 
 def test_dump_mislabelled_replicate_config_opt_out(tmp_path):
-    """With `verify_replicated_shards_on_dump` off, the label is trusted as it was before the check: one
-    copy, taken from the first replica, stands for the whole group."""
+    """With `verify_replicated_shards_on_dump` off, the label is trusted: one copy, taken from the first
+    replica, stands for the whole group."""
     # The property is generated from `Config::attributes_t` by `reflect::for_each` in ttnn-nanobind/core.cpp.
     assert hasattr(ttnn.CONFIG, "verify_replicated_shards_on_dump")
     tensor, _, shards = _mislabelled_replicate_tensor()
