@@ -416,13 +416,14 @@ def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_erro
 
     from ttml.common.utils import validate_clip_grad_norm
 
-    class _Model:
-        def parameters(self):
-            return {"w": object()}
+    replicated, sharded = object(), object()
+    monkeypatch.setattr(
+        ttml.Sharding, "from_tensor", lambda tensor: SimpleNamespace(is_fully_replicated=tensor is not sharded)
+    )
 
-    monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda tensor: SimpleNamespace(is_fully_replicated=False))
+    validate_clip_grad_norm(SimpleNamespace(parameters=lambda: {"a": replicated, "b": replicated}))
     with expect_error(ValueError, "not supported with sharded parameters"):
-        validate_clip_grad_norm(_Model())
+        validate_clip_grad_norm(SimpleNamespace(parameters=lambda: {"a": replicated, "w": sharded}))
 
 
 @pytest.mark.parametrize(
@@ -461,6 +462,135 @@ def test_build_lr_scheduler_trajectory(lr_scheduler_type, warmup_steps, total_st
         if sched is not None:
             sched.step()
     assert lrs == pytest.approx(expected, abs=1e-6)
+
+
+_GENERATE_TIME_S = 1.0
+_SAVE_CHECKPOINT_TIME_S = 4.0
+_ON_SAVE_TIME_S = 2.0
+_REWARDS = [0.0, 1.0, 0.0, 1.0]
+_BASE_LR = 1.0
+
+
+def _run_train_loop_on_host(monkeypatch):
+    """Run ``GRPOTrainer.train()`` on host fakes: one rollout of 2 prompts x 2 generations,
+    ``num_iterations=2``, a checkpoint every step. The fake scheduler halves the LR each step."""
+    from types import SimpleNamespace
+
+    from ttml.trainers import GRPOMonitor, grpo_trainer
+
+    run = SimpleNamespace(clock=0.0, nlog_calls=0, events=[], pi_old=[], saved_lrs=[], metrics_by_step={})
+    monkeypatch.setattr(grpo_trainer, "time", SimpleNamespace(perf_counter=lambda: run.clock))
+
+    class _Tensor:
+        def set_requires_grad(self, _):
+            pass
+
+    class _Completer:
+        def generate(self, prompts):
+            run.clock += _GENERATE_TIME_S
+            return [[7] for _ in range(len(prompts) * 2)]
+
+        def compute_nlog_probs(self, prompts, completions):
+            run.nlog_calls += 1
+            return _Tensor(), _Tensor()
+
+    class _Optimizer:
+        lr = _BASE_LR
+
+        def get_lr(self):
+            return self.lr
+
+        def step(self):
+            pass
+
+        def zero_grad(self):
+            pass
+
+    class _Recorder(TrainerCallback):
+        def on_step_end(self, trainer, step, **kwargs):
+            run.events.append(("on_step_end", step))
+            if step == 1:
+                trainer.metrics["step_1_only"] = 1.0
+
+        def on_save(self, trainer, step, path):
+            run.events.append(("on_save", step))
+            run.clock += _ON_SAVE_TIME_S
+
+    class _Monitor(GRPOMonitor):
+        def on_step_end(self, trainer, step, **kwargs):
+            run.events.append(("monitor", step))
+            run.metrics_by_step[step] = kwargs
+
+    def fake_save_checkpoint(model, step, output_dir, **kwargs):
+        run.events.append(("save_checkpoint", step))
+        run.saved_lrs.append(kwargs["learning_rate"])
+        run.clock += _SAVE_CHECKPOINT_TIME_S
+
+    cfg = GRPOConfig(**{**_HOST_GRPO_CONFIG, "num_iterations": 2, "checkpointing": True, "checkpoint_interval": 1})
+    optimizer, monitor = _Optimizer(), _Monitor(cfg)
+
+    def fake_setup(self):
+        self.model = SimpleNamespace(train=lambda: None, eval=lambda: None)
+        self._tokenizer = SimpleNamespace(decode=lambda ids, **_: str(ids))
+        self._optimizer = optimizer
+        self._lr_scheduler = SimpleNamespace(step=lambda: setattr(optimizer, "lr", optimizer.lr / 2))
+        self._monitor_cb = monitor
+        self._completions_per_microbatch = 4
+        self._generation_batch_prompts = 2
+        self._prompts = [[1], [2]]
+        self._extra_dataset_columns = {}
+
+    monkeypatch.setattr(GRPOTrainer, "_setup", fake_setup)
+    monkeypatch.setattr(
+        GRPOTrainer, "_compute_loss_and_backward", lambda self, p, c, adv, nlog, mask, n: run.pi_old.append(nlog)
+    )
+    monkeypatch.setattr(grpo_trainer, "save_checkpoint", fake_save_checkpoint)
+
+    GRPOTrainer(
+        completer=_Completer(),
+        dataset=None,
+        config=cfg,
+        reward_func=lambda completions, **_: list(_REWARDS),
+        optimizer_dict={},
+        callbacks=[_Recorder(), monitor],
+    ).train()
+    return run
+
+
+def test_train_loop_reuses_pi_old_across_mini_epochs(monkeypatch):
+    run = _run_train_loop_on_host(monkeypatch)
+    assert run.nlog_calls == 1
+    mini_epoch_1_pi_old, mini_epoch_2_pi_old = run.pi_old
+    # With num_iterations > 1, pi_old must not be recomputed between mini-epochs.
+    assert mini_epoch_1_pi_old is mini_epoch_2_pi_old
+
+
+def test_train_loop_checkpoints_between_step_end_and_monitor(monkeypatch):
+    run = _run_train_loop_on_host(monkeypatch)
+    for step in (1, 2):
+        step_events = [event for event, s in run.events if s == step]
+        assert step_events == ["on_step_end", "save_checkpoint", "on_save", "monitor"]
+
+
+def test_train_loop_mini_epoch_metrics(monkeypatch):
+    step_1, step_2 = _run_train_loop_on_host(monkeypatch).metrics_by_step.values()
+    assert step_1["reward_mean"] == step_2["reward_mean"] == np.mean(_REWARDS)
+    assert step_1["generation_time_s"] == _GENERATE_TIME_S
+    assert step_2["generation_time_s"] == 0.0
+    assert step_1["_Recorder_time_s"] == step_2["_Recorder_time_s"] == _ON_SAVE_TIME_S
+    assert "step_1_only" in step_1 and "step_1_only" not in step_2
+
+
+def test_train_loop_step_time_includes_checkpoint(monkeypatch):
+    step_1, step_2 = _run_train_loop_on_host(monkeypatch).metrics_by_step.values()
+    assert step_1["step_time_s"] == _GENERATE_TIME_S + _SAVE_CHECKPOINT_TIME_S + _ON_SAVE_TIME_S
+    assert step_2["step_time_s"] == _SAVE_CHECKPOINT_TIME_S + _ON_SAVE_TIME_S
+
+
+def test_train_loop_checkpoint_records_step_lr(monkeypatch):
+    run = _run_train_loop_on_host(monkeypatch)
+    step_lrs = [metrics["lr"] for metrics in run.metrics_by_step.values()]
+    assert run.saved_lrs == step_lrs == [_BASE_LR, _BASE_LR / 2]
 
 
 def _make_muon_with_adamw():
