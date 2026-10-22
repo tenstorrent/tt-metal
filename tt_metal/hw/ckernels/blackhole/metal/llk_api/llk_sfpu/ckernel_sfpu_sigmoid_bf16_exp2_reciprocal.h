@@ -27,11 +27,8 @@ template <typename Config>
 inline void init_exp2_reciprocal() {
     // The target header owns ARECIP/Newton on BH and quadratic-seed/Newton
     // on WH. Its program registers must survive until the numerical call.
+    // It programs no constant stock's init leaves alone: the call loads the Horner coefficients itself.
     ckernel::sfpu::sfpu_reciprocal_init<false>();
-    // BH's reciprocal reads only Prgm0, which leaves Prgm1/Prgm2 to the
-    // leading Horner coefficients.
-    sfpi::vConstFloatPrgm1 = exp2_reciprocal_c2<Config>;
-    sfpi::vConstFloatPrgm2 = exp2_reciprocal_c1<Config>;
 }
 
 template <typename Config>
@@ -70,11 +67,11 @@ sfpi_inline sfpi::vFloat exp2_reciprocal_evaluate(
 template <typename Config, int Iterations = 8>
 inline void calculate_exp2_reciprocal() {
     // Loop-invariant operands stay in registers across the tile instead of
-    // being reloaded for every row. WH's reciprocal owns all three program
-    // registers, so its two Horner coefficients take general registers too.
+    // being reloaded for every row; the two Horner coefficients take general
+    // registers, as the program registers belong to stock's init.
     const sfpi::vFloat multiplier = exp2_reciprocal_float(Config::kMultiplierBits & 0x7fffffffu);
-    const sfpi::vFloat c2 = sfpi::vConstFloatPrgm1;
-    const sfpi::vFloat c1 = sfpi::vConstFloatPrgm2;
+    const sfpi::vFloat c2 = exp2_reciprocal_c2<Config>;
+    const sfpi::vFloat c1 = exp2_reciprocal_c1<Config>;
     const sfpi::vFloat c0 = exp2_reciprocal_float(Config::kCoefficientBits[0]);
 #pragma GCC unroll 8
     for (int d = 0; d < Iterations; ++d) {

@@ -931,6 +931,7 @@ KernelGroup::KernelGroup(
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
     uint64_t local_cb_mask,
+    uint32_t num_local_dfbs,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -939,7 +940,8 @@ KernelGroup::KernelGroup(
 
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
-    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
+    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()),
+    num_local_dfbs(num_local_dfbs) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
     auto kernel_config = this->launch_msg.view().kernel_config();
@@ -1253,8 +1255,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         if (not hal.get_supports_dfbs(programmable_core_type_index)) {
                             continue;
                         }
-                        // Hacky here but dfbs and cbs aren't used interchangeably so use the local_cb_mask on
-                        // KernelGroup to hold value of number of dfbs
                         auto local_dfb_val = per_core_num_dfbs_.find(core);
                         if (local_dfb_val != per_core_num_dfbs_.end()) {
                             num_dfbs = local_dfb_val->second;
@@ -1276,7 +1276,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 "local_cb_mask: {}, num_dfbs: {}",
                 local_cb_mask,
                 num_dfbs);
-            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by processor index, so loops over this array will be in processor order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
@@ -1297,6 +1296,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 std::move(kernel_ids),
                 local_cb_mask,
+                num_dfbs,
                 min_remote_cb_start_index,
                 cores,
                 hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
@@ -3707,10 +3707,9 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
-        // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
-        // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.
-        if (!hal.has_tile_counter_registers() && !dataflow_buffers.empty()) {
-            program_dispatch::finalize_dfb_masks(kernel_groups_getter(index), dataflow_buffers);
+        // Only now that the CB and DFB config regions are placed may local_cb_mask describe the DFBs.
+        if (!dataflow_buffers.empty()) {
+            program_dispatch::finalize_dfb_masks(metal_ctx, kernel_groups_getter(index), dataflow_buffers);
         }
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));

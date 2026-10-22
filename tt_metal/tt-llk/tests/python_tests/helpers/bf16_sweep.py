@@ -213,8 +213,18 @@ def bf16_exhaustive_sweep(
     # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
     # a NaN golden, a store saturating past the output's range and inputs outside the op's
     # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
-    # NaN inputs are left to the output-class check below, which is stricter.
-    failures = nonfinite_mismatches(golden, result) & _normal_input(
+    # NaN inputs are left to the output-class check below, which is stricter. A special input
+    # where the kernel returns its stock word is held to that word in both checks.
+    expected = golden[tail].clone()
+    for lane, value in enumerate(specials):
+        if stock.get(_special_class(value)) is not None:
+            word = torch.tensor([stock[_special_class(value)]], dtype=torch.int32).to(
+                torch.int16
+            )
+            expected[lane] = word.view(torch.bfloat16).to(expected.dtype)[0]
+    judged = golden.clone()
+    judged[tail] = expected
+    failures = nonfinite_mismatches(judged, result) & _normal_input(
         src_A, formats.input_format, formats.output_format, dest_acc
     )
     assert (
@@ -232,13 +242,6 @@ def bf16_exhaustive_sweep(
             ]
         )
 
-    expected = golden[tail].clone()
-    for lane, value in enumerate(specials):
-        if stock.get(_special_class(value)) is not None:
-            word = torch.tensor([stock[_special_class(value)]], dtype=torch.int32).to(
-                torch.int16
-            )
-            expected[lane] = word.view(torch.bfloat16).to(expected.dtype)[0]
     wrong = output_class(expected) != output_class(result[tail])
     if nonfinite and not nan_sign:
         # The pack stores a NaN the kernel makes as an infinity, whose sign Wormhole leaves unspecified.

@@ -144,10 +144,14 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
     )
 
 
+# Rows per chip of the MTP id block below the hidden on the D2D activation (see mtp_prefill/id_transport.py).
+MTP_ID_ROWS = TILE_HEIGHT
+
+
 def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
     if not mtp_levels:
         return chunk_size
-    return chunk_size + sp_factor * mtp_union_rows(chunk_size, sp_factor, mtp_levels)
+    return chunk_size + sp_factor * MTP_ID_ROWS
 
 
 def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:

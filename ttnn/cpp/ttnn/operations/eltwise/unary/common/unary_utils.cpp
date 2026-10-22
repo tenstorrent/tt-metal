@@ -168,8 +168,9 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
     // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
     // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
     // grid is a small vector and copying it keeps the lifetime obvious.
-    auto sub_device_workers_for = [](const tt::tt_metal::CoreRangeSet& grid,
-                                     tt::tt_metal::IDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
+    auto sub_device_workers_for =
+        [](const tt::tt_metal::CoreRangeSet& grid,
+           tt::tt_metal::distributed::MeshDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);

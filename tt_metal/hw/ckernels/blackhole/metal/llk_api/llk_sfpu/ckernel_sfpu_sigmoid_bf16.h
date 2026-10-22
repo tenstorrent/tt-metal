@@ -30,6 +30,8 @@ inline bool bf16_dest_sigmoid() {
     return false;
 #endif
 }
+// Each call records replay slots 0-25, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
 inline void calculate_sigmoid_bf16() {
     ckernel::sfpu::bf16::sigmoid::calculate_exp2_reciprocal<ckernel::sfpu::SigmoidBf16Config, ITERATIONS>();

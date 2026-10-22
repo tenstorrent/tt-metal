@@ -19,6 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
@@ -46,6 +47,7 @@ class TtFusedMTP(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: str = "mtp_0",
+        use_fused_rmsnorm: bool = False,
     ):
         """Build both norms and upload eh_proj.
 
@@ -82,6 +84,7 @@ class TtFusedMTP(LightweightModule):
             num_links=num_links,
             topology=self.topology,
             weight_cache_path=weight_cache_path,
+            use_fused=use_fused_rmsnorm,
         )
         sd = state_dict or {}
         self.enorm = TtDistributedRmsNorm(
@@ -242,6 +245,14 @@ class TtMTPModule(LightweightModule):
         self.mtp_config = mtp_config or MTPConfig.from_hf_config(config)
         self.layer_idx = self.mtp_config.mtp_layer_idx if layer_idx is None else layer_idx
         self.mesh_device = mesh_device
+        # Same fused-norm rule as the trunk's TtPrefillBlock.
+        use_fused_rmsnorm = block_kwargs.get("use_fused_rmsnorm")
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = (
+                getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+                and is_blackhole()
+                and block_kwargs.get("is_chunked", False)
+            )
 
         mtp_weights = state_dict["mtp"]
         self.fused = TtFusedMTP(
@@ -254,6 +265,7 @@ class TtMTPModule(LightweightModule):
             weights_dtype=weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=cache_name_prefix,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         self.layer = TtPrefillBlock(
@@ -280,6 +292,7 @@ class TtMTPModule(LightweightModule):
             topology=self.fused.topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"{cache_name_prefix}.shared_head_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
     @staticmethod

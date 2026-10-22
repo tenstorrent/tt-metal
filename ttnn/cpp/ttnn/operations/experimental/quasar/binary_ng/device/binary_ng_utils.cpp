@@ -910,12 +910,14 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     // The rule: where an input moves, a reader thread per compute thread; where the output moves, a writer
     // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
     // nothing, so its reader or writer runs one thread. The DM batch is 8 tiles per barrier, and the compute
-    // batch 8, as many tiles as the DST holds in bf16. Beside a DRAM operand both are 1, as in the legacy binary_ng:
-    // the batching gains are craq-sim numbers, with no DRAM time.
+    // batch 8, as many tiles as a 16-bit DST section holds; the SFPU kernel's batch is kNativeSfpuMaxTilesPerCycle,
+    // which fills the section with two slots per tile. Beside a DRAM operand both are 1, as in the legacy
+    // binary_ng: the batching gains are craq-sim numbers, with no DRAM time.
     constexpr uint32_t kRuleDmBatch = 8;
     constexpr uint32_t kRuleTilesPerCycle = 8;
     const uint32_t rule_dm_batch = moves.dram ? 1u : kRuleDmBatch;
-    const uint32_t rule_tiles_per_cycle = moves.dram ? 1u : kRuleTilesPerCycle;
+    const uint32_t rule_tiles_per_cycle =
+        moves.dram ? 1u : (moves.sfpu ? kNativeSfpuMaxTilesPerCycle : kRuleTilesPerCycle);
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);
     config.reader_threads = moves.inputs ? tuning.reader_threads.env.value_or(config.compute_threads) : 1u;
@@ -972,7 +974,7 @@ const NativeTuning& native_tuning() {
                 v);
             knob.env = static_cast<uint32_t>(parsed);
         };
-        // 8 covers every legal thread count and the DST's 8 bf16 tiles; depth's ceiling is the platform's
+        // 8 covers every legal thread count and the 8 tiles of a 16-bit DST section; depth's ceiling is the platform's
         // uint8_t cliff at 255.
         constexpr uint32_t kMaxThreads = 8;
         constexpr uint32_t kMaxBatch = 8;
@@ -1031,13 +1033,16 @@ const NativeTuning& native_tuning() {
         const NativeConfig output_borrowed = resolve_native_config(t, {.inputs = true, .output = false});
         const NativeConfig inputs_borrowed = resolve_native_config(t, {.inputs = false, .output = true});
         const NativeConfig all_borrowed = resolve_native_config(t, {});
+        const NativeConfig noc_sfpu = resolve_native_config(t, {.inputs = true, .output = true, .sfpu = true});
         log_info(
             tt::LogOp,
             "binary_ng Quasar-native ENABLED. Where the operands move over the NoC, all in L1: R={} C={} W={} "
             "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where an operand is in DRAM: "
             "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where the output is borrowed and an input moves: "
             "R={} W=1 tiles_per_cycle={}. Where the inputs are borrowed and the output moves: R=1 W={} "
-            "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Sync is EXPLICIT.",
+            "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Where the SFPU kernel "
+            "runs, "
+            "all in L1 over the NoC: tiles_per_cycle={}. Sync is EXPLICIT.",
             describe_native_value(t.reader_threads, noc.reader_threads),
             describe_native_value(t.compute_threads, noc.compute_threads),
             describe_native_value(t.writer_threads, noc.writer_threads),
@@ -1051,7 +1056,8 @@ const NativeTuning& native_tuning() {
             describe_native_value(t.tiles_per_cycle, output_borrowed.tiles_per_cycle),
             describe_native_value(t.writer_threads, inputs_borrowed.writer_threads),
             describe_native_value(t.tiles_per_cycle, inputs_borrowed.tiles_per_cycle),
-            describe_native_value(t.tiles_per_cycle, all_borrowed.tiles_per_cycle));
+            describe_native_value(t.tiles_per_cycle, all_borrowed.tiles_per_cycle),
+            describe_native_value(t.tiles_per_cycle, noc_sfpu.tiles_per_cycle));
         return t;
     }();
     return tuning;
