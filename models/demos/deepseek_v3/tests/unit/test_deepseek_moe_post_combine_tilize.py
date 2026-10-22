@@ -109,3 +109,43 @@ def test_deepseek_moe_post_combine_tilize(mesh_device, iterations):
     assert all_iterations_passed, "deepseek_moe_post_combine_tilize Verification Failed!"
 
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.parametrize(
+    "input_shape, shard_shape, grid_end",
+    [
+        ((1, 1, 64, 128), [32, 64], (1, 1)),
+        ((1, 1, 128, 128), [32, 64], (1, 3)),
+        ((1, 1, 64, 256), [32, 64], (3, 1)),
+        ((8, 1, 32, 1024), [32, 256], (3, 7)),
+    ],
+)
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
+def test_deepseek_moe_post_combine_tilize_shard_orientation(device, input_shape, shard_shape, grid_end, orientation):
+    torch.manual_seed(0)
+    output_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=shard_shape,
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))}),
+            orientation=orientation,
+        ),
+    )
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output = ttnn.experimental.deepseek_moe_post_combine_tilize(tt_input, output_memory_config=output_memory_config)
+
+    torch_output = ttnn.to_torch(tt_output).to(torch.bfloat16).reshape(input_shape)
+    assert torch.equal(torch_output, torch_input)

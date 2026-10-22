@@ -102,3 +102,22 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape_nhwc",
+    [
+        ([1, 12, 40, 512]),
+        ([1, 12, 40, 128]),
+    ],
+    ids=["C512", "C128"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+def test_intimg_rejects_unsupported_channel_count(device, input_shape_nhwc, dtype, expect_error):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    with expect_error(RuntimeError, "channel dimension must be 256"):
+        ttnn.experimental.intimg(input_tensor)

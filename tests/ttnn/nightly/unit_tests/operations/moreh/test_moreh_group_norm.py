@@ -343,6 +343,62 @@ def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mea
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+@pytest.mark.parametrize(
+    "N, C_num_groups, HW",
+    [
+        [2, [8, 4], [32, 32]],
+        [1, [32, 8], [64, 64]],
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_configs",
+    [
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+    ],
+    ids=[
+        "out_dram_mean_l1_rstd_l1",
+        "out_l1_mean_dram_rstd_dram",
+        "out_dram_mean_l1_rstd_dram",
+        "out_l1_mean_l1_rstd_dram",
+    ],
+)
+def test_moreh_group_norm_mean_rstd_memory_config(N, C_num_groups, HW, memory_configs, device):
+    torch.manual_seed(2024)
+    C, num_groups = C_num_groups
+    H, W = HW
+    memory_config, mean_memory_config, rstd_memory_config = memory_configs
+
+    cpu_input = torch.randn(N, C, H, W, dtype=torch.bfloat16).float()
+    _, expected_mean, expected_rstd = torch_group_norm(cpu_input, num_groups)
+
+    npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.group_norm(
+        to_ttnn(cpu_input, device=device),
+        num_groups,
+        1e-05,
+        are_required_outputs=(True, True, True),
+        memory_config=memory_config,
+        mean_memory_config=mean_memory_config,
+        rstd_memory_config=rstd_memory_config,
+    )
+
+    assert npu_output.memory_config().buffer_type == memory_config.buffer_type
+    assert npu_mean.memory_config().buffer_type == mean_memory_config.buffer_type
+    assert npu_rstd.memory_config().buffer_type == rstd_memory_config.buffer_type
+
+    actual_mean = to_torch(npu_mean).reshape(-1)[: N * num_groups].view(N, num_groups)
+    actual_rstd = to_torch(npu_rstd).reshape(-1)[: N * num_groups].view(N, num_groups)
+    rtol = atol = 0.1
+    pass_mean, out_mean = comp_allclose(expected_mean, actual_mean, rtol=rtol, atol=atol)
+    logger.debug(f"mean: {out_mean}")
+    assert pass_mean
+    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=rtol, atol=atol)
+    logger.debug(f"rstd: {out_rstd}")
+    assert pass_rstd
+
+
 def run_test_moreh_group_norm_backward(
     N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
 ):

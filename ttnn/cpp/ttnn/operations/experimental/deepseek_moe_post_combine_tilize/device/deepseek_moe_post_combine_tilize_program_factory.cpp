@@ -38,8 +38,6 @@ DeepseekMoEPostCombineTilizeDeviceOperation::DeepseekMoEPostCombineTilizeProgram
      */
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     uint32_t input_row_page_size = static_cast<uint32_t>(input_tensor.buffer()->page_size());
-    const auto& input_shape = input_tensor.padded_shape();
-    const uint32_t input_rank = input_shape.rank();
 
     const ttnn::Tensor& output_tensor = tensor_return_value;
     const uint32_t output_tile_page_size = static_cast<uint32_t>(output_tensor.buffer()->page_size());
@@ -58,13 +56,7 @@ DeepseekMoEPostCombineTilizeDeviceOperation::DeepseekMoEPostCombineTilizeProgram
 
     const CoreRangeSet op_cores = output_nd_shard_spec.grid;
 
-    uint32_t upper_dims = 1;
-    for (uint32_t dim = 0; dim < input_rank - 1; ++dim) {
-        upper_dims *= input_shape[dim];
-    }
-
     const uint32_t output_num_shards_wide = output_shape[-1] / output_shard_width;
-    const uint32_t output_num_shards_high = upper_dims / output_nd_shard_spec.shard_shape[-2];
 
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -182,15 +174,8 @@ DeepseekMoEPostCombineTilizeDeviceOperation::DeepseekMoEPostCombineTilizeProgram
         const auto& core = cores[i];
 
         // reader
-        uint32_t intra_row_byte_offset;
-        uint32_t row_page_offset;
-        if (is_row_major_shard_orientation) {
-            intra_row_byte_offset = (i % output_num_shards_wide) * output_shard_width_bytes;
-            row_page_offset = (i / output_num_shards_wide) * tt::constants::TILE_HEIGHT;
-        } else {
-            intra_row_byte_offset = (i / output_num_shards_high) * output_shard_width_bytes;
-            row_page_offset = (i % output_num_shards_high) * tt::constants::TILE_HEIGHT;
-        }
+        const uint32_t intra_row_byte_offset = (i % output_num_shards_wide) * output_shard_width_bytes;
+        const uint32_t row_page_offset = (i / output_num_shards_wide) * tt::constants::TILE_HEIGHT;
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
