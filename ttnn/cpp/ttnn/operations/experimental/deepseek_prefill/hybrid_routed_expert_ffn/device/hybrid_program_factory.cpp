@@ -2699,6 +2699,10 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
         TT_FATAL(a.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
+        // The reader indexes page 0 as a flat uint32 vector; a TILE page is in face order, so
+        // entries past the first face row would be read from the wrong expert.
+        TT_FATAL(
+            a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout, got {}", name, a.layout());
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
         const uint32_t num_entries = a.logical_shape()[-1];
         TT_FATAL(
