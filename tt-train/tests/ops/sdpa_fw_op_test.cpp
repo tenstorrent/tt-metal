@@ -498,7 +498,7 @@ struct SDPATestConfig {
     float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
     float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
     float dropout_prob = 0.0F;
-    // Kernel tunables (q_chunk_size / k_chunk_size); zero leaves the program factory's defaults.
+    // 0 = program factory default.
     ttml::metal::SDPAForwardProgramConfig program_config{};
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
@@ -1417,14 +1417,8 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
 }
 
 // =============================================================================
-// PROGRAM CONFIG TESTS - q_chunk_size / k_chunk_size knobs
+// q_chunk_size / k_chunk_size knobs: same numbers, different chunking.
 // =============================================================================
-//
-// Every combination below exercises a different kernel geometry: Q chunks of 1/2/4 tile-rows
-// against K/V steps of 1/2/4/8 tiles, so the QK^T and PV matmul_block rectangles, the
-// multi-cycle exp pass (k=256 needs two DST cycles) and the causal diagonal-band stamping all
-// get covered. The reference is unchanged, so this is a pure "same numbers, different
-// chunking" check.
 
 struct ChunkKnobs {
     uint32_t q_chunk_size;
@@ -1448,8 +1442,7 @@ void run_chunk_knob_sweep(SDPATestConfig base) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // S=256 (8 tile rows): q chunks of up to 4 rows, k steps of up to 8 tiles. Few sequences,
-    // so the standard (non-paired) distribution runs.
+    // S=256: standard (non-paired) distribution.
     run_chunk_knob_sweep(SDPATestConfig{
         .batch_size = 1U,
         .sequence_length = 256U,
@@ -1463,9 +1456,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // 64 (batch, head) sequences with GQA. Whether a knob setting takes the balanced
-    // (first-with-last pairs) or the plain distribution depends on the core count of the
-    // device (pairs >= cores); the nightly variant below forces the balanced path everywhere.
+    // 64 sequences, GQA; balanced vs plain split depends on the device core count.
     run_chunk_knob_sweep(SDPATestConfig{
         .batch_size = 4U,
         .sequence_length = 256U,
@@ -1479,9 +1470,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_Balanced_GQA) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Enough (batch, head) sequences that chunk pairs cover every core even at q=128 on a
-    // 130-core grid (128 sequences x 2 pairs), so the balanced (first-with-last) distribution
-    // is taken for every knob setting; GQA on top. Slow because of the host reference.
+    // Enough sequences that pairs cover every core at q=128 (balanced path on any grid). Slow host reference.
     run_chunk_knob_sweep(SDPATestConfig{
         .batch_size = 8U,
         .sequence_length = 512U,
@@ -1508,8 +1497,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // No mask, V narrower than Q/K (vWt=2 vs qWt=4) and an output gate, so the PV block picker
-    // and the per-row gate/normalize loop see a non-square geometry.
+    // No mask, vWt < qWt, gate: non-square PV geometry.
     run_chunk_knob_sweep(SDPATestConfig{
         .batch_size = 1U,
         .sequence_length = 256U,

@@ -50,15 +50,7 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
-    // onto QK^T scores via the packer's L1-accumulate path (TTNN's
-    // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
-    // the packer's read-modify-write — score never leaves FP32, no DST→SRC truncation.
-    //
-    //   tile[0] = causal-diagonal: 0.0 on/below diagonal (kept), -1e9 above (masked).
-    //             Applied where the K tile index equals the query row's tile index.
-    //   tile[1] = all -1e9: applied on K tiles strictly past a row's diagonal inside the
-    //             steps that overlap the diagonal band of the Q chunk.
+    // Pre-transformed causal mask tiles: [0] diagonal pattern (0 kept / -1e9 masked), [1] all -1e9.
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
     generate_pretransformed_causal_mask_tile(cb_attn_mask);
     generate_tile_with_bfloat16_value(cb_attn_mask, BF16_NEG_LARGE_BITS);
@@ -67,8 +59,7 @@ void kernel_main() {
     constexpr uint32_t out_tiles_per_chunk = Sq_chunk_t * vWt;
     constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
-    // Drain one Q chunk: Sq_chunk_t consecutive output rows of one batch/head, which are
-    // consecutive tiles in the (B, H, S, D) output, so one write covers the whole chunk.
+    // One Q chunk: Sq_chunk_t consecutive output rows, contiguous in DRAM.
     auto write_q_chunk = [&](const uint32_t global_q_chunk_idx) {
         const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
         const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
@@ -94,8 +85,7 @@ void kernel_main() {
     };
 
 #ifdef BALANCED_PARALLELISM
-    // Balanced parallelism mode: each unit is a pair of Q chunks (heavy then light), the
-    // same order the reader and compute kernels use.
+    // Balanced: pairs, heavy then light (same order as reader/compute).
     for (uint32_t p = 0; p < num_units; ++p) {
         const uint32_t global_pair_idx = start_unit + p;
         const uint32_t seq_idx = global_pair_idx / pairs_per_seq;

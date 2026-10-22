@@ -60,15 +60,9 @@ void recip_tile_first_column(uint32_t idst) {
 // positions. The function transforms it to (0.0, -1e9) in-place and adds it to the score
 // tile so that masked positions become large negative values that vanish under softmax.
 //
-// Preconditions:
-//   - The DST register buffer must be in acquired state via *acquire_dst*.
-//   - `cb_attn_mask` must have at least `mask_tile_idx + 1` tiles fronted.
+// Preconditions: DST acquired; cb_attn_mask has mask_tile_idx + 1 tiles fronted
+// (host mask is staged row-major per step: pass row * Sk_chunk_t + n).
 //
-// `mask_tile_idx` selects which mask tile in `cb_attn_mask` to apply: the host-provided
-// mask is staged row-major per step, so callers pass `row * Sk_chunk_t + n`.
-//
-// Scaling by the SDPA scaler factor is NOT done here; it is deferred to after the
-// row-max subtraction for better numerical precision.
 void apply_mask_on_reg(
     uint32_t register_idx,
     uint32_t cb_attn_mask,
@@ -102,24 +96,14 @@ void apply_mask_on_reg(
     add_binary_tile(register_idx, mask_register, register_idx);
 }
 
-// ---------------------------------------------------------------------------------------------
-// Per-row softmax state helpers.
-//
-// The compute kernel handles Sq_chunk_t query tile-rows per Q chunk. The score CB holds the
-// Sq_chunk_t x Sk_chunk_t tiles of the current K/V step row-major (row r, K tile n at
-// r * Sk_chunk_t + n), and every running statistic CB (max, exp-sum, exp-max-diff) is
-// Sq_chunk_t tiles deep with row r in slot r. The helpers below work on one row; the caller
-// owns the reserve/push of the row-deep CBs so a whole chunk's rows share one push.
-// ---------------------------------------------------------------------------------------------
+// Per-row softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB
+// is Sq_chunk_t deep with row r in slot r. The caller owns waits/reserves/pushes of the row-deep CBs.
 
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
 //
-// Reduces over the `Sk_chunk_t` score tiles of row `row`, accumulating the max into a single
-// DST register, optionally folds in the running max of the row, and packs the result into
-// slot `row` of cb_cur_max. Caller: cb_attention_weights fronted, cb_cur_max reserved
-// (Sq_chunk_t tiles), cb_prev_max fronted when do_eltwise_max.
+// Max over row `row` of the score CB, folded with its running max, packed to cb_cur_max[row].
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t = 1U>
 void update_cur_row_max_value(
     uint32_t cb_attention_weights,
@@ -160,18 +144,8 @@ void update_cur_row_max_value(
     tile_regs_release();
 }
 
-// Apply exp(scale * (score - max)) in place on the Sk_chunk_t score tiles of row `row`, and
-// build the row's partial sum (over the Sk_chunk_t tiles) in slot `row` of cb_cur_exp_sum.
-//
-// The partial sum is built directly in L1 via the packer's L1-accumulate path: the first exp
-// tile overwrites the slot, subsequent tiles add to it. This avoids an extra DST cycle (and
-// an extra row-reduce CB) just to fold the per-tile partial sums together.
-//
-// DST budget: `sm_block_size` registers are held live across sub_tiles_bcast_cols + exp_tile +
-// (two) pack passes, so the row is processed in Sk_chunk_t / sm_block_size DST cycles.
-//
-// Caller: cb_attention_weights popped and re-reserved on the same L1 slots (single-buffered
-// CB wraps back), cb_cur_max fronted, cb_cur_exp_sum reserved (Sq_chunk_t tiles).
+// exp(scale * (score - max)) in place on row `row`; the row's partial sum is built in
+// cb_cur_exp_sum[row] via packer L1-accumulate, in Sk_chunk_t / sm_block_size DST cycles.
 template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t, uint32_t sm_block_size>
 void apply_exp_inplace_and_find_exp_sum(
     uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum, uint32_t row) {
@@ -196,15 +170,13 @@ void apply_exp_inplace_and_find_exp_sum(
         tile_regs_commit();
 
         tile_regs_wait();
-        // Write the exp tiles back over their own score slots.
         pack_reconfig_data_format(cb_attention_weights);
         pack_reconfig_l1_acc(false);
         for (uint32_t i = 0; i < sm_block_size; ++i) {
             pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ row * Sk_chunk_t + n0 + i);
         }
 
-        // Row partial sum in cb_cur_exp_sum[row]: the very first tile of the row overwrites
-        // the slot (L1-acc off); every other tile L1-accumulates onto it.
+        // first tile overwrites the slot, the rest L1-accumulate
         pack_reconfig_data_format(cb_cur_exp_sum);
         uint32_t i = 0;
         if (n0 == 0U) {
@@ -222,20 +194,8 @@ void apply_exp_inplace_and_find_exp_sum(
     }
 }
 
-// Computes (attention_weights @ V) for the whole Q chunk: attention_weights is Sq_chunk_t rows
-// of Sk_chunk_t score tiles (row-major), V is the Sk_chunk_t × Wt block of this step. The
-// K-dimension reduction (over Sk_chunk_t) is accumulated inside DST across the inner loop.
-//
-// Each (block_h × block_w) rectangle of output tiles is produced by one matmul_block call per
-// K step (ct_dim=block_w, rt_dim=block_h, kt_dim=Sk_chunk_t). matmul_block walks in0 rows at
-// stride kt_dim, which is exactly the row-major score layout, and V is row-major in cb_value
-// (seq outer, feat inner) so the `block_w` V tiles consumed per K step at a fixed seq are
-// contiguous — no transpose read needed (contrast with QK^T where K must be col-major).
-//
-// `block_h * block_w` must fit DST. matmul_block writes its output tiles directly into DST
-// and needs no scratch register, so callers can use the full `dst_size` (4 for fp32_acc,
-// 8 for bf16_acc) — distinct from the SFPU block_size used elsewhere that needs `+1` for
-// `unary_bcast` scratch and is therefore capped at `dst_size - 1`.
+// attention_weights (Sq_chunk_t x Sk_chunk_t, row-major) @ V (Sk_chunk_t x Wt) for the whole chunk,
+// block_h x block_w output tiles per matmul_block call (block_h * block_w <= dst_size).
 template <uint32_t Sk_chunk_t, uint32_t Sq_chunk_t>
 void matmul_qk_by_v(
     uint32_t Wt,
@@ -262,8 +222,6 @@ void matmul_qk_by_v(
     for (uint32_t qb = 0; qb < Sq_chunk_t; qb += block_h) {
         for (uint32_t vb = 0; vb < Wt; vb += block_w) {
             tile_regs_acquire();
-            // K-reduction: at each k step, matmul_block writes block_h x block_w output tiles
-            // into DST[0..block_h*block_w-1], accumulating across k steps.
             for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
                 matmul_block(
                     cb_attention_weights,
@@ -289,8 +247,7 @@ void matmul_qk_by_v(
     cb_push_back(cb_cur_mm_out, Sq_chunk_t * Wt);
 }
 
-// exp(scale * (prev_max - cur_max)) for row `row`, packed into slot `row` of cb_exp_max_diff.
-// Caller: both max CBs fronted, cb_exp_max_diff reserved (Sq_chunk_t tiles).
+// exp(scale * (prev_max - cur_max)) for row `row` -> cb_exp_max_diff[row].
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row) {
     const uint32_t exp_max_diff_dst_idx = 0;
@@ -316,9 +273,7 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     tile_regs_release();
 }
 
-// cur_sum[row] = prev_sum[row] * exp_max_diff[row] + cur_sum[row], written back over slot
-// `row`. Caller: prev_sum and exp_max_diff fronted; cb_cur_sum_exp popped and re-reserved on
-// the same L1 slots (the CB is exactly Sq_chunk_t deep, so pop+reserve wraps back).
+// cur_sum[row] = prev_sum[row] * exp_max_diff[row] + cur_sum[row], in place.
 void update_cur_exp_sum_inplace(
     uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_exp, uint32_t cb_exp_max_diff, uint32_t row) {
     const uint32_t exp_sum_dst_idx = 0;
@@ -355,10 +310,7 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
         cb_col_vec)));
 }
 
-// Scale every row's prev_mm_out tiles by that row's column-broadcast factor and L1-accumulate
-// onto cur_mm_out (Sq_chunk_t * Wt tiles, row r at r * Wt). Uses the SFPU path: prev_mm_out
-// is loaded via UnpackToDestFp32 (full FP32 in DST), the factor via unary_bcast<COL> (col 0
-// broadcast to all cols), and mul_binary_tile does the FP32 multiply.
+// cur_mm_out[row] += prev_mm_out[row] * exp_max_diff[row] (column broadcast), via packer L1-accumulate.
 template <uint32_t Sq_chunk_t>
 void update_cur_mm_out(
     uint32_t Wt, uint32_t block_size, uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
@@ -392,8 +344,7 @@ void update_cur_mm_out(
 
             tile_regs_commit();
             tile_regs_wait();
-            // cur_mm_out is full and exactly Sq_chunk_t * Wt deep, so its write pointer has
-            // wrapped onto the fronted tiles: the L1-acc pack adds onto the live slots.
+            // CB is exactly Sq_chunk_t * Wt deep: write pointer wrapped onto the fronted tiles
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 pack_tile</* out_of_order */ true>(block_idx, cb_cur_mm_out, /* offset */ row * Wt + tile_idx + block_idx);
             }
@@ -402,15 +353,12 @@ void update_cur_mm_out(
     }
     pack_reconfig_l1_acc(false);
 
-    // Re-front the accumulated tiles (bookkeeping only; the data stayed in place).
     cb_pop_front(cb_cur_mm_out, Sq_chunk_t * Wt);
     cb_reserve_back(cb_cur_mm_out, Sq_chunk_t * Wt);
     cb_push_back(cb_cur_mm_out, Sq_chunk_t * Wt);
 }
 
-// Row-reduce tile `row` of cb_in_idx in place via matmul with a column-of-ones tile.
-// Result is a column vector (value in column 0 of each row).
-// Caller: cb_in_idx popped and re-reserved on the same slots, cb_matmul_reduce fronted.
+// Row-reduce tile `row` of cb_in_idx in place (matmul with a ones column).
 template <uint32_t cb_identity_scaler, uint32_t cb_matmul_reduce>
 void row_reduce_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
     const uint32_t reduce_dst_idx = 0;
@@ -428,8 +376,7 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
     tile_regs_release();
 }
 
-// Apply reciprocal to tile `row` of cb_in_idx in place.
-// Caller: cb_in_idx popped and re-reserved on the same slots.
+// 1/x on tile `row` of cb_in_idx in place.
 void recip_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
     const uint32_t dst_idx = 0;
     tile_regs_acquire();
@@ -446,12 +393,7 @@ void recip_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
     tile_regs_release();
 }
 
-// Compute logsumexp = scale*max + log(sum_exp) for row `row` and pack it into slot `row` of
-// cb_out_lse with column-0 masking. Max is unscaled (raw QK^T max), so we multiply by scale
-// to get the correct LSE. Reads cb_sum_exp (row-reduced) and cb_max WITHOUT consuming them.
-// cb_mask_tile should contain 1.0 in column 0 and 0.0 elsewhere (cb_matmul_reduce).
-// The lse tile is computed entirely in FP32 DST registers for maximum precision.
-// Caller: cb_out_lse reserved (Sq_chunk_t tiles).
+// lse[row] = scale * max + log(sum_exp), FP32, column 0 only, packed to cb_out_lse[row].
 void compute_and_pack_lse(
     uint32_t cb_sum_exp,
     uint32_t cb_max,
