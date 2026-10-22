@@ -9,7 +9,10 @@ each user is decoding) and a *log* that is only interesting as a history. Printi
 to one stream makes each harder to read, so this splits them:
 
 * a **status header** with the served model, uptime, active turns, throughput and the
-  KV block pool, repainted a few times a second;
+  KV block pool, repainted a few times a second -- and, from a server that takes images
+  (the V4.1 one), its image rows and each image in flight: being uploaded, decoded into
+  patches, queued, encoded by the ViT, its rows written into the embedding table -- with
+  the timings of the last few done;
 * a **per-user table**, one row per KV-cache slot: its ``user`` key, tokens used of its
   context, and the phase and tok/s of any turn it is running;
 * the **log**, timestamped, with the time in a narrow left column and the message on the
@@ -65,6 +68,8 @@ _HELP = (
 # would otherwise spend every row on the status and leave the log nothing, or overflow
 # the frame and scroll the status off the top.
 _MIN_LOG_LINES = 3
+# Images in flight listed by name in the status header; any more are counted on one line.
+_IMAGE_LINES = 4
 
 # How fast the log may be repainted while a key or the wheel is arriving. The status
 # numbers stay on the slower ``fps`` clock. New log lines refresh a little faster than
@@ -449,6 +454,9 @@ class ServerConsole:
                 f"\nhost RAM: {host.get('users', 0)}/{limits['users']} conversations, "
                 f"{host.get('bytes', 0) / 2**30:.2f}/{limits['bytes'] / 2**30:.0f} GiB"
             )
+        images = stats.get("images")
+        if images and not compact:
+            self._image_lines(head, images)
 
         # Not expanded: with seven short columns, stretching to the panel width scatters
         # them across the screen and makes the rows hard to read across.
@@ -509,6 +517,41 @@ class ServerConsole:
         subtitle = "  ".join(flags + [f"[dim]{_HELP}[/dim]"])
         body = head if compact else Group(head, table)
         return Panel(body, title="DeepSeek-V4-Flash server", subtitle=subtitle, border_style="cyan")
+
+    @staticmethod
+    def _image_lines(head, images: dict) -> None:
+        """The image rows and stored files, then a line per image in flight (at most a few) and per image done."""
+        files = images.get("files") or {}
+        free, total = images.get("rows_free", 0), images.get("rows_total", 0)
+        style = "red" if free < total * 0.1 else "yellow" if free < total * 0.3 else "green"
+        head.append("\nimages: ")
+        head.append(f"{free}/{total} rows free", style=style)
+        head.append(
+            f"  {images.get('held', 0)} held, {images.get('encoded', 0)} in the table"
+            f"  files {files.get('count', 0)} ({files.get('bytes', 0) / 2**20:.0f} MiB)"
+        )
+        live = images.get("live", [])
+        for entry in live[:_IMAGE_LINES]:
+            stage = entry["stage"]
+            if stage == "uploading":
+                detail = f"{entry.get('received', 0) / 2**20:.1f}/{entry.get('bytes', 0) / 2**20:.1f} MiB"
+            elif stage == "vit":
+                detail = f"{entry.get('patches', '?')} patches -> {entry.get('rows', 0)} rows"
+            elif "rows" in entry:
+                detail = f"{entry['rows']} rows"
+            else:
+                detail = f"{entry.get('bytes', 0) / 2**10:.0f} KiB" if entry.get("bytes") else ""
+            head.append(f"\n  {entry['label']:<12}  {stage:<13} {detail:<26} {entry['seconds']:5.1f}s", style="yellow")
+        if len(live) > _IMAGE_LINES:
+            head.append(f"\n  ... {len(live) - _IMAGE_LINES} more in flight", style="yellow")
+        now = time.time()
+        for entry in reversed(images.get("done", [])):
+            vit = "vit (disk)" if entry.get("vit") is None else f"vit {entry['vit']:.2f}s"
+            head.append(
+                f"\n  {entry['label']:<12}  done {entry.get('rows', 0):>4} rows  decode {entry.get('decode', 0.0):.2f}s"
+                f"  {vit}  embedding {entry.get('embedding', 0.0):.2f}s  {now - entry['at']:.0f}s ago",
+                style="dim",
+            )
 
     def _scroll_bar(self):
         """One fixed line under the status telling where the log window is.
@@ -932,6 +975,35 @@ def _demo() -> int:
             "pool": {"sliding": (random.randint(1, 90), 100), "compress": (12, 64)},
             "tokens_left": random.randint(100, 9000),
             "broken": None,
+            "images": {
+                "rows_free": 7676,
+                "rows_total": 16384,
+                "held": 12,
+                "encoded": 9,
+                "files": {"count": 3, "bytes": 5 << 20},
+                "live": [
+                    {"label": "upload 4", "stage": "uploading", "received": 3 << 20, "bytes": 7 << 20, "seconds": 0.4},
+                    {"label": "5f5066d444f1", "stage": "vit", "rows": 646, "patches": "48x60", "seconds": 0.1},
+                ],
+                "done": [
+                    {
+                        "label": "a3c9e1f00b12",
+                        "rows": 288,
+                        "decode": 0.04,
+                        "vit": 0.12,
+                        "embedding": 0.03,
+                        "at": time.time() - 9,
+                    },
+                    {
+                        "label": "77b0d2aa9c41",
+                        "rows": 1020,
+                        "decode": 0.01,
+                        "vit": None,
+                        "embedding": 0.05,
+                        "at": time.time() - 2,
+                    },
+                ],
+            },
         }
 
     stop = threading.Event()
