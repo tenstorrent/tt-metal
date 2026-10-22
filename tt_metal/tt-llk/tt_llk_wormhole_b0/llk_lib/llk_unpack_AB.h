@@ -149,6 +149,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
+    asm volatile("nop");
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape);
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
@@ -173,6 +174,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    asm volatile("nop");
     _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
 }
 
@@ -191,6 +193,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
 {
+    asm volatile("nop");
     _llk_unpack_AB_init_<BType>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
 }
 
