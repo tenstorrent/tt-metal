@@ -70,6 +70,7 @@ constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
  * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
  * | tile0_sorted    | First data tile is sorted in idir; Blackhole skips it in phases 0 to 4     | bool         | true, false                                           | False    |
  * | ct_steps        | Blackhole: constant counter steps in the step passes of a full 64 datum sort | bool         | true, false                                           | False    |
+ * | bottom_dead     | Blackhole: only the first tile of a 64 datum sort is read, so phase 5 sorts it alone | bool | true, false                                    | False    |
  */
 // clang-format on
 template <
@@ -78,7 +79,8 @@ template <
     bool fused = false,
     bool rank_stamped = false,
     TopkTieOrder tie_order = TopkTieOrder::Unset,
-    bool ct_steps = false>
+    bool ct_steps = false,
+    bool bottom_dead = false>
 ALWI void topk_local_sort(
     uint32_t idst,
     int idir,
@@ -101,7 +103,8 @@ ALWI void topk_local_sort(
          fused,
          rank_stamped,
          static_cast<ckernel::sfpu::TopkTieOrder>(tie_order),
-         ct_steps),
+         ct_steps,
+         bottom_dead),
         idst,
         VectorMode::RC_custom,
         idir,
