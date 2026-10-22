@@ -38,6 +38,7 @@ from .moe import expert_quant
 from .moe_stream import zero_output
 from .mtp import TtMiMoMTP
 from .rope import MiMoRotarySetup, partial_rope_cos_sin
+from .spec_inputs import SpecInputs
 
 
 def prefill_padded_len(seq_len):
@@ -216,6 +217,7 @@ class TtMiMoModel:
         self.decode_trace = None
         self.verify_trace = None  # speculative verify step (capture_verify_trace)
         self.mtp = None  # the MTP drafter (setup_mtp)
+        self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp, tt/spec_inputs.py)
         self.greedy_head = None
         self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
@@ -1079,22 +1081,33 @@ class TtMiMoModel:
     # ------------------------------------------------------------------ speculative decoding (reference/spec_decode.py)
     def setup_mtp(self, ckpt, cache_dir, layer=0):
         """Load MTP layer ``layer`` as the speculative drafter (its cache and trace: TtMiMoMTP.setup_cache,
-        capture_spec_traces)."""
-        assert self.mtp is None
+        capture_spec_traces), and make the packed uploads of the verify and draft traces (persistent: before any
+        capture)."""
+        assert self.mtp is None and self.decode_trace is None
         self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layer)
+        kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
+        self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
 
     def capture_verify_trace(self):
         """Compile, then capture the verify step: the decode step with every layer's K / V written one slot at a time
-        and no feed-back (a verify always reloads its inputs). Every slot idle while capturing: no K / V written."""
+        and no feed-back (a verify always reloads its inputs). Every slot idle while capturing: no K / V written.
+
+        The trace starts with SpecInputs.derive_verify, which writes every input but the cos / sin from the packed
+        upload (``verify_enqueue``); the decode step after it is the one captured before."""
         assert self.verify_trace is None and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        rope = self.rope_tables is not None
+        # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
+        self.spec_inputs.reset()
+        self.spec_inputs.derive_verify(inputs, rope)
         self._release(self._decode_inputs(inputs, serial=SPEC_SLOTS))
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self.spec_inputs.derive_verify(inputs, rope)
         output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
@@ -1120,10 +1133,19 @@ class TtMiMoModel:
 
     def verify_enqueue(self, tokens, positions):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
-        trace's output (its ``next_tokens`` are the slots' greedy tokens)."""
+        trace's output (its ``next_tokens`` are the slots' greedy tokens). Copies the packed tokens and positions
+        (the trace derives its other inputs from them), and the RoPE cos / sin unless the trace reads them from the
+        device tables."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
-        for h, d in zip(self.prepare_decode_inputs_host(tokens, positions, serial=True), self.verify_trace["inputs"]):
-            ttnn.copy_host_to_device_tensor(h, d)
+        spec = self.spec_inputs
+        ttnn.copy_host_to_device_tensor(spec.verify_host(tokens, positions), spec.verify_packed)
+        if self.rope_tables is None:
+            host = (
+                *self.rope_setups["swa"].decode_host_inputs(positions),
+                *self.rope_setups["full"].decode_host_inputs(positions),
+            )
+            for h, d in zip(host, self.verify_trace["inputs"][2:6]):
+                ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(self.mesh_device, self.verify_trace["id"], cq_id=0, blocking=False)
         return self.verify_trace["output"]
 

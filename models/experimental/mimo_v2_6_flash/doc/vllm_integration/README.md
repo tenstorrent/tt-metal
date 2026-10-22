@@ -208,8 +208,15 @@ vllm serve ... --no-async-scheduling \
   each slot taking the target's final normed hidden there (the persistent buffer of the last layer's fused norm) and
   the embedding of the committed token; two steps on the last slot feed the layer its own output (vLLM's MTP
   proposer with one layer). Its KV cache is a ring of 256 positions, addressed at 256 + t % 256 with RoPE at t.
+- **Inputs** (`reference/spec_inputs.py`, `tt/spec_inputs.py`): a verify and a draft each copy one packed int32
+  tensor (tokens and positions; the draft's ring cache positions and RoPE indices computed on the host) instead of
+  13-14 tiny tensors; a short program at the start of each trace writes the trace's input buffers from it (owned
+  positions, owner and token masks, serial positions, RoPE index). Without device RoPE tables (contexts past 128K)
+  the verify also copies its 4 cos / sin and the draft its 6.
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
+  `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
+  `tests/test_spec_inputs_tp8.py` (one Galaxy row): the device programs against the same values, eager and traced.
   `tests/test_spec_decode_tp8_dp4.py` (Galaxy, needs vllm-tt-plugin): the adapter's speculative tokens equal its
   greedy tokens; logs the mean accepted length and ms per token.
 - **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first

@@ -6,7 +6,9 @@
 Lane 0 decodes a prompt greedily one token per step; lane 1 serves the same prompt the way the plugin drives a
 speculating request: a plain step, then propose (MTP drafts) / verify (the request in every slot of its replica) /
 greedy acceptance. The speculative tokens must equal the plain greedy tokens. Logs the mean accepted length and the
-time per token of both loops. Needs vllm-tt-plugin (its spec_decode value types) and the MiMo checkpoint.
+time per token of both loops. Needs vllm-tt-plugin (its spec_decode value types) and the MiMo checkpoint. Runs with
+the decode RoPE tables (the verify and draft traces read their cos / sin from them) and without (MIMO_DEVICE_ROPE=0,
+as past 128K context: the host uploads the cos / sin beside the packed inputs).
 """
 
 import time
@@ -37,12 +39,14 @@ PROMPT = (
 )
 
 
+@pytest.mark.parametrize("device_rope", [True, False], ids=["rope_tables", "host_rope"])
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
+def test_spec_decode_tp8_dp4(mesh_device, device_rope, monkeypatch):
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")
+    monkeypatch.setattr(generator_vllm, "DEVICE_ROPE", device_rope)
     # One KV cache group (no vLLM to group the specs): every layer reads one page table, a buffer per layer.
     monkeypatch.setattr(MiMoV2ForCausalLM, "_layer_groups", [0] * cfg.num_hidden_layers)
     monkeypatch.setattr(MiMoV2ForCausalLM, "prefill_token_budget", 2048)

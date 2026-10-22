@@ -12,6 +12,12 @@ One traced program per replica drafts MAX_DRAFTS tokens for the one request of t
 * two steps on the anchor slot alone, each taking the layer's own normed output and the previous draft (on device),
   for drafts 2 and 3.
 
+A draft copies one packed int32 tensor (tt/spec_inputs.py): the program starts by writing its token and position
+inputs from it. The committed tokens are uploaded, not taken from the last step's greedy tokens on device: they are
+the greedy tokens only when the plugin accepted greedily (a logits verify or a host-sampled step commits the plugin's
+own samples). With the decode RoPE tables (TtMiMoModel.setup_decode_rope_tables) the cos / sin are rows of the tables
+at the uploaded positions, as in decode; without them (long contexts) the draft also copies its six cos / sin.
+
 The layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
 at the MTP layer index; ``eh_proj`` (column-parallel) mixes cat(enorm(embedding), hnorm(hidden)) into it, and its
 own final norm feeds the target's LM head. Its KV cache is a small ring addressed at mtp_cache_position(t) with RoPE
@@ -26,7 +32,7 @@ import torch
 import ttnn
 
 from ..reference.mtp import load_mtp_weights
-from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position, mtp_table_row, serial_positions
+from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_table_row
 from .common import as_weight, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
@@ -130,52 +136,79 @@ class TtMiMoMTP:
         logits.deallocate(True)
         return h
 
+    def _rope(self, rope):
+        """The (cos, sin) of each of the three passes and the tensors made for them: the host inputs, or with the
+        decode RoPE tables the table rows at the three RoPE index inputs (the SWA theta's tables)."""
+        m = self.model
+        if m.rope_tables is None:
+            return [tuple(rope[2 * k : 2 * k + 2]) for k in range(3)], []
+        pairs, made = [], []
+        for idx in rope:
+            pair = []
+            for t in m.rope_tables[:2]:
+                row = ttnn.embedding(idx, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+                pair.append(ttnn.reshape(row, (1, 1, m.max_batch, t.shape[-1])))
+            pairs.append(tuple(pair))
+            made += pair
+        return pairs, made
+
     def _body(self, inputs):
+        """The draft program: its inputs written from the packed upload, then the three passes. ``inputs``: tokens,
+        fill, SPEC_SLOTS serial fill positions, step2, step3, then the RoPE inputs (three table indices, or the
+        three passes' host cos / sin)."""
         tokens, fill, *rest = inputs
         serial = list(rest[:SPEC_SLOTS])
-        step2, step3, cos1, sin1, cos2, sin2, cos3, sin3 = rest[SPEC_SLOTS:]
+        step2, step3, *rope = rest[SPEC_SLOTS:]
+        tables = self.model.rope_tables is not None
+        self.model.spec_inputs.derive_mtp(tokens, fill, serial, step2, step3, rope if tables else None)
+        (cs1, cs2, cs3), made = self._rope(rope)
         hidden = self.model.norm_buffers[0]
-        h1 = self._pass(tokens, hidden, fill, serial, cos1, sin1, self.heads[0])
-        h2 = self._pass(self.heads[0].next_tokens, h1, step2, None, cos2, sin2, self.heads[1])
+        h1 = self._pass(tokens, hidden, fill, serial, *cs1, self.heads[0])
+        h2 = self._pass(self.heads[0].next_tokens, h1, step2, None, *cs2, self.heads[1])
         h1.deallocate(True)
-        h3 = self._pass(self.heads[1].next_tokens, h2, step3, None, cos3, sin3, self.heads[2])
+        h3 = self._pass(self.heads[1].next_tokens, h2, step3, None, *cs3, self.heads[2])
         h2.deallocate(True)
         h3.deallocate(True)
+        for t in made:
+            t.deallocate(True)
 
     # ------------------------------------------------------------------ host
-    def host_inputs(self, tokens=None, plan=None):
-        """Host tensors of one draft: ``tokens`` per slot (the tokens committed there), ``plan`` the true positions
-        (reference.spec_decode.MtpInputs); None for an idle run that writes nothing."""
+    def _rope_host(self, plan=None):
+        """Host cos / sin of the fill, step2 and step3 true positions (-1 idle; None: an idle run), when there are
+        no decode RoPE tables."""
+        m = self.model
+        rope = m.rope_setups["swa"]
+        out = []
+        for values in (plan.fill, plan.step2, plan.step3) if plan is not None else ([],) * 3:
+            t = torch.full((m.max_batch,), -1, dtype=torch.int32)
+            t[: len(values)] = torch.tensor(values, dtype=torch.int32)
+            out += list(rope.decode_host_inputs(t))
+        return out
+
+    def _idle_inputs(self):
+        """Host tensors of the program's inputs (``_body``), for an idle run: their device copies are the trace's
+        inputs, rewritten from the packed upload on every replay (the RoPE cos / sin by ``enqueue``)."""
         m = self.model
         rep = self.plan.replicate()
-        idle = [-1] * SPEC_SLOTS
-        fill, step2, step3 = (plan.fill, plan.step2, plan.step3) if plan is not None else (idle, idle, idle)
 
-        def padded(values, fill_value):
-            t = torch.full((m.max_batch,), fill_value, dtype=torch.int32)
-            t[: len(values)] = torch.tensor(values, dtype=torch.int32)
-            return t
+        def host(t, dtype):
+            return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
 
-        def ids(values):
-            return ttnn.from_torch(padded(values, -1), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
-
-        def cache(values):
-            return ids([mtp_cache_position(p) for p in values])
-
-        tok = padded(tokens if tokens is not None else [0] * SPEC_SLOTS, 0).reshape(1, -1)
-        out = [ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), cache(fill)]
-        out += [ids(s) for s in serial_positions([mtp_cache_position(p) for p in fill])]
-        out += [cache(step2), cache(step3)]
-        rope = m.rope_setups["swa"]
-        for values in (fill, step2, step3):
-            out += list(rope.decode_host_inputs(padded(values, -1)))
-        return out
+        tokens = host(torch.zeros(1, m.max_batch, dtype=torch.int32), ttnn.uint32)
+        idle = [host(torch.full((m.max_batch,), -1, dtype=torch.int32), ttnn.int32) for _ in range(SPEC_SLOTS + 3)]
+        if m.rope_tables is None:
+            rope = self._rope_host()
+        else:
+            rope = [host(torch.zeros(1, m.max_batch, dtype=torch.int32), ttnn.uint32) for _ in range(3)]
+        return [tokens, *idle, *rope]
 
     def capture_trace(self):
         """Compile with an idle run (every position -1: no K / V written), then capture the draft program."""
         assert self.trace is None and self.heads is not None
         m = self.model
-        inputs = [ttnn.to_device(t, m.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in self.host_inputs()]
+        inputs = [ttnn.to_device(t, m.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in self._idle_inputs()]
+        # The packed upload still holds the last served draft (a recapture): idle it, so the runs below write no K / V.
+        m.spec_inputs.reset()
         self._body(inputs)
         ttnn.synchronize_device(m.mesh_device)
         trace_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
@@ -190,13 +223,21 @@ class TtMiMoMTP:
             self.trace = None
 
     def enqueue(self, tokens, plan):
-        """Draft after the replica's last decode or verify step (non-blocking): it reads that step's final hidden."""
+        """Draft after the replica's last decode or verify step (non-blocking): it reads that step's final hidden.
+        ``tokens`` per slot (the tokens committed there), ``plan`` the true positions (reference.spec_decode.MtpInputs).
+        Copies the packed upload, and the cos / sin without the decode RoPE tables."""
+        m = self.model
+        # The RoPE indices read rows of the device tables, which end at max_seq_len.
+        assert max(plan.step3) < m.max_seq_len, f"draft position {max(plan.step3)} >= {m.max_seq_len}"
         t = time.perf_counter()
-        host = self.host_inputs(tokens, plan)
+        packed = m.spec_inputs.mtp_host(tokens, plan)
+        rope = self._rope_host(plan) if m.rope_tables is None else []
         self.last_inputs_s = time.perf_counter() - t
-        for h, d in zip(host, self.trace["inputs"]):
+        ttnn.copy_host_to_device_tensor(packed, m.spec_inputs.mtp_packed)
+        inputs = self.trace["inputs"]
+        for h, d in zip(rope, inputs[len(inputs) - len(rope) :]):
             ttnn.copy_host_to_device_tensor(h, d)
-        ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
     def read_drafts(self, anchor):
         """The drafts of the anchor slot (blocks until the draft program finished)."""

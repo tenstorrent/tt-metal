@@ -46,8 +46,10 @@ last step, and a verify step runs that request in every decode slot of its repli
 with several requests decline to draft and decode as usual; a verify block that still carries drafts beside other
 rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. A verify answers the
 plugin's argmax ids when every request of the step is greedy, else its logits: the plugin then walks acceptance on
-the host with each request's own sampling (temperature, top-p, ...), so sampled requests speculate losslessly. A
-step that verifies nothing decodes as above, a sampled request's on the sampled decode trace.
+the host with each request's own sampling (temperature, top-p, ...), so sampled requests speculate losslessly. A verify
+and a draft each copy one packed int32 tensor of their tokens and positions (plus the RoPE cos / sin when there are no
+device RoPE tables); their traces derive every other input from it on device (tt/spec_inputs.py). A step that
+verifies nothing decodes as above, a sampled request's on the sampled decode trace.
 """
 
 import math
