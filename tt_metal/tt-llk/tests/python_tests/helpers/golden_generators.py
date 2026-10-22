@@ -528,6 +528,12 @@ class DummyGoldenGenerator:
     def __call__(self, *args, **kwargs):
         return _dummy_zeros(*args, **kwargs)
 
+    def transpose_faces(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
+
+    def transpose_within_faces(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
+
     def transpose_faces_multi_tile(self, *args, **kwargs):
         return _dummy_zeros(*args, **kwargs)
 
