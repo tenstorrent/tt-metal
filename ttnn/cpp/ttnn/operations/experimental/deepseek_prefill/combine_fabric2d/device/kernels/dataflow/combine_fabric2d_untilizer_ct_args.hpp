@@ -23,7 +23,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the destinations start at. Asserted
 // against the field list below, so it cannot drift out of step with it.
-constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 17;
+constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 20;
 
 struct UntilizerCtArgs {
     uint32_t token_size_bytes;
@@ -41,11 +41,17 @@ struct UntilizerCtArgs {
     uint32_t num_consumers;
     uint32_t ring_batches;
     uint32_t control_addr;
-    uint32_t produced_addr;
+    uint32_t produced_slot;
     // Tile geometry. These cores exist only where there is something to untilize.
     uint32_t tiles_per_row;
     uint32_t tile_bytes;
     uint32_t block_tiles;
+    // The routed expert's split between its two passes; decides the order experts are walked in.
+    uint32_t expert_threshold;
+    // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
+    uint32_t expert_table_page_base;
+    // The routed expert's per-expert readiness count on this core.
+    uint32_t ready_sem;
 
 #ifndef KERNEL_BUILD
     UntilizerCtArgs(
@@ -66,10 +72,13 @@ struct UntilizerCtArgs {
         num_consumers(static_cast<uint32_t>(plan.consumers.size())),
         ring_batches(UNT_RING_BATCHES),
         control_addr(plan.control_addr),
-        produced_addr(plan.produced_addr),
+        produced_slot(plan.produced_slot),
         tiles_per_row(op::tiles_per_token_row(tensor_args)),
         tile_bytes(op::tile_size_bytes(tensor_args)),
-        block_tiles(op::untilize_block_tiles(tensor_args)) {
+        block_tiles(op::untilize_block_tiles(tensor_args)),
+        expert_threshold(args.hybrid_token_threshold),
+        expert_table_page_base(plan.expert_table_page_base),
+        ready_sem(plan.ready_sem) {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
         // the same work list a reader's schedule is built from, so neither side can reorder alone.
         for (const auto& w : work) {
@@ -81,29 +90,31 @@ struct UntilizerCtArgs {
         for (const auto& c : plan.consumers) {
             blocks_.push_back(c.noc.x);
             blocks_.push_back(c.noc.y);
-            blocks_.push_back(c.counter_addr);
+            blocks_.push_back(c.counter_slot);
         }
     }
 
     std::vector<uint32_t> to_ct_word_arr() const {
-        std::vector<uint32_t> word_arr{
-            token_size_bytes,
-            num_routed_experts,
-            experts_per_chip,
-            my_expert_base,
-            dispatch_group_size,
-            my_dg_index,
-            num_destinations,
-            walks_down,
-            my_index,
-            num_peers,
-            num_consumers,
-            ring_batches,
-            control_addr,
-            produced_addr,
-            tiles_per_row,
-            tile_bytes,
-            block_tiles};
+        std::vector<uint32_t> word_arr{token_size_bytes,
+                                       num_routed_experts,
+                                       experts_per_chip,
+                                       my_expert_base,
+                                       dispatch_group_size,
+                                       my_dg_index,
+                                       num_destinations,
+                                       walks_down,
+                                       my_index,
+                                       num_peers,
+                                       num_consumers,
+                                       ring_batches,
+                                       control_addr,
+                                       produced_slot,
+                                       tiles_per_row,
+                                       tile_bytes,
+                                       block_tiles,
+                                       expert_threshold,
+                                       expert_table_page_base,
+                                       ready_sem};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -122,10 +133,30 @@ struct UntilizerCtArgs {
         num_consumers(get_compile_time_arg_val(10)),
         ring_batches(get_compile_time_arg_val(11)),
         control_addr(get_compile_time_arg_val(12)),
-        produced_addr(get_compile_time_arg_val(13)),
+        produced_slot(get_compile_time_arg_val(13)),
         tiles_per_row(get_compile_time_arg_val(14)),
         tile_bytes(get_compile_time_arg_val(15)),
-        block_tiles(get_compile_time_arg_val(16)) {}
+        block_tiles(get_compile_time_arg_val(16)),
+        expert_threshold(get_compile_time_arg_val(17)),
+        expert_table_page_base(get_compile_time_arg_val(18)),
+        ready_sem(get_compile_time_arg_val(19)) {}
+
+    // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
+    // standalone op places its ring counters in. The framework re-initialises those every launch; the
+    // hand-placed pair is this op's to zero.
+#ifdef CMBF2D_OVERLAPPED
+    volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(peer_word));
+    }
+    uint32_t produced_slot_addr() const { return get_semaphore(produced_slot); }
+    void reset_freed_counter(volatile tt_l1_ptr uint32_t*) const {}
+#else
+    volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_word);
+    }
+    uint32_t produced_slot_addr() const { return produced_slot; }
+    void reset_freed_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
+#endif
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(6);  // num_destinations
@@ -138,6 +169,10 @@ struct UntilizerCtArgs {
     static constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
     static constexpr auto dram_expert_offsets_args =
         TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
+#ifdef CMBF2D_OVERLAPPED
+    static constexpr auto dram_expert_table_args =
+        TensorAccessorArgs<dram_expert_offsets_args.next_compile_time_args_offset()>();
+#endif
 #endif
 
 #ifndef KERNEL_BUILD

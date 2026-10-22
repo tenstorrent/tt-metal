@@ -237,6 +237,9 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
  */
 // Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
 inline constexpr bool gelu_bf16_whole_tile = false;
+// The stock gelu kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void gelu_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu() {

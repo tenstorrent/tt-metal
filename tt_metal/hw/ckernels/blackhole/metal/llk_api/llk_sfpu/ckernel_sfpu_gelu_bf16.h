@@ -37,51 +37,63 @@ struct GeluBf16Config {
     static constexpr unsigned kOriginPatterns = 2u;
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_zone_affine_even_decay.h"
+#include "ckernel_sfpu_gelu_bf16_zone_affine_even_decay.h"
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_gelu() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-// The Blackhole whole-tile call as the fitter's scheduler issues it (ttpoly/sfpu_schedule.py): the
-// compiled instructions of ckernel::sfpu::bf16::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, 32> in
-// a stall-filling order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every
-// BF16 input.
+// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
+// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
+// ckernel::sfpu::bf16::gelu::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, 32> in a stall-filling
+// order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every BF16 input;
+// other ITERATIONS run the compiled body itself.
 inline void calculate_gelu_bf16_scheduled() {
-    TTI_SFPLOADI(7, 2, 0xd21b);
-    TTI_SFPLOADI(6, 2, 0xcf9f);
-    TTI_SFPLOADI(7, 8, 0x38c1);
-    TTI_SFPLOADI(6, 8, 0x3b2e);
-    TTI_SFPLOADI(5, 2, 0x682e);
-    TTI_SFPLOADI(5, 8, 0x3cd3);
+    TTI_SFPLOADI(7, 2, 0xaa3b);
+    TTI_SFPLOADI(7, 8, 0xbf38);
+    TTI_SFPLOADI(6, 2, 0x299);
+    TTI_SFPLOADI(5, 2, 0xdc51);
+    TTI_SFPLOADI(6, 8, 0x27aa);
+    TTI_SFPLOADI(5, 8, 0x33a7);
 // A loop, not unrolled: the body stays in the instruction cache.
 #pragma GCC unroll 1
-    for (int pass = 0; pass < 4; ++pass) {
+    for (int pass = 0; pass < 8; ++pass) {
         TTI_SFPLOAD(2, 0, 7, 0);
         TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPEXEXP(0, 1, 0, 0);
+        TTI_SFPLOADI(0, 0, 0x42fe);
+        TTI_SFPMAD(3, 7, 0, 1, 0);
+        TTI_SFPLOADI(0, 2, 0xd21b);
+        TTI_SFPEXEXP(0, 1, 3, 0);
         TTI_SFPEXMAN(0, 1, 1, 0);
-        TTI_SFPSHFT(0, 0, 1, 0);
-        TTI_SFPEXMAN(0, 1, 0, 1);
-        TTI_SFPMAD(7, 2, 6, 3, 0);
-        TTI_SFPCAST(0, 0, 0);
+        TTI_SFPLOADI(4, 2, 0xcf9f);
+        TTI_SFPSHFT(0, 3, 1, 0);
+        TTI_SFPLOADI(0, 8, 0x38c1);
+        TTI_SFPLOADI(4, 8, 0x3b2e);
+        TTI_SFPEXMAN(0, 1, 3, 1);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
+        TTI_SFPLOADI(4, 2, 0x682e);
+        TTI_SFPCAST(3, 3, 0);
+        TTI_SFPLOADI(4, 8, 0x3cd3);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
         TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(3, 2, 5, 3, 0);
         TTI_SFPLOADI(4, 8, 0xbe9f);
-        TTI_SFPMAD(3, 2, 4, 3, 0);
-        TTI_SFPMAD(14, 0, 13, 4, 0);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
+        TTI_SFPMAD(6, 3, 5, 4, 0);
         TTI_SFPEXEXP(0, 1, 1, 1);
-        TTI_SFPMAD(4, 0, 10, 0, 0);
+        TTI_SFPMAD(4, 3, 10, 3, 0);
         TTI_SFPSHFT(0x17, 1, 1, 7);
-        TTI_SFPMUL(0, 3, 9, 0, 0);
+        TTI_SFPMUL(3, 0, 9, 0, 0);
         TTI_SFPLOADI(3, 0, 0xc048);
         TTI_SFPMUL(0, 1, 9, 0, 0);
         TTI_SFPMUL(2, 2, 9, 1, 0);
@@ -127,19 +139,25 @@ inline void calculate_gelu_bf16_scheduled() {
         TTI_SFPSTORE(0, 0, 7, 0);
         TTI_SFPLOAD(2, 0, 7, 2);
         TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
+        TTI_SFPLOADI(0, 0, 0x42fe);
+        TTI_SFPMAD(3, 7, 0, 1, 0);
+        TTI_SFPLOADI(0, 2, 0xd21b);
         TTI_SFPEXEXP(0, 1, 3, 0);
         TTI_SFPEXMAN(0, 1, 1, 0);
+        TTI_SFPLOADI(4, 2, 0xcf9f);
         TTI_SFPSHFT(0, 3, 1, 0);
+        TTI_SFPLOADI(0, 8, 0x38c1);
+        TTI_SFPLOADI(4, 8, 0x3b2e);
         TTI_SFPEXMAN(0, 1, 3, 1);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
+        TTI_SFPLOADI(4, 2, 0x682e);
         TTI_SFPCAST(3, 3, 0);
+        TTI_SFPLOADI(4, 8, 0x3cd3);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
         TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
         TTI_SFPLOADI(4, 8, 0xbe9f);
         TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
+        TTI_SFPMAD(6, 3, 5, 4, 0);
         TTI_SFPEXEXP(0, 1, 1, 1);
         TTI_SFPMAD(4, 3, 10, 3, 0);
         TTI_SFPSHFT(0x17, 1, 1, 7);
@@ -189,19 +207,25 @@ inline void calculate_gelu_bf16_scheduled() {
         TTI_SFPSTORE(0, 0, 7, 2);
         TTI_SFPLOAD(2, 0, 7, 4);
         TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
+        TTI_SFPLOADI(0, 0, 0x42fe);
+        TTI_SFPMAD(3, 7, 0, 1, 0);
+        TTI_SFPLOADI(0, 2, 0xd21b);
         TTI_SFPEXEXP(0, 1, 3, 0);
         TTI_SFPEXMAN(0, 1, 1, 0);
+        TTI_SFPLOADI(4, 2, 0xcf9f);
         TTI_SFPSHFT(0, 3, 1, 0);
+        TTI_SFPLOADI(0, 8, 0x38c1);
+        TTI_SFPLOADI(4, 8, 0x3b2e);
         TTI_SFPEXMAN(0, 1, 3, 1);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
+        TTI_SFPLOADI(4, 2, 0x682e);
         TTI_SFPCAST(3, 3, 0);
+        TTI_SFPLOADI(4, 8, 0x3cd3);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
         TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
         TTI_SFPLOADI(4, 8, 0xbe9f);
         TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
+        TTI_SFPMAD(6, 3, 5, 4, 0);
         TTI_SFPEXEXP(0, 1, 1, 1);
         TTI_SFPMAD(4, 3, 10, 3, 0);
         TTI_SFPSHFT(0x17, 1, 1, 7);
@@ -251,19 +275,25 @@ inline void calculate_gelu_bf16_scheduled() {
         TTI_SFPSTORE(0, 0, 7, 4);
         TTI_SFPLOAD(2, 0, 7, 6);
         TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
+        TTI_SFPLOADI(0, 0, 0x42fe);
+        TTI_SFPMAD(3, 7, 0, 1, 0);
+        TTI_SFPLOADI(0, 2, 0xd21b);
         TTI_SFPEXEXP(0, 1, 3, 0);
         TTI_SFPEXMAN(0, 1, 1, 0);
+        TTI_SFPLOADI(4, 2, 0xcf9f);
         TTI_SFPSHFT(0, 3, 1, 0);
+        TTI_SFPLOADI(0, 8, 0x38c1);
+        TTI_SFPLOADI(4, 8, 0x3b2e);
         TTI_SFPEXMAN(0, 1, 3, 1);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
+        TTI_SFPLOADI(4, 2, 0x682e);
         TTI_SFPCAST(3, 3, 0);
+        TTI_SFPLOADI(4, 8, 0x3cd3);
+        TTI_SFPMAD(0, 2, 4, 0, 0);
         TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
         TTI_SFPLOADI(4, 8, 0xbe9f);
         TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
+        TTI_SFPMAD(6, 3, 5, 4, 0);
         TTI_SFPEXEXP(0, 1, 1, 1);
         TTI_SFPMAD(4, 3, 10, 3, 0);
         TTI_SFPSHFT(0x17, 1, 1, 7);
@@ -311,272 +341,21 @@ inline void calculate_gelu_bf16_scheduled() {
         TTI_SFPENCC(3, 0, 0, 0xa);
         TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 1);
         TTI_SFPSTORE(0, 0, 7, 6);
-        TTI_SFPLOAD(2, 0, 7, 8);
-        TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
-        TTI_SFPEXEXP(0, 1, 3, 0);
-        TTI_SFPEXMAN(0, 1, 1, 0);
-        TTI_SFPSHFT(0, 3, 1, 0);
-        TTI_SFPEXMAN(0, 1, 3, 1);
-        TTI_SFPCAST(3, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
-        TTI_SFPLOADI(4, 8, 0xbe9f);
-        TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
-        TTI_SFPEXEXP(0, 1, 1, 1);
-        TTI_SFPMAD(4, 3, 10, 3, 0);
-        TTI_SFPSHFT(0x17, 1, 1, 7);
-        TTI_SFPMUL(3, 0, 9, 0, 0);
-        TTI_SFPLOADI(3, 0, 0xc048);
-        TTI_SFPMUL(0, 1, 9, 0, 0);
-        TTI_SFPMUL(2, 2, 9, 1, 0);
-        TTI_SFPGT(0, 3, 2, 1);
-        TTI_SFPLOADI(3, 2, 0x6e76);
-        TTI_SFPLOADI(4, 2, 0x921c);
-        TTI_SFPLOADI(3, 8, 0xb555);
-        TTI_SFPLOADI(4, 8, 0x3818);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x17aa);
-        TTI_SFPLOADI(4, 8, 0xba3e);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x5ac4);
-        TTI_SFPLOADI(4, 8, 0x3c09);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x62c6);
-        TTI_SFPLOADI(4, 8, 0xbd82);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x4b84);
-        TTI_SFPLOADI(4, 8, 0x3ecb);
-        TTI_SFPMAD(3, 1, 4, 1, 0);
-        TTI_SFPLOADI(3, 0, 0x3f00);
-        TTI_SFPMAD(2, 1, 3, 1, 0);
-        TTI_SFPMUL(2, 1, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0xc153);
-        TTI_SFPLE(0, 1, 2, 1);
-        TTI_SFPMUL(2, 9, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0x4031);
-        TTI_SFPGT(0, 1, 2, 1);
-        TTI_SFPMOV(0, 2, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOAD(1, 6, 7, 8);
-        TTI_SFPLOADI(3, 2, 0x7f01);
-        TTI_SFPXOR(0, 3, 1, 0);
-        TTI_SFPLOADI(3, 2, 0x7fff);
-        TTI_SFPAND(1, 3, 1, 1);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSETMAN(0, 2, 0, 1);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 1);
-        TTI_SFPSTORE(0, 0, 7, 8);
-        TTI_SFPLOAD(2, 0, 7, 0xa);
-        TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
-        TTI_SFPEXEXP(0, 1, 3, 0);
-        TTI_SFPEXMAN(0, 1, 1, 0);
-        TTI_SFPSHFT(0, 3, 1, 0);
-        TTI_SFPEXMAN(0, 1, 3, 1);
-        TTI_SFPCAST(3, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
-        TTI_SFPLOADI(4, 8, 0xbe9f);
-        TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
-        TTI_SFPEXEXP(0, 1, 1, 1);
-        TTI_SFPMAD(4, 3, 10, 3, 0);
-        TTI_SFPSHFT(0x17, 1, 1, 7);
-        TTI_SFPMUL(3, 0, 9, 0, 0);
-        TTI_SFPLOADI(3, 0, 0xc048);
-        TTI_SFPMUL(0, 1, 9, 0, 0);
-        TTI_SFPMUL(2, 2, 9, 1, 0);
-        TTI_SFPGT(0, 3, 2, 1);
-        TTI_SFPLOADI(3, 2, 0x6e76);
-        TTI_SFPLOADI(4, 2, 0x921c);
-        TTI_SFPLOADI(3, 8, 0xb555);
-        TTI_SFPLOADI(4, 8, 0x3818);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x17aa);
-        TTI_SFPLOADI(4, 8, 0xba3e);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x5ac4);
-        TTI_SFPLOADI(4, 8, 0x3c09);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x62c6);
-        TTI_SFPLOADI(4, 8, 0xbd82);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x4b84);
-        TTI_SFPLOADI(4, 8, 0x3ecb);
-        TTI_SFPMAD(3, 1, 4, 1, 0);
-        TTI_SFPLOADI(3, 0, 0x3f00);
-        TTI_SFPMAD(2, 1, 3, 1, 0);
-        TTI_SFPMUL(2, 1, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0xc153);
-        TTI_SFPLE(0, 1, 2, 1);
-        TTI_SFPMUL(2, 9, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0x4031);
-        TTI_SFPGT(0, 1, 2, 1);
-        TTI_SFPMOV(0, 2, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOAD(1, 6, 7, 0xa);
-        TTI_SFPLOADI(3, 2, 0x7f01);
-        TTI_SFPXOR(0, 3, 1, 0);
-        TTI_SFPLOADI(3, 2, 0x7fff);
-        TTI_SFPAND(1, 3, 1, 1);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSETMAN(0, 2, 0, 1);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 1);
-        TTI_SFPSTORE(0, 0, 7, 0xa);
-        TTI_SFPLOAD(2, 0, 7, 0xc);
-        TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
-        TTI_SFPEXEXP(0, 1, 3, 0);
-        TTI_SFPEXMAN(0, 1, 1, 0);
-        TTI_SFPSHFT(0, 3, 1, 0);
-        TTI_SFPEXMAN(0, 1, 3, 1);
-        TTI_SFPCAST(3, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
-        TTI_SFPLOADI(4, 8, 0xbe9f);
-        TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
-        TTI_SFPEXEXP(0, 1, 1, 1);
-        TTI_SFPMAD(4, 3, 10, 3, 0);
-        TTI_SFPSHFT(0x17, 1, 1, 7);
-        TTI_SFPMUL(3, 0, 9, 0, 0);
-        TTI_SFPLOADI(3, 0, 0xc048);
-        TTI_SFPMUL(0, 1, 9, 0, 0);
-        TTI_SFPMUL(2, 2, 9, 1, 0);
-        TTI_SFPGT(0, 3, 2, 1);
-        TTI_SFPLOADI(3, 2, 0x6e76);
-        TTI_SFPLOADI(4, 2, 0x921c);
-        TTI_SFPLOADI(3, 8, 0xb555);
-        TTI_SFPLOADI(4, 8, 0x3818);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x17aa);
-        TTI_SFPLOADI(4, 8, 0xba3e);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x5ac4);
-        TTI_SFPLOADI(4, 8, 0x3c09);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x62c6);
-        TTI_SFPLOADI(4, 8, 0xbd82);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x4b84);
-        TTI_SFPLOADI(4, 8, 0x3ecb);
-        TTI_SFPMAD(3, 1, 4, 1, 0);
-        TTI_SFPLOADI(3, 0, 0x3f00);
-        TTI_SFPMAD(2, 1, 3, 1, 0);
-        TTI_SFPMUL(2, 1, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0xc153);
-        TTI_SFPLE(0, 1, 2, 1);
-        TTI_SFPMUL(2, 9, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0x4031);
-        TTI_SFPGT(0, 1, 2, 1);
-        TTI_SFPMOV(0, 2, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOAD(1, 6, 7, 0xc);
-        TTI_SFPLOADI(3, 2, 0x7f01);
-        TTI_SFPXOR(0, 3, 1, 0);
-        TTI_SFPLOADI(3, 2, 0x7fff);
-        TTI_SFPAND(1, 3, 1, 1);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSETMAN(0, 2, 0, 1);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 1);
-        TTI_SFPSTORE(0, 0, 7, 0xc);
-        TTI_SFPLOAD(2, 0, 7, 0xe);
-        TTI_SFPMUL(2, 2, 9, 3, 0);
-        TTI_SFPLOADI(1, 0, 0x42fe);
-        TTI_SFPMAD(3, 12, 1, 1, 0);
-        TTI_SFPMAD(7, 2, 6, 0, 0);
-        TTI_SFPEXEXP(0, 1, 3, 0);
-        TTI_SFPEXMAN(0, 1, 1, 0);
-        TTI_SFPSHFT(0, 3, 1, 0);
-        TTI_SFPEXMAN(0, 1, 3, 1);
-        TTI_SFPCAST(3, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x9763);
-        TTI_SFPMAD(0, 2, 5, 0, 0);
-        TTI_SFPLOADI(4, 8, 0xbe9f);
-        TTI_SFPMAD(0, 2, 4, 0, 0);
-        TTI_SFPMAD(14, 3, 13, 4, 0);
-        TTI_SFPEXEXP(0, 1, 1, 1);
-        TTI_SFPMAD(4, 3, 10, 3, 0);
-        TTI_SFPSHFT(0x17, 1, 1, 7);
-        TTI_SFPMUL(3, 0, 9, 0, 0);
-        TTI_SFPLOADI(3, 0, 0xc048);
-        TTI_SFPMUL(0, 1, 9, 0, 0);
-        TTI_SFPMUL(2, 2, 9, 1, 0);
-        TTI_SFPGT(0, 3, 2, 1);
-        TTI_SFPLOADI(3, 2, 0x6e76);
-        TTI_SFPLOADI(4, 2, 0x921c);
-        TTI_SFPLOADI(3, 8, 0xb555);
-        TTI_SFPLOADI(4, 8, 0x3818);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x17aa);
-        TTI_SFPLOADI(4, 8, 0xba3e);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x5ac4);
-        TTI_SFPLOADI(4, 8, 0x3c09);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x62c6);
-        TTI_SFPLOADI(4, 8, 0xbd82);
-        TTI_SFPMAD(3, 1, 4, 3, 0);
-        TTI_SFPLOADI(4, 2, 0x4b84);
-        TTI_SFPLOADI(4, 8, 0x3ecb);
-        TTI_SFPMAD(3, 1, 4, 1, 0);
-        TTI_SFPLOADI(3, 0, 0x3f00);
-        TTI_SFPMAD(2, 1, 3, 1, 0);
-        TTI_SFPMUL(2, 1, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0xc153);
-        TTI_SFPLE(0, 1, 2, 1);
-        TTI_SFPMUL(2, 9, 9, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOADI(1, 0, 0x4031);
-        TTI_SFPGT(0, 1, 2, 1);
-        TTI_SFPMOV(0, 2, 0, 0);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFPLOAD(1, 6, 7, 0xe);
-        TTI_SFPLOADI(3, 2, 0x7f01);
-        TTI_SFPXOR(0, 3, 1, 0);
-        TTI_SFPLOADI(3, 2, 0x7fff);
-        TTI_SFPAND(1, 3, 1, 1);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSETMAN(0, 2, 0, 1);
-        TTI_SFPENCC(3, 0, 0, 0xa);
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, 1);
-        TTI_SFPSTORE(0, 0, 7, 0xe);
         TTI_INCRWC(0, 7, 0, 0);
-        TTI_INCRWC(0, 7, 0, 0);
-        TTI_INCRWC(0, 2, 0, 0);
+        TTI_INCRWC(0, 1, 0, 0);
     }
 }
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_gelu_bf16() {
     if constexpr (ITERATIONS == 32) {
         calculate_gelu_bf16_scheduled();
     } else {
-        ckernel::sfpu::bf16::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, ITERATIONS>();
+        ckernel::sfpu::bf16::gelu::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, ITERATIONS>();
     }
 }
 inline void init_gelu_bf16() {
-    if (bf16_dest_gelu()) {
-        ckernel::sfpu::bf16::init_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config>();
-    }
+    ckernel::sfpu::bf16::gelu::init_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config>();
 }
 
 }  // namespace ckernel::sfpu

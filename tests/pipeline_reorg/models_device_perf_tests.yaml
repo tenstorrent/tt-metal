@@ -53,6 +53,9 @@
 - name: "ttnn eltwise generated bf16 gelu"
   cmd: >-
     pytest --timeout 120 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_bfloat8_b
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_exhaustive_inputs
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_nonfinite_inputs
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_bf16_unflushed_zero_and_subnormal_inputs
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_gelu_with_sqrt_in_sfpu_chain
   skus:
@@ -100,8 +103,10 @@
 # generated bf16 op: selu
 # generated bf16 op: selu_bw
 # generated bf16 op: sigmoid
+# generated bf16 op: sigmoid_bw
 # generated bf16 op: silu_bw
 # generated bf16 op: sinh_bw
+# generated bf16 op: situ_glu
 # generated bf16 op: softplus
 # generated bf16 op: softplus_bw
 # generated bf16 op: softshrink
@@ -112,6 +117,7 @@
 # generated bf16 op: sqrt_bw
 # generated bf16 op: square_bw
 # generated bf16 op: tanh
+# generated bf16 op: tanh_bw
 # generated bf16 op: tanhshrink
 # generated bf16 op: xielu
 # generated bf16 ops end

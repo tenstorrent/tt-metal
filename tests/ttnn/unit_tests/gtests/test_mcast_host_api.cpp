@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <set>
+#include "mcast_host_test_common.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -14,11 +15,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
-
-namespace ttnn::kernel_lib::host::test {
-// Shared independent test decoder; compact CT goldens pin its bit/field positions.
-dataflow_kernel_lib::mcast_wire::ArgumentMetadata emitted_metadata(const std::vector<uint32_t>& ct, uint32_t base);
-}  // namespace ttnn::kernel_lib::host::test
 
 namespace ttnn::kernel_lib::host::api_test {
 using tt::tt_metal::CoreCoord;
@@ -54,7 +50,7 @@ KernelDescriptor emitted(const McastType& mcast, NOC noc = NOC::NOC_0) {
 
 void expect_pattern(
     const Mcast& channel,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const std::vector<std::vector<CoreCoord>>& receivers,
     const std::vector<std::vector<CoreCoord>>& senders,
     const std::vector<std::vector<uint32_t>>& acks,
