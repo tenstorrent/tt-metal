@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "ckernel_sfpu_unary_max_min.h"
-#include "llk_assert.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -27,14 +26,11 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
     calculate_unary_max_min<IS_MAX_OP, DataFormat::Float32, APPROXIMATION_MODE, ITERATIONS>(value);
 }
 
-// Quasar has no UInt32 Dest format, so the unsigned variants (unary_*_uint32_tile) reject the call.
+// Quasar has no UInt32 Dest format, so the compute API leaves out unary_*_uint32_tile; only the Int32 path exists.
 template <bool IS_MAX_OP, bool IS_UNSIGNED, bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
-inline void calculate_unary_max_min_int32([[maybe_unused]] const std::uint32_t value) {
-    if constexpr (IS_UNSIGNED) {
-        LLK_ASSERT(false, "unary_max_uint32_tile / unary_min_uint32_tile are not supported on Quasar");
-    } else {
-        calculate_unary_max_min<IS_MAX_OP, DataFormat::Int32, APPROXIMATION_MODE, ITERATIONS>(value);
-    }
+inline void calculate_unary_max_min_int32(const std::uint32_t value) {
+    static_assert(!IS_UNSIGNED, "unary_max_uint32_tile / unary_min_uint32_tile are not supported on Quasar");
+    calculate_unary_max_min<IS_MAX_OP, DataFormat::Int32, APPROXIMATION_MODE, ITERATIONS>(value);
 }
 
 }  // namespace sfpu

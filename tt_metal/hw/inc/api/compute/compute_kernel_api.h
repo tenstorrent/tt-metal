@@ -983,6 +983,7 @@ ALWI void unary_max_int32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_int32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UINT */)));
 }
 
+#ifndef ARCH_QUASAR  // Quasar has no UInt32 Dest format
 // unary_max : if x > value --> x, else value
 // clang-format off
 /**
@@ -1016,6 +1017,7 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
 ALWI void unary_max_uint32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_uint32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UINT */)));
 }
+#endif  // !ARCH_QUASAR
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -1109,6 +1111,7 @@ ALWI void unary_min_int32_tile_init() {
         SFPU_UNARY_INIT_FN(unary_min_int32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UINT */)));
 }
 
+#ifndef ARCH_QUASAR  // Quasar has no UInt32 Dest format
 // unary_min : if x < value --> x, else value
 // clang-format off
 /**
@@ -1143,6 +1146,7 @@ ALWI void unary_min_uint32_tile_init() {
     MATH(
         SFPU_UNARY_INIT_FN(unary_min_uint32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UINT */)));
 }
+#endif  // !ARCH_QUASAR
 
 // unary_min : if x < value --> x, else value
 // clang-format off
