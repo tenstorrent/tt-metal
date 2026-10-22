@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_block_cyclic,
+    is_tp_deduped_kv_cache,
     kda_chunk_n_tokens,
     kda_max_sequence_length,
     kda_segment_bytes,
@@ -149,9 +150,13 @@ def build_and_serialize_kv_chunk_table(
     layer_rows=None,
     index_layer_ids=None,
     kda=None,
+    kvpe_alias_rows=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
+
+    ``kvpe_alias_rows`` (``{alias row: source row}``): config-0 rows published at another row's
+    addresses, for decode MTP levels that share one KV cache. Merged (DSA) table only.
 
     ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
     (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
@@ -196,12 +201,8 @@ def build_and_serialize_kv_chunk_table(
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
 
-    KV DEDUP is derived, not passed. A sparse/DSA model (``index_kv_cache`` given) always stripes its
-    block-cyclic caches across SP*TP, so its table addresses each (row, col) device individually instead
-    of one group per SP row; a dense model never does. Deriving it here is what keeps the table's
-    addressing and the caches' allocation from disagreeing — a mismatch makes EVERY address wrong, with
-    no error. ``tp_axis`` names the TP mesh axis in either case — it is the dflash head-count geometry
-    and is not itself the dedup switch."""
+    KV dedup is read from the KVPE cache's declared topology (is_tp_deduped_kv_cache), so the table cannot
+    disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -239,10 +240,13 @@ def build_and_serialize_kv_chunk_table(
             index_layer_ids=index_layer_ids,
             dflash_first_layer=dflash_first_layer,
             kvpe_layer_rows=layer_rows,
+            kvpe_alias_rows=kvpe_alias_rows,
         )
+    assert kvpe_alias_rows is None, "kvpe_alias_rows is wired into the merged (DSA) table only"
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
     stage_layout = stage_layouts[0] if stage_layouts else None
+    kv_dedup = is_tp_deduped_kv_cache(primary_cache, mesh_shape)
 
     def _builder(*, config, chunk_size_bytes, num_users):
         return create_kv_chunk_address_table_block_cyclic(
@@ -258,6 +262,7 @@ def build_and_serialize_kv_chunk_table(
             num_my_layers=num_my_layers,
             stage_layout=stage_layout,
             layer_rows=layer_rows,
+            tp_axis=tp_axis if kv_dedup else None,
         )
 
     return serialize_kv_chunk_table(
@@ -287,6 +292,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     index_layer_ids=None,
     dflash_first_layer=0,
     kvpe_layer_rows=None,
+    kvpe_alias_rows=None,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
@@ -301,6 +307,9 @@ def _build_and_serialize_merged_kv_chunk_table(
     ``kvpe_layer_rows``: the same map for config 0, for a HYBRID attention stack whose kvpe stage is
     numbered in compacted MLA-slot space (Kimi-K3). Without it a merged table would publish kvpe rows
     at slot numbers while the single-config path publishes them at layers.
+
+    ``kvpe_alias_rows``: ``{alias row: source row}`` past config 0's rows, each published at its source's
+    addresses. Config 0 widens to cover them; config 1 widens with it (one layer axis) but gets no aliases.
 
     ``("kda_recurrent", spec)`` / ``("kda_convolution", spec)`` (Kimi-K3): a :class:`KdaTableSpec`; these
     take the decimal names after the block-cyclic caches and are populated by
@@ -378,7 +387,13 @@ def _build_and_serialize_merged_kv_chunk_table(
             )
 
     block_cyclic = [(name, cache) for name, cache, head_idx in entries if head_idx is None]
-    kv_dedup = index_config_name is not None
+    # The KVPE cache (config 0) decides the layout; every block-cyclic cache must share it.
+    kv_dedup = is_tp_deduped_kv_cache(block_cyclic[0][1], mesh_shape)
+    for name, cache in block_cyclic:
+        assert is_tp_deduped_kv_cache(cache, mesh_shape) == kv_dedup, (
+            f"KV table config {name!r} is {'not ' if kv_dedup else ''}TP-deduped but the KVPE cache "
+            f"{'is' if kv_dedup else 'is not'}; every block-cyclic cache must share one layout"
+        )
     if stage_layouts is None:
         stage_layouts = [
             allgather_kv_stage_layout(
@@ -455,6 +470,14 @@ def _build_and_serialize_merged_kv_chunk_table(
         ), f"kvpe_layer_rows has {len(kvpe_layer_rows)} entries but config 0 spans {dense_rows} compacted slabs"
         configs[kvpe_config_name].num_layers = max(configs[kvpe_config_name].num_layers, max(kvpe_layer_rows) + 1)
 
+    if kvpe_alias_rows:
+        written_rows = configs[kvpe_config_name].num_layers
+        assert min(kvpe_alias_rows) >= written_rows > max(kvpe_alias_rows.values()), (
+            f"kvpe_alias_rows {kvpe_alias_rows} must add rows past config 0's {written_rows} written rows "
+            "and point back into them"
+        )
+        configs[kvpe_config_name].num_layers = max(kvpe_alias_rows) + 1
+
     for name, (kind, spec) in kda_configs.items():
         cfg = disagg.KvChunkAddressTableConfig()
         # One layer axis for every config: the KDA rows sit at their model layers, so the extent is the
@@ -516,6 +539,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                     else (kvpe_layer_rows if name == kvpe_config_name else None)
                 ),
                 tp_axis=tp_axis if kv_dedup else None,
+                alias_rows=kvpe_alias_rows if name == kvpe_config_name else None,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(
