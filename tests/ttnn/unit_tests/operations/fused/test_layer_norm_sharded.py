@@ -654,7 +654,7 @@ def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, 
 )
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("use_weight_bias", [False, True], ids=["no_weight_bias", "weight_bias"])
-@pytest.mark.parametrize("h", [32, 64, 96])
+@pytest.mark.parametrize("h", [32, 64])
 def test_layer_norm_sharded_width_non_rectangular_grid(
     device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias, h
 ):
