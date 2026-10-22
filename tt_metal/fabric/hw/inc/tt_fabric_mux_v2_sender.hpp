@@ -343,17 +343,8 @@ private:
         if (l1_base_semaphore_id == kFabricMuxV2NoL1BaseSemaphore) {
             return;
         }
-        const uint64_t l1_base_noc_addr = get_noc_addr(
-            mux_noc_x, mux_noc_y, get_semaphore<ProgrammableCoreType::TENSIX>(l1_base_semaphore_id), noc_index);
-        volatile tt_l1_ptr uint32_t* scratch = teardown_ptr;
-        *scratch = 0;
-        WAYPOINT("MV2B");
-        do {
-            noc_async_read(l1_base_noc_addr, reinterpret_cast<size_t>(scratch), sizeof(uint32_t), noc_index);
-            noc_async_read_barrier(noc_index);
-            invalidate_l1_cache();
-        } while (*scratch == 0);
-        const uint32_t l1_base = *scratch;
+        const uint32_t l1_base = poll_fabric_mux_l1_base(
+            mux_noc_x, mux_noc_y, l1_base_semaphore_id, reinterpret_cast<uint32_t>(teardown_ptr), noc_index);
         channel_base_address += l1_base;
         connection_info_address += l1_base;
         connection_handshake_address += l1_base;

@@ -62,7 +62,7 @@ def _run_reduce_scatter(mesh_device, enable_trace, use_new):
 
 
 def _run_strided_all_gather(mesh_device, enable_trace):
-    # FabricMuxV2Config, Program factory. Two devices run Linear.
+    # FabricMuxV2Config, Program factory. On two devices the op runs Ring as Linear.
     run_strided_all_gather_impl(
         mesh_device,
         mesh_device.get_num_devices(),
