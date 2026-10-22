@@ -333,3 +333,20 @@ Ethernet placement - ~25% placement, the rest (~15-20%) the engine's NoC traffic
 Ethernet cores within the mover column (a placement table instead of the probe that needs 4 cores in a row); engine
 compute (2 x 4 sub-blocks at ~100-160 TFLOP/s); then down + the reduce-scatter per chunk (matmul_reduce_scatter port).
 (A gather-only probe inside the fused program aborted on the host - free(): invalid next size - not chased.)
+
+### Galaxy per-chip shapes (user steer): 640 rows a mesh row, TP ring of 4
+Galaxy floors a chip (ring: busiest link 1.5 shards; the LoudBox line's end link carries 3, i.e. 2x): x all-gather
+GLM ~41 us / K3 ~72 (line 84 / 146); shared expert HiFi2 compute GLM ~26 / K3 ~139; weights once 13 / 68 (overlap).
+Tests now default to 640 rows a mesh row (chunk 1280 on the 2x4). v3 at 640 rows (x chain on the LoudBox line):
+| | GLM-Flash | K3 |
+|---|---|---|
+| engine alone, MT 2 (one chunk) / MT 1 (two) | 98.7 / 126.5 us | 403 / 542 |
+| fused x chain, one chunk / two | 195.8 / 193.7, PCC 0.99982 | 521.8 / 572.3, PCC 0.99973 |
+Fixed: x_gather3 picked a row's link by the global row while the host counted packets per chunk-local row - chunks
+not a multiple of 4 row tiles (MT 1) hung.
+Engine phases (device zones, 640 rows, us from start): GLM - W load 0-30, gate / up 0-57, h rounds 55-75, down to
+95; K3 - W load 0-148 (35 MB at ~237 GB/s), gate / up 0-316 (~89 TFLOP/s), h 315-334, down to 395.
+Tried: (a) weights issued all at once with a transaction id a block, a block streamed as soon as it landed - kept
+(GLM 97 -> 95); (b) NoC swap (weight reads + column multicasts on NOC0): K3 gate / up 316 -> 274 but down +20 us,
+GLM 97 -> 113 - reverted; (c) h exchanged all at once with counters instead of 22 kernel_lib rounds: no faster
+(the concurrent row multicasts serialize: 18-41 us) - reverted to the rounds. KB 16: K3 403 -> 367, GLM no change.

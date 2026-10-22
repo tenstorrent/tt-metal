@@ -27,6 +27,7 @@ import ttnn
 
 NWS = 3  # (W slots)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
+HCNT, HFREE = 1 + 2 * NWS, 3 + 2 * NWS  # (unused: the h exchange is the kernel_lib family again)
 NSEM_OWN = 1 + 2 * NWS
 XIN, WIN, HOWN, HALL, OUT = 0, 1, 2, 3, 4  # CB ids
 NOUT = 2  # (down passes OUT holds)
@@ -36,13 +37,14 @@ _BRISC = r"""
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 using namespace dataflow_kernel_lib;
 constexpr uint32_t GX = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), KB = get_compile_time_arg_val(2);
 constexpr uint32_t NSG = get_compile_time_arg_val(3), NPG = get_compile_time_arg_val(4), NCH = get_compile_time_arg_val(5);
 constexpr uint32_t HT = get_compile_time_arg_val(6), POMAX = get_compile_time_arg_val(7), CR = get_compile_time_arg_val(8);
 constexpr uint32_t S0 = get_compile_time_arg_val(9), S1 = get_compile_time_arg_val(10), KT = get_compile_time_arg_val(11);
-constexpr uint32_t XREADY = get_compile_time_arg_val(12);
-constexpr auto x_args = TensorAccessorArgs<13>();
+constexpr uint32_t XREADY = get_compile_time_arg_val(12), HCNT = get_compile_time_arg_val(13), HFREE = get_compile_time_arg_val(14);
+constexpr auto x_args = TensorAccessorArgs<15>();
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
 // x step j: family j % 2, owner = the family's subset[(j / 2) % S], its local index (j / 2) / S
@@ -54,7 +56,8 @@ void kernel_main() {
     const uint32_t xown = get_arg_val<uint32_t>(a++), xin = get_arg_val<uint32_t>(a++), hown = get_arg_val<uint32_t>(a++);
     const uint32_t hall = get_arg_val<uint32_t>(a++), po = get_arg_val<uint32_t>(a++), h0 = get_arg_val<uint32_t>(a++);
     const uint32_t i0 = get_arg_val<uint32_t>(a++), i1 = get_arg_val<uint32_t>(a++);  // my index in family 0 / 1 (or GX)
-    const uint32_t need0 = a;  // need[m]: XREADY before chunk m's x is here
+    const uint32_t lx = get_arg_val<uint32_t>(a++), rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
+    const uint32_t vx0 = a, need0 = vx0 + GX;  // the row's NoC x; need[m]: XREADY before chunk m's x is here
     const uint32_t nown = (i0 < GX ? NOWN0 : 0) + (i1 < GX ? NOWN1 : 0);  // (my steps a chunk)
     auto mine = [&](uint32_t j) { return (j & 1) ? ((j / 2) % S1 == i1) : ((j / 2) % S0 == i0); };
     // my steps' x-own slot: [chunk][family 0 slots, then family 1][MT][KB]
@@ -63,6 +66,7 @@ void kernel_main() {
         return xown + ((m * nown + slot) * MT) * KB * 2048;
     };
     if (x_ct) {  // (alone) my steps of every chunk from DRAM x [rows, x_ct]: columns x_k0 ..
+        DeviceZoneScopedN("SE-XLOAD");
         const auto xg = TensorAccessor(x_args, x_addr, 2048);
         for (uint32_t m = 0; m < NCH; ++m)
             for (uint32_t j = 0; j < NSG; ++j)
@@ -77,15 +81,17 @@ void kernel_main() {
     constexpr auto mx1 = McastArgs<get_named_compile_time_arg_val("x1_ct_offset"), get_named_compile_time_arg_val("x1_rt_offset")>();
     constexpr auto mh = McastArgs<get_named_compile_time_arg_val("h_ct_offset"), get_named_compile_time_arg_val("h_rt_offset")>();
     Noc noc;
+    auto sh = mh.optional_sender(noc);
+    auto rh = mh.optional_receiver(noc);
     auto s0 = mx0.optional_sender(noc);
     auto r0 = mx0.optional_receiver(noc);
     auto s1 = mx1.optional_sender(noc);
     auto r1 = mx1.optional_receiver(noc);
-    auto sh = mh.optional_sender(noc);
-    auto rh = mh.optional_receiver(noc);
     volatile tt_l1_ptr uint32_t* xready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(XREADY));
     for (uint32_t m = 0; m < NCH; ++m) {
         const uint32_t need = get_arg_val<uint32_t>(need0 + m);
+        {
+        DeviceZoneScopedN("SE-XROUNDS");
         for (uint32_t pg = 0; pg < NPG; ++pg)
             for (uint32_t j = 0; j < NSG; ++j) {
                 const uint32_t round = (m * NPG + pg) * NF + j / 2;  // (the family's)
@@ -99,24 +105,30 @@ void kernel_main() {
                 }
                 cb_push_back(CB_XIN, MT * KB);
             }
-        // h: every core's rows into every row core's h-all [MT][HT] at its h0 (rounds (row tile, column))
+        }
+        DeviceZoneScopedN("SE-HX");
+        // h: every core's rows into every row core's h-all slot (m % 2) at its h0 - kernel_lib rotating rounds
+        // (row tile, column); the receivers' readiness ack is the slot's credit
         cb_wait_front(CB_HOWN, MT * POMAX);
         cb_reserve_back(CB_HALL, MT * HT);
+        const uint32_t hs = hall + (m & 1) * MT * HT * 2048;
         for (uint32_t r = 0; r < MT; ++r)
             for (uint32_t c = 0; c < GX; ++c) {
                 const uint32_t round = (m * MT + r) * GX + c;
-                if (c == cx) sh->send(hown + r * POMAX * 2048, hall + (r * HT + h0) * 2048, po * 2048);
+                if (c == cx) sh->send(hown + r * POMAX * 2048, hs + (r * HT + h0) * 2048, po * 2048);
                 else rh->receive(round);
             }
         cb_push_back(CB_HALL, MT * HT);
         cb_pop_front(CB_HOWN, MT * POMAX);
     }
+    noc_async_atomic_barrier();
 }
 """
 
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 constexpr uint32_t GY = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), KB = get_compile_time_arg_val(2);
 constexpr uint32_t NSG = get_compile_time_arg_val(3), NPG = get_compile_time_arg_val(4), NCH = get_compile_time_arg_val(5);
 constexpr uint32_t KBD = get_compile_time_arg_val(6), NSD = get_compile_time_arg_val(7), NPD = get_compile_time_arg_val(8);
@@ -142,19 +154,23 @@ void kernel_main() {
     };
     const auto wg = TensorAccessor(w_args, w_addr, WTB);
     const auto yg = TensorAccessor(y_args, y_addr, 2048);
-    // my blocks from DRAM, once (the column's blocks in order from wbase)
+    // my blocks from DRAM, once: every read issued now, the k-th block's under transaction id min(k, 14) + 1; a block
+    // is sent once its reads landed (the column streams while the weights are still arriving)
     {
-        uint32_t page = wbase, off = 0;
+        DeviceZoneScopedN("SE-WISSUE");
+        uint32_t page = wbase, off = 0, k = 0;
         for (uint32_t b = 0; b < NB; ++b) {
             const uint32_t n = bsize(b);
             if (b % GY == cy) {
+                noc_async_read_set_trid(k < 14 ? k + 1 : 15);
                 for (uint32_t t = 0; t < n; ++t) noc_async_read(wg.get_noc_addr(page + t), wown + (off + t) * WTB, WTB);
                 off += n;
+                ++k;
             }
             page += n;
         }
-        noc_async_read_barrier();
     }
+    uint32_t kb = 0;  // (my next block to send in the first chunk)
     const uint32_t NR = NCH * NB;  // (W rounds a call)
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
     uint32_t nf[NWS] = {};
@@ -168,6 +184,10 @@ void kernel_main() {
         if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = ws % NB, n = bsize(b);
             if (b < GY) woff = 0;  // (a new chunk: my blocks from the start)
+            if (ws < NB) {  // (first chunk: this block's reads landed)
+                noc_async_read_barrier_with_trid(kb < 14 ? kb + 1 : 15);
+                ++kb;
+            }
             const uint32_t dst = win + (ws % NWS) * WSLOT * WTB, vw = words + (ws & 3) * 16;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vw) = ws + 1;
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), n * WTB, GY);
@@ -213,6 +233,7 @@ _COMPUTE = r"""
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -238,6 +259,8 @@ void kernel_main() {
 #endif
     for (uint32_t m = 0; m < NCH; ++m) {
         // gate / up: per pass all of K in DEST, the GLU, h packed once
+        {
+        DeviceZoneScopedN("SE-GU");
         cb_reserve_back(HOWN, MT * POMAX);
         uint32_t hoff = 0;
         for (uint32_t pg = 0; pg < NPG; ++pg) {
@@ -271,6 +294,8 @@ void kernel_main() {
             hoff += pw / 2;
         }
         cb_push_back(HOWN, MT * POMAX);
+        }
+        DeviceZoneScopedN("SE-DOWN");
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
         cb_wait_front(HALL, MT * HT);
         for (uint32_t pd = 0; pd < NPD; ++pd) {
@@ -390,7 +415,7 @@ class SeEngine3:
             ("xin", 2 * MT * self.KB * 2048),
             ("win", NWS * self.WSLOT * self.wtb),
             ("hown", MT * self.POMAX * 2048),
-            ("hall", MT * self.HT * 2048),
+            ("hall", 2 * MT * self.HT * 2048),
             ("out", NOUT * MT * self.PWDMAX * 2048),
             ("words", 256),
         ]:
@@ -479,7 +504,7 @@ class SeEngine3:
         cb(XIN, "xin", 2 * MT * self.KB * 2048, ttnn.bfloat16, 2048)
         cb(WIN, "win", NWS * self.WSLOT * self.wtb, self.w_dtype, self.wtb)
         cb(HOWN, "hown", MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
-        cb(HALL, "hall", MT * self.HT * 2048, ttnn.bfloat16, 2048)
+        cb(HALL, "hall", 2 * MT * self.HT * 2048, ttnn.bfloat16, 2048)
         cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
@@ -489,21 +514,28 @@ class SeEngine3:
             i0 = self.fam0.index(c) if c in self.fam0 else GX
             i1 = self.fam1.index(c) if c in self.fam1 else GX
             for cy in range(GY):
-                b_rt[cx0 + c][cy] = [
-                    c,
-                    cy,
-                    int(x.buffer_address()),
-                    x_ct,
-                    x_k0,
-                    b + off["xown"],
-                    b + off["xin"],
-                    b + off["hown"],
-                    b + off["hall"],
-                    self.po[c],
-                    self.h0[c],
-                    i0,
-                    i1,
-                ] + need
+                b_rt[cx0 + c][cy] = (
+                    [
+                        c,
+                        cy,
+                        int(x.buffer_address()),
+                        x_ct,
+                        x_k0,
+                        b + off["xown"],
+                        b + off["xin"],
+                        b + off["hown"],
+                        b + off["hall"],
+                        self.po[c],
+                        self.h0[c],
+                        i0,
+                        i1,
+                        virt(0, cy).x,
+                        virt(GX - 1, cy).x,
+                        virt(c, cy).y,
+                    ]
+                    + [virt(cc, cy).x for cc in range(GX)]
+                    + need
+                )
                 n_rt[cx0 + c][cy] = (
                     [
                         cy,
@@ -540,6 +572,8 @@ class SeEngine3:
             self.S1,
             self.KT,
             XREADY,
+            HCNT,
+            HFREE,
         ]
         nct = [
             GY,
@@ -626,7 +660,7 @@ class SeEngine3:
         return cbs, kernels, sems
 
     def attach_mcast(self, prog):
-        """The kernel_lib families (x slots 0 / 1, h) attached to prog's BRISC kernel (after prog.semaphores is set:
+        """The kernel_lib families (x slots 0 / 1, h; the BRISC's NOC0) attached to prog's BRISC kernel (after prog.semaphores is set:
         attachment allocates its semaphore ids past ours)."""
         GX, GY, cx0 = self.GX, self.GY, self.cx0
         rect = self.crs
@@ -639,7 +673,9 @@ class SeEngine3:
             ("h", ttnn.Mcast1DRotatingSenderConfig()),
         ]
         for name, cfg in fams:
-            mc = ttnn.Mcast1D(self.mesh, rect, ttnn.Mcast1DShape.PerRow, cfg, ttnn.McastConfig(handshake=True))
+            mc = ttnn.Mcast1D(
+                self.mesh, rect, ttnn.Mcast1DShape.PerRow, cfg, ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0)
+            )
             mc.attach(prog, name, [self.brisc])
 
     def run_alone(self, x, w):
