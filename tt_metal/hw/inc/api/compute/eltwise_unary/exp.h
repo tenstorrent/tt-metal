@@ -17,7 +17,7 @@ namespace ckernel {
  * ClampToNegative (default): Inputs below ~-88.5 are clamped to -88.5. Safer but slightly slower.
  * None: No input clamping. Faster, but inputs below ~-88.5 will produce incorrect outputs. They
  *     will be guaranteed to be negative, so consider enabling packer ReLU when using this mode.
- * ClampBoth: As ClampToNegative, and overflow returns +inf. Used by ttnn.exp in fast mode.
+ * ClampBoth: As ClampToNegative, and overflow returns +inf. Slower than ClampToNegative on float32 data.
  */
 enum class InputClamping : uint8_t {
     ClampBoth = 2,
