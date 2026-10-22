@@ -28,6 +28,14 @@
 #include "llk_compute_api_claim.h"
 #include "llk_dest_chain.h"
 
+#ifdef ENABLE_LLK_ASSERT
+namespace llk_2_0 {
+// Tiles per block op of each Dest unit since that unit's last init (0: none yet), indexed by dest_dvalid_client.
+// Debug only; defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc. See detail::check_block_tiles.
+extern thread_local std::uint32_t block_tiles[4];
+}  // namespace llk_2_0
+#endif
+
 namespace ckernel {
 namespace experimental {
 namespace detail {
@@ -36,6 +44,9 @@ namespace detail {
 template <dest_dvalid_client UNIT>
 __attribute__((noinline)) void dest_join() {
     LLK_COMPUTE_API_CLAIM(2_0, legacy);  // every 2.0 op init joins
+#ifdef ENABLE_LLK_ASSERT
+    llk_2_0::block_tiles[static_cast<int>(UNIT)] = 0;  // an init starts a new block size (check_block_tiles)
+#endif
     _llk_dest_chain_join_<UNIT>();
 }
 
@@ -47,6 +58,30 @@ __attribute__((noinline)) void dest_leave() {
 template <dest_dvalid_client UNIT>
 __attribute__((noinline)) void dest_take() {
     _llk_dest_chain_take_<UNIT, DST_SYNC_MODE, DST_ACCUM_MODE>();
+}
+
+// clang-format off
+/**
+ * Debug-only check that block ops never take a tail (2.0 decision): every block op of Dest unit `UNIT` between two
+ * of its inits must cover the same number of tiles, so the kernel's tile total divides evenly by it. The first block
+ * op after an init (dest_join) sets the count; a block op with another count asserts. LLK_ASSERT only: compiles to
+ * nothing without LLK asserts.
+ *
+ * | Param Type | Name   | Description                            | Type               | Valid Range                     | Required |
+ * |------------|--------|----------------------------------------|--------------------|---------------------------------|----------|
+ * | Template   | UNIT   | Dest unit running the block op         | dest_dvalid_client | UNPACK, FPU, PACK               | True     |
+ * | Function   | ntiles | Tiles this block op covers             | uint32_t           | == first block since the init   | True     |
+ */
+// clang-format on
+template <dest_dvalid_client UNIT>
+ALWI void check_block_tiles([[maybe_unused]] std::uint32_t ntiles) {
+#ifdef ENABLE_LLK_ASSERT
+    std::uint32_t& block = llk_2_0::block_tiles[static_cast<int>(UNIT)];
+    if (block == 0) {
+        block = ntiles;
+    }
+    LLK_ASSERT(ntiles == block, "2.0 block op: tile count differs from the first block since init (no tails)");
+#endif
 }
 
 // Dest tiles per section for the kernel's sync mode and Dest width.

@@ -63,6 +63,8 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uin
 /**
  * Id-free block pack, Quasar: pack_tile over a ct_dim x rt_dim block, Dest tiles start_idst + i -> output tiles
  * start_itile + i, i < ct_dim * rt_dim. The block must fit one Dest section (static_assert).
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                        | Type       | Valid Range                     | Required |
  * |------------|---------------------|------------------------------------|------------|---------------------------------|----------|
@@ -82,15 +84,15 @@ template <
 ALWI void pack_block(LLKOperand<Format, Shape> out, std::uint32_t start_itile, std::uint32_t start_idst = 0) {
     static_assert(
         ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
-    for (std::uint32_t i = 0; i < ct_dim * rt_dim; ++i) {
-        pack_tile(out, start_itile + i, start_idst + i);
-    }
+    pack_block<is_fp32_dest_acc_en>(out, start_itile, start_idst, ct_dim * rt_dim);
 }
 
 // clang-format off
 /**
- * Id-free block pack with a runtime tile count (tails), Quasar: pack_tile over `ntiles` tiles, Dest tiles
+ * Id-free block pack with a runtime tile count, Quasar: pack_tile over `ntiles` tiles, Dest tiles
  * start_idst + i -> output tiles start_itile + i.
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                        | Type       | Valid Range                         | Required |
  * |------------|---------------------|------------------------------------|------------|-------------------------------------|----------|
@@ -106,6 +108,7 @@ ALWI void pack_block(
     LLKOperand<Format, Shape> out, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
     LLK_ASSERT(
         start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
+    detail::check_block_tiles<dest_dvalid_client::PACK>(ntiles);
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         pack_tile(out, start_itile + i, start_idst + i);
     }

@@ -50,6 +50,7 @@ ALWI void binary_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+    check_block_tiles<dest_dvalid_client::FPU>(ntiles);
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         binary_tile<type>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
@@ -168,6 +169,8 @@ ALWI void mul_tile(
  * Id-free block add, Quasar: add_tile over a ct_dim x rt_dim block, A[start_itile0 + i] + B[start_itile1 + i] ->
  * Dest[start_idst + i]. The block must fit one Dest section (static_assert). sub_block / mul_block are identical
  * with - / *.
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                        | Description                    | Type       | Valid Range                     | Required |
  * |------------|-----------------------------|--------------------------------|------------|---------------------------------|----------|
@@ -260,8 +263,10 @@ ALWI void mul_block(
 
 // clang-format off
 /**
- * Id-free block binary with a runtime tile count (tails), Quasar: Dest[start_idst + i] = A[start_itile0 + i] [op]
+ * Id-free block binary with a runtime tile count, Quasar: Dest[start_idst + i] = A[start_itile0 + i] [op]
  * B[start_itile1 + i], i < ntiles, op = add / sub / mul as the preceding init.
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                        | Description                    | Type              | Valid Range                         | Required |
  * |------------|-----------------------------|--------------------------------|-------------------|-------------------------------------|----------|
