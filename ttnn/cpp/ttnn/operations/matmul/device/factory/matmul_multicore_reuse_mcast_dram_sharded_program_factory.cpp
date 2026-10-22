@@ -605,6 +605,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         }
         return a.x < b.x;
     });
+    // The multi-shard gather reads in0 shard sender_id + j by shard id (ShardView), so storage core i in this
+    // order must hold in0 shard i: in0 is ROW_MAJOR width-sharded, one shard per core, in this grid's core order.
+    TT_FATAL(
+        shards_per_block == 1 ||
+            mcast_senders_coords == corerange_to_cores(input_all_storage_cores, std::nullopt, true),
+        "DRAM-sharded matmul: a multi-shard in0 block needs the in0 shard grid's cores in row-major (y, x) order");
     in0_mcast_sender_noc_x.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
         in0_mcast_sender_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
@@ -934,7 +940,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                     .accessor_name = "in0_mcast_receiver",
                 },
             },
-        // The resident in0 width shard, read via LocalTensorAccessor (base address only).
+        // The resident in0 width shard, read via LocalTensorAccessor (base address only); the multi-shard
+        // gather also reads other storage cores' shards through it by shard id (ShardView).
         .tensor_bindings =
             {
                 TensorBinding{
