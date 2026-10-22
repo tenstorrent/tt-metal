@@ -31,6 +31,9 @@ class AdaptiveVerify:
         self.ema = float(os.environ.get("DSV41_SPEC_TIME_EMA", "0.2"))
         self._cur = None
         self._calib_off = False
+        self.forced_k = int(
+            os.environ.get("DSV41_VLLM_SPEC_FORCED_K", "0")
+        )  # runner of a step without any draft (default: the smallest candidate; a debugging knob)
 
     # ---- runners ------------------------------------------------------------------------------------------------------------------------
     def all_runners(self):
@@ -130,7 +133,7 @@ class AdaptiveVerify:
     def runner_for(self, nv_max):
         """(k, runner) verifying the block of a step whose largest valid draft count is ``nv_max`` (0: no row carries a draft: the cheapest runner; a count that is not a candidate: the next larger)."""
         if nv_max <= 0:
-            k = self.ks[0]
+            k = self.forced_k if self.forced_k in self.runners else self.ks[0]
         else:
             k = next((q for q in self.ks if q >= nv_max), self.ks[-1])
         return k, self.runners[k]

@@ -410,6 +410,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 with corruptible(self.m.md):
                     r_.snaps = r_.dec.snapshot_states()
                     r_.capture_trace()
+                    if self.spec_adapt is not None and int(os.environ.get("DSV41_SPEC_CALIB", "3")) > 0:
+                        # round time of every runner (the adaptive choice scores E[tokens] / round time): replays of the captured block on the idle model, state restored
+                        r_.calibrate(
+                            torch.zeros(r_.B, r_.n, dtype=torch.long),
+                            torch.full((r_.B,), 130, dtype=torch.long),
+                            int(os.environ.get("DSV41_SPEC_CALIB", "3")),
+                        )
                 for (
                     _,
                     snap,
@@ -419,6 +426,8 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     if snap is not None:
                         ttnn.deallocate(snap)
                 r_.snaps = None
+            if self.spec_adapt is not None:
+                self.spec._after_seed()
             logger.info(
                 f"DSV4.1 vLLM: spec traces captured ({len(self._spec_runners()) + len(self.spec_buckets)} runner(s))"
             )
