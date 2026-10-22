@@ -27,7 +27,8 @@ def pad_to_tile(n: int) -> int:
 
 @dataclass(frozen=True)
 class TtTimestralPrecision:
-    """bf16 weights and HiFi2 matmuls by default; ``performance()`` stores weights as bfloat8_b at LoFi."""
+    """bf16 weights and HiFi2 matmuls by default; ``performance()`` stores weights as bfloat8_b at LoFi,
+    except wo / w_down, whose matmuls fold in the bf16 residual add."""
 
     bf8_weights: bool = False
     lofi: bool = False
@@ -37,10 +38,11 @@ class TtTimestralPrecision:
     def performance(cls) -> "TtTimestralPrecision":
         return cls(bf8_weights=True, lofi=True)
 
-    def weight_dtype(self):
+    def weight_dtype(self, *, residual: bool = False):
+        """``residual``: the matmul folds in the residual add, which needs weight dtype == residual dtype (bf16)."""
         import ttnn
 
-        return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
+        return ttnn.bfloat8_b if self.bf8_weights and not residual else ttnn.bfloat16
 
     def compute_kernel_config(self, *, math_fidelity=None):
         import ttnn

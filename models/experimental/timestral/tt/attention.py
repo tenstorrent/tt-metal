@@ -91,7 +91,7 @@ class TtAttention:
         self._wqkv = upload_linear(device, weights.wqkv, dtype)
         self._wv = None if weights.is_time else upload_linear(device, weights.wv, dtype)
         self._wg = upload_linear(device, weights.wg, dtype)
-        self._wo = upload_linear(device, weights.wo, dtype)
+        self._wo = upload_linear(device, weights.wo, precision.weight_dtype(residual=True))
         self._ones = upload(device, torch.ones(1, self.d_model))
         if weights.is_time:
             self._rope_trans = upload(device, pair_rotation(TILE).reshape(1, 1, TILE, TILE))

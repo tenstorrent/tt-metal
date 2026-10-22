@@ -31,7 +31,7 @@ class TtSwiGLU:
         self.eps = weights.eps
         dtype = precision.weight_dtype()
         self._w_up_gate = upload_swiglu(device, weights.w_up, weights.w_gate, dtype)
-        self._w_down = upload_linear(device, weights.w_down, dtype)
+        self._w_down = upload_linear(device, weights.w_down, precision.weight_dtype(residual=True))
         self._ones = upload(device, torch.ones(1, weights.w_down.shape[0]))
 
     def __call__(self, x, residual=None):
