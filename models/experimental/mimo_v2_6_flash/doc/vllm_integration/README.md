@@ -212,7 +212,7 @@ drafter contract (`docs/SPEC_DECODE_CONTRACT.md`); lane DP serves it with the pl
 
 ```bash
 export MIMO_SPEC_DECODE=mtp   # MIMO_MTP_LAYER (default 0) picks the MTP layer
-vllm serve ... --no-async-scheduling \
+vllm serve ... \
   --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
 ```
 
@@ -268,6 +268,13 @@ vllm serve ... --no-async-scheduling \
   Every buffer the chain reads or writes is persistent (accept page, `mtp_packed`, the MTP heads' token rows, the
   result page), so a later chain program that derives the next verify's inputs on device, with the host reading one
   step behind, can read them.
+- **Async scheduling** (`supports_async_spec_decode`; `MIMO_ASYNC_SPEC=0` declares none, and the launch then needs
+  `--no-async-scheduling`). Ordinary steps of a speculating launch overlap the step in flight as without
+  speculation (at concurrency 16 every step is one: every lane holds several requests, none drafts, and a propose
+  touches no device). The plugin proposes for an ordinary step when it commits it, a step after its submission; when
+  the lane's next step is already enqueued, the resident hidden the MTP would read is that step's, so the propose
+  enqueues nothing and offers placeholder drafts, which make the plugin drain the newer step and propose for it (that
+  propose drafts on device). A verify answers host tensors, also when asked to defer its read.
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
   `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
@@ -275,7 +282,9 @@ vllm serve ... --no-async-scheduling \
   and the chain and drafts steps bit for bit against their mirror. `tests/test_spec_chain_host.py` (no device): the
   chain's mirror against the host plan (every accepted count, the ring's wrap, the context limit) and after the accept
   kernel's greedy mirror; `tests/test_spec_chain_adapter_host.py` (no device, needs vllm-tt-plugin): the adapter's
-  verify / propose on fake lanes made of the mirrors (chained and host-planned drafts, the fallbacks).
+  verify / propose on fake lanes made of the mirrors (chained and host-planned drafts, the fallbacks);
+  `tests/test_spec_async_adapter_host.py` (no device, needs vllm-tt-plugin): the same lanes driven through the
+  plugin's async calls.
   `tests/test_sample_verify_host.py` (no device): the accept kernel's integer mirror against the plugin's accept-walk
   semantics (accept boundaries, the residual without the draft, the bonus, greedy ties, top_k and top_p, truncation),
   and against `vllm_tt_plugin.spec_accept` itself when the plugin is installed.
