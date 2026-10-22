@@ -27,13 +27,16 @@ CB = 0
 
 _WALK = r"""
 // one shard's runs for this port, in order: row tile r, bank b (b0, b0 + BS, ..), up to RP pages a packet
+// part 0: every row tile; 1 / 2: the even / odd row tiles (a ring's opposite shard, half each way). idx: the run's
+// index in the full walk (part 0) of the shard
 template <typename F>
-FORCE_INLINE void walk(uint32_t rows, uint32_t b0, uint32_t bs, F&& f) {
+FORCE_INLINE void walk(uint32_t rows, uint32_t b0, uint32_t bs, uint32_t part, F&& f) {
     constexpr uint32_t PB = CT / NB;
     uint32_t idx = 0;
     for (uint32_t r = 0; r < rows; ++r)
         for (uint32_t b = b0; b < NB; b += bs)
-            for (uint32_t i = 0; i < PB; i += RP) f(r * CT + b + i * NB, PB - i < RP ? PB - i : RP, idx++);
+            for (uint32_t i = 0; i < PB; i += RP, ++idx)
+                if (part == 0 || (r & 1) == part - 1) f(r * CT + b + i * NB, PB - i < RP ? PB - i : RP, idx);
 }
 // a shard-local page (row tile r, column c) -> its page in x_full, shard q
 FORCE_INLINE uint32_t out_page(uint32_t page, uint32_t q) { return (page / CT) * G * CT + q * CT + page % CT; }
@@ -53,15 +56,15 @@ constexpr auto o_args = TensorAccessorArgs<x_args.next_compile_time_args_offset(
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0), o_addr = get_arg_val<uint32_t>(1), rows = get_arg_val<uint32_t>(2);
     const uint32_t b0 = get_arg_val<uint32_t>(3), bs = get_arg_val<uint32_t>(4), arrival = get_arg_val<uint32_t>(5);
-    const uint32_t full = get_arg_val<uint32_t>(6), n = get_arg_val<uint32_t>(7);  // packets a shard; shards to send
+    const uint32_t total = get_arg_val<uint32_t>(6), n = get_arg_val<uint32_t>(7);  // packets I send; entries
     const auto x = TensorAccessor(x_args, x_addr, 2048);
     const auto o = TensorAccessor(o_args, o_addr, 2048);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival);
-    const uint32_t total = n * full;
     uint32_t batch = 0, wptr = 0, done = 0;
-    for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t q = get_arg_val<uint32_t>(8 + k);
-        walk(rows, b0, bs, [&](uint32_t page, uint32_t np, uint32_t idx) {
+    for (uint32_t k = 0; k < n; ++k) {  // entry k: shard q, part, and (relays) its first packet in upstream's stream
+        const uint32_t q = get_arg_val<uint32_t>(8 + 3 * k), part = get_arg_val<uint32_t>(9 + 3 * k);
+        const uint32_t up_base = get_arg_val<uint32_t>(10 + 3 * k);
+        walk(rows, b0, bs, part, [&](uint32_t page, uint32_t np, uint32_t idx) {
             if (batch == 0) {
                 cb_reserve_back(0, RP * GROUP);
                 wptr = get_write_ptr(0);
@@ -69,8 +72,8 @@ void kernel_main() {
             uint64_t src;
             if (k == 0) {
                 src = x.get_noc_addr(page);  // my own columns
-            } else {  // relay: upstream's shard k - 1 of its stream landed here (its packet (k - 1) full + idx)
-                noc_semaphore_wait_min(arrived, ((k - 1) * full + idx) / INC + 1);
+            } else {  // relay: upstream's packet up_base + idx (idx: index in the shard's full walk) landed here
+                noc_semaphore_wait_min(arrived, (up_base + idx) / INC + 1);
                 src = o.get_noc_addr(out_page(page, q));
             }
             noc_async_read(src, wptr + batch * RP * 2048, np * 2048);
@@ -110,9 +113,9 @@ void kernel_main() {
     const uint32_t send_ready = get_arg_val<uint32_t>(a++), rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
     const uint32_t px = get_arg_val<uint32_t>(a++), py = get_arg_val<uint32_t>(a++);  // downstream port (NoC)
     const uint16_t mesh = get_arg_val<uint32_t>(a++), chip = get_arg_val<uint32_t>(a++);  // the neighbour
-    const uint32_t full = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++);
+    const uint32_t total = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++);
     const uint32_t qs = a;
-    a += n;
+    a += 2 * n;
     const auto o = TensorAccessor(o_args, o_addr, 2048);
     if (n > 0 || send_ready) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
@@ -134,11 +137,10 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
         const uint64_t arr_noc = get_noc_addr(px, py, arrival);
-        const uint32_t total = n * full;
         uint32_t sent = 0, h = 0, unflushed = 0;
         for (uint32_t k = 0; k < n; ++k) {
-            const uint32_t q = get_arg_val<uint32_t>(qs + k);
-            walk(rows, b0, bs, [&](uint32_t page, uint32_t np, uint32_t) {
+            const uint32_t q = get_arg_val<uint32_t>(qs + 2 * k), part = get_arg_val<uint32_t>(qs + 2 * k + 1);
+            walk(rows, b0, bs, part, [&](uint32_t page, uint32_t np, uint32_t) {
                 cb_wait_front(0, RP * (unflushed + 1));
                 const uint32_t src = get_read_ptr(0) + unflushed * RP * 2048;
                 const uint64_t dst = o.get_noc_addr(out_page(page, q), 0, 0);
@@ -190,7 +192,7 @@ void kernel_main() {
     const auto o = TensorAccessor(o_args, o_addr, 2048);
     const uint32_t buf = get_write_ptr(0);
     uint32_t slot = 0;
-    walk(rows, b0, bs, [&](uint32_t page, uint32_t np, uint32_t) {
+    walk(rows, b0, bs, 0, [&](uint32_t page, uint32_t np, uint32_t) {
         const uint32_t l1 = buf + slot * RP * 2048;
         noc_async_read(x.get_noc_addr(page), l1, np * 2048);
         noc_async_read_barrier();
@@ -208,32 +210,35 @@ def _incs(n):
     return n // INC_EVERY + (1 if n % INC_EVERY else 0)
 
 
-def tp_gather_prepare(mesh_device, rows, kl, *, num_links=2, group=4):
-    """Returns run(x [1, 1, rows, kl] bf16 TILE DRAM) -> x_full [1, 1, rows, G kl] (a fresh DRAM tensor)."""
+def tp_gather_prepare(mesh_device, rows, kl, *, num_links=2, group=4, ring=None):
+    """Returns run(x [1, 1, rows, kl] bf16 TILE DRAM) -> x_full [1, 1, rows, G kl] (a fresh DRAM tensor). ring: the TP
+    axis wraps (None: from the fabric config). A ring sends each shard the shorter way, the opposite chip's (even G)
+    half each way (row-tile parity): 1.5 shards on the busiest hop of a ring of 4, 2 on a line."""
     G = tuple(mesh_device.shape)[1]
     nb = mesh_device.dram_grid_size().x
     ct, rt = kl // 32, rows // 32
     assert kl % 32 == 0 and rows % 32 == 0 and ct % nb == 0, f"kl / 32 = {ct} must be a multiple of the {nb} banks"
     rp = max(1, min(ct // nb, ttnn.get_tt_fabric_max_payload_size_bytes() // 2048))
     assert 4 * rp <= 2 * group * rp, "the copy core's 4 slots must fit the CB"
-    chips, _ = plan(mesh_device, cluster_axis=1, topology=ttnn.Topology.Linear, num_links=num_links)
+    if ring is None:
+        cfg = ttnn.get_fabric_config()
+        ring = cfg in (ttnn.FabricConfig.FABRIC_2D_TORUS_X, ttnn.FabricConfig.FABRIC_2D_TORUS_XY) and G > 2
+    topo = ttnn.Topology.Ring if ring else ttnn.Topology.Linear
+    chips, _ = plan(mesh_device, cluster_axis=1, topology=topo, num_links=num_links, balance=ring)
     ports_all = sorted({(c.x, c.y) for ch in chips.values() for c in ch["ports"].values()})
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in ports_all])
     sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(2)]  # arrival, ready (on every port core)
     arrival, ready = (int(ttnn.get_global_semaphore_address(s)) for s in sems)
-    per_shard = lambda l: rt * len(range(l, nb, num_links)) * -(-(ct // nb) // rp)  # noqa: E731
+    pieces = -(-(ct // nb) // rp)
+    rows_of = {0: rt, 1: (rt + 1) // 2, 2: rt // 2}
+    pk = lambda l, part: rows_of[part] * len(range(l, nb, num_links)) * pieces  # noqa: E731  (packets of an entry)
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)  # noqa: E731
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))  # noqa: E731
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(  # noqa: E731
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
-    state = dict(key=None)
-
-    def sends(p, d):  # the shards a port sends, own first (east: p, p-1, .., 0; west: p, p+1, .., G-1)
-        if d == "fwd":
-            return list(range(p, -1, -1)) if p < G - 1 else []
-        return list(range(p, G)) if p > 0 else []
+    state = dict(key=None, ring=ring)
 
     def build(x, out):
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
@@ -256,22 +261,38 @@ def tp_gather_prepare(mesh_device, rows, kl, *, num_links=2, group=4):
             for (_, d, l), core in ch["ports"].items():
                 peer = rg["next"] if d == "fwd" else rg["prev"]
                 up = rg["prev"] if d == "fwd" else rg["next"]
-                mine = sends(p, d) if peer is not None else []
-                up_n = len(sends(chips[up]["rings"][0]["p"], d)) if up is not None else 0
-                full = per_shard(l)
-                rd_rt[core.x][core.y] = [xa, oa, rt, l, num_links, arrival, full, len(mine)] + mine
-                args = [oa, rt, l, num_links, arrival, _incs(up_n * full) if up_n else 0, ready, int(bool(mine))]
+                mine = rg[d] if peer is not None else []  # [(shard, part)], own first
+                ups = chips[up]["rings"][0][d] if up is not None else []
+                up_cum = [0]
+                for _, part in ups:
+                    up_cum.append(up_cum[-1] + pk(l, part))
+                total = sum(pk(l, part) for _, part in mine)
+                ent = []
+                for k, (q, part) in enumerate(mine):
+                    ent += [q, part, up_cum[k - 1] if k > 0 else 0]
+                rd_rt[core.x][core.y] = [xa, oa, rt, l, num_links, arrival, total, len(mine)] + ent
+                args = [oa, rt, l, num_links, arrival, _incs(up_cum[-1]) if ups else 0, ready, int(bool(mine))]
                 # (my ready goes to the neighbour's port facing me: it sends to me)
                 if peer is not None and rg.get(f"{d}_links"):
                     rc = virt(chips[peer]["ports"][(0, _OPP[d], l)])
                     pc = virt(chips[peer]["ports"][(0, d, l)])
                     pn = node(peer)
-                    send_ready = bool(sends(chips[peer]["rings"][0]["p"], _OPP[d]))
-                    args += [int(send_ready), rc.x, rc.y, pc.x, pc.y, int(pn.mesh_id), int(pn.chip_id), full, len(mine)]
-                    args += mine
+                    send_ready = bool(chips[peer]["rings"][0][_OPP[d]])
+                    args += [
+                        int(send_ready),
+                        rc.x,
+                        rc.y,
+                        pc.x,
+                        pc.y,
+                        int(pn.mesh_id),
+                        int(pn.chip_id),
+                        total,
+                        len(mine),
+                    ]
+                    args += [v for q, part in mine for v in (q, part)]
                     args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], prog, core))
                 else:
-                    args += [0, 0, 0, 0, 0, 0, 0, full, 0]
+                    args += [0, 0, 0, 0, 0, 0, 0, 0, 0]
                 sd_rt[core.x][core.y] = args
             cp_rt = ttnn.RuntimeArgs()
             for j, core in enumerate(ch["copy"]):

@@ -188,3 +188,25 @@ packets, so the 2-link 4-chip line's busiest hop (2 shards) puts the x all-gathe
 all-gather cannot get faster on this box - only hidden under compute. Same for the shared expert's reduce-scatter
 (~335 / ~590 us floor). So the fused head's TP links carry ~730 us (GLM-Flash) / ~1350 us (K3) of unavoidable traffic,
 and the head is bounded below by that, against today's 1352 / 3309 us serial heads.
+
+### Building block 2: the chunked matmul engine (models/demos/moe_block/tt/lin2c.py)
+lin2d (x resident per core row, W streamed down the columns, 2D multicasts) chunked over M: chunk m = 32 GY rows, x
+gated per chunk by XREADY (a producer's increments), XFREE back-pressure, a column barrier a chunk, a y notify of the
+consumer cores per chunk, GLU (silu / SiTU) on the packer's SFPU. W is re-read every chunk (8 chunks of 320 rows at
+chunk 5120) - acceptable: the head is TP-link-bound (~730 / ~1350 us), so the shared expert only has to fit under that.
+Bug on the way: the W multicast destination took CB1's write pointer at send time (it moves with the pushes) instead of
+the ring base captured at kernel start: wrong slots once the steps a chunk exceed the ring (gate / up PCC 0.2-0.6, down
+fine with NS = NB).
+| test_lin2c, one engine, all 12 x 10 cores (us, PCC) | GLM-Flash | K3 (E 448) |
+|---|---|---|
+| gate / up + GLU [2560, H] x [H, 2 I/TP] | 232 (93 TFLOP/s), 0.99993 | 808 (140), 0.99988 |
+| down [2560, I/TP] x [I/TP, H] | 142, 0.99978 | 383, 0.99976 |
+| **chain in one program** (gate / up -> h DRAM -> down, per-chunk notifies; test_lin2c_chain) | | |
+| 8 + 4 columns | **294**, 0.99974 | **1040**, 0.99962 |
+| 8 + 3 (a column left for the head's movers) | 309 | 1138 |
+| 9 + 3 / 7 + 4 / 7 + 5 | 310 / 323 / 320 | 1144 / 1176 / 1222 |
+vs the block's mm2d shared expert (HiFi2): 292 / 947 us - the chain is level on GLM-Flash, +10-20% on K3, and it can
+now start on chunk 0's x and stream h -> down while later chunks are still arriving.
+
+tp_gather made ring-capable (plan topology from the fabric config, balanced ring schedule: the distance-TP/2 shard split
+into even / odd row tiles over the two directions, relay waits per part); line regression exact, 336 / 585 us.

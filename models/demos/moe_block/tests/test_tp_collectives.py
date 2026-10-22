@@ -268,7 +268,7 @@ def test_agmm_bar(mesh_device, device_params):
     indirect=True,
 )
 def test_tp_gather(mesh_device, device_params):
-    """The fused head's x all-gather (models/demos/moe_block/tt/tp_gather.py: line multicasts) vs ttnn.all_gather."""
+    """The fused head's x all-gather (models/demos/moe_block/tt/tp_gather.py: store-and-forward unicasts) vs ttnn.all_gather."""
     from models.demos.moe_block.tt.tp_gather import tp_gather_prepare
 
     for name in os.environ.get("TPG_CASES", "glm_x_ag,k3_x_ag").split(","):
