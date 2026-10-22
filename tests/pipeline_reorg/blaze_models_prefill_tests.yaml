@@ -2049,8 +2049,6 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Measured ~10 min with the TTNN weight cache built (load ~4 min, compile ~2 min, 256k request
-      # 14 s, PCC readback ~1 min). Raise it for a run that has to rebuild that cache.
       timeout: 30
       tier: 1
       release_ready: false
