@@ -28,7 +28,6 @@ from models.experimental.bevformer.tests.common import (
     frame_metas,
     random_image_batch,
     signposted_forward,
-    to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
@@ -67,7 +66,7 @@ def test_bevformer_perf(device, reset_seeds):
 
     tt_model = TTBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
     # Uploaded once so the profiled run measures the detector, not the transfer.
-    tt_img = to_conv_layout(img.flatten(0, 1), device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_img = ttnn.from_torch(img.flatten(0, 1), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     # Each measured frame is prepared up front so the signposted region contains only detector
     # execution. Separate buffers let the measured loop advance frames without host-side refills.
     tt_frames = [tt_model.prepare_frame(metas) for metas in frames]
