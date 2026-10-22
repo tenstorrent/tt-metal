@@ -19,16 +19,7 @@
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
-
-// Helper: compute optimal num_blocks_per_col for pack_untilize blocking
-constexpr uint32_t compute_num_blocks_per_column(uint32_t per_core_block_tile_cnt, uint32_t max_bct) {
-    for (uint32_t bct = max_bct; bct >= 1; --bct) {
-        if (per_core_block_tile_cnt % bct == 0) {
-            return per_core_block_tile_cnt / bct;
-        }
-    }
-    return 1;
-}
+#include "ttnn/operations/data_movement/common/kernels/codegen/pack_untilize_rows.h"
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);       // num tile-rows this core handles
@@ -49,13 +40,7 @@ void kernel_main() {
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
-        out_cb.reserve_back(full_ct_dim);
-        for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
-            src_cb.wait_front(block_ct_dim);
-            pack_untilize_block<block_ct_dim, full_ct_dim>(src_cb_id, 1, out_cb_id, b);
-            src_cb.pop_front(block_ct_dim);
-        }
-        out_cb.push_back(full_ct_dim);
+        pack_untilize_tile_row<block_ct_dim, full_ct_dim>(src_cb, out_cb);
     }
     pack_untilize_uninit(out_cb_id);
 }

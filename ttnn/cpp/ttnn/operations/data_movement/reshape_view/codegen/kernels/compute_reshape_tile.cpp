@@ -9,20 +9,11 @@
 // The intermediate RM buffer holds the same flat data, just reinterpreted.
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/reconfig_data_format.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
-
-constexpr uint32_t compute_num_blocks_per_column(uint32_t tile_cnt, uint32_t max_bct) {
-    for (uint32_t bct = max_bct; bct >= 1; --bct) {
-        if (tile_cnt % bct == 0) {
-            return tile_cnt / bct;
-        }
-    }
-    return 1;
-}
+#include "ttnn/operations/data_movement/common/kernels/codegen/pack_untilize_rows.h"
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_named_compile_time_arg_val("cb_in");
@@ -52,19 +43,12 @@ void kernel_main() {
         pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in, cb_mid);
 
         for (uint32_t tr = 0; tr < in_tile_rows; ++tr) {
-            mid_buffer.reserve_back(full_ct_dim);
-            for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
-                in_buffer.wait_front(block_ct_dim);
-                pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in, 1, cb_mid, b);
-                in_buffer.pop_front(block_ct_dim);
-            }
-            mid_buffer.push_back(full_ct_dim);
+            pack_untilize_tile_row<block_ct_dim, full_ct_dim>(in_buffer, mid_buffer);
         }
         pack_untilize_uninit(cb_mid);
 
-        // Phase 2: tilize RM sticks → output tiles in cb_out
-        reconfig_data_format_srca(cb_in, cb_mid);
-        pack_reconfig_data_format(cb_mid, cb_out);
+        // Phase 2: tilize RM sticks → output tiles in cb_out. All three CBs share one data format, so the phases need
+        // no format reconfig.
         tilize_init(cb_mid, Wt_out, cb_out);
 
         for (uint32_t tr = 0; tr < out_tile_rows; ++tr) {
@@ -75,9 +59,5 @@ void kernel_main() {
             mid_buffer.pop_front(Wt_out);
         }
         tilize_uninit(cb_mid, cb_out);
-
-        // Restore the phase-1 formats for the next chunk's untilize.
-        reconfig_data_format_srca(cb_mid, cb_in);
-        pack_reconfig_data_format(cb_out, cb_mid);
     }
 }

@@ -154,7 +154,7 @@ struct RmArbitraryPlan {
 
 // LCM TILE plan: tiles are untilized and re-tilized through the compute engine in chunks of lcm(W_in, W_out) datums
 // per row.
-struct TilePlan {
+struct LcmPlan {
     uint32_t wt_in = 0;
     uint32_t wt_out = 0;
     uint32_t in_rows = 0;
@@ -189,7 +189,7 @@ struct LaunchPlan {
     // is planned from the shapes alone.
     TileRoute tile_route = TileRoute::TileRows;
     TileRowsChoice tile_rows;
-    std::optional<TilePlan> lcm;
+    std::optional<LcmPlan> lcm;
     // ROW_MAJOR: the geometries routing built, not yet fitted to any budget. The slab geometry is only built when the
     // stick program does not fit the static window, or has no geometry.
     uint32_t out_aligned_page = 0;
@@ -201,7 +201,7 @@ struct LaunchPlan {
 using RmChoice = std::variant<RmPlan, RmArbitraryPlan>;
 
 // A TILE program fitted to a budget, one alternative per TileRoute.
-using TileChoice = std::variant<TileRowsChoice, TilePlan, TileMappedChoice>;
+using TileChoice = std::variant<TileRowsChoice, LcmPlan, TileMappedChoice>;
 
 // Cores the op may use: `sub_core_grids` if given, else the device's compute grid.
 tt::tt_metal::CoreRangeSet reshape_core_grid(
@@ -238,11 +238,11 @@ std::optional<TileChoice> live_tile_choice(
 // unchanged: bf16 NaN comes back as Inf.
 bool lcm_bit_exact(tt::tt_metal::DataType dtype);
 
-// The LCM program's geometry, nullopt outside what it handles; fit_tile sizes its output CB to `l1_budget`.
-std::optional<TilePlan> tile_geometry(
+// The LCM program's geometry, nullopt outside what it handles; fit_lcm sizes its output CB to `l1_budget`.
+std::optional<LcmPlan> lcm_tile_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores);
 
-std::optional<TilePlan> fit_tile(TilePlan plan, uint64_t l1_budget);
+std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget);
 
 // The segment map fitted to `l1_budget`, nullopt when it exceeds its size caps or does not fit with one input slot.
 std::optional<TileMappedChoice> fit_tile_mapped(

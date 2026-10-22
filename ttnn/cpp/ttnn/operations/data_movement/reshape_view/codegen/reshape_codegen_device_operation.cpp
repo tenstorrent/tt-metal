@@ -134,7 +134,7 @@ ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
             if (const auto* rows = std::get_if<rcg::TileRowsChoice>(&*chosen)) {
                 first = rows->max_in;
                 second = rows->staged_batches;
-            } else if (const auto* lcm = std::get_if<rcg::TilePlan>(&*chosen)) {
+            } else if (const auto* lcm = std::get_if<rcg::LcmPlan>(&*chosen)) {
                 first = lcm->out_cb_depth;
                 second = lcm->write_batch;
             } else {

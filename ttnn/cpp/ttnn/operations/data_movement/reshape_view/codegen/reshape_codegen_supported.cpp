@@ -118,14 +118,14 @@ bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
 // output tile: about 0.85 us against 5 us per round (measured on Blackhole).
 constexpr uint64_t kLcmTileSpeedup = 6;
 
-bool lcm_beats_native(const TilePlan& plan, uint32_t num_cores) {
+bool lcm_beats_native(const LcmPlan& plan, uint32_t num_cores) {
     const uint64_t out_tiles = static_cast<uint64_t>(plan.total_chunks) * plan.out_tiles;
     return static_cast<uint64_t>(plan.in_tiles) * tt::div_up(plan.total_chunks, num_cores) <=
            kLcmTileSpeedup * tt::div_up(out_tiles, num_cores);
 }
 
 // The LCM geometry for dtypes the compute engine round-trips unchanged, else nullopt.
-std::optional<TilePlan> lcm_geometry(
+std::optional<LcmPlan> lcm_geometry(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::TensorSpec& spec,
@@ -133,7 +133,7 @@ std::optional<TilePlan> lcm_geometry(
     if (!lcm_bit_exact(input.dtype())) {
         return std::nullopt;
     }
-    return tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores);
+    return lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores);
 }
 
 constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
@@ -455,7 +455,7 @@ const char* unsupported_reason(
             return nullptr;
         }
     } else if (plan->tile_route == TileRoute::Lcm) {
-        if (plan->lcm.has_value() && fit_tile(*plan->lcm, budget).has_value()) {
+        if (plan->lcm.has_value() && fit_lcm(*plan->lcm, budget).has_value()) {
             return nullptr;
         }
     } else if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {

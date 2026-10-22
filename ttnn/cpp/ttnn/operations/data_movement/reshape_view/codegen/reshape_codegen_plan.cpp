@@ -167,7 +167,7 @@ bool lcm_bit_exact(tt::tt_metal::DataType dtype) {
     return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
 }
 
-std::optional<TilePlan> tile_geometry(
+std::optional<LcmPlan> lcm_tile_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores) {
     const auto& in_shape = input.logical_shape();
     if (in_shape.rank() < 2 || logical_output_shape.rank() < 2) {
@@ -184,7 +184,7 @@ std::optional<TilePlan> tile_geometry(
         return std::nullopt;
     }
 
-    TilePlan plan;
+    LcmPlan plan;
     plan.wt_in = w_in / tile_w;
     plan.wt_out = w_out / tile_w;
     const uint64_t lcm_w = std::lcm<uint64_t, uint64_t>(w_in, w_out);
@@ -203,7 +203,7 @@ std::optional<TilePlan> tile_geometry(
     return plan;
 }
 
-std::optional<TilePlan> fit_tile(TilePlan plan, uint64_t l1_budget) {
+std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget) {
     // The in and mid CBs hold a whole chunk. The out CB must take what the two kernels move without wrapping: compute
     // tilizes Wt_out tiles in one write and the writer reads a batch from one offset, so its depth is a multiple of
     // both. The batched writer holds one batch while it waits for the next, so compute still needs Wt_out free slots
@@ -252,7 +252,7 @@ std::optional<TileChoice> live_tile_choice(
             return TileChoice{std::move(*rows)};
         }
     } else if (planned.tile_route == TileRoute::Lcm && planned.lcm.has_value()) {
-        if (auto lcm = fit_tile(*planned.lcm, free_l1)) {
+        if (auto lcm = fit_lcm(*planned.lcm, free_l1)) {
             return TileChoice{*lcm};
         }
     }

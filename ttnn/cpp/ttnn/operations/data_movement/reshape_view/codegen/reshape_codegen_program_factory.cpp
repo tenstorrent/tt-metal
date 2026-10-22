@@ -37,11 +37,9 @@ constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/resha
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbMid = tt::CBIndex::c_1;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
-constexpr uint32_t kSeqIdentity = 0;
-// pack_untilize block width limit by DEST capacity: half as many tiles when datums are 32-bit.
-constexpr uint32_t kMaxBlockCtDim16 = 8;
+constexpr uint32_t kSeqIdentity = 0;  // mirrors common/kernels/codegen/sequencers.h SEQ_IDENTITY
+// pack_untilize block width limit for 32-bit datums, as untilize codegen's compute_block_ct_dim sets it.
 constexpr uint32_t kMaxBlockCtDim32 = 4;
-constexpr uint32_t kWideDatumBytes = 4;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
@@ -265,13 +263,14 @@ ProgramDescriptor build_rm_arbitrary(
     return desc;
 }
 
-ProgramDescriptor build_tile(const rcg::TilePlan& p, const Tensor& input, Tensor& output, const rcg::WorkSplit& split) {
+ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& output, const rcg::WorkSplit& split) {
     ProgramDescriptor desc;
     const CoreRangeSet& all_cores = split.all_cores;
     const auto fmt = datatype_to_dataformat_converter(input.dtype());
     Buffer* in_buf = input.buffer();
     Buffer* out_buf = output.buffer();
-    const bool wide = input.element_size() == kWideDatumBytes;
+    // lcm_bit_exact admits only 4-byte dtypes.
+    TT_ASSERT(input.element_size() == 4, "the LCM program supports 4-byte dtypes only");
 
     desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.in_tiles, all_cores));
     desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.in_tiles, all_cores));
@@ -310,15 +309,13 @@ ProgramDescriptor build_tile(const rcg::TilePlan& p, const Tensor& input, Tensor
         {"wt_out", p.wt_out},
         {"in_tile_rows", p.in_rows},
         {"out_tile_rows", p.out_rows},
-        {"max_bct", wide ? kMaxBlockCtDim32 : kMaxBlockCtDim16},
+        {"max_bct", kMaxBlockCtDim32},
     };
-    ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = wide};
-    if (wide) {
-        // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST.
-        compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        compute_config.unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
-        compute_config.unpack_to_dest_mode[kCbMid] = UnpackToDestMode::UnpackToDestFp32;
-    }
+    ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = true};
+    // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST.
+    compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    compute_config.unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
+    compute_config.unpack_to_dest_mode[kCbMid] = UnpackToDestMode::UnpackToDestFp32;
     compute.config = compute_config;
 
     const auto cores = corerange_to_cores(split.all_cores, split.num_cores, false);
@@ -525,14 +522,14 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
         // nothing fits reaches the error.
         const auto chosen =
             rcg::live_tile_choice(input, operation_attributes.logical_output_shape, grid.num_cores(), plan);
-        const auto* lcm = chosen.has_value() ? std::get_if<rcg::TilePlan>(&*chosen) : nullptr;
+        const auto* lcm = chosen.has_value() ? std::get_if<rcg::LcmPlan>(&*chosen) : nullptr;
         TT_FATAL(
             lcm != nullptr,
             "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below "
             "the lowest L1 allocation; free L1 tensors or use the native reshape",
             ttnn::operations::data_movement::get_max_l1_space(input));
         TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes);
-        return build_tile(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
+        return build_lcm(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
     }
     TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == plan.out_aligned_page);
 
