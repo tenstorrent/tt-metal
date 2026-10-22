@@ -9,8 +9,8 @@ shape, with the math side given the real TensorShape (unpack_A_test.cpp builds
 it from the face grid). Covers the plain copy (A2D), the SrcB broadcasts (B2D)
 and the 32-bit unpack-to-dest path (Float32 with dest_acc=Yes).
 
-Shapes the LLK blocks with LLK_ASSERT are not listed here; see
-_llk_math_eltwise_unary_datacopy_init_ for the supported set.
+Only shapes that work on main run. The ones that do not are asserted in the LLK
+and skipped here with the name of the assert.
 """
 
 import pytest
@@ -59,7 +59,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.tile_constants import get_tile_params
-from helpers.tile_shape import construct_tile_shape
+from helpers.tile_shape import FACE_C_DIM, TileShape, construct_tile_shape
 from helpers.utils import passed_test
 
 DATACOPY_TILE_SHAPES = [
@@ -71,6 +71,7 @@ DATACOPY_TILE_SHAPES = [
     [32, 16],
     [16, 16],
     [32, 32],
+    [8, 16],
 ]
 
 
@@ -91,18 +92,36 @@ def test_eltwise_unary_datacopy_tensor_shape(
     if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
         pytest.skip("32-bit formats require dest accumulation")
 
-    # The column-broadcast MOP runs twice over two faces (4 SrcB faces), so it hangs on
-    # anything but a 32x32 tile. _llk_math_eltwise_unary_datacopy_init_ asserts this.
-    if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
-        pytest.skip("Column broadcast datacopy supports only 32x32 tiles")
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
 
-    # Blackhole asserts on this one: it failed on ttsim and has no silicon coverage yet.
+    # The shapes below do not work on main, so the LLK asserts on them.
+    # Column broadcast runs 4 SrcB faces; anything but 32x32 hangs on Wormhole.
+    if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
+        pytest.skip(
+            "Asserted: column broadcast is 32x32 only "
+            "(_llk_unpack_A_init_ and _llk_math_eltwise_unary_datacopy_init_)"
+        )
+    # Row broadcast of a 32x16 tile through dest takes the bottom face's row for the bottom half.
     if (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        broadcast_type == BroadcastType.Row
+        and tile_dimensions == [32, 16]
+        and unpack_to_dest
+    ):
+        pytest.skip(
+            "Asserted: row broadcast with unpack to dest on 32x16 (_llk_unpack_A_init_)"
+        )
+    # Same for the Wormhole SrcB row broadcast, whose MOP always runs 4 faces.
+    if (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
         and broadcast_type == BroadcastType.Row
         and tile_dimensions == [32, 16]
     ):
-        pytest.skip("Row broadcast datacopy of a 32x16 tile is blocked on Blackhole")
+        pytest.skip(
+            "Asserted on Wormhole: row broadcast datacopy on 32x16 "
+            "(_llk_math_eltwise_unary_datacopy_init_)"
+        )
 
     # Same known Wormhole issue as test_bcast.py::test_unpack_bcast.
     if (
@@ -113,7 +132,24 @@ def test_eltwise_unary_datacopy_tensor_shape(
     ):
         pytest.skip("Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b")
 
-    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    # 8x16 (one 8-row face) is not in SUPPORTED_TILE_SIZES, so it goes through the
+    # face_r_dim / num_faces path, as in test_unpack_A_targeted_tensor_shape_coverage.
+    one_face_8x16 = tile_dimensions == [8, 16]
+    if one_face_8x16:
+        face_r_dim, num_faces_r_dim, num_faces_c_dim = 8, 1, 1
+        tile_shape = TileShape(
+            face_r_dim=face_r_dim,
+            face_c_dim=FACE_C_DIM,
+            num_faces_r_dim=num_faces_r_dim,
+            num_faces_c_dim=num_faces_c_dim,
+        )
+        buffer_dimensions = list(TILE_DIMENSIONS)
+        stimuli_kwargs = {"face_r_dim": face_r_dim, "num_faces": 1}
+    else:
+        face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+        tile_shape = construct_tile_shape(tile_dimensions)
+        buffer_dimensions = list(tile_dimensions)
+        stimuli_kwargs = {"tile_dimensions": tile_dimensions}
     num_faces = num_faces_r_dim * num_faces_c_dim
     input_dimensions = list(tile_dimensions)
 
@@ -122,7 +158,7 @@ def test_eltwise_unary_datacopy_tensor_shape(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        tile_dimensions=tile_dimensions,
+        **stimuli_kwargs,
     )
 
     if broadcast_type != BroadcastType.None_:
@@ -134,6 +170,8 @@ def test_eltwise_unary_datacopy_tensor_shape(
             num_faces=num_faces,
             tile_cnt=tile_cnt_A,
             face_r_dim=face_r_dim,
+            num_faces_r_dim=num_faces_r_dim,
+            num_faces_c_dim=num_faces_c_dim,
         )
     else:
         golden_tensor = src_A.to(format_dict[formats.output_format])
@@ -142,8 +180,8 @@ def test_eltwise_unary_datacopy_tensor_shape(
         DestSync.Half,
         dest_acc,
         formats,
-        input_dimensions,
-        tile_dimensions,
+        buffer_dimensions,
+        buffer_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
 
@@ -174,8 +212,8 @@ def test_eltwise_unary_datacopy_tensor_shape(
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
             INPUT_DIMENSIONS(
-                input_dimensions[0] // TILE_DIMENSIONS[0],
-                input_dimensions[1] // TILE_DIMENSIONS[1],
+                buffer_dimensions[0] // TILE_DIMENSIONS[0],
+                buffer_dimensions[1] // TILE_DIMENSIONS[1],
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -189,12 +227,11 @@ def test_eltwise_unary_datacopy_tensor_shape(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
             face_r_dim=face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
+            tile_dimensions=buffer_dimensions,
+            use_dense_tile_dimensions=not one_face_8x16,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit()
-        and dest_acc == DestAccumulation.Yes,
+        unpack_to_dest=unpack_to_dest,
     )
 
     res_from_L1 = configuration.run().result
@@ -205,7 +242,7 @@ def test_eltwise_unary_datacopy_tensor_shape(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        tile_shape=construct_tile_shape(tile_dimensions),
+        tile_shape=tile_shape,
     )
 
     # Datacopy/bcast should be bit-exact for float formats (no compute loss)
