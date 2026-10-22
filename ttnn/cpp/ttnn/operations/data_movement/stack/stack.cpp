@@ -53,12 +53,15 @@ Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
         rank,
         -(rank + 1),
         rank);
-    // A new trailing axis is far cheaper as concat at 0 plus one permute (stack_via_leading_axis).
-    // Everything else keeps unsqueeze-then-concat, where concat's own checks decide what is
-    // supported on either route: sharded or mixed-layout inputs; block-float dtypes, whose rank-5
-    // permute would bypass permute's bfloat8_b typecast; rank-0 inputs; and rank-1 tile inputs,
-    // since a [W] tile tensor is physically a padded [32, W] row, so concat at 0 would cross a
-    // padded axis and run untilize and re-tilize.
+    // Concat divides by the padded last dim of its output, so an empty input would end in SIGFPE.
+    TT_FATAL(first.logical_volume() > 0, "Stack does not support zero-volume inputs (shape {})", first.logical_shape());
+    // A new trailing axis goes through stack_via_leading_axis. Kept on unsqueeze-then-concat on
+    // purpose: block floats, because for rank >= 4 inputs the stacked tensor is rank 5 and
+    // ttnn::permute hands rank > 4 to prim::permute without its bfloat8_b typecast (lower ranks
+    // would be fine; excluded at every rank for uniformity); rank-1 tile inputs, since a [W] tile
+    // tensor is physically a padded [32, W] row, so concat at 0 would untilize and re-tilize, which
+    // measures slower than the existing path. Sharded, mixed-layout and rank-0 inputs also keep it:
+    // concat validates the first two, and for rank 0 both routes are the same ops.
     const auto layout = first.layout();
     const bool uniform_interleaved =
         std::all_of(input_tensors.begin(), input_tensors.end(), [layout](const Tensor& tensor) {
@@ -73,9 +76,9 @@ Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
     std::vector<Tensor> expanded_tensors;
     expanded_tensors.reserve(input_tensors.size());
     for (const auto& tensor : input_tensors) {
-        expanded_tensors.push_back(ttnn::unsqueeze(tensor, dim));
+        expanded_tensors.push_back(ttnn::unsqueeze(tensor, normalized_dim));
     }
-    return ttnn::concat(expanded_tensors, dim);
+    return ttnn::concat(expanded_tensors, normalized_dim);
 }
 
 }  // namespace ttnn

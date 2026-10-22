@@ -20,7 +20,7 @@ void bind_stack(nb::module_& mod) {
         R"doc(
         Stacks tensors along a new dimension. All inputs must share shape, dtype and layout; the output
         has one more dimension than each input, with the number of inputs at position `dim`. The output
-        is DRAM interleaved regardless of the inputs' placement.
+        currently lands in DRAM interleaved (concat's default), whatever the inputs' placement.
 
         Args:
             * :attr:`input_tensors`: List of tensors to stack.
