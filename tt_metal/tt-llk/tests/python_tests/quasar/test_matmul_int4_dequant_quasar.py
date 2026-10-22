@@ -286,9 +286,7 @@ def test_matmul_int4_dequant_quasar(
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[format.output_format])
 
-    # Every int32 -> fp32 cast is exact (|partial| < 2^24); each scale multiply and each
-    # One rounding per group accumulation plus two (cast * s_w, * s_a), each bounded relative to
-    # sum(|terms|) so cancellation can't hide error - far tighter than the Float32 default.
+    # One fp32 rounding per group sum plus two (* s_w, * s_a), bounded relative to sum(|terms|).
     tolerance = FP32_ERR_BOUND_REL * (num_groups + 2) * error_bound
     max_excess = ((res_tensor - golden_tensor).abs() - tolerance).max()
     assert (
