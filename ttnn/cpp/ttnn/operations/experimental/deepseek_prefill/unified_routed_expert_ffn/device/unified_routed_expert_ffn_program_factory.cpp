@@ -47,12 +47,12 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // partials_up (up matmul) using the SAME shared x K-block — one x read
 // per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
-// Writer-only scratch for the device-side `start` (expert_region_offsets)
-// page: the writer adds start[global_id]/TILE tile-rows to every output row.
-constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
-// Reader's own `start` scratch (x is the shared dispatched buffer, so the
-// reader offsets its x reads by start[global_id] too). Separate from the
-// writer's so the two RISCs don't share one L1 page.
+// c_14 is unused: the writer once had its own `start` scratch there.
+// The `start` (expert_region_offsets) scratch, shared by reader and writer: the
+// reader offsets its x reads by start[global_id] and the writer adds
+// start[global_id]/TILE tile-rows to every output row. The reader's counts
+// broadcast fills it once on every core, before the counts push the writer
+// waits on; neither RISC writes it afterwards.
 constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 // Row-major bf16 staging for x when x_is_row_major: the reader fills it with
 // row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
@@ -841,18 +841,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // may itself be up to MAX_GLOBAL_EXPERTS entries.
     make_cb(CB_IDX_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, idx_scratch_bytes);
 
-    // CB_START_SCRATCH holds the device-side `start` (expert_region_offsets)
-    // page for the writer in direct-write mode. Same sizing rationale as the
-    // counts scratch: expert_region_offsets is validated to have the same
-    // length as counts, so size it to the real per-call requirement (lands the
-    // tensor's page and holds every region-offset entry) rather than the old
-    // fixed MAX_GLOBAL_EXPERTS floor.
+    // CB_START_SCRATCH_READER holds the device-side `start` (expert_region_offsets)
+    // page for reader and writer. Same sizing rationale as the counts scratch:
+    // expert_region_offsets is validated to have the same length as counts, so
+    // size it to the real per-call requirement (lands the tensor's page and holds
+    // every region-offset entry) rather than the old fixed MAX_GLOBAL_EXPERTS floor.
     const uint32_t start_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(start_buffer->aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
-    make_cb(CB_START_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
-    // Reader's `start` scratch. Same sizing; separate CB so
-    // reader (NCRISC) and writer (BRISC) never share one scratch page.
     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
 
     // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
@@ -997,8 +993,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         M_tiles_full,  // 13
         // dst_M_tiles: tile-row count of the shared destination buffer, which
         // bounds the writer's destination rows.
-        dst_M_tiles,       // 14
-        CB_START_SCRATCH,  // 15
+        dst_M_tiles,              // 14
+        CB_START_SCRATCH_READER,  // 15: shared with the reader (counts broadcast)
         // UP_SPLIT up-weight read: CB + dims let the writer replicate the gate
         // read on NoC 1, and writer_split_up gates it (1 = UP_SPLIT).
         CB_IN1_UP,                            // 16
