@@ -22,7 +22,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tests.pcc.common import (
     bf16_conv_via_fp32,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
-    skip_if_tuned_grid,
+    skip_if_not_quasar_any_grid,
 )
 
 
@@ -69,7 +69,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tests.pcc.common import (
                 "center": {"pcc": 0.95, "abs_err": 0.1, "rel_err": 2.1},
                 "offset": {"pcc": 0.990, "abs_err": 10.4, "rel_err": 0.6},
             },
-            skip_if_tuned_grid,
+            skip_if_not_quasar_any_grid,
         ),
     ],
     ids=[
