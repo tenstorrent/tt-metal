@@ -219,20 +219,31 @@ def _scan_chunks(
     return RecurrenceResult(output=output, final_state=final_states)
 
 
-def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
-    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [E | B] (E = A - I) that the prefix gathers."""
+def transform_identity(device: ttnn.MeshDevice, batch_heads: int, key_dim: int) -> ttnn.Tensor:
+    """The replicated FP32 [BH, K, K] identity that ``pack_transform`` subtracts.
+
+    Allocate it once, outside any trace: a captured trace cannot write host data to the device.
+    """
+    return ttnn.from_torch(
+        torch.eye(key_dim, dtype=torch.float32).expand(batch_heads, key_dim, key_dim).contiguous(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
+def pack_transform(transform: AffineTransform, identity: ttnn.Tensor) -> ttnn.Tensor:
+    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [E | B] (E = A - I) that the prefix gathers.
+
+    ``identity`` is the matching ``transform_identity``.
+    """
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
     value_dim = transform_b.shape[-1]
     # chain_affine_transforms takes the complement form; subtract I in FP32 before narrowing so E keeps its precision.
-    eye = ttnn.from_torch(
-        torch.eye(key_dim, dtype=torch.float32).expand(batch_heads, key_dim, key_dim).contiguous(),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        device=transform_a.device(),
-        memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
-    )
-    transform_a = ttnn.subtract(transform_a, eye, memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG)
+    transform_a = ttnn.subtract(transform_a, identity, memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG)
     # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
     # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
     packed = ttnn.concat(
@@ -420,6 +431,7 @@ def _partition_prefix(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
+    identity: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
         summary.a,
@@ -433,7 +445,7 @@ def _partition_prefix(
         compute_kernel_config=compute_config.affine_prefix,
     )
     return distributed_prefix(
-        pack_transform(AffineTransform(a, b)),
+        pack_transform(AffineTransform(a, b), identity),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.affine_prefix,
@@ -455,6 +467,7 @@ def _scan_sp_grouped_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     gather_buffer: ttnn.Tensor | None = None,
+    identity: ttnn.Tensor | None = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -500,6 +513,7 @@ def _scan_sp_grouped_chunks(
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
             compute_config=compute_config,
+            identity=identity,
         )
         # The chronological prefix ends where the split tail begins, supplying its seed.
         group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
@@ -638,6 +652,12 @@ class KDARecurrence:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
+        # With several groups per head, the prefix packs each rank's reduced transform as E = A - I on device.
+        self._prefix_identity = (
+            transform_identity(device, batch * heads, key_dim)
+            if self._sequence_parallel and grouped and self._groups > 1
+            else None
+        )
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
@@ -802,4 +822,5 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             gather_buffer=self._gather_buffer,
+            identity=self._prefix_identity,
         )
