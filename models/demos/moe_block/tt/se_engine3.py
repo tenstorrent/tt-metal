@@ -735,10 +735,17 @@ class SeEngine3:
         )
         return list(self.rs_sizes.items())
 
-    def alloc_arena(self):
-        """The arena (call scratch: x, the weights, every CB) as an L1 tensor; base its address (the programs bake it)."""
-        o, n = self.arena_bytes, self.GX * self.GY
-        shard = ttnn.ShardSpec(self.crs, [1, o // 4], ttnn.ShardOrientation.ROW_MAJOR)
+    def alloc_arena(self, extra=()):
+        """The arena (call scratch: x, the weights, every CB) as an L1 tensor; base its address (the programs bake it).
+        extra: more cores the same range is carved on (L1 addresses are allocated in lockstep over the grid, so the
+        mover column's other buffers live in it too)."""
+        o = self.arena_bytes
+        crs = self.crs
+        if extra:
+            crs = ttnn.CoreRangeSet(list(crs.ranges()) + [ttnn.CoreRange(c, c) for c in extra])
+        n = self.GX * self.GY + len(extra)
+        self.arena_crs = crs
+        shard = ttnn.ShardSpec(crs, [1, o // 4], ttnn.ShardOrientation.ROW_MAJOR)
         self.arena = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, n, o // 4]),
             ttnn.uint32,

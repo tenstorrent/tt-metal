@@ -322,3 +322,30 @@ class RsPlan:
 
     def zone_tiles(self, d):
         return self.slots[d] * self.P
+
+
+class LogitsPlan(RsPlan):
+    """The router's logits reduce-scatter by tokens (fp32 on the wire: bf16 changes the picks): RB router cores, core
+    j computing row tile j of every block (all E / 32 = ET column tiles, all of the chip's K slice), so at the fin it
+    holds one row tile of the owner's tokens with every expert - its top-k is local. Same schedule, ports and protocol
+    as RsPlan; a core's sub-block is its ET tiles of a block, all its matmuls run before the first hand-off."""
+
+    def __init__(self, *, G, ring, RB, ET, nv):
+        self.G, self.GX, self.GY, self.MT, self.nv, self.ET = G, RB, 1, 1, nv, ET
+        self.kind = rs_kind(G, ring)
+        self.chips, self.slots = plan_transport(G, self.kind)
+        self.ncores, self.P, self.scatter = RB, ET, 0
+
+    def count(self, cx, cy, b):
+        return self.ET
+
+    def counts_word(self, cx, cy):
+        return 0  # (unused: every core has ET tiles of every block)
+
+    def ops(self, p, cx, cy):
+        h = self.half(self.k(cx, cy))
+        out = [("pass", 0)]
+        for e, b in enumerate(self.entries(p, h)):
+            d, start = self.role(p, b, h)
+            out.append(("hand", e) if d != "fin" and start else ("fin", e))
+        return out

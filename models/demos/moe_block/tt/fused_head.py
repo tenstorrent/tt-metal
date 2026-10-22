@@ -199,6 +199,17 @@ class HeadSE:
         return y
 
 
+@dataclass(frozen=True)
+class RouterSpec:
+    """The fused head's router chain: E experts, top K, the routed scale; logits_first: the ports send the logits
+    ahead of the x gather (GLM-type), else after it (K3)."""
+
+    E: int
+    K: int
+    route_scale: float = 1.0
+    logits_first: bool = True
+
+
 class HeadSE3:
     """The fused head's x chain, v3 (row-chunk-major, weights resident): x [rows, H / TP] a chip -> the x all-gather a
     row chunk at a time straight into the engine's x-own L1 (tt/x_gather3.py) -> per chunk gate / up -> h -> down ->
@@ -220,11 +231,14 @@ class HeadSE3:
         fidelity=ttnn.MathFidelity.HiFi2,
         rs_dim=None,
         rs_mode="fused",
+        router=None,
     ):
         """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
         adds there, y the chip's reduced block - the only DRAM write); "mrs": (the bar) the engine stops at h in DRAM
-        and the ported matmul_reduce_scatter op runs on it. None: the engine's own down, y the chip's partial."""
+        and the ported matmul_reduce_scatter op runs on it. None: the engine's own down, y the chip's partial.
+        router (RouterSpec): the router chain on the mover column's free cores (tt/router_stream.py) - run() then
+        returns (y, the owners' joint routing rows)."""
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
@@ -294,7 +308,7 @@ class HeadSE3:
         if self.rs_mode == "fused":  # the ports' mailboxes (a word per engine core, zero) and the arrival counters
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-            words = GX * GY * 4
+            words = GX * GY * 4 + 4 * 8  # (+ the router cores' words)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -309,6 +323,30 @@ class HeadSE3:
             )
             self.arr_sems = [ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(2)]
             ttnn.synchronize_device(mesh_device)
+        self.router = None
+        if router is not None:
+            from models.demos.moe_block.tt.router_stream import RouterStream
+
+            used = {(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()}
+            wset = {(self.xg.watcher_core(k).x, self.xg.watcher_core(k).y) for k in self.xg.chips}
+            used |= wset
+            free = [ttnn.CoreCoord(cx, cy) for cx in range(GX, grid.x) for cy in range(grid.y) if (cx, cy) not in used]
+            assert self.rs_mode == "fused"
+            ttnn.deallocate(self.eng.arena)  # (again, also over the router cores and the ports: lockstep L1)
+            self.eng.alloc_arena(extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)])
+            self.router = RouterStream(
+                mesh_device,
+                self.xg,
+                rows=rows,
+                H=H,
+                E=router.E,
+                K=router.K,
+                route_scale=router.route_scale,
+                cores=free,
+                prio_first=router.logits_first,
+                arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
+                words=int(self.mbox.buffer_address()) + 16 * GX * GY,
+            )
         self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
         self.state = dict(key=None)
 
@@ -368,7 +406,19 @@ class HeadSE3:
             num_links=self.num_links,
         )
 
+    def upload_router(self, w_router, bias):
+        self.rw = self.router.upload(w_router, bias)
+
     def run(self, x, w):
+        if self.router is not None:
+            self.rout = self.router.out_tensor()
+            y = self._run(
+                x,
+                w,
+                self.H // self.plan.G if self.rs_dim == -1 else self.H,
+                self.rows // self.plan.G if self.rs_dim == -2 else self.rows,
+            )
+            return y, self.rout
         if self.rs_mode == "fused":
             G = self.plan.G
             return self._run(
@@ -397,6 +447,8 @@ class HeadSE3:
             ttnn.DRAM_MEMORY_CONFIG,
         )
         key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), id(self.eng.arena))
+        if self.router is not None:
+            key += (int(self.rout.buffer_address()),)
         if self.state["key"] != key:
             md = ttnn.MeshProgramDescriptor()
             e = self.eng
@@ -420,7 +472,10 @@ class HeadSE3:
                     rse = dict(
                         rs_pos=p, rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y), rs_mbox=mbox, rs_arr=arr
                     )
-                c0, k0 = self.xg.pieces(coord, prog, x, XREADY, rs=rsx)
+                c0, k0 = self.xg.pieces(coord, prog, x, XREADY, rs=rsx, router=self.router)
+                if self.router is not None:
+                    c2, k2 = self.router.pieces(coord, x, *self.rw, self.rout)
+                    c0, k0 = c0 + c2, k0 + k2
                 c1, k1, sems = e.pieces(
                     x,
                     w,
@@ -439,5 +494,8 @@ class HeadSE3:
                 r, c = coord
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
             self.state["key"], self.state["desc"] = key, md
-        ttnn.generic_op([x, w, y, self.eng.arena], self.state["desc"])
+        io = [x, w, y, self.eng.arena]
+        if self.router is not None:
+            io += [self.rout, *self.rw]
+        ttnn.generic_op(io, self.state["desc"])
         return y

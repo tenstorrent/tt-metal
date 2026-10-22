@@ -17,6 +17,7 @@ never reused within a call, so no credits: the call fence only."""
 from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
 
 import ttnn
+from models.demos.moe_block.tt.router_stream import LSTREAM
 
 INC_EVERY = 8
 CB = 0
@@ -123,8 +124,8 @@ _RS_SENDER = r"""
 // core, its zone slot of this direction (slot by the core's half); a core's last chunk carries the fused increment of
 // its arrival counter. Pops at the reader's batch boundaries. args at r0: as the reader's, then the zone base, the
 // arrival counter's address, P (zone slot tiles)
-template <typename C, typename H>
-FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs) {
+template <typename C, typename H, typename L>
+FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll) {
     const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
@@ -149,6 +150,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs) {
             const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();  // (the logits go while I wait)
                 cb_wait_front(0, RP * (u + 1));
                 const uint32_t src = get_read_ptr(0) + u * RP * 2048;
                 const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
@@ -244,6 +246,7 @@ using namespace tt::tt_fabric;
     + _CT
     + _WALK
     + _RS_SENDER
+    + LSTREAM
     + r"""
 void kernel_main() {
     size_t a = 0;
@@ -258,8 +261,11 @@ void kernel_main() {
     const uint32_t ent = a, T = ent + 3 * n;  // entries (q, part, packets a chunk); tables
     a = T + G + S0 + S1 + 3 * GX + GY;  // (past the tables: the RS units, then the fabric connection)
     const uint32_t rs0 = a, rnu = get_arg_val<uint32_t>(rs0), rnc = get_arg_val<uint32_t>(rs0 + 1 + 2 * rnu);
-    a = rs0 + 2 + 2 * rnu + 2 * rnc + G + 5;
-    if (n > 0 || send_ready || rnu > 0) {
+    const uint32_t ls0 = rs0 + 2 + 2 * rnu + 2 * rnc + G + 5;
+    LStream ls;
+    ls.init(ls0);
+    a = ls0 + LStream::len(ls0);
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -279,12 +285,17 @@ void kernel_main() {
         }
         const uint64_t arr_noc = get_noc_addr(px, py, arrival);
         uint32_t h = 0, unflushed = 0;
+        auto lpoll = [&]() { ls.poll(conn, hdrs[GROUP], false); };
         for (uint32_t m = 0; m < NCH && n > 0; ++m) {
             for (uint32_t k = 0; k < n; ++k) {
                 const uint32_t q = get_arg_val<uint32_t>(ent + 3 * k), part = get_arg_val<uint32_t>(ent + 3 * k + 1);
                 const uint32_t npk = get_arg_val<uint32_t>(ent + 3 * k + 2);
                 uint32_t sent = 0;
                 walk(m, q, part, v, [&](uint32_t R, uint32_t j, uint32_t, uint32_t kk0, uint32_t np, uint32_t) {
+#if LS_FIRST
+                    lpoll();  // (GLM-type: the logits ahead of the x gather)
+                    while (!cb_pages_available_at_front(0, RP * (unflushed + 1))) lpoll();
+#endif
                     cb_wait_front(0, RP * (unflushed + 1));
                     const uint32_t src = get_read_ptr(0) + unflushed * RP * 2048;
                     const Dst d = dst_of(T, xown, m, R, j, kk0);
@@ -310,7 +321,11 @@ void kernel_main() {
                 conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
             }
         }
-        rs_send(rs0, conn, hdrs);
+        lpoll();
+        rs_send(rs0, conn, hdrs, lpoll);
+        ls.poll(conn, hdrs[GROUP], true);  // (whatever is left of the logits)
+        noc_async_writes_flushed();
+        ls.rearm();
         conn.close();
     }
     if (expect_in > 0) {  // everything from upstream landed; re-arm for the next call
@@ -497,7 +512,7 @@ class XGather3:
         i = DIRS_I[d]
         return out + plan.entries(p) + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], plan.P]
 
-    def pieces(self, coord, prog, x, xready_sem, rs=None):
+    def pieces(self, coord, prog, x, xready_sem, rs=None, router=None):
         """(CBs, kernels) of chip `coord` (fabric connections set up on prog); x: this chip's [rows, kl] in DRAM.
         rs: the down + reduce-scatter phase's (rs_block)."""
         mesh, chips, e = self.mesh, self.chips, self.eng
@@ -537,7 +552,9 @@ class XGather3:
                 + (self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5))
             )
             rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5)
+            rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 6)
             assert rsb[0] == 0 or mine, "a port sending reduce-scatter units must have the gather's fence"
+            assert not (router and router.port_block(coord, d, v)[0]) or mine, "the logits need the gather's fence"
             args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
             if peer is not None and rg.get(f"{d}_links"):
                 pp = {(dd, ll): cc for (_, dd, ll), cc in chips[peer]["ports"].items()}
@@ -563,7 +580,7 @@ class XGather3:
                 )
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][v], prog, core))
             else:
-                assert rsb[0] == 0
+                assert rsb[0] == 0 and not (router and router.port_block(coord, d, v)[0])
                 args += [0] * 10 + [0] + T + rsb
             sd_rt[core.x][core.y] = args
         ct = [
@@ -594,7 +611,7 @@ class XGather3:
                 config=dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=_SENDER,
+                kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n" + _SENDER,
                 source_type=st,
                 core_ranges=cs(list(ports.values())),
                 compile_time_args=ct,

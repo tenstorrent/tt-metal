@@ -102,7 +102,61 @@ CHAIN = {
     "glm": (4096, 1024, "silu", 8, 4),
     "k3": (7168, 3072, "situ", 8, 4),
 }
-RS_DIM = {"glm": -2, "k3": -1}  # (the SE reduce-scatter: GLM's rows to their owners, K3's width)
+RS_DIM = {"glm": -2, "k3": -1}
+
+
+def _router_specs():
+    from models.demos.moe_block.tt.fused_head import RouterSpec
+
+    # (GLM-type: the logits ahead of the x gather; K3: after it)
+    return {
+        "glm": RouterSpec(E=288, K=8, route_scale=2.5, logits_first=True),
+        "k3": RouterSpec(E=448, K=16, logits_first=False),
+    }
+
+
+class _Lazy(dict):
+    def __missing__(self, k):
+        self.update(_router_specs())
+        return dict.__getitem__(self, k)
+
+
+ROUTER = _Lazy()
+
+
+def _check_routing(head, xs, w_r, b_r, rows_t, rows, name):
+    """The owners' joint routing rows vs the host's fp32 routing (x as the device holds it, bf16)."""
+    spec, G = ROUTER[name], C
+    K = spec.K
+    outs = [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(rows_t)]
+    agree, wp = [], []
+    for d in range(R * C):
+        r, c = divmod(d, C)
+        p = head.xg.chips[(r, c)]["rings"][0]["p"]
+        xf = torch.cat([xs[r * C + cc].to(torch.bfloat16).float() for cc in range(C)], dim=1)
+        lg = xf @ w_r.T
+        sc = torch.sigmoid(lg)
+        n = rows // G
+        tok = slice(p * n, (p + 1) * n)
+        _, ids = torch.topk(sc[tok] + b_r, K, dim=-1)
+        wts = sc[tok].gather(1, ids)
+        wts = wts / wts.sum(-1, keepdim=True) * spec.route_scale
+        u = outs[d].to(torch.int64).reshape(n, 2 * K) & 0xFFFF
+        dids = u[:, :K]
+        dw = (u[:, K:].to(torch.int32) << 16).view(torch.float32)
+        hit = torch.stack([torch.isin(dids[t], ids[t]) for t in range(n)])
+        agree.append(hit.float().mean().item())  # (the device's picks among the host's)
+        same = hit.all(1)
+        o_h, o_d = torch.sort(ids[same], 1)[1], torch.sort(dids[same], 1)[1]
+        wp.append(pcc(torch.gather(wts[same], 1, o_h), torch.gather(dw[same], 1, o_d)))
+    logger.info(
+        f"HSE3 {name} routing: picks equal {100 * min(agree):.2f}% (worst chip), weights PCC {min(wp):.5f} "
+        f"(rows with the same picks)"
+    )
+    assert min(agree) > 0.98 and min(wp) > 0.99, (
+        agree,
+        wp,
+    )  # (the SE reduce-scatter: GLM's rows to their owners, K3's width)
 
 
 @pytest.mark.parametrize(
@@ -432,12 +486,17 @@ def test_head_se3(mesh_device, device_params):
             KB=int(os.environ.get("SE_KB", "0")) or None,
             rs_dim=RS_DIM[name] if os.environ.get("SE_RS") else None,  # (+ down + SE reduce-scatter:)
             rs_mode=os.environ.get("SE_RS") or "fused",  # (fused: in this program; mrs: the ported op on h, the bar)
+            router=ROUTER[name] if os.environ.get("SE_ROUTER") else None,  # (+ the router chain on its own cores)
         )
         g = torch.Generator().manual_seed(7)
         xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         w = head.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
+        if head.router is not None:
+            spec = ROUTER[name]
+            w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
+            head.upload_router(w_r, b_r)
         xt = ttnn.from_torch(
             torch.stack(xs).view(R, C, rows, H // C),
             dtype=ttnn.bfloat16,
@@ -447,6 +506,9 @@ def test_head_se3(mesh_device, device_params):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
         )
         us, y = _time(mesh_device, lambda: head.run(xt, w))
+        if head.router is not None:
+            y, rows_t = y
+            _check_routing(head, xs, w_r, b_r, rows_t, rows, name)
         ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
         act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
         ps, refs = [], []

@@ -12,7 +12,7 @@ import random
 
 import pytest
 
-from models.demos.moe_block.tt.se_rs import DIRS, RsPlan
+from models.demos.moe_block.tt.se_rs import DIRS, LogitsPlan, RsPlan
 
 
 def _run(plan, seed):
@@ -198,3 +198,10 @@ def test_rs_model_catches_bad_threshold():
     except (AssertionError, KeyError):  # (a slot read before it landed, or the counts off)
         return
     raise AssertionError("the model accepted a wrong threshold")
+
+
+@pytest.mark.parametrize("ring", [False, True], ids=["line", "ring"])
+@pytest.mark.parametrize("seed", range(4))
+def test_logits_protocol(ring, seed):
+    """The router logits' reduce-scatter (5 router cores, one owner row tile each, fp32) on the same protocol."""
+    _run(LogitsPlan(G=4, ring=ring, RB=5, ET=14, nv=2), seed)
