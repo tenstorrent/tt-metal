@@ -197,7 +197,7 @@ inline void llk_pack_untilize(
         get_local_cb_interface(output_id).fifo_wr_ptr - 1,
         pack_src_format[output_id],
         pack_dst_format[output_id],
-        full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+        full_ct_dim * get_output_pack_tile_size(output_id),
         face_r_dim,
         num_faces,
         block_c_index,

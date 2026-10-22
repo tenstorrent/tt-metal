@@ -82,7 +82,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);
-    std::uint32_t num_words = num_tiles * cb.fifo_page_size;
+    std::uint32_t num_words = num_tiles * get_cb_page_size(output, cb_fifo_page_size[output]);
 
     LLK_ASSERT(cb.fifo_wr_ptr < cb.fifo_limit, "CB push_back: fifo_wr_ptr already at or past fifo_limit");
 

@@ -43,5 +43,5 @@ inline const uint32_t get_output_tile_c_dim(const std::uint32_t output_id) {
 }
 
 inline uint32_t get_output_pack_tile_size(const uint32_t output_id) {
-    return get_cb_page_size(output_id, pack_tile_size[output_id]);
+    return get_cb_page_size(output_id, cb_fifo_page_size[output_id]);
 }
