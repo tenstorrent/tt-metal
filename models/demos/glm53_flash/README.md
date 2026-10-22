@@ -23,8 +23,9 @@ headroom; `tests/test_memory_plan.py` prints the envelope).
 
 ## Performance
 
-Measured 2026-10-21 on an 8x4 Blackhole Galaxy with the default configuration (hybrid expert layout, 45 layers resident,
-bfp8 experts, fast exact mHC kernels, fused router), `tests/test_mesh_model.py` (short prompts) and
+Measured 2026-10-21/22 on an 8x4 Blackhole Galaxy with the default configuration (hybrid expert layout, 45 layers resident,
+bfp8 experts, fast exact mHC kernels, fused router on decode, the blocks expert prefill path up to 4 K positions and
+the regions path above with the stacked expert copy kept for decode when it fits), `tests/test_mesh_model.py` (short prompts) and
 `tests/test_mesh_long_context.py` (long prompts, one prompt per slot). Decode is the traced steady-state step with every
 slot active at the stated decode ISL. ISL is per user: every decode slot attends over that many cached tokens, so the
 mesh holds users x ISL tokens of cache (32 x 1 M = 33.5 M tokens). TTFT and decode of a row come from one run.

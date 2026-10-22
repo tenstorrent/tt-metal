@@ -980,3 +980,11 @@ in the first run: the first token at this prompt is a near-tie that flips across
 reaches the passphrase; within a run the prefill is bit-deterministic (the repeat-user-0 check), so the cross-run
 flip is the near-tie plus whatever differs between processes at the last ulp (allocation order, stale padding).
 README row updated. The users x ISL envelope is now needle-verified at all four points.
+
+**auto vs blocks on the 8x4, 32 users, short prompt (04:56, `e2e_hybrid_B4_auto.log`):** planner keeps the stacked
+copy; traced TTFT 266 / 280 ms (= blocks 266), eager 976-1004 ms (blocks 1383), residual chain PCC 0.949673 (blocks
+0.900901; the regions kernel is closer to HF on the residual), first token == HF, decode **86.6 ms** vs 83.1 with
+the blocks default (the second expert copy). Decision (93b9d6b233a): `GLM53_PREFILL_EXPERTS=auto` is the default,
+resolved by the mesh model as blocks up to 4 K positions and regions (+ stacked copy per the planner) above, so every
+README row's configuration is the default one; a bare layer treats auto as blocks. The chain of 2026-10-21/22 is
+complete: AUTO 8X4 DONE.
