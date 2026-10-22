@@ -32,10 +32,13 @@ committed rows (q = A .. B - 1, A the position of the step's first column) in ev
 by one per layer (layer i's rows q >= B - i take drafts). Layer i's rows A - i .. A - 1 took the last draft's d_1 ..
 d_i; once the verify rejects some of them they are stale, so the passes also re-run the rows before A (re-prefill):
 max(0, layers - m) of them for m committed tokens, the most any layer needs (layer i needs max(0, i + 1 - m)), from
-the target hidden rows and layer-0 tokens the last draft cached (MtpStash). With 3 layers a draft runs 3 rows, 4
-when all 3 drafts were accepted (fewer for a request's first drafts, while the stash holds fewer rows), so the rows
-fit one pass of SPEC_SLOTS slots: right-aligned, the anchor (the row at B - 1) in the last slot. vLLM re-runs these
-rows in every layer, as here; re-running a row whose entry is current rewrites the same entry.
+the target hidden rows and layer-0 tokens the last draft cached (MtpStash: every row of its pass, found by position).
+With 3 layers a draft runs 3 rows, 4 when all 3 drafts were accepted (fewer for a request's first drafts, while the
+stash holds fewer rows), so the rows fit one pass of SPEC_SLOTS slots: right-aligned, the anchor (the row at B - 1)
+in the last slot. vLLM re-runs these rows in every layer, as here; re-running a row whose entry is current rewrites
+the same entry. The rows a draft re-runs are the last draft's last ones (its anchor at A - 1); the stash keeps all of
+that draft's rows so that a draft planned again from the same commit (the adapter's MIMO_SPEC_CHAIN_CHECK, or a host
+plan after the device chained a draft from a different commit) finds the same ones: re-planning is idempotent.
 """
 
 from dataclasses import dataclass, field
@@ -142,21 +145,28 @@ def plan_mtp(source, committed_positions, accepted, slots=SPEC_SLOTS):
 
 @dataclass
 class MtpStash:
-    """The rows a multi-layer draft cached for the next one's re-prefill: per row its true position (-1 none), oldest
-    first, one row per MTP layer after the first. The drafter keeps each row's target hidden and layer-0 token."""
+    """The rows of a multi-layer draft's pass, which the next one re-runs from (re-prefill): per slot its true position
+    (-1 idle or none). The drafter keeps each row's target hidden and layer-0 token, by slot. A re-prefill finds a row
+    by its position (``row``)."""
 
     positions: list
 
     @classmethod
-    def empty(cls, layers=MAX_DRAFTS):
-        return cls(positions=[-1] * (layers - 1))
+    def empty(cls, slots=SPEC_SLOTS):
+        return cls(positions=[-1] * slots)
+
+    def row(self, position):
+        """The slot holding ``position`` (the first, as the device's plan step searches), or None."""
+        if position < 0:
+            return None
+        return next((k for k, p in enumerate(self.positions) if p == position), None)
 
 
 @dataclass
 class MtpLayersInputs:
     """The passes of a multi-layer draft, one per MTP layer, all over the same slots: per slot the true position (-1
     idle), the source of its target hidden and layer-0 token, ("step", s) the last step's slot s (the hidden there and
-    the token committed there) or ("stash", k) row k of the MtpStash (None idle), the re-prefilled row count, and the
+    the token committed there) or ("stash", k) slot k of the MtpStash (None idle), the re-prefilled row count, and the
     anchor slot (the row at B - 1, whose greedy tokens are the drafts). Used slots are consecutive and in position
     order, ending at the anchor."""
 
@@ -175,8 +185,8 @@ def plan_mtp_layers(source, committed_positions, accepted, stash, layers=MAX_DRA
     """source: the lane's DraftSource; committed_positions: that row's [1 + K] committed positions; accepted: its
     committed count m; stash: the MtpStash of the lane's last draft. The committed token c sits at
     committed_positions[c] (consecutive, from A + 1); the row taking it is at committed_positions[c] - 1. The stash
-    rows re-run are the max(0, layers - m) positions before A, as far as the stash holds them (it holds nothing
-    after a step that did not follow a draft; then nothing is stale either)."""
+    rows re-run are the max(0, layers - m) positions before A, as far as the stash holds them consecutively from
+    A - 1 down (it holds nothing after a step that did not follow a draft; then nothing is stale either)."""
     m = int(accepted)
     if not 1 <= m <= len(source.slots):
         raise ValueError(f"row {source.row}: {m} committed tokens, the step answered {len(source.slots)} columns")
@@ -184,11 +194,12 @@ def plan_mtp_layers(source, committed_positions, accepted, stash, layers=MAX_DRA
     for c in range(m):
         if int(committed_positions[c]) != a + 1 + c:
             raise ValueError(f"row {source.row}: committed positions {list(committed_positions[:m])} not consecutive")
-    if len(stash.positions) != layers - 1:
-        raise ValueError(f"a stash of {len(stash.positions)} rows for {layers} MTP layers")
-    want, r = max(0, layers - m), 0
-    while r < want and stash.positions[layers - 2 - r] == a - 1 - r:
-        r += 1
+    if len(stash.positions) != slots:
+        raise ValueError(f"a stash of {len(stash.positions)} rows for passes of {slots} slots")
+    want, found = max(0, layers - m), []  # found[k]: the stash slot of position a - 1 - k
+    while len(found) < want and stash.row(a - 1 - len(found)) is not None:
+        found.append(stash.row(a - 1 - len(found)))
+    r = len(found)
     rows = r + m
     if rows > slots:
         raise ValueError(f"row {source.row}: {rows} MTP rows, a pass has {slots} slots")
@@ -196,7 +207,7 @@ def plan_mtp_layers(source, committed_positions, accepted, stash, layers=MAX_DRA
     first = slots - rows
     for j in range(rows):
         positions[first + j] = a - r + j
-        sources[first + j] = ("stash", layers - 1 - r + j) if j < r else ("step", source.slots[j - r])
+        sources[first + j] = ("stash", found[r - 1 - j]) if j < r else ("step", source.slots[j - r])
     return MtpLayersInputs(positions=positions, sources=sources, reprefill=r, anchor=slots - 1)
 
 
@@ -208,10 +219,9 @@ def mtp_layer_tokens(tokens0, drafts, layer):
     return window[layer : layer + len(tokens0)]
 
 
-def mtp_stash(plan, layers=MAX_DRAFTS):
-    """The MtpStash after the draft ``plan``: its last layers - 1 slots (row k is slot len(positions) - layers + 1 +
-    k)."""
-    return MtpStash(positions=list(plan.positions[len(plan.positions) - (layers - 1) :]))
+def mtp_stash(plan):
+    """The MtpStash after the draft ``plan``: every slot's position (stash slot k is the pass's slot k)."""
+    return MtpStash(positions=list(plan.positions))
 
 
 # The MTP layer's own KV cache: one request per lane drafts, and its attention reads its 128-token window, so a ring of

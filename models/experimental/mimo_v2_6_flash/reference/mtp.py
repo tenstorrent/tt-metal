@@ -97,8 +97,8 @@ class ReferenceMTPDrafter:
     def reset(self):
         """A new request's prompt: no K / V, nothing stashed."""
         self.histories = [PositionalHistory() for _ in self.mtps]
-        self.stash = MtpStash.empty(len(self.mtps)) if self.multi_layer else None
-        self.stash_rows = [None] * (len(self.mtps) - 1)  # (hidden, layer-0 token) of each stash row
+        self.stash = MtpStash.empty() if self.multi_layer else None
+        self.stash_rows = [None] * SPEC_SLOTS  # (hidden, layer-0 token) of each stash slot
         self.outputs = None  # each draft's final normed output at its row (the anchor), of the last draft
 
     def plan(self, source, committed_positions, accepted):
@@ -133,7 +133,7 @@ class ReferenceMTPDrafter:
 
     def _draft_layers(self, plan, slot_tokens, slot_hidden):
         """Every layer over the plan's rows (stash rows, then the step's), layer i on the tokens shifted by i; the
-        last rows become the stash."""
+        rows become the stash."""
         rows = plan.rows
         assert rows and rows[-1] == plan.anchor
         hidden, tokens0 = [], []
@@ -153,10 +153,58 @@ class ReferenceMTPDrafter:
             h = mtp(hidden, self.embedding[torch.tensor(tokens)], positions, history)[-1]
             drafts.append(self._greedy(h))
             self.outputs.append(h)
-        self.stash = mtp_stash(plan, len(self.mtps))
-        last = len(plan.positions) - len(self.stash_rows)
+        self.stash = mtp_stash(plan)
         self.stash_rows = [
-            (hidden[rows.index(s)], tokens0[rows.index(s)]) if s in rows else None
-            for s in range(last, len(plan.positions))
+            (hidden[rows.index(s)], tokens0[rows.index(s)]) if s in rows else None for s in range(SPEC_SLOTS)
         ]
         return drafts
+
+
+class MtpProgramMirror:
+    """The every-layer draft program of one replica (tt/mtp.py ``_body_layers``) on the host, step for step on the
+    kernels' integer mirrors (reference/spec_chain.py): the plan step on the packed upload and the stash page, the
+    hidden gather from the table [the step's final norm rows, the stash rows] (which becomes the stash), and pass i on
+    MTP layer i over the plan's slots with the tokens step's tokens, each writing its own cache (PositionalHistory, the
+    device ring's semantics), its greedy token per used slot into head i; then the drafts step. ``mtps``: MAX_DRAFTS
+    ReferenceMTP layers; ``embedding`` / ``lm_head`` the target's; ``table_rows`` T, the final norm buffer's rows."""
+
+    def __init__(self, mtps, embedding, lm_head, table_rows=32):
+        from .spec_chain import stash_page
+
+        assert len(mtps) == MAX_DRAFTS
+        self.mtps, self.embedding, self.lm_head, self.table_rows = list(mtps), embedding, lm_head, table_rows
+        self.histories = [PositionalHistory() for _ in self.mtps]
+        self.stash = stash_page(table_rows)
+        self.stash_hidden = torch.zeros(table_rows, embedding.shape[-1])
+        self.heads = [[0] * table_rows for _ in self.mtps]
+        self.outputs = None
+
+    def reset(self):
+        """TtMiMoMTP.reset: zero rings (no K / V), an empty stash page."""
+        from .spec_chain import stash_page
+
+        self.histories = [PositionalHistory() for _ in self.mtps]
+        self.stash = stash_page(self.table_rows)
+
+    def run(self, mtp, step_hidden):
+        """One replay: ``mtp`` the packed upload (int32 values [MTP_ROWS * B], B = table_rows), ``step_hidden`` the
+        final norm buffer [T, hidden]. Returns the result's drafts section (drafts_step)."""
+        from .spec_chain import drafts_step, plan_step, tokens_step
+
+        inputs, self.stash = plan_step(mtp, self.stash, self.table_rows)
+        rows = torch.cat((step_hidden.float(), self.stash_hidden))[torch.tensor(inputs["hidden"])]
+        self.stash_hidden = rows.clone()
+        used = [j for j in range(SPEC_SLOTS) if inputs["pos"][j] >= 0]
+        positions = torch.tensor([inputs["rope"][j] for j in used])
+        self.outputs = []
+        for i, (mtp_layer, history) in enumerate(zip(self.mtps, self.histories)):
+            tokens = inputs["tokens0"] if i == 0 else tokens_step(inputs["tokens0"], self.heads, i)
+            head = [0] * self.table_rows
+            if used:
+                embeds = self.embedding[torch.tensor([tokens[j] for j in used])]
+                out = mtp_layer(rows[used], embeds, positions, history)
+                for k, j in enumerate(used):
+                    head[j] = int(torch.argmax(out[k] @ self.lm_head.T))
+                self.outputs.append(out[-1])
+            self.heads[i] = head
+        return drafts_step(mtp, self.heads, layers=MAX_DRAFTS)

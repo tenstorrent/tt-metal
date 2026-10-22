@@ -41,8 +41,9 @@ padded length and the alignment of its start (attention.py), a bounded set.
 
 Speculative decoding (MIMO_SPEC_DECODE=mtp; the plugin's model-owned drafter contract, docs/SPEC_DECODE_CONTRACT.md,
 with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter",
-"num_speculative_tokens": 3}'``): the MTP layer drafts up to MAX_DRAFTS tokens for a lane that ran one request in its
-last step, and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
+"num_speculative_tokens": 3}'``): the MTP layers draft up to MAX_DRAFTS tokens for a lane that ran one request in its
+last step (MIMO_MTP_LAYERS=3, the default: draft i + 1 from MTP layer i; 1: layer MIMO_MTP_LAYER drafts every
+token), and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
 with several requests decline to draft and decode as usual; a verify block that still carries drafts beside other
 rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. A verify answers the
 plugin's argmax ids when every request of the step is greedy. A step with a sampled request is accepted on device
@@ -111,9 +112,12 @@ DEVICE_ROPE = os.environ.get("MIMO_DEVICE_ROPE", "1") == "1"
 # Up to this context the tables hold whole 192-wide rows (201 MB per chip at 128K); past it only the 64 rotated dims
 # (``compact``: 537 MB per chip at 1M instead of 1.61 GB), each read appending the constant 1 / 0 of the other dims.
 ROPE_TABLE_FULL_WIDTH_MAX_LEN = 131072
-# MIMO_SPEC_DECODE=mtp: load the MTP layer (MIMO_MTP_LAYER, default 0, vLLM's MTP proposer's layer) and serve the
-# plugin's model-owned drafter contract (module docstring).
+# MIMO_SPEC_DECODE=mtp: load the MTP layers and serve the plugin's model-owned drafter contract (module docstring).
+# MIMO_MTP_LAYERS=3 (default): draft i + 1 from MTP layer i (vLLM 0.31's MultiModuleMTPSpeculator, which the GPU
+# references run with the num_nextn_predict_layers patch; needs the decode RoPE tables); 1: MTP layer MIMO_MTP_LAYER
+# (default 0) drafts every token, feeding itself its own output (vLLM's MTP proposer, upstream vLLM for MiMo).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
+MTP_LAYERS = int(os.environ.get("MIMO_MTP_LAYERS", "3"))
 MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
 # MIMO_SPEC_CHAIN=0: no draft chained behind a verify (every draft host-planned after the plugin's walk, and an
 # argmax_ids verify reads its greedy tokens without an accept step), the flow before tt/spec_chain.py, for comparison.
@@ -223,7 +227,7 @@ class MiMoV2ForCausalLM:
         num_layers = hf_config.num_hidden_layers
         if num_layers > cfg.num_hidden_layers:
             raise ValueError(f"num_hidden_layers {num_layers} > the checkpoint's {cfg.num_hidden_layers}")
-        mtp_layer = None
+        mtp_layers = None
         if SPEC_DECODE:
             if SPEC_DECODE != "mtp":
                 raise ValueError(f"MIMO_SPEC_DECODE={SPEC_DECODE!r}: MiMo drafts with its MTP layer (mtp)")
@@ -232,7 +236,13 @@ class MiMoV2ForCausalLM:
                     f"a verify runs one request in {SPEC_SLOTS} decode slots: launch with --max-num-seqs >= "
                     f"{SPEC_SLOTS} per lane (got {max_batch_size // dp})"
                 )
-            mtp_layer = MTP_LAYER
+            if MTP_LAYERS not in (1, MAX_DRAFTS):
+                raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: 1, or {MAX_DRAFTS} (one MTP layer per draft)")
+            if MTP_LAYERS > cfg.num_nextn_predict_layers:
+                raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: the checkpoint has {cfg.num_nextn_predict_layers}")
+            if MTP_LAYERS > 1 and not DEVICE_ROPE:
+                raise ValueError("MIMO_MTP_LAYERS=3 plans its passes on device: it needs MIMO_DEVICE_ROPE=1")
+            mtp_layers = (MTP_LAYER,) if MTP_LAYERS == 1 else tuple(range(MAX_DRAFTS))
         logger.info(f"MiMo vLLM: {dp} replicas x {max_batch_size // dp} users, {num_layers} layers, {path}")
         generator = MiMoGalaxyGenerator(
             mesh_device,
@@ -245,7 +255,7 @@ class MiMoV2ForCausalLM:
             num_layers=num_layers,
             block_size=BLOCK_SIZE,
             setup_kv=False,
-            mtp_layer=mtp_layer,
+            mtp_layers=mtp_layers,
         )
         return cls(generator, max_seq_len)
 
@@ -785,7 +795,8 @@ class MiMoV2ForCausalLM:
                     else:
                         waited += time.perf_counter() - t
                     if chains[lane] is not None:
-                        self.chained[lane] = chained_draft(result, self.spec_sources[lane], vp.positions)
+                        layers = len(model.mtp.layers)
+                        self.chained[lane] = chained_draft(result, self.spec_sources[lane], vp.positions, layers)
                     if fused:
                         model.verify_sampler.tally(result.accept)
                         commit_pass(vp, result.accept, committed, accepted_counts)
@@ -902,7 +913,8 @@ class MiMoV2ForCausalLM:
         device (``_verify``), the drafts are already on the host: they are returned when the plugin committed what the
         device committed (the row's count, tokens and positions). Otherwise (a plain decode step, a logits verify, no
         decode RoPE tables, MIMO_SPEC_CHAIN=0, a draft the device declined at max_seq_len - K that ``num_drafts``
-        allows, or a different commit) the MTP drafts now from the host plan (reference.spec_decode.plan_mtp)."""
+        allows, or a different commit) the MTP drafts now from the host plan (reference.spec_decode.plan_mtp), or with
+        every MTP layer from the commit's description (the device plans the passes: their rows depend on its stash)."""
         from vllm_tt_plugin.spec_decode import DraftOutput
 
         t0 = time.perf_counter()
@@ -929,13 +941,18 @@ class MiMoV2ForCausalLM:
                 hits += 1
                 if not self.chain_check:
                     continue
-            plan = plan_mtp(source, committed_positions[r].tolist(), m)
-            slot_tokens = [0] * SPEC_SLOTS
-            for c in range(m):
-                slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
-            mtp.enqueue(slot_tokens, plan)
+            if mtp.multi:
+                mtp.enqueue_layers(source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
+                anchor = SPEC_SLOTS - 1
+            else:
+                plan = plan_mtp(source, committed_positions[r].tolist(), m)
+                slot_tokens = [0] * SPEC_SLOTS
+                for c in range(m):
+                    slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
+                mtp.enqueue(slot_tokens, plan)
+                anchor = plan.anchor
             inputs_s += mtp.last_inputs_s
-            jobs.append((lane, r, plan.anchor, hit))
+            jobs.append((lane, r, anchor, hit))
         waited = 0.0
         for lane, r, anchor, hit in jobs:
             t = time.perf_counter()

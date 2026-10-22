@@ -10,10 +10,12 @@ accept kernel's mirror (reference/sample_verify.py) on greedy requests: the comm
 walk over the argmax ids. test_spec_inputs_tp8.py runs the kernel against the same mirror on a Galaxy row."""
 
 import random
+from types import SimpleNamespace
 
 import pytest
 import torch
 
+from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import (
     GROUPS,
     NO_TOKEN,
@@ -36,15 +38,25 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     chain_step,
     chained_draft,
     drafts_step,
+    plan_step,
+    stash_page,
+    tokens_step,
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     MAX_DRAFTS,
     SPEC_SLOTS,
+    DraftSource,
+    MtpStash,
     accept_greedy,
     draft_source,
+    mtp_cache_position,
+    mtp_layer_tokens,
+    mtp_stash,
     plan_mtp,
+    plan_mtp_layers,
     plan_verify_passes,
+    serial_positions,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
     MTP_ROWS,
@@ -52,8 +64,16 @@ from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
     owned_slot_caps,
     owned_slot_columns,
     pack_mtp,
+    pack_mtp_layers,
     pack_verify,
     slot_caps,
+)
+from models.experimental.mimo_v2_6_flash.tests.test_spec_decode_host import (
+    SCHEDULE,
+    TinyMiMo,
+    drive,
+    mtp_drafter,
+    tiny_config,
 )
 
 B = 32
@@ -293,3 +313,175 @@ def test_a_pass_of_two_requests_chains_nothing():
     result = unpack_result(chain_pass(vp, accept, argmax, [[0] * B] * MAX_DRAFTS, source=False))
     assert [g[0] for g in result.accept] == [1, 1, 0, 0] and result.argmax == argmax[:SPEC_SLOTS]
     assert not result.drafting
+
+
+# ---------------------------------------------------------------------- every MTP layer (MIMO_MTP_LAYERS=3)
+def host_description(source, committed, positions, m):
+    """What propose_draft_tokens uploads for the plugin's commit with every layer (pack_mtp_layers)."""
+    return pack_mtp_layers(B, source, committed, positions, m).tolist()
+
+
+@pytest.mark.parametrize("bonus", BONUS + [MAX_SEQ_LEN - 1 - MAX_DRAFTS])
+def test_layers_chain_writes_the_commits_description(bonus):
+    """Every draft count n and accepted count m: the chain step's upload is the description propose_draft_tokens
+    builds from the plugin's commit, the anchor the last slot; it declines past the limit as with one layer."""
+    rng = random.Random(100 + bonus)
+    limit = MAX_SEQ_LEN - MAX_DRAFTS
+    for n in range(MAX_DRAFTS + 1):
+        for m in range(1, n + 2):
+            p = bonus - m
+            if p < 0:
+                continue
+            vp = one_row_pass(p, n, rng)
+            source = draft_source([vp])
+            committed = [rng.randrange(VOCAB) for _ in range(m)]
+            accept = accept_page([(m, committed)])
+            for lim, drafting in ((limit, True), (bonus, False)):
+                mtp, header = chain_step(upload(vp, chain_row(B, source, lim)), accept, [0] * B, layers=MAX_DRAFTS)
+                want = host_description(source, committed, committed_positions(vp, m), m) if drafting else None
+                assert mtp == (want if drafting else pack_mtp_layers(B).tolist()), (n, m, drafting)
+                assert header[STATUS_AT : STATUS_AT + 4] == (
+                    [1, SPEC_SLOTS - 1, bonus, 0] if drafting else [0, NO_SLOT, 0, 0]
+                )
+    # An idle chain row, and the one-layer idle upload (an idle description too: SpecInputs.reset writes it).
+    vp = one_row_pass(300, 3, rng)
+    mtp, _ = chain_step(upload(vp), accept_page([(2, [7, 8])]), [0] * B, layers=MAX_DRAFTS)
+    assert mtp == pack_mtp_layers(B).tolist() and pack_mtp(B)[:B].tolist() == pack_mtp_layers(B)[:B].tolist()
+
+
+def stash_cases(a):
+    """Stash pages before a draft whose committed rows start at ``a`` (A): the last draft's rows in every layout the
+    flows leave (anchor at A - 1 with 1 .. 4 rows), unrelated positions, a hole at A - 2, and empty."""
+    rng = random.Random(a)
+    cases = []
+    for rows in range(1, SPEC_SLOTS + 1):
+        positions = [-1] * (SPEC_SLOTS - rows) + [a - rows + j for j in range(rows)]
+        cases.append(positions)
+    cases += [[a - 40, a - 39, a - 38, a - 37], [-1, a - 3, -1, a - 1], [-1] * SPEC_SLOTS]
+    out = []
+    for positions in cases:
+        positions = [p if p >= 0 else -1 for p in positions]
+        out.append((positions, [rng.randrange(VOCAB) if p >= 0 else 0 for p in positions]))
+    return out
+
+
+@pytest.mark.parametrize("bonus", BONUS + [MAX_SEQ_LEN - 1])
+def test_plan_step_is_plan_mtp_layers(bonus):
+    """The plan step on the description of every commit (count m, a verify's slots or a plain step's one slot) and
+    every stash layout writes plan_mtp_layers' passes: ring cache positions, serial positions, RoPE indices, the
+    hidden table rows of its sources (step slot s: s; stash slot k: T + k) and layer-0 tokens; and the new stash is
+    mtp_stash(plan) with those tokens. Around the ring's wrap and at the end of the context."""
+    rng = random.Random(bonus)
+    sources = [(DraftSource(row=1, slots=[0, 1, 2, 3]), m) for m in range(1, SPEC_SLOTS + 1)]
+    sources += [(DraftSource(row=1, slots=[s]), 1) for s in range(SPEC_SLOTS)]
+    for source, m in sources:
+        if bonus - m < 0:
+            continue
+        positions = [bonus - m + 1 + c for c in range(m)] + [-1] * (1 + MAX_DRAFTS - m)
+        committed = [rng.randrange(VOCAB) for _ in range(m)]
+        mtp = host_description(source, committed, positions, m)
+        a = positions[0] - 1
+        for stash_positions, stash_tokens in stash_cases(a):
+            page = stash_page(B, stash_positions, stash_tokens)
+            got, new = plan_step(mtp, page, B)
+            plan = plan_mtp_layers(source, positions, m, MtpStash(stash_positions))
+            want_hidden, want_tokens = [B + j for j in range(B)], [0] * B
+            for j in plan.rows:
+                kind, k = plan.sources[j]
+                want_hidden[j] = k if kind == "step" else B + k
+                want_tokens[j] = committed[source.slots.index(k)] if kind == "step" else stash_tokens[k]
+            assert got["pos"] == [mtp_cache_position(p) for p in plan.positions] + [-1] * (B - SPEC_SLOTS)
+            assert got["rope"] == [max(p, 0) for p in plan.positions] + [0] * (B - SPEC_SLOTS)
+            assert got["serial"] == [serial_positions(got["pos"], SPEC_SLOTS)[j] for j in range(SPEC_SLOTS)]
+            assert got["hidden"] == want_hidden and got["tokens0"] == want_tokens
+            assert new == stash_page(B, mtp_stash(plan).positions, want_tokens[:SPEC_SLOTS])
+            assert max(got["rope"]) < MAX_SEQ_LEN
+
+
+def test_an_idle_description_leaves_the_stash():
+    page = stash_page(B, [-1, 5, 6, 7], [0, 1, 2, 3])
+    for mtp in (pack_mtp_layers(B).tolist(), pack_mtp(B).tolist()):
+        got, new = plan_step(mtp, page, B)
+        assert new == page and got["pos"] == [-1] * B and got["hidden"] == [B + j for j in range(B)]
+        assert got["tokens0"] == [0] * B and got["rope"] == [0] * B
+
+
+@pytest.mark.parametrize("rows", range(1, SPEC_SLOTS + 1))
+def test_tokens_step_is_mtp_layer_tokens(rows):
+    rng = random.Random(rows)
+    tokens0 = [0] * (SPEC_SLOTS - rows) + [rng.randrange(VOCAB) for _ in range(rows)] + [0] * (B - SPEC_SLOTS)
+    heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+    drafts = [h[SPEC_SLOTS - 1] for h in heads]
+    used = tokens0[SPEC_SLOTS - rows : SPEC_SLOTS]
+    for layer in range(1, MAX_DRAFTS):
+        out = tokens_step(tokens0, heads, layer)
+        assert out[SPEC_SLOTS - rows : SPEC_SLOTS] == mtp_layer_tokens(used, drafts, layer)
+        assert out[SPEC_SLOTS:] == [0] * (B - SPEC_SLOTS)
+
+
+def test_layers_drafts_step_and_chained_draft():
+    rng = random.Random(9)
+    heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+    vp = one_row_pass(1000, 3, rng)
+    committed = [rng.randrange(VOCAB) for _ in range(2)]
+    chain = chain_row(B, draft_source([vp]), MAX_SEQ_LEN - MAX_DRAFTS)
+    mtp, header = chain_step(upload(vp, chain), accept_page([(2, committed)]), [0] * B, layers=MAX_DRAFTS)
+    result = unpack_result(header + drafts_step(mtp, heads, layers=MAX_DRAFTS))
+    assert result.drafting and result.anchor == result.draft_anchor == SPEC_SLOTS - 1 and result.bonus == 1002
+    d = chained_draft(result, draft_source([vp]), vp.positions, layers=MAX_DRAFTS)
+    assert d.tokens == committed and d.positions == [1001, 1002] and d.drafts == [h[SPEC_SLOTS - 1] for h in heads]
+    idle = drafts_step(pack_mtp_layers(B).tolist(), heads, layers=MAX_DRAFTS)
+    assert idle[0] == NO_SLOT and idle[1 : 1 + MAX_DRAFTS] == [NO_TOKEN] * MAX_DRAFTS
+    # A host description of a plain step's commit drafts at the last slot too.
+    host = host_description(DraftSource(row=0, slots=[2]), [9], [701, -1, -1, -1], 1)
+    assert drafts_step(host, heads, layers=MAX_DRAFTS)[0] == SPEC_SLOTS - 1
+
+
+# ---------------------------------------------------------------------- the device program's mirror, end to end
+class ProgramDrafter:
+    """The device program (reference.mtp.MtpProgramMirror) behind ReferenceMTPDrafter's interface, so that the host
+    tests' driver serves it: plan() keeps the commit, draft() uploads its description and replays the program on the
+    step's final norm rows (the slots' hidden, zeros elsewhere)."""
+
+    def __init__(self, reference):
+        self.program = MtpProgramMirror(reference.mtps, reference.embedding, reference.lm_head, table_rows=B)
+        self.mtps, self.outputs, self.stash = reference.mtps, None, None
+
+    def plan(self, source, committed_positions, accepted):
+        mtp = pack_mtp_layers(B, source, [0] * SPEC_SLOTS, committed_positions, accepted).tolist()
+        inputs, _ = plan_step(mtp, self.program.stash, B)
+        positions = [inputs["rope"][j] if inputs["pos"][j] >= 0 else -1 for j in range(SPEC_SLOTS)]
+        return SimpleNamespace(source=source, committed=committed_positions, m=accepted, positions=positions)
+
+    def draft(self, plan, slot_tokens, slot_hidden):
+        tokens = [slot_tokens[plan.source.slots[c]] for c in range(plan.m)]
+        mtp = pack_mtp_layers(B, plan.source, tokens, plan.committed, plan.m).tolist()
+        step = torch.zeros(B, next(iter(slot_hidden.values())).shape[-1])
+        for s, h in slot_hidden.items():
+            step[s] = h
+        out = self.program.run(mtp, step)
+        self.outputs = self.program.outputs
+        assert out[0] == SPEC_SLOTS - 1
+        return out[1 : 1 + MAX_DRAFTS]
+
+
+def test_the_device_program_drafts_what_the_reference_drafter_drafts():
+    """Every accepted count after every other, and plain steps: the device program's mirror (plan step on the device
+    stash, gather, tokens step, three passes) drafts exactly the reference drafter's drafts, which equal a
+    recomputation of every layer over the whole sequence."""
+    g = torch.Generator().manual_seed(1)
+    cfg = tiny_config()
+    target = TinyMiMo(cfg, g)
+    reference = mtp_drafter(cfg, target, g, MAX_DRAFTS)
+    prompt = [3, 14, 15, 92, 65, 35, 89, 79, 32, 38]
+    want = [
+        (drafts, [o.clone() for o in outputs]) for _, drafts, outputs, _ in drive(target, reference, prompt, SCHEDULE)
+    ]
+    reference.reset()
+    program = ProgramDrafter(reference)
+    got = list(drive(target, program, prompt, SCHEDULE))
+    assert len(got) == len(want)
+    for (_, drafts, outputs, (re_drafts, re_outputs)), (want_drafts, want_outputs) in zip(got, want):
+        assert drafts == want_drafts == re_drafts
+        for a, b in zip(outputs, want_outputs):
+            torch.testing.assert_close(a, b, atol=0, rtol=0)

@@ -1140,12 +1140,12 @@ class TtMiMoModel:
         return trace["output"]
 
     # ------------------------------------------------------------------ speculative decoding (reference/spec_decode.py)
-    def setup_mtp(self, ckpt, cache_dir, layer=0):
-        """Load MTP layer ``layer`` as the speculative drafter (its cache and trace: TtMiMoMTP.setup_cache,
-        capture_spec_traces), and make the packed uploads of the verify and draft traces (persistent: before any
-        capture)."""
+    def setup_mtp(self, ckpt, cache_dir, layers=(0,)):
+        """Load the MTP layers ``layers`` (one, or one per draft: TtMiMoMTP) as the speculative drafter (its caches
+        and trace: TtMiMoMTP.setup_cache, capture_spec_traces), and make the packed uploads of the verify and draft
+        traces (persistent: before any capture)."""
         assert self.mtp is None and self.decode_trace is None
-        self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layer)
+        self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layers)
         kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
         self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
 

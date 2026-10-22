@@ -21,6 +21,10 @@ The drafts are chained behind the verify on device (tt/spec_chain.py): with the 
 a verify must return the drafts the verify's result page carried (only the first, after the plain step, is drafted
 from the host plan), and the first ones are drafted again from the host plan (MIMO_SPEC_CHAIN_CHECK) and must be the
 same tokens. Without the tables every draft is host-planned.
+
+Both drafters run: every MTP layer (MIMO_MTP_LAYERS=3, draft i + 1 from layer i, the passes planned on device from the
+stash; the chain checks then also cover a draft planned again on the stash its chained twin left) and one layer
+(MIMO_MTP_LAYERS=1, the drafter before it). Every-layer drafting needs the decode RoPE tables.
 """
 
 import time
@@ -51,15 +55,19 @@ PROMPT = (
 )
 
 
+@pytest.mark.parametrize("mtp_layers", [3, 1], ids=["mtp3", "mtp1"])
 @pytest.mark.parametrize(
     "device_rope", ["whole", "compact", None], ids=["rope_tables", "compact_rope_tables", "host_rope"]
 )
 @pytest.mark.parametrize("device_params", [SPEC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_spec_decode_tp8_dp4(mesh_device, device_rope, monkeypatch):
+def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, monkeypatch):
+    if mtp_layers > 1 and device_rope is None:
+        pytest.skip("every-layer drafting plans its passes on device: it needs the decode RoPE tables")
     path = model_path()
     cfg = MiMoConfig.from_model_path(path)
     monkeypatch.setattr(generator_vllm, "SPEC_DECODE", "mtp")
+    monkeypatch.setattr(generator_vllm, "MTP_LAYERS", mtp_layers)
     monkeypatch.setattr(generator_vllm, "DEVICE_ROPE", device_rope is not None)
     if device_rope == "compact":  # the 1M entry's tables at this test's short context
         monkeypatch.setattr(generator_vllm, "ROPE_TABLE_FULL_WIDTH_MAX_LEN", 0)
@@ -232,7 +240,8 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, monkeypatch):
     else:
         assert stats["chained"] == 0 and stats["host"] == len(counts)
     logger.info(
-        f"MTP spec decode: mean accepted {sum(counts) / len(counts):.2f} over {len(counts)} verifies "
+        f"MTP spec decode ({mtp_layers} MTP layers): mean accepted {sum(counts) / len(counts):.2f} over "
+        f"{len(counts)} verifies "
         f"(histogram {[counts.count(m) for m in range(1, MAX_DRAFTS + 2)]}); "
         f"{1e3 * plain_s / STEPS:.1f} ms/token plain, {1e3 * spec_s / (len(seq) - prompt.numel() - 1):.1f} ms/token "
         "speculative (drafts chained behind the verify, one read per verify); sampled fused checks differing on "

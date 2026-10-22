@@ -96,24 +96,24 @@ def test_mtp_after_a_plain_step():
 
 
 def test_mtp_layers_after_a_rejection():
-    # Last draft: rows up to 40 (stash 39, 40). The verify at 41..44 rejected d_1 and committed one token, at 42: two
+    # Last draft: rows 38 .. 40 in slots 1 .. 3. The verify at 41..44 rejected d_1 and committed one token, at 42: two
     # stash rows re-run before the new row, right-aligned.
-    plan = plan_mtp_layers(DraftSource(row=3, slots=[0, 1, 2, 3]), [42, -1, -1, -1], 1, MtpStash([39, 40]))
+    plan = plan_mtp_layers(DraftSource(row=3, slots=[0, 1, 2, 3]), [42, -1, -1, -1], 1, MtpStash([-1, 38, 39, 40]))
     assert plan.positions == [-1, 39, 40, 41] and plan.reprefill == 2 and plan.anchor == 3
-    assert plan.sources == [None, ("stash", 0), ("stash", 1), ("step", 0)]
+    assert plan.sources == [None, ("stash", 2), ("stash", 3), ("step", 0)]
     assert plan.rows == [1, 2, 3]
-    assert mtp_stash(plan) == MtpStash([40, 41])
+    assert mtp_stash(plan) == MtpStash([-1, 39, 40, 41])
 
 
 @pytest.mark.parametrize("m, reprefill", [(1, 2), (2, 1), (3, 0), (4, 0)])
 def test_mtp_layers_reprefill_the_rows_later_layers_drafted(m, reprefill):
     committed = [42 + c for c in range(m)] + [-1] * (4 - m)
-    plan = plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), committed, m, MtpStash([39, 40]))
+    plan = plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), committed, m, MtpStash([37, 38, 39, 40]))
     assert plan.reprefill == reprefill
     rows = plan.rows
     assert len(rows) == max(3, m) and rows[-1] == plan.anchor == 3
     assert [plan.positions[s] for s in rows] == list(range(41 - reprefill, 41 + m))
-    assert [plan.sources[s] for s in rows] == [("stash", 2 - reprefill + j) for j in range(reprefill)] + [
+    assert [plan.sources[s] for s in rows] == [("stash", 4 - reprefill + j) for j in range(reprefill)] + [
         ("step", c) for c in range(m)
     ]
 
@@ -121,23 +121,43 @@ def test_mtp_layers_reprefill_the_rows_later_layers_drafted(m, reprefill):
 def test_mtp_layers_reprefill_only_what_the_stash_holds():
     source = DraftSource(row=0, slots=[0, 1, 2, 3])
     # The last draft ran one row (its first draft): one stash row.
-    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([-1, 40]))
+    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([-1, -1, -1, 40]))
     assert plan.positions == [-1, -1, 40, 41] and plan.reprefill == 1
     # The last step did not follow a draft of these positions (a step without drafting in between): nothing is stale.
-    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([30, 31]))
+    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([-1, 29, 30, 31]))
     assert plan.positions == [-1, -1, -1, 41] and plan.reprefill == 0
     plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash.empty())
     assert plan.reprefill == 0
+    # Consecutive from A - 1 down only: 39 without 40 re-runs nothing.
+    plan = plan_mtp_layers(source, [42, -1, -1, -1], 1, MtpStash([-1, 38, 39, -1]))
+    assert plan.reprefill == 0
+
+
+def test_mtp_layers_replanning_the_same_commit_finds_the_same_rows():
+    """A draft planned again from the commit it was planned from (after it ran: the stash then holds its own rows)
+    re-runs the same rows from the same sources: the adapter's chain check drafts each chained draft again."""
+    source = DraftSource(row=0, slots=[0, 1, 2, 3])
+    for stash in (MtpStash([37, 38, 39, 40]), MtpStash([-1, -1, -1, 40]), MtpStash.empty()):
+        for m in range(1, SPEC_SLOTS + 1):
+            committed = [42 + c for c in range(m)] + [-1] * (4 - m)
+            plan = plan_mtp_layers(source, committed, m, stash)
+            again = plan_mtp_layers(source, committed, m, mtp_stash(plan))
+            assert again.positions == plan.positions and again.reprefill == plan.reprefill
+            # The stash rows are found where the first draft put them (its own slots, which held them).
+            for s in plan.rows[: plan.reprefill]:
+                assert again.sources[s] == ("stash", s)
 
 
 def test_mtp_layers_after_a_plain_step():
     # A step without drafts after a draft: its one slot, and both stash rows (the draft's d_1, d_2 are unverified).
-    plan = plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, -1, -1, -1], 1, MtpStash([14, 15]))
-    assert plan.positions == [-1, 14, 15, 16] and plan.sources[1:] == [("stash", 0), ("stash", 1), ("step", 2)]
+    plan = plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, -1, -1, -1], 1, MtpStash([-1, 13, 14, 15]))
+    assert plan.positions == [-1, 14, 15, 16] and plan.sources[1:] == [("stash", 2), ("stash", 3), ("step", 2)]
     with pytest.raises(ValueError):
-        plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, 18, -1, -1], 2, MtpStash([14, 15]))
+        plan_mtp_layers(DraftSource(row=6, slots=[2]), [17, 18, -1, -1], 2, MtpStash([-1, 13, 14, 15]))
     with pytest.raises(ValueError):
-        plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), [17, 19, -1, -1], 2, MtpStash([14, 15]))
+        plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), [17, 19, -1, -1], 2, MtpStash([-1, 13, 14, 15]))
+    with pytest.raises(ValueError):
+        plan_mtp_layers(DraftSource(row=0, slots=[0, 1, 2, 3]), [17, -1, -1, -1], 1, MtpStash([14, 15]))
 
 
 def test_mtp_layer_tokens_shift_one_per_layer():
@@ -391,7 +411,7 @@ def drive(target, drafter, prompt, schedule, keep_stash=True):
             first = min(p for p in plan.positions if p >= 0)
         drafts = drafter.draft(plan, slot_tokens, slot_hidden)
         if not keep_stash:
-            drafter.stash = MtpStash.empty(len(drafter.mtps))
+            drafter.stash = MtpStash.empty()
         yield plan, drafts, drafter.outputs, recompute_drafts(target, drafter.mtps, seq, first)
         # The verify of the last committed token (at p) and the drafts: commit m tokens at p + 1 .. p + m.
         p = len(seq) - 1
