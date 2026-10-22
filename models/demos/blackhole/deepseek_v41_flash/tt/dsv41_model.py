@@ -1119,6 +1119,7 @@ class Model:
                         ttnn.fill_cache(k_cache, inp, u_)
                         if inp is not full:
                             ttnn.deallocate(inp)
+                    self.log_dram(f"key export in place j0={j0} P={P} (temporaries live)")  # (DSV41_MEMLOG)
                     if full is not out:
                         ttnn.deallocate(full)
                 else:
