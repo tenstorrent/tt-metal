@@ -173,7 +173,13 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
             cb_pop_front(cb_attention_weights, score_tiles);
             cb_reserve_back(cb_attention_weights, score_tiles);
 
+            // Both mask tiles go to DST once; the packer then stamps them onto every masked slot.
             copy_init(cb_attn_mask);
+            tile_regs_acquire();
+            copy_tile(cb_attn_mask, /* diagonal pattern */ 0, /* dst */ 0);
+            copy_tile(cb_attn_mask, /* all -1e9 */ 1, /* dst */ 1);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_reconfig_l1_acc(1);
             const uint32_t step_first_k_tile = k_step * Sk_chunk_t;
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -182,17 +188,12 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
                 const uint32_t first_masked_n = (row_tile > step_first_k_tile) ? (row_tile - step_first_k_tile) : 0U;
                 for (uint32_t n = first_masked_n; n < Sk_chunk_t; ++n) {
                     // mask[0] on the diagonal tile, mask[1] (all -1e9) past it.
-                    const uint32_t mask_tile_idx = (step_first_k_tile + n == row_tile) ? 0U : 1U;
-                    tile_regs_acquire();
-                    copy_tile(cb_attn_mask, mask_tile_idx, /* dst */ 0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile</* out_of_order */ true>(
-                        /* dst */ 0, cb_attention_weights, /* offset */ r * Sk_chunk_t + n);
-                    tile_regs_release();
+                    const uint32_t mask_dst = (step_first_k_tile + n == row_tile) ? 0U : 1U;
+                    pack_tile</* out_of_order */ true>(mask_dst, cb_attention_weights, /* offset */ r * Sk_chunk_t + n);
                 }
             }
             pack_reconfig_l1_acc(0);
+            tile_regs_release();
 
             cb_push_back(cb_attention_weights, score_tiles);
         }
