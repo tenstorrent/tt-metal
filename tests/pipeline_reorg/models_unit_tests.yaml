@@ -2376,6 +2376,7 @@
   budget_type: unit
 
 # MOSS-Image Base/SFT: pinned CUDA component replay plus native text-to-image smoke.
+# Select platform Ubuntu 24.04 (Python 3.12): Pillow 13 requires Python >=3.11.
 # Existing bh_p150 is a current cloud-MLPerf functional lane; civ2's unit_tier3
 # budget is already consumed. Two discrete P150s are NOT equivalent to a P300.
 - name: MOSS-Image Base and SFT component tests (P150)

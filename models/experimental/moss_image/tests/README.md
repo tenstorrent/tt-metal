@@ -4,7 +4,12 @@ Tests use repository `mesh_device` and `device_params` fixtures. Model code neve
 opens or closes their devices. Integrated tests reserve 128 KiB L1-small for
 the full-resolution VAE; the corrected SFPU encoder recurrence runs within the
 same reservation. Run from the TT-Metal checkout with its freshly
-built native TTNN and the model runtime requirements installed.
+built native TTNN and the model runtime requirements installed. Use Python 3.11
+or newer for both TTNN and the model; Pillow 13 does not support Python 3.10.
+For CI, select a matching source-build image (for example Ubuntu 24.04 / Python
+3.12), rather than installing these requirements into the default Python 3.10
+image. Select **Ubuntu 24.04** in the Tier 3 model-unit-tests workflow
+platform input so the native TTNN build and test interpreter match.
 
 ## Assets
 
