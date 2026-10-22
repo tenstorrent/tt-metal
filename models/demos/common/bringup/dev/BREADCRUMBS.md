@@ -1698,3 +1698,13 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   commit-only, the stamped gate result, the A/B sides, the kept profiles; never re-run for an administrative reason;
   say what re-runs, why and how long before starting it). Agents' rule 8: run the full gate once, after the last edit.
   Owner: "THE SYSTEM SHOULD NOT ACT AS TIME IS NOT IMPORTANT".
+
+## F154: commit-only takes the fix the refusing hook asked for (2026-10-22)
+- DeepSeek-V4.1 P.18: the gate passed, git's prefer-expect-error hook refused the commit (a fork unit test used
+  pytest.raises). Fixing the named test file changed the task's files, so F149's commit-only refused it and asked for
+  a full re-run: the hook's own fix was treated as a code change.
+- Now the pending commit keeps a per-file hash map; commit-only commits without a re-run when every file changed
+  since the gate is one the hook's output names, and lists them in the commit. Any other changed file still needs
+  the gate. A pending commit without the map (older) records it at its next refusal.
+- core/gate.py (task_files_map, _hook_fixed, _refused, commit_only); selftest
+  test_commit_only_takes_a_fix_to_the_files_the_hook_named.
