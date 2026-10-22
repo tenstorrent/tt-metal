@@ -44,10 +44,8 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
     }
 }
 
-void prepare_ephemeral_allocation(
-    EphemeralAllocationMetadata& metadata,
-    PersistentL1Arena& persistent_l1,
-    std::unordered_map<CoreCoord, PersistentL1Arena::Seal>& seals) {
+void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1) {
+    auto& seals = metadata.seals[&persistent_l1];
     for (auto& region : metadata.regions) {
         const CoreRangeSet cores(region.core_range);
         for (const CoreCoord& core : corerange_to_cores(cores)) {

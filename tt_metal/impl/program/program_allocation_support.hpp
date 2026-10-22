@@ -47,6 +47,16 @@ struct EphemeralAllocationMetadata {
     };
 
     std::vector<LockstepAllocationRegion> regions;
+
+    // Per-core L1 is laid out as [persistent L1 arena, program-scope resources, ...], growing upward.
+    // (See persistent_l1_arena.hpp for more.)
+    //
+    // Once `prepare_ephemeral_allocation` is called, further persistent L1 allocations must be forbidden on the
+    // regions' cores, as they would overlap the program-scope resources placed above the arena.
+    //
+    // These seals stop the arena from giving out space on those cores, per arena and per core. The seals are released
+    // via RAII once this metadata is destructed.
+    std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> seals;
 };
 
 // Registers regions of allocation sharing the same allocation.
@@ -62,10 +72,7 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 // side-effect:
 //  - updates regions' base address.
 //  - "seal" persistent_l1 to prevent collision between address spaces during `allocate_ephemeral_memory`.
-void prepare_ephemeral_allocation(
-    EphemeralAllocationMetadata& metadata,
-    PersistentL1Arena& persistent_l1,
-    std::unordered_map<CoreCoord, PersistentL1Arena::Seal>& seals);
+void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
 
 // Performs lockstep allocation of a program-local resource across `cores`.
 //

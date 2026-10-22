@@ -468,7 +468,8 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
-    persistent_l1_seals_.clear();
+    cb_allocation_metadata_.seals.clear();
+    dfb_allocation_metadata_.seals.clear();
     Inspector::program_destroyed(this);
 }
 
@@ -2185,9 +2186,8 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 
 void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     auto& persistent_l1 = device->allocator_impl()->persistent_l1();
-    auto& seals = this->persistent_l1_seals_[&persistent_l1];
-    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1, seals);
-    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1, seals);
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1);
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1);
 }
 
 // Scratchpad is a Metal 2.0-only construct.
