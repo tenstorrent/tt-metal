@@ -24,6 +24,8 @@
 #include "tensor/flatbuffer/tensor_file_layout.hpp"
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
+#include "ttnn/tensor/topology_check.hpp"
+#include "ttnn/config.hpp"
 
 namespace ttnn {
 using tt::tt_metal::MemoryPin;
@@ -40,9 +42,15 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         // rank, and each host will attempt to flush the serialized tensor file to disk.
         cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-        // Only rank 0 serializes and writes; the other ranks wait in the barrier below. If rank 0 throws before its
-        // barrier (a rejected tensor, a failed write) they wait until the launcher tears the job down.
-        // Reporting the failure to every rank needs a collective in place of the barrier; follow-up.
+        if (*ctx->size() > 1) {
+            // After the gather every rank holds every shard, so every rank reaches the same verdict and a rejected
+            // tensor throws on all of them, rather than on rank 0 alone (inside to_flatbuffer, which repeats the
+            // check) while the others wait in the barrier below.
+            ttnn::verify_shards_match_topology(cpu_tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
+        }
+        // Only rank 0 serializes and writes; the other ranks wait in the barrier below. If rank 0 fails the write
+        // itself they wait until the launcher tears the job down; reporting that needs a collective in place of the
+        // barrier; follow-up.
         if (ctx->rank() != tt::tt_metal::distributed::multihost::Rank(0)) {
             ctx->barrier();
             return;
