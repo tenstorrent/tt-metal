@@ -639,6 +639,80 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     )
 
 
+def _int32_sign_boundary_block(dims):
+    """Int32 block whose rows each pivot on the -1 / 0 boundary (or a neighbour of it), so the row result is
+    decided by exactly the pairs the Blackhole row path's sign-magnitude order map sends to -0 / +0.
+    """
+    rows, cols = dims
+    values = torch.empty(dims, dtype=torch.int64)
+    for r in range(rows):
+        c = (7 * r + 3) % cols  # one planted lane per row, a different column each row
+        pattern = r % 6
+        if pattern == 0:  # {-1, 0}: MAX 0, MIN -1
+            values[r, :] = -1
+            values[r, c] = 0
+        elif pattern == 1:  # {0, -1}: MAX 0, MIN -1
+            values[r, :] = 0
+            values[r, c] = -1
+        elif pattern == 2:  # {-1, 0, 1}
+            values[r, :] = torch.tensor([-1, 0, 1]).repeat(cols // 3 + 2)[
+                r % 3 : r % 3 + cols
+            ]
+        elif pattern == 3:  # {-2, -1}: MAX -1, MIN -2
+            values[r, :] = -2
+            values[r, c] = -1
+        elif pattern == 4:  # {-1, -2}: MIN -2
+            values[r, :] = -1
+            values[r, c] = -2
+        else:  # {0, -1, INT32_MIN}
+            values[r, :] = 0
+            values[r, c] = -1
+            values[r, (c + 11) % cols] = INT32_MIN
+    return values
+
+
+@pytest.mark.parametrize(
+    "mathop, dims",
+    [
+        (MathOperation.ReduceColumn, [TILE_DIM, TILE_DIM]),
+        (MathOperation.ReduceRow, [TILE_DIM, TILE_DIM]),
+        # Multi-tile rows: the per-tile results meet again in the cross-tile combine.
+        (MathOperation.ReduceRow, [TILE_DIM, 2 * TILE_DIM]),
+        (MathOperation.ReduceRow, [2 * TILE_DIM, 2 * TILE_DIM]),
+    ],
+    ids=["col-1x1", "row-1x1", "row-1x2", "row-2x2"],
+)
+@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+def test_int32_reduce_max_min_sign_boundary(mathop, dims, reduce_pool):
+    """Int32 MAX/MIN where -1 against 0 (and -2 against -1) decides every row.
+
+    The Blackhole row path XORs 0x7FFFFFFF into negative operands so that a plain sign-magnitude SFPSWAP orders
+    them as two's-complement; that sends -1 to -0, so these rows only come out right if SFPSWAP ranks -0 below +0
+    and the map is undone before the store. Random Int32 data almost never makes that pair decide a row.
+    """
+    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
+        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+
+    values = _int32_sign_boundary_block(dims)
+    reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
+    golden = (
+        values.max(dim=reduce_axis).values
+        if reduce_pool == ReducePool.Max
+        else values.min(dim=reduce_axis).values
+    )
+
+    _, res = _run_integer_reduce(
+        mathop, reduce_pool, injected_value=None, tile=values.to(torch.int32)
+    )
+    res = res.to(torch.int64)
+
+    mismatch = (golden != res).nonzero().flatten().tolist()
+    assert not mismatch, (
+        f"{len(mismatch)} mismatched Int32 {reduce_pool} {mathop} lanes, first at {mismatch[0]}: "
+        f"golden {int(golden[mismatch[0]])}, device {int(res[mismatch[0]])}"
+    )
+
+
 @pytest.mark.parametrize(
     "mathop, dims",
     [
@@ -668,7 +742,7 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
     for i, extreme in enumerate([3, INT32_MAX, UINT32_BIT31 + 5]):
         values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
-    # Lanes where 0 vs 0x80000000 decides the result (after the flip they are the +0 / -0 pair). Row and
+    # Lanes where 0 vs 0x80000000 decides the result (after the flip they are INT32_MIN vs 0). Row and
     # column MIN_LANE are 0x80000000 with a planted 0 (MIN must find a 0); row and column MAX_LANE are 0 with a
     # planted 0x80000000 (MAX must find it). The lanes cross: row MIN_LANE also holds column MAX_LANE's 0 and
     # row MAX_LANE holds column MIN_LANE's 0x80000000, which are further instances of the same pair.
@@ -681,6 +755,12 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     values[7, MIN_LANE] = 0
     values[:, MAX_LANE] = 0
     values[9, MAX_LANE] = UINT32_BIT31
+    # Rows where 0x7FFFFFFF vs 0x80000000 decides the result: after the flip they are -1 vs 0, the pair the row
+    # path's sign-magnitude order map sends to -0 / +0. Written after the column lanes so nothing overrides them.
+    values[27, :] = INT32_MAX
+    values[27, 14] = UINT32_BIT31
+    values[28, :] = UINT32_BIT31
+    values[28, 16] = INT32_MAX
     values[3, 5] = UINT32_MAX
     reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
     golden = (
