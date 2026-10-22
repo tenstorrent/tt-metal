@@ -81,16 +81,9 @@ FORCE_INLINE uint32_t wait_for_fabric_mux_l1_base(
     uint8_t fabric_mux_y,
     uint32_t fabric_mux_l1_base_semaphore_id,
     uint32_t local_scratch_address) {
-    uint64_t noc_addr = get_noc_addr(fabric_mux_x, fabric_mux_y, get_semaphore(fabric_mux_l1_base_semaphore_id));
-    auto local_scratch_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_scratch_address);
-
-    local_scratch_ptr[0] = 0;
-    do {
-        noc_async_read_one_packet(noc_addr, local_scratch_address, 4);
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-    } while (local_scratch_ptr[0] == 0);
-    return local_scratch_ptr[0];
+    // The mux publishes its map's address once it is ready for traffic.
+    return poll_fabric_mux_l1_base(
+        fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_scratch_address, noc_index);
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
