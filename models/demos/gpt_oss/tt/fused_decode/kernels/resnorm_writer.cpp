@@ -38,18 +38,9 @@ void kernel_main() {
         return get_noc_addr((w >> 8) & 0xFF, w & 0xFF, 0);
     };
     const uint32_t all_base = get_write_ptr(cb_all);  // (fresh CB: the same address on every core)
-
-    cb_wait_front(cb_part, 1);
-    const uint32_t src = get_read_ptr(cb_part);
-    for (uint32_t k = 0; k < GX; ++k) {
-        noc_async_write(src, peer(k) + all_base + nb * f32_tile, f32_tile);
-    }
-    noc_async_write_barrier();
-    for (uint32_t k = 0; k < GX; ++k) {
-        noc_semaphore_inc(peer(k) + get_semaphore(0), 1);
-    }
-    noc_async_atomic_barrier();
-    cb_pop_front(cb_part, 1);
+#ifndef RN_MPC
+#define RN_MPC 1
+#endif
 
     constexpr uint32_t acc_base = 11;
 #ifdef RN_OUT_BF16
@@ -66,8 +57,27 @@ void kernel_main() {
 #else
     constexpr uint32_t acc_lo = acc_n8;
 #endif
-    for (uint32_t j = 0; j < NB; ++j) {
-        const uint32_t page = m * NT + nb * NB + j;
+#ifdef RN_ROUTER
+    constexpr auto lo_args = TensorAccessorArgs<acc_lo>();
+    const auto s_lo = TensorAccessor(lo_args, get_common_arg_val<uint32_t>(2), tile);
+    const uint32_t lall_base = get_write_ptr(cb_lall);
+#endif
+    for (uint32_t mi = 0; mi < RN_MPC; ++mi) {
+        const uint32_t rt = m * RN_MPC + mi;
+        // this row tile's partial into slot mi GX + nb of every core of the row, then their semaphore 0
+        cb_wait_front(cb_part, 1);
+        const uint32_t src = get_read_ptr(cb_part);
+        for (uint32_t k = 0; k < GX; ++k) {
+            noc_async_write(src, peer(k) + all_base + (mi * GX + nb) * f32_tile, f32_tile);
+        }
+        noc_async_write_barrier();
+        for (uint32_t k = 0; k < GX; ++k) {
+            noc_semaphore_inc(peer(k) + get_semaphore(0), 1);
+        }
+        noc_async_atomic_barrier();
+        cb_pop_front(cb_part, 1);
+        for (uint32_t j = 0; j < NB; ++j) {
+            const uint32_t page = rt * NT + nb * NB + j;
 #ifdef RN_OUT_BF16
         cb_wait_front(cb_n, 1);
         noc_async_write(get_read_ptr(cb_n), s_n.get_noc_addr(page), n_tile);
@@ -83,25 +93,23 @@ void kernel_main() {
 #ifdef RN_X8
         cb_pop_front(cb_n8, 1);
 #endif
-    }
-#ifdef RN_ROUTER
-    {
-        constexpr auto lo_args = TensorAccessorArgs<acc_lo>();
-        const uint32_t lall_base = get_write_ptr(cb_lall);
-        cb_wait_front(cb_lp, 1);
-        noc_async_write(get_read_ptr(cb_lp), peer(0) + lall_base + nb * f32_tile, f32_tile);
-        noc_async_write_barrier();
-        noc_semaphore_inc(peer(0) + get_semaphore(1), 1);
-        noc_async_atomic_barrier();
-        cb_pop_front(cb_lp, 1);
-        if (nb == 0) {
-            const auto s_lo = TensorAccessor(lo_args, get_common_arg_val<uint32_t>(2), tile);
-            cb_wait_front(cb_lo, 1);
-            noc_async_write(get_read_ptr(cb_lo), s_lo.get_noc_addr(m), tile);
-            noc_async_write_barrier();
-            cb_pop_front(cb_lo, 1);
         }
-    }
+#ifdef RN_ROUTER
+        {
+            cb_wait_front(cb_lp, 1);
+            noc_async_write(get_read_ptr(cb_lp), peer(0) + lall_base + (mi * GX + nb) * f32_tile, f32_tile);
+            noc_async_write_barrier();
+            noc_semaphore_inc(peer(0) + get_semaphore(1), 1);
+            noc_async_atomic_barrier();
+            cb_pop_front(cb_lp, 1);
+            if (nb == 0) {
+                cb_wait_front(cb_lo, 1);
+                noc_async_write(get_read_ptr(cb_lo), s_lo.get_noc_addr(rt), tile);
+                noc_async_write_barrier();
+                cb_pop_front(cb_lo, 1);
+            }
+        }
 #endif
+    }
     noc_async_write_barrier();
 }

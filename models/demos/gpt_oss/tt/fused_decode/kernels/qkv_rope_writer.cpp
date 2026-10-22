@@ -25,16 +25,20 @@ void kernel_main() {
     const auto s_v0 = TensorAccessor(v0_args, get_common_arg_val<uint32_t>(1), tile);
     const auto s_v1 = TensorAccessor(v1_args, get_common_arg_val<uint32_t>(2), tile);
     const uint32_t hc = get_absolute_logical_x(), r = get_absolute_logical_y();
-    for (uint32_t i = 0; i < 2 * HPC; ++i) {
+#ifndef QR_MPC
+#define QR_MPC 1
+#endif
+    for (uint32_t q = 0; q < QR_MPC * 2 * HPC; ++q) {  // (QR_MPC row tiles per core: row tile r QR_MPC + q / (2 HPC))
+        const uint32_t i = q % (2 * HPC), rr = r * QR_MPC + q / (2 * HPC);
         const uint32_t h = hc * HPC + i / 2, d = i % 2;
         cb_wait_front(cb_out, 1);
         uint64_t dst;
         if (h < NA) {
-            dst = s_qk.get_noc_addr((h * RT + r) * 2 + d);
+            dst = s_qk.get_noc_addr((h * RT + rr) * 2 + d);
         } else if (h < NA + NB) {
-            dst = s_v0.get_noc_addr(((h - NA) * RT + r) * 2 + d);
+            dst = s_v0.get_noc_addr(((h - NA) * RT + rr) * 2 + d);
         } else {
-            dst = s_v1.get_noc_addr(((h - NA - NB) * RT + r) * 2 + d);
+            dst = s_v1.get_noc_addr(((h - NA - NB) * RT + rr) * 2 + d);
         }
         noc_async_write(get_read_ptr(cb_out), dst, tile);
         noc_async_writes_flushed();

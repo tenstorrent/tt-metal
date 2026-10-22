@@ -13,6 +13,9 @@
 void kernel_main() {
     constexpr uint32_t cb_gu = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
-    cb_reserve_back(cb_gu, 2 * NH);
-    cb_push_back(cb_gu, 2 * NH);
+#ifndef SM_MPC
+#define SM_MPC 1
+#endif
+    cb_reserve_back(cb_gu, 2 * NH * SM_MPC);  // (SM_MPC row tiles per core: the whole shard)
+    cb_push_back(cb_gu, 2 * NH * SM_MPC);
 }

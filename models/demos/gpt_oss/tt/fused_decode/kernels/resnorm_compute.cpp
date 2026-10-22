@@ -73,25 +73,30 @@ void kernel_main() {
     constexpr uint32_t cb_b = get_compile_time_arg_val(22);
 
     compute_kernel_hw_startup(cb_r, cb_y, cb_r2);
-    // (the inits do not switch the unpacker formats: state_configure is a no-op outside the sentinel build)
-    // x = r + y -> the new residual
-    cb_wait_front(cb_r, NB);
-    cb_wait_front(cb_y, NB);
-    pack_reconfig_data_format(cb_r2);
-#ifdef RN_F32
+#ifndef RN_MPC
+#define RN_MPC 1
+#endif
 #ifdef RN_BIAS
     cb_wait_front(cb_b, NB);
 #endif
-    for (uint32_t j = 0; j < NB; ++j) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_r);
-        copy_init(cb_r);
-        copy_tile(cb_r, j, 0);
-        reconfig_data_format_srca(cb_y);
-        copy_init(cb_y);
-        copy_tile(cb_y, j, 1);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
+    // RN_MPC row tiles per core, one after another (cb_r / cb_r2: the shards, row tile mi's NB tiles at the front)
+    for (uint32_t mi = 0; mi < RN_MPC; ++mi) {
+        // (the inits do not switch the unpacker formats: state_configure is a no-op outside the sentinel build)
+        // x = r + y -> the new residual
+        cb_wait_front(cb_r, NB);
+        cb_wait_front(cb_y, NB);
+        pack_reconfig_data_format(cb_r2);
+#ifdef RN_F32
+        for (uint32_t j = 0; j < NB; ++j) {
+            tile_regs_acquire();
+            reconfig_data_format_srca(cb_r);
+            copy_init(cb_r);
+            copy_tile(cb_r, j, 0);
+            reconfig_data_format_srca(cb_y);
+            copy_init(cb_y);
+            copy_tile(cb_y, j, 1);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
 #ifdef RN_BIAS
         reconfig_data_format_srca(cb_b);
         copy_init(cb_b);
@@ -129,9 +134,6 @@ void kernel_main() {
 #endif
     cb_pop_front(cb_r, NB);
     cb_pop_front(cb_y, NB);
-#ifdef RN_BIAS
-    cb_pop_front(cb_b, NB);
-#endif
 
     // x^2 (FP32)
     cb_wait_front(cb_r2, NB);
@@ -277,8 +279,6 @@ void kernel_main() {
         tile_regs_release();
     }
     cb_pop_front(cb_t, NB);
-    cb_pop_front(cb_g, NB);
-    cb_pop_front(cb_sc, 1);
 
 #ifdef RN_ROUTER
     // the partial logits: sum_j n_j W_j (matmul: SrcA <- in1 (W), SrcB <- in0 (n))
@@ -298,7 +298,6 @@ void kernel_main() {
     tile_regs_release();
     cb_push_back(cb_lp, 1);
     cb_pop_front(cb_nm, NB);
-    cb_pop_front(cb_w, NB);
     if (get_absolute_logical_x() == 0) {
         // the row tile's logits: the GX partials + the bias tile (every row the bias)
         cb_wait_front(cb_lall, GX);
@@ -319,6 +318,18 @@ void kernel_main() {
         tile_regs_release();
         cb_push_back(cb_lo, 1);
         cb_pop_front(cb_lall, GX);
+    }
+#endif
+    cb_pop_front(cb_r2, NB);  // (the next row tile's new residual tiles at the front)
+    }
+    cb_pop_front(cb_g, NB);
+    cb_pop_front(cb_sc, 1);
+#ifdef RN_BIAS
+    cb_pop_front(cb_b, NB);
+#endif
+#ifdef RN_ROUTER
+    cb_pop_front(cb_w, NB);
+    if (get_absolute_logical_x() == 0) {
         cb_pop_front(cb_lb, 1);
     }
 #endif

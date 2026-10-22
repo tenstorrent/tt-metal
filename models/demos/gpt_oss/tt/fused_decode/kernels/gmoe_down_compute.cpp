@@ -37,6 +37,41 @@ void kernel_main() {
         if (m == 0) {
             continue;
         }
+        if (m > MAXS) {
+            // a big expert (gmoe_down_reader.cpp): per group of MAXS slots, this core's units of it
+            if (loaded != E) {
+                cb_pop_front(cb_a, MAXS * KD);
+                loaded = E;
+            }
+            const uint32_t ue1 = u1 < (e + 1) * NU ? u1 : (e + 1) * NU;
+            for (uint32_t g0 = 0; g0 < m; g0 += MAXS) {
+                const uint32_t n = m - g0 < MAXS ? m - g0 : MAXS;
+                cb_wait_front(cb_a, MAXS * KD);
+                for (uint32_t uu = u; uu < ue1; ++uu) {
+                    cb_wait_front(cb_w, KD);
+                    for (uint32_t g = 0; g < n; g += RT) {
+                        const uint32_t rt = n - g < RT ? n - g : RT;
+                        matmul_block_init(cb_a, cb_w, 0, 1, rt, KD);
+                        tile_regs_acquire();
+                        for (uint32_t k = 0; k < KD; ++k) {
+                            matmul_block(cb_a, cb_w, g * KD + k, k, 0, false, 1, rt, KD);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t r = 0; r < rt; ++r) {
+                            cb_reserve_back(cb_out, 1);
+                            pack_tile(r, cb_out);
+                            cb_push_back(cb_out, 1);
+                        }
+                        tile_regs_release();
+                    }
+                    cb_pop_front(cb_w, KD);
+                }
+                cb_pop_front(cb_a, MAXS * KD);
+            }
+            u = ue1 - 1;
+            continue;
+        }
         if (e != loaded) {
             if (loaded != E) {
                 cb_pop_front(cb_a, MAXS * KD);

@@ -35,7 +35,15 @@ from ..fused_decode.boundary import KERNEL_DIR
 TILE = 32
 E = 32
 MAX_SLOTS = 72  # sum over experts of ceil(count / 32) <= 256 x 5 / 32 + 32 (a BF16 tie routes 5 experts)
-MAXS = 8  # slots per expert (256 rows)
+MAXS = 8  # slots per expert (256 rows); the down's A_g block (an expert with more: in groups of MAXS, gmoe_down_*)
+
+
+def max_slots(rows):
+    """The slots of a rows-row pass: rows x 5 / 32 + 31 at most routed (each expert's last slot partly full) + the bias
+    slot, a multiple of 8 (X_g's 8 core rows); 72 up to 256 rows, 112 at 512, 192 at 1024."""
+    return max(MAX_SLOTS, -(-(rows * 5 // TILE + 32) // 8) * 8)
+
+
 GROUP = 4  # gate|up in0 block (slots)
 # Timed with the routing tables of all 24 layers of a real run injected: fewer outstanding DRAM reads are faster
 # (congestion): gate|up 1 unit in flight (vs 3: 240 -> 224 us per layer at 3 pages), down 2 (vs 6: 92 -> 86 us)
@@ -69,8 +77,9 @@ class GroupedMoE:
         [1, E x 720], down_bias [E, hidden]) on DRAM (BatchedVerify.moe); gate / up / down are only read here.
         rows: the routed pass's rows (32 .. 256, a multiple of 32). share: another GroupedMoE whose relaid weights and
         rows-independent buffers (table, A_g, Y_g) this one uses (passes of different row counts, run one at a time)."""
-        assert rows % TILE == 0 and TILE <= rows <= 256
+        assert rows % TILE == 0 and TILE <= rows <= 1024
         self.mesh, self.hidden, self.rows = mesh, hidden, rows
+        self.S = max_slots(rows)
         self.gu_split = GU_SPLIT
         grid = mesh.compute_with_storage_grid_size()
         self.gx = grid.x
@@ -88,12 +97,19 @@ class GroupedMoE:
             return ttnn.from_torch(torch.zeros(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh,
                                    memory_config=mc, mesh_mapper=rep)  # fmt: skip
 
-        S = MAX_SLOTS * TILE
+        S = self.S * TILE
         # the gather / combine matrices in L1 (the route op writes them, the matmuls read them): route 54 -> 45 us,
         # gather 39 -> 36 us per layer
-        self.p1t = zeros([1, 1, S, rows], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG)
-        self.pw = zeros([1, 1, rows, S], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG)
+        # (a 1024-row pass: in DRAM, 115 KB per core each in L1 left too little L1 for the prefill's programs)
+        pmc = ttnn.L1_MEMORY_CONFIG if rows <= 512 else ttnn.DRAM_MEMORY_CONFIG
+        self.p1t = zeros([1, 1, S, rows], ttnn.bfloat16, pmc)
+        self.pw = zeros([1, 1, rows, S], ttnn.bfloat16, pmc)
         self._pass_configs(rows)
+        if share is not None and share.S != self.S:  # (more slots: its own A_g / Y_g; the weights shared)
+            self.table, self.layers = share.table, share.layers
+            self.ck_hifi2, self.ck_combine = share.ck_hifi2, share.ck_combine
+            self._slot_buffers(zeros)
+            return
         if share is not None:
             self.table, self.ag, self.yg, self.layers = share.table, share.ag, share.yg, share.layers
             self.ck_hifi2, self.ck_combine = share.ck_hifi2, share.ck_combine
@@ -103,18 +119,7 @@ class GroupedMoE:
         self.table = ttnn.from_torch(torch.zeros(1, 1, 1, 2 * E, dtype=torch.int32), dtype=ttnn.uint32,
                                      layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                      mesh_mapper=rep)  # fmt: skip
-        # A_g in L1, height sharded one 32-row slot per core (the down reader loads a slot in one read; in DRAM: round
-        # 23.8 vs 23.3 ms at ISL 256)
-        ag_mc = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
-            ttnn.ShardSpec(self._first_cores(MAX_SLOTS), [TILE, self.ku * TILE], ttnn.ShardOrientation.ROW_MAJOR),
-        )  # fmt: skip
-        self.ag = zeros([1, 1, S, self.ku * TILE], ttnn.bfloat8_b, ag_mc)
-        # Y_g: the down outputs per slot row (the combine's K side), BFP8 (down + combine 28 us faster per layer than
-        # BF16, output PCC vs the float reference 0.99991 vs 0.99995), one in L1 for all layers; its last slot holds the
-        # layer's down bias rows (copied by the route op) and Pw's columns of it the routing weights: the down bias
-        # through the combine, no bias matmul and add per layer
-        self.yg = zeros([1, 1, S, hidden], ttnn.bfloat8_b, ttnn.L1_MEMORY_CONFIG)
+        self._slot_buffers(zeros)
         # per layer: 32-row bias tiles, and the down K tile each expert shares with a neighbour, the neighbour's rows
         # zeroed (row tile e of edge)
         keep = torch.zeros(E, 1, 1, TILE, 1)
@@ -161,22 +166,43 @@ class GroupedMoE:
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )  # fmt: skip
+
+    def _slot_buffers(self, zeros):
+        """The slot-count-dependent buffers: A_g, Y_g and X_g's layout."""
+        mesh, S = self.mesh, self.S * TILE
+        # A_g in L1, height sharded one 32-row slot per core (the down reader loads a slot in one read; in DRAM: round
+        # 23.8 vs 23.3 ms at ISL 256); more slots than cores (512 / 1024-row passes): 2 per core
+        spc = -(-self.S // self.nc)
+        ag_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+            ttnn.ShardSpec(self._first_cores(-(-self.S // spc)), [spc * TILE, self.ku * TILE], ttnn.ShardOrientation.ROW_MAJOR),
+        )  # fmt: skip
+        self.ag = zeros([1, 1, S, self.ku * TILE], ttnn.bfloat8_b, ag_mc)
+        # Y_g: the down outputs per slot row (the combine's K side), BFP8 (down + combine 28 us faster per layer than
+        # BF16, output PCC vs the float reference 0.99991 vs 0.99995), one in L1 for all layers; its last slot holds the
+        # layer's down bias rows (copied by the route op) and Pw's columns of it the routing weights: the down bias
+        # through the combine, no bias matmul and add per layer
+        self.yg = zeros([1, 1, S, self.hidden], ttnn.bfloat8_b, ttnn.L1_MEMORY_CONFIG)
         # X_g block sharded as the gather's 10 x 8 output blocks: a slot's row is 10 contiguous 9-tile runs, the gate|up
         # reader loads it in 10 reads instead of 90 single-tile ones
         self.xg_mc = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1,
             ttnn.ShardSpec(ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))]),
-                           [MAX_SLOTS // 8 * TILE, self.kt // 10 * TILE], ttnn.ShardOrientation.ROW_MAJOR),
+                           [self.S // 8 * TILE, self.kt // 10 * TILE], ttnn.ShardOrientation.ROW_MAJOR),
         )  # fmt: skip
         self.xg_noc = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(j, 0)).x for j in range(10)]
         self.xg_noc += [mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, i)).y for i in range(8)]
 
     def _pass_configs(self, rows):
-        """The row-count-dependent matmul configs: gather [72 x 32, rows] x [rows, hidden]: 10 x 8 cores, 9 x 9 output
-        tiles each; combine [rows, 72 x 32] x [72 x 32, hidden]: 10 x rows / 32 cores, 1 x 9 output tiles each, 8-tile
-        K blocks."""
-        self.gather_pc = _pc2d(10, 8, rows // TILE, MAX_SLOTS // 8, self.kt // 10, 3)
-        self.combine_pc = _pc2d(10, rows // TILE, 8, 1, self.kt // 10, 3)
+        """The row-count-dependent matmul configs: gather [S x 32, rows] x [rows, hidden]: 10 x 8 cores, S / 8 x 9 output
+        tiles each; combine [rows, S x 32] x [S x 32, hidden]: 10 x gy cores (gy = rows / 32 up to 8), rows / 32 / gy x
+        9 output tiles each, 8-tile K blocks."""
+        kt_r, pm = rows // TILE, self.S // 8
+        # the gather's K blocks: all the rows up to 256; more rows: blocks small enough for the double-buffered in0
+        bw = kt_r if kt_r <= 8 else max(d for d in range(1, 9) if kt_r % d == 0 and pm * d <= 56)
+        self.gather_pc = _pc2d(10, 8, bw, pm, self.kt // 10, 3)
+        gy = min(kt_r, 8)
+        self.combine_pc = _pc2d(10, gy, 8, kt_r // gy, self.kt // 10, 3)
 
     def _relayout(self, src0, src1, units, page, down, split=1):
         """Every unit's weight tiles into one contiguous page (fused_decode/kernels/gmoe_relayout.cpp): a [units, page]
@@ -224,13 +250,17 @@ class GroupedMoE:
         """The routing and the plan in one program (fused_decode/kernels/gmoe_route.cpp): logits [1, 1, rows, E] (BF16
         tiles) -> self.p1t / self.pw (the routing weights in Pw's slot columns and its last slot) / self.table, and the
         layer's down bias rows into Y_g's last slot."""
-        RW, RH = 9, MAX_SLOTS // 9
+        if self.S <= MAX_SLOTS:
+            RW, RH, rpc = 9, MAX_SLOTS // 9, 4
+        else:  # (512 / 1024 rows: the whole grid, 8 / 16 rows per phase-1 core, several slots per core)
+            g = self.mesh.compute_with_storage_grid_size()
+            RW, RH, rpc = g.x, g.y, self.rows // 64
         c0, c1 = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(RW - 1, RH - 1)
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(c0, c1)])
         a_, b_ = self.mesh.worker_core_from_logical_core(c0), self.mesh.worker_core_from_logical_core(c1)
         b8 = self.layers[li]["down_bias8"]
         io = [logits, self.p1t, self.pw, self.table, b8, self.yg]
-        ct = [0, RW, MAX_SLOTS, RW * RH, 0, 1]
+        ct = [0, RW, self.S, RW * RH, 0, 1]
         for t in io:
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         addr = [t.buffer_address() for t in io]
@@ -238,9 +268,11 @@ class GroupedMoE:
             kernel_source=str(KERNEL_DIR / "gmoe_route.cpp"), core_ranges=cores, compile_time_args=ct,
             runtime_args=[], common_runtime_args=addr[:4] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y] + addr[4:],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-            defines=[("GMOE_KTH", str(self.kt)), ("GMOE_ROWS", str(self.rows))],
+            defines=[("GMOE_KTH", str(self.kt)), ("GMOE_ROWS", str(self.rows)), ("GMOE_RPC", str(rpc))]
+            + ([("GMOE_CNT16", "1")] if self.rows >= 1024 else []),
         )  # fmt: skip
-        scr = self.rows * 32 + 64 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
+        scr = (self.rows * 32 + 64 + rpc * 32 + 2048 + rpc * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
+               + (self.rows // rpc) * 64)  # fmt: skip
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
         # 0: arrivals, 1: go, 2 .. 12: the expert counts (atomic increments at the hub, zeroed by every launch)
         sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in range(2 + (E + 2) // 3)]
@@ -269,23 +301,27 @@ class GroupedMoE:
         rca = [t.buffer_address() for t in io]
         xg_arg = len(rca)
         rca += self.xg_noc
+        # (512 / 1024-row passes: an expert with more than GROUP slots in groups of GROUP, each with its units' weights,
+        # instead of its rows of X_g reloaded per unit: gate|up 4.1 -> 8.1 ms per pass at 512 rows otherwise)
+        gmajor = [("GMOE_GU_GMAJOR", "1")] if self.rows > 256 else []
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
                 runtime_args=[], common_runtime_args=rca,
                 defines=[("GMOE_DEPTH", str(GU_DEPTH)), ("GMOE_SPLIT", str(GU_SPLIT)), ("GMOE_XG_ARG", str(xg_arg)),
-                         ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(MAX_SLOTS // 8))],
+                         ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(self.S // 8))] + gmajor,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_writer.cpp"), core_ranges=cores, compile_time_args=wct,
                 runtime_args=[], common_runtime_args=[self.ag.buffer_address()],
+                defines=[("GMOE_CAP", str(GROUP))] if gmajor else [],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_compute.cpp"), core_ranges=cores, compile_time_args=cct,
-                runtime_args=[],
+                runtime_args=[], defines=gmajor,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),
@@ -322,7 +358,7 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_writer.cpp"), core_ranges=cores, compile_time_args=wct,
-                runtime_args=[], common_runtime_args=[yg.buffer_address()],
+                runtime_args=[], common_runtime_args=[yg.buffer_address()], defines=[("GMOE_CAP", str(MAXS))],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(

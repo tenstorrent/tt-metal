@@ -38,16 +38,6 @@ void kernel_main() {
 
     cb_reserve_back(cb_t, 1);
     noc_async_read(s_t.get_noc_addr(0), get_write_ptr(cb_t), tile);
-    cb_reserve_back(cb_cos, 2);
-    cb_reserve_back(cb_sin, 2);
-    for (uint32_t d = 0; d < 2; ++d) {
-        noc_async_read(s_cos.get_noc_addr(r * 2 + d), get_write_ptr(cb_cos) + d * tile, tile);
-        noc_async_read(s_sin.get_noc_addr(r * 2 + d), get_write_ptr(cb_sin) + d * tile, tile);
-    }
-    cb_reserve_back(cb_x, 2 * HPC);
-    for (uint32_t i = 0; i < 2 * HPC; ++i) {
-        noc_async_read(s_qkv.get_noc_addr(r * NT + hc * 2 * HPC + i), get_write_ptr(cb_x) + i * tile, tile);
-    }
 #ifdef QR_HEADNORM
     {
         constexpr auto gq_args = TensorAccessorArgs<t_args.next_compile_time_args_offset()>();
@@ -81,7 +71,25 @@ void kernel_main() {
 #endif
     noc_async_read_barrier();
     cb_push_back(cb_t, 1);
-    cb_push_back(cb_cos, 2);
-    cb_push_back(cb_sin, 2);
-    cb_push_back(cb_x, 2 * HPC);
+#ifndef QR_MPC
+#define QR_MPC 1
+#endif
+    // QR_MPC row tiles per core: row tile y QR_MPC + mi, one at a time
+    for (uint32_t mi = 0; mi < QR_MPC; ++mi) {
+        const uint32_t rt = r * QR_MPC + mi;
+        cb_reserve_back(cb_cos, 2);
+        cb_reserve_back(cb_sin, 2);
+        for (uint32_t d = 0; d < 2; ++d) {
+            noc_async_read(s_cos.get_noc_addr(rt * 2 + d), get_write_ptr(cb_cos) + d * tile, tile);
+            noc_async_read(s_sin.get_noc_addr(rt * 2 + d), get_write_ptr(cb_sin) + d * tile, tile);
+        }
+        cb_reserve_back(cb_x, 2 * HPC);
+        for (uint32_t i = 0; i < 2 * HPC; ++i) {
+            noc_async_read(s_qkv.get_noc_addr(rt * NT + hc * 2 * HPC + i), get_write_ptr(cb_x) + i * tile, tile);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_cos, 2);
+        cb_push_back(cb_sin, 2);
+        cb_push_back(cb_x, 2 * HPC);
+    }
 }

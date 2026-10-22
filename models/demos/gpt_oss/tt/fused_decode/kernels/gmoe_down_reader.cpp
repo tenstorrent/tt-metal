@@ -31,7 +31,8 @@ void kernel_main() {
     constexpr uint32_t NU = get_compile_time_arg_val(8);  // output column tiles (hidden / 32)
     constexpr uint32_t WC = get_compile_time_arg_val(9);
     constexpr uint32_t CC = get_compile_time_arg_val(10);
-    constexpr uint32_t MAXS = get_compile_time_arg_val(11);  // slots per expert (8)
+    constexpr uint32_t MAXS = get_compile_time_arg_val(11);  // slots cb_a holds (8): an expert with more is done in
+    // groups of MAXS slots, each group with all of this core's units of the expert (their weights read once per group)
     constexpr auto table_args = TensorAccessorArgs<12>();
     constexpr auto ag_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto d_args = TensorAccessorArgs<ag_args.next_compile_time_args_offset()>();
@@ -91,6 +92,38 @@ void kernel_main() {
     };
     for (uint32_t u = u0; u < u1; ++u) {
         if (p.tiles[u / NU] == 0) {
+            continue;
+        }
+        if (p.tiles[u / NU] > MAXS) {
+            // a big expert (more slots than cb_a holds; 512 / 1024-row passes): the pipeline drained, then per group
+            // of MAXS slots its rows of A_g and this core's units of it, one at a time
+            while (pushed < issued) {
+                push_one();
+            }
+            const uint32_t e = u / NU, m = p.tiles[e];
+            const uint32_t ue1 = u1 < (e + 1) * NU ? u1 : (e + 1) * NU;
+            for (uint32_t g = 0; g < m; g += MAXS) {
+                const uint32_t n = m - g < MAXS ? m - g : MAXS;
+                cb_reserve_back(cb_a, MAXS * KD);
+                const uint32_t l1 = get_write_ptr(cb_a);
+                for (uint32_t i = 0; i < n; ++i) {
+                    noc_async_read(
+                        s_a.get_noc_addr((p.base[e] + g + i) * KD, 0, 0), l1 + i * KD * a_tile, KD * a_tile, 0);
+                    noc_async_read_barrier(0);
+                }
+                cb_push_back(cb_a, MAXS * KD);
+                for (uint32_t uu = u; uu < ue1; ++uu) {
+                    cb_reserve_back(cb_w, KD);
+                    const uint32_t wl1 = wbase + (issued % DEPTH) * KD * w_tile;
+                    noc_async_read(s_d.get_noc_addr(uu, 0, 0), wl1, KD * w_tile, 0);
+                    noc_async_read_barrier(0);
+                    cb_push_back(cb_w, KD);
+                    ++issued;
+                    ++pushed;
+                }
+            }
+            loaded = gmoe::E;
+            u = ue1 - 1;
             continue;
         }
         if (issued - pushed == DEPTH) {

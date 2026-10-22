@@ -43,33 +43,37 @@ void kernel_main() {
     const uint32_t hc = get_absolute_logical_x();
 
     compute_kernel_hw_startup(cb_x, cb_t, cb_out);
-    cb_wait_front(cb_x, 2 * HPC);
-    cb_wait_front(cb_cos, 2);
-    cb_wait_front(cb_sin, 2);
     cb_wait_front(cb_t, 1);
 #ifdef QR_HEADNORM
     cb_wait_front(cb_g, 2 * HPC);
     cb_wait_front(cb_sc, 1);
 #endif
-    for (uint32_t p = 0; p < HPC; ++p) {
-        const uint32_t h = hc * HPC + p, i0 = 2 * p;
-        if (h >= ROPE_HEADS) {  // V: copied
-            for (uint32_t d = 0; d < 2; ++d) {
-                tile_regs_acquire();
-                reconfig_data_format_srca(cb_x);
-                copy_init(cb_x);
-                copy_tile(cb_x, i0 + d, 0);
-                tile_regs_commit();
-                cb_reserve_back(cb_out, 1);
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_out);
-                pack_tile(0, cb_out);
-                tile_regs_release();
-                cb_push_back(cb_out, 1);
+#ifndef QR_MPC
+#define QR_MPC 1
+#endif
+    for (uint32_t mi = 0; mi < QR_MPC; ++mi) {  // (QR_MPC row tiles per core)
+        cb_wait_front(cb_x, 2 * HPC);
+        cb_wait_front(cb_cos, 2);
+        cb_wait_front(cb_sin, 2);
+        for (uint32_t p = 0; p < HPC; ++p) {
+            const uint32_t h = hc * HPC + p, i0 = 2 * p;
+            if (h >= ROPE_HEADS) {  // V: copied
+                for (uint32_t d = 0; d < 2; ++d) {
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(cb_x);
+                    copy_init(cb_x);
+                    copy_tile(cb_x, i0 + d, 0);
+                    tile_regs_commit();
+                    cb_reserve_back(cb_out, 1);
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_out);
+                    pack_tile(0, cb_out);
+                    tile_regs_release();
+                    cb_push_back(cb_out, 1);
+                }
+                continue;
             }
-            continue;
-        }
-        uint32_t src = cb_x, s0 = i0;
+            uint32_t src = cb_x, s0 = i0;
 #ifdef QR_HEADNORM
         // x^2 of both tiles (FP32)
         tile_regs_acquire();
@@ -185,10 +189,11 @@ void kernel_main() {
 #ifdef QR_HEADNORM
         cb_pop_front(cb_nrm, 2);
 #endif
-    }
+        }
     cb_pop_front(cb_x, 2 * HPC);
     cb_pop_front(cb_cos, 2);
     cb_pop_front(cb_sin, 2);
+    }
     cb_pop_front(cb_t, 1);
 #ifdef QR_HEADNORM
     cb_pop_front(cb_g, 2 * HPC);

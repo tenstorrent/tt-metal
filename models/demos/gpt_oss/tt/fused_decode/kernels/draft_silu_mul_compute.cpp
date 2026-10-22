@@ -22,31 +22,36 @@ void kernel_main() {
     constexpr uint32_t BLK = 4;
 
     compute_kernel_hw_startup(cb_gu, cb_gu, cb_act);
-    cb_wait_front(cb_gu, 2 * NH);
+#ifndef SM_MPC
+#define SM_MPC 1
+#endif
     pack_reconfig_data_format(cb_act);
-    for (uint32_t t0 = 0; t0 < NH; t0 += BLK) {
-        const uint32_t n = t0 + BLK < NH ? BLK : NH - t0;
-        tile_regs_acquire();
-        copy_init(cb_gu);
-        for (uint32_t b = 0; b < n; ++b) {
-            copy_tile(cb_gu, t0 + b, b);
+    for (uint32_t mi = 0; mi < SM_MPC; ++mi) {  // (row tiles per core)
+        cb_wait_front(cb_gu, 2 * NH);
+        for (uint32_t t0 = 0; t0 < NH; t0 += BLK) {
+            const uint32_t n = t0 + BLK < NH ? BLK : NH - t0;
+            tile_regs_acquire();
+            copy_init(cb_gu);
+            for (uint32_t b = 0; b < n; ++b) {
+                copy_tile(cb_gu, t0 + b, b);
+            }
+            silu_tile_init();
+            for (uint32_t b = 0; b < n; ++b) {
+                silu_tile(b);
+            }
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gu);
+            for (uint32_t b = 0; b < n; ++b) {
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gu, NH + t0 + b, b);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t b = 0; b < n; ++b) {
+                cb_reserve_back(cb_act, 1);
+                pack_tile(b, cb_act);
+                cb_push_back(cb_act, 1);
+            }
+            tile_regs_release();
         }
-        silu_tile_init();
-        for (uint32_t b = 0; b < n; ++b) {
-            silu_tile(b);
-        }
-        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gu);
-        for (uint32_t b = 0; b < n; ++b) {
-            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gu, NH + t0 + b, b);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t b = 0; b < n; ++b) {
-            cb_reserve_back(cb_act, 1);
-            pack_tile(b, cb_act);
-            cb_push_back(cb_act, 1);
-        }
-        tile_regs_release();
+        cb_pop_front(cb_gu, 2 * NH);
     }
-    cb_pop_front(cb_gu, 2 * NH);
 }

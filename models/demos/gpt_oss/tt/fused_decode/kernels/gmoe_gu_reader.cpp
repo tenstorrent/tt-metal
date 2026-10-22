@@ -140,6 +140,40 @@ void kernel_main() {
         if (p.tiles[e] == 0) {
             continue;
         }
+#ifdef GMOE_GU_GMAJOR
+        if (p.tiles[e] > GROUP) {
+            // a big expert (512 / 1024-row passes): the pipeline drained, then per group of GROUP slots its rows of X_g
+            // once and this core's units of it (their weights read once per group, not the rows once per unit)
+            while (pushed < issued) {
+                push_one();
+            }
+            const uint32_t m = p.tiles[e];
+            const uint32_t ue1 = u1 < (e + 1) * NU ? u1 : (e + 1) * NU;
+            for (uint32_t g = 0; g < m; g += GROUP) {
+                load_x(p.base[e] + g, m - g < GROUP ? m - g : GROUP);
+                for (uint32_t uu = u; uu < ue1; ++uu) {
+                    const uint32_t slot = issued % DEPTH;
+                    cb_reserve_back(cb_w, PW);
+                    cb_reserve_back(cb_b, 2);
+                    const uint32_t wl1 = wbase + slot * PW * w_tile, bl1 = bbase + slot * 2 * b_tile;
+                    const uint32_t n = gmoe::g0(e) + uu % NU;
+                    for (uint32_t q = 0; q < SPLIT; ++q) {
+                        noc_async_read(s_gu.get_noc_addr(uu * SPLIT + q, 0, 0), wl1 + q * sp, sp, 0);
+                    }
+                    noc_async_read(s_gb.get_noc_addr(n, 0, 0), bl1, b_tile, 0);
+                    noc_async_read(s_ub.get_noc_addr(n, 0, 0), bl1 + b_tile, b_tile, 0);
+                    noc_async_read_barrier(0);
+                    cb_push_back(cb_w, PW);
+                    cb_push_back(cb_b, 2);
+                    ++issued;
+                    ++pushed;
+                }
+            }
+            loaded = gmoe::E;
+            u = ue1 - 1;
+            continue;
+        }
+#endif
         if (issued - pushed == DEPTH) {
             push_one();
         }

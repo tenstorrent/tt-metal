@@ -17,9 +17,13 @@ void kernel_main() {
     constexpr uint32_t tile = 2048;
     const auto s_act = TensorAccessor(act_args, get_common_arg_val<uint32_t>(0), tile);
     const uint32_t j = get_absolute_logical_x(), m = get_absolute_logical_y();
-    for (uint32_t t = 0; t < NH; ++t) {
+#ifndef SM_MPC
+#define SM_MPC 1
+#endif
+    for (uint32_t q = 0; q < SM_MPC * NH; ++q) {  // (SM_MPC row tiles per core: row tile m SM_MPC + q / NH)
+        const uint32_t t = q % NH, rt = m * SM_MPC + q / NH;
         cb_wait_front(cb_act, 1);
-        noc_async_write(get_read_ptr(cb_act), s_act.get_noc_addr(m * NT + j * NH + t), tile);
+        noc_async_write(get_read_ptr(cb_act), s_act.get_noc_addr(rt * NT + j * NH + t), tile);
         noc_async_writes_flushed();
         cb_pop_front(cb_act, 1);
     }

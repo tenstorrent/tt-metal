@@ -59,19 +59,14 @@ void kernel_main() {
     const uint32_t nb = get_absolute_logical_x(), m = get_absolute_logical_y();
     const auto s_g = TensorAccessor(g_args, g_addr, tile);
 
-    cb_reserve_back(cb_r, NB);  // (the residual shard: in place)
-    cb_push_back(cb_r, NB);
+#ifndef RN_MPC
+#define RN_MPC 1
+#endif
+    // RN_MPC row tiles per core (core y = m: row tiles m RN_MPC .. m RN_MPC + RN_MPC - 1, one after another)
+    cb_reserve_back(cb_r, NB * RN_MPC);  // (the residual shard: in place)
+    cb_push_back(cb_r, NB * RN_MPC);
 
-    // the all-reduce output first (the add waits for it; the weights are needed only at the end)
-    cb_reserve_back(cb_y, NB);
-    const uint32_t yl1 = get_write_ptr(cb_y);
-    noc_async_read_set_trid(1);
-    for (uint32_t j = 0; j < NB; ++j) {
-        const uint32_t c = nb * NB + j;
-        const uint32_t w = get_common_arg_val<uint32_t>(noc_arg + c / 2) >> (16 * (c % 2));
-        noc_async_read(get_noc_addr((w >> 8) & 0xFF, w & 0xFF, y_addr + m * tile), yl1 + j * tile, tile);
-    }
-    noc_async_read_set_trid(0);
+    // the weights / scaler / bias / router tiles once (every row tile uses them)
     cb_reserve_back(cb_g, NB);
     const uint32_t gl1 = get_write_ptr(cb_g);
     for (uint32_t j = 0; j < NB; ++j) {
@@ -79,8 +74,6 @@ void kernel_main() {
             noc_async_read(s_g.get_noc_addr(nb * NB + j) + f * 512, gl1 + j * tile + f * 512, 64);
         }
     }
-    noc_async_read_barrier_with_trid(1);
-    cb_push_back(cb_y, NB);
     // the scaler: 1.0 (BF16) in row 0 of each face, zeros elsewhere
     cb_reserve_back(cb_sc, 1);
     const uint32_t sc = get_write_ptr(cb_sc);
@@ -109,7 +102,6 @@ void kernel_main() {
         cb_push_back(cb_b, NB);
     }
 #endif
-
 #ifdef RN_ROUTER
     {
         const auto s_w = TensorAccessor(w_args, get_common_arg_val<uint32_t>(2), tile);
@@ -131,21 +123,45 @@ void kernel_main() {
     }
 #endif
 
-    // the row's partials (every core of the row, this one included, writes its slot and increments semaphore 0)
-    cb_reserve_back(cb_all, GX);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
-    while (*sem < GX) {
-        invalidate_l1_cache();
-    }
-    cb_push_back(cb_all, GX);
 #ifdef RN_ROUTER
-    if (nb == 0) {  // the row's partial logits
-        cb_reserve_back(cb_lall, GX);
-        volatile tt_l1_ptr uint32_t* sem1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));
-        while (*sem1 < GX) {
+    volatile tt_l1_ptr uint32_t* sem1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));
+#endif
+    for (uint32_t mi = 0; mi < RN_MPC; ++mi) {
+        const uint32_t rt = m * RN_MPC + mi;
+        // the all-reduce output's NB tiles of row tile rt (RN_YPARTS: the output in parts of 8 row tiles, part p > 0's
+        // address at common arg RN_YPART_ARG + p - 1)
+#ifdef RN_YPARTS
+        const uint32_t yp = rt / 8;
+        const uint32_t y_row =
+            (yp == 0 ? y_addr : get_common_arg_val<uint32_t>(RN_YPART_ARG + yp - 1)) + (rt % 8) * tile;
+#else
+        const uint32_t y_row = y_addr + rt * tile;
+#endif
+        cb_reserve_back(cb_y, NB);
+        const uint32_t yl1 = get_write_ptr(cb_y);
+        for (uint32_t j = 0; j < NB; ++j) {
+            const uint32_t c = nb * NB + j;
+            const uint32_t w = get_common_arg_val<uint32_t>(noc_arg + c / 2) >> (16 * (c % 2));
+            noc_async_read(get_noc_addr((w >> 8) & 0xFF, w & 0xFF, y_row), yl1 + j * tile, tile);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_y, NB);
+        // the row tile's partials (every core of the row writes slot mi GX + its x and increments semaphore 0: the
+        // count reaches GX (mi + 1) once row tile mi's are all in)
+        cb_reserve_back(cb_all, GX);
+        while (*sem < GX * (mi + 1)) {
             invalidate_l1_cache();
         }
-        cb_push_back(cb_lall, GX);
-    }
+        cb_push_back(cb_all, GX);
+#ifdef RN_ROUTER
+        if (nb == 0) {  // the row tile's partial logits
+            cb_reserve_back(cb_lall, GX);
+            while (*sem1 < GX * (mi + 1)) {
+                invalidate_l1_cache();
+            }
+            cb_push_back(cb_lall, GX);
+        }
 #endif
+    }
 }

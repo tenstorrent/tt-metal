@@ -37,6 +37,24 @@ TILE = ttnn.TILE_SIZE
 U32 = 32  # rows per attention step: one row per user
 
 
+def _row_grid(rows):
+    """(core rows, 32-row tiles per core) of a pass's row-tiled layouts: one row tile per core row up to 8 row tiles
+    (256 rows), then 8 core rows of rows / 256 row tiles each (512 / 1024-row passes)."""
+    rt = rows // TILE
+    gy = min(rt, 8)
+    assert rt % gy == 0, rows
+    return gy, rt // gy
+
+
+def _residual_mc(rows, hidden):
+    """A pass's residual: block sharded on 10 x gy cores, [mpc 32 rows, hidden / 10] each (_row_grid)."""
+    gy, mpc = _row_grid(rows)
+    return ttnn.create_sharded_memory_config(
+        (mpc * TILE, hidden // 10), ttnn.CoreGrid(x=10, y=gy), ttnn.ShardStrategy.BLOCK,
+        ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+    )  # fmt: skip
+
+
 def _replicate(mesh, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=True):
     return ttnn.from_torch(
         t, dtype=dtype, layout=layout, device=mesh if device else None, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh)
@@ -56,6 +74,14 @@ def hold_prefill_l1(model):
         model.set_prefill_l1_end(model.mesh_device.lowest_occupied_compute_l1_address() or 0)
 
 
+class _Parts(list):
+    """An all-reduce output of a 512 / 1024-row pass: one width-sharded tensor per 256 rows (_TPAllReduce.PART)."""
+
+    def deallocate(self, force=True):
+        for t in self:
+            t.deallocate(force)
+
+
 class _TPAllReduce:
     """TP all-reduce of [rows, hidden] partial sums over the mesh row with all_reduce_async: persistent scratch and a
     global semaphore per slot, two slots used alternately (each call is an all-rank synchronization, so no device reuses
@@ -64,14 +90,23 @@ class _TPAllReduce:
     BF8 (the batched decode's all-reduce precision) on 90 cores, so the [rows, 4 x hidden] scratch fits L1."""
 
     CORES, LINKS = 90, 2
+    PART = (
+        256  # rows per all_reduce_async call: its link workers' CB holds 45 shards' rows (391 KB at 256 rows; a 512 /
+    )
+    # 1024-row pass runs one call per 256 rows, each part straight from the interleaved input's rows)
     _instances = {}
 
     def __init__(self, mesh, rows, hidden):
         from ..fused_decode.config import width_sharded_memory_config
 
         D = mesh.shape[1]
-        self.mesh = mesh
+        self.mesh, self.hidden = mesh, hidden
+        self.parts = max(1, rows // self.PART)
+        rows = rows // self.parts
         self.memory_config = width_sharded_memory_config(mesh, hidden, self.CORES, rows=rows)
+        grid = self.memory_config.shard_spec.grid.bounding_box()
+        self.grid = ttnn.CoreCoord(grid.end.x - grid.start.x + 1, grid.end.y - grid.start.y + 1)
+        self.shard = list(self.memory_config.shard_spec.shape)
         scratch = width_sharded_memory_config(mesh, hidden * D, self.CORES, rows=rows)
         grid = mesh.compute_with_storage_grid_size()
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -100,22 +135,32 @@ class _TPAllReduce:
             inst.calls = 0
 
     def __call__(self, x):
-        xs = ttnn.to_memory_config(x, self.memory_config, dtype=ttnn.bfloat8_b)
-        scratch, semaphore = self.slots[self.calls % 2]
-        self.calls += 1
-        out = ttnn.experimental.all_reduce_async(
-            xs,
-            scratch,
-            cluster_axis=1,
-            mesh_device=self.mesh,
-            multi_device_global_semaphore=semaphore,
-            memory_config=self.memory_config,
-            dtype=ttnn.bfloat16,
-            topology=ttnn.Topology.Ring,
-            num_links=self.LINKS,
-        )
-        xs.deallocate(True)
-        return out
+        outs = _Parts()
+        for i in range(self.parts):
+            if self.parts == 1:
+                xs = ttnn.to_memory_config(x, self.memory_config, dtype=ttnn.bfloat8_b)
+            else:
+                xs = ttnn.interleaved_to_sharded_partial(
+                    x, self.grid, self.shard, self.parts, i, ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.ShardOrientation.ROW_MAJOR, output_dtype=ttnn.bfloat8_b,
+                )  # fmt: skip
+            scratch, semaphore = self.slots[self.calls % 2]
+            self.calls += 1
+            outs.append(
+                ttnn.experimental.all_reduce_async(
+                    xs,
+                    scratch,
+                    cluster_axis=1,
+                    mesh_device=self.mesh,
+                    multi_device_global_semaphore=semaphore,
+                    memory_config=self.memory_config,
+                    dtype=ttnn.bfloat16,
+                    topology=ttnn.Topology.Ring,
+                    num_links=self.LINKS,
+                )
+            )
+            xs.deallocate(True)
+        return outs[0] if self.parts == 1 else outs
 
 
 class _ResNorm:
@@ -136,7 +181,8 @@ class _ResNorm:
         gw = grid.end.x - grid.start.x + 1
         assert ar_mc.shard_spec.shape[1] == TILE and gw * (grid.end.y - grid.start.y + 1) == self.nt
         ar_cores = [ttnn.CoreCoord(grid.start.x + c % gw, grid.start.y + c // gw) for c in range(self.nt)]
-        res_cores = [ttnn.CoreCoord(x, y) for y in range(rows // TILE) for x in range(self.GX)]
+        self.gy, self.mpc = _row_grid(rows)  # (mpc row tiles per core: the kernels loop over them, RN_MPC)
+        res_cores = [ttnn.CoreCoord(x, y) for y in range(self.gy) for x in range(self.GX)]
 
         def nocs(cores):
             w = []
@@ -147,9 +193,7 @@ class _ResNorm:
             return [w[i] | (w[i + 1] << 16) for i in range(0, len(w), 2)]
 
         self.ar_noc, self.res_noc = nocs(ar_cores), nocs(res_cores)
-        self.cores = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.GX - 1, rows // TILE - 1))]
-        )
+        self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.GX - 1, self.gy - 1))])
         self.gammas = {}
 
     def gamma(self, norm):
@@ -225,10 +269,13 @@ class _ResNorm:
         cores = self.cores
         defines = ([("RN_OUT_BF16", "1")] if out_bf16 else []) + ([("RN_X8", "1")] if x8 else [])
         defines += ([("RN_F32", "1")] if f32_res else []) + ([("RN_BIAS", "1")] if bias is not None else [])
+        if self.mpc > 1:
+            defines.append(("RN_MPC", str(self.mpc)))
         reader_ct = [cb_y, cb_r, cb_g, cb_sc, cb_all, self.nb, self.GX, cb_w, cb_lb, cb_lall, cb_b]
         reader_ct += ttnn.TensorAccessorArgs(g).get_compile_time_args()
-        reader_args = [y.buffer_address(), g.buffer_address()]
-        io = [y, res, g, res2]
+        ys = list(y) if isinstance(y, _Parts) else [y]
+        reader_args = [ys[0].buffer_address(), g.buffer_address()]
+        io = ys + [res, g, res2]
         if router is not None:
             defines.append(("RN_ROUTER", "1"))
             lb = self.router_bias(router)
@@ -252,7 +299,9 @@ class _ResNorm:
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "resnorm_reader.cpp"), core_ranges=cores, compile_time_args=reader_ct,
-                runtime_args=[], common_runtime_args=reader_args + self.ar_noc, defines=defines,
+                runtime_args=[], common_runtime_args=reader_args + self.ar_noc + [t.buffer_address() for t in ys[1:]],
+                defines=defines + ([("RN_YPARTS", str(len(ys))), ("RN_YPART_ARG", str(len(reader_args) + len(self.ar_noc)))]
+                                   if len(ys) > 1 else []),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(
@@ -281,7 +330,7 @@ class _ResNorm:
             ttnn.cb_descriptor_from_sharded_tensor(cb_r, res),
             cb(cb_g, bf, 2048, nb),
             cb(cb_sc, bf, 2048, 1),
-            cb(cb_all, fp, 4096, self.GX),
+            cb(cb_all, fp, 4096, self.GX * self.mpc),  # (a slot per (row tile, core of the row))
             ttnn.cb_descriptor_from_sharded_tensor(cb_r2, res2),
             # (x^2 and x rs in one allocation: x^2 is consumed before x rs is written)
             ttnn.CBDescriptor(total_size=4096 * nb, core_ranges=cores, format_descriptors=[
@@ -298,7 +347,7 @@ class _ResNorm:
             cbs.append(cb(cb_n8, b8, 1088, 2))
         if router is not None:
             cbs += [cb(cb_nm, bf, 2048, nb), cb(cb_w, bf, 2048, nb), cb(cb_lp, fp, 4096, 1),
-                    cb(cb_lall, fp, 4096, self.GX), cb(cb_lb, bf, 2048, 1), cb(cb_lo, bf, 2048, 1)]  # fmt: skip
+                    cb(cb_lall, fp, 4096, self.GX * self.mpc), cb(cb_lb, bf, 2048, 1), cb(cb_lo, bf, 2048, 1)]  # fmt: skip
         sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in range(2)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
         return [res2] + [t for t in (out, out8, logits) if t is not None]
@@ -316,7 +365,9 @@ def _mm_config_256(k, n, rows=256):
     2D over 10 x 8 cores (one row tile, n / 10 columns each) is 1.4-2.5x faster (drafter QKV 74 -> 37 us, gate / up
     86 -> 49, down 73 -> 51, o_proj 45 -> 33; verify QKV BF8 68 -> 27); the drafter's fc (k = 14400) is fastest 1D
     over 90 cores (487 -> 293 us). rows (32 .. 256): one row tile per core row (rows / 32 core rows)."""
-    kt, nt, gy = k // TILE, n // TILE, rows // TILE
+    kt, nt, mt = k // TILE, n // TILE, rows // TILE
+    gy = min(mt, 8)  # (more than 8 row tiles, e.g. a 512-row pass: several row tiles per core row)
+    pm = -(-mt // gy)
     if k == 14400 and nt == 90 and rows == 256:
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(11, 9), in0_block_w=10, out_subblock_h=1, out_subblock_w=1,
@@ -332,7 +383,7 @@ def _mm_config_256(k, n, rows=256):
     bw = {90: 10, 60: 12, 32: 8}.get(kt, max(d for d in range(1, 17) if kt % d == 0))
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), in0_block_w=bw, out_subblock_h=1,
-        out_subblock_w=max(d for d in range(1, 5) if pn % d == 0), out_block_h=1, out_block_w=pn, per_core_M=1,
+        out_subblock_w=max(d for d in range(1, 5) if pn % d == 0), out_block_h=pm, out_block_w=pn, per_core_M=pm,
         per_core_N=pn, transpose_mcast=False, fused_activation=None,
     )  # fmt: skip
 
@@ -382,6 +433,17 @@ def _matmul_config(x, w, out_dram, fp32=False, grid=(11, 10)):
     narrow = max(M, N) // min(M, N) > 8 or (all_dram and min(M, N) <= TILE)
     wide, tall = narrow and N > M, narrow and N <= M
     gx, gy = grid
+    if wide and Mt > 8 and not all_dram:
+        # (a 512 / 1024-row LM head: every core all the rows, output blocks of up to 8 row tiles: the output CB holds a block,
+        # not all per_core_M rows)
+        pm, pn = Mt, -(-(-(-N // (gx * gy))) // TILE)
+        ob = max(d for d in range(1, 9) if Mt % d == 0)
+        sh, sw = _subblock(ob, pn, fp32)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy), in0_block_w=2 if Kt % 2 == 0 else 1,
+            out_subblock_h=sh, out_subblock_w=sw, out_block_h=ob, out_block_w=pn, per_core_M=pm, per_core_N=pn,
+            fuse_batch=False, fused_activation=None, mcast_in0=True,
+        )  # fmt: skip
     assert all_dram or (nbx * nby <= gx * gy and Kt % in0_bw == 0), "config outside the mirrored cases"
     cr = (nbx, nby) if not (nby == 1 and nbx == 1) and nby <= gy and nbx <= gx else (0, 0)
     if (cr[1] == 1 and not all_dram) or wide:
@@ -452,29 +514,39 @@ class _Argmax:
         column index, by the per-row max / index kernels (fused_decode/kernels/b32_argmax_*: one pass over the logits,
         BFP8 or BF16 read as stored; ttnn.topk k = 1 took ~1.0 ms at 256 rows). out_rows: the outputs have out_rows
         rows, the logits being their last rows (the first ones left unwritten)."""
-        from ..fused_decode.boundary import KERNEL_DIR
-
         mesh = logits.device()
         rows, width = logits.shape[-2], logits.shape[-1]
         RT, NT, NCH = rows // TILE, width // TILE, self.NCH
         out_rows = out_rows or rows
         r0 = out_rows // TILE - RT  # the output row tile of logits row tile 0
-        grid = mesh.compute_with_storage_grid_size()
-        core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][: RT * NCH]
-        cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_list])
         f32 = ttnn.float32
         vals = ttnn.empty([1, 1, out_rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
                           memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
         idx = ttnn.empty([1, 1, out_rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
                          memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+        # one program per (up to) 8 row tiles x 13 chunks (104 cores; a 512 / 1024-row pass: 2 / 4 programs)
+        for t0 in range(0, RT, 8):
+            self._device_part(logits, vals, idx, t0, min(8, RT - t0), r0)
+        return vals, idx
+
+    def _device_part(self, logits, vals, idx, t0, nrt, r0):
+        """Row tiles t0 .. t0 + nrt - 1 of logits into rows (t0 + r0) 32 .. of vals / idx."""
+        from ..fused_decode.boundary import KERNEL_DIR
+
+        mesh = logits.device()
+        NT, NCH = logits.shape[-1] // TILE, self.NCH
+        grid = mesh.compute_with_storage_grid_size()
+        core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][: nrt * NCH]
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_list])
+        f32 = ttnn.float32
         bounds = [NT * c // NCH for c in range(NCH + 1)]
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         noc = [mesh.worker_core_from_logical_core(c) for c in core_list]
         for i, c in enumerate(core_list):
-            ch, rt = i // RT, i % RT
+            ch, rt = i // nrt, i % nrt
             col0, ncol = bounds[ch], bounds[ch + 1] - bounds[ch]
-            rd[c.x][c.y] = [rt, col0, ncol]
-            wr[c.x][c.y] = [rt + r0, ch, (noc[rt].x << 8) | noc[rt].y]
+            rd[c.x][c.y] = [t0 + rt, col0, ncol]
+            wr[c.x][c.y] = [t0 + rt + r0, ch, (noc[rt].x << 8) | noc[rt].y]
             cp[c.x][c.y] = [col0, ncol]
         B, SEM = 8, 0
         cb_in, cb_part, cb_recv = 0, 1, 2
@@ -512,7 +584,6 @@ class _Argmax:
         cbs = [cb(cb_in, logits.dtype, tile, 2 * B), cb(cb_part, f32, 4096, 4), cb(cb_recv, f32, recv, 1)]
         sems = [ttnn.SemaphoreDescriptor(SEM, ttnn.CoreType.WORKER, cores, 0)]
         ttnn.generic_op([logits, vals, idx], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
-        return vals, idx
 
     def combine(self, out, mesh):
         """The devices' (value, index) combined on device: [1, 1, rows, 1] FLOAT32 global token ids, the same on every
@@ -731,7 +802,8 @@ def _qkv_rope(mesh, trans, qkv, cos, sin, na, nb, rope_heads, headnorm=None):
     rows, nt = qkv.shape[-2], qkv.shape[-1] // TILE
     heads, hd = nt // 2, 2 * TILE
     hpc = 2
-    gx, gy = heads // hpc, rows // TILE
+    gx = heads // hpc
+    gy, mpc = _row_grid(rows)  # (mpc row tiles per core: QR_MPC)
     assert gx * hpc == heads and gx <= 11
     mk = lambda n: ttnn.empty([1, n, rows, hd], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
                               memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
@@ -742,11 +814,13 @@ def _qkv_rope(mesh, trans, qkv, cos, sin, na, nb, rope_heads, headnorm=None):
     rct = [cb_x, cb_cos, cb_sin, cb_t, hpc, nt, cb_g, cb_sc, rope_heads]
     for t in rin:
         rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-    wct = [cb_out, hpc, na, gy, nb]
+    wct = [cb_out, hpc, na, rows // TILE, nb]
     for t in (a, b, c):
         wct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
     f32 = lambda v: struct.unpack("<I", struct.pack("<f", v))[0]
     defines = [("QR_HEADNORM", "1"), ("QR_NQ", str(headnorm[2]))] if headnorm else []
+    if mpc > 1:
+        defines.append(("QR_MPC", str(mpc)))
     dm = ttnn.DataMovementConfigDescriptor
     kernels = [
         ttnn.KernelDescriptor(
@@ -756,7 +830,7 @@ def _qkv_rope(mesh, trans, qkv, cos, sin, na, nb, rope_heads, headnorm=None):
         ),
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "qkv_rope_writer.cpp"), core_ranges=cores, compile_time_args=wct,
-            runtime_args=[], common_runtime_args=[t.buffer_address() for t in (a, b, c)],
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in (a, b, c)], defines=defines,
             config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
         ),
         ttnn.KernelDescriptor(
@@ -984,10 +1058,7 @@ class BatchedDraft:
 
         # the FP32 residual block sharded on 10 x 8 cores, one 32-row tile x 9 column tiles each, as the verify's: the
         # sharded norm reduces over 10 cores per row tile
-        self.res_mc = ttnn.create_sharded_memory_config(
-            (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
-            ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
-        )  # fmt: skip
+        self.res_mc = _residual_mc(self.rows, self.hidden)
         self.norm_pc = sharded_norm_program_config(self.res_mc)
         # each residual add (+ the o_proj bias) and the norm after it in one program (_ResNorm, FP32 residual, FP32 norm
         # outputs as the sharded norm's); the all-reduces' outputs stay in their width shards
@@ -1014,7 +1085,7 @@ class BatchedDraft:
 
     # -- pieces ----------------------------------------------------------------------------------------------------
     def _linear(self, x, w, bias=None, ck=None):
-        pc = _mm_config_256(w.shape[-2], w.shape[-1]) if x.shape[-2] == self.rows else None
+        pc = _mm_config_256(w.shape[-2], w.shape[-1], self.rows) if x.shape[-2] == self.rows else None
         # (a pass's 256-row activations in L1; the prompt context's chunks in DRAM)
         mc = self.act_mc if x.shape[-2] == self.rows else ttnn.DRAM_MEMORY_CONFIG
         if pc is None:  # (the auto config, fixed: _matmul_config)
@@ -1035,11 +1106,13 @@ class BatchedDraft:
         from ..fused_decode.boundary import KERNEL_DIR
 
         K, N2 = L["gu"].shape[-2], L["gu"].shape[-1]
-        gx, gy = 10, self.rows // TILE
+        gx = 10
+        gy, mpc = _row_grid(self.rows)  # (mpc row tiles per core: SM_MPC)
         nh = N2 // 2 // TILE // gx
-        gu_mc = ttnn.create_sharded_memory_config((TILE, N2 // gx), ttnn.CoreGrid(x=gx, y=gy), ttnn.ShardStrategy.BLOCK,
+        sm_def = [("SM_MPC", str(mpc))] if mpc > 1 else []
+        gu_mc = ttnn.create_sharded_memory_config((mpc * TILE, N2 // gx), ttnn.CoreGrid(x=gx, y=gy), ttnn.ShardStrategy.BLOCK,
                                                   ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)  # fmt: skip
-        gu = ttnn.linear(x, L["gu"], program_config=_mm_config_256(K, N2), dtype=ttnn.bfloat16,
+        gu = ttnn.linear(x, L["gu"], program_config=_mm_config_256(K, N2, self.rows), dtype=ttnn.bfloat16,
                          compute_kernel_config=self.mm_ck, memory_config=gu_mc)  # fmt: skip
         act = ttnn.empty([1, 1, self.rows, N2 // 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
                          memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
@@ -1049,18 +1122,18 @@ class BatchedDraft:
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "draft_silu_mul_reader.cpp"), core_ranges=cores,
-                compile_time_args=[cb_gu, nh], runtime_args=[],
+                compile_time_args=[cb_gu, nh], runtime_args=[], defines=sm_def,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "draft_silu_mul_writer.cpp"), core_ranges=cores,
                 compile_time_args=[cb_act, nh, N2 // 2 // TILE] + ttnn.TensorAccessorArgs(act).get_compile_time_args(),
-                runtime_args=[], common_runtime_args=[act.buffer_address()],
+                runtime_args=[], common_runtime_args=[act.buffer_address()], defines=sm_def,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "draft_silu_mul_compute.cpp"), core_ranges=cores,
-                compile_time_args=[cb_gu, cb_act, nh], runtime_args=[],
+                compile_time_args=[cb_gu, cb_act, nh], runtime_args=[], defines=sm_def,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),
@@ -1347,10 +1420,7 @@ class BatchedVerify:
         hd = self.head_dim = attn0.config.head_dim
         # the residual block sharded on 10 x 8 cores, one 32-row tile x 9 column tiles each: the sharded norm reduces
         # over 10 cores per row tile instead of 30 per 8 (standalone 14.6 -> 6.4 us per norm, 49 per pass)
-        self.residual_mc = ttnn.create_sharded_memory_config(
-            (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
-            ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
-        )  # fmt: skip
+        self.residual_mc = _residual_mc(self.rows, self.hidden)
         # each residual add and the norm after it in one program (_ResNorm); the post-attention one also computes the
         # router's logits (split K over its 10 cores of a row, FP32 sums) and the BFP8 copy for the grouped MoE's gather
         self.resnorm = _ResNorm(self.mesh, self.rows, self.hidden, self.residual_mc,
@@ -1383,9 +1453,9 @@ class BatchedVerify:
         # holds: 3 slices at 32 users (plain step at 4K 10.36 -> 9.76 ms vs 96 cores), else 1 (64 users at ISL 16K
         # 23.3 -> 22.2 ms, 256 at 8K 43.4 -> 40.7); 2 or 3 slices for every user: slower, e.g. 64 users at 16K 24.2 /
         # 24.6 ms)
-        slices = 3 if block == 8 or users <= 32 else 1
+        slices = 3 if users <= 32 else 1  # (more users per pass, e.g. a 512 / 1024-row pass: 1 slice, the grid's width)
         grid = self.mesh.compute_with_storage_grid_size()
-        budget = 96 if block == 8 else grid.x * grid.y
+        budget = 96 if block == 8 and users <= 32 else grid.x * grid.y
         per = min(users, budget // BlockAttention.cores_needed(self.local_kv_heads, block, slices))
         self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], per, slices
@@ -1433,7 +1503,7 @@ class BatchedVerify:
             x,
             w.wqkv,
             bias=w.wqkv_bias,
-            program_config=_mm_config_256(w.wqkv.shape[-2], w.wqkv.shape[-1]),
+            program_config=_mm_config_256(w.wqkv.shape[-2], w.wqkv.shape[-1], self.rows),
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.qkv_ck,
             memory_config=amc,
@@ -1443,7 +1513,7 @@ class BatchedVerify:
         qkv.deallocate(True)
         # the bias inside the matmul (BF16 output; the all-reduce converts it to its BFP8 input shards)
         o = ttnn.linear(heads, self.oproj_w[li], bias=attn_mod.batched_oproj.bias,
-                        program_config=_mm_config_256(heads.shape[-1], self.oproj_w[li].shape[-1]),
+                        program_config=_mm_config_256(heads.shape[-1], self.oproj_w[li].shape[-1], self.rows),
                         dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck, memory_config=amc)  # fmt: skip
         heads.deallocate(True)
         out = _all_reduce(o)
@@ -1533,7 +1603,7 @@ class BatchedDFlashRunner:
     ROWS = 256  # rows per pass: users per lane x block
 
     def __init__(self, generator, model, page_table, kv_cache, users=32, window=1024, eos_ids=(200002, 200012),
-                 ring=None, block=None, share=None):  # fmt: skip
+                 ring=None, block=None, share=None, rows_per_pass=None):  # fmt: skip
         """ring: the drafter's per-user cache as a ring of `ring` blocks (BatchedDraft; with more than one lane, 24 by
         default: the window's 1024 positions + a block). share: a runner over the same users (prefilled) whose drafter
         (weights, caches with the prompt context) and grouped MoE weights this one uses, with its own block."""
@@ -1543,10 +1613,14 @@ class BatchedDFlashRunner:
         mesh = model.mesh_device
         self.mesh = mesh
         self.total_users = users
-        # block: the draft / verify block per user; a lane holds 256 / block users. Default: the largest block that keeps
-        # every user in one 256-row pass, at least 2 and at most the checkpoint's 8: 8 rows at 32 users, 4 at 64, 2 at 128
-        # and 256 (measured best at ISL 256, 256 new tokens: 32 users 8 rows 247 vs 4 rows 207 tok/s/user; 64 users 4
-        # rows 169 vs 8 rows 124; 128 users 2 rows 93 vs 4 rows 85; 256 users 2 rows 47 vs 4 rows 42)
+        # rows per verify / draft pass: 256, or 512 from 128 users (one pass of 128 users x 4 rows / 256 x 2; measured at
+        # ISL 256, 512 new tokens: 128 users 101.5 tok/s/user vs 89.4 with 2-row blocks in 256-row passes, 256 users
+        # 55.7 vs 45.2 with two 256-row passes; at 64 users 8 rows in a 512-row pass 155 vs 167 with 4 rows in 256)
+        self.ROWS = rows_per_pass or (512 if users >= 128 else self.ROWS)
+        # block: the draft / verify block per user; a lane holds ROWS / block users. Default: the largest block that keeps
+        # every user in one pass, at least 2 and at most the checkpoint's 8: 8 rows at 32 users, 4 at 64 and 128, 2 at 256
+        # (256-row passes, ISL 256, 256 new tokens: 32 users 8 rows 247 vs 4 rows 207 tok/s/user; 64 users 4 rows 169 vs
+        # 8 rows 124)
         if block is None:
             ckpt = load_draft_config(draft_snapshot())["block_size"]
             block = max(2, min(ckpt, self.ROWS // max(users, 1)))
