@@ -29,25 +29,33 @@
 #include "api/compute/transpose.h"
 #include "sdpa_compute_utils.hpp"
 
+// How to read this kernel: the reader kernel pushes Q, K and V tiles into circular buffers (CBs);
+// this kernel waits for them (cb_wait_front), computes in the DST register file between
+// tile_regs_acquire and tile_regs_release, packs results into CBs (cb_reserve_back + pack_tile +
+// cb_push_back) and releases inputs (cb_pop_front). The writer drains cb_output / cb_intermediates.
+//
+// Work unit: one Q chunk = Sq_chunk_t query tile-rows of one batch/head. The chunk walks K/V in
+// steps of Sk_chunk_t tiles; per step it does QK^T, online softmax and P@V for all its rows.
+
 // For standard mode: num_units_per_core = Q chunks to process
 // For balanced mode: num_units_per_core = pairs of Q chunks (max over cores; runtime arg has the actual count)
 constexpr uint32_t num_units_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);       // SFPU per-row block size (cap = dst_size - 1)
+constexpr uint32_t block_size = get_compile_time_arg_val(1);       // output tiles per DST pass, element-wise loops
 constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query/key (d_qk/TILE_W)
 constexpr uint32_t vWt = get_compile_time_arg_val(3);              // num tile in inner dim in value (d_v/TILE_W)
 constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
-constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);       // K/V tiles per inner-loop step
-constexpr uint32_t pv_block_w = get_compile_time_arg_val(9);       // PV matmul_block ct_dim (V feature tiles)
+constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);       // K/V tiles per step
+constexpr uint32_t pv_block_w = get_compile_time_arg_val(9);       // V feature tiles per PV matmul_block call
 constexpr uint32_t scaler_bf16_bits =
     get_compile_time_arg_val(10);  // host-side RNE BF16 of scaler_bits, for the WH fused scale+exp
 constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(11);     // query tile-rows per Q chunk
-constexpr uint32_t qk_block_h = get_compile_time_arg_val(12);     // QK^T matmul_block rt_dim (Q rows)
-constexpr uint32_t qk_block_w = get_compile_time_arg_val(13);     // QK^T matmul_block ct_dim (K tiles)
-constexpr uint32_t pv_block_h = get_compile_time_arg_val(14);     // PV matmul_block rt_dim (Q rows)
-constexpr uint32_t sm_block_size = get_compile_time_arg_val(15);  // score tiles per DST cycle in the exp pass
+constexpr uint32_t qk_block_h = get_compile_time_arg_val(12);     // Q rows per QK^T matmul_block call
+constexpr uint32_t qk_block_w = get_compile_time_arg_val(13);     // K tiles per QK^T matmul_block call
+constexpr uint32_t pv_block_h = get_compile_time_arg_val(14);     // Q rows per PV matmul_block call
+constexpr uint32_t sm_block_size = get_compile_time_arg_val(15);  // score tiles of one row per DST pass, exp step
 
 constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
 constexpr uint32_t pairs_per_seq = q_num_chunks / 2;
@@ -80,15 +88,17 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 constexpr uint32_t cb_gate = tt::CBIndex::c_16;
 
-// One Q chunk: Sq_chunk_t query tile-rows of one batch/head sharing one pass over K/V.
-// Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); stat CBs hold row r in slot r.
+// Layouts used below. Score CB (cb_attention_weights): the Sq_chunk_t x Sk_chunk_t score tiles of one
+// step, row-major: row r, K tile n sits at r * Sk_chunk_t + n. Per-row state CBs (max, sum,
+// exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
 FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
     cb_wait_front(cb_query, q_tiles);
 
     const uint32_t first_row_tile = global_first_row % Ht;
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Causal: K/V tiles up to the chunk's last diagonal tile, rounded up to Sk_chunk_t.
+    // Causal: only K/V tiles up to the chunk's last diagonal tile, rounded up to whole steps.
+    // Steps before first_masked_step lie entirely left of the diagonal and need no masking.
     const uint32_t num_kv_tiles_to_process = round_up(first_row_tile + Sq_chunk_t, Sk_chunk_t);
     const uint32_t first_masked_step = first_row_tile / Sk_chunk_t;
 #else
@@ -96,7 +106,7 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
 #endif
     const uint32_t num_kv_steps = num_kv_tiles_to_process / Sk_chunk_t;
 
-    // set up ping pong buffers
+    // prev/cur state CBs swap roles after every step
     uint32_t alias_cb_prev_max = cb_prev_max;
     uint32_t alias_cb_cur_max = cb_cur_max;
     uint32_t alias_cb_prev_sum_exp = cb_prev_sum_exp;
@@ -111,7 +121,8 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
         pack_reconfig_data_format(cb_attention_weights);
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-        // QK^T via matmul_block into row-major score slots; causal mask is then L1-accumulated by the packer.
+        // S = Q @ K^T, one qk_block_h x qk_block_w rectangle of score tiles per DST pass, packed to its
+        // row-major slot. The causal mask is added afterwards by the packer (see below).
         matmul_block_init(
             cb_query,
             cb_key,
@@ -120,11 +131,13 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
             /* rt_dim */ qk_block_h,
             /* kt_dim */ qWt);
         cb_reserve_back(cb_attention_weights, score_tiles);
-        for (uint32_t qb = 0; qb < Sq_chunk_t; qb += qk_block_h) {
-            for (uint32_t kb = 0; kb < Sk_chunk_t; kb += qk_block_w) {
+        for (uint32_t row0 = 0; row0 < Sq_chunk_t; row0 += qk_block_h) {
+            for (uint32_t col0 = 0; col0 < Sk_chunk_t; col0 += qk_block_w) {
                 tile_regs_acquire();
-                uint32_t q_idx = qb * qWt;
-                uint32_t k_idx = kb;
+                // Accumulate over the feature dim: Q is row-major (next feature tile = +1), K is stored
+                // feature-major in cb_key (next feature tile = +Sk_chunk_t).
+                uint32_t q_idx = row0 * qWt;
+                uint32_t k_idx = col0;
                 for (uint32_t feat = 0; feat < qWt; ++feat) {
                     matmul_block(
                         cb_query,
@@ -144,7 +157,7 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
                 for (uint32_t i = 0; i < qk_block_h; ++i) {
                     for (uint32_t j = 0; j < qk_block_w; ++j) {
                         pack_tile</* out_of_order */ true>(
-                            i * qk_block_w + j, cb_attention_weights, /* offset */ (qb + i) * Sk_chunk_t + kb + j);
+                            i * qk_block_w + j, cb_attention_weights, /* offset */ (row0 + i) * Sk_chunk_t + col0 + j);
                     }
                 }
                 tile_regs_release();
@@ -153,20 +166,23 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
         cb_push_back(cb_attention_weights, score_tiles);
 
         if (k_step >= first_masked_step) {
-            // Re-enter reserved state on the same L1 slots (single-buffered CB wraps back).
+            // Add the causal mask onto the scores already in L1. The CB holds exactly one step, so
+            // pop + reserve lands on the same slots; with L1-accumulate on, pack_tile adds to the
+            // tile already there instead of overwriting it.
             cb_wait_front(cb_attention_weights, score_tiles);
             cb_pop_front(cb_attention_weights, score_tiles);
             cb_reserve_back(cb_attention_weights, score_tiles);
 
             copy_init(cb_attn_mask);
             pack_reconfig_l1_acc(1);
-            const uint32_t k_first_tile = k_step * Sk_chunk_t;
+            const uint32_t step_first_k_tile = k_step * Sk_chunk_t;
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                 const uint32_t row_tile = first_row_tile + r;
-                const uint32_t n_begin = (row_tile > k_first_tile) ? (row_tile - k_first_tile) : 0U;
-                for (uint32_t n = n_begin; n < Sk_chunk_t; ++n) {
+                // K tiles left of this row's diagonal tile stay unmasked.
+                const uint32_t first_masked_n = (row_tile > step_first_k_tile) ? (row_tile - step_first_k_tile) : 0U;
+                for (uint32_t n = first_masked_n; n < Sk_chunk_t; ++n) {
                     // mask[0] on the diagonal tile, mask[1] (all -1e9) past it.
-                    const uint32_t mask_tile_idx = (k_first_tile + n == row_tile) ? 0U : 1U;
+                    const uint32_t mask_tile_idx = (step_first_k_tile + n == row_tile) ? 0U : 1U;
                     tile_regs_acquire();
                     copy_tile(cb_attn_mask, mask_tile_idx, /* dst */ 0);
                     tile_regs_commit();
@@ -181,7 +197,7 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
             cb_push_back(cb_attention_weights, score_tiles);
         }
 #else
-        // Arbitrary / no mask: per-tile matmul_tiles + apply_mask_on_reg.
+        // Arbitrary / no mask: one score tile at a time, mask applied while it is still in DST.
         constexpr uint32_t matmul_accum_reg = 0U;
         cb_reserve_back(cb_attention_weights, score_tiles);
         for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -222,7 +238,8 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
 
         cb_pop_front(cb_key, k_tiles);
 
-        // Online softmax, row by row: max
+        // Online softmax, row by row.
+        // (1) running max per row: max(previous max, max of this step's scores)
         cb_wait_front(cb_attention_weights, score_tiles);
         if (k_step > 0) {
             cb_wait_front(alias_cb_prev_max, Sq_chunk_t);
@@ -240,7 +257,8 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
         cb_push_back(alias_cb_cur_max, Sq_chunk_t);
         cb_wait_front(alias_cb_cur_max, Sq_chunk_t);
 
-        // exp in place (CB is exactly score_tiles deep, pop+reserve wraps to the same slots) + row partial sums
+        // (2) P = exp(scale * (S - max)) written over S (pop + reserve lands on the same slots), plus
+        //     each row's sum of P
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_reserve_back(cb_attention_weights, score_tiles);
         cb_reserve_back(alias_cb_cur_sum_exp, Sq_chunk_t);
@@ -251,14 +269,15 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
         cb_push_back(cb_attention_weights, score_tiles);
         cb_push_back(alias_cb_cur_sum_exp, Sq_chunk_t);
 
-        // attention @ V
+        // (3) O_step = P @ V
         matmul_qk_by_v<Sk_chunk_t, Sq_chunk_t>(
             vWt, pv_block_h, pv_block_w, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
 
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_pop_front(cb_value, v_tiles);
 
-        // correction against the previous step's running stats
+        // (4) fold into the running sum and output: both from previous steps were computed against the
+        //     old max, so scale them by exp(scale * (old max - new max)) before adding this step's.
         if (k_step > 0) {
             cb_reserve_back(cb_exp_max_diff, Sq_chunk_t);
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -271,7 +290,7 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
             cb_wait_front(cb_exp_max_diff, Sq_chunk_t);
             cb_wait_front(alias_cb_prev_sum_exp, Sq_chunk_t);
             cb_wait_front(alias_cb_cur_sum_exp, Sq_chunk_t);
-            // in place: pop+reserve wraps back
+            // in place (CB holds exactly Sq_chunk_t tiles, pop + reserve lands on the same slots)
             cb_pop_front(alias_cb_cur_sum_exp, Sq_chunk_t);
             cb_reserve_back(alias_cb_cur_sum_exp, Sq_chunk_t);
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -291,13 +310,13 @@ FORCE_INLINE void process_q_chunk(uint32_t global_first_row) {
         std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
     }
 
-    // ====== Finalize the chunk's rows ======
+    // ====== Finalize the chunk's rows: O / sum, and lse for the backward pass ======
     cb_wait_front(alias_cb_prev_mm_out, out_tiles);
     cb_wait_front(alias_cb_prev_max, Sq_chunk_t);
     cb_wait_front(alias_cb_prev_sum_exp, Sq_chunk_t);
     cb_wait_front(cb_matmul_reduce, onetile);
 
-    // in place
+    // The row sum so far is per 32-column tile column; reduce it to one value per row (in place).
     cb_pop_front(alias_cb_prev_sum_exp, Sq_chunk_t);
     cb_reserve_back(alias_cb_prev_sum_exp, Sq_chunk_t);
     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
