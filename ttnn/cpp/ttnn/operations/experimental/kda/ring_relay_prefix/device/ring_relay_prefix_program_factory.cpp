@@ -25,6 +25,10 @@ constexpr uint32_t cb_ein = 2;
 constexpr uint32_t cb_eout = 3;
 constexpr uint32_t cb_chron = 4;
 constexpr uint32_t cb_stage = 5;
+constexpr uint32_t cb_init = 6;
+constexpr uint32_t cb_state = 7;
+constexpr uint32_t cb_final = 8;
+constexpr uint32_t cb_first = 9;
 // Tile-column buffers per sender: later columns are read out of their head cores while earlier ones are on the link.
 constexpr uint32_t sender_slots = 4;
 // On the head cores: the sender releases a head once it has read the head's last column.
@@ -53,10 +57,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t kt = in.initial_state.logical_shape()[1] / tt::constants::TILE_HEIGHT;
     const uint32_t state_tiles = kt * kt;
     const uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
-    const uint32_t summary_tile = tt::constants::TILE_HW * sizeof(uint16_t);
-    const uint32_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    // Fabric packets of whole FP32 tiles, up to three.
-    const uint32_t chunk_bytes = std::min(3 * state_tile, payload / state_tile * state_tile);
+    // The states cross the fabric in BF16, one tile column per packet.
+    const uint32_t bf16_tile = tt::constants::TILE_HW * sizeof(uint16_t);
+    const uint32_t column_bytes = kt * bf16_tile;
     const uint32_t heads_per_link = (batch_heads + attrs.num_links - 1) / attrs.num_links;
 
     const std::vector<CoreCoord> head_cores(attrs.cores.begin(), attrs.cores.begin() + batch_heads);
@@ -66,14 +69,18 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto sender_set = kda_factory_detail::merged_core_set(sender_cores);
 
     desc.cbs = {
-        kda_factory_detail::cb_descriptor(cb_a, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
-        kda_factory_detail::cb_descriptor(cb_b, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
+        kda_factory_detail::cb_descriptor(cb_a, state_tiles, bf16_tile, tt::DataFormat::Float16_b, head_set),
+        kda_factory_detail::cb_descriptor(cb_b, state_tiles, bf16_tile, tt::DataFormat::Float16_b, head_set),
         kda_factory_detail::sharded_cb_descriptor(cb_ein, in.entry_landing),
         kda_factory_detail::sharded_cb_descriptor(cb_eout, in.state_staging),
         kda_factory_detail::cb_descriptor(cb_chron, 1, 64, tt::DataFormat::UInt32, head_set),
         // One page: the sender addresses its unit buffers itself.
         kda_factory_detail::cb_descriptor(
-            cb_stage, 1, sender_slots * kt * state_tile, tt::DataFormat::Float32, sender_set),
+            cb_stage, 1, sender_slots * column_bytes, tt::DataFormat::Float16_b, sender_set),
+        kda_factory_detail::cb_descriptor(cb_init, state_tiles, state_tile, tt::DataFormat::Float32, head_set),
+        kda_factory_detail::cb_descriptor(cb_state, state_tiles, state_tile, tt::DataFormat::Float32, head_set),
+        kda_factory_detail::sharded_cb_descriptor(cb_final, in.final_landing),
+        kda_factory_detail::cb_descriptor(cb_first, 1, 64, tt::DataFormat::UInt32, head_set),
     };
     desc.semaphores.push_back(
         tt::tt_metal::SemaphoreDescriptor{.id = ack_semaphore_id, .core_ranges = head_set, .initial_value = 0});
@@ -85,20 +92,19 @@ tt::tt_metal::ProgramDescriptor build_program(
     const std::vector<uint32_t> chronology = {sp_rank, sp_size, attrs.local_rows};
     std::vector<uint32_t> reader_ct = {cb_a, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
-    reader_ct.push_back(kt);
+    reader_ct.insert(reader_ct.end(), {kt, cb_init, cb_final, cb_first});
     for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
     std::vector<uint32_t> writer_ct = {cb_eout, cb_chron};
     writer_ct.insert(writer_ct.end(), chronology.begin(), chronology.end());
-    writer_ct.push_back(kt);
-    writer_ct.push_back(ack_semaphore_id);
+    writer_ct.insert(writer_ct.end(), {kt, ack_semaphore_id, cb_state, cb_init});
     for (const auto* tensor : {&entry, &final_state}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
     }
     std::vector<uint32_t> sender_ct = {cb_stage};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
-    sender_ct.insert(sender_ct.end(), {kt * state_tile, chunk_bytes, kt, sender_slots, ack_semaphore_id});
+    sender_ct.insert(sender_ct.end(), {column_bytes, column_bytes, kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     const auto arch = mesh->arch();
@@ -121,7 +127,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/ring_relay_prefix.cpp",
         .core_ranges = head_set,
-        .compile_time_args = {cb_a, cb_b, cb_ein, cb_eout, kt},
+        .compile_time_args = {cb_a, cb_b, cb_ein, cb_eout, kt, cb_init, cb_state, cb_final, cb_first},
         // The matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
@@ -151,14 +157,12 @@ tt::tt_metal::ProgramDescriptor build_program(
         reader_rt.push_back(in.actual_start.buffer());
         reader_rt.push_back(h);
         reader_rt.push_back(arrival_address);
+        reader_rt.push_back(final_address);
         reader.emplace_runtime_args(core, reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
         writer_rt.push_back(entry.buffer());
         writer_rt.push_back(final_state.buffer());
         writer_rt.push_back(h);
-        writer_rt.push_back(in.entry_landing.buffer());
-        writer_rt.push_back(in.final_landing.buffer());
-        writer_rt.push_back(final_address);
         writer_rt.push_back(first_notify_semaphore_id + h / attrs.num_links);
         writer_rt.push_back(static_cast<uint32_t>(sender.x));
         writer_rt.push_back(static_cast<uint32_t>(sender.y));

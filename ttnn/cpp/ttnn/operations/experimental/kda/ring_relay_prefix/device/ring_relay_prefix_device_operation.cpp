@@ -32,16 +32,17 @@ void RingRelayPrefixOperation::validate_on_program_cache_miss(
         "{}: needs two global semaphores",
         name);
     TT_FATAL(
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
-        "{}: the relay sends whole FP32 tiles",
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >=
+            state[1] * tt::constants::TILE_WIDTH * sizeof(uint16_t),
+        "{}: the relay sends one BF16 tile column of a state per packet",
         name);
     for (const auto* landing : {&in.entry_landing, &in.state_staging, &in.final_landing}) {
         const auto& memory = landing->memory_config();
         TT_FATAL(
-            landing->dtype() == DataType::FLOAT32 && memory.buffer_type() == tt::tt_metal::BufferType::L1 &&
+            landing->dtype() == DataType::BFLOAT16 && memory.buffer_type() == tt::tt_metal::BufferType::L1 &&
                 memory.shard_spec().has_value() && memory.shard_spec()->grid.num_cores() == heads &&
                 memory.shard_spec()->shape[0] == state[1],
-            "{}: the landing buffers must be FP32 L1, one {} x {} state per head core",
+            "{}: the landing buffers must be BF16 L1, one {} x {} state per head core",
             name,
             state[1],
             state[1]);

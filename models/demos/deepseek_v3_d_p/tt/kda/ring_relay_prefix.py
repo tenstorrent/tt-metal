@@ -113,8 +113,10 @@ class RingRelayPrefix:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(head_set, (key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
+        # The states cross the fabric in BF16: half the bytes on the relay's links, its bound. The head cores keep
+        # the FP32 initial state and write the entry and final states in FP32.
         alloc = lambda: ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batch_heads * key_dim, key_dim]), ttnn.float32, ttnn.TILE_LAYOUT, mesh_device, shard
+            ttnn.Shape([batch_heads * key_dim, key_dim]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, shard
         )
         self.entry_landing = alloc()
         self.state_staging = alloc()

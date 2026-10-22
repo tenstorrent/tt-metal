@@ -20,9 +20,9 @@ void bind_ring_relay_prefix(nb::module_& mod) {
         ``actual_start``) takes its entry state ``E_p`` from its predecessor, computes
         ``E_{p+1} = A_p E_p + B_p`` from its packed ``[A | B]`` summary and forwards it, one head per core and
         one tile column at a time; the last rank sends the final state on to the first. ``cores`` lists a core
-        per head, then a sender core per link. The landing buffers (FP32 L1, sharded one head per head core) and
-        the two global ``semaphores`` (entry and final arrival) must outlive the call: a peer writes them before
-        this rank's call starts. Calls must be separated by an SP-line barrier.
+        per head, then a sender core per link. The states cross the fabric in BF16: the landing buffers (BF16 L1,
+        sharded one head per head core) and the two global ``semaphores`` (entry and final arrival) must outlive
+        the call: a peer writes them before this rank's call starts. Calls must be separated by an SP-line barrier.
 
         With ``output_gate_cores``, ``output_gate_input @ output_gate_weight`` (``block_matmul``'s program)
         runs in the same dispatch on those cores, its first ``output_gate_copied_columns`` tile columns copied

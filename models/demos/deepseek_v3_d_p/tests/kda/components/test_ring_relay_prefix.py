@@ -108,12 +108,16 @@ def test_ring_relay_prefix_matches_gather_and_chain(mesh_device, start):
 
     def assert_matches_chain(got, chained, expected, name):
         # The same products at the same fidelity in another operand and accumulation order (the relay accumulates the
-        # K-sum on top of B in DST, the chain adds B after the matmul): the relay must be no further from the FP64
-        # reference than the gather + chain.
+        # K-sum on top of B in DST, the chain adds B after the matmul), and the relay's states cross the fabric in
+        # BF16: the relay must be no further from the FP64 reference than the gather + chain, plus half a BF16 ulp
+        # (2**-8 relative) of the state.
         expected = expected.double()
         relay_error = torch.linalg.vector_norm(got.double() - expected).item()
         chain_error = torch.linalg.vector_norm(chained.double() - expected).item()
-        assert relay_error <= 1.01 * chain_error, f"{name}: relay error {relay_error} > chain error {chain_error}"
+        bf16_rounding = 2**-8 * torch.linalg.vector_norm(expected).item()
+        assert (
+            relay_error <= 1.01 * chain_error + bf16_rounding
+        ), f"{name}: relay error {relay_error} > chain error {chain_error} + BF16 rounding {bf16_rounding}"
 
     for index, (local_entry, local_final, local_chained_entry, local_chained_final) in enumerate(devices):
         rank, tp = divmod(index, tp_size)
