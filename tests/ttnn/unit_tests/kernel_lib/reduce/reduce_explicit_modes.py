@@ -952,6 +952,13 @@ def test_reduce_explicit_modes(request, device, case: ReduceCase):
         )
 
 
+@pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
+def test_reduce_tile_sum_rejects_a_missing_auxiliary_cb(device, expect_error, dim):
+    case = _case(f"no-auxiliary-TileSum-{dim}", dim=dim, rows=2, cols=3, algorithm="TileSum", no_auxiliary=True)
+    with expect_error(RuntimeError, "Native and TileSum reductions require an auxiliary CB"):
+        _run_case(device, case)
+
+
 @pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.float32))
 def test_reduce_auxiliary_tile_patterns_over_dirty_memory(device, dtype):
     """Zero-valued scalers overwrite consumed lanes; masks clear poisoned padding."""

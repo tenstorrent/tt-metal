@@ -838,8 +838,8 @@ ALWI void reduce(
     // =============================================================================
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
     static_assert(
-        has_auxiliary || algorithm == ReduceAlgorithm::TileSum || is_sfpu,
-        "Native reduction requires an auxiliary scaler CB");
+        has_auxiliary || is_sfpu,
+        "Native and TileSum reductions require an auxiliary CB: Native reads its scaler and TileSum its zero tile");
     static_assert(
         scale_bits == REDUCE_UNIT_SCALE_BITS || algorithm == ReduceAlgorithm::TileSum || is_sfpu,
         "ReduceAlgorithm::Native carries its scale in the scaler tile, so scale_bits must be 1.0f");
