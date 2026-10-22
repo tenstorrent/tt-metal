@@ -35,8 +35,8 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
@@ -154,7 +154,7 @@ private:
     MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
-    // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
+    // New path (MeshDevice::open_mesh_device): a MetalContext instance is created for the
     // MeshDevice, and when the MeshDevice closes it also destroys the associated MetalContext.
     bool destroy_metal_context_instance_on_close_ = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
@@ -186,7 +186,6 @@ private:
         uint32_t l1_size_per_core = 0;
         uint32_t dram_size_per_channel = 0;
         std::set<CoreCoord> ethernet_cores;
-        std::set<CoreCoord> storage_only_cores;
     };
     std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
@@ -362,7 +361,6 @@ public:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
