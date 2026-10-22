@@ -335,12 +335,20 @@ manifest::Heartbeat heartbeat(tt::ARCH arch) {
     };
 }
 
-// A stream register's byte offset in its stream's block.
-uint32_t stream_register_offset(const tt::tt_metal::Hal& hal, manifest::StreamRegister reg) {
+// Where a stream register is in its stream's block, and how many of its low bits hold its value.
+manifest::StreamRegisterLayout stream_register_layout(const tt::tt_metal::Hal& hal, manifest::StreamRegister reg) {
     switch (reg) {
         case manifest::StreamRegister::BUF_SPACE_AVAILABLE:
-            return hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t);
-        case manifest::StreamRegister::REMOTE_SRC: return hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t);
+            // The bits above the count can hold other state.
+            return {
+                .offset = static_cast<uint32_t>(
+                    hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t)),
+                .bits = hal.get_noc_stream_remote_dest_words_free_width()};
+        case manifest::StreamRegister::REMOTE_SRC:
+            // The fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (fabric_stream_regs.hpp).
+            return {
+                .offset = static_cast<uint32_t>(hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t)),
+                .bits = 24};
     }
     TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(reg));
 }
@@ -356,7 +364,7 @@ manifest::StreamRegisters stream_registers(const tt::tt_metal::Hal& hal) {
         .count = StreamRegAssignments::num_eth_stream_registers,
     };
     for (const auto reg : enchantum::values<manifest::StreamRegister>) {
-        out.register_offsets.emplace_back(reg, stream_register_offset(hal, reg));
+        out.registers.emplace_back(reg, stream_register_layout(hal, reg));
     }
     return out;
 }
