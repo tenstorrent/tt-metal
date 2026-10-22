@@ -42,7 +42,10 @@ from ttnn.operations.transformer_golden import torch_sdpa_reference
 
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
 from models.demos.gemma4_d_p.tt.attention import ring_prefill
@@ -143,6 +146,15 @@ class ModelConfig:
     # MLA expanded K (k_expand_weight): Q is [q_nope | q_pe] (d_q wide) against the d_k-wide latent K, expanded per head
     # inside the op with a W_UK of [nhq, k_expand_nope, d_k - (d_q - k_expand_nope)].
     k_expand_nope: int = None
+    # The production model config whose fabric packet payload the mesh opens with (the ring gather's packet size is the
+    # fabric's), resolved when the mesh opens; None keeps the fabric default.
+    fabric_payload_config: type = None
+
+
+def model_fabric_payload_size(model: ModelConfig):
+    """The fabric packet payload the model's production mesh opens with, or None for the fabric default."""
+    config = getattr(model, "fabric_payload_config", None)
+    return moe_fabric_payload_size(config) if config is not None else None
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -608,6 +620,7 @@ def open_ring_joint_sdpa_runtime(
     full_mesh: bool = False,
     num_global_semaphores: int = 3,
     fabric_config: ttnn.FabricConfig = None,
+    fabric_payload_size: int = None,
 ):
     if full_mesh:
         # The caller asks for a full-mesh gather; the op resolves whether that route closes.
@@ -627,6 +640,11 @@ def open_ring_joint_sdpa_runtime(
     mesh_device = None
 
     try:
+        # The production payload when the caller names one (fabric_payload_size), else the fabric default.
+        fabric_router_config = None
+        if fabric_payload_size is not None:
+            fabric_router_config = ttnn.FabricRouterConfig()
+            fabric_router_config.max_packet_payload_size_bytes = fabric_payload_size
         ttnn.set_fabric_config(
             fabric_config,
             ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -634,6 +652,7 @@ def open_ring_joint_sdpa_runtime(
             ttnn.FabricTensixConfig.DISABLED,
             ttnn.FabricUDMMode.DISABLED,
             ttnn.FabricManagerMode.DEFAULT,
+            *([fabric_router_config] if fabric_router_config is not None else []),
         )
 
         mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
@@ -1913,6 +1932,7 @@ def run_ring_joint_sdpa_chunked(
             fp32_dest_acc_en=fp32_dest_acc_en,
             topology=model.topology,
             reserve_llk_kernel_config=reserve_llk_kernel_config,
+            fabric_payload_size=model_fabric_payload_size(model),
         )
     mesh_device = runtime.mesh_device
     topology = runtime.topology
@@ -6841,6 +6861,7 @@ RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(
     # K2.6's list. 640 is what K3 deploys; a wider k sweep is a local run, not CI cost.
     k_chunk_sizes=[512, 640],
     seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+    fabric_payload_config=KimiK3Config,
 )
 
 # The dense MLA chunked prefill with V unrolled per head at each model's per-chip shape: K is the latent cache (indexed,
@@ -6860,10 +6881,13 @@ _UNROLLED_V_KIMI = replace(
 )
 UNROLLED_V_CHUNKED_MODEL_CONFIGS = {
     "kimi_k3_unrolled_v": _UNROLLED_V_KIMI,
-    "kimi_k2_7_unrolled_v": replace(_UNROLLED_V_KIMI, name="kimi_k2_7_unrolled_v", nhq=16, nhv=16),
+    "kimi_k2_7_unrolled_v": replace(
+        _UNROLLED_V_KIMI, name="kimi_k2_7_unrolled_v", nhq=16, nhv=16, fabric_payload_config=KimiK27Config
+    ),
     "mistral4_unrolled_v": replace(
         _UNROLLED_V_KIMI,
         name="mistral4_unrolled_v",
+        fabric_payload_config=None,
         nhq=32,
         nhv=32,
         d_q=320,
@@ -8793,7 +8817,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     perf_chunk = n_chunks - 1  # final chunk: largest K/V prefix + current chunk (simulates galaxy 50k+5k)
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
-    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, fabric_payload_size=model_fabric_payload_size(model))
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
             duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
@@ -8835,11 +8859,12 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
 # Unrolled-V final 50k+5k chunk at each model's production chunks (ttMLA). Util counts d_v=128 FLOPs, so it is not
 # comparable to the ring_mla (d_v=512) numbers above; compare chunk latency end to end instead. Calibrated on the
-# 8-device Blackhole LoudBox ring (non-Galaxy, sp=8 tp=1, 110 SDPA cores), stock fabric packets.
+# 8-device Blackhole LoudBox ring (non-Galaxy, sp=8 tp=1, 110 SDPA cores), with the model's production fabric packets
+# (the same latency as stock packets: the ring gather is not on the critical path at full compute).
 UNROLLED_V_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, ring_size, expected_util)
-    ("kimi_k3_unrolled_v", 8, 65.20),  # q160 k512, 96 units in one wave: 5.863 ms
-    ("kimi_k2_7_unrolled_v", 8, 58.78),  # q320 k256 split three ways, 96 cores: 4.336 ms
+    ("kimi_k3_unrolled_v", 8, 65.95),  # q160 k512, 96 units in one wave: 5.797 ms
+    ("kimi_k2_7_unrolled_v", 8, 60.72),  # q320 k256 split three ways, interleaved ring steps, 96 cores: 4.198 ms
 ]
 
 
@@ -8864,7 +8889,7 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
     perf_chunk = n_chunks - 1
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-indexed"
-    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, fabric_payload_size=model_fabric_payload_size(model))
     sdpa_cores = runtime.sdpa_compute_grid[0] * runtime.sdpa_compute_grid[1]
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
@@ -8920,7 +8945,7 @@ if MESH_CONFIG.is_galaxy:
         ("kimi_k2_7_expanded_k", 8, 48.86, 0.05),
     ]
 else:
-    # The Blackhole LoudBox ring (sp=8 tp=1): K3 4.29 ms, K2.7 3.00 ms, repeatable within 0.5%.
+    # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets: K3 4.29 ms, K2.7 3.00 ms, repeatable within 0.5%.
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
         ("kimi_k3_expanded_k", 8, 54.10, 0.015),
         ("kimi_k2_7_expanded_k", 8, 51.50, 0.015),
@@ -8960,7 +8985,7 @@ def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_siz
     perf_chunk = n_chunks - 1
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-indexed"
-    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, fabric_payload_size=model_fabric_payload_size(model))
     sdpa_cores = runtime.sdpa_compute_grid[0] * runtime.sdpa_compute_grid[1]
     try:
         with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
