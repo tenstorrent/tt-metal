@@ -40,11 +40,7 @@ def test_reshard_unaligned_height_sharded_scratch_race(device, channels, input_b
     assert passing, output
 
 
-@pytest.mark.parametrize(
-    "input_buffer_type",
-    [ttnn.BufferType.L1, ttnn.BufferType.DRAM],
-)
-def test_reshard_width_sharded_multirange_corerangeset_grid(device, input_buffer_type):
+def test_reshard_width_sharded_multirange_corerangeset_grid(device):
     """Regression for the multi-CoreRange CoreRangeSet grid truncation at reshard_device_operation.cpp:73-74.
 
     A width-sharded tensor whose shard grid is a CoreRangeSet containing more than one CoreRange
@@ -53,6 +49,8 @@ def test_reshard_width_sharded_multirange_corerangeset_grid(device, input_buffer
     full shard count. Cores beyond ranges()[0] received wrong per-shard offsets and the final
     output shard was silently corrupted. This test constructs that layout with fp32 arange data
     so every element is uniquely identifiable, and asserts bitwise identity against the input.
+    L1 only — DRAM banks are 1D (every shard core must have y == 0), so a wrapped multi-range
+    shard grid is not representable on DRAM; the production reach lives in L1 anyway.
     """
     grid_size = device.compute_with_storage_grid_size()
     if grid_size.x < 8 or grid_size.y < 6:
@@ -86,7 +84,7 @@ def test_reshard_width_sharded_multirange_corerangeset_grid(device, input_buffer
 
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, (rows, w_in), ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, input_buffer_type, input_shard_spec
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec
     )
     output_shard_spec = ttnn.ShardSpec(output_shard_grid, (rows, w_out), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
