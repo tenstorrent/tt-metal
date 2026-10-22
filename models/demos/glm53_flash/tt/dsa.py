@@ -86,12 +86,14 @@ PREFIX_INCREMENTAL_BUDGET_MB = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDG
 def prefill_blocks() -> tuple[int, int]:
     """(score sub-block rows, attention block rows) of the sparse prefill loop (``TtDSA._sparse_rows``).
     ``GLM53_PREFILL_QBLOCK`` (default 2048; 512 single-user / 256 at 32 users at 1 M for the score block's memory)
-    bounds the scorer's [rows, pools] bf16 block; ``GLM53_PREFILL_ABLOCK`` (default 2048) the rows of one id
+    bounds the scorer's [rows, pools] bf16 block; ``GLM53_PREFILL_ABLOCK`` (default = QBLOCK, the validated per-sub-block form; 2048 batches a slab) the rows of one id
     expansion + absorbed-query + sparse_sdpa pass (a whole 2048-row slab of a 16 K chunk on 8 rows), i.e. how many
     score sub-blocks are selected before their attention runs batched. ``ABLOCK <= QBLOCK`` is the per-sub-block
     form (one attention call per score sub-block, the previous loop)."""
     qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
-    ab = int(os.environ.get("GLM53_PREFILL_ABLOCK", "2048"))
+    ab = (
+        int(os.environ.get("GLM53_PREFILL_ABLOCK", "0")) or qb
+    )  # default = the validated per-sub-block form; 2048 batches a slab
     return qb, ab
 
 

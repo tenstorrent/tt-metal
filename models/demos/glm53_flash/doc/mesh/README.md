@@ -1003,3 +1003,20 @@ the blocks default (the second expert copy). Decision (93b9d6b233a): `GLM53_PREF
 resolved by the mesh model as blocks up to 4 K positions and regions (+ stacked copy per the planner) above, so every
 README row's configuration is the default one; a bare layer treats auto as blocks. The chain of 2026-10-21/22 is
 complete: AUTO 8X4 DONE.
+
+## 2026-10-22 device-free deliveries (machine in use elsewhere; nothing run on chips)
+
+| track | delivered | default | device validation (`_logs/mesh/sched_validate_devicefree_work.sh`, starts only on `touch GO_VALIDATE`) |
+|---|---|---|---|
+| A3 mHC norm on 32 cores | `GLM53_MHC_NORM=sharded|sharded_cast|single` in the exact decode collapse (+2 ops, expected -70 us/layer = -3.2 ms/step); host reference test 19/19 | `single` until the A/B | `test_mhc_a3a4_device.py` on one chip, then the block decoder/e2e, then the 8x4 e2e + logits gate |
+| A4 Sinkhorn | finding: already ONE fused program per token tile (all 32 users); `GLM53_MHC_SINKHORN=batched` is a reference graph (+250-450 us), the real -94 us/layer needs a kernel change | `kernel` | none |
+| B7 TP all-reduce | `GLM53_TP_ALLREDUCE=gather` = all_gather_cols + fast_reduce_nc (expected -1.5 ms/step) | `ccl` | `test_ccl_allreduce_gather.py` on the block, then e2e |
+| C1 for 4 users/row | `GLM53_EP_RS_REMAP=1`: down-writer row-stride remap so the rs combine serves T < 32 (expected -2..-14 ms/step at 32 users under EP32) | `0` | `test_expert_stream_rs_t4.py` (chip 0 row chunks, block remap vs op), EP e2e |
+| prefill selection | one attention block per `GLM53_PREFILL_ABLOCK` rows (2048 batches a slab), untilize_with_unpadding, cached bounds: ~1-3 % of a 16 K chunk; `GLM53_PREFIX_INCREMENTAL=1` arena (11 x ISL KiB resident: 0.69 GiB at 64 K, 11 GiB at 1 M) | ABLOCK = QBLOCK (old form), incremental 0 | `test_prefill_select_batched.py`, `test_prefix_incremental.py` on the block, 64 K needle on the 8x4 |
+| vLLM generator | `tt/generator_vllm.py` + `tt/vllm_config.py` (plugin contract, logical->physical slot indirection, column-aware placement, logical block pool over device-managed pages, traced/chunked prefill planner), 17 host tests; `max_num_seqs` = users per row until per-row prefill ownership | n/a | plugin registration + (2,4) reduced smoke, then 8x4 (`_agents/vllm_glm53/STATUS.md`) |
+| PP study | `pp_design.md`: no decode gain at equal batch; capacity + prefill-ceiling layout for later | n/a | per-row 6-layer prefill rate measurement |
+| MTP steps 3-5 | in progress (agent) | | `test_mtp_spec.py` on the block |
+
+Honest expectation for the decode step after the validation flips the defaults: 83.1 -> ~78 ms at 32 users (A3 + B7),
+plus the EP32 32-user path 71 -> ~60-69 ms with the T<32 reduce-scatter combine; the larger items (A1 fused pre-block
+after its NOC audit, B5 DSA decode fusion, MTP) remain.
