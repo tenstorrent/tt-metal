@@ -40,9 +40,42 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     return result;
 }
 
+// The BF16-grade sigmoid of _sfpu_sigmoid_<false>, operation for operation (exp_21f of -x, then one Newton step of
+// the reciprocal of 1 + exp(-x)), with its constants in registers the caller loads once per call, so its loop
+// reloads no FP32 constant. (-x) / ln2 is formed as x * -(1 / ln2): the product is the same, sign included.
+struct SigmoidBf16Constants {
+    sfpi::vFloat neg_one_ln2 = -1.4426950216293334961f;
+    sfpi::vFloat exp_bias = 127.f;
+    sfpi::vFloat c0 = EXP_21F_BF16_C0;
+    sfpi::vFloat c1 = EXP_21F_BF16_C1;
+    sfpi::vFloat c2 = EXP_21F_BF16_C2;
+};
+
+template <typename Constants>
+sfpi_inline sfpi::vFloat _sfpu_sigmoid_bf16_preloaded_(sfpi::vFloat x, const Constants& k) {
+    sfpi::vFloat xlog2 = sfpi::clamp(x * k.neg_one_ln2 + k.exp_bias, 0.0f, 255.0f);
+    sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
+    sfpi::vInt exponential_part = sfpi::exexp(z, sfpi::ExponentMode::Biased);
+    sfpi::vMag fractional_part = sfpi::exman(z);
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
+    frac = PolynomialEvaluator::eval(frac, k.c0, k.c1, k.c2);
+    sfpi::vFloat exp_neg_x = sfpi::setexp(frac, exponential_part);
+    return sfpu_reciprocal_iter<1>(1.0f + exp_neg_x);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
-    if constexpr (!APPROXIMATION_MODE) {
+    if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
+        const SigmoidBf16Constants constants;
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat result = _sfpu_sigmoid_bf16_preloaded_(sfpi::dst_reg[0], constants);
+            // Rounded to BF16 as a vFloat, so the store keeps the destination's format.
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
+    } else if constexpr (!APPROXIMATION_MODE) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
