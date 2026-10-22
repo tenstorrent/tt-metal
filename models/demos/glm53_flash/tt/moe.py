@@ -1501,14 +1501,29 @@ class TtEPExperts(LightweightModule):
         return out
 
     def combine_rows(self, out: ttnn.Tensor, meta: ttnn.Tensor, T: int) -> ttnn.Tensor:
-        """Stage 3 (4 device ops + the combine): the contributions as rows, ``all_to_all_combine(local_reduce)``
-        into a zeroed [K, T, 1, H] slot tensor (slot k of token t = the contribution of the device owning its k-th
-        expert, untouched slots stay 0), tilized, summed over K -> [1, 1, T, H] (this column's partial)."""
+        """Stage 3 -> [1, 1, T, H] (this column's partial). ``rs`` (the default): ONE ``reduce_scatter_rows(out,
+        dim=2)``: ``out`` [1, 1, rows*T, H] TILE (row r*T + t = this chip's weighted contribution to token t of
+        row r, an exact zero row when none of its experts is in the token's list), summed over the senders with
+        row r handed chunk r = its own tokens, IS the combine (the hybrid layout's op on the same shape, 128-144
+        us; decode ledger C1). T % 32 != 0 (4 users/row): under ``GLM53_EP_RS_REMAP=1`` the down writer lays
+        ``out`` out as [1, 1, rows*32, H] (chunk r rows 0..T-1 = row r's tokens, rows T..31 exact zeros:
+        ``custom_ops/expert_stream/op.py::ep_rs_chunk``), the reduce-scatter yields [1, 1, 32, H] and rows 0..T-1
+        are sliced; any other ``out`` layout (the remap off, T % 32 != 0) takes the op path. ``op``: 4 device ops +
+        the combine: the contributions as rows, ``all_to_all_combine(local_reduce)`` into a zeroed [K, T, 1, H]
+        slot tensor (slot k of token t = the contribution of the device owning its k-th expert, untouched slots
+        stay 0), tilized, summed over K. ``a2a``: ``_combine_rows_a2a``."""
         K, H = meta.shape[-1], self.H
         l1 = ttnn.L1_MEMORY_CONFIG
         Td = out.shape[-2]
-        if self.combine_mode == "rs" and T % TILE == 0 and Td == self.mesh.rows * T:
-            return self.mesh.reduce_scatter_rows(out, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,T,H]
+        # rows per mesh-row chunk of a chunk-aligned ``out``: T itself at T % 32 == 0, one tile below 32 (the remap)
+        chunk = T if T % TILE == 0 else (TILE if T < TILE else None)
+        if self.combine_mode == "rs" and chunk is not None and Td == self.mesh.rows * chunk:
+            y = self.mesh.reduce_scatter_rows(out, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,chunk,H]
+            if chunk != T:  # the remapped layout: row r's T users sit at rows 0..T-1 of its chunk (pad rows zero)
+                y_full, y = y, ttnn.slice(y, [0, 0, 0, 0], [1, 1, T, H])
+                if y_full is not out:  # a 1-row mesh's reduce-scatter is the identity: ``forward`` frees ``out``
+                    ttnn.deallocate(y_full)
+            return y
         if self.combine_mode == "a2a" and T % 16 == 0 and Td == self.mesh.rows * T:
             return self._combine_rows_a2a(out, T)
         out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (1, Td, 1, H))

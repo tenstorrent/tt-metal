@@ -273,6 +273,33 @@ def ep_base_tensor(base: int, device, mesh_mapper=None):
     return ttnn.from_torch(t, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, mesh_mapper=mesh_mapper)
 
 
+def mesh_rows(device) -> int:
+    """Rows of the mesh a device handle spans (1 on a single chip). The EP row-major dispatch delivers
+    ``rows * T_users`` rows per chip in mesh-row order, which the reduce-scatter combine's output chunks split back."""
+    shape = getattr(device, "shape", None)
+    return int(list(shape)[0]) if shape is not None else 1
+
+
+def ep_rs_chunk(device, t_valid: int | None) -> int | None:
+    """Tokens per output chunk of the EP row-major down op under ``GLM53_EP_RS_REMAP=1`` (default 0: ``None``).
+    The reduce-scatter EP combine (``tt/moe.py`` ``TtEPExperts.combine_rows``, ``GLM53_EP_COMBINE=rs``) hands mesh
+    row r chunk r of ``out`` on the tile-row dim, which needs row r's tokens in a 32-row-aligned chunk. At
+    ``T_users = t_valid / rows`` tokens per mesh row (``t_valid = rows * T_users``: the all_to_all_dispatch delivers
+    every row's tokens in row order) with ``T_users % 32 != 0`` (4 users/row = 32 users on the 8x4) the plain
+    ``[1, 1, t_valid, H]`` layout (dispatched row i at tile i // 32, row i % 32) interleaves the rows' tokens inside
+    one tile; with the remap the down writer lays ``out`` out as ``[1, 1, rows * 32, H]``: dispatched row i at chunk
+    i // T_users (= its mesh row), row i % T_users, rows T_users .. 31 of every chunk exact zeros
+    (``kernels/writer_down_dispatch.cpp``). Returns ``T_users`` then, else ``None``. The op / a2a combines read
+    ``out`` row for row and must not run with the remap (their shape checks fail loudly: ``Td != rows * T``)."""
+    if t_valid is None or os.environ.get("GLM53_EP_RS_REMAP", "0") != "1":
+        return None
+    rows = mesh_rows(device)
+    if t_valid % rows:
+        return None
+    t_users = t_valid // rows
+    return t_users if t_users % TILE else None
+
+
 # ---------------------------------------------------------------------------------------------------- placement
 class _BankStreamOp:
     """Worker placement shared by the streaming ops (after gpt_oss fused_decode/stream.py): ``readers`` cores per
@@ -683,7 +710,8 @@ class ExpertGateUpDispatch(_BankStreamOp):
 class ExpertDownDispatch(_BankStreamOp):
     """(act, table, counts, w2, out) -> out. act / table from the gate|up dispatch, counts as above, w2 as the block
     op, out [1, 1, T, H] BF16 TILE. ``readers`` cores per bank (default 8: 2 output columns each; the resident
-    per-pass h buffer is P x cols tiles)."""
+    per-pass h buffer is P x cols tiles). EP row-major: ``out_chunk`` (``ep_rs_chunk``) lays ``out`` out in 32-row
+    chunks of ``out_chunk`` tokens ([1, 1, ceil(t_valid / out_chunk) * 32, H]) for the reduce-scatter combine."""
 
     def __init__(
         self,
@@ -728,7 +756,7 @@ class ExpertDownDispatch(_BankStreamOp):
             else:
                 raise ValueError(f"down dispatch does not fit L1 at T = {T}, E = {E}, I = {I}")
 
-    def __call__(self, act, table, counts, w2, out, base=None, t_valid=None):
+    def __call__(self, act, table, counts, w2, out, base=None, t_valid=None, out_chunk=None):
         cb_a, cb_w, cb_c0, cb_c1, cb_t, cb_id, cb_h, cb_g, cb_m, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
         e_tiles = -(-self.E // TILE)
         c_tiles = self.T // TILE + 1 if self.ep else e_tiles
@@ -738,6 +766,18 @@ class ExpertDownDispatch(_BankStreamOp):
             assert t_valid is not None and 0 < t_valid <= self.T, (t_valid, self.T)
             extra_rt += [t_valid, rm_page_bytes(counts)]
         ep_mode = 2 if self.ep_rm else int(self.ep)
+        # output row placement (writer phase 2): the plain [T, H] layout (dispatched row i at tile i // 32, row
+        # i % 32: OUT_TPR = 32, T / 32 tile rows), or the reduce-scatter combine's chunks of ``out_chunk`` tokens
+        # (row i at tile i // out_chunk, row i % out_chunk; ``ep_rs_chunk`` from the env unless given). Compile-time:
+        # a (T, out_chunk) pair is one program; the generic op's cache keys the descriptor.
+        if self.ep_rm and out_chunk is None:
+            out_chunk = ep_rs_chunk(self.device, t_valid)
+        if out_chunk is None:
+            out_tpr, rt_out = TILE, self.T // TILE
+        else:
+            assert self.ep_rm and 1 <= out_chunk <= TILE, (out_chunk, self.ep_rm)
+            out_tpr, rt_out = out_chunk, -(-t_valid // out_chunk)
+            assert out.shape[-2] == rt_out * TILE, (tuple(out.shape), rt_out, out_chunk, t_valid)
         cbs = [
             self._cb(cb_a, ttnn.bfloat16, BF16_TILE_BYTES, self.a_slots * self.seg_tiles),
             self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, self.w_slots * self.block_tiles),
@@ -801,10 +841,12 @@ class ExpertDownDispatch(_BankStreamOp):
             cb_m,
             ep_mode,
             self.picks,
+            out_tpr,  # 18: tokens per output tile row
+            rt_out,  # 19: output tile rows (the compute's phase-2 count below must agree)
         ]
         for t in (counts, table, act, out, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        compute_ct = [cb_a, cb_w, cb_id, cb_h, cb_g, cb_out, self.seg_tiles, self.cols, self.J, self.T // TILE, cb_m]
+        compute_ct = [cb_a, cb_w, cb_id, cb_h, cb_g, cb_out, self.seg_tiles, self.cols, self.J, rt_out, cb_m]
         program = self._program(
             "down_dispatch",
             cbs,
@@ -845,9 +887,15 @@ class ExpertDispatch:
         self.E, self.K, self.I, self.H, self.T, self.ep, self.ep_rm = E, K, I, H, T, ep, ep_rm
         self.P = self.gate_up.P
 
-    def alloc(self, device, act_l1: bool = True, t_valid: int | None = None):
+    def alloc(self, device, act_l1: bool = True, t_valid: int | None = None, out_chunk: int | None = None):
         """act / table / out for one call; ``t_valid`` (EP row-major) gives ``out`` its logical row count (the
-        tile padding to T stays physical, so ``to_layout(ROW_MAJOR)`` yields exactly the dispatched rows)."""
+        tile padding to T stays physical, so ``to_layout(ROW_MAJOR)`` yields exactly the dispatched rows). With the
+        reduce-scatter combine's chunked layout (``out_chunk`` tokens per 32-row chunk, ``ep_rs_chunk`` from the env
+        unless given) ``out`` is [1, 1, ceil(t_valid / out_chunk) * 32, H]: every row is logical (the reduce-scatter
+        reads the pad rows too)."""
+        if self.ep_rm and out_chunk is None:
+            out_chunk = ep_rs_chunk(device, t_valid)
+        out_rows = -(-t_valid // out_chunk) * TILE if out_chunk is not None else (t_valid or self.T)
         act = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, self.P, TILE, self.I]),
             ttnn.bfloat16,
@@ -859,7 +907,7 @@ class ExpertDispatch:
             ttnn.Shape([1, 1, self.P, TABLE_WIDTH]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
         )
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, t_valid or self.T, self.H]),
+            ttnn.Shape([1, 1, out_rows, self.H]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
@@ -873,12 +921,13 @@ class ExpertDispatch:
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x_rm, routing_counts(routing)
 
-    def forward(self, x_rm, routing, counts, w13, w2, act, table, out, base=None, t_valid=None):
+    def forward(self, x_rm, routing, counts, w13, w2, act, table, out, base=None, t_valid=None, out_chunk=None):
         """Non-EP: (x_rm, routing, counts). EP: routing = weight tiles, counts = index tiles, base = the chip's
         expert base page (``ep_index_tiles`` / ``ep_base_tensor``). EP row-major: x_rm = the [x | w] rows, counts =
-        the id rows, t_valid = the dispatched row count (``ep_rm_inputs``)."""
+        the id rows, t_valid = the dispatched row count (``ep_rm_inputs``), out_chunk = the chunked output layout
+        ``out`` was allocated with (``alloc``; the env default when ``None``)."""
         self.gate_up(x_rm, routing, counts, w13, act, table, base=base, t_valid=t_valid)
-        self.down(act, table, counts, w2, out, base=base, t_valid=t_valid)
+        self.down(act, table, counts, w2, out, base=base, t_valid=t_valid, out_chunk=out_chunk)
         return out
 
     __call__ = forward
