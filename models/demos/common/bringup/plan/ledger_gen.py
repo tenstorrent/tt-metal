@@ -36,13 +36,19 @@ from models.demos.common.bringup.testing.templates import component_test_path, s
 
 SAFE = "scripts/run_safe_pytest.sh --run-all"
 PY = "python -m models.demos.common.bringup"
-# PROGRAM_SUPPORT_COUNT: the pipelined timeline reads the device profiler once per chunk; the default 1000 programs per
-# core drops markers on large models (GLM-5.3, 5 layers: 1319 programs per chip per chunk).
 REAL = "BRINGUP_SCALED=0"  # F75: a step that must read the real checkpoint on a scaled run (core/spec.py)
-PROFILE_ENV = (
-    "TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1"
-    " TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000"
+# F155: device time comes from the program real-time profiler (no environment). The device profiler only on
+# perf.profiler: device (cross-checks); PROGRAM_SUPPORT_COUNT: its pipelined timeline reads it once per chunk, and
+# the default 1000 programs per core drops markers on large models (GLM-5.3, 5 layers: 1319 programs per chip).
+DEVICE_PROFILE_ENV = (
+    "BRINGUP_PROFILER=device TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1"
+    " TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000"
 )
+
+
+def profile_env(spec) -> str:
+    """The environment prefix of a profile gate (with its trailing space), by the spec's perf.profiler."""
+    return f"{DEVICE_PROFILE_ENV} " if spec.get("perf.profiler") == "device" else ""
 
 
 # F128 (owner): end-to-end accuracy is gated against the limit each test records (calib x the reference's own drift
@@ -423,7 +429,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "Warm per-section, per-chip profile of one long chunk",
         "perf",
         [prev],
-        f"{PROFILE_ENV} {SAFE} --no-precompile models/demos/common/bringup/tests/test_profile.py",
+        f"{profile_env(spec)}{SAFE} --no-precompile models/demos/common/bringup/tests/test_profile.py",
         {"device_ms_total": "> 0", "profiled_programs": ">= 1"},
         device=True,
     )
@@ -458,7 +464,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "perf",
         ["X.2"],
         f"BRINGUP_RUNG={full['name']} {SAFE} models/demos/common/bringup/tests/test_ladder.py"
-        f" && BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 {PROFILE_ENV} {SAFE} models/demos/common/bringup/tests/test_profile.py"
+        f" && BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 {profile_env(spec)}{SAFE} models/demos/common/bringup/tests/test_profile.py"
         f" && {SAFE} models/demos/common/bringup/tests/test_positions.py",
         fm,
         device=True,

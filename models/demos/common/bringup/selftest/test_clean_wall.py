@@ -18,7 +18,12 @@ def test_profiled_run_gets_a_clean_wall_run_first():
     assert segs[0] == ladder
     assert segs[1].startswith("BRINGUP_PROFILE_WALL=1 ") and "TT_METAL_" not in segs[1]
     assert segs[1].endswith("tests/test_profile.py")
-    assert segs[2] == f"BRINGUP_WALL_CLEAN=1 {PROF}"
+    # F155: the profiled run measures with the real-time profiler: the device profiler's variables go
+    assert (
+        segs[2]
+        == "BRINGUP_WALL_CLEAN=1 scripts/run_safe_pytest.sh --run-all --no-precompile "
+        + PROF.split(" scripts/run_safe_pytest.sh --run-all --no-precompile ")[1]
+    )
 
 
 def test_other_commands_unchanged_and_idempotent():

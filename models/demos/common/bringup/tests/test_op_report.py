@@ -7,13 +7,13 @@ Profiles the chunk at BRINGUP_OPREP_START (default the target's last chunk: seq 
 records, and the same layers at BRINGUP_OPREP_CONTEXT_START (default 0; "none" to skip) for the context-scaling
 section. Layers (BRINGUP_OPREP_LAYERS): "rep" (default) one representative layer per spec block type, weighted by the
 block type's layer count so totals are the full model's (op mode syncs after every op: the whole model is slow);
-"all"; or "lo-hi". BRINGUP_OPREP_RT=1: per-call device time from the program real-time profiler instead (no per-op
-syncs, no TT_METAL_DEVICE_PROFILER build; a program's time is its dispatch-side start to end, per chip). Writes
-<repo>/generated/<model>/op_report{.json,.txt} and prints the text.
+"all"; or "lo-hi". Per-call device time from the program real-time profiler (F155, the default: no per-op syncs,
+no TT_METAL_DEVICE_PROFILER build; a program's time is its dispatch-side start to end, per chip). BRINGUP_PROFILER=
+device (or the older BRINGUP_OPREP_RT=0) for the device profiler, with TT_METAL_DEVICE_PROFILER=1
+TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000.
+Writes <repo>/generated/<model>/op_report{.json,.txt} and prints the text.
 
-    TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 \\
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 BRINGUP_SPEC=<spec.yaml> \\
-    scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_op_report.py -s
+    BRINGUP_SPEC=<spec.yaml> scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_op_report.py -s
 """
 
 import os
@@ -62,10 +62,10 @@ def test_op_report(mesh_device):
     import ttnn
     from models.demos.common.bringup.reference.prompt import tokens as prompt_tokens
 
-    rt = os.environ.get("BRINGUP_OPREP_RT", "0") == "1"  # the program real-time profiler (no syncs, no profiler build)
+    legacy = os.environ.get("BRINGUP_OPREP_RT")  # before F155: "1" for the real-time profiler
+    rt = legacy == "1" if legacy in ("0", "1") else profiler.backend(S) == "rt"  # F155: rt unless asked otherwise
     if not rt:
-        for k, v in profiler.PROFILER_ENV.items():
-            assert os.environ.get(k) == v, f"set {k}={v}"
+        profiler.require_device_profiler()
     seq, chunk = int(S.get("target.seq")), int(S.get("target.chunk"))
     start = int(os.environ.get("BRINGUP_OPREP_START", seq - chunk))
     ctx_env = os.environ.get("BRINGUP_OPREP_CONTEXT_START", "0")

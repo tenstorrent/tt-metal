@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Per-op profiling never runs over the whole model: one representative layer per block type, or an explicit list."""
+"""Per-op profiling on the device profiler never runs over the whole model: one representative layer per block type,
+or an explicit list. F155: on the real-time profiler (no syncs) it covers every layer, or the explicit list."""
 
 from models.demos.common.bringup.core.spec import Spec
 from models.demos.common.bringup.testing.profile import op_layers
@@ -31,3 +32,11 @@ def test_whole_model_refused(monkeypatch):
         assert "minute per layer" in str(e)
     else:
         raise AssertionError("op mode over the whole model was not refused")
+
+
+def test_realtime_covers_every_layer(monkeypatch):
+    s = Spec.load(SPEC)
+    monkeypatch.delenv("BRINGUP_PROFILE_LAYERS", raising=False)
+    assert op_layers(s, s.layers(), rt=True) == s.layers()
+    monkeypatch.setenv("BRINGUP_PROFILE_LAYERS", ",".join(map(str, s.layers())))
+    assert op_layers(s, s.layers(), rt=True) == s.layers()
