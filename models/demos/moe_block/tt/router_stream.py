@@ -112,6 +112,14 @@ void kernel_main() {
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
+#ifdef RA_PLAN
+    {  // the second planner instance on this core (the routing exchange + planner: routing_stream)
+        const uint32_t rr = 4 + G + 2 + 5, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NC_);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
+        ra::plan(rr + 2, B);
+    }
+#endif
 }
 """
 
@@ -387,12 +395,16 @@ void kernel_main() {
 #ifdef RA_PLAN
     {  // the routing exchange + planner (routing_stream): every router core's rows written, then routing_a2a's planner
         DeviceZoneScopedN("SE-RPLAN");
-        const uint32_t r0 = t0 + 7, rows = get_arg_val<uint32_t>(r0), B = get_arg_val<uint32_t>(r0 + 1);
-        for (uint32_t i = 0; i < RA_M_; ++i)
-            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(r0 + 2 + 2 * i), get_arg_val<uint32_t>(r0 + 3 + 2 * i), rows), 1);
-        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_M_);
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all M increments landed)
-        ra::plan(r0 + 2 + 2 * RA_M_, B);
+        const uint32_t r0 = t0 + 7, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
+        const uint32_t B = get_arg_val<uint32_t>(r0 + 2);
+        for (uint32_t i = 0; i < RA_NC_; ++i) {  // (my rows are written: every router core's two planner RISCs told)
+            const uint32_t x = get_arg_val<uint32_t>(r0 + 3 + 2 * i), y = get_arg_val<uint32_t>(r0 + 4 + 2 * i);
+            noc_semaphore_inc(get_noc_addr(x, y, rows), 1);
+            noc_semaphore_inc(get_noc_addr(x, y, rows2), 1);
+        }
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_NC_);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all increments landed)
+        ra::plan(r0 + 3 + 2 * RA_NC_, B);
     }
 #endif
 }
@@ -627,7 +639,14 @@ class RouterStream:
         if not hasattr(self, "_ra_pargs") or self._ra_coord != coord:
             self._ra_pargs, self._ra_coord = self.ra.planner_args(coord), coord
         pxy = [w for c in self.cores for v in [virt(c)] for w in (v.x, v.y)]
-        return [self.ra.addr["rows"], self.ra.pbase] + pxy + self._ra_pargs(j)
+        return [self.ra.addr["rows"], self.ra.addr["rows2"], self.ra.pbases[j]] + pxy + self._ra_pargs(j)
+
+    def _ra_args2(self, coord, j):
+        """The second planner instance (q = j + router cores) on this router core's NCRISC."""
+        if not hasattr(self, "_ra_pargs") or self._ra_coord != coord:
+            self._ra_pargs, self._ra_coord = self.ra.planner_args(coord), coord
+        q = j + len(self.cores)
+        return [self.ra.addr["rows2"], self.ra.pbases[q]] + self._ra_pargs(q)
 
     def attach_mcast(self, prog):
         """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
@@ -689,6 +708,7 @@ class RouterStream:
                 + [bb * RB + j for bb in range(G)]
                 + [G - 1, self.arr[0]]
                 + tail
+                + (self._ra_args2(coord, j) if self.ra is not None else [])
             )
             ops = [1 | bb << 8 for bb in hand] + [2 | p << 8]
             c_rt[core.x][core.y] = (
@@ -727,10 +747,11 @@ class RouterStream:
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         self.ncrisc = ttnn.KernelDescriptor(
-            kernel_source=_NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
+            kernel_source=self._ra_src(coord, len(ct + acc(x) + acc(w) + acc(b) + acc(ix)))
+            + _NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
             source_type=st,
             core_ranges=self.crs,
-            compile_time_args=ct + acc(x) + acc(w) + acc(b) + acc(ix),
+            compile_time_args=ct + acc(x) + acc(w) + acc(b) + acc(ix) + (self._ra_ct() if self.ra is not None else []),
             runtime_args=n_rt,
             config=dm("RISCV_1", ttnn.NOC.NOC_0),
         )

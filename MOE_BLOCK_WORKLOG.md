@@ -586,3 +586,14 @@ Everything is in the one program now except dispatch prep (route words + owners'
 - Floors: the TP-link-bytes floor (180 / 330) still holds; the routing chain's own critical path (router compute +
   logits on the wire + top-K + planner + exchange latency) is ~150 us (GLM) at best - below the link floor, so the
   floor stands; the gap is the chain's serialization behind the saturated links.
+- Planner on 10 instances (every router core's BRISC + NCRISC; regions overlaying the router's dead matmul / zone
+  buffers; per-instance exchange semaphores and bases - routing_a2a assumed one base): its work before the exchange
+  ~12 -> ~10 us, after the arrivals ~38 -> ~22 us; still bit-exact. GLM 279.0 us, K3 510.8 (one run; run-to-run
+  spread ~+-10 us now that the routing chain binds).
+- K3 logits-first (data check of the user's K3 priority): the routing chain ends earlier (~490) but the gather slows
+  and the SE ends ~520 (528-531 us twice) - x first kept.
+- Where the routing chain loses time (instrumented: per-arrival stamps at planner core 0, zones on every send /
+  forward): the senders and forwarders act within a poll of their packets landing; the exchange waits are the chips'
+  skew (logits arriving 76-127 us across chips under the gather's load, plus launch skew - every device's zone times
+  are relative to its own start, so cross-chip gaps include it) carried into an all-to-all that waits for the last
+  chip. Not tried yet: a cheaper top-K network (13 full 64-sorts: 35 / 55 us), the router matmul on more cores.

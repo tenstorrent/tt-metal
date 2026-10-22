@@ -40,6 +40,38 @@ def _plan_fn(subs):
         "const uint32_t go_sem = get_arg_val<uint32_t>(a++), parts_sem = get_arg_val<uint32_t>(a++), "
         "ex_sem = get_arg_val<uint32_t>(a++);",
     )
+    # (planner instances need not share one L1 base or one set of semaphores - two run on a core, BRISC and NCRISC:
+    # after the cores' NoC (x, y), every instance's base, exchange and go semaphores)
+    body = body.replace(
+        """        py[i] = get_arg_val<uint32_t>(a++);
+    }
+""",
+        """        py[i] = get_arg_val<uint32_t>(a++);
+    }
+    uint32_t bb[M], exs[M], gos[M];
+    for (uint32_t i = 0; i < M; ++i) bb[i] = get_arg_val<uint32_t>(a++);
+    for (uint32_t i = 0; i < M; ++i) exs[i] = get_arg_val<uint32_t>(a++);
+    for (uint32_t i = 0; i < M; ++i) gos[i] = get_arg_val<uint32_t>(a++);
+""",
+    )
+    for a_, b_ in (
+        ("get_noc_addr(px[r], py[r], B + O_EX + q * N * 4)", "get_noc_addr(px[r], py[r], bb[r] + O_EX + q * N * 4)"),
+        (
+            "noc_semaphore_inc(get_noc_addr(px[r], py[r], ex_sem), 1)",
+            "noc_semaphore_inc(get_noc_addr(px[r], py[r], exs[r]), 1)",
+        ),
+        (
+            "noc_semaphore_inc(get_noc_addr(px[r], py[r], go_sem), 1)",
+            "noc_semaphore_inc(get_noc_addr(px[r], py[r], gos[r]), 1)",
+        ),
+        (
+            "get_noc_addr(px[0], py[0], B + O_PLAN + (16 + aa) * 4)",
+            "get_noc_addr(px[0], py[0], bb[0] + O_PLAN + (16 + aa) * 4)",
+        ),
+        ("get_noc_addr(px[0], py[0], B + O_PIN + q * 64)", "get_noc_addr(px[0], py[0], bb[0] + O_PIN + q * 64)"),
+    ):
+        assert body.count(a_) == 1, a_
+        body = body.replace(a_, b_)
     # (the port buffers: absolute addresses, not offsets from the planner's base)
     body = body.replace(
         "const uint32_t pb = B + get_arg_val<uint32_t>(dst_arg + 3 * d + 2);",
@@ -206,6 +238,7 @@ struct RAFwd {
             for (uint32_t k = 0; k < n; ++k) {
                 volatile tt_l1_ptr uint32_t* f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl + 16 * k);
                 if (sent[k] || *f == 0) continue;
+                DeviceZoneScopedN("SE-RAFWD");
                 const uint32_t pb = fb + k * PCAP;
                 const uint32_t par = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[14];
                 const uint32_t src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[15];
@@ -271,7 +304,7 @@ class RoutingStream:
         self.R, self.C, self.N = R, C, R * C
         self.S, self.K, self.EPC, self.A, self.L = S, K, EPC, A, L
         self.luts, self.nps, self.rows_cap = luts, nps, rows_cap
-        self.M = len(router.cores)
+        self.M = 2 * len(router.cores)  # (planner instances: every router core's BRISC, then its NCRISC)
         M = self.M
         assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0 and 1 <= M <= min(EPC, A, 16)
         sz = routing_a2a_sizes(N=self.N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
@@ -288,8 +321,13 @@ class RoutingStream:
         if cfg in (ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D_TORUS_Y) and R > 2:
             self.wrap_y = True
         base, abytes, off0 = arena
-        assert off0 + self.plan_l1 <= abytes, "router cores: no room for the planner's region"
-        self.pbase = base + off0  # (the planner's B on the router cores)
+        # the planner instances' regions overlay the router's matmul / partial / zone buffers (dead once its top-K ran:
+        # the planner starts after the joint rows)
+        al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+        self.pl_step = al(self.plan_l1)
+        assert 2 * self.pl_step <= router.off["bias"], "router cores: no room for two planner regions"
+        self.pbases = [router.base + (q // len(router.cores)) * self.pl_step for q in range(M)]
+        self.pbase = self.pbases[0]
         # the senders' packet buffers (the arena's range on their cores): the gather's ports after their logits buffer,
         # each Y sender on the watcher core from the arena's start (the second Y direction after the first); the
         # forwarding slots after a port's own packets
@@ -341,10 +379,14 @@ class RoutingStream:
             c0=gs(c0),
             c1=gs(c0),
             calls_p=gs(pc),
+            calls_p2=gs(pc),
             go=gs(pc),
+            go2=gs(pc),
             parts=gs(pc),
             ex=gs(pc),
+            ex2=gs(pc),
             rows=gs(pc),
+            rows2=gs(pc),
             calls_s=gs(scs),
             ready=gs(scs),
         )
@@ -481,15 +523,18 @@ class RoutingStream:
             int(self.slots.buffer_address()),
             self.addr["c0"],
             self.addr["c1"],
-            self.addr["calls_p"],
+            None,  # (the instance's call count: per RISC)
             int(o["counts"].buffer_address()),
             int(o["regions"].buffer_address()),
             int(o["token_index"].buffer_address()),
             int(o["table"].buffer_address()),
             int(o["plan"].buffer_address()),
         ] + list(self.luts[coord])
-        pv = [virt(c) for c in self.router.cores]
+        nc = len(self.router.cores)
+        pv = [virt(self.router.cores[q % nc]) for q in range(self.M)]
         pxy = [w for v in pv for w in (v.x, v.y)]
+        per = lambda k1, k2: [self.addr[k1] if q < nc else self.addr[k2] for q in range(self.M)]  # noqa: E731
+        inst = self.pbases + per("ex", "ex2") + per("go", "go2")
         dst = []
         for d in range(self.N):
             core, j, b = where[d]
@@ -498,8 +543,15 @@ class RoutingStream:
         senders = sorted(sv)
         port_args = [w for k in senders for v in [virt(self._core_of(coord, k))] for w in (v.x, v.y)]
         tail = [int(self.dbg.buffer_address()) if self.dbg is not None else 0, self.addr["ready"]]
-        sems = [self.addr["go"], self.addr["parts"], self.addr["ex"]]
-        return lambda q: head + [q, 0, 0] + pxy + dst + port_args + tail + sems
+
+        def args(q):
+            h = list(head)
+            h[4] = self.addr["calls_p"] if q < nc else self.addr["calls_p2"]
+            sems = [self.addr["go"] if q < nc else self.addr["go2"], self.addr["parts"]]
+            sems += [self.addr["ex"] if q < nc else self.addr["ex2"]]
+            return h + [q, 0, 0] + pxy + inst + dst + port_args + tail + sems
+
+        return args
 
     def kernel_subs(self, coord, ct0):
         return dict(
@@ -562,6 +614,7 @@ class RoutingStream:
         return "".join(
             f"#define {k} {v}\n"
             for k, v in dict(
+                RA_NC_=len(self.router.cores),
                 RA_N_=self.N,
                 RA_M_=self.M,
                 RA_EPC_=self.EPC,
