@@ -339,6 +339,28 @@ void py_module_types(nb::module_& mod) {
                     CoreCoord: The logical service-core coordinate on that device.
             )doc")
         .def(
+            "get_socket_config_addr",
+            &tt::tt_metal::H2DStreamService::get_socket_config_addr,
+            nb::arg("coord"),
+            R"doc(
+                L1 address of this coord's socket config buffer on its service
+                core. Its first word, bytes_sent, counts the bytes the host has
+                pushed: each transfer's data pages, plus one metadata page when
+                metadata is configured, plus any FIFO tail too short for a page
+                that a wrap skips.
+
+                Args:
+                    coord (MeshCoordinate): The mesh coordinate whose socket to
+                        look up.
+
+                Raises:
+                    RuntimeError: If the coord does not participate in this
+                        service.
+
+                Returns:
+                    int: The L1 address on the service core for this coord.
+            )doc")
+        .def(
             "get_metadata_addr",
             &tt::tt_metal::H2DStreamService::get_metadata_addr,
             R"doc(

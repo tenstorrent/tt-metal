@@ -171,6 +171,9 @@ jobs:
       # halts the cores) and wedge the fabric; disable it so the leg matches demo-sp, which
       # never armed the watchdog.
       hang-detection-timeout: 0
+      # Hangs are caught instead by the prefill runner's stage hang watcher, which tells idle from
+      # stuck, and runs tt-triage only on the rank at fault.
+      auto-triage: true
 
   Galaxy-Blaze-models-prefill-sc1-runner:
     needs: [validate-test-type, check-harbor, build-artifact]
@@ -189,6 +192,7 @@ jobs:
       include-test-group: disagg_prefill
       resource-prefix: sc1-runner
       hang-detection-timeout: 0
+      auto-triage: true
 
   prefill-scaling-summary:
     name: ${{ matrix.title }}

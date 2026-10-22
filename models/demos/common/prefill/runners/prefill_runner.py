@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import torch
@@ -15,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners import hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -345,6 +347,10 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
+# Off-thread: an NFS stall on CI's shared TIMING_DIR would hold the chunk and read as a hang.
+_TIMING_WRITER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefill-timing")
+
+
 def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
     if not TIMING_DIR:
         return
@@ -400,7 +406,7 @@ def _compute_and_send(
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
-        _record_chunk_timing(rank, c, t_start, compute_ms)
+        _TIMING_WRITER.submit(_record_chunk_timing, rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
         forward_md = None
         if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
@@ -463,6 +469,8 @@ def run_request_loop(
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
             mtp_tokens = None
         if _is_shutdown_sentinel(meta):
+            # The sentinel moves the input counters but fires no acks.
+            hang_detector.stop()
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
@@ -557,6 +565,9 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
+        # A traced rank sends a warm-up record its downstream must expect.
+        "use_trace": USE_TRACE,
+        "dflash": DFLASH_ENABLED,
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
@@ -820,6 +831,26 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # that record is the upstream warm-up.
     traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
+    # Without layer acks nothing on the device counts a chunk the last rank has finished.
+    if d2h_service is not None:
+        # Dense layouts list no ids: every layer acks, extra rows numbered past the trunk.
+        ack_layers = layout.rank_layer_ids or list(range(first_layer_idx, first_layer_idx + layout.rank_record_count))
+        hang_detector.arm(
+            mesh_device,
+            rank,
+            num_ranks,
+            h2d=h2d_service,
+            d2d_in=d2d_in,
+            d2d_out=d2d_out,
+            d2h=d2h_service,
+            acks_per_chunk=layout.rank_record_count,
+            ack_layers=ack_layers,
+            # _capture_trace sends one down every boundary. Not called here: it hands its tensor out once.
+            warmup_transfers=int(traced and hasattr(runtime, "send_warmup_inputs")),
+            warmup_acks=getattr(runtime, "warmup_ack_count", lambda: 0)() if traced else 0,
+            layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
+        )
+
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
@@ -839,6 +870,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             before_first_chunk=_capture_trace if traced else None,
         )
     finally:
+        # Before the services, and the L1 words it reads, go away.
+        hang_detector.stop()
         import gc
 
         if layer_ack_service is not None:

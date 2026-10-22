@@ -44,6 +44,13 @@ on:
         default: 120
         description: >-
           Seconds without dispatch progress before tt-triage fires; 0 or less disables it.
+      auto-triage:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Export the tt-triage hook even with hang-detection-timeout 0, and arm the prefill runner's
+          stage hang watcher, which runs it when a stage stops moving.
 
 permissions:
   id-token: write
@@ -182,6 +189,8 @@ jobs:
       TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
       # Pinned host-memory H2D makes weight load 10x slower; 0 restores the copy path. See #52893.
       TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+      # Read by prefill_runner.py (hang_detector.py); the TT_ prefix is what tt-run forwards to ranks.
+      TT_PREFILL_STAGE_HANG_DETECTION_ENABLED: ${{ inputs.auto-triage && '1' || '0' }}
     strategy:
       fail-fast: false
       matrix:
@@ -200,7 +209,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
+          auto-triage: ${{ inputs.auto-triage || inputs.hang-detection-timeout > 0 }}
           hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
           triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
           hang-report-test-id: "tests/pipeline_reorg/blaze_models_prefill_tests.py::${{ matrix.test-group.name }}"
