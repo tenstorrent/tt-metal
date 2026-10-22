@@ -1893,7 +1893,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
 
     uint16_t fabric_heartbeat_counter = 0;
-#if defined(ARCH_BLACKHOLE)
+#if defined(FABRIC_HEARTBEAT_FROM_MEM_MAP)
+#if !defined(MEM_FABRIC_KERNEL_HEARTBEAT)
+#error "FABRIC_HEARTBEAT_FROM_MEM_MAP needs MEM_FABRIC_KERNEL_HEARTBEAT in dev_mem_map.h"
+#endif
+    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = MEM_FABRIC_KERNEL_HEARTBEAT;
+#elif defined(ARCH_BLACKHOLE)
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
 #else
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
