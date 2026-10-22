@@ -49,13 +49,18 @@ constexpr uint8_t CB_FIN = 18;      // a root's summed row                      
 constexpr uint32_t SEM_ROOT = 0;
 constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1;
 
-CBDescriptor make_cb(uint8_t index, uint32_t page_bytes, uint32_t num_pages, const CoreRangeSet& cores) {
+CBDescriptor make_cb(
+    uint8_t index,
+    uint32_t page_bytes,
+    uint32_t num_pages,
+    const CoreRangeSet& cores,
+    DataType dt = DataType::FLOAT32) {
     CBDescriptor cb;
     cb.total_size = num_pages * page_bytes;
     cb.core_ranges = cores;
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = index,
-        .data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::FLOAT32),
+        .data_format = tt::tt_metal::datatype_to_dataformat_converter(dt),
         .page_size = page_bytes});
     return cb;
 }
@@ -93,8 +98,14 @@ tt::tt_metal::ProgramDescriptor MhcEngramPackProgramFactory::create_descriptor(
     const MhcEngramPackPlan p = mhc_engram_pack_plan(params, in);
     const uint32_t n = p.n, B = p.cols_per_block, NU = p.n * p.groups, RT = p.row_tiles;
     const uint32_t page = TILE_HW * TILE_HW * 4;
-    for (const Tensor* t : {&in.streams, &in.keys, &in.weight, &row, &scratch}) {
-        TT_FATAL(t->buffer()->page_size() == page, "mhc_pre_xing_pack engram: every operand must be fp32 tiles");
+    // P.20: bf16 streams and keys (CB_IN in bf16 pages; define MHC_ENGRAM_X16); fp32: the program it always was
+    const bool x16 = in.streams.dtype() == DataType::BFLOAT16;
+    const uint32_t in_page = x16 ? page / 2 : page;
+    for (const Tensor* t : {&in.streams, &in.keys}) {
+        TT_FATAL(t->buffer()->page_size() == in_page, "mhc_pre_xing_pack engram: streams / keys must share a dtype");
+    }
+    for (const Tensor* t : {&in.weight, &row, &scratch}) {
+        TT_FATAL(t->buffer()->page_size() == page, "mhc_pre_xing_pack engram: weight / row must be fp32 tiles");
     }
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -127,7 +138,7 @@ tt::tt_metal::ProgramDescriptor MhcEngramPackProgramFactory::create_descriptor(
     }
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_cb(CB_IN, page, 2 * 2 * B, all_cores));
+    desc.cbs.push_back(make_cb(CB_IN, in_page, 2 * 2 * B, all_cores, x16 ? DataType::BFLOAT16 : DataType::FLOAT32));
     desc.cbs.push_back(make_cb(CB_W, page, 2 * B, all_cores));
     desc.cbs.push_back(make_cb(CB_SOA, page, 3, all_cores));
     TT_FATAL(NU <= 64, "mhc_pre_xing_pack engram: {} partials per row", NU);
@@ -189,6 +200,13 @@ tt::tt_metal::ProgramDescriptor MhcEngramPackProgramFactory::create_descriptor(
     desc.kernels.push_back(make_kernel(
         "mhc_engram_pack_writer.cpp", all_cores, writer_ct, writer_rt, tt::tt_metal::WriterConfigDescriptor{}));
     desc.kernels.push_back(make_kernel("mhc_engram_pack_compute.cpp", all_cores, compute_ct, compute_rt, cc));
+    if (x16) {  // absent for fp32: the reader / compute unchanged (P.20)
+        for (auto& k : desc.kernels) {
+            if (&k != &desc.kernels[WRITER_KERNEL]) {
+                k.defines.emplace_back("MHC_ENGRAM_X16", "1");
+            }
+        }
+    }
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = SEM_ROOT, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     return desc;

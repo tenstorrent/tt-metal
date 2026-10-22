@@ -32,6 +32,24 @@ void check_tile_dram_f32(const Tensor& t, const char* name) {
     }
 }
 
+// The streams (and the engram keys): float32, or (deepseek_v41_flash_d_p P.20) bfloat16 TILE; a bf16 y / X' follows.
+void check_tile_dram_stream(const Tensor& t, const char* name) {
+    if (t.dtype() == DataType::BFLOAT16) {
+        if (t.layout() != Layout::TILE) {
+            throw ValueErrorCpp(fmt::format("mhc_pre_xing: {} must be float32 or bfloat16 TILE", name));
+        }
+        const auto& mc = t.memory_config();
+        if (mc.memory_layout() != TensorMemoryLayout::INTERLEAVED || mc.buffer_type() != BufferType::DRAM) {
+            throw ValueErrorCpp(fmt::format("mhc_pre_xing: {} must be DRAM interleaved", name));
+        }
+        if (t.logical_shape().rank() < 2 || t.logical_shape().rank() > 4) {
+            throw ValueErrorCpp(fmt::format("mhc_pre_xing: {} rank must be 2..4", name));
+        }
+        return;
+    }
+    check_tile_dram_f32(t, name);
+}
+
 }  // namespace
 
 std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
@@ -107,7 +125,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
         }
     }
     if (streams.has_value()) {
-        check_tile_dram_f32(*streams, "streams");
+        check_tile_dram_stream(*streams, "streams");
         const auto& ss = streams->logical_shape();
         const auto& is = input.logical_shape();
         if (ss.rank() != is.rank()) {
@@ -186,9 +204,12 @@ Tensor mhc_pre_xing_pack(
         if (!engram_keys.has_value() || !engram_weight.has_value() || mix_opt.has_value()) {
             throw ValueErrorCpp("mhc_pre_xing_pack: engram mode needs engram_keys and engram_weight, and mix None");
         }
-        check_tile_dram_f32(streams, "streams");
-        check_tile_dram_f32(*engram_keys, "engram_keys");
+        check_tile_dram_stream(streams, "streams");
+        check_tile_dram_stream(*engram_keys, "engram_keys");
         check_tile_dram_f32(*engram_weight, "engram_weight");
+        if (engram_keys->dtype() != streams.dtype()) {
+            throw ValueErrorCpp("mhc_pre_xing_pack: engram_keys and streams must share a dtype (float32 or bfloat16)");
+        }
         const auto& ss = streams.logical_shape();
         const auto& ks = engram_keys->logical_shape();
         const auto& ws = engram_weight->logical_shape();
@@ -218,7 +239,7 @@ Tensor mhc_pre_xing_pack(
     }
     const Tensor& mix = *mix_opt;
     check_tile_dram_f32(mix, "mix");
-    check_tile_dram_f32(streams, "streams");
+    check_tile_dram_stream(streams, "streams");
     if (mix.logical_shape()[-1] != TILE_HW) {
         throw ValueErrorCpp(fmt::format("mhc_pre_xing_pack: mix last dim {} != 32", mix.logical_shape()[-1]));
     }
