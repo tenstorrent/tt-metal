@@ -1079,8 +1079,9 @@ void kernel_main() {
     }  // end chunk loop
     }  // end per-local-expert loop
 
-    // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
-    // is a posted atomic; without an explicit barrier it can still be in
-    // flight at kernel exit, leading to timing-dependent corruption.
-    noc.async_atomic_barrier();
+    // Semaphore<>::set_multicast (act_valid / in1_valid) is a non-posted write, not an
+    // atomic, so an atomic barrier does not wait for its acks. An ack landing after exit
+    // is missed by the next kernel's NoC counter snapshot, and that kernel's first write
+    // barrier never completes.
+    noc.async_full_barrier();
 }
