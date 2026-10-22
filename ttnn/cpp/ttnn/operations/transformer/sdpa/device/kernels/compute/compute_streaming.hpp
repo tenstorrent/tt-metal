@@ -3673,12 +3673,14 @@ void sdpa_ring_v2(
  * its max is not folded in, its sum and out are written instead of accumulated.
  *
  * Ordering of in-place writes. CB push/wait pairs order nothing for the slot CBs, so the step posts one PACK_DONE
- * token (STALL_PACK: the packer's L1 writes have drained) after its last pack, and the next step takes it before its
- * first unpack of slot state (take_barrier; the caller takes a dangling token at the end of the ring iteration, and
- * before the final normalization). Inside the step the only stage that unpacks what an earlier stage of the same
- * step packed in place is the V matmul (S6) reading the exp'd scores of S5, ordered by the same handshake as the
- * Phase 2 drain of sdpa_inner_loop_step; everything else goes through per-step scratches with push/wait, or is a
- * packer-side L1 accumulate onto tiles the same packer wrote earlier in the step.
+ * token (STALL_PACK: the packer's L1 writes have drained) after its last pack and takes it on the unpack thread
+ * before returning, so no unpack of a later step (or of the final normalization) can see a stale slot tile. The
+ * token never outlives the step: init_sdpa_streaming_semaphores() re-initializes the T6 semaphores on the pack
+ * thread at the start of every ring iteration, and a token left dangling across that reset is lost (the 2026-10-21
+ * hang at 1024 rows, tau 2: 13 cores stuck in the take). Inside the step the only stage that unpacks what an earlier
+ * stage of the same step packed in place is the V matmul (S6) reading the exp'd scores of S5, ordered by the same
+ * handshake as the Phase 2 drain of sdpa_inner_loop_step; everything else goes through per-step scratches with
+ * push/wait, or is a packer-side L1 accumulate onto tiles the same packer wrote earlier in the step.
  *
  * Per-step scratches, reserved/pushed/popped at FULL capacity every step so their pointers always return to base:
  *   cb_qkt_im        scores, group-contiguous: group member g, Q tile row r, column c at (g*Sq_chunk_t + r)*W + c
@@ -3726,8 +3728,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     const uint32_t n_runs,
     const uint32_t run_w,
     const uint32_t initialized_mask,
-    const bool apply_col_bias,
-    const bool take_barrier) {
+    const bool apply_col_bias) {
     constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
@@ -3834,11 +3835,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
 
     // ---- S2: row max over the W columns, eltwise-max with the slot's stored max, into cb_max_scratch. ----
-    if (take_barrier) {
-        // The previous step's in-place packs (max, sum, out) precede every unpack of slot state from here on.
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-    }
+    // (The previous step's in-place packs were taken at the end of that step: slot state is current here.)
     CircularBuffer(cb_qkt_im).wait_front(qk_cap);
     CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
     configure_single_tile_pack(cb_max_scratch);
@@ -4116,12 +4113,15 @@ static __attribute__((noinline, noclone)) void sdpa_resident_block_step(
     }
     sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
 
-    // Scratches back to empty (their pointers at base again), then the token the next step takes before it unpacks
-    // slot state: every pack of this step precedes it on the pack thread.
+    // Scratches back to empty (their pointers at base again). Then the in-place packs of this step (max, sum, out)
+    // are drained before the unpack thread leaves the step: post on the pack thread after its last pack, take on the
+    // unpack thread here, so the token never outlives the step (see the ordering note above).
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
     CircularBuffer(cb_max_scratch).pop_front(stats_cap);
     CircularBuffer(cb_exp_max_diff).pop_front(stats_cap);
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 }
 
 /**
@@ -4309,8 +4309,6 @@ void sdpa_ring_resident(
     }
 
     uint32_t KV_chunks_processed_in_iter = 0;
-    // A step leaves one PACK_DONE token for the next step (or the end of this call) to take.
-    bool barrier_pending = false;
 
     const auto run_step = [&](const uint8_t* slots,
                               const uint32_t n_slots,
@@ -4341,8 +4339,7 @@ void sdpa_ring_resident(
             cb_sol_bias,
             v_cb_physical_width_t,
             kQkCap,
-            kStatsCap>(slots, n_slots, run_cols, n_runs, run_w, initialized, apply_col_bias, barrier_pending);
-        barrier_pending = true;
+            kStatsCap>(slots, n_slots, run_cols, n_runs, run_w, initialized, apply_col_bias);
         for (uint32_t g = 0; g < n_slots; ++g) {
             initialized |= 1u << slots[g];
         }
@@ -4476,13 +4473,6 @@ void sdpa_ring_resident(
         }
     }
     acc_state.last_call_k_chunks = initialized;
-
-    if (barrier_pending) {
-        // The last step's in-place packs, before the normalization below (or the next call's first step) unpacks
-        // the slots; init_sdpa_streaming_semaphores() resets the token count at the next call.
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-    }
 
     if (is_last_ring_iter) {
         // Normalize every resident chunk, in slot order, into cb_out for the writer: the sum and out slots are
