@@ -109,10 +109,11 @@
 # as the 2D Torus neighbor_exchange cases. (Torus cases use torus unicast routing / is_torus_2d_unicast.)
 # Each MGD declares a different per-mesh fabric_config; the run fails if any tt-run does.
 - id: galaxy-fabric-per-mesh-torus-yx
-  name: Galaxy Fabric per-mesh heterogeneous-config sanity (4 MGDs)
+  name: Galaxy Fabric per-mesh heterogeneous-config sanity + multicast (4 MGDs)
   cmd: |
     set -e
     YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+    MCAST_YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml
     MGDDIR=tests/tt_metal/tt_fabric/custom_mesh_descriptors
     LOGDIR=$(mktemp -d)
     # tt-run does NOT propagate the test binary's exit code: an mpirun SIGABRT from a
@@ -141,10 +142,14 @@
       LOG="$LOGDIR/$(basename $MGD).log"
       TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML 2>&1 | tee "$LOG"
       assert_fabric_ok "$LOG" "$MGD"
+      echo "=== per-mesh multicast-data scenario: $MGD ==="
+      MCAST_LOG="$LOGDIR/$(basename $MGD).mcast.log"
+      TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $MCAST_YAML --filter name.MeshMulticastAllToAllIntra 2>&1 | tee "$MCAST_LOG"
+      assert_fabric_ok "$MCAST_LOG" "$MGD (mcast)"
     done
   skus:
     bh_galaxy:
-      timeout: 20
+      timeout: 30
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
