@@ -19,7 +19,7 @@
 //
 //   * host_sanitizers.cpp — the emule-only implementation. It is the ONLY place
 //     that touches MetalContext/Cluster and references `__emule_asan_panic`
-//     (whose single definition lives in emulated_program_runner.cpp). Because it
+//     (whose single definition lives in tt-emule src/emulation/emule_asan_panic.cpp). Because it
 //     is compiled only when TT_METAL_USE_EMULE is set, a non-emule libtt_metal
 //     never carries an unresolved `__emule_asan_panic` reference.
 //
