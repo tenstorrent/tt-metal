@@ -11,6 +11,7 @@ torch.set_printoptions(sci_mode=False)
 
 import ttnn
 from tracy import signpost
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 valid_tile_heights = [1, 2, 4, 8, 16, 32]
@@ -330,6 +331,69 @@ def test_matmul_decode_row_major_height_sharded_replicated(device, m, k, n, outp
     assert got.shape[-2] % m == 0
     for replica in got.reshape(got.shape[-2] // m, m, n):
         assert_with_pcc(torch_output_tensor, replica, 0.99)
+
+
+@pytest.mark.parametrize("m", [1, 5, 8])
+@pytest.mark.parametrize("k, n, num_inputA_cores", [(576, 5120, 9), (1024, 4096, 8)])
+@pytest.mark.parametrize("via_eltwise", [False, True], ids=["direct", "silu_mul"])
+def test_matmul_decode_row_major_width_sharded_multi_row(device, m, k, n, num_inputA_cores, via_eltwise):
+    """ROW_MAJOR WIDTH_SHARDED A with M rows: each A core holds [M, K / cores], gathered and restriped
+    into whole K rows so custom_mm runs once per row against the same weights. ``silu_mul`` builds A
+    with ``silu(gate) * up`` on the sharded rows, as a shared expert feeds its down projection."""
+    if not is_blackhole() and m > 1:
+        pytest.skip("M > 1 ROW_MAJOR width-sharded A needs custom_mm (Blackhole)")
+    torch.manual_seed(0)
+    num_inputB_cores = n // 64
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y < num_inputB_cores:
+        pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+
+    torch_gate = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_up = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((k, n), dtype=torch.bfloat16)
+    torch_a = (
+        (torch.nn.functional.silu(torch_gate.float()) * torch_up.float()).bfloat16() if via_eltwise else torch_gate
+    )
+
+    a_grid = num_cores_to_rectangle_core_range_set(num_inputA_cores, device)
+    b_grid = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m, k // num_inputA_cores),
+        core_grid=a_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    def to_a(t):
+        return ttnn.from_torch(
+            t, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in0_memory_config
+        )
+
+    if via_eltwise:
+        a = ttnn.multiply(ttnn.silu(to_a(torch_gate)), to_a(torch_up))
+        assert a.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_with_pcc(torch_a, ttnn.to_torch(a).reshape(m, k), 0.999)
+    else:
+        a = to_a(torch_a)
+    weight = ttnn.from_torch(
+        torch_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            (k, n // num_inputB_cores),
+            core_grid=b_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    out = ttnn.experimental.matmul_decode(a, weight)
+    assert out.layout == ttnn.ROW_MAJOR_LAYOUT
+    got = ttnn.to_torch(out).float().reshape(m, n)
+    ref = torch_a.float() @ torch_b.float()
+    for row in range(m):
+        assert_with_pcc(ref[row], got[row], 0.99)
 
 
 @pytest.mark.parametrize("m", [1])

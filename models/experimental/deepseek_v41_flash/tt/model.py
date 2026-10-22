@@ -94,7 +94,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import (
     plan_pool_blocks,
 )
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
-from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm
+from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm, Linear
 from models.experimental.deepseek_v4_flash.tt.model import (
     DeepSeekV4Model,
     _OUT_SOCKET_CORE,
@@ -1803,9 +1803,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
         verified position is restored. Everything else a step writes is keyed by position, so the
         accepted token at that position rewrites it before anything reads it.
 
-        ``drafter`` builds :class:`DeepSeekV41DSpark` on the output stage around the ``lm_head`` given to
-        :meth:`prepare_static_decode` (``rope_main`` is the sliding RoPE table, ``drafter_kwargs`` go to the
-        constructor) and taps the stream mean at its target layers into its stash every step.
+        ``drafter`` builds :class:`DeepSeekV41DSpark` on its own 1xTP stage, the first mesh row the pipeline
+        leaves idle (build with ``num_stages`` below the mesh's row count), with its own copy of the decode
+        ``lm_head`` (``rope_main`` is the sliding RoPE table, ``drafter_kwargs`` go to the constructor).
+        The output stage taps the stream mean at the target layers into the stash every step; the stash
+        stays there, and each :meth:`spec_write_main` sends the rows it gathers over one D2D socket. The
+        drafter's prefetcher rings are on its own row, so the caller opens a prefetcher session on
+        ``dspark.device`` (the model's session predates it).
         """
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
@@ -1838,16 +1842,34 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if not drafter:
             return
         if self._lm_head_traced is None:
-            raise ValueError("the drafter shares the decode lm_head: pass lm_head to prepare_static_decode()")
+            raise ValueError("the drafter copies the decode lm_head: pass lm_head to prepare_static_decode()")
+        drafter_row = self.num_submeshes
+        if drafter_row >= self.mesh_devices // self.tp_size:
+            raise ValueError(
+                f"the drafter runs on the row after the pipeline's {self.num_submeshes}, but the mesh has "
+                f"{self.mesh_devices // self.tp_size}: build with fewer num_stages"
+            )
         out_sm = self.submeshes_io[self._output_sm_index]
+        device = self.device.create_submesh(ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(drafter_row, 0))
+        link = self._create_socket_pair(out_sm["device"], device)
+        logger.info(f"DSpark drafter on idle row {drafter_row}, its stash on output stage {out_sm['index']}")
+        lm_head = Linear(
+            dequantized(self.loader, "lm_head.weight", translate=True),
+            device,
+            self.cache.file("lm_head"),
+            dtype=self._lm_head_traced.weight.dtype,
+        )
+        drafter_kwargs = {"use_prefetcher": self.use_prefetcher, **drafter_kwargs}
         self.dspark = DeepSeekV41DSpark(
             cfg,
             self.loader,
-            out_sm["device"],
-            self._lm_head_traced,
+            device,
+            lm_head,
             rope_main,
             cache=self.cache,
             tp_size=self.tp_size,
+            stash_device=out_sm["device"],
+            link=link,
             **drafter_kwargs,
         )
         taps = dict(zip(self.dspark.targets, self.dspark.stash))
@@ -1895,9 +1917,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for sm in self.submeshes_io:
             self._spec_fixup(sm)
         if self.dspark is not None:
+            self.dspark.send_main()
             self.dspark.write_main()
             for out in self.dspark.draft():
                 out.deallocate(True)
+            ttnn.synchronize_device(self.dspark.device)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         self._capture_traces(token_id, pos)
@@ -1908,6 +1932,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
             sm["fix_tid"] = tid
         if self.dspark is not None:
+            stash_device = self.dspark.stash_device
+            tid = ttnn.begin_trace_capture(stash_device, cq_id=0)
+            with _trace_capture_guard():
+                self.dspark.send_main()
+            ttnn.end_trace_capture(stash_device, tid, cq_id=0)
+            self._spec_tids["send_main"] = tid
             device = self.dspark.device
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             with _trace_capture_guard():
@@ -1947,6 +1977,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``j`` out of the rings). Their stash rows must still be in the stash."""
         self._wait_replays_dispatched()
         self.dspark.set_main_rows(positions, written)
+        ttnn.execute_trace(self.dspark.stash_device, self._spec_tids["send_main"], cq_id=0, blocking=False)
         ttnn.execute_trace(self.dspark.device, self._spec_tids["write_main"], cq_id=0, blocking=False)
 
     def spec_seed(self, positions) -> None:
