@@ -41,6 +41,7 @@ namespace sfpu {
  * It is exact here because pow comes from a bf16 DST: with 8 significant bits every
  * |pow| >= 256 is an even integer, so |pow| is clamped to 16384 (even, fits int16) before
  * the conversion and (-1)**40000 gives 1. This relies on pow being bf16-representable.
+ * A negative base with a NaN or +/-inf pow returns NaN.
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
@@ -139,8 +140,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
-        // The clamp maps a NaN pow to 16384, which reads as an even integer.
-        v_if(sfpi::is_nan(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
+        // The clamp maps a NaN or +/-inf pow to 16384, which reads as an even integer, and the
+        // magnitude above is not meaningful for an infinite pow. Keep NaN for both.
+        v_if(!sfpi::is_finite(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
     }
     v_endif;
@@ -202,10 +204,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * Parity: exact for every |pow|. The odd/even test converts |pow| through int32 after
- * clamping it to 2**24; every fp32 >= 2**24 is an even integer, so the clamp keeps parity
- * and integer-ness and the int32 round trip stays exact. (-1)**40000 gives 1, and a -0 base
- * keeps its sign for any odd integer pow.
+ * Parity: exact for every finite |pow|. The odd/even test converts |pow| through int32
+ * after clamping it to 2**24; every fp32 >= 2**24 is an even integer, so the clamp keeps
+ * parity and integer-ness and the int32 round trip stays exact. (-1)**40000 gives 1, and a
+ * -0 base keeps its sign for any odd integer pow. A negative base with a NaN or +/-inf pow
+ * returns NaN (torch instead gives 1 for |base| == 1 and 0/inf otherwise); a -0 base with
+ * +/-inf pow still takes the zero-base result (+0 / +inf).
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -339,8 +343,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
-        // The clamp maps a NaN pow to 2**24, which reads as an even integer.
-        v_if(sfpi::is_nan(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
+        // The clamp maps a NaN or +/-inf pow to 2**24, which reads as an even integer, and the
+        // magnitude above is NaN-poisoned for an infinite pow (the Veltkamp split computes
+        // inf - inf). Keep NaN for both.
+        v_if(!sfpi::is_finite(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
     }
     v_endif;

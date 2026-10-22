@@ -459,6 +459,17 @@ NEGATIVE_BASE_LARGE_EXPONENT_CASES = {
         (-1.0, 8388607.5),
         (-2.0, 3.0),
         (-2.0, 2.0),
+        # A -0 base keeps its sign through an odd integer pow.
+        (-0.0, 40001.0),
+        (-0.0, -40001.0),
+        (-0.0, 8388609.0),
+        (-1.0, float("nan")),
+        (-2.0, float("nan")),
+        (-2.0, float("inf")),
+        (-0.5, float("inf")),
+        (-2.0, float("-inf")),
+        (-1.0, float("inf")),
+        (-1.0, float("-inf")),
     ],
     # bf16-representable exponents only: every |pow| >= 256 is an even integer.
     "bfloat16": [
@@ -472,6 +483,13 @@ NEGATIVE_BASE_LARGE_EXPONENT_CASES = {
         (-0.5, 32768.0),
         (-1.0, 2.5),
         (-2.0, 3.0),
+        (-1.0, float("nan")),
+        (-2.0, float("nan")),
+        (-2.0, float("inf")),
+        (-0.5, float("inf")),
+        (-2.0, float("-inf")),
+        (-1.0, float("inf")),
+        (-1.0, float("-inf")),
     ],
 }
 
@@ -485,6 +503,8 @@ def test_binary_pow_negative_base_large_integer_exponent(device, dtype):
     torch_base = torch.tensor([b for b, _ in cases], dtype=torch_dtype)
     torch_exp = torch.tensor([e for _, e in cases], dtype=torch_dtype)
     expected = torch.pow(torch_base.float(), torch_exp.float())
+    # The kernel returns NaN for a negative base with a +/-inf pow; torch gives 1 or 0/inf.
+    expected[torch.isinf(torch_exp) & (torch_base < 0)] = float("nan")
 
     tt_base = ttnn.from_torch(torch_base, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_exp = ttnn.from_torch(torch_exp, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
