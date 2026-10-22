@@ -495,8 +495,8 @@ inline void _llk_math_reduce_addrmod_(const MathFidelitySchedule fidelity, const
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  * @note Pass the source register formats: for SUM/AVG, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
- * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
- *       FPU path to it.
+ * @note PoolType::MIN and PoolType::PROD are rejected here. Nothing reduces without this init, so
+ *       that closes the whole FPU path to them.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataFormat src_b_format, const TensorShape tensor_shape)
@@ -510,6 +510,10 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
         POOL_TYPE != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+    static_assert(
+        POOL_TYPE != PoolType::PROD,
+        "The FPU reduce has no PROD: GAPOOL/GMPOOL have no product variant. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce with REDUCE_SCALAR).");
 
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const auto fidelity       = math_fidelity_schedule<FIDELITY>(src_a_format, src_b_format);
