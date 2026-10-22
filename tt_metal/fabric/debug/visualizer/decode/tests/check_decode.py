@@ -109,7 +109,11 @@ def check_router(manifest: dict, path: str, router: dict, problems: list):
             missing = [item for item in paths if item not in router[key]]
             extra = [item for item in router[key] if item not in paths]
             problems.append(f"{path}.{key}: missing {missing[:3]}, not in the manifest {extra[:3]}, or out of order")
-    unread = [key for key, stream in router["streams"].items() if stream["before"] is None or stream["after"] is None]
+    unread = [
+        key
+        for key, stream in router["streams"].items()
+        if None in (stream["before"], stream["after"], stream["before_word"], stream["after_word"])
+    ]
     unread += [key for key, element in router["elements"].items() if element["value"] is None]
     if unread:
         problems.append(f"{path}: no value for {unread[:3]}")

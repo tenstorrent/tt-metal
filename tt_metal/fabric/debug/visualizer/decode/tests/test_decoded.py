@@ -37,6 +37,15 @@ MANIFEST = {
                 {"name": "wall_clock_low", "address": 0xFFB121F0, "size": 4, "schema": "u32"},
                 {"name": "wall_clock_high", "address": 0xFFB121F8, "size": 4, "schema": "u32"},
             ],
+            "stream_registers": {
+                "base": 0xFFB40000,
+                "stride": 0x1000,
+                "count": 32,
+                "registers": {
+                    "buf_space_available": {"offset": 0x100, "bits": 17},
+                    "remote_src": {"offset": 0, "bits": 24},
+                },
+            },
             "types": {},
         }
     },
@@ -143,7 +152,15 @@ class DecodeSnapshotTest(TemporaryDirectoryTest):
                 "areas": {"heartbeat": 0xDCBA0005},
                 "regions": {"fields/edm_status": 7},
                 "streams": {
-                    "fields/free_slots": {"stream_id": 0, "register": "buf_space_available", "before": 3, "after": 2}
+                    "fields/free_slots": {
+                        "stream_id": 0,
+                        "register": "buf_space_available",
+                        "bits": 17,
+                        "before": 3,
+                        "after": 2,
+                        "before_word": 3,
+                        "after_word": 2,
+                    }
                 },
                 "elements": {},
             },

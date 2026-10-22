@@ -24,14 +24,18 @@ REGISTER_BYTES = 4
 @dataclass(frozen=True)
 class StreamValue:
     """
-    A stream reference's register, read before and after the router's L1, each word decoded by the reference's
-    schema. A word capture didn't read is None.
+    A stream reference's register, read before and after the router's L1. Each value is the word's low `bits` bits,
+    decoded by the reference's schema. The whole words are kept too, since the bits above the value can hold other
+    state. A word capture didn't read is None, and so is its value.
     """
 
     stream_id: int
     register: str
+    bits: int  # from the manifest's stream_registers
     before: object
     after: object
+    before_word: int | None
+    after_word: int | None
 
 
 @dataclass(frozen=True)
@@ -67,11 +71,23 @@ def _decode_l1(node, item: dict, loaded: Input, types: Types, where: str):
     return decode_value(node, loaded.raw, item["offset"], types, where)
 
 
-def _decode_word(schema: str, word: int | None, types: Types, where: str):
+def _decode_word(schema: str, word: int | None, bits: int, types: Types, where: str):
+    """The word's low `bits` bits, decoded by `schema`."""
     if word is None:
         return None
-    data = word.to_bytes(REGISTER_BYTES, "little")
+    data = (word & ((1 << bits) - 1)).to_bytes(REGISTER_BYTES, "little")
     return decode_value({"schema": schema, "size": REGISTER_BYTES}, data, 0, types, where)
+
+
+def _get_register_bits(manifest: dict, where: str) -> dict[str, int]:
+    """Each stream register's value width, by name, from the manifest's stream_registers at `where`."""
+    widths = {}
+    for name, register in lookup(manifest, f"{where}.registers", "object", of="object").items():
+        bits = lookup(register, "bits", "integer", where=f"{where}.registers.{name}")
+        if not 0 < bits <= REGISTER_BYTES * 8:
+            raise ManifestError(f"{where}.registers.{name}.bits is {bits}; a register is {REGISTER_BYTES * 8} bits")
+        widths[name] = bits
+    return widths
 
 
 def decode_router(loaded: Input, types: Types, path: str) -> DecodedRouter:
@@ -85,8 +101,11 @@ def decode_router(loaded: Input, types: Types, path: str) -> DecodedRouter:
         raise InputError(f"snapshot {loaded.snapshot_path} has no router {path}")
     router, router_where = get_router(loaded.manifest, path)
     leaves = {leaf.path: leaf for leaf in walk_router(router, router_where)}
-    areas_where = f"archs.{lookup(loaded.manifest, 'run.arch', 'string')}.areas"
+    arch_where = f"archs.{lookup(loaded.manifest, 'run.arch', 'string')}"
+    areas_where = f"{arch_where}.areas"
     areas = lookup(loaded.manifest, areas_where, "object")
+    registers_where = f"{arch_where}.stream_registers"
+    register_bits = _get_register_bits(loaded.manifest, registers_where)
 
     decoded_areas = {
         name: _decode_l1(areas.get(name), item, loaded, types, f"{areas_where}.{name}")
@@ -108,12 +127,20 @@ def decode_router(loaded: Input, types: Types, path: str) -> DecodedRouter:
             stream_id = lookup(leaf.node, "stream_id", "integer", where=leaf.where)
             register = lookup(leaf.node, "register", "string", where=leaf.where)
             schema = lookup(leaf.node, "schema", "string", where=leaf.where)
+            bits = register_bits.get(register)
+            if bits is None:
+                raise ManifestError(
+                    f"{leaf.where}.register is {register!r}; {registers_where}.registers names {sorted(register_bits)}"
+                )
             read = entry["streams"].get(str(stream_id), {}).get(register, {})
             streams[leaf.path] = StreamValue(
                 stream_id,
                 register,
-                before=_decode_word(schema, read.get("before"), types, leaf.where),
-                after=_decode_word(schema, read.get("after"), types, leaf.where),
+                bits,
+                before=_decode_word(schema, read.get("before"), bits, types, leaf.where),
+                after=_decode_word(schema, read.get("after"), bits, types, leaf.where),
+                before_word=read.get("before"),
+                after_word=read.get("after"),
             )
         elif leaf.kind is LeafKind.ELEMENT:
             array = lookup(leaf.node, "array", "string", where=leaf.where)

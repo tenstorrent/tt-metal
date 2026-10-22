@@ -72,7 +72,10 @@ There is one decoded file per snapshot, `fabric_decoded_rank_<r>_of_<n>_<UTC>.js
         "channels/senders/vc0/ch0/ring_buffer": [{ "bytes": { "offset": 4028, "size": 4448 } }, ...]
       },
       "streams": {
-        "channels/senders/vc0/ch0/fields/free_slots": { "stream_id": 0, "register": "buf_space_available", "before": 14, "after": 14 }
+        "channels/senders/vc0/ch0/fields/free_slots": {
+          "stream_id": 0, "register": "buf_space_available", "bits": 17,
+          "before": 14, "after": 14, "before_word": 14, "after_word": 14
+        }
       },
       "elements": {
         "channels/senders/vc0/ch0/credits/completed": { "array": "credit_counters/to_sender_completion", "index": 0, "value": 1234 }
@@ -98,9 +101,16 @@ There is one decoded file per snapshot, `fabric_decoded_rank_<r>_of_<n>_<UTC>.js
   - an object for a struct, and a list for an array;
   - `{bytes: {offset, size}}` for bytes, which points into the snapshot's `.bin` rather than copying it. A ring buffer
     is a list of its slots.
-- **Streams.** There is one entry per stream reference, keyed by the reference's own path. Each has its stream id, its
-  register, and the words read before and after the router's L1, each decoded by the reference's schema as the whole
+- **Streams.** There is one entry per stream reference, keyed by the reference's own path, with its stream id and its
   register. Streams 30 and 31 each serve two references, and each reference gets its own entry.
+  - **Before and after.** Capture reads each stream register twice: before it reads the router's L1, and again after.
+    The router keeps running while capture reads it, and these registers are its live credit and free slot counts, so
+    the two reads show whether they moved while the L1 was read. When they match, the counts and the L1 describe the
+    same moment. When they differ, traffic moved during the read: the channel is alive, but the L1 isn't one instant
+    for that register, so anything that combines the counts with the L1 is approximate.
+  - **Values.** `before` and `after` are the word's low `bits` bits, as the manifest's `stream_registers` gives them,
+    decoded by the reference's schema. `before_word` and `after_word` are the whole words, since the bits above the
+    value can hold other state: on Blackhole, `buf_space_available` keeps more state above its count.
 - **Elements.** There is one entry per `{array, index}` reference: the element of the decoded array it names. Each one
   the manifest writes is a credit on a VC whose credits use L1 counters.
 - **Health.** The router's liveness facts, described in [HEALTH.md](docs/HEALTH.md).

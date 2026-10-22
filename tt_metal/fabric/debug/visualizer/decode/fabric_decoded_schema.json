@@ -70,10 +70,13 @@
       "properties": {
         "stream_id": { "$ref": "#/$defs/count" },
         "register": { "$ref": "#/$defs/name" },
+        "bits": { "type": "integer", "minimum": 1, "maximum": 32 },
         "before": { "$ref": "#/$defs/value" },
-        "after": { "$ref": "#/$defs/value" }
+        "after": { "$ref": "#/$defs/value" },
+        "before_word": { "type": ["integer", "null"], "minimum": 0 },
+        "after_word": { "type": ["integer", "null"], "minimum": 0 }
       },
-      "required": ["stream_id", "register", "before", "after"],
+      "required": ["stream_id", "register", "bits", "before", "after", "before_word", "after_word"],
       "additionalProperties": false
     },
     "element": {
