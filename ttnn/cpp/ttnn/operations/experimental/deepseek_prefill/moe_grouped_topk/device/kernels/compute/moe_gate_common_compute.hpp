@@ -30,34 +30,14 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/compute/moe_gate_sqrt_softplus.h"
 
-// Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus, see the LLK header). Only
-// Blackhole ships it; elsewhere activate_add_bias_tile keeps the stock softplus / sqrt / add sequence.
-// Gated on the arch, not on the header being found, so a missing header breaks the Blackhole build
-// instead of silently falling back to the stock bf16 softplus.
+// Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus). Only Blackhole ships it;
+// elsewhere activate_add_bias_tile keeps the stock softplus / sqrt / add sequence. Gated on the arch, as
+// the Compute API header is, so a missing header breaks the Blackhole build instead of silently falling
+// back to the stock bf16 softplus.
 #if defined(ARCH_BLACKHOLE)
 #define MOE_GATE_FUSED_SQRT_SOFTPLUS 1
-#ifdef TRISC_MATH
-#include "ckernel_sfpu_moe_gate_sqrt_softplus.h"
-#endif
-namespace ckernel {
-// x in DEST tile idst_x, bias in idst_bias -> sqrt(softplus(x)) over idst_x, sqrt(softplus(x)) + bias over idst_bias.
-ALWI void moe_gate_sqrt_softplus_add_bias_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::moe_gate_sqrt_softplus_init)));
-}
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void moe_gate_sqrt_softplus_add_bias_tile(uint32_t idst_x, uint32_t idst_bias) {
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_moe_gate_sqrt_softplus_add_bias,
-        (8 /* ITERATIONS */, is_fp32_dest_acc_en),
-        idst_x,
-        idst_bias,
-        idst_bias,
-        VectorMode::RC)));
-}
-}  // namespace ckernel
 #endif
 
 namespace blocks {
