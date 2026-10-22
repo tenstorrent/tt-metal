@@ -490,18 +490,6 @@ FORCE_INLINE void reduce_split_segmented_row(
 }
 #endif
 
-// One discarded datacopy keeps the next program's first tile on this core intact after a raw pack and unpack round
-// trip.
-FORCE_INLINE void settle_next_program(uint32_t input_cb) {
-    reconfig_data_format_srca(input_cb);
-    copy_init(input_cb);
-    tile_regs_acquire();
-    copy_tile(input_cb, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    tile_regs_release();
-}
-
 }  // namespace
 
 void kernel_main() {
@@ -627,11 +615,7 @@ void kernel_main() {
                     tile_regs_release();
                 }
             }
-            if constexpr (split_segments) {
-                if (num_chunks > max_fused_chunks) {
-                    settle_next_program(input_cb);
-                }
-            }
+            MATH((topk_large_indices_split::finish()));
             if (!has_split) {
                 return;
             }
@@ -698,8 +682,5 @@ void kernel_main() {
             // Re-arm the untilize pack the row output path expects.
             pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
         }
-    }
-    if (num_recv_rounds > 0 || sends_survivor) {
-        settle_next_program(input_cb);
     }
 }

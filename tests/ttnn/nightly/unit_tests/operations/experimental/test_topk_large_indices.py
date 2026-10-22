@@ -175,20 +175,47 @@ def test_topk_large_indices_spread_winners_decode_global_indices(device, k, llk_
     _assert_topk_matches_torch(torch_input, tt_indices, k)
 
 
-def test_topk_large_indices_whole_k2048_segmented_rows_leave_the_next_op_intact(device):
-    # A whole row of 34 chunks per core round-trips the accumulator through L1; the next op must still read its first tile.
-    num_rows = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
-    torch_input = _make_spread_large_index_input(n=34 * 2048 - 7, k=2048).repeat(num_rows, 1)
+@pytest.mark.parametrize(
+    "num_rows,n,k",
+    [
+        (None, 34 * 2048 - 7, 2048),  # one row per core, a later segment of two chunks runs on one thread
+        (None, 36 * 2048 - 7, 2048),  # a later segment of four chunks round-trips the accumulator through L1
+        (None, 100 * 2048 - 7, 2048),  # three later segments, the last of four chunks
+        (640, 51200, 1536),  # prefill: split rows of 25 chunks
+        (None, 20 * 1024, 1024),  # K 1024 split rows
+        (None, 20 * 512, 512),  # K 512 split rows
+        (3, 102400, 2048),  # columns of a row split across cores, the survivors merged over the NoC
+        (None, 40 * 2048, 2048),  # whole segmented rows plus split rows on the leftover cores
+        (8, 131072, 32),  # k <= 64 columns of a row split across cores
+    ],
+    ids=[
+        "seg_34",
+        "seg_36_acc",
+        "seg_100_acc",
+        "prefill_640",
+        "split_k1024",
+        "split_k512",
+        "tree_3",
+        "seg_40_tree",
+        "k32_tree",
+    ],
+)
+def test_topk_large_indices_leaves_the_next_op_intact(device, num_rows, n, k):
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    if num_rows is None:
+        num_rows = num_cores
+    torch_input = _make_spread_large_index_input(n=n, k=k).repeat(num_rows, 1)
     tt_input = _to_device(torch_input, device)
-    a = torch.randint(-8, 8, (1, 1, 32 * num_rows, 64)).to(torch.bfloat16)
-    b = torch.randint(-8, 8, (1, 1, 32 * num_rows, 64)).to(torch.bfloat16)
+    a = torch.randint(-8, 8, (1, 1, 32 * num_cores, 64)).to(torch.bfloat16)
+    b = torch.randint(-8, 8, (1, 1, 32 * num_cores, 64)).to(torch.bfloat16)
     tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     for _ in range(3):
-        tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=2048)
+        tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k)
         total = ttnn.to_torch(ttnn.add(tt_a, tt_b))
         assert_equal(total, a + b)
-    _assert_topk_matches_torch(torch_input, tt_indices, 2048)
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
 
 
 def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
@@ -744,6 +771,7 @@ def test_topk_large_indices_metadata_matches_scalar(device, k, n, valid_length, 
     _assert_indices(metadata, expected, [num_rows, k])
 
 
+@skip_with_watcher("The reader asserts on malformed metadata under the watcher, which is the point of this case.")
 def test_topk_large_indices_metadata_zero_length_does_not_hang(device):
     """A metadata tensor holding 0 with the default offset=0 must not hang the device.
 
