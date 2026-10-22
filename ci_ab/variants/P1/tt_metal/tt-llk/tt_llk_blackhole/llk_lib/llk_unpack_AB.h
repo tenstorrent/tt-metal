@@ -332,7 +332,7 @@ inline void _llk_unpack_AB_stream_(const std::uint32_t address_a, const std::uin
     const std::uint32_t base_a = address_a - off_a;
     const std::uint32_t base_b = address_b - off_b;
     const std::uint32_t ctx    = unp_cfg_context;
-    bool store                 = false;
+    [[maybe_unused]] bool store = false;
     if (s.mir_a[ctx] != base_a)
     {
         cfg[(ctx == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = base_a;
