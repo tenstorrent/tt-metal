@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -25,6 +25,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    TypeVar,
     Union,
     get_args,
     get_origin,
@@ -56,15 +57,18 @@ class Metric(Enum):
     TOLERANCE = "tolerance"
 
 
-def _check_number(value: Any, *, integer: bool = False, least: int = 0) -> None:
+def _check_number(
+    value: Any, *, integer: bool = False, least: Optional[int] = 0
+) -> None:
     """Refuse what the annotations cannot: a bool (YAML reads ``yes`` as one, and bool is
-    an int), a non-finite value, or one below *least*."""
+    an int), a non-finite value, or one below *least* (``None``: no lower bound, as for
+    a signed binade index)."""
     kinds = int if integer else (int, float)
     if (
         isinstance(value, bool)
         or not isinstance(value, kinds)
         or not math.isfinite(value)
-        or value < least
+        or (least is not None and value < least)
     ):
         raise TableError(Problem.BAD_NUMBER, value)
 
@@ -199,6 +203,36 @@ _KEY_TYPES = (
 
 #: Matches every variant of an op.
 DEFAULT = BudgetKey()
+
+#: The architecture every unkeyed budget was measured on.
+MEASURED_ARCH = ChipArchitecture.WORMHOLE
+
+V = TypeVar("V")
+
+
+def _winner(
+    table: Dict[BudgetKey, V], query: BudgetKey
+) -> Optional[Tuple[BudgetKey, V]]:
+    """The single most specific entry of *table* covering *query*, or ``None``."""
+    matched = [(key, value) for key, value in table.items() if key.matches(query)]
+    if not matched:
+        return None
+    best = max(key.specificity for key, _ in matched)
+    winners = [(key, value) for key, value in matched if key.specificity == best]
+    if len(winners) > 1:
+        raise TableError(Problem.AMBIGUOUS, [key.describe() for key, _ in winners])
+    return winners[0]
+
+
+def steps_bind(key: BudgetKey, query: BudgetKey) -> bool:
+    """Whether a step budget on the row keyed *key* binds the variant *query*: every
+    format named is one the SFPU computes in, and the variant is on the architecture
+    the row was measured on -- :data:`MEASURED_ARCH` for a row that names none."""
+    formats_ok = all(
+        fmt is None or fmt in ULP_FORMATS
+        for fmt in (query.input_format, query.output_format)
+    )
+    return formats_ok and (query.arch == MEASURED_ARCH or key.arch is not None)
 
 
 @dataclass(frozen=True)
@@ -336,6 +370,13 @@ def from_plain(cls: type, data: Any) -> Any:
     unknown = set(data) - set(hints)
     if unknown:
         raise TableError(Problem.UNKNOWN_FIELD, sorted(map(str, unknown)))
+    missing = {
+        f.name
+        for f in fields(cls)
+        if f.default is MISSING and f.default_factory is MISSING
+    } - set(data)
+    if missing:
+        raise TableError(Problem.MISSING_FIELD, sorted(missing))
     return cls(**{name: _convert(hints[name], value) for name, value in data.items()})
 
 
@@ -360,9 +401,11 @@ def _convert(hint: Any, value: Any) -> Any:
             raise TableError(Problem.NOT_A_MEMBER, value)
         return hint[value]
     if hint is int:
-        _check_number(value, integer=True, least=-(2**63))
+        _check_number(value, integer=True, least=None)
         return value
     if hint is float:
+        if isinstance(value, str) and value in _INFINITIES:
+            return float(value)  # JSON has no infinity; `to_json` spells it this way
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TableError(Problem.BAD_NUMBER, value)
         return float(value)
@@ -381,6 +424,12 @@ class _Loader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
 def _construct_mapping(loader: _Loader, node: yaml.MappingNode, deep: bool = False):
     seen = set()
     for key_node, _ in node.value:
+        if not isinstance(key_node, yaml.ScalarNode):
+            # Doubled braces pasted from an f-string: the row's one key is a mapping.
+            raise TableError(
+                Problem.WRONG_SHAPE,
+                f"line {key_node.start_mark.line + 1}: a key that is not a name",
+            )
         key = loader.construct_object(key_node, deep=deep)
         if key in seen:
             raise TableError(
@@ -397,8 +446,12 @@ _Loader.add_constructor(
 
 def read_table(text: str) -> Table:
     """*text* as a :data:`Table`; a :class:`TableError` names the op and row it
-    refuses."""
-    loaded = yaml.load(text, Loader=_Loader) or {}
+    refuses. Text PyYAML cannot read at all (a conflict marker, a ``<<`` merge key) is
+    refused as :attr:`Problem.UNREADABLE` rather than escaping as PyYAML's own error."""
+    try:
+        loaded = yaml.load(text, Loader=_Loader) or {}
+    except yaml.YAMLError as error:
+        raise TableError(Problem.UNREADABLE, " ".join(str(error).split())) from error
     if not isinstance(loaded, dict):
         raise TableError(Problem.WRONG_SHAPE, "the top level")
     table: Table = {}
@@ -508,11 +561,33 @@ class Measurement:
     readings: Tuple[Reading, ...] = ()
 
     def to_json(self) -> str:
-        return json.dumps(to_plain(self))
+        """One JSON object. An infinite entry edge is written as ``"inf"`` or
+        ``"-inf"``: JSON has no infinity, and the ``-Infinity`` ``json.dumps`` would
+        write only Python reads back."""
+        return json.dumps(_json_safe(to_plain(self)))
 
     @classmethod
     def from_json(cls, line: str) -> "Measurement":
-        return from_plain(cls, json.loads(line))
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise TableError(Problem.UNREADABLE, error) from error
+        return from_plain(cls, data)
+
+
+#: How :meth:`Measurement.to_json` spells an infinite float, and what
+#: :func:`from_plain` reads back as one.
+_INFINITIES = ("inf", "-inf")
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and math.isinf(value):
+        return str(value)
+    return value
 
 
 def read_measurements(path: Path) -> List[Measurement]:

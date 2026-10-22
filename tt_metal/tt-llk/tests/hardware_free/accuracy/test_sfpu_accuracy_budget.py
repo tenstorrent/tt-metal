@@ -58,7 +58,7 @@ from helpers.ulp import (
 from helpers.ulp_domains import Domain, Problem
 from helpers.ulp_sweep import _verdict, sweep_cells
 from helpers.ulp_table import TABLE_PATH, Row, load_table
-from helpers.ulp_testing import refused
+from helpers.ulp_testing import TANH_DOMAINS, refused
 from helpers.utils import passed_test
 
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
@@ -71,7 +71,7 @@ NOT_COMPUTE_FORMATS = sorted(
 )
 
 #: The input axis for the live-table sweeps: the formats a row may name, and ``None``,
-#: which resolves the rows that wildcard ``in:``.
+#: which resolves the rows that wildcard ``input``.
 QUERYABLE_INPUT_FORMATS = [*ULP_FORMATS, None]
 
 
@@ -925,8 +925,8 @@ INTEGER_VALUED = (
 #: sign's -1/0/1, a pass-through-or-zero selection, an operand selection, a constant, a
 #: clamp, or a single IEEE add. One step here is the contract breaking, not the pack path.
 #: Listed by what the op computes, not read back from the table, which would agree with
-#: it by construction. ReluMax, ReluMin and Frac stay out: each carries a `measured: 1`
-#: wildcard row from the 2026-09-18 sample, which would have to be split by input first --
+#: it by construction. ReluMax, ReluMin and Frac stay out: each carries a sampled
+#: `measured: 1` wildcard row, which would have to be split by input first --
 #: on a wildcard the guard below cannot tell a narrowing cell's pack step from drift.
 #: SfpuBinaryMax/Min had the same wildcards and are keyed by input now.
 EXACT_ZERO_BY_CONSTRUCTION = (
@@ -987,9 +987,9 @@ EXACT_IN_EVERY_FORMAT = tuple(
     )
 )
 
-#: What the output pack may cost an exact op on a cell that converts: a measured 1 step,
-#: written as 2 by the emitter's headroom.
-_PACK_PATH_STEPS = 2
+#: What the output pack may cost an exact op on a cell that converts: one step. The
+#: figure is the measurement itself, so one is also the most such a cell may read.
+_PACK_PATH_STEPS = 1
 
 
 def _mantissa_bits(fmt):
@@ -1010,7 +1010,7 @@ def _exact_allowance(op, input_format, output_format):
     if input_format is None:
         return (
             _PACK_PATH_STEPS,
-            "the row wildcards `in:`, so it covers a narrowing cell",
+            "the row wildcards `input`, so it covers a narrowing cell",
         )
     if _mantissa_bits(output_format) < _mantissa_bits(input_format):
         # e.g. Float16 -> Float16_b: bf16 cannot hold every integer fp16 can.
@@ -1182,9 +1182,10 @@ def test_every_driven_variant_of_an_exact_op_is_gated():
     """`test_an_exact_op_never_carries_a_wide_budget` asks only that each exact op keep
     *some* step budget: drop every `SfpuMask` Float16_b row and keep its Float32 one, and
     the Float16_b variants fall back to tolerance while it still passes. This walks every
-    variant the hand-built drivers run an exact op in, on a float non-block output, and
-    requires each to resolve to a step budget -- at the Dest the variant asks for and at
-    the one it is promoted to. A variant the driver skips never runs, so it must resolve
+    variant the hand-built drivers run an exact op in between formats the SFPU computes
+    in (`_step_gateable`), and requires each to resolve to a step budget -- at the Dest
+    the variant asks for and at the one it is promoted to. A variant the driver skips
+    never runs, so it must resolve
     to *no* step budget: one there claims a measurement nobody took -- which is how a
     re-sort that dropped Isinf/Isnan/Isneginf's `not measured` rows showed up. The swept
     cells of the unary exact ops are held by
@@ -1384,7 +1385,7 @@ def test_no_integer_only_op_is_enrolled():
 
 
 #: Ops measured on the hand-built sweep that drives them, under ``--ulp-report`` on
-#: Wormhole, 2026-09-18; the counts are in the YAML row comments. Those sweeps gate on
+#: Wormhole; the rows' notes carry the variant and lane counts. Those sweeps gate on
 #: the whole contract (``gate_on_step_budget``), so these rows are what they enforce.
 #: For the eight predicates without a registered domain (the isinf/isnan five,
 #: LogicalNot, UnaryEq, UnaryNe) these sweeps are the only gate; Signbit, ReluMin and
@@ -1440,7 +1441,7 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
 
 
 def test_a_demoted_row_measured_past_the_ceiling():
-    """A tolerance row the emitter wrote -- it pins ``in`` and ``out``, as every row it
+    """A tolerance row the emitter wrote -- it pins ``input`` and ``output``, as every row it
     writes does -- with a measurement is a demotion only if its ``measured`` is past
     ``usable_budget_ceiling``: ``_verdict``'s call for that figure. One inside the
     ceiling should have been enrolled. A broader row is a sampled hand judgement."""
@@ -1536,8 +1537,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     # something: the stale check below fails once no row needs it.
     (MathOperation.Digamma, None, None, None, None): (
         "wrong for negative x, which the LUT has no branch for (#58682): -inf of the "
-        "wrong sign for large negative x, and a finite -61312 where a block-quantized "
-        "input lands on the pole at 0 (the saturation below the fit range is #51128)"
+        "wrong sign for large negative x (the saturation below the fit range is #51128)"
     ),
     (MathOperation.Expm1Cw, None, None, None, None): (
         "past the overflow point (x ~ 89) the kernel returns -1, the x -> -inf limit, "
@@ -1672,7 +1672,12 @@ def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
         and row.measured is None
         and (op, row.key) not in _EVERY_CLAIMED_LANE_NONFINITE
     ]
-    assert not bare, f"re-emit these rows' ops: {bare}"
+    assert not bare, (
+        f"{len(bare)} row(s) name the lanes that park their cell but not the maximum "
+        "over the rest of it: re-emit their ops, or, where the emit still records no "
+        "figure (no lane of the cell is finite on both sides), list the row in "
+        f"_EVERY_CLAIMED_LANE_NONFINITE: {bare}"
+    )
 
 
 def _acknowledges(key, cell) -> bool:
@@ -1812,7 +1817,7 @@ _TANH = Row(
     output=DataFormat.Float16_b,
     dest=DestAccumulation.No,
     near_zero_atol=1e-7,
-    domains=(Domain(-math.inf, -1, 3), Domain(-1, 1, 10), Domain(1, math.inf, 3)),
+    domains=TANH_DOMAINS,
 )
 
 

@@ -27,7 +27,7 @@ from helpers.ulp_domains import (
     partition,
     usable_budget_ceiling,
 )
-from helpers.ulp_testing import refused
+from helpers.ulp_testing import TANH_DOMAINS, refused
 
 INF = math.inf
 BF16 = usable_budget_ceiling(DataFormat.Float16_b)
@@ -198,15 +198,8 @@ def test_spans_with_no_figure_draw_no_list():
     assert entries_of(((-INF, 0.0, True), (0.0, INF, False)), lambda lo, hi: None) == ()
 
 
-_OK = [
-    {"low": -INF, "high": -1, "ulp": 3},
-    {"low": -1, "high": 1, "ulp": 10},
-    {"low": 1, "high": INF, "ulp": 3},
-]
-
-
 def test_a_well_formed_list_is_accepted():
-    check_domains((Domain(-INF, -1, 3), Domain(-1, 1, 10), Domain(1, INF, 3)))
+    check_domains(TANH_DOMAINS)
     check_domains((Domain(-INF, 0), Domain(0, INF, 1)))
 
 
@@ -239,9 +232,8 @@ def test_a_malformed_entry_is_refused(low, high, ulp, problem):
 
 def test_a_list_implies_its_whole_cell_contract():
     """Gated at its largest figure when every figure is within the ceiling."""
-    entries = (Domain(-INF, -1, 3), Domain(-1, 1, 10), Domain(1, INF, 3))
-    assert contract_of(entries, BF16) == (False, 10)
-    assert contract_of(entries[:1] + (Domain(-1, INF, 5),), BF16) == (True, 5)
+    assert contract_of(TANH_DOMAINS, BF16) == (False, 10)
+    assert contract_of(TANH_DOMAINS[:1] + (Domain(-1, INF, 5),), BF16) == (True, 5)
 
 
 def test_the_ceilings_are_the_rtol_they_replace():

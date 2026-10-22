@@ -40,7 +40,7 @@ from helpers.ulp_table import (
     Row,
     write_table_file,
 )
-from helpers.ulp_testing import refused
+from helpers.ulp_testing import TANH_DOMAINS, refused
 
 INF = math.inf
 F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
@@ -302,27 +302,36 @@ def test_diff_exit_status(tmp_path, head, flags, status):
     assert main(argv) == status
 
 
-def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path):
+def _diff_main(tmp_path, head_text, *flags):
+    """The guard's `diff` of the typed `_BASE` against *head_text* as written; its exit
+    status."""
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
     write_table_file(_BASE, base_path)
-    head_path.write_text(yaml.safe_dump({"Abs": [{"input": "Bfp8_b", "measured": 1}]}))
-    argv = [
-        "diff",
-        "--base",
-        str(base_path),
-        "--head",
-        str(head_path),
-        "--allow-raises",
-    ]
-    assert main(argv) == 2
+    head_path.write_text(head_text, encoding="utf-8")
+    return main(["diff", "--base", str(base_path), "--head", str(head_path), *flags])
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        yaml.safe_dump({"Abs": [{"input": "Bfp8_b", "measured": 1}]}),
+        "<<<<<<< HEAD\nAbs: [\n",
+        "Abs:\n- {{measured: 1}}\n",
+        "Abs:\n- {input: Float16_b, output: Float16_b, domains: [{low: -.inf}]}\n",
+    ],
+    ids=["block-float", "conflict-marker", "doubled-braces", "entry-without-high"],
+)
+def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head):
+    """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
+    gate, not a table no gate can be read from. Text PyYAML cannot read and a record
+    missing a field used to escape as tracebacks with the regression exit status."""
+    assert _diff_main(tmp_path, head, "--allow-raises") == 2
 
 
 # ── Rows with a `domains` list ────────────────────────────────────────────────
 
-_TANH = (Domain(-INF, -1, 3), Domain(-1, 1, 10), Domain(1, INF, 3))
 
-
-def _tanh(domains=_TANH, **fields):
+def _tanh(domains=TANH_DOMAINS, **fields):
     row = Row(input=F16B, output=F16B, dest=D_NO, domains=domains, **fields)
     return _table(row, op=TANH)
 
@@ -343,12 +352,12 @@ def test_a_plain_row_turned_into_a_list_is_judged_segment_by_segment():
 
 
 def test_an_entry_raised_is_a_raise_for_its_lanes_only():
-    raised = (Domain(-INF, -1, 4), *_TANH[1:])
+    raised = (Domain(-INF, -1, 4), *TANH_DOMAINS[1:])
     assert _segments(_tanh(), _tanh(raised)) == [(Kind.RAISED, (-INF, -1.0))]
 
 
 def test_a_list_redrawn_with_the_same_figures_is_no_change():
-    split = (_TANH[0], Domain(-1, 0, 10), Domain(0, 1, 10), _TANH[2])
+    split = (TANH_DOMAINS[0], Domain(-1, 0, 10), Domain(0, 1, 10), TANH_DOMAINS[2])
     assert compare(_tanh(), _tanh(split)) == []
 
 
@@ -356,7 +365,9 @@ def test_a_list_redrawn_with_the_same_figures_is_no_change():
     "last", [Domain(1, INF, 9), Domain(1, INF)], ids=["past-the-ceiling", "unranked"]
 )
 def test_a_list_replaced_by_a_looser_one_loses_the_gate_where_it_loosens(last):
-    assert _segments(_tanh(), _tanh((*_TANH[:2], last))) == [(Kind.UNGATED, (1.0, INF))]
+    assert _segments(_tanh(), _tanh((*TANH_DOMAINS[:2], last))) == [
+        (Kind.UNGATED, (1.0, INF))
+    ]
 
 
 def test_a_raise_in_a_large_negative_tail_is_seen():
@@ -372,7 +383,7 @@ def test_a_raise_in_a_large_negative_tail_is_seen():
 
 
 def test_a_widened_floor_beside_an_unchanged_list_is_a_regression():
-    wider = (*_TANH[:2], Domain(1, INF, 2))
+    wider = (*TANH_DOMAINS[:2], Domain(1, INF, 2))
     changes = compare(_tanh(near_zero_atol=1e-7), _tanh(wider, near_zero_atol=1e-3))
     assert [(c.kind, c.segment) for c in changes] == [
         (Kind.FLOOR_WIDENED, (-INF, -1.0)),
@@ -389,6 +400,31 @@ def test_a_re_emit_that_splits_a_list_row_drops_no_baseline():
         op=TANH,
     )
     assert not [c for c in compare(one, split) if c.is_regression]
+
+
+@pytest.mark.parametrize(
+    "output, kind",
+    [(F16, Kind.RAISED), (F16B, Kind.UNGATED)],
+    ids=["fits-the-ceiling", "past-the-ceiling"],
+)
+def test_a_null_entry_that_gains_a_figure_is_judged_against_the_largest_it_was_held_to(
+    output, kind
+):
+    """An entry with no `ulp` is not ungated: the sweep holds its strays to the row's
+    largest figure, and the emitter gives it a figure of its own only when they beat
+    every other. So a re-emit that turns `null` into 40 loosens a gate of 2: a raise
+    where 40 still fits the output's ceiling (fp16, 51), a lost gate where the cell
+    falls to tolerance (bf16, 6). Read as ungated, both exited 0."""
+
+    def table(low_ulp):
+        domains = (Domain(-INF, 0, low_ulp), Domain(0, INF, 2))
+        return _table(
+            Row(input=F16, output=output, dest=D_NO, domains=domains), op=TANH
+        )
+
+    assert _segments(table(None), table(40)) == [(kind, (-INF, 0.0))]
+    assert _segments(table(None), table(1)) == [(Kind.TIGHTENED, (-INF, 0.0))]
+    assert compare(table(None), table(2)) == []
 
 
 # ── The headroom check ────────────────────────────────────────────────────────
@@ -477,7 +513,7 @@ def _tanh_measured(readings, bins=(), **fields):
 
 
 def test_each_entry_of_a_list_is_judged_on_its_own_lanes():
-    table = _tanh((*_TANH[:2], Domain(1, INF)))
+    table = _tanh((*TANH_DOMAINS[:2], Domain(1, INF)))
     readings = [
         Reading(-INF, -1.0, 5, 16000),
         Reading(-1.0, 1.0, 9, 33000),
@@ -485,8 +521,8 @@ def test_each_entry_of_a_list_is_judged_on_its_own_lanes():
     ]
     findings = judge(table, [_tanh_measured(readings)]).findings
     assert [(f.verdict, f.entry) for f in findings] == [
-        (Verdict.OVER_BUDGET, _TANH[0]),
-        (Verdict.TIGHTENS, _TANH[1]),
+        (Verdict.OVER_BUDGET, TANH_DOMAINS[0]),
+        (Verdict.TIGHTENS, TANH_DOMAINS[1]),
         (Verdict.NOW_ANSWERS, Domain(1, INF)),
     ]
 
@@ -505,7 +541,7 @@ def test_each_entry_of_a_list_is_judged_on_its_own_lanes():
 def test_a_null_entry_answers_once_a_binade_holds_enough_ranked_lanes(
     lanes, bins, answers
 ):
-    table = _tanh((*_TANH[:2], Domain(1, INF)))
+    table = _tanh((*TANH_DOMAINS[:2], Domain(1, INF)))
     readings = [
         Reading(-INF, -1.0, 3, 16000),
         Reading(-1.0, 1.0, 10, 33000),
@@ -521,7 +557,7 @@ def test_a_null_entry_answers_once_a_binade_holds_enough_ranked_lanes(
     ids=["largest-past-the-ceiling", "largest-gated"],
 )
 def test_ranked_lanes_in_a_null_entry_are_held_to_the_largest_figure(middle, verdict):
-    table = _tanh((_TANH[0], Domain(-1, 1, middle), Domain(1, INF)))
+    table = _tanh((TANH_DOMAINS[0], Domain(-1, 1, middle), Domain(1, INF)))
     readings = [Reading(-INF, -1.0, 3, 16000), Reading(-1.0, 1.0, middle, 33000)]
     stray = Reading(1.0, INF, 1000, 5)
     assert _verdicts(table, _tanh_measured([*readings, stray])) == [verdict]
@@ -530,7 +566,7 @@ def test_ranked_lanes_in_a_null_entry_are_held_to_the_largest_figure(middle, ver
 
 
 def test_a_list_cell_that_lost_every_lane_is_a_regression():
-    table = _tanh((Domain(-INF, -1, 9), _TANH[1], Domain(1, INF, 9)))
+    table = _tanh((Domain(-INF, -1, 9), TANH_DOMAINS[1], Domain(1, INF, 9)))
     assert _verdicts(table, _tanh_measured([], lanes=0)) == [Verdict.NO_LANE]
 
 
@@ -543,8 +579,70 @@ def test_headroom_exit_status(tmp_path):
         assert main(argv) == status
     measured.write_text("")
     assert main(argv) == 1
-    measured.write_text("{\n")
-    assert main(argv) == 2
+    for unreadable in ("{\n", '{"op": "Abs"}\n'):  # not JSON; a record missing fields
+        measured.write_text(unreadable)
+        assert main(argv) == 2, unreadable
+
+
+def test_the_domains_command_reports_the_asked_op_and_writes_the_report_out(
+    tmp_path, capsys
+):
+    """`--op` keeps one op, a cell the table holds a list for shows it beside the drawn
+    one, and `--out` gets exactly what was printed."""
+    table, measured = tmp_path / "table.yaml", tmp_path / "measured.jsonl"
+    out = tmp_path / "domains.md"
+    write_table_file(
+        {**_tanh(), ABS: (Row(input=F16B, output=F16B, measured=1),)}, table
+    )
+    tanh = _measured(
+        10,
+        op=TANH,
+        bins=tuple(
+            (sign * (k + BINADE_OFFSET), 128, 128, 10 if k < 0 else 3)
+            for k in range(-126, 128)
+            for sign in (1, -1)
+        ),
+    )
+    abs_ = _measured(1, bins=((BINADE_OFFSET, 128, 128, 1),))
+    measured.write_text("\n".join(m.to_json() for m in (tanh, abs_)) + "\n")
+    argv = ["domains", "--measured", str(measured), "--table", str(table)]
+    assert main([*argv, "--op", "Tanh", "--out", str(out)]) == 0
+    report = capsys.readouterr().out
+    assert out.read_text(encoding="utf-8") == report
+    assert "Tanh" in report and "table:" in report and "Abs" not in report
+
+
+def test_an_unknown_op_is_a_usage_error_not_a_traceback(tmp_path):
+    """argparse converts only an `ArgumentTypeError` into its exit-2 usage error; the
+    `KeyError` a bare `MathOperation[name]` raised escaped with the regression status.
+    """
+    argv = ["domains", "--measured", str(tmp_path / "m.jsonl"), "--op", "cos"]
+    with pytest.raises(SystemExit) as caught:  # allow-pytest.raises: host-only test
+        main(argv)
+    assert caught.value.code == 2
+
+
+def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
+    """`helpers.sfpu_accuracy_budget` loads the table at import. The guard judges tables
+    by path, and a PR head whose table the loader refuses is exactly its case: that
+    refusal must reach `main` as "cannot load" (exit 2), not kill the process at import
+    with the regression status. So the guard takes the resolution rule from
+    `ulp_table`, and the registry stays out of its import chain."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys, helpers.ulp_budget_diff; "
+        "sys.exit('helpers.sfpu_accuracy_budget' in sys.modules)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parent,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
 
 
 # ── The list the emitter's rule draws on a recorded profile ───────────────────
@@ -561,7 +659,7 @@ def test_the_rule_redraws_a_list_from_the_recorded_profile():
         for k in range(-126, 128)
         for sign in (1, -1)
     ]
-    assert _drawn([*bins, (0, 1, 1, 0)]) == _TANH
+    assert _drawn([*bins, (0, 1, 1, 0)]) == TANH_DOMAINS
 
 
 def test_a_negative_power_of_two_sits_where_the_list_puts_it():

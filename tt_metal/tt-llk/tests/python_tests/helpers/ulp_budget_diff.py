@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .llk_params import MathOperation
-from .sfpu_accuracy_budget import MEASURED_ARCH, _winner, steps_bind
 from .ulp import ULP_FORMATS
 from .ulp_domains import (
     DOMAIN_MIN_BIN_LANES,
@@ -37,14 +36,17 @@ from .ulp_domains import (
     partition,
     usable_budget_ceiling,
 )
-from .ulp_table import (
+from .ulp_table import (  # not the registry: that loads the checked-out table at import
+    MEASURED_ARCH,
     BudgetKey,
     Measurement,
     Metric,
     Row,
     Table,
+    _winner,
     load_table,
     read_measurements,
+    steps_bind,
 )
 
 #: A cell identity: the op and the key of the row that decides it.
@@ -156,10 +158,7 @@ class Held:
         if self.row is None:
             return "—"
         if self.gated:
-            text = str(self.row.contract.max_ulp)
-            if self.row.near_zero_atol:
-                text += f" (floor {self.row.near_zero_atol:g})"
-            return text
+            return _figure_text(self.row.contract.max_ulp, self.row.near_zero_atol)
         parts = []
         if self.baseline is not None:
             parts.append(f"max {self.baseline}")
@@ -173,6 +172,11 @@ class Held:
                 if value is not None:
                     parts.append(f"{label} {value:g}")
         return "tolerance" + (f" ({', '.join(parts)})" if parts else "")
+
+
+def _figure_text(figure: int, floor: Optional[float]) -> str:
+    """A gated figure, with the near-zero floor it is held with if it has one."""
+    return f"{figure} (floor {floor:g})" if floor else str(figure)
 
 
 def _held(table: Table, op: MathOperation, query: BudgetKey, open_dims) -> Held:
@@ -256,39 +260,45 @@ def _classify(was: Held, now: Held) -> Optional[Kind]:
 
 class State(Enum):
     """What one segment of the input is held to: a gated figure, a figure past the
-    ceiling the headroom report holds, an entry no lane is ranked in, or nothing."""
+    ceiling the headroom report holds, or nothing."""
 
     GATED = auto()
     PAST = auto()
-    NULL = auto()
     NONE = auto()
 
 
 @dataclass(frozen=True)
 class Span:
+    """One run of the input and what holds it. *strays* marks an entry with no ``ulp``:
+    its few ranked lanes are held to the row's largest figure, which is *figure*."""
+
     low: float
     high: float
     state: State
     figure: Optional[int] = None
+    strays: bool = False
 
 
 def _spans(held: Held, query: BudgetKey) -> List[Span]:
     """*held*'s row over ``(-inf, inf)``: its list's entries, or one span for a plain
-    row. A recorded figure is a baseline only for a variant of a measured cell's shape,
-    as on the plain path."""
+    row. An entry with no ``ulp`` is held to the row's largest figure -- by the sweep
+    where that figure fits the ceiling, by the headroom report past it -- so it is
+    compared as that figure, and an entry that gains a worse figure of its own reads as
+    the raise it is. A recorded figure is a baseline only for a variant of a measured
+    cell's shape, as on the plain path."""
     row = held.row
     if row is None:
         return [Span(-_INF, _INF, State.NONE)]
     if row.domains:
         binds, ceiling = steps_bind(row.key, query), _ceiling(query)
+        largest = max(d.ulp for d in row.domains if d.ulp is not None)
         spans = []
         for d in row.domains:
-            if d.ulp is None:
-                spans.append(Span(d.low, d.high, State.NULL))
-            elif binds and d.ulp <= ceiling:
-                spans.append(Span(d.low, d.high, State.GATED, d.ulp))
+            figure, strays = (largest, True) if d.ulp is None else (d.ulp, False)
+            if binds and figure <= ceiling:
+                spans.append(Span(d.low, d.high, State.GATED, figure, strays))
             elif held.measured_shape:
-                spans.append(Span(d.low, d.high, State.PAST, d.ulp))
+                spans.append(Span(d.low, d.high, State.PAST, figure, strays))
             else:
                 spans.append(Span(d.low, d.high, State.NONE))
         return spans
@@ -306,13 +316,14 @@ def _span_at(spans: List[Span], x: float) -> Span:
 
 
 def _span_text(span: Span, row: Optional[Row]) -> str:
+    if span.state is State.NONE:
+        return "—"
     if span.state is State.GATED:
-        if row is not None and row.near_zero_atol:
-            return f"{span.figure} (floor {row.near_zero_atol:g})"
-        return str(span.figure)
-    if span.state is State.PAST:
-        return f"tolerance (max {span.figure})"
-    return "unranked" if span.state is State.NULL else "—"
+        floor = row.near_zero_atol if row is not None else None
+        text = _figure_text(span.figure, floor)
+    else:
+        text = f"tolerance (max {span.figure})"
+    return f"unranked, strays held to {text}" if span.strays else text
 
 
 def _classify_segment(was: Span, now: Span) -> Optional[Kind]:
@@ -356,8 +367,6 @@ class Change:
 
     cell: Cell
     kind: Kind
-    before: Optional[Row]
-    after: Optional[Row]
     variants: int = 1
     held_before: str = "—"
     held_after: str = "—"
@@ -439,8 +448,6 @@ def compare(base: Table, head: Table) -> List[Change]:
                 grouped[ident] = Change(
                     (op, deciding.key),
                     kind,
-                    was.row,
-                    now.row,
                     variants=prior.variants + 1 if prior else 1,
                     held_before=before_text,
                     held_after=after_text,
@@ -607,12 +614,10 @@ class Headroom:
         failed = sum(f.verdict.fails for f in self.findings)
         return failed if self.measured else 1
 
-    def of(self, verdict: Verdict) -> List[Finding]:
-        return [f for f in self.findings if f.verdict is verdict]
 
-
-def _past(seen: int, figure: int, ceiling: float) -> Verdict:
-    # The sweep fails a figure within the ceiling itself; past it, only this does.
+def _past(figure: int, ceiling: float) -> Verdict:
+    """The verdict on a lane worse than *figure*: the sweep fails a figure within the
+    ceiling itself; past it, only this report holds the lane."""
     return Verdict.OVER_BUDGET if figure <= ceiling else Verdict.REGRESSED
 
 
@@ -659,25 +664,13 @@ def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
                         found(Finding(cell, Verdict.NOW_ANSWERS, seen, None, entry))
                     if seen is not None and seen > largest:
                         found(
-                            Finding(
-                                cell,
-                                _past(seen, largest, ceiling),
-                                seen,
-                                largest,
-                                entry,
-                            )
+                            Finding(cell, _past(largest, ceiling), seen, largest, entry)
                         )
                 elif lanes == 0:
                     found(Finding(cell, Verdict.NO_LANE, None, entry.ulp, entry))
                 elif seen > entry.ulp:
                     found(
-                        Finding(
-                            cell,
-                            _past(seen, entry.ulp, ceiling),
-                            seen,
-                            entry.ulp,
-                            entry,
-                        )
+                        Finding(cell, _past(entry.ulp, ceiling), seen, entry.ulp, entry)
                     )
                 elif seen < entry.ulp:
                     found(Finding(cell, Verdict.TIGHTENS, seen, entry.ulp, entry))
@@ -817,6 +810,20 @@ def _domains_text(domains: Tuple[Domain, ...]) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _op(name: str) -> MathOperation:
+    """``--op``'s value: an op by its exact name. argparse turns only an
+    ``ArgumentTypeError`` into its usage error (exit 2); a ``KeyError`` would escape as
+    a traceback with the regression exit status."""
+    try:
+        return MathOperation[name]
+    except KeyError:
+        close = [m for m in MathOperation.__members__ if m.lower() == name.lower()]
+        hint = (
+            f"; did you mean {close[0]}?" if close else " (spelt as the table's keys)"
+        )
+        raise argparse.ArgumentTypeError(f"{name!r} is not an op{hint}") from None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -832,7 +839,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     domains = sub.add_parser("domains", help="the lists the rule draws on the profiles")
     domains.add_argument("--measured", type=Path, required=True)
     domains.add_argument("--table", type=Path)
-    domains.add_argument("--op", type=lambda name: MathOperation[name])
+    domains.add_argument("--op", type=_op)
     for command in (diff, headroom, domains):
         command.add_argument("--out", type=Path, help="also write the report here")
     args = parser.parse_args(argv)

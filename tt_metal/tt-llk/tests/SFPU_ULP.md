@@ -44,8 +44,9 @@ so both write nothing and say so. Of a measured op it replaces every row of each
 measured `(input, output)` pair, and keeps the rows no measurement re-derives: one that
 names an `arch`, declares `atol`/`rtol`, or names a pair this run did not measure. Each
 refusal is its own exception type (`WrongArch`, `SessionNotClean`, `IncompleteGrid`,
-`AmbiguousCollapse`), and a successful emit returns a `WriteReport` that the one-line
-summary is rendered from.
+`AmbiguousCollapse`); a rewrite the loader would refuse is a `TableError` raised before
+anything is written, since `write_table_file` reads its dump back first. A successful
+emit returns a `WriteReport` that the one-line summary is rendered from.
 
 ## Why a step budget rather than a tolerance
 
@@ -85,8 +86,9 @@ fails no test; re-measure before relying on one.
 
 `Float32` has 2^32 values and one device run holds 2^16, so it cannot be enumerated. The
 sweep strides the format's total order instead. Every binade holds the same number of
-representable values, so each gets an equal share: one run reaches 261 binades from 0 to
-3.4e38. Ask `ulp_sweep.is_exhaustive(input_format)` if you need to know which you got.
+representable values, so each gets an equal share: one run reaches all 254 normal
+binades, from 1.2e-38 to 3.4e38, with no subnormal and no zero among its 65,024
+samples. Ask `ulp_sweep.is_exhaustive(input_format)` if you need to know which you got.
 
 On Wormhole and Blackhole an exponent-B input (`Float16_b`) packed to
 `Float16` needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only:
@@ -202,7 +204,7 @@ MyOp:
 
 Every row records what was measured: a `domains` list on every cell the sweep drives,
 or a `measured` figure on the rest. A figure *is* the gate: there is no headroom over
-it. A row's `note` is for people; no code reads it. Four verdicts:
+it. A row's `note` is for people; no code reads it. Five verdicts:
 
 - **`domains: [{low: L, high: H, ulp: U}, …]`** — every cell with a per-element ULP,
   one list over the whole swept range ("Where an op holds its figure", below). An entry
@@ -520,8 +522,9 @@ by input, and an exponent-B input into Float16, which only ever runs on the prom
 ### Binary comparison predicates: exact by construction
 
 Each writes 1.0/0.0, so 0 is the only correct answer. The measurement sits on each op
-rather than here, so every budget names the sweep that backs it.
-0 ULP, 147k-246k lanes across the six
+rather than here, so every budget names the sweep that backs it: 0 ULP over 147k-246k
+lanes on each of the six (SfpuElwEq, SfpuElwNe, SfpuElwGe, SfpuElwGt, SfpuElwLe,
+SfpuElwLt).
 
 ### SfpuElwpow and SfpuXlogy: binary SFPU, still on the tolerance metric
 
@@ -559,8 +562,8 @@ tracked: #54770 (exponent wraps past overflow; closed, production feeds x < 0 on
 #### Frac
 
 Frac computes x - trunc(x), so the result carries none of the input's rounding, and
-the rows below gate each swept cell at what it measured (0 on most, 2 for a measured 1
-on the narrowing cells). The sampled `{output: Float16}` wildcard's 384 steps have no
+its rows gate each swept cell at what it measured (0 on most, 1 on the narrowing
+cells). The sampled `{output: Float16}` wildcard's 384 steps have no
 cause recorded; it answers only the cells the sweep does not drive.
 
 #### GeluAppx
@@ -576,7 +579,7 @@ atol.
 
 #### Heaviside
 
-See the Sign/Heaviside note above Sign.
+See the note under Sign.
 
 #### I0
 
@@ -592,10 +595,9 @@ tracked: #52174 (input clamped at 88.5)
 #### Identity
 
 Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so it
-has no sampled input-keyed row, and every row below is the sweep's but the
-`output: Float32` / `output: Float16_b` wildcards at the end (sampled), which
-answer only for cells no input-keyed row names. Its steps are the pack path's, as for
-Abs and Neg.
+has no sampled input-keyed row: every row is the sweep's but the two sampled
+`output: Float32` / `output: Float16_b` wildcards, which answer only for cells no
+input-keyed row names. Its steps are the pack path's, as for Abs and Neg.
 
 #### Isfinite
 
@@ -647,7 +649,7 @@ tracked: #52675 (no overflow guard, 16-bit Dest), #55129 (Veltkamp split overflo
 
 #### SfpuAddcmul
 
-SfpuAddcmul is ternary, as are SfpuAddcdiv above and SfpuLerp below. The ternary sweep
+SfpuAddcmul, SfpuAddcdiv and SfpuLerp are ternary. The ternary sweep
 is small, so each of their sampled figures covers every variant that exists for that
 format rather than a sample of a larger space; the counts say how many that is.
 
@@ -661,23 +663,23 @@ Shares SfpuBinaryFmod's implementation: see the note there.
 
 #### SfpuElwGe
 
-0 ULP, 147k-246k lanes across the six
+0 ULP, 147k-246k lanes; one of the six binary comparison predicates above.
 
 #### SfpuElwGt
 
-0 ULP, 147k-246k lanes across the six
+0 ULP, 147k-246k lanes; one of the six binary comparison predicates above.
 
 #### SfpuElwLe
 
-0 ULP, 147k-246k lanes across the six
+0 ULP, 147k-246k lanes; one of the six binary comparison predicates above.
 
 #### SfpuElwLt
 
-0 ULP, 147k-246k lanes across the six
+0 ULP, 147k-246k lanes; one of the six binary comparison predicates above.
 
 #### SfpuElwNe
 
-0 ULP, 147k-246k lanes across the six
+0 ULP, 147k-246k lanes; one of the six binary comparison predicates above.
 
 #### SfpuElwadd
 

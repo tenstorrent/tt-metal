@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every distinct finite 16-bit value -- a stride of Float32 -- every enrolled unary SFPU
-op.
+"""Every normal 16-bit value and zero -- a stride of Float32 -- every enrolled unary
+SFPU op.
 
 The functional drivers in test_eltwise_unary_sfpu.py sample a few thousand points from
 an op's safe domain, so a budget measured that way can only ever be re-confirmed by
@@ -23,7 +23,7 @@ maximum in the reason. To hold the tolerance cells to the figures their rows rec
 measure and compare::
 
     pytest test_unary_sfpu_ulp.py --ulp-measure=ulp.jsonl
-    python3 helpers/ulp_budget_diff.py headroom \\
+    python -m helpers.ulp_budget_diff headroom \\
         --table helpers/sfpu_accuracy_budget.yaml --measured ulp.jsonl
 
 or re-measure and fold the results back into helpers/sfpu_accuracy_budget.yaml::
@@ -158,7 +158,8 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
             generate_input_dim(SWEEP_DIMENSIONS, SWEEP_DIMENSIONS),
             APPROX_MODE(approx_mode),
             # The table has no axis for either: every budget is measured with these two
-            # compiled in and holds for a kernel built that way (see the YAML header).
+            # compiled in and holds for a kernel built that way (SFPU_ULP.md, "The rules
+            # the table enforces").
             FAST_MODE(FastMode.No),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
@@ -324,7 +325,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             _record_ulp_measurement(
                 distance,
                 mask=mask,
-                nonfinite=int(overflowed.sum()),
+                nonfinite=verdict.nonfinite,
             )
         if ulp_sweep.EMIT:
             ulp_sweep.record_unmeasurable(mathop, key, verdict)

@@ -117,8 +117,8 @@ class StimuliSpec:
             pads with zeros to fill the tensor.  Float16_b, Float16, and
             Float32 are supported; Float32's full domain is too large to
             enumerate, so over a wide range give it a *stride*.  Bypasses the
-            face loop (tensor-level operation).  Uses *low*, *high*, *offset*
-            and *stride*;
+            face loop (tensor-level operation).  Uses *low*, *high*, *offset*,
+            *stride* and *normal_only* (leave the subnormals out; zero stays);
             ignores *seed*, *mean*, *std*, *value*, *intervals*, *face_specs*,
             *masked_faces*.
 

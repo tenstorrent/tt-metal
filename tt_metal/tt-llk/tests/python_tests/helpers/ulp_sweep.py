@@ -871,18 +871,16 @@ def nonfinite_failures(
     )
 
 
-#: How many offending lanes a non-finite verdict spells out. Two: the verdict is written
-#: on each of the table's not-measurable rows, and at four the named lanes were a tenth
-#: of the file and took it past the repo's 500 KB `check-large-files` limit
-#: (test_the_table_fits_the_repos_file_size_limit). The count beside them says how many
-#: there are; two show the kind.
+#: How many offending lanes a non-finite verdict spells out. Two: the row's `nonfinite`
+#: count says how many there are, two lanes show the kind (an overflow, a NaN, a wrong
+#: sign), and more would only lengthen every not-measurable row's `note`.
 NAMED_LANES = 2
 
 
 @dataclass(frozen=True)
 class Unmeasurable:
     """A cell the sweep could not describe with a step count, as the emitter writes it:
-    a tolerance row with these figures and *why* in its comment.
+    a tolerance row with these figures and *why* in its ``note``.
 
     *nonfinite* is how many lanes disagreed with the golden about being finite -- what
     makes the cell unmeasurable, and the count the headroom report (from #57527) fails a
@@ -1200,12 +1198,12 @@ def record_unmeasurable(
 
 
 def _with_measured(verdict: Unmeasurable, measured: Optional[int]) -> Unmeasurable:
-    """*verdict* with *measured* as its finite-lane figure, if that is worse. A verdict
-    that ranked no lane (``nonfinite == 0``) takes no figure."""
-    if (
-        measured is None
-        or verdict.nonfinite == 0
-        or (verdict.measured is not None and verdict.measured >= measured)
+    """*verdict* with *measured* as its finite-lane figure, if that is worse. Kept on a
+    verdict of no rankable lane too, though its row will not write it (:func:`_decide`):
+    dropped here, a later non-finite verdict would win with only its own figure, and the
+    cell's worst lane would depend on the order the workers' readings arrived in."""
+    if measured is None or (
+        verdict.measured is not None and verdict.measured >= measured
     ):
         return verdict
     return replace(verdict, measured=measured)
@@ -1335,9 +1333,11 @@ def _decide(
         drawn = tuple(lists.get(key, ()))
         out = key.output_format
         if isinstance(value, Unmeasurable):
+            # A verdict that ranked no lane records no figure: one written here would
+            # sit without `nonfinite`, and the row would read as an ordinary demotion.
             decided[key] = Decision(
                 Metric.TOLERANCE,
-                value.measured,
+                value.measured if value.nonfinite else None,
                 nonfinite=value.nonfinite or None,
                 note=f"not measurable: {value.why}",
             )

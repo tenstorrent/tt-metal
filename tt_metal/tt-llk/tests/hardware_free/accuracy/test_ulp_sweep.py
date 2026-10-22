@@ -14,9 +14,14 @@ import torch
 from helpers import ulp_sweep
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    MathOperation,
+    format_dict,
+)
 from helpers.ulp import has_ulp_gate, ulp_distance, ulp_stats
-from helpers.ulp_domains import Domain
+from helpers.ulp_domains import Domain, usable_budget_ceiling
 from helpers.ulp_sweep import (
     DOMAINS,
     MEASURED,
@@ -36,11 +41,14 @@ from helpers.ulp_sweep import (
     merge_measured,
     nonfinite_failures,
     nonfinite_verdict,
+    padding_lanes,
     ranked_mask,
     record,
     record_unmeasurable,
     stale_excuses,
     sweep_cells,
+    sweep_spec,
+    swept_value_count,
     write_table,
 )
 from helpers.ulp_table import (
@@ -68,6 +76,18 @@ def _host_only_arch(monkeypatch):
 
     monkeypatch.setenv("CHIP_ARCH", "wormhole")
     monkeypatch.setattr(chip, "_cached_chip_architecture", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_reading_outlives_its_test():
+    """`record` folds into the module-level `MEASURED` and `DOMAINS`, and keeps the worst
+    lane: a reading one test left behind would be the next test's figure, and whether
+    that showed depended on file order."""
+    MEASURED.clear()
+    DOMAINS.clear()
+    yield
+    MEASURED.clear()
+    DOMAINS.clear()
 
 
 # ── The emitter ───────────────────────────────────────────────────────────────
@@ -104,11 +124,7 @@ _TABLE = {
 def table(tmp_path):
     path = tmp_path / "budget.yaml"
     write_table_file(_TABLE, path)
-    MEASURED.clear()
-    DOMAINS.clear()
-    yield path
-    MEASURED.clear()
-    DOMAINS.clear()
+    return path
 
 
 def _rows(path, op=GELU):
@@ -196,11 +212,9 @@ def test_an_op_not_yet_in_the_table_is_written(table):
 
 def test_a_cell_recorded_twice_keeps_the_worst_lane():
     """Last-write-wins is the polarity that hides error."""
-    MEASURED.clear()
     record(GELU, _CELL, 12)
     record(GELU, _CELL, 3)
     assert MEASURED[GELU][_CELL] == 12
-    MEASURED.clear()
 
 
 def test_an_anti_diagonal_grid_is_refused_rather_than_collapsed(table):
@@ -230,7 +244,6 @@ def test_the_emitted_figure_is_the_measurement():
 def test_xdist_workers_measurements_merge_worst_lane_first():
     """Under ``-n`` each worker fills its own ``MEASURED``; the controller merges the
     exports, keeping the worse reading of a cell two workers measured."""
-    MEASURED.clear()
     record(GELU, _CELL, 5)
     worker_a = export_measured()
     MEASURED.clear()
@@ -243,7 +256,6 @@ def test_xdist_workers_measurements_merge_worst_lane_first():
     merge_measured(worker_b)
     merge_measured(None)  # a worker that recorded nothing
     assert MEASURED == {GELU: {_CELL: 9, other: 2}}
-    MEASURED.clear()
 
 
 @pytest.mark.parametrize(
@@ -251,7 +263,6 @@ def test_xdist_workers_measurements_merge_worst_lane_first():
 )
 def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(verdict_first):
     """A number must not rescue an overflow; the finite-lane figure is the worse."""
-    MEASURED.clear()
     verdict = Unmeasurable(why="lanes disagreeing", nonfinite=3, measured=2)
     record_unmeasurable(GELU, _CELL, verdict)
     with_verdict = export_measured()
@@ -262,12 +273,10 @@ def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(verdict_f
     for blob in [with_verdict, with_number][:: 1 if verdict_first else -1]:
         merge_measured(blob)
     assert MEASURED == {GELU: {_CELL: replace(verdict, measured=4)}}
-    MEASURED.clear()
 
 
 @pytest.mark.parametrize("order", [1, -1], ids=["a,b", "b,a"])
 def test_two_unmeasurable_readings_merge_to_the_worst_of_both(order):
-    MEASURED.clear()
     a = Unmeasurable(why="2 lanes", nonfinite=2, measured=9)
     b = Unmeasurable(why="5 lanes", nonfinite=5, measured=3)
     for verdict in (a, b)[::order]:
@@ -275,10 +284,15 @@ def test_two_unmeasurable_readings_merge_to_the_worst_of_both(order):
     assert MEASURED == {
         GELU: {_CELL: Unmeasurable(why="5 lanes", nonfinite=5, measured=9)}
     }
-    MEASURED.clear()
 
 
-def test_a_cell_that_ranked_no_lane_stays_without_a_figure_when_a_number_arrives():
+def test_a_cell_that_ranked_no_lane_is_written_without_a_figure_when_a_number_arrives(
+    table,
+):
+    """A no-lane verdict (`nonfinite == 0`) given a later reading's figure was written as
+    `{metric: TOLERANCE, measured: N}` with no `nonfinite`: an ordinary demotion to every
+    reader, held to N by the headroom report. Its row stays not measurable, with no
+    figure; the figure is kept underneath, for a non-finite verdict arriving later."""
     for order in (1, -1):
         MEASURED.clear()
         steps = [
@@ -287,8 +301,46 @@ def test_a_cell_that_ranked_no_lane_stays_without_a_figure_when_a_number_arrives
         ]
         for step in steps[::order]:
             step()
-        assert MEASURED[GELU][_CELL] == Unmeasurable(why="no lane"), order
-    MEASURED.clear()
+        assert MEASURED[GELU][_CELL].nonfinite == 0, order
+        write_table(table)
+        assert _rows(table)[_pair(F16, F16)] == Row(
+            input=F16,
+            output=F16,
+            metric=Metric.TOLERANCE,
+            note="not measurable: no lane",
+        ), order
+
+
+def test_three_readings_of_one_cell_merge_alike_in_any_order():
+    """9, then a no-lane verdict, then an overflow verdict with a figure of its own, 2:
+    the no-lane verdict dropped the 9, so the overflow won with its 2, while in the
+    other order the cell kept 9. The order the workers' readings arrived in picked the
+    baseline. Every order now gives the overflow verdict with the worst figure, read in
+    one process or each in a worker of its own and merged by the controller."""
+    from itertools import permutations
+
+    readings = (
+        lambda: record(GELU, _CELL, 9),
+        lambda: record_unmeasurable(GELU, _CELL, Unmeasurable(why="no lane")),
+        lambda: record_unmeasurable(
+            GELU, _CELL, Unmeasurable(why="overflow", nonfinite=3, measured=2)
+        ),
+    )
+    worst = Unmeasurable(why="overflow", nonfinite=3, measured=9)
+    for order in permutations(range(len(readings))):
+        MEASURED.clear()
+        for i in order:
+            readings[i]()
+        assert MEASURED[GELU][_CELL] == worst, order
+        exported = []
+        for i in order:
+            MEASURED.clear()
+            readings[i]()
+            exported.append(export_measured())
+        MEASURED.clear()
+        for blob in exported:
+            merge_measured(blob)
+        assert MEASURED[GELU][_CELL] == worst, order
 
 
 @pytest.mark.parametrize(
@@ -347,15 +399,11 @@ def test_a_whole_table_emit_over_the_real_table_loads(tmp_path, monkeypatch):
     path = tmp_path / "budget.yaml"
     write_table_file(load_table(), path)
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
-    MEASURED.clear()
     ops = sweep._sweep_ops()
     for op in ops:
         for cell in sweep_cells(ChipArchitecture.WORMHOLE):
             record(op, cell_key(*cell), 1)
-    try:
-        report = finish_emit(ChipArchitecture.WORMHOLE, 0, path)
-    finally:
-        MEASURED.clear()
+    report = finish_emit(ChipArchitecture.WORMHOLE, 0, path)
     assert set(report.written) == set(ops)
     load_table(path)
 
@@ -439,19 +487,16 @@ def test_a_tied_reading_resolves_the_same_whichever_arrives_first():
         for floor in order:
             record(GELU, _CELL, _WORST, floor)
         outcomes.append(MEASURED[GELU][_CELL])
-    MEASURED.clear()
     assert outcomes == [_WORST, _WORST]
 
 
 def test_a_floored_measurement_survives_the_xdist_merge():
-    MEASURED.clear()
     record(GELU, _CELL, _WORST, floor=_FLOOR)
     blob = export_measured()
     MEASURED.clear()
     merge_measured(blob)
     merge_measured(blob)
     assert MEASURED[GELU][_CELL] == Floored(_WORST, *_FLOOR)
-    MEASURED.clear()
 
 
 @pytest.mark.parametrize(
@@ -466,11 +511,9 @@ def test_a_floored_measurement_survives_the_xdist_merge():
 def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
     """The floor came from one reading's lanes; either order keeps the worst lane
     unfloored."""
-    MEASURED.clear()
     for max_ulp, floor in (first, second):
         record(GELU, _CELL, max_ulp, floor=floor)
     assert MEASURED[GELU][_CELL] == _WORST
-    MEASURED.clear()
 
 
 def test_a_cell_with_a_list_is_written_as_the_list_and_nothing_else(table):
@@ -508,8 +551,6 @@ def test_lists_are_part_of_what_a_collapse_must_agree_on(table):
 
 
 def test_a_list_survives_the_xdist_merge_and_a_differing_reading_drops_it():
-    MEASURED.clear()
-    DOMAINS.clear()
     record(GELU, _CELL, 5, domains=_TWO)
     blob = export_measured()
     MEASURED.clear()
@@ -524,8 +565,6 @@ def test_a_list_survives_the_xdist_merge_and_a_differing_reading_drops_it():
     record(GELU, _CELL, 9, domains=_ONE)
     record(GELU, _CELL, 2, domains=_TWO)
     assert (MEASURED[GELU][_CELL], DOMAINS[GELU][_CELL]) == (9, _ONE)
-    MEASURED.clear()
-    DOMAINS.clear()
 
 
 def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
@@ -967,7 +1006,7 @@ def test_an_emit_refusal_fails_only_a_clean_session(monkeypatch, exitstatus, exp
     from helpers import llk_pytest_plugin, ulp_sweep
 
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
-    MEASURED.clear()  # refused for having measured nothing
+    # MEASURED is empty: refused for having measured nothing.
     session = SimpleNamespace(
         config=SimpleNamespace(
             option=SimpleNamespace(collectonly=False),
@@ -1100,6 +1139,41 @@ def test_the_float32_walk_is_pinned_end_to_end():
     for b in binade.unique().tolist():
         share = float(lower[binade == b].mean())
         assert 0.3 < share < 0.7, (hex(b), share)
+
+
+@pytest.mark.parametrize(
+    "fmt, count",
+    [(F16B, 65025), (F16, 61441), (F32, 65024)],
+    ids=lambda v: v.name if isinstance(v, DataFormat) else str(v),
+)
+def test_the_sweep_feeds_every_normal_value_and_zero_and_nothing_else(fmt, count):
+    """What `sweep_spec` makes `generate_stimuli` feed, end to end on the host, pinned by
+    number rather than by `swept_value_count` (which `padding_lanes` reads too, so a
+    check through it could not fail): every normal value of the format once and its
+    zero -- no subnormal, which the unpack would flush -- then a zero tail that is
+    exactly the padding. Drop `normal_only` at either end and the subnormals come back
+    while the top real values are masked as padding."""
+    import test_unary_sfpu_ulp as sweep
+    from helpers.stimuli_generator import generate_stimuli
+
+    src, *_ = generate_stimuli(
+        stimuli_format_A=fmt,
+        input_dimensions_A=sweep.SWEEP_DIMENSIONS,
+        stimuli_format_B=fmt,
+        input_dimensions_B=sweep.SWEEP_DIMENSIONS,
+        spec_A=sweep_spec(fmt),
+    )
+    flat = src.flatten().to(torch.float64)
+    assert flat.numel() == 2**16
+    data, tail = flat[:count], flat[count:]
+    finfo = torch.finfo(format_dict[fmt])
+    assert not bool(((data != 0) & (data.abs() < finfo.tiny)).any()), "a subnormal"
+    assert data.unique().numel() == count, "a value fed twice, or one missing"
+    assert int((data == 0).sum()) == (0 if fmt is F32 else 1)
+    assert float(data.abs().max()) == finfo.max
+    assert bool((tail == 0).all()) and tail.numel() == 2**16 - count
+    assert swept_value_count(fmt) == count
+    assert int(padding_lanes(src, fmt).sum()) == tail.numel()
 
 
 @pytest.mark.parametrize(
@@ -1471,10 +1545,6 @@ def test_a_cell_whose_every_claimed_lane_is_non_finite_records_no_figure():
 
 # ── A cell's `domains` list ──────────────────────────────────────────────────
 
-_INF = math.inf
-_ONE = (Domain(-_INF, _INF, 5),)
-_TWO = (Domain(-_INF, 0, 5), Domain(0, _INF, 2))
-
 
 def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
     monkeypatch,
@@ -1506,7 +1576,7 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
         1,
         1,
     )  # -1.5 shares the binade; -1.25 is unranked
-    spans = rule.partition(bins, 6.0)
+    spans = rule.partition(bins, usable_budget_ceiling(F16B))
     # 1.5 (9 steps) and 2.0 (8 steps) are both past bf16's ceiling of 6: one bad range.
     assert spans == ((-_INF, 1.0, True), (1.0, 4.0, True), (4.0, _INF, True))
     drawn = domain_figures(spans, x, distance, present, judged)
@@ -1558,7 +1628,9 @@ def test_a_worst_lane_on_a_negative_edge_is_figured_on_the_side_its_entry_holds(
     distance = torch.tensor([1] * n + [9] * n + [9] * n)
     every = torch.ones(3 * n, dtype=torch.bool)
     bins = binade_maxima(x, distance, every, every)
-    drawn = domain_figures(rule.partition(bins, 6.0), x, distance, every, every)
+    drawn = domain_figures(
+        rule.partition(bins, usable_budget_ceiling(F16B)), x, distance, every, every
+    )
     assert drawn == (Domain(-_INF, -1, 1), Domain(-1, _INF, 9))
     key = cell_key(F16B, F16B, NO, D_NO)
     record_of = Measurement(
@@ -1588,10 +1660,12 @@ def test_a_cell_whose_strays_beat_every_figure_writes_a_list_its_gate_passes(
     ranked = torch.tensor([i < 3 for i in range(64)] + [True] * 64)  # 3 strays at 30
     present = torch.ones(128, dtype=torch.bool)
     bins = binade_maxima(x, distance, ranked, present)
-    spans = rule.partition(bins, 6.0)
+    spans = rule.partition(bins, usable_budget_ceiling(F16B))
     assert [r for _, _, r in spans] == [False, True]
     drawn = domain_figures(spans, x, distance, present, ranked)
     assert [d.ulp for d in drawn] == [30, 1]
     few = torch.tensor([i < 3 for i in range(128)])
-    nothing = rule.partition(binade_maxima(x, distance, few, present), 6.0)
+    nothing = rule.partition(
+        binade_maxima(x, distance, few, present), usable_budget_ceiling(F16B)
+    )
     assert domain_figures(nothing, x, distance, present, few) == ()

@@ -1,13 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the ULP host tests share: asserting a refusal by its typed reason."""
+"""What the ULP host tests share: asserting a refusal by its typed reason, and one
+well-formed ``domains`` list."""
 
+import math
 from contextlib import contextmanager
 
 import pytest
 
-from .ulp_domains import Problem, TableError
+from .ulp_domains import Domain, Problem, TableError
+
+#: A list of the shape the sweep writes for tanh on a bf16 output: gated at 3 steps on
+#: both tails, 10 (past bf16's ceiling of 6) on [-1, 1).
+TANH_DOMAINS = (
+    Domain(-math.inf, -1, 3),
+    Domain(-1, 1, 10),
+    Domain(1, math.inf, 3),
+)
 
 
 @contextmanager

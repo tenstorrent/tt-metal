@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from itertools import product
-from typing import Dict, Optional, Tuple, TypeVar
+from typing import Dict, Optional, Tuple
 
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat, InputOutputFormat
@@ -34,14 +34,17 @@ from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read i
     FLUSH_SUBNORMAL_OUTPUTS,
     ULP_FORMATS,
 )
-from .ulp_domains import Domain, Problem, TableError, usable_budget_ceiling
-from .ulp_table import (
+from .ulp_domains import Domain, usable_budget_ceiling
+from .ulp_table import (  # MEASURED_ARCH, _winner, steps_bind: the guard reads them there
     DEFAULT,
+    MEASURED_ARCH,
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
     Metric,
+    _winner,
     load_table,
+    steps_bind,
 )
 
 __all__ = [
@@ -53,9 +56,6 @@ __all__ = [
     "Metric",
     "usable_budget_ceiling",
 ]
-
-#: The architecture every unkeyed budget was measured on.
-MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
 
 @dataclass(frozen=True)
@@ -87,39 +87,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, _Contracts] = {
     op: {row.key: row.contract for row in rows} for op, rows in load_table().items()
 }
 
-V = TypeVar("V")
-
-
-def _winner(
-    table: Dict[BudgetKey, V], query: BudgetKey
-) -> Optional[Tuple[BudgetKey, V]]:
-    """The single most specific entry of *table* covering *query*, or ``None``."""
-    matched = [(key, value) for key, value in table.items() if key.matches(query)]
-    if not matched:
-        return None
-    best = max(key.specificity for key, _ in matched)
-    winners = [(key, value) for key, value in matched if key.specificity == best]
-    if len(winners) > 1:
-        raise TableError(Problem.AMBIGUOUS, [key.describe() for key, _ in winners])
-    return winners[0]
-
 
 def resolve_contract(table: _Contracts, query: BudgetKey) -> AccuracyContract:
     """The most specific contract in *table* covering *query*, or
     :data:`TOLERANCE_CONTRACT`."""
     found = _winner(table, query)
     return TOLERANCE_CONTRACT if found is None else found[1]
-
-
-def steps_bind(key: BudgetKey, query: BudgetKey) -> bool:
-    """Whether a step budget on the row keyed *key* binds the variant *query*: every
-    format named is one the SFPU computes in, and the variant is on the architecture
-    the row was measured on -- :data:`MEASURED_ARCH` for a row that names none."""
-    formats_ok = all(
-        fmt is None or fmt in ULP_FORMATS
-        for fmt in (query.input_format, query.output_format)
-    )
-    return formats_ok and (query.arch == MEASURED_ARCH or key.arch is not None)
 
 
 def accuracy_contract(

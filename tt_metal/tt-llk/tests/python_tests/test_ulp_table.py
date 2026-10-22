@@ -4,6 +4,7 @@
 """Host-side guards for ``helpers/ulp_table.py``: the budget table as typed rows, the
 one serializer that writes it, and the measurement records."""
 
+import json
 import math
 
 import pytest
@@ -24,12 +25,12 @@ from helpers.ulp_table import (
     from_plain,
     load_table,
     read_table,
+    write_table_file,
 )
-from helpers.ulp_testing import refused
+from helpers.ulp_testing import TANH_DOMAINS, refused
 
 INF = math.inf
 F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
-TANH = (Domain(-INF, -1, 3), Domain(-1, 1, 10), Domain(1, INF, 3))
 
 
 def _ids(value):
@@ -49,15 +50,17 @@ def _ids(value):
         (dict(input=DataFormat.Bfp8_b, measured=1), Problem.NOT_A_COMPUTE_FORMAT),
         (dict(output=DataFormat.Bfp4_b, measured=1), Problem.NOT_A_COMPUTE_FORMAT),
         (
-            dict(input=F16B, output=F16B, measured=10, domains=TANH),
+            dict(input=F16B, output=F16B, measured=10, domains=TANH_DOMAINS),
             Problem.BESIDE_DOMAINS,
         ),
         (
-            dict(input=F16B, output=F16B, metric=Metric.TOLERANCE, domains=TANH),
+            dict(
+                input=F16B, output=F16B, metric=Metric.TOLERANCE, domains=TANH_DOMAINS
+            ),
             Problem.BESIDE_DOMAINS,
         ),
-        (dict(output=F16B, domains=TANH), Problem.UNPINNED_DOMAINS),
-        (dict(input=F16B, output=F16B, domains=TANH[:1]), Problem.NOT_COVERING),
+        (dict(output=F16B, domains=TANH_DOMAINS), Problem.UNPINNED_DOMAINS),
+        (dict(input=F16B, output=F16B, domains=TANH_DOMAINS[:1]), Problem.NOT_COVERING),
     ],
     ids=_ids,
 )
@@ -70,9 +73,11 @@ def test_a_rows_contract_is_its_figure_or_what_its_list_implies():
     assert Row(output=F16B, measured=2).contract == AccuracyContract(max_ulp=2)
     tolerance = Row(metric=Metric.TOLERANCE, measured=300, atol=0.1).contract
     assert tolerance == AccuracyContract(metric=Metric.TOLERANCE, atol=0.1)
-    listed = Row(input=F16B, output=F16B, domains=TANH).contract
+    listed = Row(input=F16B, output=F16B, domains=TANH_DOMAINS).contract
     assert (listed.metric, listed.max_ulp) == (Metric.TOLERANCE, None)  # 10 > bf16's 6
-    fits = Row(input=F16B, output=F32, near_zero_atol=1e-7, domains=TANH).contract
+    fits = Row(
+        input=F16B, output=F32, near_zero_atol=1e-7, domains=TANH_DOMAINS
+    ).contract
     assert (fits.metric, fits.max_ulp, fits.near_zero_atol) == (Metric.ULP, 10, 1e-7)
     assert Row(output=F16B, measured=2).key == BudgetKey(output_format=F16B)
 
@@ -122,6 +127,35 @@ def test_a_repeated_yaml_key_is_refused_not_overwritten():
         read_table(text)
 
 
+@pytest.mark.parametrize(
+    "text, problem",
+    [
+        ("Abs:\n- {{measured: 1}}\n", Problem.WRONG_SHAPE),
+        ("<<<<<<< HEAD\nAbs: [\n", Problem.UNREADABLE),
+        ("Abs:\n- &a {measured: 1}\n- {<<: *a, output: Float16}\n", Problem.UNREADABLE),
+        ("Abs: &rows\n- *rows\n", Problem.WRONG_SHAPE),
+    ],
+    ids=["doubled-braces", "conflict-marker", "merge-key", "self-containing-anchor"],
+)
+def test_text_no_reader_can_hold_is_refused_not_crashed(text, problem):
+    """A mapping used as a key (doubled braces pasted from an f-string) raised a bare
+    ``TypeError``, and text PyYAML cannot scan or construct escaped as its own error:
+    both past the guard's "cannot load" handling, as tracebacks."""
+    with refused(problem):
+        read_table(text)
+
+
+def test_a_record_missing_a_required_field_is_refused():
+    """A dataclass built without a required field raises ``TypeError``, which is not a
+    refusal; the reader names the fields instead."""
+    with refused(Problem.MISSING_FIELD):
+        from_plain(Domain, {"low": 0})
+    with refused(Problem.MISSING_FIELD):
+        Measurement.from_json('{"op": "Abs"}')
+    with refused(Problem.UNREADABLE):
+        Measurement.from_json("{\n")
+
+
 def test_a_typed_table_round_trips_through_the_one_serializer():
     table = {
         MathOperation.Tanh: (
@@ -131,7 +165,7 @@ def test_a_typed_table_round_trips_through_the_one_serializer():
                 approx=ApproximationMode.Yes,
                 dest=DestAccumulation.No,
                 near_zero_atol=2.4e-7,
-                domains=TANH,
+                domains=TANH_DOMAINS,
             ),
             Row(
                 output=F32, metric=Metric.TOLERANCE, measured=9, nonfinite=2, note="#1"
@@ -144,6 +178,18 @@ def test_a_typed_table_round_trips_through_the_one_serializer():
     assert {op: set(rows) for op, rows in back.items()} == {
         op: set(rows) for op, rows in table.items()
     }
+
+
+def test_a_table_the_loader_would_refuse_is_never_written(tmp_path):
+    """`write_table_file` reads its dump back before writing, so a refused rewrite --
+    two rows of one op on one key -- leaves the file as it was."""
+    path = tmp_path / "budget.yaml"
+    before = dump_table({MathOperation.Abs: (Row(output=F16B, measured=1),)})
+    path.write_text(before, encoding="utf-8")
+    twice = (Row(output=F16B, measured=1), Row(output=F16B, measured=2))
+    with refused(Problem.REPEATED_KEY):
+        write_table_file({MathOperation.Abs: twice}, path)
+    assert path.read_text(encoding="utf-8") == before
 
 
 def test_the_table_on_disk_is_exactly_what_the_serializer_writes():
@@ -164,7 +210,12 @@ def test_a_measurement_round_trips_through_its_json_line():
         worst=10,
         lanes=65025,
         nonfinite=2,
-        bins=((151, 128, 128, 3),),
+        bins=((-151, 128, 128, 3), (151, 128, 128, 3)),
         readings=(Reading(-INF, -1.0, 3, 16000), Reading(1.0, INF, None, 0)),
     )
-    assert Measurement.from_json(measurement.to_json()) == measurement
+    text = measurement.to_json()
+    assert Measurement.from_json(text) == measurement
+    # JSON has no infinity: `json.dumps` would write `-Infinity`, which only Python
+    # reads back; an infinite edge is spelt as a string instead.
+    assert "Infinity" not in text
+    assert json.loads(text)["readings"][0]["low"] == "-inf"
