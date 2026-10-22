@@ -35,6 +35,8 @@ pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
 _SEQUENCE = 5120
 _PCC_THRESHOLD = 0.9995
+_GALAXY_ROWS_PER_CHIP = _SEQUENCE // 8
+_GALAXY_HEADS_PER_CHIP = 24
 
 # Valid interval [start, start + length) of one prefill call, from the local rows L
 # per SP rank and the capacity C. Full intervals place the sequence on every rank
@@ -58,22 +60,40 @@ _INTERVALS = {
     # A one-token prompt: the carry continues the incoming layer carry.
     "one-token": lambda L, C: (0, 1),
 }
+# The output NRMSE bar is calibrated on whole intervals, where thousands of rows average out. A one-token output is a
+# single row, and per-row output NRMSE spreads to about 3.2% (QuietBox SP4xTP1: median 1.9%, max 3.2%).
+_INTERVAL_OUTPUT_NRMSE = {"one-token": 0.035}
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis,device_params",
+    "mesh_device,tensor_parallel_axis,device_params,sequence,num_heads",
     [
+        # LoudBox and QuietBox run Galaxy's per-chip workload, 640 rows and 24 heads per chip, over an SP ring
+        # with one TP rank: the layouts their KDA layer perf gates time. FABRIC_1D_RING rings only mesh axis 0.
         pytest.param(
-            (2, 4),
+            (8, 1),
             1,
-            fabric_1d_device_params(),
-            id="SP2xTP4-fabric-1d",
+            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+            _SEQUENCE,
+            _GALAXY_HEADS_PER_CHIP,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="SP8xTP1-ring",
         ),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-fabric-1d"),
+        pytest.param(
+            (4, 1),
+            1,
+            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+            4 * _GALAXY_ROWS_PER_CHIP,
+            _GALAXY_HEADS_PER_CHIP,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="SP4xTP1-ring",
+        ),
         pytest.param(
             (8, 4),
             1,
             torus_xy_device_params(),
+            _SEQUENCE,
+            None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -85,6 +105,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    sequence: int,
+    num_heads: int | None,
     interval: str,
 ) -> None:
     """Gate K3 dimensions on one valid interval against Torch; repeat runs must match exactly.
@@ -97,9 +119,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     sequence_parallel_axis = 1 - tensor_parallel_axis
     sp_size = mesh_shape[sequence_parallel_axis]
     layout = f"SP{sp_size}xTP{mesh_shape[tensor_parallel_axis]}"
-    local_rows = _SEQUENCE // sp_size
-    actual_start, length = _INTERVALS[interval](local_rows, _SEQUENCE)
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    local_rows = sequence // sp_size
+    actual_start, length = _INTERVALS[interval](local_rows, sequence)
+    case = make_synthetic_kimi_k3_test_case(sequence=sequence, num_heads=num_heads)
     golden_output, golden_state, reference_seconds = load_or_compute_cpu_reference(
         replace(case, hidden=case.hidden[:, :length].clone())
     )
@@ -109,6 +131,11 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
     )
+    if num_heads is not None:
+        assert (layer.active_seq_len_local, layer.config.num_heads) == (
+            _GALAXY_ROWS_PER_CHIP,
+            _GALAXY_HEADS_PER_CHIP,
+        ), f"{layout} must run Galaxy's per-chip workload"
 
     permutation = mla_row_permutation(actual_start, sp_size, local_rows)
     padded = case.hidden.clone()
@@ -142,10 +169,14 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             sp_axis=sequence_parallel_axis,
             tp_axis=tensor_parallel_axis,
             config=case.config,
-            label=f"Synthetic Kimi-K3 T{_SEQUENCE} {layout} {interval} start={actual_start} length={length}",
+            label=f"Synthetic Kimi-K3 T{sequence} {layout} {interval} start={actual_start} length={length}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.05, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+            nrmse=LayerNrmseThresholds(
+                output=_INTERVAL_OUTPUT_NRMSE.get(interval, 0.02),
+                recurrent=0.05,
+                convolution=KIMI_K3_CONVOLUTION_NRMSE,
+            ),
         )
         assert all(
             marker.item() == 0 for marker in mismatch_markers
@@ -155,7 +186,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             + json.dumps(
                 {
                     "layout": layout,
-                    "sequence": _SEQUENCE,
+                    "sequence": sequence,
+                    "num_heads": case.config.num_heads,
                     "weights": "deterministic synthetic",
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,
