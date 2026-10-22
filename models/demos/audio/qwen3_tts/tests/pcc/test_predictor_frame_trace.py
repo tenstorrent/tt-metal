@@ -7,7 +7,8 @@
 The step-by-step path, which reads each head's logits to host and samples there, is the
 reference. Greedy must pick what it picks, step for step. Sampling cannot be compared
 pick by pick, so the first codebook, whose logits depend only on the frame's inputs, is
-drawn many times and its distribution compared with the softmax over the top k. Speed is
+drawn many times and its distribution compared with the softmax over the top k. Ties are
+checked on built logits. Speed is
 `tests/perf/test_perf.py`'s to measure: the watcher these run under distorts it.
 
 Run:
@@ -21,6 +22,7 @@ from scipy.stats import chisquare
 import ttnn
 from models.demos.audio.qwen3_tts.tests.reference_helpers import code_predictor_prompt
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
+    DEVICE_TOP_K_LIMIT,
     TtCodePredictorCachedDecoder,
     preprocess_cached_predictor_parameters,
 )
@@ -97,6 +99,37 @@ def test_the_first_codebook_is_drawn_from_the_top_k_softmax(device):
         f"(host sampler at the same size: {host_distance:.4f}), {len(set(draws.tolist()))} distinct"
     )
     assert p_value >= MIN_P_VALUE, f"chi-square p {p_value:.3g} < {MIN_P_VALUE}"
+
+
+def _sample_built(predictor, device, logits, noise=()):
+    """One device draw from built logits, with `noise` on the first candidates."""
+    rows = torch.zeros(1, 1, predictor.groups - 1, DEVICE_TOP_K_LIMIT)
+    rows[0, 0, 0, : len(noise)] = torch.tensor(noise, dtype=torch.float32)
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(rows, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), predictor._device_sampling["noise"]
+    )
+    logits = ttnn.from_torch(logits.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return int(ttnn.to_torch(predictor._sample(logits, 0)).reshape(-1)[0])
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_ties_pick_the_lowest_id_and_keep_the_kth_value(device):
+    greedy = _predictor(device, 1.0, 1)
+    logits = torch.zeros(greedy.config["vocab_size"])
+    logits[[9, 3]] = 1.0
+    assert _sample_built(greedy, device, logits) == 3
+    # More tied maxima than the device keeps candidates.
+    logits[100 : 100 + 2 * DEVICE_TOP_K_LIMIT] = 2.0
+    assert _sample_built(greedy, device, logits) == 100
+
+    # Top 2 of [2 at id 10, 1 at ids 7 and 20]: both ids tied at the k-th value can win;
+    # the stable top k orders the candidates 10, 7, 20, then the zeros, from id 0.
+    sampled = _predictor(device, 1.0, 2)
+    logits = torch.zeros(sampled.config["vocab_size"])
+    logits[10], logits[[7, 20]] = 2.0, 1.0
+    assert _sample_built(sampled, device, logits, [0, 0, 100]) == 20
+    assert _sample_built(sampled, device, logits, [0, 100]) == 7
+    assert _sample_built(sampled, device, logits, [0, 0, 0, 100]) == 10, "a value below the k-th won"
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
