@@ -199,10 +199,18 @@ void check_top_level(
             "host_rank",
             "mpi_rank",
             "world_size",
-            "written_at"}));
+            "written_at",
+            "git_sha",
+            "git_dirty"}));
     EXPECT_EQ(run.at("fabric_config"), lower_enum_name(fabric_config));
     EXPECT_EQ(run.at("arch"), lower_enum_name(BaseFabricFixture::arch_));
     EXPECT_FALSE(run.at("written_at").get<std::string>().empty());
+    // A full commit SHA, or empty outside a git checkout.
+    const auto git_sha = run.at("git_sha").get<std::string>();
+    EXPECT_TRUE(
+        git_sha.empty() || (git_sha.size() == 40 && git_sha.find_first_not_of("0123456789abcdef") == std::string::npos))
+        << git_sha;
+    EXPECT_TRUE(run.at("git_dirty").is_boolean());
 
     const bool is_2d = fabric_config == FabricConfig::FABRIC_2D;
     const auto& block = manifest.at("fabric_context");
@@ -1297,12 +1305,12 @@ void check_archs(const json& manifest) {
     }
 }
 
-// The stream registers are where the HAL puts them, and every register of every stream is in the HAL's register
-// space.
+// The stream registers are where the HAL puts them, with the HAL's widths, and every register of every stream is in
+// the HAL's register space.
 void check_arch_stream_registers(const json& manifest) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& streams = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("stream_registers");
-    EXPECT_EQ(keys_of(streams), (std::set<std::string>{"base", "stride", "count", "register_offsets"}));
+    EXPECT_EQ(keys_of(streams), (std::set<std::string>{"base", "stride", "count", "registers"}));
     const auto base = streams.at("base").get<uint32_t>();
     const auto stride = streams.at("stride").get<uint32_t>();
     const auto count = streams.at("count").get<uint32_t>();
@@ -1310,23 +1318,30 @@ void check_arch_stream_registers(const json& manifest) {
     EXPECT_EQ(stride, hal.get_noc_stream_reg_space_size());
     EXPECT_EQ(count, StreamRegAssignments::num_eth_stream_registers);
 
-    const auto& offsets = streams.at("register_offsets");
-    std::set<std::string> registers;
+    const auto& registers = streams.at("registers");
+    std::set<std::string> names;
     for (const auto reg : enchantum::values<manifest::StreamRegister>) {
-        registers.insert(lower_enum_name(reg));
+        names.insert(lower_enum_name(reg));
     }
-    EXPECT_EQ(keys_of(offsets), registers);
+    EXPECT_EQ(keys_of(registers), names);
+    const auto& buf_space_available = registers.at(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
     EXPECT_EQ(
-        offsets.at(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE)).get<uint32_t>(),
+        buf_space_available.at("offset").get<uint32_t>(),
         hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t));
-    EXPECT_EQ(
-        offsets.at(lower_enum_name(manifest::StreamRegister::REMOTE_SRC)).get<uint32_t>(),
-        hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t));
-    for (const auto& [name, offset] : offsets.items()) {
+    EXPECT_EQ(buf_space_available.at("bits").get<uint32_t>(), hal.get_noc_stream_remote_dest_words_free_width());
+    const auto& remote_src = registers.at(lower_enum_name(manifest::StreamRegister::REMOTE_SRC));
+    EXPECT_EQ(remote_src.at("offset").get<uint32_t>(), hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t));
+    EXPECT_EQ(remote_src.at("bits").get<uint32_t>(), 24u);
+    for (const auto& [name, reg] : registers.items()) {
         SCOPED_TRACE(name);
-        EXPECT_LT(offset.get<uint32_t>(), stride);
+        EXPECT_EQ(keys_of(reg), (std::set<std::string>{"offset", "bits"}));
+        const auto offset = reg.at("offset").get<uint32_t>();
+        EXPECT_LT(offset, stride);
+        const auto bits = reg.at("bits").get<uint32_t>();
+        EXPECT_GE(bits, 1u);
+        EXPECT_LE(bits, 32u);
         for (uint32_t stream_id = 0; stream_id < count; ++stream_id) {
-            EXPECT_TRUE(hal.valid_reg_addr(base + (stream_id * stride) + offset.get<uint32_t>())) << stream_id;
+            EXPECT_TRUE(hal.valid_reg_addr(base + (stream_id * stride) + offset)) << stream_id;
         }
     }
 }
