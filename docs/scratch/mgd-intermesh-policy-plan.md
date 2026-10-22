@@ -43,7 +43,7 @@ The design carries the policy per connection, end to end:
    added by the mapper like its other implicit preferred constraints (section 7.6).
 
 So yes, STRICT / RELAXED can be a required constraint instead of a solver argument, for the
-whole solve or per edge. The MGD side and the solver side should land together (section 9):
+whole solve or per edge. The MGD side and the solver side land together, in one PR (section 9):
 the per-pair demand is useless until the solver can encode it, and the solver change has no
 caller until the MGD supplies it.
 
@@ -183,7 +183,7 @@ constraints and set the mode as the default edge policy when none is set; if the
 already set a different default, the solve fails. A three-argument call resolves to the new
 overload, and since an `enum class` and `bool` don't convert into each other, no call is
 ambiguous. About 190 uses of `ConnectionValidationMode::` in 13 files (127 in
-`test_topology_solver.cpp`) move over in the same stack or later; nothing forces them.
+`test_topology_solver.cpp`) can move over later; nothing forces them.
 
 Inside the backends, `ConnectionValidationMode` disappears from the SAT encoder, the DFS
 search and `MappingValidator`; they read the resolved `EdgeDemand` per edge.
@@ -257,7 +257,7 @@ soft seams, each with and without the host cap. Under the per-edge design:
 
 1. **Parse.** Replace `populate_inter_mesh_policy` with a per-pair demand table, built from
    every FABRIC connection and from `graph_topology`. Drop the "Cannot mix STRICT and RELAXED
-   policies in the same graph" check (section 9 says when).
+   policies in the same graph" check.
 2. **API** on `MeshGraphDescriptor` and `MeshGraph`:
 
    ```cpp
@@ -628,11 +628,9 @@ Steps:
    enumerator keeps the best-tier representative: SAT finds it first under the objective, so
    it is enough to record the first.
 
-**Rollout.** The implicit default changes which mapping wins a tie, so it can move goldens on
-systems whose descriptors carry cabling data. Land it in two steps: first with
-`disable_implicit_port_type_preference` on by default, together with a test run that lists
-every golden that would change; then switch it on in its own PR with those goldens updated
-and reviewed.
+**Goldens.** The implicit default changes which mapping wins a tie, so it can move goldens on
+systems whose descriptors carry cabling data. A report test lists every golden that changes,
+and the same PR updates them (section 9).
 
 ## 8. Implications
 
@@ -644,7 +642,7 @@ and reviewed.
 | Solver API | The mode argument and `allow_unmatched_target_edges` become one constraint, `set_default_edge_policy`. Old signatures keep working, deprecated; about 190 uses in 13 files can move later |
 | Intra-mesh | Same behaviour, now expressed as the default edge policy; ready for per-edge intra-mesh policy if the MGD ever gets it |
 | Cable type, explicit | Opt-in. An allowed list can turn a STRICT connection UNSAT on hardware that only has other cables; the error names the connection and the types found |
-| Cable type, implicit | On by default after F4. It only breaks ties left after every other objective, so the constraints met never change, but which tied mapping wins can, on systems whose descriptors carry cabling data. Systems reporting only `UNKNOWN` are unchanged. `port_type_defaults { disable: true }` restores today's choice |
+| Cable type, implicit | On by default. It only breaks ties left after every other objective, so the constraints met never change, but which tied mapping wins can, on systems whose descriptors carry cabling data. Systems reporting only `UNKNOWN` are unchanged. `port_type_defaults { disable: true }` restores today's choice |
 | Solve time | Mixed MGDs solve faster than all-RELAXED ones, because STRICT edges keep their pruning. Uniform MGDs are unchanged |
 | Symmetry | `unique_shapes` must be off when policies mix (section 5) |
 | Warnings | Zero-link and shortfall warnings name the connection and its policy |
@@ -652,32 +650,36 @@ and reviewed.
 
 ## 9. Implementation plan
 
-Land the MGD side and the solver side as one PR stack. The parse-time "Cannot mix" check stays
-until the last PR, so no MGD is accepted before every consumer can handle it.
+One PR, with the MGD side, the solver side, the mapper, the control plane and cable types
+together. Every piece needs another to be useful (the demand table needs the solver encoding,
+the solver change needs a caller, cable preferences need the per-edge structure), so splitting
+it would only land code with no caller.
 
-| PR | Contents | Behaviour change |
-|---|---|---|
-| A1. Solver edge constraints | `EdgePolicy`, `EdgeDemand`, `set_default_edge_policy`, `set_edge_policy`, `add_required_edge_constraint`, `add_preferred_edge_constraint`, `resolve_edge_demands`, `merge`; SAT steps from 3.3; validator and DFS per edge; the old mode argument becomes the default edge policy inside the solver | none: the old signatures resolve to the same demands |
-| A2. Solver call without a mode | overloads without `ConnectionValidationMode`; old ones deprecated; `set_allow_unmatched_target_edges` becomes an alias; session `set_best_effort_edges_required` | none |
-| A3. Intra-mesh callers | `complete_intra_mesh_for_placement`, candidate pools, PGD grouping matches, `topology_mapper.cpp:1746` set the default edge policy (section 3.4) | none: same policy, now as a constraint |
-| B. MGD demand tables | `InterMeshChannelDemand`, `get_inter_mesh_channel_demand`, `has_relaxed_inter_mesh_connection`; requested maps carry policy; sum instead of overwrite | none for valid MGDs, except the overwrite fix |
-| C. Mapper | seat solve and exit nodes read demands (sections 3.5, 5); config override; `unique_shapes` gate; drop the merge-agreement fatals | merged parts with different policies are accepted |
-| D. Control plane | sections 6.1-6.5 (#49960) | device-level and mesh-level connections may coexist |
-| F1. Solver channel classes | `ChannelClass`, `set_global_edge_channel_classes`, allowed classes, preferences at both scopes and both strengths; SAT pieces from 7.3; DFS allowed-class filter; tiers in `MappingResult` | none: no caller annotates classes |
-| F2. Port types in the mapper | counts per `PortType` (7.7 step 2); `PortTypeRules`, `add_port_type_constraints` in both solves, pools and exit nodes (steps 3-5); `default_port_type_preference()`; config fields with the implicit default **off** | none |
-| F3. MGD and control plane | `allowed_port_types` / `preferred_port_types` in `Channels`, `port_type_defaults`; parse-time conflict check; binding in tier order; shortfall counts allowed channels | MGDs may constrain and prefer cable types |
-| F4. Implicit default on | flip `disable_implicit_port_type_preference` to off; update the goldens the F2 report listed | ties go to the better cable |
-| E. Allow mixing | drop the MGD 1.0 "Cannot mix" check; proto and `MGD_README.md` comments; deprecate `is_inter_mesh_policy_relaxed` | MGDs may mix policies |
+| Area | What the PR changes |
+|---|---|
+| Solver | `EdgePolicy`, `EdgeDemand`, `set_default_edge_policy`, `set_edge_policy`, `add_required_edge_constraint`, `add_preferred_edge_constraint`, `resolve_edge_demands`, `merge` (section 3.2); SAT steps from 3.3; validator and DFS per edge; overloads without `ConnectionValidationMode`, old ones deprecated; `set_allow_unmatched_target_edges` becomes an alias; session `set_best_effort_edges_required` |
+| Solver, cable types | `ChannelClass`, `set_global_edge_channel_classes`, allowed classes, preferences at both scopes and both strengths (7.1); SAT pieces from 7.3; tiers in `MappingResult` |
+| MGD and MeshGraph | demand table and `get_inter_mesh_channel_demand` (section 4); requested maps carry policy and sum; `allowed_port_types` / `preferred_port_types` in `Channels` and `port_type_defaults` (7.5); drop the "Cannot mix" check and the merge-agreement fatals; proto and `MGD_README.md` comments; deprecate `is_inter_mesh_policy_relaxed` |
+| Mapper | intra-mesh callers set the default edge policy (3.4); seat solve and exit nodes read demands (3.5, 5); `PortTypeRules`, `add_port_type_constraints`, counts per `PortType`, `default_port_type_preference()` (7.6, 7.7); config overrides; `unique_shapes` gate |
+| Control plane | sections 6.1-6.5 (#49960); binding in cable-tier order; shortfall counts allowed channels |
 
-A1, A2, A3 go in that order; the A series and B are independent and can be reviewed in
-parallel. C needs A1 and B; D and E need C. The test suites can move off the mode argument
-after A2, in any order. The cable-type series F1-F4 needs A1 (it extends `EdgeDemand`)
-and is otherwise independent: F1 can be reviewed alongside A2, F3 needs D for the binding,
-and F4 needs the built-in order signed off.
+The ~190 existing uses of `ConnectionValidationMode::` keep compiling through the deprecated
+overloads, so the PR doesn't have to touch them.
+
+**Behaviour changes in the PR, and how they're reviewed:**
+
+- MGDs may mix policies, merged parts may disagree, and device-level and mesh-level
+  connections may coexist. Nothing accepted today is rejected.
+- Hierarchical MGDs whose graphs had different policies now honour each one (section 8). The
+  PR lists the affected textprotos in its description.
+- The implicit cable preference can change which tied mapping wins on systems whose
+  descriptors carry cabling data. A report test lists every golden that moves, and the PR
+  updates them, so the diff shows each change next to the cable tiers that caused it. The
+  built-in order (open question 10) is settled in review before merge.
 
 ### Tests
 
-- **Solver (A1, A2).** A required edge with no global edge is UNSAT. A preferred edge with no
+- **Solver.** A required edge with no global edge is UNSAT. A preferred edge with no
   global edge solves with a warning, and is realized when a placement allows it. A
   required-plus-preferred edge meets its minimum and prefers the total. Degree and AC-3
   pruning still apply to required edges when other edges are preferred. Property test over
@@ -685,28 +687,28 @@ and F4 needs the built-in order signed off.
   the same mappings and warnings as the matching mode argument (and `allow_unmatched` for
   `BEST_EFFORT`). Precedence, the count check, conflicting defaults in `merge`, and a mode
   argument that disagrees with the default all fail as section 3.2 says.
-- **Intra-mesh (A3).** Every intra-mesh golden in `TopologyMapperUtilsTest` and the PGD suites
+- **Intra-mesh.** Every intra-mesh golden in `TopologyMapperUtilsTest` and the PGD suites
   is unchanged; a mesh whose default would resolve an edge to `required == 0` fails.
-- **MGD (B).** A pair with a device-level STRICT 1 and a mesh-level RELAXED 2 gives demand
+- **MGD.** A pair with a device-level STRICT 1 and a mesh-level RELAXED 2 gives demand
   `{1, 2}`. Two mesh-level connections on one pair sum. Each existing textproto gives the same
   demands as its global policy.
-- **Mapper (C).** Three meshes: M0–M1 STRICT and M1–M2 RELAXED. A seating with no M1–M2 link
+- **Mapper.** Three meshes: M0–M1 STRICT and M1–M2 RELAXED. A seating with no M1–M2 link
   is accepted with a warning; one with no M0–M1 link is rejected. Merging a STRICT part with a
   RELAXED part succeeds. `unique_shapes` is off for mixed MGDs.
-- **Control plane (D).** The #49960 acceptance criteria. A STRICT boundary shortfall throws;
+- **Control plane.** The #49960 acceptance criteria. A STRICT boundary shortfall throws;
   a RELAXED one warns; a downed link on a RELAXED boundary is not rejected. Single-host and
   multi-host golden paths.
-- **Cable type (F).** Two seatings with equal link counts, one over the preferred type: the
+- **Cable type.** Two seatings with equal link counts, one over the preferred type: the
   preferred one wins. A STRICT edge whose only links are a disallowed type is UNSAT; the same
   edge under BEST_EFFORT is zero-link with a warning. `UNKNOWN` channels always count. A
   system with no cabling data maps exactly as today. Capacity beats cable tier (a RELAXED edge
   takes 4 QSFP-DD links over 2 WARP400 links), as section 7.2 orders them. The control plane
   binds preferred channels first.
-- **Implicit default (F2, F4).** With no MGD fields, a tie between a TRACE edge and a QSFP-DD
+- **Implicit default.** With no MGD fields, a tie between a TRACE edge and a QSFP-DD
   edge goes to TRACE; a PGD preferred pinning still beats the implicit order; an explicit
   `preferred_port_types` beats `port_type_defaults`, which beats the config, which beats the
-  built-in table; `disable: true` gives today's mapping. F2 adds a report test that lists every
-  golden the default would change.
+  built-in table; `disable: true` gives today's mapping. A report test lists every golden the
+  default changes.
 - **Regression.** `TopologyMapperUtilsTest`, `MeshGraphDescriptorTests`, control-plane
   suites and the CPU-only fabric suites, unchanged for uniform MGDs.
 
