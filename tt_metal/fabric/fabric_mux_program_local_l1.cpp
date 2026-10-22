@@ -5,34 +5,59 @@
 #include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"
 
 #include <bitset>
+#include <cstddef>
 
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_fabric::detail {
 
-uint32_t reserve_fabric_mux_program_local_l1(
-    tt::tt_metal::ProgramDescriptor& desc,
-    const tt::tt_metal::CoreRangeSet& mux_cores,
-    uint8_t cb_index,
-    uint32_t map_size_bytes) {
+namespace {
+
+template <std::size_t N>
+uint32_t lowest_free_id(const std::bitset<N>& used_ids) {
+    uint32_t id = 0;
+    while (id < N && used_ids.test(id)) {
+        id++;
+    }
+    return id;
+}
+
+uint8_t lowest_free_cb_index(
+    const std::bitset<NUM_CIRCULAR_BUFFERS>& used_cb_indices, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t cb_index = lowest_free_id(used_cb_indices);
+    TT_FATAL(
+        cb_index < NUM_CIRCULAR_BUFFERS,
+        "No circular buffer index is free on every fabric mux core {}; all {} are in use on at least one of them",
+        mux_cores.str(),
+        NUM_CIRCULAR_BUFFERS);
+    return static_cast<uint8_t>(cb_index);
+}
+
+}  // namespace
+
+FabricMuxProgramLocalL1 reserve_fabric_mux_program_local_l1(
+    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores, uint32_t map_size_bytes) {
     TT_FATAL(!mux_cores.empty(), "Fabric mux program-local L1 placement needs at least one mux core");
+    std::bitset<NUM_CIRCULAR_BUFFERS> used_cb_indices;
     for (const auto& cb : desc.cbs) {
         if (!cb.core_ranges.intersects(mux_cores)) {
             continue;
         }
         for (const auto& format : cb.format_descriptors) {
-            TT_FATAL(
-                format.buffer_index != cb_index,
-                "Fabric mux circular buffer index {} is already used on cores {}, which overlap mux cores {}",
-                cb_index,
-                cb.core_ranges.str(),
-                mux_cores.str());
+            used_cb_indices.set(format.buffer_index);
+        }
+        for (const auto& format : cb.remote_format_descriptors) {
+            used_cb_indices.set(format.buffer_index);
         }
     }
+    const uint8_t cb_index = lowest_free_cb_index(used_cb_indices, mux_cores);
 
     // One id for every mux core: the mux kernel's compile-time args, and its clients', are shared across them.
     std::bitset<tt::tt_metal::NUM_SEMAPHORES> used_semaphore_ids;
@@ -41,10 +66,7 @@ uint32_t reserve_fabric_mux_program_local_l1(
             used_semaphore_ids.set(semaphore.id);
         }
     }
-    uint32_t semaphore_id = 0;
-    while (semaphore_id < tt::tt_metal::NUM_SEMAPHORES && used_semaphore_ids.test(semaphore_id)) {
-        semaphore_id++;
-    }
+    const uint32_t semaphore_id = lowest_free_id(used_semaphore_ids);
     TT_FATAL(
         semaphore_id < tt::tt_metal::NUM_SEMAPHORES,
         "No semaphore id is free on every fabric mux core {}; all {} are in use on at least one of them",
@@ -62,15 +84,22 @@ uint32_t reserve_fabric_mux_program_local_l1(
             .page_size = map_size_bytes,
         }}},
     });
-    return semaphore_id;
+    return {.cb_index = cb_index, .l1_base_semaphore_id = semaphore_id};
 }
 
-uint32_t reserve_fabric_mux_program_local_l1(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& mux_cores,
-    uint8_t cb_index,
-    uint32_t map_size_bytes) {
+FabricMuxProgramLocalL1 reserve_fabric_mux_program_local_l1(
+    tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores, uint32_t map_size_bytes) {
     TT_FATAL(!mux_cores.empty(), "Fabric mux program-local L1 placement needs at least one mux core");
+    std::bitset<NUM_CIRCULAR_BUFFERS> used_cb_indices;
+    for (const auto& mux_range : mux_cores.ranges()) {
+        for (const auto& cb : program.impl().circular_buffers_on_corerange(mux_range)) {
+            for (const uint8_t buffer_index : cb->buffer_indices()) {
+                used_cb_indices.set(buffer_index);
+            }
+        }
+    }
+    const uint8_t cb_index = lowest_free_cb_index(used_cb_indices, mux_cores);
+
     // CreateSemaphore picks an id that is free on every core in mux_cores.
     const uint32_t semaphore_id = tt::tt_metal::CreateSemaphore(program, mux_cores, 0);
     tt::tt_metal::CreateCircularBuffer(
@@ -78,7 +107,7 @@ uint32_t reserve_fabric_mux_program_local_l1(
         mux_cores,
         tt::tt_metal::CircularBufferConfig(map_size_bytes, {{cb_index, tt::DataFormat::RawUInt32}})
             .set_page_size(cb_index, map_size_bytes));
-    return semaphore_id;
+    return {.cb_index = cb_index, .l1_base_semaphore_id = semaphore_id};
 }
 
 }  // namespace tt::tt_fabric::detail
