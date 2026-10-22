@@ -196,6 +196,15 @@ tolerance on GPU. Run it first on any new machine.
 Read a trace's prefill ids from `input_ids.safetensors`, not from the token cache: the cache holds the wikitext ids
 only, and a model with a prefix (metadata `prefix_ids`) prefilled those first.
 
+`backfill_input_ids.py` adds that file to traces generated before the engine wrote it, rebuilt from metadata.json and
+the token cache and checked against the trace's own `hidden/embed.safetensors` (equal ids must have equal embedding
+rows, different ids different ones: a prefix shift fails at once, no weights needed). It only adds the file, readable
+by all; metadata.json and SHA256SUMS are left as they are. Dry run unless `--write`:
+
+```
+python backfill_input_ids.py [<root>] [--only <hf-repo>[/isl<N>]] [--check-tokenizer] [--write]
+```
+
 `trim_trace.py` copies a trace keeping the layer hidden states of only some layers, always including decoder
 layers 0-4 (embed, final and every layer's cache stay complete), hard-linked when on the same filesystem, with metadata.json's inventory and a `hidden_layers`
 entry saying what was kept and why, and a fresh SHA256SUMS. At isl 56320 the 4-stream mHC hidden states dominate:
