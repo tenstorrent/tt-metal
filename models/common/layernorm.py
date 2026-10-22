@@ -219,7 +219,7 @@ class LayerNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of LayerNorm cannot output a sharded tensor"
 
-        if LayerNormTypes.LAYERNORM:
+        if self.norm_type == LayerNormTypes.LAYERNORM:
             if distributed:
                 x = self._distributed_layer_norm(
                     x,
