@@ -21,6 +21,13 @@ Vocabulary (design doc ``_agents/vllm_glm53/DESIGN.md``):
   row, so the rows replicate the same ``users_per_row`` prompts and the engine serves ``users_per_row``
   distinct requests (``rows_independent=False``). Per-row prefill ownership (the mesh README's "next
   step") lifts that to ``rows x users_per_row``; the table is written for both.
+* **wave** (``rows_independent``, design ``_agents/vllm_glm53/ROW_OWNERSHIP.md``): one prefill call of the
+  mesh model in which every mesh row runs one chunk of a DIFFERENT prompt (row-local attention and KDA
+  scan, the per-token expert collectives as in decode). ``WavePlanner`` turns the prefill rows of a vLLM
+  step into an ordered list of such waves (``WaveStep``) and of sequence-parallel single-prompt prefills
+  (``SPStep``: today's path, taken only while it is exact, ``SlotTable.sp_eligible``). Phase 1 of the
+  device side needs every member of a wave on the same slot index (``wave_affinity="user"``); phase 2
+  lifts that (``"row"``).
 """
 
 from __future__ import annotations
@@ -32,6 +39,8 @@ TILE = 32
 DENSE_PREFILL_ROWS = 2048  # the traced per-length prefill covers prompts up to this many tokens
 DEFAULT_DEVICE_PREFILL_CHUNK = 16384  # tokens per eager prefill chunk on the 8x4 (32 K exceeds the KDA owner cores)
 DEFAULT_BLOCK_SIZE = 32  # the latent page (TtLatentCache.block_size); the vLLM block size must match it
+DEFAULT_WAVE_ROWS = 2048  # rows per mesh row per wave (= today's 16 K chunk on 8 rows: memory-neutral)
+WAVE_AFFINITIES = ("user", "row")
 
 
 # ----------------------------------------------------------------------------------------------- geometry
@@ -45,11 +54,17 @@ class ServingGeometry:
     users_per_row: int
     max_seq_len: int
     partitioned: bool = True  # user-partitioned DSA cache (column c owns users [c*B/cols, (c+1)*B/cols))
-    rows_independent: bool = False  # per-row prefill ownership (not wired: SP prefill v1 fills slot u of every row)
+    rows_independent: bool = False  # per-row prefill ownership (waves); False = SP prefill v1 fills slot u of every row
     block_size: int = DEFAULT_BLOCK_SIZE
-    device_prefill_chunk: int = DEFAULT_DEVICE_PREFILL_CHUNK
+    device_prefill_chunk: int = DEFAULT_DEVICE_PREFILL_CHUNK  # the SP prefill's device chunk (tokens of one prompt)
     traced_prefill_lengths: tuple[int, ...] = ()
     pad_token_id: int = 0
+    # waves (rows_independent): rows per mesh row per wave (every member's chunk is walked in these), which members
+    # may share a wave ("user": the same slot index on distinct rows, phase 1; "row": distinct rows, phase 2) and
+    # whether a request still takes the sequence-parallel path while that is exact (``SlotTable.sp_eligible``)
+    wave_rows: int = DEFAULT_WAVE_ROWS
+    wave_affinity: str = "user"
+    sp_fallback: bool = True
 
     def __post_init__(self):
         if self.rows < 1 or self.cols < 1 or self.users_per_row < 1:
@@ -65,6 +80,12 @@ class ServingGeometry:
         unit = TILE * self.rows
         if self.device_prefill_chunk < unit or self.device_prefill_chunk % unit:
             raise ValueError(f"device_prefill_chunk {self.device_prefill_chunk} must be a positive multiple of {unit}")
+        if self.wave_affinity not in WAVE_AFFINITIES:
+            raise ValueError(f"wave_affinity {self.wave_affinity!r}: expected one of {WAVE_AFFINITIES}")
+        # a wave chunk below the dense range would put rows with dense prefixes of different lengths in one wave
+        # (not SPMD); at >= 2048 rows only a prompt's first chunk (start 0, no prefix) has dense rows
+        if self.wave_rows < DENSE_PREFILL_ROWS or self.wave_rows % TILE:
+            raise ValueError(f"wave_rows {self.wave_rows} must be a multiple of {TILE} and >= {DENSE_PREFILL_ROWS}")
 
     @property
     def users_per_chip(self) -> int:
@@ -86,9 +107,20 @@ class ServingGeometry:
 
     @property
     def chunk_unit(self) -> int:
-        """Prefill chunk alignment: a chunk start must be a multiple of 32 (the FunctionalDecoder contract) and
-        every chunk but the last a multiple of ``32 * rows`` (tile-aligned row slabs)."""
-        return TILE * self.rows
+        """Prefill chunk alignment: a chunk start must be a multiple of 32 (the FunctionalDecoder contract) and,
+        under the sequence-parallel prefill, every chunk but the last a multiple of ``32 * rows`` (tile-aligned
+        row slabs); a wave's per-row chunks need the 32-row alignment only."""
+        return TILE if self.rows_independent else TILE * self.rows
+
+    def wave_user_order(self) -> list[int]:
+        """The slot indices in the order the wave-affine placement fills them (``wave_affinity="user"``): index
+        ``k`` of column 0, index ``k`` of column 1, ... so consecutive slot indices sit on different columns
+        (decode balance) while every index is filled across all the rows before the next (one wave per burst)."""
+        if self.partitioned and self.cols > 1:
+            per_col = [list(self.users_of_column(c)) for c in range(self.cols)]
+        else:
+            per_col = [list(range(self.users_per_row))]
+        return [col[k] for k in range(len(per_col[0])) for col in per_col]
 
     def column_of(self, user: int) -> int:
         if not (0 <= user < self.users_per_row):
@@ -130,6 +162,9 @@ class SlotState:
     position: int = 0  # the position the next decode token of this slot is consumed at
     phase: str = "free"  # free | prefill | decode
     prefilled_to: int = 0  # tokens of the prompt written so far (chunked prefill bookkeeping)
+    # every chunk so far went through the sequence-parallel path (its replicas sit in the other rows' slot ``user``,
+    # so a later SP chunk finds the prefix there); a wave chunk exists on the owner row only and clears it for good
+    sp_only: bool = True
 
 
 class SlotTable:
@@ -140,6 +175,9 @@ class SlotTable:
     rows, the row with the fewest live users). Every column chip of a row serves its own users' sparse
     attention and holds their caches, so spreading requests over the columns balances per-chip decode
     work and keeps the next prompt's prefill scratch next to a column that has room.
+    Independent rows with ``wave_affinity="user"`` (phase 1 of the device side: every member of a wave
+    shares the slot index) fill one slot index across all the rows before the next
+    (``ServingGeometry.wave_user_order``), so a burst of up to ``rows`` arrivals forms one wave.
 
     A remap (``apply_remap``: ``row i reads the state at slot remap[i]``) permutes the table instead of
     moving device state; ``apply_moves`` is the same permutation in the plugin's ``old -> new`` dictionary
@@ -199,16 +237,27 @@ class SlotTable:
         if self._phys[logical] is not None:
             self.release(logical)
         col_loads, row_loads = self.column_loads(), self.row_loads()
-        rows = range(self.g.rows) if self.g.rows_independent else (0,)
-        best = None  # (key, row, user): column balance first, then row balance, then the lowest indices
-        for col in range(self.g.cols):
-            for row in rows:
-                for user in self.g.users_of_column(col):
+        best = None  # (key, row, user)
+        if self.g.rows_independent and self.g.wave_affinity == "user":
+            # wave-affine: the first slot index (column-interleaved order) with a free row, its lowest free row
+            for user in self.g.wave_user_order():
+                for row in range(self.g.rows):
                     if (row, user) not in self._occupied:
-                        key = (col_loads[col], row_loads[row], col, row, user)
-                        if best is None or key < best[0]:
-                            best = (key, row, user)
+                        best = (None, row, user)
                         break
+                if best is not None:
+                    break
+        else:
+            rows = range(self.g.rows) if self.g.rows_independent else (0,)
+            # column balance first, then row balance, then the lowest indices
+            for col in range(self.g.cols):
+                for row in rows:
+                    for user in self.g.users_of_column(col):
+                        if (row, user) not in self._occupied:
+                            key = (col_loads[col], row_loads[row], col, row, user)
+                            if best is None or key < best[0]:
+                                best = (key, row, user)
+                            break
         if best is None:
             raise RuntimeError(
                 f"no free physical slot for a new request: {len(self.live())} of {self.n} logical slots live, "
@@ -219,6 +268,18 @@ class SlotTable:
         self._phys[logical] = state
         self._occupied.add((row, user))
         return state
+
+    def sp_eligible(self, logical: int) -> bool:
+        """Whether the next prefill chunk of ``logical`` may take the sequence-parallel path exactly: always with
+        replicated rows (the only path there); with independent rows only when the policy allows it, every chunk
+        so far was SP (the prefix exists on every row) and slot ``user`` holds no live request on any other row
+        (the SP chunk writes replicas into those slots; a free slot's contents are garbage by contract)."""
+        s = self._require(logical)
+        if not self.g.rows_independent:
+            return True
+        if not self.g.sp_fallback or not s.sp_only:
+            return False
+        return not any((r, s.user) in self._occupied for r in range(self.g.rows) if r != s.row)
 
     def release(self, logical: int) -> None:
         self._check_logical(logical)
@@ -354,7 +415,23 @@ class PrefillPlanner:
         fits = [T for T in self.g.traced_prefill_lengths if T >= n_tokens]
         return min(fits) if fits else None
 
-    def plan(self, start: int, end: int, *, enable_trace: bool = True) -> PrefillPlan:
+    def captured_length(self, n_tokens: int) -> int | None:
+        """``traced_length`` when that trace is captured, else None."""
+        T = self.traced_length(n_tokens)
+        return T if T is not None and self._traced(T) else None
+
+    @staticmethod
+    def walk(start: int, end: int, chunk: int) -> tuple[tuple[int, int], ...]:
+        """``[start, end)`` in consecutive device chunks of at most ``chunk`` tokens."""
+        out = []
+        s0 = start
+        while s0 < end:
+            e = min(end, s0 + chunk)
+            out.append((s0, e))
+            s0 = e
+        return tuple(out)
+
+    def check_range(self, start: int, end: int) -> tuple[int, int]:
         start, end = int(start), int(end)
         if start < 0 or start % TILE:
             raise ValueError(f"prefill chunk start {start} must be a non-negative multiple of {TILE}")
@@ -362,19 +439,163 @@ class PrefillPlanner:
             raise ValueError(f"prefill chunk [{start}, {end}) is empty")
         if end > self.g.max_seq_len:
             raise ValueError(f"prefill chunk end {end} exceeds max_seq_len {self.g.max_seq_len}")
+        return start, end
+
+    def plan(self, start: int, end: int, *, enable_trace: bool = True) -> PrefillPlan:
+        start, end = self.check_range(start, end)
         n = end - start
         if start == 0 and enable_trace:
-            T = self.traced_length(n)
-            if T is not None and self._traced(T):
+            T = self.captured_length(n)
+            if T is not None:
                 return PrefillPlan("traced", ((0, end),), T)
-        chunk = self.g.device_prefill_chunk
-        chunks = []
-        s0 = start
-        while s0 < end:
-            e = min(end, s0 + chunk)
-            chunks.append((s0, e))
-            s0 = e
-        return PrefillPlan("eager", tuple(chunks))
+        return PrefillPlan("eager", self.walk(start, end, self.g.device_prefill_chunk))
+
+
+# ------------------------------------------------------------------------------------------- waves
+@dataclass(frozen=True)
+class WaveMember:
+    """One request's chunk inside a wave: its logical slot, its physical ``(row, user)`` and ``[start, end)``."""
+
+    logical: int
+    row: int
+    user: int
+    start: int
+    end: int
+
+    @property
+    def n_tokens(self) -> int:
+        return self.end - self.start
+
+
+@dataclass(frozen=True)
+class WaveCall:
+    """What the mesh model's ``prefill_wave`` / ``prefill_traced_wave`` receive: at most one member per mesh row
+    (rows without a member are idle: pad tokens into dummy targets on the device), every member's chunk padded to
+    ``t_pad`` rows (its valid end is ``end - start``), the uniform slot index ``user`` (phase 1) or None (phase 2:
+    each member's own), ``traced_length`` the captured per-row length that fits every member (all at ``start == 0``)
+    or None (eager). ``ids`` maps a member's row to its chunk's token ids (filled by the adapter; the planner leaves
+    it empty). The model returns ``{row: (first greedy token, last-token logits or None)}`` per member."""
+
+    rows: int
+    t_pad: int
+    members: tuple[WaveMember, ...]
+    user: int | None = None
+    traced_length: int | None = None
+    ids: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        rows_used = [m.row for m in self.members]
+        if not self.members or len(set(rows_used)) != len(rows_used):
+            raise ValueError(f"a wave needs at least one member and at most one per row (rows {rows_used})")
+        if any(m.n_tokens > self.t_pad for m in self.members):
+            raise ValueError(f"a member's chunk exceeds t_pad {self.t_pad}")
+        if self.user is not None and any(m.user != self.user for m in self.members):
+            raise ValueError(f"wave slot index {self.user} differs from a member's")
+
+    @property
+    def idle_rows(self) -> list[int]:
+        return [r for r in range(self.rows) if r not in {m.row for m in self.members}]
+
+    def member_of_row(self, row: int) -> WaveMember | None:
+        for m in self.members:
+            if m.row == row:
+                return m
+        return None
+
+
+@dataclass(frozen=True)
+class SPStep:
+    """One request through today's sequence-parallel prefill (``PrefillPlan``): exact only while the request is
+    ``SlotTable.sp_eligible``."""
+
+    logical: int
+    plan: PrefillPlan
+
+
+@dataclass(frozen=True)
+class WaveStep:
+    call: WaveCall
+
+
+class WavePlanner:
+    """The prefill rows of one vLLM step -> ordered device steps under per-row prefill ownership.
+
+    ``plan(pending)`` with ``pending = [(logical, start, end), ...]`` (every logical slot already placed in the
+    table, chunks contiguous with the slot's ``prefilled_to``): requests that may still take the sequence-parallel
+    path (``SlotTable.sp_eligible``) become ``SPStep``s in order; the rest are grouped into waves, every member's
+    range walked in ``wave_rows`` device chunks across consecutive waves (a member drops out when its range is
+    done). ``wave_affinity="user"``: one group per slot index (the rows are distinct by construction: one request
+    per ``(row, user)``); ``"row"``: one group, every row serving its pending requests one after the other (the
+    k-th wave takes the head of every row's queue). A wave whose members all start at 0 and fit a captured
+    per-row traced length is marked for the traced replay.
+    """
+
+    def __init__(self, geometry: ServingGeometry, slots: SlotTable, prefill_planner: PrefillPlanner):
+        self.g = geometry
+        self.slots = slots
+        self.pp = prefill_planner
+
+    def plan(self, pending: Sequence[tuple[int, int, int]], *, enable_trace: bool = True) -> list:
+        items = []
+        for logical, start, end in pending:
+            start, end = self.pp.check_range(start, end)
+            s = self.slots.physical(int(logical))
+            if s is None:
+                raise RuntimeError(f"logical slot {logical} holds no request: allocate it before planning its chunk")
+            items.append((int(logical), s, start, end))
+        if len({i[0] for i in items}) != len(items):
+            raise ValueError("a request appears twice in one prefill step")
+        steps: list = []
+        wave_items = []
+        for logical, s, start, end in items:
+            if self.slots.sp_eligible(logical):
+                steps.append(SPStep(logical, self.pp.plan(start, end, enable_trace=enable_trace)))
+            else:
+                wave_items.append((logical, s, start, end))
+        if not wave_items:
+            return steps
+        if self.g.wave_affinity == "user":
+            groups: dict[int, list] = {}
+            for it in wave_items:
+                groups.setdefault(it[1].user, []).append(it)
+            for user, group in groups.items():
+                steps.extend(self._waves(group, user, enable_trace))
+        else:
+            steps.extend(self._waves(wave_items, None, enable_trace))
+        return steps
+
+    def _waves(self, group: list, user: int | None, enable_trace: bool) -> list:
+        """Waves of one group: per row a queue of (logical, user, remaining chunks); every wave takes the next
+        chunk of every row's current request."""
+        queues: dict[int, list] = {}
+        for logical, s, start, end in group:
+            chunks = list(self.pp.walk(start, end, self.g.wave_rows))
+            queues.setdefault(s.row, []).append([logical, s.user, chunks])
+        out = []
+        while any(queues.values()):
+            members = []
+            for row in sorted(queues):
+                q = queues[row]
+                while q and not q[0][2]:
+                    q.pop(0)
+                if not q:
+                    continue
+                logical, u, chunks = q[0]
+                c0, c1 = chunks.pop(0)
+                members.append(WaveMember(logical=logical, row=row, user=u, start=c0, end=c1))
+            if not members:
+                break
+            n = max(m.n_tokens for m in members)
+            t_pad = -(-n // TILE) * TILE
+            traced = None
+            if enable_trace and all(m.start == 0 for m in members):
+                traced = self.pp.captured_length(n)
+            out.append(
+                WaveStep(
+                    WaveCall(rows=self.g.rows, t_pad=t_pad, members=tuple(members), user=user, traced_length=traced)
+                )
+            )
+        return out
 
 
 # ---------------------------------------------------------------------------------- sampling / sizing
