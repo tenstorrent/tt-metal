@@ -46,7 +46,7 @@ The design carries the policy per connection, end to end:
    it mapped that is up and on an allowed cable type, more than requested when the cabling has
    more. The control plane keeps channel selection and direction assignment as they are and
    drops its gather of port descriptors (section 10). Moving channel selection and directions
-   into the mapper too is a stretch goal, not planned (section 12).
+   into the mapper too is a stretch goal, not planned (section 13).
 
 So yes, STRICT / RELAXED can be a required constraint instead of a solver argument, for the
 whole solve or per edge. The MGD side and the solver side land together, in one PR (section 9):
@@ -204,7 +204,7 @@ search and `MappingValidator`; they read the resolved `EdgeDemand` per edge.
 | 2. AC-3 (`:887`) | skipped for the whole problem when soft; STRICT also checks channel counts (`:902, 918`) | runs over required arcs; an arc checks channels against its `required` minimum |
 | 3b. `prune_active_lit` (`:1364`) | guards the hard domains of a soft encoding | the same, built from the required-only domains |
 | 6. Adjacency support (`:1121`) | every edge hard, or every edge guarded by a realized literal; STRICT supports need the full count (`:1155`) | required edge: unguarded support clauses on global edges with at least `required` channels. Preferred-only edge: guarded by its realized literal |
-| Channel thresholds (`:1564`) | RELAXED: levels 1..count on every edge | levels `required+1 .. required+preferred`, only on edges with `preferred > 0` |
+| Channel thresholds (`:1564`) | RELAXED: levels 1..count on every edge, built but discarded (`:1861`), so never optimized | levels `required+1 .. required+preferred`, only on edges with `preferred > 0`, maximized as their own stage (11.5) |
 | Realized-edge objective (`:1867`, binary search at `:2033`) | over every edge when soft | over preferred-only edges |
 | Seam toggle (`set_allow_unmatched_target_edges`, `:1926`) | assume every realized literal | `set_best_effort_edges_required(bool)`: assume the preferred-only edges' realized literals, so `BEST_EFFORT` edges act as `RELAXED`; required edges are hard in both modes |
 
@@ -212,8 +212,10 @@ A uniform `STRICT` or `RELAXED` default produces exactly today's encoding for th
 uniform `BEST_EFFORT` default produces today's soft encoding. That is the property test in
 section 9.
 
-The objective order is unchanged: host cap and host objective, then the number of realized
-preferred edges, then channel thresholds, then preferred node hits.
+The order of today's objectives is unchanged: host cap and host packing, then preferred node
+hits, then the number of realized preferred-only edges. Preferred channels follow as a new
+stage; today the channel-threshold literals are built but never optimized. Section 11.5 has
+the full schedule.
 
 **Validation** (`MappingValidator`, `topology_solver.tpp:3800`) checks each edge against its
 demand: a missing required edge or a required-channel shortfall is an error; a missing
@@ -361,7 +363,7 @@ void set_default_allowed_channel_classes(std::set<ChannelClass> classes);
 bool set_edge_allowed_channel_classes(TargetNode a, TargetNode b, std::set<ChannelClass> classes);
 
 // Soft: preference tiers, best first. A class that is not listed is in the last tier.
-// PRIMARY ranks above preferred node hits; TIE_BREAK ranks below them (section 7.6).
+// PRIMARY is optimized before TIE_BREAK; both come after capacity and node hits (section 11.5).
 enum class PreferenceStrength { PRIMARY, TIE_BREAK };
 void set_default_channel_class_preference(
     std::vector<ChannelClass> best_first, PreferenceStrength strength = PreferenceStrength::PRIMARY);
@@ -399,10 +401,11 @@ struct EdgeDemand {
   actually use. The objective minimizes the number of target edges in the worst tier, then
   the next worst, and so on (lexicographic). Tiers read directly as "prefer A over B" and need
   no weight tuning; integer costs per class could be added later if tiers aren't enough.
-- **Objective order.** host cap and host objective, then realized preferred edges, then
-  channel thresholds, then **primary cable tiers** (what an MGD connection or mesh asks for),
-  then preferred node hits, then **tie-break cable tiers** (the implicit default, section
-  7.6). Capacity comes before cable type (open question 7).
+- **Objective order.** host cap and host packing, then preferred node hits, then realized
+  preferred-only edges, then preferred channels, then **primary cable tiers** (what an MGD
+  connection or mesh asks for), then **tie-break cable tiers** (the implicit default, section
+  7.6), then tie-break node preferences. The first three are today's order. Capacity comes
+  before cable type (open question 7). Section 11.5 has the encoding.
 - **`UNKNOWN`.** Descriptors without cabling data report `UNKNOWN`. An `UNKNOWN` channel is
   always allowed, so an allowed list can't silently drop every link on such a system, and it
   sits in the last tier, with a single warning per solve. When every channel is `UNKNOWN`,
@@ -629,10 +632,9 @@ Steps:
    changed.
 8. **Control plane.** Binding takes allowed channels in the same order: explicit first, then
    the tie-break table.
-9. **`unique_shapes`.** It collapses mappings on the same set of global nodes, but two such
-   mappings can use different edges and so different cables. With a preference active, the
-   enumerator keeps the best-tier representative: SAT finds it first under the objective, so
-   it is enough to record the first.
+9. **`unique_shapes`.** It lists every distinct footprint rather than the best one, so the
+   cable objectives are skipped there, as node hits are today. The cable choice is made by the
+   seat solve and the final intra-mesh solve, which don't use `unique_shapes` (section 11.5).
 
 **Goldens.** The implicit default changes which mapping wins a tie, so it can move goldens on
 systems whose descriptors carry cabling data. A report test lists every golden that changes,
@@ -663,8 +665,8 @@ it would only land code with no caller.
 
 | Area | What the PR changes |
 |---|---|
-| Solver | `EdgePolicy`, `EdgeDemand`, `set_default_edge_policy`, `set_edge_policy`, `add_required_edge_constraint`, `add_preferred_edge_constraint`, `resolve_edge_demands`, `merge` (section 3.2); SAT steps from 3.3; validator and DFS per edge; overloads without `ConnectionValidationMode`, old ones deprecated; `set_allow_unmatched_target_edges` becomes an alias; session `set_best_effort_edges_required` |
-| Solver, cable types | `ChannelClass`, `set_global_edge_channel_classes`, allowed classes, preferences at both scopes and both strengths (7.1); SAT pieces from 7.3; tiers in `MappingResult` |
+| Solver | `EdgePolicy`, `EdgeDemand`, `set_default_edge_policy`, `set_edge_policy`, `add_required_edge_constraint`, `add_preferred_edge_constraint`, `resolve_edge_demands`, `merge` (section 3.2); SAT steps from 3.3; `IndexedEdgeDemand` and resolution in `ConstraintIndexData` (11.1); the `SatObjective` schedule and the preferred-channel stage (11.5); validator and DFS per edge; overloads without `ConnectionValidationMode`, old ones deprecated; `set_allow_unmatched_target_edges` becomes an alias; session `set_best_effort_edges_required` |
+| Solver, cable types | `ChannelClass`, `set_global_edge_channel_classes`, allowed classes, preferences at both scopes and both strengths (7.1); usable-count and tier tables, tier literals, TIE_BREAK node preferences (11.2, 11.4); tiers in `MappingResult` |
 | MGD and MeshGraph | demand table and `get_inter_mesh_channel_demand` (section 4); requested maps carry policy and sum; `allowed_port_types` / `preferred_port_types` in `Channels` and `port_type_defaults` (7.5); drop the "Cannot mix" check and the merge-agreement fatals; proto and `MGD_README.md` comments; deprecate `is_inter_mesh_policy_relaxed` |
 | Mapper | intra-mesh callers set the default edge policy (3.4); seat solve and exit nodes read demands (3.5, 5); `PortTypeRules`, `add_port_type_constraints`, counts per `PortType`, `default_port_type_preference()` (7.6, 7.7); config overrides; `unique_shapes` gate |
 | Control plane | sections 6.1-6.5 (#49960); binding in cable-tier order; shortfall counts allowed channels |
@@ -682,6 +684,8 @@ overloads, so the PR doesn't have to touch them.
   descriptors carry cabling data. A report test lists every golden that moves, and the PR
   updates them, so the diff shows each change next to the cable tiers that caused it. The
   built-in order (open question 10) is settled in review before merge.
+- The preferred-channel stage (section 11.5) makes the SAT engine maximize channels, which
+  it never did. It can change which tied mapping wins, so the same report test covers it.
 
 ### Tests
 
@@ -715,6 +719,8 @@ overloads, so the PR doesn't have to touch them.
   `preferred_port_types` beats `port_type_defaults`, which beats the config, which beats the
   built-in table; `disable: true` gives today's mapping. A report test lists every golden the
   default changes.
+- **Encoding.** The brute-force cross-check, CNF parity, per-piece, objective-order and
+  limit tests in section 11.10.
 - **Regression.** `TopologyMapperUtilsTest`, `MeshGraphDescriptorTests`, control-plane
   suites and the CPU-only fabric suites, unchanged for uniform MGDs.
 
@@ -729,7 +735,7 @@ N/E/S/W, overflow onto Z). What goes away is the gather: ranks no longer read th
 from the PSD and send them to rank 0, because the mapper already has the full PSD on rank 0.
 
 Moving channel selection and direction assignment into the mapper as well is a stretch goal,
-in section 12. It is not planned for implementation.
+in section 13. It is not planned for implementation.
 
 ### 10.1 What the control plane does today
 
@@ -908,7 +914,7 @@ follow-up.
 | MPI | The gather of port descriptors goes away; the down-link report rides the existing chip-info message. The broadcast of the paired result stays |
 | Control plane code | Pairing and direction assignment are unchanged apart from the tier sort; the gather code is removed |
 | RELAXED boundaries | Get every allowed channel as a candidate, more than requested when the cabling has more, exactly as the gather gave today |
-| Cable preference | Trimmed links keep their preferred cables. Which links the round-robin picks is unchanged; that is a stretch-goal concern (section 12) |
+| Cable preference | Trimmed links keep their preferred cables. Which links the round-robin picks is unchanged; that is a stretch-goal concern (section 13) |
 | Single-host | Same algorithm as today, restricted to the table |
 | Testing | `collect_inter_mesh_candidates` is pure: CPU-only tests on PSD fixtures |
 | Debugging | The table can be dumped next to `asic_to_fabric_node_mapping_rank_*.yaml` as `inter_mesh_candidates.yaml`: every boundary, its channels with type and tier, and every excluded channel with its reason |
@@ -938,7 +944,292 @@ Tests:
 - **Single-host.** A cable missing from the table is never bound.
 - **Multi-host.** Every rank gets the same paired result.
 
-## 11. Open questions
+## 11. SAT encoding and constraint API in detail
+
+Sections 3 and 7 say what changes. This section is the implementation reference: how each
+constraint is set, how it reaches the SAT encoder, and the exact variables, clauses and
+objective stages. File references are to `topology_solver.hpp` (API and index types) and
+`topology_solver_sat.cpp` (encoder) unless noted.
+
+### 11.1 From API call to encoder
+
+A constraint goes through the same three layers as today's node constraints:
+`MappingConstraints` stores what the caller said, `ConstraintIndexData` (`:879`) resolves it
+to indices once per solve, and `TopologySatConstraintView` (`:1040`) hands it to the encoder.
+
+| API call | Stored in `MappingConstraints` | Resolved in `ConstraintIndexData` | Read by |
+|---|---|---|---|
+| `set_default_edge_policy(p)` | `std::optional<EdgePolicy> default_edge_policy_` | `edge_demands` (below) | support clauses, realized literals, channel indicators |
+| `set_edge_policy(a, b, p)` | `std::map<std::pair<T, T>, EdgePolicy> edge_policies_`, key `(min, max)` | `edge_demands` | same |
+| `add_required_edge_constraint(a, b, n)`, `add_preferred_edge_constraint(a, b, n)` | `std::map<std::pair<T, T>, EdgeDemand> explicit_edge_demands_`; calls add up | `edge_demands` | same |
+| `set_global_edge_channel_classes(a, b, counts)` | `std::map<std::pair<G, G>, std::map<ChannelClass, std::size_t>> global_edge_classes_` | `global_class_count` | usable-count table (11.2) |
+| `set_default_allowed_channel_classes`, `set_edge_allowed_channel_classes` | `default_allowed_classes_`, `edge_allowed_classes_` | `IndexedEdgeDemand::allowed` | usable-count table |
+| `set_default_channel_class_preference`, `set_edge_channel_class_preference` | one default and one per-edge map per `PreferenceStrength` | `IndexedEdgeDemand::primary`, `::tie_break` | tier table, tier literals |
+| `add_preferred_constraint(t, globals, strength)` (new optional `strength`, default `PRIMARY`) | `preferred_mappings_` (PRIMARY, today's) and `tie_break_preferred_mappings_` | `preferred_global_indices`, `tie_break_preferred_global_indices` | node-hit indicators |
+| `set_allow_unmatched_target_edges(true)` | deprecated alias: sets `default_edge_policy_ = BEST_EFFORT` | | |
+| session: `set_best_effort_edges_required(bool)` | live session flag, replaces `set_allow_unmatched_target_edges` on the session (`:1671`) | | assumptions in `next()` |
+
+New index types in `ConstraintIndexData`:
+
+```cpp
+// One per undirected target edge (t1 < t2) of the target graph.
+struct IndexedEdgeDemand {
+    std::size_t t1 = 0;
+    std::size_t t2 = 0;
+    std::size_t required = 0;
+    std::size_t preferred = 0;
+    std::vector<ChannelClass> allowed;    // sorted; empty = every class
+    std::vector<ChannelClass> primary;    // best first; empty = none
+    std::vector<ChannelClass> tie_break;  // best first; empty = none
+};
+std::vector<IndexedEdgeDemand> edge_demands;
+std::vector<std::map<std::size_t, std::size_t>> edge_demand_of;  // t1 -> t2 -> index into edge_demands
+
+// Global side: channels per class for each adjacent global pair; absent = all in class 0.
+std::vector<std::map<std::size_t, std::vector<std::pair<ChannelClass, std::size_t>>>> global_class_count;
+std::vector<std::vector<std::size_t>> tie_break_preferred_global_indices;
+```
+
+**Resolution** happens once, in the `ConstraintIndexData` constructor, for every target edge
+in `GraphIndexData::target_adj_idx`:
+
+1. Explicit numbers if any, else `set_edge_policy`, else the default, else `RELAXED`.
+2. A policy becomes numbers from the edge's channel count `c = target_conn_count[t1][t2]`:
+   STRICT `{c, 0}`, RELAXED `{1, c - 1}`, BEST_EFFORT `{0, c}`.
+3. Explicit numbers must satisfy `required + preferred == c`; class counts on a global pair must
+   add up to `global_conn_count`. A violation fails the solve with a message naming the edge,
+   through the existing `trivial_reason` path, before anything is encoded.
+4. Allowed classes and preferences: per edge if set, else the default.
+
+`merge` combines two `MappingConstraints` by the rules in section 3.2: explicit numbers add,
+conflicting policies or preferences on one edge are rejected.
+
+### 11.2 Precomputed tables
+
+Before encoding, for each target edge `e = (t1, t2)` and each candidate pair `(ga, gb)` with
+`ga` in the domain of `t1`, `gb` in the domain of `t2`, and `ga`, `gb` adjacent:
+
+- **usable count** `u_e(ga, gb)`: the channels of `(ga, gb)` in `e`'s allowed classes, plus
+  every `UNKNOWN` channel. With no class annotation it is `global_conn_count[ga][gb]`, today's
+  number.
+- **tier** `τ_e(ga, gb)`, once per strength that `e` has a preference at: sort the usable
+  channels by the preference (unlisted classes last), take the best `c_e`, and use the worst
+  tier among them. An edge pays for the cables it would actually use.
+
+The tables are sparse vectors per edge of `(i1, i2, u, τ_primary, τ_tie_break)`, built in the
+same loop that `topology_sat_encode_adjacency_support` (`:1116`) already runs over domain
+pairs, so they cost no more than the support clauses do.
+
+### 11.3 Hard constraints
+
+Unchanged: one assignment literal `x[t, g]` per target and domain global
+(`topology_sat_create_assignment_variables`, `:979`), exactly one per target (`:1012`),
+injectivity (`:1027`), resources, same-rank groups, node cardinality.
+
+| Piece | Today | Per edge |
+|---|---|---|
+| Domain degree filter (`topology_sat_build_initial_domains`, `:842`) | skipped when soft | `g` stays in `dom(t)` only if it has at least `deg_req(t)` neighbours, where `deg_req(t)` counts `t`'s edges with `required > 0` |
+| AC-3 (`topology_sat_apply_arc_consistency`, `:880`) | skipped when soft; STRICT compares multiplicity with `c` | arcs only for required edges; `ga` is supported if some `gb` in `dom(t2)` has `u_e(ga, gb) >= required_e` |
+| Required edge, `required_e >= 1` | STRICT: `multiplicity >= c`; RELAXED: adjacent | for each `ga` in `dom(t1)`: `¬x[t1,ga] ∨ ⋁ { x[t2,gb] : u_e(ga,gb) >= required_e }`, and the same from `t2`. Today's clause shape with `required_e` and `u` |
+| Preferred-only edge, `required_e == 0` | every edge guarded when soft | one realized literal `r_e`: `¬r_e ∨ ¬x[t1,ga] ∨ ⋁ { x[t2,gb] : u_e(ga,gb) >= 1 }`, both directions. Only these edges get `r_e` |
+| `prune_active_lit` (`:1364`) | guards the hard domains of a soft encoding | built from the domains that required edges pruned |
+
+A uniform STRICT default gives every edge `required = c`, which is today's STRICT clause
+exactly; uniform RELAXED gives `required = 1`, today's RELAXED clause; uniform BEST_EFFORT gives
+today's soft encoding.
+
+### 11.4 Indicators for the objectives
+
+**Realized edges.** The `r_e` literals above, with today's full-width counter
+(`topology_sat_build_at_least_threshold_lits`, `:512`): threshold literal `R[k]` true means at
+least `k` of the `r_e` are true.
+
+**Preferred channels.** For each edge with `preferred_e > 0` and each level
+`k = required_e + 1 .. required_e + preferred_e` (capped at 24 levels per edge, as today):
+
+```
+I[e,k]  ⇔  ⋁ { x[t1,ga] ∧ x[t2,gb] : u_e(ga,gb) >= k }      (topology_sat_define_indicator_as_or_of_pairwise_and, :1491)
+I[e,k+1] → I[e,k]                                              (chain, new; helps the counter)
+```
+
+and one counter over all `I` literals, giving thresholds `C[k]`. Maximizing `Σ I` is
+maximizing `Σ_e min(c_e, u_e)`, the same score DFS uses to order candidates.
+
+Today these indicators are built under RELAXED
+(`topology_sat_append_relaxed_channel_threshold_literals`, `:1564`), but the result `ch_lits`
+is discarded (`:1858-1862`), so the SAT engine never maximizes channels today. The per-edge
+design makes it a real objective stage (11.5). The existing limits stay: at most 512 pairs per
+indicator and 2048 indicators per solve; past them the stage is skipped with one debug line
+naming the edge, and the mapping is still valid.
+
+**Cable tiers.** For each edge with a preference at strength `S` whose candidate pairs span
+more than one tier, with tiers `0 .. L-1` (0 best), one literal per tier above the best:
+
+```
+z_S[e,j]  means "e uses a pair of tier >= j",  j = 1 .. L-1
+for each candidate pair with τ = τ_e(ga,gb) >= 1:   ¬x[t1,ga] ∨ ¬x[t2,gb] ∨ z_S[e,τ]
+z_S[e,j] → z_S[e,j-1]                               j = 2 .. L-1
+```
+
+Pairs in tier 0 add nothing, and an edge whose pairs all share one tier gets no literals. A
+BEST_EFFORT edge left with zero links selects no adjacent pair, so it isn't charged. One
+counter per `(S, j)` over the `z_S[·,j]` literals.
+
+**Node hits.** Today's PRIMARY indicators `p_t ⇔ ⋁ x[t,g]` over preferred globals
+(`topology_sat_append_preferred_hit_indicators`, `:1439`) stay as they are. TIE_BREAK node
+preferences get their own indicators `q_t`, built the same way, with a full-width counter.
+
+### 11.5 Objective schedule
+
+Today `Impl` holds a list of assumption stages (`s.stages`, `:1874-1883`): it tries host
+packing and preferred node hits together, then each alone, then neither, and keeps the first
+that solves. After that it maximizes realized edges by binary search on `R[k]` under the kept
+stage (`:2005-2084`). The design generalizes the second half into an ordered list:
+
+```cpp
+struct SatObjective {
+    enum class Kind : std::uint8_t { MAXIMIZE, MINIMIZE };
+    Kind kind;
+    std::vector<int> thresholds;  // thresholds[k-1] true => at least k counted literals true
+    std::string name;             // for PlacementSolveStats / MappingResult and logs
+};
+std::vector<SatObjective> objectives;  // in Impl, after `stages`
+```
+
+`next()` first runs today's stage fallback unchanged, then each objective in order. A
+MAXIMIZE objective binary-searches the largest `k` with `thresholds[k-1]` satisfiable; a
+MINIMIZE objective the smallest `k` with `¬thresholds[k]` satisfiable. The optimum is then
+**kept as an assumption** for every later objective, so the order is strictly lexicographic.
+Each probe tries the symmetry hint first, as today; an undecided probe counts as UNSAT, and two
+undecided probes end that objective with the best model found
+(`kZeroLinkMaximizeMaxUndecidedSolves`, today's budget).
+
+| Order | Objective | Kind | Status |
+|---|---|---|---|
+| 1 | host packing (`minimize_lit`) | assumption stage | today |
+| 2 | preferred node hits, at least the computed lower bound (`preferred_lit`) | assumption stage | today |
+| 3 | realized preferred-only edges, `R[k]` | MAXIMIZE | today |
+| 4 | preferred channels, `C[k]` | MAXIMIZE | new (indicators exist today, unused) |
+| 5 | PRIMARY cable tiers, worst tier first: one MINIMIZE per `j = L-1 .. 1` | MINIMIZE | new |
+| 6 | TIE_BREAK cable tiers, same way | MINIMIZE | new |
+| 7 | TIE_BREAK node hits, `q_t` | MAXIMIZE | new |
+
+**Why node hits stay above realized edges.** In today's code, node hits come first: the
+node-hit stage stays assumed while realized edges are maximized. Keeping today's results for
+today's inputs fixes rows 1 to 3. So PRIMARY cable tiers rank below node hits as well as below capacity, and
+TIE_BREAK below PRIMARY. Ranking PRIMARY tiers above node hits would mean moving node hits
+below realized edges, which changes the result of every soft solve that has pinnings (open
+question 11).
+
+**`unique_shapes`.** Today node hits are skipped under `unique_shapes` (`:1813`), because that
+mode lists every distinct footprint rather than the best one. Objectives 4 to 7 are skipped the
+same way. The candidate pools are listed with `unique_shapes` on, and the cable choice is made
+later, by the seat solve and by the final intra-mesh solve on the chosen footprint, neither of
+which uses `unique_shapes`. This replaces step 9 of section 7.7.
+
+**Cost when unused.** An objective with no literals is not added. With no classes, no
+preferences, and no tie-break node preferences, only objective 4 is new, and only for edges
+with `preferred > 0`. Objective 4 can change which tied mapping wins, so it is covered by the
+same golden report test as the implicit cable default (section 9).
+
+### 11.6 How the mapper sets the constraints
+
+**Intra-mesh solve** (`complete_intra_mesh_for_placement`, `topology_mapper_utils.cpp:1459`):
+
+```cpp
+MappingConstraints<FabricNodeId, PhysicalNodeId> intra = ...;  // pinnings, ranks, exit nodes as today
+intra.set_default_edge_policy(mesh_is_relaxed ? EdgePolicy::RELAXED : EdgePolicy::STRICT);
+add_port_type_constraints(intra, rules.for_mesh(mesh_id), channels_per_port_type);  // section 7.7
+auto result = solve_topology_mapping(logical_graph, physical_graph, intra);       // no mode argument
+```
+
+**Seat solve** (`build_sat_placement_constraints`,
+`physical_grouping_descriptor_matching.cpp:2732`; target `GlobalMeshId`, global
+`const Candidate*`):
+
+```cpp
+constraints.set_default_edge_policy(EdgePolicy::STRICT);
+for (const auto& [pair, demand] : inter_mesh_channel_demands) {    // section 4
+    if (demand.strict > 0) {
+        constraints.add_required_edge_constraint(pair.first, pair.second, demand.strict);
+    }
+    if (demand.relaxed > 0) {
+        constraints.add_preferred_edge_constraint(pair.first, pair.second, demand.relaxed);
+    }
+}
+for (const auto& [seats, links_per_type] : seat_pair_links_per_port_type) {  // AdjacencyMatrixCache, per type
+    constraints.set_global_edge_channel_classes(seats.first, seats.second, to_classes(links_per_type));
+}
+add_port_type_constraints(constraints, rules.for_seat_solve(), seat_pair_links_per_port_type);
+```
+
+The mesh-level target graph carries `strict + relaxed` parallel edges per pair, so the count
+check in 11.1 holds. The seat graph already carries one parallel edge per link
+(`build_sat_placement_seat_graph`, `:2723`), and the per-type counts add up to it. A pair with
+`strict == 0` is preferred-only and gets an `r_e`. The ladder's hard-seam rungs call
+`set_best_effort_edges_required(true)`, which assumes those `r_e`; STRICT pairs are hard in
+every rung.
+
+**Exit nodes** (`add_exit_node_constraints`, `topology_mapper_utils.cpp:955`) keep their
+required and cardinality node constraints. The minimum exit-pair count comes from the pair's
+`strict` part only, so a RELAXED part never forces an exit chip. The cable preference is a
+TIE_BREAK node preference:
+
+```cpp
+intra.add_preferred_constraint(fabric_node, exit_asics_in_best_tier, PreferenceStrength::TIE_BREAK);
+```
+
+**Stretch goal (section 13).** Its seat-solve conditions need no new encoding: placeable
+counts change the global edge multiplicities and class counts, and the per-seat filter is
+`add_forbidden_constraint`, which removes the seat from the domain (a unit clause through
+`refresh_constraints`, `:1900`). Only the pair-level block is a new clause, described there.
+
+### 11.7 DFS backend
+
+| Constraint | DFS |
+|---|---|
+| Required edge, allowed classes | the edge check compares `u_e` with `required_e`, where it compares the multiplicity with `c` under STRICT today |
+| Preferred-only edge | rejected with today's message: zero-link edges need SAT (`topology_solver.tpp:1354`) |
+| Preferred channels | candidate order by `Σ min(c_e, u_e)`, today's channel-match score using `u` |
+| Cable tiers, TIE_BREAK node hits | candidate order only, best tier first |
+
+### 11.8 Incremental sessions
+
+| Change | Without re-encoding? |
+|---|---|
+| node forbidden / required constraints | yes: unit clauses through `refresh_constraints` (`:1900`), as today |
+| `set_best_effort_edges_required` | yes: assumptions on `r_e`, replacing today's seam toggle (`:1924-1934`) |
+| blocking clauses (`exclude_mapping`) | yes, as today |
+| edge demands, allowed classes, preferences | no: they shape the clauses, so the session is rebuilt. The seat solve already rebuilds when its pools grow |
+
+### 11.9 Size
+
+| Piece | Variables | Clauses |
+|---|---|---|
+| Support clauses | none | unchanged: one per (edge, endpoint, domain global), each up to the size of the other domain |
+| Realized literals | one per preferred-only edge | unchanged shape, guarded |
+| Preferred-channel indicators | at most 24 per edge, 2048 per solve, plus one per qualifying pair | 3 per pair plus 1 + pairs per indicator, plus one chain clause per level |
+| Cable tiers | at most `L - 1` per edge with a preference | one ternary clause per candidate pair above tier 0, plus the chain |
+| Counters | `m × k` per counter | about `4 m k` per counter (`topology_sat_build_counter_matrix`, `:434`) |
+
+### 11.10 Tests for the encoding
+
+- **Brute-force cross-check.** Random small instances (up to 5 targets, 7 globals) with random
+  demands, classes, allowed sets and preferences at both strengths. Enumerate every injective
+  mapping, compute feasibility and the objective vector of 11.5, and check that SAT returns a
+  feasible mapping with the optimal vector, and UNSAT exactly when nothing is feasible.
+- **Encoding parity.** A uniform STRICT, RELAXED or BEST_EFFORT default produces the same
+  variables and clauses as the matching mode argument, apart from objective 4. Checked through
+  a CNF dump hook, a debug-only `TopologySatSolver` sink.
+- **Pieces.** A STRICT edge whose only pairs use disallowed classes is UNSAT; `UNKNOWN`
+  channels always count; a `z` literal fires only for its tier and the chain holds; an edge
+  whose pairs share one tier adds no literals.
+- **Order.** Hand-built cases where two objectives conflict, one per adjacent pair of rows in
+  11.5, check that the higher row wins.
+- **Limits.** Past the indicator caps the stage is skipped, the mapping is valid, and one debug
+  line names the edge.
+
+## 12. Open questions
 
 1. **Device-level RELAXED.** Should the named chips stay pinned as exit nodes (proposed), or
    should RELAXED also let the link move to other chips?
@@ -962,21 +1253,24 @@ Tests:
 10. **Built-in cable order.** Who signs off on `default_port_type_preference()`, and is
     "fewest connectors, shortest reach" the right rule? Does it need to depend on arch or
     cluster type?
-11. **Strength of the implicit default.** Tie-break below preferred node hits (proposed), or
-    above them, so cables can outrank a PGD-preferred layout?
+11. **Cable tiers versus node hits.** Today preferred node hits outrank realized edges
+    (section 11.5), so keeping today's results puts both cable strengths below node hits.
+    Keep that (proposed), or move node hits below realized edges so an explicit MGD cable
+    preference can outrank a PGD-preferred layout, at the cost of changing soft solves that
+    have pinnings?
 12. **Candidates per rank.** The table lives on rank 0, where the pairing runs. Should it also
     ride the chip-info broadcast, so every rank can log or dump it, or stay rank-0 only
     (proposed)?
-13. **Stretch goal (section 12).** If it is picked up: is the per-seat filter enough to keep
+13. **Stretch goal (section 13).** If it is picked up: is the per-seat filter enough to keep
     binding rejections rare on SC16 / SC20 and the dual- and quad-galaxy systems, or does it need
     capacity per exit chip from the start?
 
-## 12. Stretch goal (experimental): channel selection and direction assignment in the mapper
+## 13. Stretch goal (experimental): channel selection and direction assignment in the mapper
 
 **Status: optional, not planned for implementation.** Section 10 is the plan. This section
 records the design for doing more in the mapper, so it can be picked up later.
 
-### 12.1 Why both move together
+### 13.1 Why both move together
 
 Section 10 gives the mapper's allowed channels to the control plane and leaves the choice to
 the control plane's pairing. A natural next step is to let the mapper also **choose** the
@@ -999,7 +1293,7 @@ ignores directions can be legal in count and still bad in direction:
 All three are decided by which channels get which ports. So if the mapper chooses channels, it
 should assign directions in the same step, and the control plane only applies the result.
 
-### 12.2 What moves
+### 13.2 What moves
 
 | Concern | Section 10 | Stretch |
 |---|---|---|
@@ -1010,7 +1304,7 @@ should assign directions in the same step, and the control plane only applies th
 | Rank-0 pairing and its broadcast | control plane | gone: the plan rides the mapper's existing chip-info broadcast |
 | Apply to ETH channels, routing tables, shortfall policy, validation | control plane | control plane |
 
-### 12.3 API
+### 13.3 API
 
 ```cpp
 // tt-metalium/experimental/fabric/inter_mesh_binding.hpp
@@ -1037,7 +1331,7 @@ struct InterMeshBindingPlan {
     AnnotatedIntermeshConnections to_annotated_connections() const;  // what the control plane loads
 };
 
-// What a failed binding reports, so the mapper knows what to forbid (12.5).
+// What a failed binding reports, so the mapper knows what to forbid (13.5).
 struct InterMeshBindingFailure {
     MeshId a;
     MeshId b;
@@ -1067,7 +1361,7 @@ InterMeshBindingResult resolve_inter_mesh_binding(
 const InterMeshBindingPlan& TopologyMapper::get_inter_mesh_binding() const;
 ```
 
-### 12.4 How channels and directions are chosen
+### 13.4 How channels and directions are chosen
 
 `resolve_inter_mesh_binding` reuses the body of `pair_logical_intermesh_ports`, moved to the
 mapper, with the candidate table as input and three changes.
@@ -1087,7 +1381,7 @@ mapper, with the candidate table as input and three changes.
    its kind: `FOOTPRINT` when the boundary has fewer allowed channels than its STRICT demand
    (that depends only on which chips the two footprints cover), otherwise `PLACEMENT`.
 
-### 12.5 Keeping the seat solve and the binding in step
+### 13.5 Keeping the seat solve and the binding in step
 
 Once the binding can fail inside the mapper, the mapper should rarely propose a placement that
 fails it, and should recover when it does.
@@ -1177,7 +1471,7 @@ The change:
 systems show more than a handful of rejections per solve, the next step is to encode capacity
 per exit chip in the seat solve. Full channel selection still isn't needed for that.
 
-### 12.6 What the control plane keeps
+### 13.6 What the control plane keeps
 
 ```cpp
 void ControlPlane::generate_intermesh_connectivity() {
@@ -1196,11 +1490,11 @@ mapper), `forward_intermesh_connections_from_controller`, and
 `generate_intermesh_connections_on_local_host` are removed. `validate_requested_intermesh_connections`
 stays as an independent check of the mapper's output.
 
-### 12.7 When to pick it up
+### 13.7 When to pick it up
 
 Any one of these is a reason:
 
-- section 10 is in and bindings show the problems in 12.1: STRICT shortfalls that a
+- section 10 is in and bindings show the problems in 13.1: STRICT shortfalls that a
   different selection would meet, or one direction carrying a whole boundary;
 - a solve objective needs directions, for example keeping a ring's inter-mesh hops on
   consistent directions;
@@ -1211,7 +1505,7 @@ The cost to weigh: the mapper's output, its broadcast payload and its goldens th
 logical ports, so a change to the port layout (torus reservations, Z ports, fabric config)
 shows up as a mapping change.
 
-### 12.8 Implementation sketch (not scheduled)
+### 13.8 Implementation sketch (not scheduled)
 
 | Area | Change |
 |---|---|
@@ -1219,7 +1513,7 @@ shows up as a mapping change.
 | Solver | partial blocking clause in SAT; subset-match blocks in DFS; `exclude_partial_mapping` on the session |
 | Seat solve | placeable counts in `AdjacencyMatrix::build`; per-seat filter in `build_sat_placement_constraints`; `forbidden_seat_pairs_` and replay in `MasterSolve::restart`; `add_forbidden_seat_pair` |
 | Mapper | capacity-aware `add_exit_node_constraints`; binding after each intra-mesh success in `MultiMeshSolutionEnumerator::next`; failure kinds to pair block or seating exclusion; stats; plan in the chip-info broadcast; `get_inter_mesh_binding()`; `inter_mesh_binding.yaml` dump |
-| Control plane | the `generate_intermesh_connectivity` in 12.6; the removals |
+| Control plane | the `generate_intermesh_connectivity` in 13.6; the removals |
 
 Tests it would need:
 - **Parity.** With one candidate link per choice, the bindings equal section 10's pairing on
