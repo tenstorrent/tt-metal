@@ -8,12 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
-    AffineTransform,
-    distributed_prefix,
-    pack_transform,
-    transform_identity,
-)
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import distributed_prefix
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -57,15 +52,6 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     initial = 0.1 * torch.randn(_HEADS, _KEY, _VALUE, generator=generator)
     mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size))
 
-    def per_rank(host):
-        return ttnn.from_torch(
-            host.reshape((-1,) + host.shape[2:]),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=mapper,
-        )
-
     def replicated(host, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         return ttnn.from_torch(
             host,
@@ -79,12 +65,12 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
-    packed = pack_transform(AffineTransform(per_rank(a), per_rank(b)), transform_identity(mesh_device, _HEADS, _KEY))
-    # The prefix chains the complement form [E | B], E = A - I, as packed (BF16) for each rank.
-    packed_host = [
-        ttnn.to_torch(ttnn.get_device_tensors(packed)[rank * tp_size]).reshape(_HEADS, _KEY, _KEY + _VALUE)
-        for rank in range(sp_size)
-    ]
+    # The prefix chains each rank's complement form [E | B], E = A - I, packed in BF16 as reduce_affine_transforms
+    # and the packed summary head publish it.
+    packed_host = torch.cat([a - torch.eye(_KEY), b], dim=-1).bfloat16()
+    packed = ttnn.from_torch(
+        packed_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+    )
     entry, final = distributed_prefix(
         packed,
         replicated(initial, ttnn.float32),
