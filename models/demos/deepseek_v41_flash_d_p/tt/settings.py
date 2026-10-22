@@ -161,6 +161,22 @@ TABLE = {
         "off = the P.18 path. (a) changes the rounding of the hc mixes' exchange (exact fp32 instead of bf16: closer "
         "to the reference's fp32 mixes); the rest are data moves",
     ),
+    "STATIC_TABLES": Setting(
+        "on",
+        ("on", "off"),
+        "P.21 (owner comparison 2026-10-22, fusion report item 3): the sparse-attention table of the compressed layers. "
+        "on = ONE persistent table per KV source and slot (tt/compressor.AttnTable, allocated with the source's served "
+        "compressed cache): [compressed history in natural order (group j at row j), max_seq / r rows | window region "
+        "(128 carry + S chunk rows)] bf16 ROW_MAJOR, replicated; the compressor appends the chunk's rows with ONE "
+        "ttnn.experimental.slice_write (and a host load of the served cache writes the same rows), each compressed "
+        "layer slice_writes its [carry | chunk] window rows into the region (the layers of one source run in order "
+        "and reuse it), and the index list is [load-time window ids + the region's base | the top-k ids as they are]: "
+        "mesh_partition + concat (+ the compaction gather for starts < 128). No per-chunk gather / concat of the "
+        "history, no top-k -> table-row remap; the table's shape is the same in every chunk. off = the P.19 path "
+        "(the history gathered over the mesh per chunk, [window | history] concat, the fp32 integer remap). Data "
+        "moves only (the same bf16 rows and the same keys per query): not a precision switch. Memory: a replicated "
+        "copy of each source's compressed KV per slot (2x2 at 57,344: r2 28 MiB, r1 56 MiB a chip)",
+    ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
         "on",
