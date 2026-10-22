@@ -397,6 +397,10 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 }
 
+std::optional<tt::tt_metal::TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+}
+
 }  // namespace
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
@@ -1214,16 +1218,14 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_cache_batch_idx.has_value(),
         kv_pad_rotation_enabled,
         tensor_args.has_metadata(),
-        // The metadata accessors are baked into compile-time args; the validator pins one form, so this key is
-        // defense in depth should that pin ever relax. Only the config is keyed, never the value.
-        tensor_args.slot_id.has_value() ? tensor_args.slot_id->memory_config() : tt::tt_metal::MemoryConfig{},
-        tensor_args.kv_actual_isl.has_value() ? tensor_args.kv_actual_isl->memory_config()
-                                              : tt::tt_metal::MemoryConfig{},
-        // Presence changes how the kernels compile; the numeric attrs above hash as stable placeholders.
-        tensor_args.has_logical_n_tensor(),
-        tensor_args.has_logical_l_tensor(),
-        tensor_args.has_kv_valid_end(),
-        tensor_args.has_kv_valid_end() ? tensor_args.kv_valid_end->memory_config() : tt::tt_metal::MemoryConfig{},
+        // The metadata, logical_n / logical_l and kv_valid_end tensors' accessors are baked into compile-time args,
+        // and presence changes how the kernels compile, so each is keyed by its optional spec. Only the spec is keyed,
+        // never the value; the numeric attrs above hash as stable placeholders.
+        optional_spec(tensor_args.slot_id),
+        optional_spec(tensor_args.kv_actual_isl),
+        optional_spec(tensor_args.logical_n_tensor),
+        optional_spec(tensor_args.logical_l_tensor),
+        optional_spec(tensor_args.kv_valid_end),
         // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches
         // the folded index per dispatch, so keying the factors there would only multiply programs per layer.
         tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,
