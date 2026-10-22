@@ -278,7 +278,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
             const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
-                if ((h & 3) == 0) lpoll();  // (the logits / routing go between my packets: every 4th)
+                lpoll();  // (the logits / routing go between my packets: ahead of my next one)
 #ifdef SE_PROBE_RSSTAT
                 {
                     const uint32_t t = clk();

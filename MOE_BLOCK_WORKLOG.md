@@ -727,3 +727,10 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   relative, ~1/4 bf16 ulp) - far above fp32 accumulation; host models: bf16-rounded or chopped per-chip partials
   99.57%, bf16 accumulation per 8 K tiles 99.22% (K3) - the device's 99.10% is closer to a low-precision accumulation /
   product than to a partial-format issue. A second hw startup for the router's operands hung (reverted).
+
+### Port priority, step 1: the forwarders' landed count, the logits / routing polled before every RS packet
+- RAFwd: one shared landed count a forwarding port (+1 from a header-only atomic packet behind each forwarded packet's
+  data + flag); a poll reads that word and scans the 16 flags only when it moved (was: an invalidate + 16 flag reads
+  every call - why polling every RS packet cost ~2 GB/s of the end links). rs_send polls before every packet again.
+- GLM 287.8 us LoudBox, Galaxy-projected 260 (2.86x); K3 508.8, Galaxy 496 (2.92x) - within noise of before: the
+  routing packets' wait at the ports is not what binds (the slowest chip's chain end is).

@@ -153,6 +153,12 @@ FORCE_INLINE void ra_hop(C& conn, H hdr, uint32_t src_l1, uint32_t bytes, uint32
         conn.wait_for_empty_write_slot();
         conn.send_current_slot_non_blocking(src_l1 + off, sz, reinterpret_cast<uint32_t>(hdr));
     }
+    if (kind == 1) {  // (+1 on the next forwarder's landed count, behind the packet: its poll reads one word)
+        noc_async_writes_flushed();
+        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(nx, ny, flags + 16 * 16), 1, true});
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+    }
 }
 FORCE_INLINE uint32_t ra_bytes(uint32_t pb, uint32_t RA_M, uint32_t RA_HBP) {
     const uint32_t* nq = reinterpret_cast<const uint32_t*>(pb);
@@ -219,10 +225,10 @@ struct RASend {
 // hop once there (any order), the flag re-armed. args at r0: n, buffer base, flags, PCAP, slot tensor, c0, c1, planner
 // core 0 (x, y), mesh, then per slot (next chip, kind, x, y, slot)
 struct RAFwd {
-    uint32_t r0, n, fb, fl, PCAP, sl, c0, c1, px, py, mesh, left;
+    uint32_t r0, n, fb, fl, PCAP, sl, c0, c1, px, py, mesh, left, lastc;
     uint32_t sent[16];
     void init(uint32_t a) {
-        r0 = a; n = get_arg_val<uint32_t>(a); left = n;
+        r0 = a; n = get_arg_val<uint32_t>(a); left = n; lastc = 0;
         if (!n) return;
         fb = get_arg_val<uint32_t>(a + 1); fl = get_arg_val<uint32_t>(a + 2); PCAP = get_arg_val<uint32_t>(a + 3);
         sl = get_arg_val<uint32_t>(a + 4); c0 = get_arg_val<uint32_t>(a + 5); c1 = get_arg_val<uint32_t>(a + 6);
@@ -232,9 +238,18 @@ struct RAFwd {
     static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 10 + 5 * n : 1; }
     template <typename C, typename H>
     void poll(C& conn, H hdr, bool blocking, uint32_t RA_N, uint32_t RA_M, uint32_t RA_HBP, uint32_t MAXP) {
+        // (the landed count - one increment a packet, behind its data and flag - says when a scan of the flags can find
+        // something: a poll between the other streams' packets reads one word)
+        volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl + 16 * 16);
         while (left) {
             bool any = false;
             invalidate_l1_cache();
+            const uint32_t c = *ctr;
+            if (c == lastc) {
+                if (!blocking) return;
+                continue;
+            }
+            lastc = c;
             for (uint32_t k = 0; k < n; ++k) {
                 volatile tt_l1_ptr uint32_t* f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl + 16 * k);
                 if (sent[k] || *f == 0) continue;
@@ -249,6 +264,11 @@ struct RAFwd {
                 any = true;
             }
             if (!blocking && !any) return;
+        }
+        if (blocking && n) {  // (re-arm once every packet's count has landed)
+            while (*ctr < n) invalidate_l1_cache();
+            *ctr = 0;
+            lastc = 0;
         }
         noc_async_writes_flushed();
     }
@@ -281,7 +301,7 @@ void kernel_main() {
         rs.poll(conn, hdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
         conn.close();
     } else {
-        struct NoConn { void wait_for_empty_write_slot() {} void send_current_slot_non_blocking(uint32_t, uint32_t, uint32_t) {} } nc;
+        struct NoConn { void wait_for_empty_write_slot() {} void send_current_slot_non_blocking(uint32_t, uint32_t, uint32_t) {} void send_payload_flush_blocking_from_address(uint32_t, uint32_t) {} } nc;
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = nullptr;
         rs.poll(nc, hdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
     }

@@ -342,8 +342,8 @@ class HeadSE3:
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
             words = (
-                2 * GX * GY * 4 + 4 * 8 + 4 * 16
-            )  # (SE / latent hand-offs, the router cores', the routing's forwards)
+                2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4
+            )  # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
