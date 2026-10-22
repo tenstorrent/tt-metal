@@ -94,7 +94,9 @@ def test_verify_dependency_map_fail():
         "exist4": {"missing1", "missing2"},
     }
 
-    with pytest.raises(UnknownDependenciesError) as error:
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        UnknownDependenciesError
+    ) as error:
         _verify_dependency_map(dependency_map)
 
     assert error.value.missing == expected_missing
@@ -135,7 +137,9 @@ def test_compute_dependency_matrix_fail():
         "exist4": {"missing1", "missing2"},
     }
 
-    with pytest.raises(UnknownDependenciesError) as error:
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        UnknownDependenciesError
+    ) as error:
         _compute_dependency_map(
             exist1=lambda exist2, missing1: [],
             exist2=lambda missing2, exist3: [],
@@ -216,7 +220,9 @@ def test_compute_resolution_order_fail_circular():
     parameters = list(kwargs.keys())
     matrix = _compute_dependency_matrix(**kwargs)
 
-    with pytest.raises(CircularDependencyError) as error:
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        CircularDependencyError
+    ) as error:
         _compute_resolution_order(parameters, matrix)
 
     expected_cycle = ["exist1", "exist2", "exist4"]

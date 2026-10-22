@@ -18,10 +18,12 @@ while IFS= read -r FILE; do
         $TESTS/python_tests/test_pack.py|$TESTS/python_tests/test_eltwise_unary_datacopy.py)
             CHANGED=true
             ;;
-        # Functional tests, Quasar, ttsim, accuracy sweeps (deselected by "not accuracy") and docs.
+        # Functional tests, Quasar, ttsim, accuracy sweeps (deselected by "not accuracy"),
+        # host-only tests, and docs. None of these move a Wormhole or Blackhole perf number.
         $TESTS/python_tests/test_*.py|\
         tt_metal/tt-llk/tt_llk_quasar/**|$TESTS/sources/quasar/**|$TESTS/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**|\
         $TESTS/python_tests/accuracy/**|\
+        $TESTS/hardware_free/**|$TESTS/run_hardware_free.sh|\
         $TESTS/run_quasar_regression.sh|$TESTS/run_ttsim_regression.sh|$TESTS/render_ttsim_report.py|\
         *.md)
             ;;

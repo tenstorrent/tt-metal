@@ -52,6 +52,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-unit-tests-changed }}
   llk-perf-changed:
     value: ${{ steps.find-changed-files.outputs.llk-perf-changed }}
+  llk-hardware-free-changed:
+    value: ${{ steps.find-changed-files.outputs.llk-hardware-free-changed }}
   llk-ci-changed:
     value: ${{ steps.find-changed-files.outputs.llk-ci-changed }}
   ttsim-ci-changed:

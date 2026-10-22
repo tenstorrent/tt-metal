@@ -7,7 +7,7 @@ import json
 import pathlib
 import sys
 
-_PERF = pathlib.Path(__file__).parents[2] / "perf"
+_PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 from gate_slack_notify import (
     _describe,
