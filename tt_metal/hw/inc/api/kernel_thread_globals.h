@@ -114,6 +114,9 @@ inline void tensix_global_sem_init(uint32_t idx, uint32_t value) { *tensix_globa
 
 inline uint32_t tensix_global_sem_read(uint32_t idx) { return *tensix_global_sem(idx); }
 
+// A 4-byte store at +4 (POST_WR) posts `inc` (0..0xFFFF) without waiting for a read response.
+inline void tensix_global_sem_post(uint32_t idx, uint32_t inc) { *(tensix_global_sem(idx) + 1) = inc; }
+
 // A read at +4*(inc+8) posts `inc` (0..7) and returns the pre-increment value (same alias as the watcher ring
 // buffer). A post past 0xFFFF leaves the count unchanged and raises a semaphore error.
 inline uint32_t tensix_global_sem_fetch_add(uint32_t idx, uint32_t inc) {

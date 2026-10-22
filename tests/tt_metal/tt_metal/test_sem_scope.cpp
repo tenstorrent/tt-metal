@@ -50,6 +50,10 @@ protected:
     const std::string kernel_path_slot_probe = "tests/tt_metal/tt_metal/test_kernels/dataflow/sem_scope_slot_probe.cpp";
     const std::string kernel_path_compute = "tests/tt_metal/tt_metal/test_kernels/compute/test_compute_semaphore.cpp";
     const std::string kernel_path_cluster = "tests/tt_metal/tt_metal/test_kernels/compute/test_cluster_semaphore.cpp";
+    const std::string kernel_path_contention =
+        "tests/tt_metal/tt_metal/test_kernels/compute/test_cluster_sem_contention.cpp";
+    const std::string kernel_path_cross_cluster =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/test_cross_cluster_sem.cpp";
     uint32_t report_addr{0};
     uint32_t num_dms_{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
@@ -800,6 +804,712 @@ protected:
                 result.output.end(), l1.begin() + tile * kTileWords, l1.begin() + (tile + 1) * kTileWords);
         }
         return result;
+    }
+
+    // Mirrors the report layout of test_cluster_sem_contention.cpp.
+    static constexpr uint32_t kContentionParticipants = 16;  // 4 NEOs x 4 TRISCs
+    static constexpr uint32_t kContentionRecordWords = 16;
+    static constexpr uint32_t kContentionHistBuckets = 64;
+    static constexpr uint32_t kContentionHistBucketTicks = 4;
+    static constexpr uint32_t kContentionL1SemBaseWord = 352;
+    static constexpr uint32_t kContentionL1SemStrideWords = 4;
+    static constexpr uint32_t kContentionWindow = 8192;  // wall-clock ticks that each THROUGHPUT/VICTIM run lasts
+    enum ContentionRecord : uint32_t {
+        ACCESSES,
+        START,
+        END,
+        MAX_SEEN,
+        ZERO_GETS,
+        SAMPLES,
+        LAT_MIN,
+        LAT_MAX,
+        LAT_SUM,
+        PERF_COUNT,
+        PERF_TICKS
+    };
+    enum class ContentionMode : uint32_t { THROUGHPUT = 0, VICTIM = 1, BARRIER = 2, ACCUM = 3, SUBBANK_LOAD = 4 };
+    enum class ContentionOp : uint32_t { READ = 0, POST_GET = 1 };
+
+    struct ContentionRun {
+        ContentionMode mode = ContentionMode::THROUGHPUT;
+        ContentionOp op = ContentionOp::POST_GET;
+        uint32_t depth = 1;     // accesses each participant issues before it uses the first result
+        bool distinct = false;  // false: everyone on semaphore 0; true: participant p on semaphore p
+        uint32_t active_mask = 1;
+        uint32_t rounds = 0;     // BARRIER / ACCUM only
+        bool use_l1 = false;     // false: cluster semaphore register; true: 16B-aligned L1 word with RISC-V amoadd.w
+        uint32_t perf_ctrl = 0;  // GROUP_PERF_CTRL for each NEO's L1 client counter (l1_client_ctrl()); 0 = off
+    };
+
+    // GROUP_PERF_CTRL value: enable, subport [9:4], event [14:12] (Quasar performance counters overview, 6.5).
+    static constexpr uint32_t l1_client_ctrl(uint32_t subport, uint32_t event) {
+        return 1u | (subport << 4) | (event << 12);
+    }
+
+    struct ContentionResult {
+        std::vector<uint32_t> records;  // kContentionRecordWords per participant
+        std::vector<uint32_t> hist;
+        std::vector<uint32_t> final_values;
+        uint32_t at(uint32_t p, ContentionRecord field) const { return records[p * kContentionRecordWords + field]; }
+    };
+
+    // Fills one TRISC slot on every NEO before the next slot: participant p = NEO * 4 + TRISC.
+    static uint32_t spread_mask(uint32_t n) {
+        uint32_t mask = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            mask |= 1u << ((i % 4) * 4 + i / 4);
+        }
+        return mask;
+    }
+    // Fills NEO 0's four TRISCs, then NEO 1's, and so on.
+    static uint32_t packed_mask(uint32_t n) { return n >= 32 ? ~0u : (1u << n) - 1; }
+
+    ContentionResult run_contention(const ContentionRun& run) {
+        using namespace experimental;
+        const uint32_t record_words = kContentionParticipants * kContentionRecordWords;
+        const uint32_t report_words = record_words + 1 + kContentionHistBuckets + kContentionParticipants;
+        const uint32_t total_words = kContentionL1SemBaseWord + kContentionParticipants * kContentionL1SemStrideWords;
+        std::vector<uint32_t> zero(total_words, 0u);
+        slow_dispatch::WriteToL1(*mesh_device_, core, report_addr, zero);
+
+        const KernelSpecName compute{"contention"};
+        KernelSpec ks{
+            .unique_id = compute,
+            .source = kernel_path_contention,
+            .num_threads = 4,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"mode",
+                      "op",
+                      "depth",
+                      "distinct",
+                      "active_mask",
+                      "window",
+                      "rounds",
+                      "report_addr",
+                      "use_l1",
+                      "perf_ctrl"}},
+            .hw_config = ComputeHardwareConfig{},
+        };
+        ProgramSpec spec{
+            .name = "cluster_sem_contention",
+            .kernels = {ks},
+            .work_units = {{.name = "main", .kernels = {compute}, .target_nodes = core}},
+        };
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        ProgramRunArgs params;
+        params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+            .kernel = compute,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core,
+                {{"mode", static_cast<uint32_t>(run.mode)},
+                 {"op", static_cast<uint32_t>(run.op)},
+                 {"depth", run.depth},
+                 {"distinct", run.distinct ? 1u : 0u},
+                 {"active_mask", run.active_mask},
+                 {"window", kContentionWindow},
+                 {"rounds", run.rounds},
+                 {"report_addr", report_addr},
+                 {"use_l1", run.use_l1 ? 1u : 0u},
+                 {"perf_ctrl", run.perf_ctrl}}),
+        }};
+        SetProgramRunArgs(program, params);
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        std::vector<uint32_t> raw;
+        slow_dispatch::ReadFromL1(*mesh_device_, core, report_addr, report_words * sizeof(uint32_t), raw);
+        ContentionResult result;
+        if (raw.size() != report_words) {
+            ADD_FAILURE() << "contention report readback is short";
+            return result;
+        }
+        const auto hist_begin = raw.begin() + record_words + 1;
+        result.records.assign(raw.begin(), raw.begin() + record_words);
+        result.hist.assign(hist_begin, hist_begin + kContentionHistBuckets);
+        result.final_values.assign(hist_begin + kContentionHistBuckets, raw.end());
+        return result;
+    }
+
+    struct ContentionStats {
+        uint32_t active = 0;
+        uint64_t accesses = 0;
+        uint32_t span = 0;                 // first start to last end, wall-clock ticks
+        uint32_t start_skew = 0;           // first start to last start
+        double accesses_per_tick = 0;      // all active participants together
+        double mean_ticks_per_access = 0;  // per participant
+        double worst_ticks_per_access = 0;
+        double fairness = 0;  // Jain index of per-participant access counts: 1 = equal, 1/n = one gets all
+    };
+
+    // Statistics over the participants in `mask`.
+    static ContentionStats contention_stats(const ContentionResult& r, uint32_t mask) {
+        ContentionStats s;
+        if (mask == 0 || r.records.empty()) {
+            return s;
+        }
+        const uint32_t ref = r.at(__builtin_ctz(mask), START);
+        int64_t first_start = 0, last_start = 0, last_end = 0;
+        double sum = 0, sum_sq = 0;
+        for (uint32_t p = 0; p < kContentionParticipants; ++p) {
+            if (((mask >> p) & 1) == 0) {
+                continue;
+            }
+            const uint32_t accesses = r.at(p, ACCESSES);
+            const int64_t start = static_cast<int32_t>(r.at(p, START) - ref);
+            const int64_t end = static_cast<int32_t>(r.at(p, END) - ref);
+            first_start = s.active == 0 ? start : std::min(first_start, start);
+            last_start = s.active == 0 ? start : std::max(last_start, start);
+            last_end = s.active == 0 ? end : std::max(last_end, end);
+            const double per_access = accesses ? static_cast<double>(end - start) / accesses : 0.0;
+            s.mean_ticks_per_access += per_access;
+            s.worst_ticks_per_access = std::max(s.worst_ticks_per_access, per_access);
+            s.accesses += accesses;
+            sum += accesses;
+            sum_sq += static_cast<double>(accesses) * accesses;
+            ++s.active;
+        }
+        s.span = static_cast<uint32_t>(last_end - first_start);
+        s.start_skew = static_cast<uint32_t>(last_start - first_start);
+        s.accesses_per_tick = s.span ? static_cast<double>(s.accesses) / s.span : 0.0;
+        s.mean_ticks_per_access /= s.active;
+        s.fairness = sum_sq > 0 ? sum * sum / (s.active * sum_sq) : 0.0;
+        return s;
+    }
+
+    // Smallest latency (upper edge of its bucket) that `fraction` of the victim samples do not exceed.
+    static uint32_t hist_percentile(
+        const std::vector<uint32_t>& hist, double fraction, uint32_t bucket_ticks = kContentionHistBucketTicks) {
+        uint64_t total = 0;
+        for (uint32_t c : hist) {
+            total += c;
+        }
+        uint64_t seen = 0;
+        for (uint32_t b = 0; b < hist.size(); ++b) {
+            seen += hist[b];
+            if (seen >= fraction * total) {
+                return (b + 1) * bucket_ticks;
+            }
+        }
+        return static_cast<uint32_t>(hist.size()) * bucket_ticks;
+    }
+
+    // Timing is only printed. These are the checks that fail a run: a lost or doubled post or get shows up as
+    // a count that does not return to 0, a get that saw 0, or a count above what the participants can hold.
+    static void check_contention(const ContentionRun& run, const ContentionResult& r) {
+        ASSERT_EQ(r.final_values.size(), kContentionParticipants);
+        const uint32_t active = __builtin_popcount(run.active_mask);
+        for (uint32_t i = 0; i < kContentionParticipants; ++i) {
+            uint32_t expected = 0u;
+            if (run.mode == ContentionMode::BARRIER && i == 2) {
+                expected = run.rounds & 0xFFFFu;
+            } else if (run.mode == ContentionMode::ACCUM) {
+                if (run.distinct) {
+                    expected = ((run.active_mask >> i) & 1) ? (run.rounds & 0xFFFFu) : 0u;
+                } else if (i == 0) {
+                    expected = (active * run.rounds) & 0xFFFFu;
+                }
+            }
+            EXPECT_EQ(r.final_values[i], expected) << "semaphore " << i << " end count";
+        }
+        for (uint32_t p = 0; p < kContentionParticipants; ++p) {
+            const bool is_active = ((run.active_mask >> p) & 1) != 0;
+            if (!is_active) {
+                EXPECT_EQ(r.at(p, ACCESSES), 0u) << "inactive participant " << p << " ran";
+                continue;
+            }
+            EXPECT_GT(r.at(p, ACCESSES), 0u) << "participant " << p << " never ran";
+            EXPECT_EQ(r.at(p, ZERO_GETS), 0u) << "participant " << p << " got from a count of 0";
+            if (run.mode == ContentionMode::THROUGHPUT && run.op == ContentionOp::POST_GET) {
+                const uint32_t holders = run.distinct ? 1 : active;
+                EXPECT_LT(r.at(p, MAX_SEEN), holders * run.depth)
+                    << "participant " << p << " saw more posts than the participants can hold";
+            }
+        }
+    }
+
+    // Mirrors the report layout of test_cross_cluster_sem.cpp.
+    static constexpr uint32_t kCrossThreads = 6;  // user DMs per cluster; home DM thread 0 is the coordinator
+    static constexpr uint32_t kCrossRecordWords = 16;
+    static constexpr uint32_t kCrossHomeWord = kCrossThreads * kCrossRecordWords;
+    static constexpr uint32_t kCrossHistWord = 1600 / sizeof(uint32_t);
+    static constexpr uint32_t kCrossHistBuckets = 56;
+    static constexpr uint32_t kCrossHistBucketCycles = 16;
+    static constexpr uint32_t kCrossReportWords = 2048 / sizeof(uint32_t);  // through kHistOffset + 2 * 56 words
+    static constexpr uint32_t kCrossL1CounterWord = 1024 / sizeof(uint32_t);
+    static constexpr uint32_t kCrossLoadDoneOffset = 1056;  // compute load report, in bytes from report_addr
+    static constexpr uint32_t kCrossLoadDstOffset = 4096;   // home tile that the NoC loaders write
+    static constexpr uint32_t kCrossLoadEnd = 6144;         // end of the kernel's fixed L1 area (report, src, dst)
+    static constexpr uint32_t kCrossLoadMask = 0b110000;    // DM threads 4 and 5 on each node are the NoC loaders
+    static constexpr uint32_t kCrossLoadTiles = 1024;       // tiles each home NEO copies in the compute load
+    static constexpr uint32_t kCrossWindow = 20000;         // DM cycles that each round-trip client runs
+    enum CrossRecord : uint32_t {
+        X_OPS,
+        X_CYCLES,
+        X_LAT_MAX,
+        X_MAX_SEEN,
+        X_ZERO_GETS,
+        X_TIMEOUT,
+        X_LOAD_OPS,
+        X_LAT_MIN,
+        X_LAT_SUM,
+        X_READ_ATTEMPTS,
+    };
+    enum CrossHome : uint32_t {
+        X_FINAL_GS,
+        X_FINAL_L1,
+        X_DRAIN_CYCLES,
+        X_HOME_TIMEOUT,
+        X_LOAD_DONE_AT_END,
+        X_REMOTE_FINAL_GS,
+        X_REMOTE_FINAL_L1,
+        X_FINAL_GS2,
+        X_FINAL_L12,
+        X_PERF_COUNT_NEO0,  // L1 client event counts of home NEOs 0..3
+        X_PERF_COUNT_NEO1,
+        X_PERF_COUNT_NEO2,
+        X_PERF_COUNT_NEO3,
+        X_PERF_NEO_TICKS,  // NEO wall-clock ticks of the counter window
+        X_PERF_DM_CYCLES,  // coordinator rdcycle over the same window
+    };
+    enum class CrossMode : uint32_t {
+        RT_GS = 0,
+        RT_L1 = 1,
+        POSTED_GS = 2,
+        POSTED_L1 = 3,
+        BARRIER_GS = 4,
+        BARRIER_L1 = 5,
+        BARRIER2_GS = 6,
+        POSTED_GS_STATEFUL = 7,
+        BARRIER2_GS_PAUSED = 8,
+        BARRIER2_GS_L1REL = 9,
+        BARRIER2_GS_MCAST = 10,
+        BARRIER2_L1 = 11,
+        MCAST_GS = 12,
+        MCAST_GS_STATEFUL = 13,
+        MCAST_L1 = 14,
+        HANDOFF_T1_GS = 15,
+        HANDOFF_T1_L1 = 16,
+        HANDOFF_T2_GS = 17,
+        HANDOFF_T2_L1 = 18,
+        HANDOFF_T3_GS = 19,
+        HANDOFF_T3_L1 = 20,
+    };
+    enum class CrossLoadKind : uint32_t {
+        TILE_NOC = 0,
+        S4_POLL = 1,
+        L1_SUBBANK = 2,
+        S4_WRITE = 3,
+        S4_RW = 4,
+    };
+
+    struct CrossRun {
+        CrossMode mode = CrossMode::RT_GS;
+        uint32_t clients = 1;
+        bool local_only = false;              // false: remote cluster DMs first, then home DMs; true: home DMs only
+        uint32_t count = 0;                   // posts per client (POSTED) or rounds (BARRIER / HANDOFF)
+        uint32_t max_remote = kCrossThreads;  // cap on remote clients; the rest run on the home cluster
+        uint32_t poll_gap = 512;              // coordinator drain poll gap in DM cycles (POSTED); 0 = no drain poll
+        bool trisc_load = false;              // all 4 home NEOs run a pack/unpack datacopy in L1 during the run
+        bool trisc_l1_subbank = false;  // all 16 home TRISCs hammer kSubBankLoadOffset via local NEO L1 port atomics
+        bool noc_load = false;          // kCrossLoadMask DMs on both nodes run the background loader
+        CrossLoadKind load_kind = CrossLoadKind::TILE_NOC;
+        bool home_on_second_node = false;     // true: cluster 2 (second_node) is home, cluster 1 (core) is external
+        bool separate_counters = false;       // true: Producer 0 on counter 0, Producer 1 on counter 1
+        uint32_t custom_home_mask = 0;        // explicit active_mask on home cluster when nonzero
+        uint32_t custom_remote_mask = 0;      // explicit active_mask on external cluster when nonzero
+        uint32_t custom_load_mask = 0;        // explicit loader mask on home cluster when nonzero
+        uint32_t trisc_l1_mask = 0xFFFF;      // trisc_l1_subbank: which home TRISCs (NEO * 4 + TRISC) run the atomics
+        std::array<uint32_t, 4> perf_ctrl{};  // per home NEO GROUP_PERF_CTRL (l1_client_ctrl()); 0 = off
+    };
+
+    struct CrossResult {
+        std::vector<uint32_t> home;
+        std::vector<uint32_t> remote;
+        uint32_t home_mask = 0;
+        uint32_t remote_mask = 0;
+        uint32_t trisc_l1_ops = 0;
+        uint32_t at(bool on_home, uint32_t tid, CrossRecord field) const {
+            return (on_home ? home : remote)[tid * kCrossRecordWords + field];
+        }
+        uint32_t coordinator(CrossHome field) const { return home[kCrossHomeWord + field]; }
+        std::vector<uint32_t> hist(bool on_home, uint32_t p_idx) const {
+            const auto& buf = on_home ? home : remote;
+            const uint32_t first = kCrossHistWord + p_idx * kCrossHistBuckets;
+            return std::vector<uint32_t>(buf.begin() + first, buf.begin() + first + kCrossHistBuckets);
+        }
+    };
+
+    CrossResult run_cross_cluster(const CrossRun& run) {
+        using namespace experimental;
+        CrossResult result;
+        const bool use_custom_masks = (run.custom_home_mask != 0 || run.custom_remote_mask != 0);
+        uint32_t remote_clients = 0;
+        uint32_t home_clients = 0;
+        if (use_custom_masks) {
+            result.home_mask = run.custom_home_mask;
+            result.remote_mask = run.custom_remote_mask;
+            home_clients = __builtin_popcount(result.home_mask);
+            remote_clients = __builtin_popcount(result.remote_mask);
+        } else {
+            remote_clients = run.local_only ? 0 : std::min(run.clients, run.max_remote);
+            home_clients = run.clients - remote_clients;
+            result.remote_mask = (1u << remote_clients) - 1;
+            result.home_mask = ((1u << home_clients) - 1) << 1;  // thread 0 is the coordinator
+        }
+        if (home_clients >= kCrossThreads) {
+            ADD_FAILURE() << "at most " << kCrossThreads - 1 << " home clients";
+            return result;
+        }
+        const uint32_t load_mask =
+            run.custom_load_mask != 0 ? run.custom_load_mask : (run.noc_load ? kCrossLoadMask : 0u);
+        const uint32_t remote_load_mask = run.custom_load_mask != 0 ? 0u : load_mask;
+        if ((result.home_mask & load_mask) != 0 || (result.remote_mask & remote_load_mask) != 0) {
+            ADD_FAILURE() << "clients overlap the NoC loaders";
+            return result;
+        }
+        const uint32_t total_participants = use_custom_masks ? (home_clients + remote_clients) : run.clients;
+        const NodeCoord home_node = run.home_on_second_node ? second_node() : core;
+        const NodeCoord peer_node = run.home_on_second_node ? core : second_node();
+
+        std::vector<uint32_t> zero(kCrossReportWords, 0u);
+        slow_dispatch::WriteToL1(*mesh_device_, home_node, report_addr, zero);
+        slow_dispatch::WriteToL1(*mesh_device_, peer_node, report_addr, zero);
+        const CoreCoord home_virtual = mesh_device_->worker_core_from_logical_core(home_node);
+        const CoreCoord peer_virtual = mesh_device_->worker_core_from_logical_core(peer_node);
+
+        const KernelSpecName HOME{"cross_home"};
+        const KernelSpecName REMOTE{"cross_remote"};
+        const auto spec_for = [&](const KernelSpecName& name) {
+            return KernelSpec{
+                .unique_id = name,
+                .source = kernel_path_cross_cluster,
+                .num_threads = kCrossThreads,
+                .runtime_arg_schema = {.runtime_arg_names = {"mode",         "window",      "count",
+                                                             "is_home",      "active_mask", "participants",
+                                                             "report_addr",  "home_noc_x",  "home_noc_y",
+                                                             "poll_gap",     "home_count",  "remote_count",
+                                                             "peer_noc_x",   "peer_noc_y",  "load_mask",
+                                                             "load_dst",     "load_kind",   "separate_counters",
+                                                             "perf_ctrl_lo", "perf_ctrl_hi"}},
+                .hw_config = DataMovementHardwareConfig{},
+            };
+        };
+        ProgramSpec spec{
+            .name = "cross_cluster_sem",
+            .kernels = {spec_for(HOME), spec_for(REMOTE)},
+            .work_units =
+                {{.name = "wu_home", .kernels = {HOME}, .target_nodes = home_node},
+                 {.name = "wu_remote", .kernels = {REMOTE}, .target_nodes = peer_node}},
+        };
+
+        // The compute load is the four-NEO chain of run_cluster() with no synchronization, so it touches no
+        // semaphore while it runs. Its tiles start after load_neos padding tiles. The allocator base is
+        // report_addr, so the padding covers the DM kernel's fixed area below kCrossLoadEnd.
+        constexpr uint32_t load_neos = 4;
+        constexpr uint32_t tile_bytes = kTileWords * sizeof(uint32_t);
+        static_assert(load_neos * tile_bytes >= kCrossLoadEnd);
+        const uint32_t load_capacity = load_neos + 2 * kComputeMaxTiles + (load_neos - 1) * kComputeDepth;
+        const TensorSpec load_spec(
+            Shape{1, load_capacity * load_neos * kTileWords},
+            TensorLayout(
+                DataType::UINT32,
+                PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+        std::optional<MeshTensor> load_storage;
+        const KernelSpecName LOAD{"compute_load"};
+        const DFBSpecName load_tiles{"load_tiles"};
+        const TensorParamName load_backing{"load_backing"};
+        if (run.trisc_load) {
+            load_storage = MeshTensor::allocate_on_device(*mesh_device_, load_spec);
+            spec.kernels.push_back(KernelSpec{
+                .unique_id = LOAD,
+                .source = kernel_path_cluster,
+                .num_threads = load_neos,
+                .dfb_bindings = {StridedConsumerOf(load_tiles, "tiles_in"), ProducerOf(load_tiles, "tiles_out")},
+                .tensor_bindings = {{.tensor_parameter_name = load_backing, .accessor_name = "backing"}},
+                .compile_time_args =
+                    {{"num_neos", load_neos},
+                     {"depth", kComputeDepth},
+                     {"max_tiles", kComputeMaxTiles},
+                     {"closed_ring", 0u},
+                     {"nosync", 1u},
+                     {"skew_spins", 0u},
+                     {"local_capacity", load_capacity},
+                     {"omit_ready_wait", 0u},
+                     {"omit_space_wait", 0u},
+                     {"consumer_skew", 0u},
+                     {"batch_tiles", 1u}},
+                .runtime_arg_schema = {.runtime_arg_names = {"num_iters", "report_addr", "active_neos"}},
+                .hw_config = ComputeHardwareConfig{},
+            });
+            spec.dataflow_buffers.push_back(
+                {.unique_id = load_tiles,
+                 .entry_size = tile_bytes,
+                 .num_entries = load_capacity * load_neos,
+                 .data_format_metadata = tt::DataFormat::Float16_b,
+                 .borrowed_from = load_backing});
+            spec.tensor_parameters.push_back({.unique_id = load_backing, .spec = load_spec});
+            spec.work_units[0].kernels.push_back(LOAD);
+        } else if (run.trisc_l1_subbank) {
+            spec.kernels.push_back(KernelSpec{
+                .unique_id = LOAD,
+                .source = kernel_path_contention,
+                .num_threads = load_neos,
+                .runtime_arg_schema =
+                    {.runtime_arg_names =
+                         {"mode",
+                          "op",
+                          "depth",
+                          "distinct",
+                          "active_mask",
+                          "window",
+                          "rounds",
+                          "report_addr",
+                          "use_l1",
+                          "perf_ctrl"}},
+                .hw_config = ComputeHardwareConfig{},
+            });
+            spec.work_units[0].kernels.push_back(LOAD);
+        }
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        const auto args_for = [&](NodeCoord node, bool is_home, uint32_t mask, uint32_t node_load_mask) {
+            return MakeRuntimeArgsForSingleNode(
+                node,
+                {{"mode", static_cast<uint32_t>(run.mode)},
+                 {"window", kCrossWindow},
+                 {"count", run.count},
+                 {"is_home", is_home ? 1u : 0u},
+                 {"active_mask", mask},
+                 {"participants", total_participants},
+                 {"report_addr", report_addr},
+                 {"home_noc_x", static_cast<uint32_t>(home_virtual.x)},
+                 {"home_noc_y", static_cast<uint32_t>(home_virtual.y)},
+                 {"poll_gap", run.poll_gap},
+                 {"home_count", home_clients},
+                 {"remote_count", remote_clients},
+                 {"peer_noc_x", static_cast<uint32_t>(peer_virtual.x)},
+                 {"peer_noc_y", static_cast<uint32_t>(peer_virtual.y)},
+                 {"load_mask", node_load_mask},
+                 {"load_dst", report_addr + kCrossLoadDstOffset},
+                 {"load_kind", static_cast<uint32_t>(run.load_kind)},
+                 {"separate_counters", run.separate_counters ? 1u : 0u},
+                 {"perf_ctrl_lo", is_home ? (run.perf_ctrl[0] | run.perf_ctrl[1] << 16) : 0u},
+                 {"perf_ctrl_hi", is_home ? (run.perf_ctrl[2] | run.perf_ctrl[3] << 16) : 0u}});
+        };
+        ProgramRunArgs params;
+        params.kernel_run_args = {
+            ProgramRunArgs::KernelRunArgs{
+                .kernel = HOME, .runtime_arg_values = args_for(home_node, true, result.home_mask, load_mask)},
+            ProgramRunArgs::KernelRunArgs{
+                .kernel = REMOTE,
+                .runtime_arg_values = args_for(peer_node, false, result.remote_mask, remote_load_mask)},
+        };
+        if (run.trisc_load) {
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+                .kernel = LOAD,
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    home_node,
+                    {{"num_iters", kCrossLoadTiles},
+                     {"report_addr", report_addr + kCrossLoadDoneOffset},
+                     {"active_neos", load_neos}}),
+            });
+            params.tensor_args.emplace(load_backing, TensorArgument{*load_storage});
+        } else if (run.trisc_l1_subbank) {
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+                .kernel = LOAD,
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    home_node,
+                    {{"mode", static_cast<uint32_t>(ContentionMode::SUBBANK_LOAD)},
+                     {"op", static_cast<uint32_t>(ContentionOp::POST_GET)},
+                     {"depth", 4u},
+                     {"distinct", 0u},
+                     {"active_mask", run.trisc_l1_mask},
+                     {"window", 0u},
+                     {"rounds", 0u},
+                     {"report_addr", report_addr},
+                     {"use_l1", 1u},
+                     {"perf_ctrl", 0u}}),
+            });
+        }
+        SetProgramRunArgs(program, params);
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
+        RunProgram(mesh_device_, workload);
+
+        const uint32_t bytes = kCrossReportWords * sizeof(uint32_t);
+        slow_dispatch::ReadFromL1(*mesh_device_, home_node, report_addr, bytes, result.home);
+        slow_dispatch::ReadFromL1(*mesh_device_, peer_node, report_addr, bytes, result.remote);
+        if (run.trisc_l1_subbank) {
+            std::vector<uint32_t> load_done_words;
+            slow_dispatch::ReadFromL1(
+                *mesh_device_, home_node, report_addr + kCrossLoadDoneOffset, 2 * sizeof(uint32_t), load_done_words);
+            if (load_done_words.size() == 2) {
+                result.trisc_l1_ops = load_done_words[1];
+            }
+        }
+        if (result.home.size() * sizeof(uint32_t) != bytes || result.remote.size() * sizeof(uint32_t) != bytes) {
+            ADD_FAILURE() << "cross-cluster report readback is short";
+            result.home.assign(bytes / sizeof(uint32_t), 0u);
+            result.remote.assign(bytes / sizeof(uint32_t), 0u);
+        }
+        return result;
+    }
+
+    // Timing is only printed. These checks fail a run: a timeout, a lost or doubled update, a client that did not
+    // run, or a GET that saw 0.
+    static void check_cross_cluster(const CrossRun& run, const CrossResult& r) {
+        EXPECT_EQ(r.coordinator(X_HOME_TIMEOUT), 0u) << "coordinator timed out";
+        uint32_t expected_gs = 0;
+        uint32_t expected_l1 = 0;
+        uint32_t expected_gs2 = 0;
+        uint32_t expected_l12 = 0;
+        uint32_t expected_remote_gs = 0;
+        uint32_t expected_remote_l1 = 0;
+        switch (run.mode) {
+            case CrossMode::POSTED_GS:
+            case CrossMode::POSTED_GS_STATEFUL:
+            case CrossMode::BARRIER_GS: expected_gs = run.clients * run.count; break;
+            case CrossMode::POSTED_L1:
+            case CrossMode::BARRIER_L1: expected_l1 = run.clients * run.count; break;
+            case CrossMode::MCAST_GS:
+            case CrossMode::MCAST_GS_STATEFUL:
+                expected_gs = run.clients * run.count;
+                expected_remote_gs = expected_gs;
+                break;
+            case CrossMode::MCAST_L1:
+                expected_l1 = run.clients * run.count;
+                expected_remote_l1 = expected_l1;
+                break;
+            case CrossMode::BARRIER2_GS:  // one arrival per cluster with clients, per round
+            case CrossMode::BARRIER2_GS_PAUSED:
+            case CrossMode::BARRIER2_GS_L1REL:
+            case CrossMode::BARRIER2_GS_MCAST:
+                expected_gs = run.count * ((r.home_mask != 0) + (r.remote_mask != 0));
+                break;
+            case CrossMode::BARRIER2_L1: expected_l1 = run.count * ((r.home_mask != 0) + (r.remote_mask != 0)); break;
+            case CrossMode::HANDOFF_T1_GS:
+            case CrossMode::HANDOFF_T2_GS:
+            case CrossMode::HANDOFF_T3_GS:
+                if (run.clients == 2) {
+                    if (run.separate_counters) {
+                        expected_gs = run.count;
+                        expected_gs2 = run.count;
+                    } else {
+                        expected_gs = run.count * 0x0101u;
+                    }
+                } else {
+                    expected_gs = run.count;
+                }
+                break;
+            case CrossMode::HANDOFF_T1_L1:
+            case CrossMode::HANDOFF_T2_L1:
+            case CrossMode::HANDOFF_T3_L1:
+                if (run.clients == 2) {
+                    if (run.separate_counters) {
+                        expected_l1 = run.count;
+                        expected_l12 = run.count;
+                    } else {
+                        expected_l1 = run.count * 0x0101u;
+                    }
+                } else {
+                    expected_l1 = run.count;
+                }
+                break;
+            default: break;
+        }
+        EXPECT_EQ(r.coordinator(X_FINAL_GS), expected_gs) << "semaphore end count";
+        EXPECT_EQ(r.coordinator(X_FINAL_L1), expected_l1) << "L1 counter end count";
+        EXPECT_EQ(r.coordinator(X_FINAL_GS2), expected_gs2) << "semaphore 2 end count";
+        EXPECT_EQ(r.coordinator(X_FINAL_L12), expected_l12) << "L1 counter 2 end count";
+        EXPECT_EQ(r.coordinator(X_REMOTE_FINAL_GS), expected_remote_gs) << "remote semaphore end count";
+        EXPECT_EQ(r.coordinator(X_REMOTE_FINAL_L1), expected_remote_l1) << "remote L1 counter end count";
+        for (const bool on_home : {true, false}) {
+            const uint32_t mask = on_home ? r.home_mask : r.remote_mask;
+            for (uint32_t tid = on_home ? 1 : 0; tid < kCrossThreads; ++tid) {
+                const bool active = ((mask >> tid) & 1) != 0;
+                if (!active) {
+                    EXPECT_EQ(r.at(on_home, tid, X_OPS), 0u) << "inactive client ran, home=" << on_home << " t" << tid;
+                    continue;
+                }
+                EXPECT_EQ(r.at(on_home, tid, X_TIMEOUT), 0u) << "client timed out, home=" << on_home << " t" << tid;
+                EXPECT_GT(r.at(on_home, tid, X_OPS), 0u) << "client never ran, home=" << on_home << " t" << tid;
+                EXPECT_EQ(r.at(on_home, tid, X_ZERO_GETS), 0u) << "GET saw 0, home=" << on_home << " t" << tid;
+                if (run.mode == CrossMode::RT_GS) {
+                    EXPECT_LT(r.at(on_home, tid, X_MAX_SEEN), run.clients) << "count above the clients' posts";
+                }
+            }
+        }
+    }
+
+    struct CrossStats {
+        double mean_cycles_per_op = 0;
+        double worst_cycles_per_op = 0;
+        double ops_per_kcycle = 0;  // all clients together, assuming their windows overlap
+        double fairness = 0;        // Jain index of per-client op counts
+        uint32_t lat_max = 0;       // slowest single op pair (RT) seen by any client
+    };
+
+    static CrossStats cross_stats(const CrossResult& r) {
+        CrossStats s;
+        uint32_t n = 0;
+        double sum = 0, sum_sq = 0;
+        for (const bool on_home : {true, false}) {
+            const uint32_t mask = on_home ? r.home_mask : r.remote_mask;
+            for (uint32_t tid = 0; tid < kCrossThreads; ++tid) {
+                if (((mask >> tid) & 1) == 0) {
+                    continue;
+                }
+                const double ops = r.at(on_home, tid, X_OPS);
+                const double cycles = r.at(on_home, tid, X_CYCLES);
+                const double per_op = ops > 0 ? cycles / ops : 0.0;
+                s.mean_cycles_per_op += per_op;
+                s.worst_cycles_per_op = std::max(s.worst_cycles_per_op, per_op);
+                s.ops_per_kcycle += cycles > 0 ? 1000.0 * ops / cycles : 0.0;
+                s.lat_max = std::max(s.lat_max, r.at(on_home, tid, X_LAT_MAX));
+                sum += ops;
+                sum_sq += ops * ops;
+                ++n;
+            }
+        }
+        if (n > 0) {
+            s.mean_cycles_per_op /= n;
+            s.fairness = sum_sq > 0 ? sum * sum / (n * sum_sq) : 0.0;
+        }
+        return s;
+    }
+
+    // TestCrossClusterSemLoadCounters with the tile-copy load: all four home NEOs run the unsynchronized
+    // pack/unpack datacopy of test_cluster_semaphore.cpp while one remote client does its round trips. With
+    // counters_on, the coordinator arms each home NEO's L1 client counter (TRISC 0's port, FLEX_STALL_CARRY).
+    void run_tile_copy_load(bool counters_on) {
+        const uint32_t ctrl = counters_on ? l1_client_ctrl(0 /*subport*/, 4 /*event*/) : 0u;
+        for (const auto mode : {CrossMode::RT_GS, CrossMode::RT_L1}) {
+            const char* counter = mode == CrossMode::RT_GS ? "rt_sem" : "rt_l1";
+            CrossRun run{
+                .mode = mode,
+                .clients = 1,
+                .count = 16,
+                .max_remote = 4,
+                .trisc_load = true,
+                .load_kind = CrossLoadKind::TILE_NOC,
+                .perf_ctrl = {ctrl, ctrl, ctrl, ctrl}};
+            SCOPED_TRACE(std::string(counter) + (counters_on ? " counters on" : " counters off"));
+            const auto r = run_cross_cluster(run);
+            check_cross_cluster(run, r);
+            EXPECT_EQ(r.coordinator(X_LOAD_DONE_AT_END), 0u)
+                << "the compute load finished before the clients; raise kCrossLoadTiles";
+            if (ctrl != 0) {
+                EXPECT_GT(r.coordinator(X_PERF_NEO_TICKS), 0u) << "the coordinator did not report a counter window";
+            }
+            log_info(
+                LogTest,
+                "tile_copy_load,{},{},{:.1f}",
+                counter,
+                counters_on ? "counters_on" : "counters_off",
+                cross_stats(r).mean_cycles_per_op);
+        }
     }
 
     bool has_second_node() const {
@@ -1660,6 +2370,229 @@ TEST_F(SemScopeFixture, TestClusterSemaphoreBatchedCredits) {
     EXPECT_EQ(result.report[0], tiles);
     EXPECT_EQ(result.report[1], tiles);
     EXPECT_EQ(result.report[2], 0u);
+}
+
+// The ACCUM sweep of TestClusterSemContentionVsL1Atomic with the L1 client event counters on: where does an L1
+// atomic add spend its time as more TRISCs share the word? TRISC 0 of each NEO that has it active counts one event
+// of its NEO's TRISC L1 port around its own `rounds` adds (one subport and event per NEO per run, so each event is a
+// separate run). Events, from the Quasar performance counters overview, section 6.5:
+//   1 SBANK_POP           cycles in which super bank (subport % 4) of the TRISC port granted a request
+//   2 ISSUE_STALL_CARRY   lane cycles a request waited at that super bank's arbiter, one count per 4
+//   4 FLEX_STALL_CARRY    cycles this subport's flex FIFOs held a request they could not pass on, one count per 4
+//   5 FLEX_WORK_CARRY     requests this subport passed toward L1, one count per 4
+//   6 PENDING_REQS_CARRY  this subport's outstanding requests integrated over time, one count per 64
+//   7 ORDER_FIFO_ACTIVE   cycles with at least one of this subport's requests outstanding
+// Little's law: mean request latency = mean outstanding / request rate = (64 * e6) / (4 * e5) over equal windows.
+// Events 1 and 2 cover the whole port's super bank, so they are read only for the shared word, on the super bank
+// that a calibration run finds for it. The global-semaphore backend is the control: its adds must not use the port.
+// Prints `l1_counters_sbank,<super bank>,<pops with L1 adds>,<pops with global-semaphore adds>` for the
+// calibration, then `l1_counters,<backend>,<layout>,<n>,<ticks/add>,<port requests/add>,<request latency>,
+// <mean outstanding>,<busy fraction>,<flex stall/tick>,<sbank grant fraction>,<sbank stall/tick>`.
+TEST_F(SemScopeFixture, TestClusterSemContentionL1Counters) {
+    constexpr uint32_t rounds = 512;
+    constexpr uint32_t neos = 4;
+    struct Window {
+        uint64_t count = 0;
+        uint64_t ticks = 0;
+        uint32_t neos = 0;
+        double ticks_per_add = 0;
+    };
+    // Sums one event over the NEOs whose TRISC 0 was active.
+    const auto measure = [&](bool use_l1, bool distinct, uint32_t n, uint32_t subport, uint32_t event) {
+        const ContentionRun run{
+            .mode = ContentionMode::ACCUM,
+            .distinct = distinct,
+            .active_mask = spread_mask(n),
+            .rounds = rounds,
+            .use_l1 = use_l1,
+            .perf_ctrl = l1_client_ctrl(subport, event)};
+        const auto r = run_contention(run);
+        check_contention(run, r);
+        Window w;
+        for (uint32_t neo = 0; neo < neos; ++neo) {
+            const uint32_t p = neo * 4;
+            if (((run.active_mask >> p) & 1) == 0) {
+                continue;
+            }
+            EXPECT_GT(r.at(p, PERF_TICKS), 0u) << "TRISC 0 of NEO " << neo << " did not report a counter window";
+            w.count += r.at(p, PERF_COUNT);
+            w.ticks += r.at(p, PERF_TICKS);
+            ++w.neos;
+        }
+        w.ticks_per_add = contention_stats(r, run.active_mask).mean_ticks_per_access;
+        return w;
+    };
+
+    // Calibration: the super bank of the TRISC port whose grants rise when TRISC 0 adds to the L1 word.
+    uint32_t word_sbank = 0;
+    int64_t best_rise = 0;
+    for (uint32_t sb = 0; sb < 4; ++sb) {
+        const Window l1 = measure(true, false, 1, sb, 1);
+        const Window gs = measure(false, false, 1, sb, 1);
+        log_info(LogTest, "l1_counters_sbank,{},{},{}", sb, l1.count, gs.count);
+        const int64_t rise = static_cast<int64_t>(l1.count) - static_cast<int64_t>(gs.count);
+        if (rise > best_rise) {
+            best_rise = rise;
+            word_sbank = sb;
+        }
+    }
+    EXPECT_GT(best_rise, 0) << "no super bank of the TRISC port granted more while TRISC 0 added to the L1 word";
+
+    for (const bool use_l1 : {true, false}) {
+        for (const bool distinct : {false, true}) {
+            for (const uint32_t n : {1u, 2u, 4u, 8u, 12u, 16u}) {
+                SCOPED_TRACE(
+                    std::string(use_l1 ? "l1_atomic" : "global_sem") + (distinct ? " distinct" : " same") +
+                    " n=" + std::to_string(n));
+                const Window flex_stall = measure(use_l1, distinct, n, 0, 4);
+                const Window requests = measure(use_l1, distinct, n, 0, 5);
+                const Window outstanding = measure(use_l1, distinct, n, 0, 6);
+                const Window busy = measure(use_l1, distinct, n, 0, 7);
+                const auto rate = [](const Window& w, double scale) {
+                    return w.ticks ? scale * static_cast<double>(w.count) / static_cast<double>(w.ticks) : 0.0;
+                };
+                const double request_rate = rate(requests, 4);
+                const double mean_outstanding = rate(outstanding, 64);
+                const double requests_per_add =
+                    requests.neos ? 4.0 * static_cast<double>(requests.count) / (requests.neos * rounds) : 0.0;
+                double sbank_grants = 0;
+                double sbank_stall = 0;
+                if (!distinct) {
+                    sbank_grants = rate(measure(use_l1, distinct, n, word_sbank, 1), 1);
+                    sbank_stall = rate(measure(use_l1, distinct, n, word_sbank, 2), 4);
+                }
+                if (use_l1) {
+                    // Every add is one request on TRISC 0's port; the carries can lose up to one count each.
+                    EXPECT_NEAR(requests_per_add, 1.0, 0.05) << "L1 adds did not show up as TRISC port requests";
+                } else {
+                    EXPECT_LT(requests_per_add, 0.05) << "global-semaphore adds went through the L1 port";
+                }
+                log_info(
+                    LogTest,
+                    "l1_counters,{},{},{},{:.2f},{:.3f},{:.2f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}",
+                    use_l1 ? "l1_atomic" : "global_sem",
+                    distinct ? "distinct" : "same",
+                    n,
+                    requests.ticks_per_add,
+                    requests_per_add,
+                    request_rate > 0 ? mean_outstanding / request_rate : 0.0,
+                    mean_outstanding,
+                    rate(busy, 1),
+                    rate(flex_stall, 4),
+                    sbank_grants,
+                    sbank_stall);
+            }
+        }
+    }
+}
+
+// TestCrossClusterSemUnderLoad's TRISC L1-atomic loads with the home NEOs' L1 client event counters on (the
+// pack/unpack datacopy load is left out: with the counters on, it hung the emulator). The home DM coordinator
+// arms each NEO's counter before the clients start and reads it when they finish, so each run reports what the home
+// TRISC L1 ports did while one remote client ran its round trips. All four NEOs count the same subport and event
+// (section 6.5 of the Quasar performance counters overview; see TestClusterSemContentionL1Counters for the events):
+//   trisc_l1_atomic  16 TRISCs doing L1 atomics next to the L1 counter: TRISC 0's port (subport 0)
+//   probe_*          one TRISC (NEO 0, TRISC 0) doing the same atomics, alone, under NoC tile writes, and under NoC
+//                    atomics and reads on the counter's sub-bank (l1_subbank). If the probe's request latency rises
+//                    under l1_subbank but not under noc, the sub-bank is congested; if both rise alike, the NoC is.
+// The coordinator also reads the NEO wall clock next to its own rdcycle, which converts DM cycles to NEO ticks.
+// Prints `xcluster_counters,<counter>,<load>,<selection>,<subport>,<event>,<rt mean cycles/op>,<count NEO 0>,
+// <count NEO 1>,<count NEO 2>,<count NEO 3>,<neo ticks>,<dm cycles>`.
+TEST_F(SemScopeFixture, TestCrossClusterSemLoadCounters) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 clusters";
+    }
+    constexpr uint32_t rounds = 16;
+    struct Sel {
+        const char* name;
+        uint32_t subport;
+        uint32_t event;
+    };
+    const std::vector<Sel> trisc_port = {
+        {"flex_stall", 0, 4}, {"requests", 0, 5}, {"outstanding", 0, 6}, {"busy", 0, 7}};
+    struct Load {
+        const char* name;
+        bool trisc;
+        bool trisc_l1;
+        uint32_t trisc_l1_mask;
+        bool noc;
+        CrossLoadKind kind;
+        const std::vector<Sel>& sels;
+    };
+    const Load loads[] = {
+        {"none", false, false, 0, false, CrossLoadKind::TILE_NOC, trisc_port},
+        {"trisc_l1_atomic", false, true, 0xFFFF, false, CrossLoadKind::TILE_NOC, trisc_port},
+        {"probe", false, true, 0x1, false, CrossLoadKind::TILE_NOC, trisc_port},
+        {"probe_noc", false, true, 0x1, true, CrossLoadKind::TILE_NOC, trisc_port},
+        {"probe_l1_subbank", false, true, 0x1, true, CrossLoadKind::L1_SUBBANK, trisc_port},
+    };
+    for (const Load& load : loads) {
+        for (const auto mode : {CrossMode::RT_GS, CrossMode::RT_L1}) {
+            const char* counter = mode == CrossMode::RT_GS ? "rt_sem" : "rt_l1";
+            for (const Sel& sel : load.sels) {
+                const uint32_t ctrl = sel.event != 0 ? l1_client_ctrl(sel.subport, sel.event) : 0u;
+                CrossRun run{
+                    .mode = mode,
+                    .clients = 1,
+                    .count = rounds,
+                    .max_remote = 4,
+                    .trisc_load = load.trisc,
+                    .trisc_l1_subbank = load.trisc_l1,
+                    .noc_load = load.noc,
+                    .load_kind = load.kind,
+                    .perf_ctrl = {ctrl, ctrl, ctrl, ctrl}};
+                if (load.trisc_l1) {
+                    run.trisc_l1_mask = load.trisc_l1_mask;
+                }
+                SCOPED_TRACE(std::string(counter) + " load=" + load.name + " sel=" + sel.name);
+                const auto r = run_cross_cluster(run);
+                check_cross_cluster(run, r);
+                if (load.trisc || load.trisc_l1) {
+                    EXPECT_EQ(r.coordinator(X_LOAD_DONE_AT_END), 0u)
+                        << "the compute load finished before the clients; raise kCrossLoadTiles";
+                }
+                if (load.trisc_l1) {
+                    EXPECT_GT(r.trisc_l1_ops, 0u) << "TRISC L1-atomic loader never ran";
+                }
+                if (ctrl != 0) {
+                    EXPECT_GT(r.coordinator(X_PERF_NEO_TICKS), 0u) << "the coordinator did not report a counter window";
+                }
+                const auto s = cross_stats(r);
+                log_info(
+                    LogTest,
+                    "xcluster_counters,{},{},{},{},{},{:.1f},{},{},{},{},{},{}",
+                    counter,
+                    load.name,
+                    sel.name,
+                    sel.subport,
+                    sel.event,
+                    s.mean_cycles_per_op,
+                    r.coordinator(X_PERF_COUNT_NEO0),
+                    r.coordinator(X_PERF_COUNT_NEO1),
+                    r.coordinator(X_PERF_COUNT_NEO2),
+                    r.coordinator(X_PERF_COUNT_NEO3),
+                    r.coordinator(X_PERF_NEO_TICKS),
+                    r.coordinator(X_PERF_DM_CYCLES));
+            }
+        }
+    }
+}
+
+// The tile-copy load (all four home NEOs running a pack/unpack datacopy) with the L1 client counters off.
+TEST_F(SemScopeFixture, TestCrossClusterSemTileCopyLoadCountersOff) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 clusters";
+    }
+    run_tile_copy_load(/*counters_on=*/false);
+}
+
+// Known hang: the same run with the L1 client counters on hangs the emulator, which is why
+// TestCrossClusterSemLoadCounters leaves the tile-copy load out. Run with --gtest_also_run_disabled_tests.
+TEST_F(SemScopeFixture, DISABLED_TestCrossClusterSemTileCopyLoadCountersOn) {
+    if (!has_second_node()) {
+        GTEST_SKIP() << "needs >= 2 clusters";
+    }
+    run_tile_copy_load(/*counters_on=*/true);
 }
 
 }  // namespace tt::tt_metal
