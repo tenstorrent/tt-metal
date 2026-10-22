@@ -84,6 +84,8 @@ Request lengths and tuning remain fixed per trace layout. The host `prefill_leng
 
 The hybrid path fixes the total chunk capacity while allowing request count, spans, prefixes, and slots to change without recapture. It chooses the existing tuning by request span and attention type on the host, and caches those choices. SDPA programs compile on first use of a variant; warm the intended layouts before measuring steady-state latency. Metal checks newly loaded kernel binaries against every live trace's DRAM footprint and rejects overlaps before upload. Calls are enqueued on CQ0 without synchronization between layers.
 
+For the CP8/TP4 model's global attention, both legacy and striped paths use all four fields from `tt/attention/ring_sdpa_configs.json`, indexed by request span. A missing table or chunk entry is an error. Sliding-window attention has separate configuration selection.
+
 The caller owns the token and RoPE-position buffers and updates their contents, together with `model.packed_prefill_metadata`, before `hybrid.run()`. Their addresses must remain fixed. Call `hybrid.capture()` once after staging the initial batch, and `hybrid.close()` before closing the device. `run(blocking=False)` returns an owned output buffer that the next run overwrites. Shared DRAM boundary buffers keep trace inputs alive independently of eager allocation; projection and residual results are copied into those buffers inside the traces. The full packed attention output is cleared on every replay to handle changing unused capacity.
 
 The full-model hybrid sanity changes from one full-chunk request to five mixed requests and then two partial requests, including rotated prefixes, while reusing the same 120 traces:
@@ -113,6 +115,8 @@ The test measures only these two paths at prefixes 0 and 253952, using the same 
 Results are saved under `investigations/gemma4_hybrid_8k_comparison`; see the [recorded comparison](../../../investigations/gemma4_hybrid_8k_comparison/summary.md). Configure `GEMMA4_PERF_OUTPUT` or `GEMMA4_PERF_DEVICE_REPEATS` as needed. To change the batch capacity, set `GEMMA4_PERF_CHUNK_SIZE` and comma-separated `GEMMA4_PERF_REQUEST_LENGTHS` together; request lengths must be multiples of 256 and fill the batch exactly.
 
 Set `GEMMA4_PERF_PROFILE=1` to retain native program timestamps and kernel sources on each replay's longest-span chip. The [8k hybrid profile](../../../investigations/gemma4_hybrid_8k_profile/findings.md) provides a device-time breakdown, an interactive timeline, a Perfetto export, and capture/analysis commands for the same four timing cells.
+
+The [JSON-tuned rerun](../../../investigations/gemma4_hybrid_8k_profile/tuned/findings.md) repeats those four cells after applying the global table to striped requests. Benchmark results also record the selected hybrid SDPA program configurations.
 
 The full-model packed sanity test uses five requests totaling 4096 tokens with fixed, nonzero rotated prefixes:
 

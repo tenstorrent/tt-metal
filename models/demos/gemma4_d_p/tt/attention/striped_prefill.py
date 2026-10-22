@@ -11,17 +11,17 @@ def striped_prefill_program_config(attention, length, num_heads, cache_rows):
     mesh, ccl = attention.mesh_config, attention.ccl_manager
     global_attention = not attention.config.is_sliding
     local_length = length // mesh.cp_degree
-    q_chunk = next(size for size in (128, 64, 32) if local_length % size == 0)
-    k_chunk = next(size for size in ((256, 128, 64, 32) if global_attention else (32,)) if cache_rows % size == 0)
     grid = ccl.compute_grid_size
     num_cores = (grid.x - 1) * grid.y
-    splits = 3 if num_heads * (local_length // q_chunk) * 3 <= num_cores else 1
-    segmented = False
-    # Keep ragged slabs on divisor-Q tuning; legacy's policy is validated on 128-row-aligned slabs.
-    if global_attention and local_length % 128 == 0:
-        q_chunk, _, splits, segmented = ring_sdpa_chunk_sizes(
-            local_length, sliding=False, num_heads=num_heads, num_cores=num_cores
+    if global_attention:
+        q_chunk, k_chunk, splits, segmented = ring_sdpa_chunk_sizes(
+            local_length, sliding=False, num_heads=num_heads, num_cores=num_cores, use_tuned_configs=True
         )
+    else:
+        q_chunk = next(size for size in (128, 64, 32) if local_length % size == 0)
+        k_chunk = 32
+        splits = 3 if num_heads * (local_length // q_chunk) * 3 <= num_cores else 1
+        segmented = False
     return ring_prefill_program_config(
         mesh.device,
         ccl,

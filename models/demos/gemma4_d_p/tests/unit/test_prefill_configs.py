@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 import ttnn
-from models.demos.gemma4_d_p.tt.attention import ring_prefill
+from models.demos.gemma4_d_p.tt.attention import ring_prefill, striped_prefill
 from models.demos.gemma4_d_p.tt.attention.operations import projection_math_fidelity
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, short_m_sharded_memcfg
@@ -35,9 +35,6 @@ GRID = SimpleNamespace(x=11, y=10)
         (64, False, (64, 256, 4, False)),
         (160, False, (96, 224, 4, False)),
         (1536, False, (128, 256, 1, True)),
-        (1664, False, (128, 256, 1, True)),
-        (2048, False, (96, 256, 1, False)),
-        (4096, False, (96, 256, 1, False)),
     ],
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
@@ -53,13 +50,31 @@ def ring_sdpa_table_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("contents", [None, "{", "null", "[]", "{}", '{"configs": []}'])
-def test_ring_sdpa_table_unavailable_uses_heuristic(ring_sdpa_table_file, contents):
+def test_ring_sdpa_table_unavailable_fails(ring_sdpa_table_file, contents, expect_error):
     if contents is not None:
         ring_sdpa_table_file.write_text(contents)
-    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (96, 256, 1, True)
-    # 112 Q units on 110 cores: the op refuses both a K split and segments, so neither is requested.
-    assert ring_sdpa_chunk_sizes(448, False, use_tuned_configs=True) == (32, 256, 1, False)
+    with expect_error(ValueError, "Missing tuned global SDPA config for 6144 tokens"):
+        ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True)
     assert ring_sdpa_chunk_sizes(448, True, use_tuned_configs=True) == (128, 128, 3, False)
+
+
+def test_ring_sdpa_table_missing_chunk_fails(ring_sdpa_table_file, expect_error):
+    ring_sdpa_table_file.write_text(json.dumps({"configs": {"8192": [96, 256, 1, True]}}))
+    with expect_error(ValueError, "Missing tuned global SDPA config for 2560 tokens"):
+        ring_sdpa_chunk_sizes(320, False, use_tuned_configs=True)
+
+
+@pytest.mark.parametrize("length", range(256, 12289, 256))
+def test_striped_global_uses_all_tuned_fields(length, monkeypatch):
+    attention = SimpleNamespace(
+        mesh_config=SimpleNamespace(cp_degree=8, device=None),
+        ccl_manager=SimpleNamespace(compute_grid_size=SimpleNamespace(x=12, y=10)),
+        config=SimpleNamespace(is_sliding=False, head_dim=512),
+    )
+    monkeypatch.setattr(striped_prefill, "ring_prefill_program_config", lambda *args, **kwargs: (args, kwargs))
+    args, kwargs = striped_prefill.striped_prefill_program_config(attention, length, num_heads=8, cache_rows=32768)
+    expected = ring_prefill._load_global_ring_sdpa_configs()[length]
+    assert (*args[3:5], kwargs["max_k_splits"], kwargs["segmented_accumulation"]) == expected
 
 
 def test_ring_sdpa_table_is_relative_to_module_and_cached(ring_sdpa_table_file, tmp_path, monkeypatch):

@@ -293,9 +293,13 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, grid=(11, 10), *,
         return q_chunk, 128, _k_splits(num_heads * -(-q_slab_tokens // q_chunk), grid), False
 
     if use_tuned_configs and num_heads == 8 and tuple(grid) == (11, 10):
-        tuned = _load_global_ring_sdpa_configs().get(q_slab_tokens * 8)
-        if tuned is not None:
-            return tuned
+        chunk_size = q_slab_tokens * 8
+        try:
+            return _load_global_ring_sdpa_configs()[chunk_size]
+        except KeyError:
+            raise ValueError(
+                f"Missing tuned global SDPA config for {chunk_size} tokens in ring_sdpa_configs.json"
+            ) from None
 
     # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands. The op refuses
     # segmented accumulation with a K split, so it is on only where the split does not fit.

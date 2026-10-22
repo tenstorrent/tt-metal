@@ -36,7 +36,10 @@ function setPrefix(value) {
     return `<tr><td><i class="swatch" style="background:${color}"></i>${name}</td><td>${fmt(legacy.categories_ms[i])}</td><td>${fmt(hybrid.categories_ms[i])}</td><td>${delta >= 0 ? "+" : ""}${fmt(delta)}</td></tr>`;
   }).join("");
   byId("requests").innerHTML = hybrid.per_request.map(r => `<tr><td>${r.request + 1}</td><td>${fmt(r.tokens, 0)}</td><td>${fmt(r.global.mean_ms, 3)}</td><td>${fmt(r.sliding.mean_ms, 3)}</td></tr>`).join("");
-  byId("takeaway").textContent = prefix ? "Global SDPA contributes 80% of the slowdown; sliding-window attention adds 15%. The 2560-token request is the global-attention outlier." : "Sliding-window attention contributes 58% of the slowdown. Device gaps add 9.7 ms. Projection and MLP matmul times remain unchanged.";
+  const globalDelta = hybrid.categories_ms[0] - legacy.categories_ms[0];
+  const slidingDelta = hybrid.categories_ms[1] - legacy.categories_ms[1];
+  const gapDelta = hybrid.categories_ms[8] - legacy.categories_ms[8];
+  byId("takeaway").textContent = `Global SDPA adds ${fmt(globalDelta, 1)} ms; sliding-window attention adds ${fmt(slidingDelta, 1)} ms. Device gaps add ${fmt(gapDelta, 1)} ms.`;
   byId("bars").querySelectorAll(".segment").forEach(element => {
     element.addEventListener("pointermove", event => {
       const c = cases[Number(element.dataset.case)], category = Number(element.dataset.category);
@@ -155,7 +158,10 @@ fetch("timeline.json").then(response => {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }).then(result => {
-  data = result; byId("status").hidden = true; byId("content").hidden = false; setPrefix(prefix);
+  data = result;
+  const tuned = Boolean(data.hybrid_sdpa_configs);
+  byId("run-info").innerHTML = `${tuned ? "JSON global tuning" : "Prior heuristic global tuning"} · ${escapeHTML(data.started_at.slice(0, 10))} · <a href="${tuned ? "../" : "tuned/"}">${tuned ? "View prior run" : "View JSON tuning run"}</a>`;
+  byId("status").hidden = true; byId("content").hidden = false; setPrefix(prefix);
 }).catch(error => {
   byId("status").textContent = `Could not load timeline.json (${error.message}). Serve this directory with python -m http.server 8520.`;
 });

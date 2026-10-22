@@ -1,5 +1,7 @@
 # Hybrid prefill slowdown
 
+**Update, October 22:** [The same comparison with JSON global tuning](tuned/findings.md) reduces long-prefix hybrid time to 444.09 ms. The measurements below are the original heuristic run.
+
 The long-prefix slowdown is overwhelmingly inside SDPA: **+237.8 ms global attention (80% of the regression), +43.9 ms sliding-window attention (15%)**. Projection and MLP matmuls stay at approximately 46.2 ms combined. At prefix zero, sliding-window attention is the largest regression, adding 28.5 ms (58%).
 
 | Prefix per request | Legacy ms | Hybrid ms | Added ms | Hybrid / legacy |

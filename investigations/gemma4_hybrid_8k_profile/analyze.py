@@ -301,6 +301,8 @@ def main():
         k: report[k]
         for k in ("git_revision", "started_at", "requests", "prefixes", "repeats", "device_metric", "excluded")
     }
+    if "hybrid_sdpa_configs" in report:
+        timeline["hybrid_sdpa_configs"] = report["hybrid_sdpa_configs"]
     timeline.update(categories=CATEGORIES, sources=list(sources), cases=cases, matmul_names=MATMUL_NAMES)
     root = args.results.parent
     (root / "timeline.json").write_text(json.dumps(timeline, separators=(",", ":")) + "\n")

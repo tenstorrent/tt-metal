@@ -152,6 +152,17 @@ def test_prefill_hybrid_comparison(mesh_device, reset_seeds):
         hybrid_stage(0)
         hybrid.capture()
         hybrid_trace_ids = tuple(hybrid.traces)
+        report["hybrid_sdpa_configs"] = [
+            dict(
+                layer_type=kind,
+                request_tokens=length,
+                q_chunk_size=config.q_chunk_size,
+                k_chunk_size=config.k_chunk_size,
+                max_k_splits=config.max_k_splits,
+                segmented_accumulation=config.segmented_accumulation,
+            )
+            for (kind, length), config in hybrid._configs.items()
+        ]
         legacy_stage(0)
         trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         try:
