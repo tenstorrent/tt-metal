@@ -106,6 +106,12 @@ inline void start() {
     ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(ckernel::semaphore::MATH_PACK);
 }
 
+// Once per kernel, after the last row: back to the default of the two semaphores, as the kernels that use them expect.
+inline void finish() {
+    ckernel::t6_semaphore_init(F2S, 0, 1);
+    ckernel::t6_semaphore_init(S2F, 0, 1);
+}
+
 // A token that carries no step: MATH's row set-up is done.
 inline void post_token() { ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(F2S); }
 
@@ -206,7 +212,12 @@ inline void math_row(
                 }
             }
 
-            ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+            // PACK may take the SFPU over only after MATH's SFPU init, so the row's first token waits for it.
+            if (posted == 0) {
+                ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(F2S);
+            } else {
+                ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+            }
             posted++;
             prev_step_busy = true;
         }
