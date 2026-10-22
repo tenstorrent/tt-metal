@@ -18,6 +18,7 @@ running (the last event printed: act on it before relaunching).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -31,6 +32,7 @@ PATTERN = re.compile(
     r"|fix attempt \d+:"  # a scripted step (golden, box, ladder) failed its gate: never routine
     r"|ABORTED by the overseer|OVERSEER NOTE"  # F69
     r"|COMMIT PENDING"  # F149
+    r"|gate unit \d+/\d+ \S+ (?:FAIL|STOPPED)"  # F169: the failed unit, as soon as it fails (not the whole gate)
 )
 GATES = re.compile(r"gate PASS|gate FAIL")
 PID_FILE = "ORCHESTRATOR.pid"
@@ -60,6 +62,29 @@ def last_event(log: Path) -> str:
     lines = log.read_text(errors="replace").splitlines() if log.exists() else []
     hits = [h for h in events(lines) if "ORCHESTRATOR_EXIT" not in h] or lines  # the launcher's exit line says less
     return hits[-1][:300] if hits else "(empty log)"
+
+
+REPORTED = "watch_reported.json"  # F170: dashboard lines a watch already returned on (once per change, not per call)
+
+
+def first_report(run_dir: Path, line: str) -> bool:
+    """F170 (audit item 20): a DASHBOARD RED / STALE line wakes the overseer once per change (RED: its content; STALE:
+    per publish), not on every watch call (a red dashboard made every re-armed watch return at once)."""
+    if line.startswith("DASHBOARD STALE"):
+        from models.demos.common.bringup.dashboard import links as LK
+
+        key = f"STALE {LK.published_at(run_dir)}"
+    else:
+        key = line
+    p = Path(run_dir) / REPORTED
+    try:
+        seen = json.loads(p.read_text()) if p.exists() else []
+    except ValueError:
+        seen = []
+    if key in seen:
+        return False
+    p.write_text(json.dumps((seen + [key])[-20:]) + "\n")
+    return True
 
 
 def watch(
@@ -95,7 +120,7 @@ def watch(
             out(f"ORCHESTRATOR NOT RUNNING; last event: {last_event(log)}")
             return NOT_RUNNING
         s = stale()
-        if s:
+        if s and first_report(run_dir, s):
             out(s)
             return EVENT
         if time.monotonic() >= end:

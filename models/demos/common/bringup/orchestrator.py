@@ -63,7 +63,6 @@ failure (including a box that fails at device open: reset it, then resume), 3 wa
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import os
 import re
@@ -83,6 +82,7 @@ from models.demos.common.bringup import watch as W
 from models.demos.common.bringup.core import checkout_env, defaults
 from models.demos.common.bringup.core import freeze as F
 from models.demos.common.bringup.core import metrics as M
+from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.gate import (
     SAFE_HANG_RC,
     _is_direct_pytest,
@@ -93,16 +93,17 @@ from models.demos.common.bringup.core.gate import (
     gate_command,
     gate_env,
     gate_outputs,
+    gate_units,
     git_commit,
     log_dir,
     run_gate,
     run_name,
     stage_paths,
+    unit_base,
 )
 from models.demos.common.bringup.core.ledger import Ledger, satisfied
 from models.demos.common.bringup.core.runs import FreezeError, agent_hashes, freeze_task
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
-from models.demos.common.bringup.core.stamps import NO_MEASURE, RECORDS
 from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.knowledge import usage as kusage
 from models.demos.common.bringup.plan import approvals
@@ -146,6 +147,7 @@ IGNORED = (
     r"\.tmp$",
 )
 DONE, STOPPED, HUMAN, PAUSED = 0, 1, 3, 4
+CRASH_RETRIES, CRASH_WAIT_S = 2, 60  # F170: an agent that died without changing anything is retried, not charged
 # A gate that fails at device open is a box problem (a board reset is needed), not the task's: retrying it only burns
 # attempts. These signatures stop the run at once with a reason for the person.
 INFRA_FAILURES = re.compile(
@@ -434,6 +436,48 @@ def allowed(path: str, patterns: list[str]) -> bool:
 
 
 # ---------------------------------------------------------------- the orchestrator
+class FrameworkStop(Exception):
+    """F170 (audit item 4): a gate failed inside the framework's own code (a programming error, e.g. a renamed key):
+    an agent cannot change framework files, so the run stops for the overseer instead of starting attempts."""
+
+    def __init__(self, tid: str, where: str):
+        super().__init__(f"{tid}: {where}")
+        self.tid, self.where = tid, where
+
+
+FRAMEWORK_CODE = re.compile(r"(^|/)models/demos/common/bringup/(core|testing|tests|reference)/[\w/]+\.py$")
+PROGRAMMING_ERRORS = (
+    "KeyError",
+    "AttributeError",
+    "TypeError",
+    "NameError",
+    "ImportError",
+    "ModuleNotFoundError",
+    "SyntaxError",
+    "IndentationError",
+    "UnboundLocalError",
+)
+PYTEST_FRAME = re.compile(r"^([\w./-]+\.py):(\d+): (\w+)\s*$", re.M)  # pytest: the innermost entry's "path:line: Exc"
+PY_FRAME = re.compile(r'File "([^"]+\.py)", line (\d+)')
+PY_EXC = re.compile(r"^(\w+(?:Error|Exception)):", re.M)
+
+
+def framework_error(text: str) -> str | None:
+    """F170: 'file:line: Exc' when a log's innermost traceback frame is the framework's code and the exception is a
+    programming error (not a failed check: an AssertionError or pytest Failed is the model's)."""
+    m = list(PYTEST_FRAME.finditer(text))
+    if m:
+        path, line, exc = m[-1].groups()
+    else:
+        frames, excs = list(PY_FRAME.finditer(text)), list(PY_EXC.finditer(text))
+        if not frames or not excs:
+            return None
+        (path, line), exc = frames[-1].groups(), excs[-1].group(1)
+    if exc in PROGRAMMING_ERRORS and FRAMEWORK_CODE.search(path):
+        return f"{path}:{line}: {exc}"
+    return None
+
+
 class InfraStop(Exception):
     def __init__(self, tid: str, sig: str):
         super().__init__(sig)
@@ -472,6 +516,8 @@ class Orchestrator:
         self.roles = yaml.safe_load((HERE / "briefs" / "roles.yaml").read_text())
         self.pause_file = self.run_dir / "PAUSE"
         self.last_changed: list[str] = []  # the files the last agent run changed
+        self.crashed = False  # F170: the last agent run died (rc != 0 / is_error), not by the overseer's abort
+        self.last_gate: dict = {}  # F170: {task: (code key, GateResult)} of its last gate, to not re-measure a FAIL
 
     # ---- policy
     def common_paths(self) -> list[str]:
@@ -554,6 +600,11 @@ class Orchestrator:
             "component_desc": desc,
             "component_entry": yaml.safe_dump(comp).strip() if comp else "(none in components.yaml)",
             "gate_cmd": task["gate"]["cmd"],
+            "gate_check": (  # F170: the agent runs its gate through the framework, so every unit it passes is kept
+                f"PYTHONPATH={s.repo} python -m models.demos.common.bringup gate {task['id']} "
+                f"--spec {rel(s, s.path) if s.path else '<spec>'} --check"
+            ),
+            "gate_units": "\n".join(f"- `{u}`: `{c}`" for u, c in gate_units(task, self.led.tasks())),
             "details": brief.get("details", ""),
             "gate_tasks": ", ".join(brief.get("gate_tasks") or []),
             "task_id": task["id"],
@@ -766,9 +817,20 @@ class Orchestrator:
         return None
 
     # ---- one agent run
-    def run_agent(self, task: dict, role: str, attempt: int, brief: Path, agent: str = "bringup-engineer") -> list[str]:
+    def run_agent(
+        self,
+        task: dict,
+        role: str,
+        attempt: int,
+        brief: Path,
+        agent: str = "bringup-engineer",
+        report: tuple[str, int] | None = None,
+    ) -> list[str]:
+        """report: (role, attempt) the brief named the knowledge-use report under, when it differs from this run's
+        (F170, audit item 21: the debugger's brief names <tid>.fix.10n.json; it was read as <tid>.debug.n.json)."""
         tid = task["id"]
         before = dirty(self.spec.repo)
+        knowledge_before = set(self.knowledge_errors())
         log = self.run_dir / "agents" / f"{tid}.{role}.{attempt}.jsonl"
         cmd = agent_command(self.spec, self.run_dir, agent, f"Read the brief at {brief} and carry it out.", self.model)
         env = dict(os.environ, PYTHONPATH=str(CODE_ROOT), BRINGUP_TASK=tid)
@@ -808,7 +870,8 @@ class Orchestrator:
             problems.append(f"aborted by the overseer: {why}")
             self.led.update(tid, history_add={"t": now(), "status": "ABORTED", "why": why})
             self.echo(f"  [{tid}] ABORTED by the overseer ({role} attempt {attempt}): {why}")
-        if (rc != 0 or info["is_error"]) and not self.aborted:
+        self.crashed = (rc != 0 or bool(info["is_error"])) and not self.aborted
+        if self.crashed:
             problems.append(f"agent exited rc={rc} is_error={info['is_error']}")
         problems += command_violations(info["commands"], self.spec.repo)
         pats = self.allowed_paths(task, role)
@@ -838,15 +901,12 @@ class Orchestrator:
                 self.spec.bringup_dir / "BREADCRUMBS.md",
             )
         ]
-        ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
-        problems += [f"known_issues.md: {e}" for e in ki]
-        mki, _ = kcheck.check_model_known_issues(self.spec.bringup_dir / "known_issues.md")
-        problems += [f"{rel(self.spec, self.spec.bringup_dir)}/known_issues.md: {e}" for e in mki]
-        ids, _ = kcheck.check_ids(kcheck.knowledge_files(CODE_ROOT))
-        problems += [f"knowledge ids: {e}" for e in ids]
+        # F170 (audit item 10): only the knowledge-file errors this attempt introduced are its problems (a pre-existing
+        # format error in any model's file failed every attempt and made the debugger reject passes)
+        problems += [e for e in self.knowledge_errors() if e not in knowledge_before]
         # The knowledge-use report: validated and cross-checked against what the step touched; a missing or malformed
         # one is recorded (the dashboard shows it), not a failed attempt.
-        report = kusage.report_path(self.spec.bringup_dir, tid, role, attempt)
+        report = kusage.report_path(self.spec.bringup_dir, tid, *(report or (role, attempt)))
         touched, _, visible = kusage.transcript_touches(log, self.spec.repo)
         knowledge_report = kusage.finalize(
             report,
@@ -906,20 +966,90 @@ class Orchestrator:
             self.echo(f"  [{tid}] problem: {p}")
         return problems
 
+    def knowledge_errors(self) -> list[str]:
+        """The shared and the model's known-issues files' format errors and the knowledge id clashes, as problem lines."""
+        ki, _ = kcheck.check_known_issues(kcheck.HERE / "known_issues.md")
+        out = [f"known_issues.md: {e}" for e in ki]
+        mki, _ = kcheck.check_model_known_issues(self.spec.bringup_dir / "known_issues.md")
+        out += [f"{rel(self.spec, self.spec.bringup_dir)}/known_issues.md: {e}" for e in mki]
+        ids, _ = kcheck.check_ids(kcheck.knowledge_files(CODE_ROOT))
+        return out + [f"knowledge ids: {e}" for e in ids]
+
     # ---- steps
     def gate(self, tid: str, reuse: dict | None = None):
-        res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse)
+        def on_unit(k, n, unit, verdict, secs):  # F169: the gate's progress per unit, as it goes (the watch reads it)
+            if verdict == "KEPT":
+                self.echo(f"  [{tid}] gate unit {k}/{n} {unit} kept (passed before on the same code under test)")
+            else:
+                self.echo(f"  [{tid}] gate unit {k}/{n} {unit} {verdict} ({secs:.0f} s)")
+
+        key = stamps.code_key(self.spec.repo, self.spec)
+        res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse, on_unit=on_unit)
+        sig = self.infra_failure(res) if res.verdict in ("FAIL", "HANG") else None
+        if sig and reuse is None:  # F170 (audit items 7, 17): one automatic retry of the stopped unit, not a run stop
+            if not TEST_TIMEOUT.search(sig) and not self.box_ok(tid):
+                raise InfraStop(tid, sig)
+            self.echo(f"  [{tid}] {sig!r}: retrying the stopped unit once (the units that passed are kept)")
+            res = run_gate(self.spec, self.led, tid, commit=True, on_unit=on_unit)
+        for ln in res.lines:
+            if ln.startswith(("  units passed:", "  units remaining:")):
+                self.echo(f"  [{tid}]{ln[1:]}")
+        if res.verdict == "PASS":
+            OV.clear_classification(self.spec.bringup_dir, tid)
         if res.verdict == "COMMIT_PENDING":
             raise CommitPending(tid, res.summary())
         if res.verdict in ("FAIL", "HANG"):
             sig = self.infra_failure(res)
             if sig:
-                raise InfraStop(tid, sig)
+                raise InfraStop(tid, sig)  # still failing after the automatic retry
+            fw = self.framework_failure(tid, res)
+            if fw:
+                raise FrameworkStop(tid, fw)
+        self.last_gate[tid] = (key, res)
         if res.reused:  # F150
             self.echo(f"  [{tid}] reused: same code, not run: {', '.join(res.reused)}")
         self.echo(f"  [{tid}] gate {res.verdict}" + (f" -> {res.commit}" if res.commit else ""))
         self.refresh_dashboards()
         return res
+
+    BOX_CHECK = "scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_box.py"
+
+    def gate_unless_unchanged(self, tid: str):
+        """F170 (audit item 4): after an agent attempt, the gate runs only if something a gate reads changed since the
+        task's last failing gate; else that failure stands (an agent that changed nothing is not measured again)."""
+        same = self.last_gate.get(tid)
+        if same and same[1].verdict != "PASS" and same[0] == stamps.code_key(self.spec.repo, self.spec):
+            self.echo(f"  [{tid}] the tree did not change since the failing gate: no gate re-run, its failure stands")
+            return same[1]
+        return self.gate(tid)
+
+    def framework_failure(self, tid: str, res) -> str | None:
+        """F170: a gate failure inside the framework's code (framework_error) on a task that has passed before (it is
+        not the model's missing work: a first-time check before an implementation fails in the framework too)."""
+        text = res.log.read_text(errors="replace") if res and res.log and res.log.exists() else ""
+        where = framework_error(text)
+        if not where:
+            return None
+        task, state = self.led.task(tid), self.led.state()
+        seen = [tid] + list(dict.fromkeys(unit_base(u) for u, _ in gate_units(task, self.led.tasks())))
+        passed = any(any(h.get("status") == "PASS" for h in (state.get(t) or {}).get("history") or []) for t in seen)
+        return where if passed else None
+
+    def stop_for_framework(self, tid: str, where: str) -> int:
+        why = (
+            f"the gate failed in the framework's own code ({where}); no agent attempt (it cannot change framework "
+            f"files): fix the framework, `gate {tid} --unit <failed unit>`, then resume (F170)"
+        )
+        self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
+        self.echo(f"  [{tid}] STOPPED (framework): {why}")
+        return STOPPED
+
+    def box_ok(self, tid: str) -> bool:
+        """F170: after a box error, one quick box check through the safe runner (it resets the cards after the run;
+        never tt-smi -r): the mesh opens and its collectives work. True: retry the unit; False: a person resets."""
+        log = log_dir(self.spec, self.led) / f"{tid}.boxcheck.log"
+        self.echo(f"  [{tid}] box error: quick box check ({log.name})")
+        return self.run_cmd(self.BOX_CHECK, gate_env(self.spec, self.led, tid), log) == 0
 
     def refresh_dashboards(self) -> None:
         """Re-export the dashboards after every gate, in the background (BRINGUP_DASHBOARD=0 turns it off)."""
@@ -1013,6 +1143,7 @@ class Orchestrator:
                 "the test was rendered afresh from its template.\n" + previous
             )
         while used < budget:
+            self.pause_point(task["id"], f"test attempt {attempt + 1}")
             attempt += 1
             problems = self.run_agent(task, "test", attempt, self.brief(task, "test", attempt, previous))
             if self.aborted:  # F69
@@ -1082,7 +1213,7 @@ class Orchestrator:
         previous = first_failure
         pol = self.policy(task, role)
         attempt, cut = self.attempts_so_far(task["id"], role)
-        used = aborts = 0
+        used = aborts = crashes = 0
         if cut is not None:
             previous = (
                 f"A previous run was interrupted during {role} attempt {cut} of this task (a crash or power loss). "
@@ -1090,6 +1221,7 @@ class Orchestrator:
                 "the rest.\n" + previous
             )
         while used < pol["attempts"]:
+            self.pause_point(task["id"], f"{role} attempt {attempt + 1}")
             attempt += 1
             # the dashboard shows the agent at work, not the check that ran before it started
             self.led.update(task["id"], status="RUNNING", attempt=attempt, role=role, waiting=None)
@@ -1104,10 +1236,17 @@ class Orchestrator:
                     self.echo(f"  [{task['id']}] paused after the overseer's abort; `resume` starts the next attempt")
                     raise SystemExit(PAUSED)
                 continue
+            if self.crashed and not self.last_changed and crashes < CRASH_RETRIES:
+                # F170 (audit item 4): an agent that died at once (an API outage) changed nothing: not an attempt, no gate
+                crashes += 1
+                attempt_note = f"agent crashed without changes ({crashes}/{CRASH_RETRIES} free retries)"
+                self.echo(f"  [{task['id']}] {attempt_note}; retrying in {CRASH_WAIT_S} s, no gate")
+                time.sleep(CRASH_WAIT_S)
+                continue
             used += 1
             if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
-            res = self.gate(task["id"])
+            res = self.gate_unless_unchanged(task["id"])
             outside = [p for p in problems if p.startswith("changed files outside")]
             if res.verdict == "PASS" and not outside:
                 # A passing gate is not redone for a command problem; the overseer reviews it (state: review).
@@ -1128,6 +1267,14 @@ class Orchestrator:
         self.echo(f"  [{task['id']}] STOPPED: {why}")
         return False
 
+    def pause_point(self, tid: str, before: str) -> None:
+        """F170 (audit item 6): a pause stops the run before the next agent attempt of every loop (implement / fix,
+        debugger, last-chance deferral, perf), not only after an abort: the overseer pauses to fix by hand, and no
+        agent starts on the failure meanwhile."""
+        if self.pause_file.exists():
+            self.echo(f"  [{tid}] paused before {before}; `resume` continues the task")
+            raise SystemExit(PAUSED)
+
     def stop_task(self, task: dict, why: str) -> bool:
         self.led.update(task["id"], status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
         self.echo(f"  [{task['id']}] STOPPED: {why}")
@@ -1146,24 +1293,32 @@ class Orchestrator:
             )
         triage = log_dir(self.spec, self.led) / f"{tid}.triage.txt"
         extra = [str(triage)] if triage.exists() else []
-        for attempt in range(1, debugger_attempts + 1):
+        attempt = aborts = 0
+        while attempt < debugger_attempts:
+            self.pause_point(tid, f"debugger attempt {attempt + 1}")
+            attempt += 1
             text = (
                 f"WIP commit: {wip or '(no changes to commit)'}\nThe implementer failed {attempts} times; "
                 f"the logs are in {self.run_dir / 'agents'} and {log_dir(self.spec, self.led)}.\n{previous}"
             )
-            brief = self.brief(
-                task,
-                "fix" if task.get("step") not in ("implement",) else "implement",
-                100 + attempt,
-                text,
-                extra,
-                False,
-            )
-            problems = self.run_agent(task, "debug", attempt, brief, agent=DEBUGGER)
+            brief_role = "fix" if task.get("step") not in ("implement",) else "implement"
+            brief = self.brief(task, brief_role, 100 + attempt, text, extra, False)
+            problems = self.run_agent(task, "debug", attempt, brief, agent=DEBUGGER, report=(brief_role, 100 + attempt))
+            if self.aborted:  # F170: an abort is the overseer's stop, as in attempt_loop: no gate, not counted
+                aborts += 1
+                attempt -= 1
+                previous = "\n".join(problems)
+                if aborts > OV.MAX_ABORTS:
+                    return self.stop_task(task, f"aborted by the overseer {aborts} times; waiting for a person")
+                continue
             entry = self.led.state().get(tid, {})
             self.led.update(tid, debugger_attempts=entry.get("debugger_attempts", 0) + 1)
-            res = self.gate(tid)
-            if res.verdict == "PASS" and not problems:
+            res = self.gate_unless_unchanged(tid)
+            outside = [p for p in problems if p.startswith("changed files outside")]
+            if res.verdict == "PASS" and not outside:  # F170 (audit item 9): as attempt_loop: a pass is a pass
+                if problems:
+                    self.led.update(tid, review=problems)
+                    self.echo(f"  [{tid}] passed with problems for review: {len(problems)}")
                 return True
             previous = "\n".join(problems + [self.failure_text(res)])
         if self.last_chance_defer(task, previous, attempts, debugger_attempts):
@@ -1186,13 +1341,30 @@ class Orchestrator:
             "with the evidence from those attempts. If it does have one, change nothing: the task then stops for a "
             f"person.\n{previous}"
         )
+        self.pause_point(task["id"], "the last-chance deferral attempt")
         problems = self.run_agent(task, "implement", 201, self.brief(task, "implement", 201, text))
-        if [p for p in problems if p.startswith("changed files outside")]:
+        if self.aborted or [p for p in problems if p.startswith("changed files outside")]:
             return False
         deferred, why = self.try_defer(task)
         if why:
             self.led.update(task["id"], reason=[why])
         return deferred
+
+    def overseer_owned(self, tid: str) -> str | None:
+        """F169: the overseer's classification of this task's last gate failure, when it is not the model's code
+        (framework, waiver, infra): the orchestrator runs only the gate's remaining units and starts no agent."""
+        c = OV.classification(self.spec.bringup_dir, tid)
+        return c["kind"] if c and c.get("kind") != "model" else None
+
+    def stop_for_overseer(self, tid: str) -> int:
+        kind = self.overseer_owned(tid)
+        why = (
+            f"the gate still fails after the overseer's {kind} fix; no agent attempt (F169): fix it, "
+            f"`gate {tid} --unit <failed unit>`, then resume (the remaining units run)"
+        )
+        self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
+        self.echo(f"  [{tid}] STOPPED (overseer-classified {kind}): {why}")
+        return STOPPED
 
     def infra_failure(self, res) -> str | None:
         text = res.log.read_text(errors="replace") if res and res.log and res.log.exists() else ""
@@ -1202,11 +1374,15 @@ class Orchestrator:
     def stop_for_infra(self, tid: str, sig: str) -> int:
         if TEST_TIMEOUT.search(sig):
             why = (
-                f"the test ran past its pytest timeout ({sig!r}); check the log for a slow path or raise "
-                "box.test_timeout_s, then resume"
+                f"the test ran past its pytest timeout ({sig!r}) twice (one automatic retry, F170): check the machine's "
+                "load (CPU jobs next to the gate) and the log for a slow path, or raise box.test_timeout_s; then "
+                "resume (only the stopped unit and the ones after it run)"
             )
         else:
-            why = f"the box failed at device open ({sig!r}); reset the board, then resume"
+            why = (
+                f"the box failed ({sig!r}) and the automatic box check failed too; reset the board, then resume "
+                "(only the stopped unit and the ones after it run)"
+            )
         self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
         self.echo(f"  [{tid}] STOPPED (infrastructure): {why}")
         return STOPPED
@@ -1224,22 +1400,11 @@ class Orchestrator:
         return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def ab_code_key(self, task: dict) -> str:
-        """The code a side measures: the committed files plus the uncommitted changes (the agent's) of the repo, without
-        the run's own records (state, results, breadcrumbs, supervision, tasks.yaml: the side's commands are stamped
-        apart), so a ledger commit between the A/B report and the accept does not count as a code change (F105)."""
-        import hashlib
-
-        def git(*a):
-            return subprocess.run(["git", *a], cwd=self.spec.repo, capture_output=True, text=True).stdout
-
-        skip = RECORDS + NO_MEASURE
-        files = [
-            ln
-            for ln in git("ls-tree", "-r", "HEAD").splitlines()
-            if not any(fnmatch.fnmatch(ln.split("\t")[-1], p) for p in skip)
-        ]
-        diff = git("diff", "HEAD", "--", ".", *(f":!{p}" for p in skip))
-        return hashlib.sha256(("\n".join(files) + diff).encode()).hexdigest()[:16]
+        """The code a side measures: F170 (audit item 14) the same key the gate stamps use (stamps.code_key: every file
+        a measurement can read, committed, changed or untracked, without the run's records), so an agent's new,
+        untracked module that changed after a measurement is a code change (it was not: the accept could commit code
+        that was never measured) and an unrelated commit of the same content is not (F105)."""
+        return stamps.code_key(self.spec.repo, self.spec)
 
     def changed_under(self, task: dict) -> list[str]:
         """Uncommitted files under the task's paths (the change a report measures)."""
@@ -1281,14 +1446,24 @@ class Orchestrator:
                 f"A previous run was interrupted during perf attempt {cut} of this task (a crash, power loss or an "
                 "overseer stop). Its changes may be in the tree: check them before redoing anything."
             )
-        for attempt in range(done + 1, done + pol["attempts"] + 1):
+        attempt, used, aborts = done, 0, 0
+        while used < pol["attempts"]:
+            self.pause_point(tid, f"perf attempt {attempt + 1}")
+            attempt += 1
             self.led.update(tid, status="RUNNING", attempt=attempt, role="perf", waiting=None)
             accuracy_guard.clear(self.spec, tid)  # the marker is per attempt
             problems = self.run_agent(task, "perf", attempt, self.brief(task, "perf", attempt, previous))
             changed |= set(self.last_changed)
+            previous = "\n".join(problems)
+            if self.aborted:  # F170: as attempt_loop: an overseer's abort is not a used attempt
+                aborts += 1
+                if aborts > OV.MAX_ABORTS:
+                    self.stop_task(task, f"aborted by the overseer {aborts} times; waiting for a person")
+                    return None
+                continue
+            used += 1
             if not problems:
                 return sorted(changed)
-            previous = "\n".join(problems)
         why = f"perf failed {pol['attempts']} attempts; waiting for a person (logs in {self.run_dir / 'agents'})"
         self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
         self.echo(f"  [{tid}] STOPPED: {why}")
@@ -1725,6 +1900,8 @@ class Orchestrator:
             if plan_written and self.needs_human(task):
                 return self._human(task, self.needs_human(task))
             res = self.gate(tid)
+            if res.verdict != "PASS" and self.overseer_owned(tid):
+                return self.stop_for_overseer(tid)
             if res.verdict != "PASS" and not self.attempt_loop(task, role or "fix", self.failure_text(res)):
                 return STOPPED
         else:
@@ -1734,7 +1911,10 @@ class Orchestrator:
             # F87: a task resumed after a stop (a fix job included) gates first: its work may be done meanwhile
             hist = self.led.state().get(tid, {}).get("history") or []
             resumed = bool(hist) and hist[-1].get("status") == "RESUMED"
-            pre = self.gate(tid) if existing and (task.get("precheck", True) or resumed) else None
+            owned = self.overseer_owned(tid)  # F169: a failure the overseer fixed: the delta runs, never an agent
+            pre = self.gate(tid) if owned or (existing and (task.get("precheck", True) or resumed)) else None
+            if owned and pre.verdict != "PASS":
+                return self.stop_for_overseer(tid)
             if (pre is None or pre.verdict != "PASS") and not self.attempt_loop(
                 task, role, self.failure_text(pre) if pre else ""
             ):
@@ -1832,6 +2012,8 @@ class Orchestrator:
                 rc = self.step(tid)
             except InfraStop as e:
                 rc = self.stop_for_infra(e.tid, e.sig)
+            except FrameworkStop as e:
+                rc = self.stop_for_framework(e.tid, e.where)
             except CommitPending as e:
                 self.echo(f"  [{e.tid}] COMMIT PENDING (the run stops; nothing re-runs):\n{e.text}")
                 rc = STOPPED

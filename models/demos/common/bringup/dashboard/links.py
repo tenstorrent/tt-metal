@@ -25,7 +25,7 @@ from pathlib import Path
 import yaml
 
 FILE = "links.yaml"
-STALE_AFTER = 2 * 60  # the orchestrator re-exports after every gate; the owner reads the published page
+STALE_AFTER = 30 * 60  # F170 (audit item 20): the heartbeat's period; at 2 min every gate woke the overseer
 
 
 def path(bringup_dir: Path) -> Path:

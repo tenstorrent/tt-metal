@@ -10,7 +10,11 @@ layers after it are skipped (F40), and with them the model-level outputs (final 
 only compares when the stack ends at the model's last layer. With a layer subset in the spec, only the selected layers'
 boundaries and state are stored, and every chunk also stores the
 block input of the first layer of each contiguous run of selected layers, so the device can restart there.
-Boundaries are stored for every chunk if the rung sets ``full_dumps``, else only for the last chunk.
+Boundaries are stored for every chunk if the rung sets ``full_dumps``, else only for the last chunk. A rung's
+``step_dump_layers`` (F159) limits the per-step boundaries to those layers; the other selected layers store only their
+``out`` at the dumped chunks (F161; a run start also keeps its ``in``) (a full model: the step tests run on the representative layers, the ladder and
+the contract read every layer's ``out`` and state). ``outs_every_chunk`` (F160) also stores every layer's ``out`` on the
+chunks that are not dumped (per-chunk layer errors over a long rung without per-step dumps).
 Rungs with ``golden: <other>`` reuse that rung's golden and are skipped here.
 
 State: each layer stores its own names (``spec.state_names``). Tensors in ``state.fixed`` (recurrent state, conv tail)
@@ -149,6 +153,9 @@ def main(argv=None):
     tokens = text_tokens(spec, seq)
     n_chunks = seq // chunk
     dumped = list(range(n_chunks)) if rung.get("full_dumps") else [n_chunks - 1]
+    step_layers = rung.get("step_dump_layers")  # F159: per-step boundaries only for these layers
+    step_layers = set(selected) if step_layers is None else set(step_layers)
+    outs_every_chunk = bool(rung.get("outs_every_chunk"))  # F160
     print(f"reference loaded in {time.time() - t0:.0f}s; seq={seq} chunk={chunk}; storing layers {selected}")
 
     # F65: a layer that reads other layers' state needs them in the golden, and their fixed-size state as of the end
@@ -193,7 +200,9 @@ def main(argv=None):
             if name.startswith("L"):
                 li, key = name[1:].split(".", 1)
                 li = int(li)
-                if li in selected and (dump or (key == "in" and li in starts)):
+                # F161: a layer without step dumps keeps only its out (its in is the previous layer's out, bit for bit)
+                keep = dump and (li in step_layers or key == "out") or (outs_every_chunk and key == "out")
+                if li in selected and (keep or (key == "in" and li in starts)):
                     per_layer[li][key] = store_dtype(t.detach().clone(), keep_fp32, key)
             elif name != "logits" and (full_stack or name != "final_norm"):
                 model_t[name] = store_dtype(t.detach().clone(), keep_fp32, name)
@@ -271,6 +280,8 @@ def main(argv=None):
         "run_starts": sorted(starts),
         "full_dumps": bool(rung.get("full_dumps")),
         "dumped_chunks": dumped,
+        "step_dump_layers": sorted(step_layers),
+        "outs_every_chunk": outs_every_chunk,
         "compute_dtype": str(dtype).split(".")[-1],
         "numerics": numerics,
         "text": prompt_rec["source"],

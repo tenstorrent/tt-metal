@@ -1737,15 +1737,18 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   test_clean_wall.py and test_plan.py updated.
 - Not changed: tests/test_all_gather_bench.py (a CCL bench that wants kernel time; it sets the device profiler
   itself).
-- F155 device validation (2026-10-22, DS41 2x2, P.19 code, last chunk): real-time vs device profiler per section within
-  0.2 % in total (91.94 vs 91.74 ms), program counts identical (3776), every section within ±2 % except moe_add +9 %
-  (its reduce-scatter waits inside the program); per-op profile of all 8 layers in 6 min (device-profiler op mode ~13).
 
 ## F157: agents run the repo's commit hooks on their changes before they finish (2026-10-22)
 - DeepSeek-V4.1 P.18 and P.19: both gates passed and both commits were refused by prefer-expect-error (new fork unit
   tests with pytest.raises); F154 committed them without a re-run, but the overseer had to fix 11 lines by hand.
 - agents/bringup-engineer.md rule 12: run `pre-commit run --files <changed and new files>` and fix every failure before
   finishing; use the expect_error fixture with the real message text.
+- F155 device validation (2026-10-22, DS41 2x2, P.19 code, last chunk): real-time vs device profiler per section within
+  0.2 % in total (91.94 vs 91.74 ms), program counts identical (3776), every section within ±2 % except moe_add +9 %
+  (its reduce-scatter waits inside the program); per-op profile of all 8 layers in 6 min (device-profiler op mode ~13).
+
+## F156: the stop guard accepts an OVERSEER HOLD line (2026-10-22)
+- skill/bringup/heartbeat_stop.py: a stopped run whose last log line says OVERSEER HOLD (a stop the overseer chose and
   told the owner about) no longer blocks every turn.
 
 ## F158: a waived step covers the block out of its swap test (2026-10-22, owner)
@@ -1755,14 +1758,29 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - testing/component.py run_swap_test: when err_swap_out misses its noise floor and a swapped step has an owner waiver,
   the block out goes through NF.waive under that step (printed, err_swap_out_waived recorded; the structural bound
   still fails a wrong module). Selftest test_a_waived_step_covers_the_block_out_of_its_swap_test.
+
+## F167 (committed as F159, 0035ffecd5c): a rung's step_dump_layers (per-step boundaries only for named layers) (2026-10-22)
+- DeepSeek-V4.1 full model on galaxy_8x4 (40 layers, chunk 5120): storing every step boundary of every layer at the
+  dumped chunks would take ~330 GB; the step tests use only the representative layers, while the ladder and the
+  contract read every layer's in / out and state.
+- Rung key `step_dump_layers: [..]`: at the dumped chunks, those layers store every boundary, the other run layers only
+  `in` and `out` (state and KV caches unchanged, every layer). Recorded in the manifest; the spec check refuses a layer
+  the run does not have. reference/generate_golden.py, core/spec.py; selftest
+  test_golden_step_dumps_only_for_the_named_layers.
+
+## F163 (committed as F160, a7d06380170): a rung's outs_every_chunk (2026-10-22)
+- DeepSeek-V4.1 full model (owner): every layer's output on every chunk of the long rung, without per-step dumps on
+  those chunks (the per-layer errors of every chunk). Rung key `outs_every_chunk: true`; manifest records it.
+  reference/generate_golden.py; selftest test_golden_outs_every_chunk_without_dumps.
+
+## F159: an all-zero target gets a zero limit, not an absurd one (2026-10-22)
+- DeepSeek-V4.1 err_state_compress_partial: the golden state was exactly zero; drift.py's one-rounding rel divided by
+  a 1e-300 clamp (9e255) and the end-to-end limit became 1.8e256, so any device value passed.
 - reference/drift.py marks an all-zero target (zero_target, rel_res 0); testing/e2e_limits.py treats rel_res > 1 (impossible
   for a rounding of a nonzero value) as such a target in drift files written before, for the rel and the PCC limits.
   Selftest test_an_all_zero_state_gets_a_zero_limit_not_an_absurd_one.
 
-## F161: a layer without step dumps stores only its out (2026-10-22)
-- DS41 full model short rung: a non-step layer's file held in and out, fp32 [5120, 20484] each (839 MB); its in is the
-  previous layer's out bit for bit (checked at L5, L15, L30) and no check reads it (the ladder, drift and profile read
-  in only at a run start, the step tests only on step layers). Now 420 MB; a run start keeps its in.
+## F164 (committed as F161, 603afee8bac): a layer without step dumps stores only its out (2026-10-22)
 - DS41 full model short rung: a non-step layer's file held in and out, fp32 [5120, 20484] each (839 MB); its in is the
   previous layer's out bit for bit (checked at L5, L15, L30) and no check reads it (the ladder, drift and profile read
   in only at a run start, the step tests only on step layers). Now 420 MB; a run start keeps its in.
@@ -1779,3 +1797,98 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - DeepSeek-V4.1 swap enc_source_14: the owner-delegated indexer waiver never applied: the per-step check's integer
   path returned before NF.waive. Now a waived top-k passes when its per-row overlap with the CPU step is structural
   (>= 1 - struct_scaled_rel, F97); a wrong id set still fails. Selftest test_a_waiver_reaches_an_index_step_but_not_a_wrong_one.
+
+## F162: a gate unit re-runs only when what it reads changed (2026-10-22, owner: time first)
+- DeepSeek-V4.1 FIX.10 re-ran 25-45 min of passed component tests three times in one afternoon: two spec waiver
+  edits (for other steps), an intake re-approval (approvals.yaml) and framework fixes; F150's code key was the whole
+  tree minus records and orchestration.
+- core/stamps.py: code_key(repo, spec) also leaves out approvals.yaml and another model's bring-up records and frozen
+  tests (its bringup/ non-Python files, its tests/bringup/), and counts the spec without tests.waivers (spec_text).
+  waiver_key(spec, cmd) stamps per unit the waivers its tests read (testing/component.py is the only reader): a
+  component test its step's, a swap test or a whole tests/bringup run all, ladder / contract / profile none.
+  Stamps gain a "waivers" field: stamps from before F162 match nothing once (one re-run), never a false reuse.
+  gate.unit_stamps and core/verify use it. Selftests test_a_unit_is_rerun_only_when_what_it_reads_changed,
+  test_a_waiver_reruns_only_the_units_that_read_it. Still conservative: an edit to testing/component.py re-runs every
+  component and swap unit (file-level, not function-level).
+
+## F165: BRINGUP_CPU_THREADS caps a CPU job's torch threads (2026-10-22)
+- DS41 full-model goldens shared the box with the live 2x2 run and starved its swap tests' CPU references (300 s
+  timeouts). core/metrics.py cpu_threads() reads BRINGUP_CPU_THREADS first; run such jobs with `taskset -c <cores>
+  nice -n 19` and the override. Selftest test_cpu_threads_env_override.
+
+## F166: a looped gate is one stamped unit per test (2026-10-22, owner: time first)
+- DeepSeek-V4.1 FIX.10: `for t in swa ...; do run_safe_pytest ... test_c_${t}_experts.py || exit 1; done` was one gate
+  unit, so a stop or failure at the 7th test re-ran all 8 (~25 min) on resume.
+- core/gate.py split_segment: a for loop over a literal list of one command template, and a run_safe_pytest call
+  over several test files (flags without values only), become one unit per test (<task>#<label>, unit_base strips
+  the label for BRINGUP_TASK and the frozen block); anything else stays whole, and a task without such segments has
+  the same single unit as before. gate_command unrolls the loop (same commands, && stops at the first failure).
+  A resumed gate reuses the tests that passed (F150 stamps) and starts at the first that did not; with F162 a waiver
+  re-runs only its step's looped test. Selftests test_a_looped_gate_reuses_the_tests_that_passed,
+  test_a_waiver_reruns_only_the_looped_test_of_its_step, test_only_a_literal_loop_or_a_plain_file_list_is_split.
+
+
+## F169: a gate never restarts; it runs the delta (2026-10-22, owner)
+- DeepSeek-V4.1 FIX.10 ran ~3 h for ~2 h of work: its ~40-min gate restarted from the first test four times, after a
+  spec waiver edit, two framework fixes (testing/component.py) and a pytest timeout; F150's stamps keyed on the tree
+  (F162 narrowed it, still counting the framework and waivers) and the gate retried as a whole. Owner: "a gate never
+  restarts; if something fails, fix the framework, then only run the delta".
+- core/stamps.py: under_test_key (the model's code and tests, the task's and a fix job's gate tasks' paths, the spec's
+  paths.own, ttnn/ and tt_metal/ incl. the forks, the goldens) and Delta (runs/<run>/delta/<task>.json: each unit's
+  verdict PASS / FAIL / STOPPED on which code under test). core/gate.py run_units: a unit that passed in this task's gate
+  on the same code under test, command and environment is kept ("reused: same code under test"); a unit whose metrics
+  miss stops the gate (as a non-zero exit did); a timeout or box error is STOPPED, retried alone; on_unit progress
+  callback; state `units` and "units passed / units remaining" lines at a stop. run_units_only (gate --unit), rerun
+  (gate --rerun), delta_status (gate --status); `--continue` is the default gate run, with a commit.
+- overseer classify --task <id> --as framework|waiver|infra|model; orchestrator: a classified failure resumes into the
+  gate's delta and starts no agent (stop_for_overseer when it still fails); the classification clears on a pass. The
+  orchestrator logs "gate unit k/n <unit> PASS|FAIL|STOPPED (s)"; watch.PATTERN wakes on a FAIL / STOPPED unit.
+- Skill section 4 opens with the overseer's duty (monitor and improve the framework, never its mouthpiece) and the five
+  gate rules. Selftests: selftest/test_delta_gate.py (delta after a waiver + framework edit, model-code change re-runs
+  all, infra stop retried alone, --unit / --rerun, orchestrator resume without an agent, the watch event); two F162
+  selftests in test_stamps.py now state the within-task F169 behaviour.
+
+
+## F170: the framework-waste audit, group A (2026-10-22, owner: time first)
+- Source: reports/framework_waste_audit.md (22 items, audit of d24349ce0ba). Group A, the most time:
+- Item 2: `gate <task> --check` (run_gate(check=True)): the agent's run of its gate, kept per unit in the stamp store and
+  the task's delta, no state, no commit. The brief shows that command and the gate's units (briefs/brief.md, rule 8),
+  so the orchestrator's gate after an attempt runs only what the agent did not pass on the same code.
+- Item 5: core/gate.py gate_units: every test-running `&&` segment (TEST_RUN) is its own unit <task>#<label>
+  (segment_label: the test file's stem); a non-test segment travels with the test after it (a trailing one with the
+  last); a one-segment gate keeps its one unit named <task>. X.3 stopping in test_positions no longer re-runs the
+  ladder and both profile runs.
+- Item 6: Orchestrator.pause_point at the top of every agent loop (implement / fix, test, debugger, last-chance deferral,
+  perf); the debugger and perf loops treat an overseer's abort as attempt_loop does (no gate, not counted).
+- Item 7 + 17: harness.mesh_parametrize puts the spec's box.test_timeout_s on every device test (frozen component and
+  swap tests had pytest.ini's 300 s); Orchestrator.gate retries a timeout or a box error once (a box error after a
+  quick box check, tests/test_box.py through the safe runner) before InfraStop.
+- Item 4: an attempt that changed nothing a gate reads (stamps.code_key) is not measured again (gate_unless_unchanged);
+  an agent that crashed (rc != 0 / is_error) without changes is retried (CRASH_RETRIES, CRASH_WAIT_S), not charged; a
+  programming error whose innermost frame is the framework's code (framework_error) on a task that passed before raises
+  FrameworkStop: the run stops for the overseer, no agent (a first check before an implementation still starts one).
+- Item 9: the debugger keeps a passing gate with problems (filed for review), as attempt_loop does.
+- Item 16: stamps._git raises GitError on a failed git call (an empty file map gave every tree one key). The selftest
+  fixture repo (fx) is now a git checkout.
+- Item 21: run_agent(report=(role, attempt)): the debugger's knowledge-use report is read where its brief named it.
+- Selftests: selftest/test_waste_fixes.py (one per item); test_stamps / test_overseer updated to the per-segment units.
+
+
+## F171: the framework-waste audit, group B (2026-10-22)
+- Item 15: run_units re-stamps a unit (stamp id, F169 under-test key) when it starts, not once at the gate's start.
+- Item 22: a committing gate runs pre-commit only on the task's changed files (_dirty_under); none changed: no run.
+- Item 12: stamps.env_key ignores BRINGUP_CPU_THREADS and TT_METAL_JIT_SERVER_* (where kernels compile, not what runs).
+- Item 11: core.verify pins the checkout env (checkout_env.pin, as gate / rerun do) and run_batch keeps each batched
+  task's outcome in the stamp store under its gate unit's stamp (a gate after a --batch re-check reuses it).
+- Item 14: Orchestrator.ab_code_key = stamps.code_key (untracked files counted, commits of the same content not; was
+  git ls-tree + git diff, blind to an agent's new untracked module). In-flight A/B sides re-measure once.
+- Item 10: run_agent charges only the knowledge-file errors the attempt introduced (knowledge_errors before / after).
+  Not done: overseer edits during an attempt are still charged as "outside the allowed paths" (rule: edit at pauses).
+- Item 19: metrics.cpu_threads: outside a gate (no BRINGUP_TASK) while an orchestrator or run_safe_pytest runs on the
+  box, a quarter of the physical cores and nice 19 (device_work_running, psutil).
+- Item 20: dashboard/links.py STALE_AFTER 30 min (was 2: every gate woke the overseer); watch.first_report returns a
+  DASHBOARD STALE (per publish) or RED (per content) line once (runs/<run>/watch_reported.json).
+- Item 8 not done: the checks read the nudged outputs in several places (not only statistics) and caching them is
+  ~GBs per model; swap tests' floors depend on device outputs; measure the CPU share first.
+- Items 13 (stamps per model, not per run) and 18 (resume an agent's session) not in this round.
+- Selftests: test_waste_fixes.py group B; test_verify's batched test checks the batch's runs are kept.

@@ -67,8 +67,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    case proves that the CPU diagnosis (rule 14) cannot separate a logic bug from a precision gap, and then only as an
    owner decision, never as a default. Packer L1 accumulation adds in the packed format; it is not a substitute for
    fp32 accumulation unless the packer writes fp32 (owner).
-8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
-   afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
+8. Check your work with the gate check command from the brief (`gate <task> --check`, or `--check --unit <name>` for
+   one test while iterating), never by running the test commands by hand: the check keeps each unit's result, and the
+   orchestrator's gate afterwards runs only the units you did not pass on the same code; only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`. Time counts (owner): run the full gate once, after your last edit; before re-running anything that
    takes more than ~10 minutes, check whether a result you already have on the same code answers the question.
 9. Serving contract. When the brief has a "Serving contract" section, build the part exactly as it says (it is how

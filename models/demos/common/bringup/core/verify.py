@@ -41,6 +41,7 @@ from models.demos.common.bringup.core.gate import (
     _merge_metrics,
     check_metrics,
     gate_env,
+    outputs_in,
     reusable,
     run_name,
     run_units,
@@ -81,8 +82,10 @@ def judge(task: dict, rc: int | None, got: dict) -> tuple[str, list[str]]:
     return ("PASS" if rc == 0 and ok else "FAIL"), lines
 
 
-def run_batch(spec, led, tids: list[str], out: Path, n: int) -> list[dict]:
-    """One pytest process over the tasks' frozen test files (F142); a row per task, judged as unbatched."""
+def run_batch(spec, led, tids: list[str], out: Path, n: int, store=None, keys: tuple | None = None) -> list[dict]:
+    """One pytest process over the tasks' frozen test files (F142); a row per task, judged as unbatched.
+    F170 (audit item 11): each task's outcome is kept in the stamp store under the stamp its own gate's unit has, so
+    the gate (or a fix job) after a batched re-check reuses it instead of running every test again."""
     tasks = [led.task(t) for t in tids]
     runner = list(batch_key(tasks[0])[1])
     if any(Path(w).name == "run_safe_pytest.sh" for w in runner) and "--no-precompile" not in runner:
@@ -112,6 +115,21 @@ def run_batch(spec, led, tids: list[str], out: Path, n: int) -> list[dict]:
                 f"  no test outcome: the batch exited {rc} before this task's test reported (rerun unbatched)"
             ] + lines
         rows.append({"task": tid, "verdict": verdict, "rc": trc, "s": dt, "lines": lines, "log": str(log), "batch": n})
+        if store is not None and o is not None:
+            uenv = dict(gate_env(spec, led, tid), **{M.RESULTS_ENV: str(out / "results")})
+            plan = unit_stamps(spec, task, uenv, led.tasks(), keys)
+            if len(plan) == 1:
+                u, _, st, sid = plan[0]
+                got = M.load(tid, out / "results")
+                rec = {"stamp": st, "verdict": verdict, "rc": trc, "s": dt, "metrics": got}
+                rec.update(by=f"verify batch {n}", t=time.strftime("%Y-%m-%dT%H:%M:%S"))
+                store.put(
+                    u,
+                    sid,
+                    rec,
+                    [p for p in outputs_in(out / "results", task) if p.exists() and p.name != f"{tid}.json"],
+                    tid,
+                )
     return rows
 
 
@@ -144,7 +162,7 @@ def verify(
     out = Path(out or spec.run_dir(run_name(led)) / "verify" / time.strftime("%Y%m%dT%H%M%S"))
     (out / "results").mkdir(parents=True, exist_ok=True)
     tasks, store = led.tasks(), stamps.Store(spec.run_dir(run_name(led)))
-    keys = (stamps.code_key(spec.repo), stamps.goldens_key(spec))
+    keys = (stamps.code_key(spec.repo, spec), stamps.goldens_key(spec))
     kept = {}
     for tid in tids if not force else []:
         row = reuse_kept(spec, led, tid, out, store, tasks, keys)
@@ -167,7 +185,8 @@ def verify(
             rows.append(r)
             continue
         if tid in first:
-            new = run_batch(spec, led, first[tid], out, len({r.get("batch") for r in rows if "batch" in r}))
+            nb = len({r.get("batch") for r in rows if "batch" in r})
+            new = run_batch(spec, led, first[tid], out, nb, store, keys)
             for r in new:
                 print(f"{r['verdict']} {r['task']} (batched, rc {r['rc']}, log {r['log']})", flush=True)
                 for line in r["lines"] if r["verdict"] == "FAIL" else []:
@@ -208,6 +227,9 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--force", action="store_true", help="F150: run a task even when a PASS on the same code is kept")
     a = ap.parse_args(argv)
+    from models.demos.common.bringup.core import checkout_env
+
+    checkout_env.pin()  # F170 (audit item 11): the gate's environment, so its stamps and the gate's match
     res = verify(Spec.load(a.spec), a.tasks, a.status or None, Path(a.out) if a.out else None, a.batch, a.force)
     return 1 if res["failed"] else 0
 
