@@ -45,18 +45,17 @@ const ttnn::Tensor& native(const autograd::TensorPtr& tensor) {
 
 }  // namespace
 
-TEST_F(ParameterDtypeTest, ParsesTheTwoNames) {
-    EXPECT_EQ(core::parse_param_dtype("bfloat16"), ttnn::DataType::BFLOAT16);
-    EXPECT_EQ(core::parse_param_dtype("float32"), ttnn::DataType::FLOAT32);
-    EXPECT_ANY_THROW((void)core::parse_param_dtype("float16"));
-}
-
-// Unset or null means "keep the dtype the model builds".
+// The two names are applied, any other is rejected, and unset or null means "keep the dtype the model builds".
 TEST_F(ParameterDtypeTest, ReadsParamDtypeFromTheTrainingConfig) {
-    EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: float32}")), ttnn::DataType::FLOAT32);
-    EXPECT_EQ(core::param_dtype_from_config(YAML::Load("seed: 5489")), std::nullopt);
-    EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: }")), std::nullopt);
-    EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: ~}")), std::nullopt);
+    const auto apply = [](const char* training_config) {
+        return core::apply_precision_config(YAML::Load(training_config), serialization::NamedParameters{});
+    };
+    EXPECT_EQ(apply("precision: {param_dtype: float32}"), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(apply("precision: {param_dtype: bfloat16}"), ttnn::DataType::BFLOAT16);
+    EXPECT_ANY_THROW(apply("precision: {param_dtype: float16}"));
+    EXPECT_EQ(apply("seed: 5489"), std::nullopt);
+    EXPECT_EQ(apply("precision: {param_dtype: }"), std::nullopt);
+    EXPECT_EQ(apply("precision: {param_dtype: ~}"), std::nullopt);
 }
 
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
