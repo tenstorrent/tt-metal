@@ -122,13 +122,10 @@ static bool get_post_process_bias(
         return !bias_is_one_row || bias_is_batched || fp32_dest_acc_en;
     }
     if (bias.has_value()) {
-        // Quasar: the fused matmul+bias path was historically avoided (bmm_large..._fused_bias TILE_COUNTERS
-        // fault). But (a) the post-process add is a BROADCAST ([M,N]+[1,N]) and Quasar has NO broadcast/repeat
-        // DFB op -> it lowers to a legacy DataMovementKernel and CRASHES; and (b) the mcast_1d m2 factory now
-        // wires FUSE_BIAS with the in1/bias DM reader carrying disable_dfb_implicit_sync_for_all (the known
-        // TILE_COUNTERS fix), so the fault comment is stale for that path. So FUSE the bias into the 1D-mcast
-        // matmul when the bias is tile-aligned; only fall back to post-process (which itself only works for a
-        // no-broadcast sharded add on Quasar) for other configs.
+        // Quasar: the mcast_1d m2 factory wires FUSE_BIAS with the in1/bias DM reader carrying
+        // disable_dfb_implicit_sync_for_all (the bmm_large..._fused_bias TILE_COUNTERS fix), so the bias is fused
+        // into the 1D-mcast matmul when it is tile-aligned. Other configs add it after the op through the Quasar
+        // binary add, whose DFB factory broadcasts the bias row for bf16 operands of one dtype.
         if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
             const auto& q_tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
             const uint32_t q_tile_height = transpose_a ? q_tile_shape[1] : q_tile_shape[0];
@@ -291,8 +288,8 @@ static ttnn::Tensor bound_matmul(
         get_fp32_dest_acc_en(matmul_struct.compute_kernel_config));
 
     // Activations the op does not fuse run after it, in order: a unified config's when the bias is added after the op
-    // (the kernels run it on the finished sum), then the caller's unless a user grid had the op fuse it into its auto
-    // config. The op is passed only an activation it fuses.
+    // (the kernels run it on the finished sum), then the caller's unless a user grid has the op fuse it into its auto
+    // config with the bias. The op is passed only an activation it fuses.
     std::vector<ttnn::operations::unary::EltwiseUnaryWithParam> activations_after_op;
     if (post_process_bias && parameters.program_config.has_value()) {
         auto* unified = std::get_if<MatmulUnifiedProgramConfig>(&parameters.program_config.value());
@@ -301,7 +298,8 @@ static ttnn::Tensor bound_matmul(
             unified->fused_activation = std::nullopt;
         }
     }
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+    if (parameters.user_fused_activation.has_value() &&
+        (!parameters.user_core_coord.has_value() || post_process_bias)) {
         activations_after_op.push_back(parameters.user_fused_activation.value());
         parameters.user_fused_activation = std::nullopt;
     }

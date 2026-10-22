@@ -1469,6 +1469,27 @@ def test_auto_placement_activation_runs_once_with_vector_B(device):
     _check(ttnn.to_torch(out).reshape(golden.shape), golden)
 
 
+def test_activation_follows_a_bias_added_separately_on_a_core_grid(device):
+    """A core grid without a program config and a bias of several rows, which ttnn.linear adds after the op: the
+    activation follows the add (Wormhole / Blackhole: the legacy config for the grid; Quasar: the unified matmul)."""
+    M, K, N = 2 * TILE, 2 * TILE, 4 * TILE
+    torch.manual_seed(38)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    bias = (torch.rand(1, 1, M, N) * 8 - 4).to(torch.bfloat16)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.linear(
+        a_t,
+        b_t,
+        bias=bias_t,
+        core_grid=ttnn.CoreGrid(y=2, x=2),
+        activation="relu",
+        compute_kernel_config=_hifi4(device),
+    )
+    _check(ttnn.to_torch(out), torch.relu(_golden(a, b) + bias.to(torch.float32)), pcc=0.999)
+
+
 def test_auto_placement_rejects_a_C_slice(device, expect_error):
     a_t = ttnn.from_torch(_randn(1, 1, 64, 64), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(_randn(1, 1, 64, 64), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
