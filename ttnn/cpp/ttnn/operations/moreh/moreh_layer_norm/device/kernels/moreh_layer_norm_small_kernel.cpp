@@ -153,7 +153,7 @@ void kernel_main() {
                 } else {
                     // I use cb_ex temporarily.
                     constexpr auto cb_tmp = cb_ex;
-                    DataflowBuffer& dfb_tmp_obj = dfb_ex_obj;
+                    auto& dfb_tmp_obj = dfb_ex_obj;
                     ckl::eltwise_chain(
                         ckl::IterationShape::one_tile(),
                         ckl::CopyTile<x_scalar_offset_input>{dfb_x_obj, w_idx},
@@ -305,8 +305,7 @@ void kernel_main() {
          * cb_out
          */
         constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
-        DataflowBuffer& dfb_gamma_beta_or_out_obj =
-            (gamma_has_value || beta_has_value) ? dfb_gamma_beta_obj : dfb_out_obj;
+        auto& dfb_gamma_beta_or_out_obj = (gamma_has_value || beta_has_value) ? dfb_gamma_beta_obj : dfb_out_obj;
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(block_size).block_size(block_size),
@@ -325,7 +324,7 @@ void kernel_main() {
 
             if constexpr (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
-                DataflowBuffer& dfb_outg_obj = beta_has_value ? dfb_gamma_beta_obj : dfb_out_obj;
+                auto& dfb_outg_obj = beta_has_value ? dfb_gamma_beta_obj : dfb_out_obj;
                 constexpr auto gamma_bcast =
                     is_groupnorm ? ckl::BroadcastDim::Scalar
                                  : (is_lastdim_layernorm ? ckl::BroadcastDim::Row : ckl::BroadcastDim::None);
