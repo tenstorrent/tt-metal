@@ -71,24 +71,15 @@ def fidelity_phases(math_fidelity: MathFidelity) -> range:
 def warn_unmodelled_split(op_name: str, arch_name: str, stacklevel: int = 2) -> None:
     """Say so when a multiply falls back to the exact product.
 
-    A multiply whose architecture has no ``mantissa_split`` is computed exactly and
-    ``math_fidelity`` is ignored entirely. That is not a near-miss: hardware
-    truncates both operands' mantissas on every phase, so the golden comes out
-    *more* accurate than the device at every fidelity, and a test comparing
-    against it sees real mismatches with nothing obviously wrong in the golden.
+    "HiFi4 included" in the message below is not a slip. Wormhole's and
+    Blackhole's per-phase masks never reach SrcA's least significant bit, so no
+    fidelity there is the exact product -- see the ``mantissa_split`` note in
+    :mod:`.fpu`.
 
-    Note "every fidelity", not just the reduced ones. On Wormhole and Blackhole
-    the per-phase masks never cover SrcA's least significant bit -- the four
-    phases reach mantissa bits 9..1 and bit 0 participates in none of them -- so
-    even HiFi4 is not the exact product there. HiFi4 is merely the closest.
-
-    `stacklevel` is counted from here, and the default 2 points at the
-    immediate caller. What it should land on is the ``build_chain`` that
-    selected the fallback, not the calling test: ``build_chain`` is reached
-    from ``run`` and from ``_run_blocked``, which sit at different depths, so
-    no fixed level reaches the test from both -- and the chain builder is the
-    honest location anyway. A caller that forwards this through a method of
-    its own adds a frame and has to say so.
+    `stacklevel` counts from here, and the default 2 blames the immediate
+    caller. It cannot be made to blame the calling test instead: ``build_chain``
+    is reached from ``run`` and from ``_run_blocked``, which sit at different
+    depths.
     """
     warnings.warn(
         f"{arch_name} computes {op_name} as an exact product: this "
