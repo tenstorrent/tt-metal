@@ -53,6 +53,11 @@ class FakeTokens:
         return FakeTokens(self.values.tolist())
 
 
+class FakeMesh:
+    def num_program_cache_entries(self):
+        return 7  # a served prefill compiles nothing: no decode trace recapture
+
+
 class AsyncLane(FakeLane):
     """FakeLane with the ordinary decode step: the oracle's token after each active slot's position, fed back into
     the resident tokens and positions (TtMiMoModel._feed_back)."""
@@ -60,15 +65,33 @@ class AsyncLane(FakeLane):
     def __init__(self):
         super().__init__()
         self.decode_trace = {"id": 0}
+        self.mesh_device = FakeMesh()
         self.resident = None
         self.decodes = 0
+        self.table_slots = []  # the slots of each set_vllm_page_tables call
+        self.prefills = []
+        self.mtp_resets = 0
+        self.mtp.reset = self._reset_mtp
         self.sampler = SimpleNamespace(host_params=lambda *a, **k: (None, False), set_params=lambda hosts: None)
+
+    def _reset_mtp(self):
+        self.mtp_resets += 1
 
     def _decode(self, pos):
         self.decodes += 1
         tokens = [SEQ[int(p) + 1] if p >= 0 else 0 for p in pos.tolist()]
         self.resident = (tokens, torch.where(pos >= 0, pos + 1, pos))
         return {"next_tokens": FakeTokens(tokens)}
+
+    def set_vllm_page_tables(self, rows):
+        self.table_slots.append(sorted(rows))
+
+    def prefill_enqueue(self, chunk, slot, start_pos=0):
+        self.prefills.append((slot, start_pos, chunk.numel()))
+        return {"logits": torch.nn.functional.one_hot(torch.tensor(SEQ[start_pos + chunk.numel()]), VOCAB).float()}
+
+    def prefill_read(self, handle):
+        return [handle["logits"].reshape(1, -1)]
 
     def decode_enqueue(self, tokens, positions, sample=False):
         for s, p in enumerate(positions.tolist()):
@@ -548,3 +571,45 @@ def test_a_hole_in_a_chain_row_s_page_tables_is_counted(adapter, defer):
     table[SPEC_ROW, (1001 - 127) // 64] = 0
     chained(adapter, tip, 1000 + 1 + MAX_DRAFTS, table=table)
     assert adapter.chain_stats["uncovered"] == 1
+
+
+# ---------------------------------------------------------------------- finishing slots and a prefill over a verify
+def test_capabilities_of_the_chained_lane_path():
+    caps = MiMoV2ForCausalLM.model_capabilities
+    assert caps["supports_finishing_slots"] and caps["supports_prefill_over_pending_spec"]
+
+
+def test_finishing_slots_are_taken_on_any_decode_step(adapter, defer):
+    drafts = start(adapter, 300)
+    out = deferred(adapter, *block(SEQ[300], 300, drafts), finishing_slots=[1, 2])
+    assert out.handle is not None and adapter.chain_stats["finishing"] == 2
+    read(adapter, submit(adapter, {SPEC_ROW: 310}))
+    tokens = torch.zeros(ROWS, 1, dtype=torch.int32)
+    positions = torch.full((ROWS,), -1, dtype=torch.int32)
+    adapter.decode_forward(tokens, positions, TABLE, None, sampling_params=GREEDY, finishing_slots=[0])
+    with pytest.raises(ValueError, match="finishing_slots"):
+        adapter.decode_forward(tokens, positions, TABLE, None, sampling_params=GREEDY, finishing_slots=[3, 1])
+
+
+def test_a_prefill_over_a_deferred_verify(adapter, defer, monkeypatch):
+    """M15: a prefill into another slot runs while a deferred verify is in flight. It writes only its slot's page
+    tables, the verify is read and proposed after it as if nothing had happened, and nothing chains onto it."""
+    monkeypatch.setattr(generator_vllm, "PREFILL_BATCH", False)
+    lane = adapter.models[1]
+    drafts = start(adapter, 500)
+    pending = deferred(adapter, *block(SEQ[500], 500, drafts)).handle
+    lane.table_slots.clear()
+    prompt = torch.tensor([SEQ[:40]], dtype=torch.int32)
+    logits = adapter.prefill_forward(
+        prompt, torch.zeros(1, dtype=torch.int32), torch.tensor([40]), FULL_TABLE, None, empty_slots=[SPEC_ROW + 2]
+    )
+    assert int(logits[0, -1].argmax()) == SEQ[40] and lane.prefills == [(2, 0, 40)]
+    assert lane.table_slots == [[2]], "the prefill writes only its slot's page-table rows"
+    assert lane.mtp_resets == 1 and adapter.models[0].mtp_resets == 0
+    readout = read_on_thread(adapter, pending)
+    m = int(readout.accepted_counts[SPEC_ROW])
+    assert readout.accepted_token_ids[SPEC_ROW, :m].tolist() == SEQ[501 : 501 + m]
+    out = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=pending)
+    assert out.draft_token_ids[SPEC_ROW].tolist() == [draft_of(500 + m, k) for k in range(MAX_DRAFTS)]
+    with pytest.raises(ValueError, match="chain_tip"):
+        chained(adapter, pending.tip_id, 500 + 1 + MAX_DRAFTS)

@@ -296,6 +296,13 @@ vllm serve ... \
   keeps away) idles the pass and raises at the read. A chain row whose page tables hold vLLM's null block inside the
   window of its lowest possible position is counted (`chain_stats["uncovered"]`) and logged: vLLM frees
   sliding-window blocks by the scheduler's optimistic length.
+- **Finishing slots and a prefill over a verify in flight** (`supports_finishing_slots`,
+  `supports_prefill_over_pending_spec`, with `MIMO_ASYNC_SPEC`). The model keeps no per-slot state to free for a
+  request left out because the step in flight reaches its `max_tokens` (a verify sends its slot as a gap; a steady
+  decode's resident inputs decode it once more into its own blocks until the next reload). A prefill may run while a
+  deferred verify is in flight: it writes only its slots' page-table rows and K / V, behind the verify on the device
+  queue, and the verify's pages are already on their way to the host, so its read and propose follow as usual;
+  nothing chains onto it afterwards, and the lane's MTP ring restarts.
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
   `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;

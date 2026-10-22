@@ -284,11 +284,18 @@ class MiMoV2ForCausalLM:
         "supports_device_logprobs": False,
         # The MTP drafter (spec_plan, propose_draft_tokens): it keeps the target hidden on device, so it needs no
         # hidden feed. Under async scheduling (MIMO_ASYNC_SPEC, module docstring) ordinary steps overlap as in a
-        # launch that does not speculate, and a verify is read back before the step returns.
+        # launch that does not speculate, a fused verify is read a step later, and the next verify may chain onto it
+        # on device.
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose",),
         "output_tokens_per_step": 1,
         "supports_async_spec_decode": ASYNC_SPEC,
+        # Lane mode under async scheduling (the plugin's section 4j): decode_forward takes the slots of requests left
+        # out because the step in flight reaches their max_tokens (``finishing_slots``; the model keeps no slot state
+        # to free), and a prefill may run while a deferred verify is in flight (prefill_forward writes only its slots;
+        # the verify's pages are host copies).
+        "supports_finishing_slots": ASYNC_SPEC,
+        "supports_prefill_over_pending_spec": ASYNC_SPEC,
     }
     # The four reload commands of the plugin's decode reload contract (docs/DECODE_RELOAD_CONTRACT.md).
     decode_input_update_contract = 1
@@ -335,7 +342,7 @@ class MiMoV2ForCausalLM:
         # Drafts returned from the chain and drafted from the host plan; with chain_check, chained drafts checked
         # against the host plan's and the mismatches; proposes for a step older than the lane's last one
         # (``_stale_source``: one step behind, or anywhere else); chain rows whose page tables have holes
-        # (``_check_chain_tables``).
+        # (``_check_chain_tables``); finishing slots the plugin named (``_check_finishing``).
         self.chain_stats = {
             "chained": 0,
             "host": 0,
@@ -344,6 +351,7 @@ class MiMoV2ForCausalLM:
             "stale": 0,
             "misplaced": 0,
             "uncovered": 0,
+            "finishing": 0,
         }
         # The deferred verifies' tip ids, and the newest one while no other step followed it (the one a chained
         # verify may build on).
@@ -579,7 +587,12 @@ class MiMoV2ForCausalLM:
         **kwargs,
     ):
         """Row ``i`` computes tokens[i, start_pos[i]:prompt_lens[i]] for the request in slot ``empty_slots[i]``.
-        Returns its last-token logits, float32 [B, 1, vocab] (host sampling)."""
+        Returns its last-token logits, float32 [B, 1, vocab] (host sampling).
+
+        It may run while a deferred verify is in flight (``supports_prefill_over_pending_spec``): it writes only its
+        slots' page-table rows and K / V, after the verify on the device queue; the verify's result pages are copied
+        to the host behind it, so its read and propose need nothing the prefill touches. Nothing chains onto that
+        verify afterwards, and a lane taking a prompt restarts its MTP ring (its drafter serves one request)."""
         if sampling_params is not None:
             raise ValueError("MiMo samples on the host; got device sampling_params")
         tables = self._layer_tables(page_table, page_tables_per_layer)
@@ -738,6 +751,7 @@ class MiMoV2ForCausalLM:
             raise ValueError("MiMo implements decode_input_update_contract 1; got the legacy reset_batch keyword")
         if kwargs.get("defer_device_sampling"):
             raise ValueError("MiMo has no deferred device sampling (no device grammar)")
+        self._check_finishing(kwargs.pop("finishing_slots", None), tokens)
         if defer_read and spec_mode != "fused_sample":
             raise ValueError(f"defer_read comes with a fused_sample verify, got spec_mode {spec_mode!r}")
         if (chain_rows is not None or chain_tip is not None) and spec_mode != "fused_sample":
@@ -831,6 +845,21 @@ class MiMoV2ForCausalLM:
         if read_from_device:
             return self.process_decode_output_host(self.read_decode_output(out), is_tokens=on_device)
         return out
+
+    def _check_finishing(self, finishing_slots, tokens):
+        """``finishing_slots`` (the plugin's section 4j, ``supports_finishing_slots``): sorted slots of requests left
+        out of this step because the step in flight reaches their max_tokens; they are never scheduled again. MiMo
+        keeps no per-slot state to free: a verify sends them as gaps, a reloading decode as idle slots, and a steady
+        decode, whose resident inputs still hold such a slot, decodes it once more into the blocks the request still
+        holds (its output is dropped) until the next reload idles it. Its MTP draft source, if any, is never asked
+        for (the plugin proposes from position -1 for it)."""
+        if finishing_slots is None:
+            return
+        slots = [int(s) for s in finishing_slots]
+        rows = torch.as_tensor(tokens).shape[0]
+        if slots != sorted(set(slots)) or any(not 0 <= s < rows for s in slots):
+            raise ValueError(f"finishing_slots must be sorted distinct slots below {rows}, got {list(finishing_slots)}")
+        self.chain_stats["finishing"] += len(slots)
 
     def _decode_timing(self, t0, reload_inputs, on_device):
         """Every 128 decode steps: the mean host time of decode_forward's submission, and the share of steps that
