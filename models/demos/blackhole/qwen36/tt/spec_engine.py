@@ -2332,7 +2332,9 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Prefill
     # --------------------------------------------------------------------- #
-    def prefill(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None):
+    def prefill(
+        self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None, final=True
+    ):
         """Eager prefill of runner slot ``slot`` (engine row _phys[slot]), warming its MTP KV; returns host float
         logits [vocab]. Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
         The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``.
@@ -2342,7 +2344,12 @@ class MTPSpecEngine:
         ``vision_tokens`` (multimodal request: the packed vision rows the tower produced; None = text): spliced into the
         image/video placeholder positions and the M-RoPE table is built with the grid. Such a request never uses the
         prefix cache (no plan, no snapshot save / lookup): the caller passes start_pos=None, and a start_pos given anyway
-        is ignored. The drafter keeps the placeholder embedding at those positions."""
+        is ignored. The drafter keeps the placeholder embedding at those positions.
+        ``final`` False (QWEN36_SPEC_CHUNKED_PREFILL: a non-final chunk [start_pos, e) of a longer prompt, e = len(prompt_ids), a
+        multiple of 128): the chunk is prefilled (KV + drafter KV, GDN snapshot at e-128 into the prefix cache) but the row is
+        not registered (no _prompts / _fresh / _active, no GDN slot write, no last-row capture, no host logits read) and a
+        zero row is returned. The next chunk (start_pos = e) resumes from the e-128 snapshot. Text rows only."""
+        assert final or vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
             self._chain_drop("prefill")
@@ -2359,10 +2366,14 @@ class MTPSpecEngine:
         self._row_gens()[self._phys[int(slot)]] += 1
         # text: the call is unchanged (no vision kwarg)
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
+        if not final:
+            vis_kw["final"] = False
         return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos, **vis_kw)
 
-    def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None):
-        """``prefill`` of engine row ``slot``."""
+    def _prefill_row(
+        self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None, vision_tokens=None, final=True
+    ):
+        """``prefill`` of engine row ``slot`` (``final`` False: a non-final chunk, see ``prefill``)."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
         self.__dict__.setdefault("_finishing", set()).discard(slot)  # a prefill gives the slot a new request
@@ -2372,9 +2383,16 @@ class MTPSpecEngine:
         assert self._last_hidden, "prefill before prepare"
         prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
         Tp = len(prompt_list)
-        self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
-            () if start_pos is None else (int(start_pos),)
-        )
+        if final:
+            self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
+                () if start_pos is None else (int(start_pos),)
+            )
+        else:
+            assert vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
+            assert Tp % 128 == 0, f"non-final prefill chunk end {Tp} is not a multiple of 128"
+            assert (
+                start_pos is not None and 0 <= int(start_pos) < Tp
+            ), f"non-final chunk start_pos {start_pos} vs end {Tp}"
         # A multimodal row keeps its vision rows until it is released / joined: a re-prefill (_reprefill,
         # _reconcile_fresh_rows) needs them. A text prefill on the row clears a previous request's.
         if vision_tokens is None:
@@ -2382,9 +2400,10 @@ class MTPSpecEngine:
         else:
             _row_vision_of(self)[slot] = vision_tokens
         cap_blocks = int(torch.as_tensor(page_table_row).shape[-1]) if _cap_blocks is None else _cap_blocks
-        assert Tp + self.T <= table_capacity(
+        # a non-final chunk runs no verify rows past its end
+        assert Tp + (self.T if final else 0) <= table_capacity(
             cap_blocks, self.block_size
-        ), f"prompt {Tp} + {self.T} verify rows does not fit {cap_blocks} blocks x {self.block_size}"
+        ), f"prompt {Tp} + {self.T if final else 0} verify rows does not fit {cap_blocks} blocks x {self.block_size}"
         pt_row = model._fit_spec_page_table(page_table_row, self.nb)
         assert pt_row.shape[0] == 1, "prefill takes ONE page-table row"
         self._check_scratch(pt_row)
@@ -2392,11 +2411,26 @@ class MTPSpecEngine:
         captured_row = [False]
         # Prefix cache (B > 1, start_pos given, cache built): (s, (cache, slot) | None, save points) or None.
         # A multimodal request bypasses the prefix cache (mirrors Qwen36Model.prefill_paged_slots): no lookup, no saves.
+        # A non-final chunk also snapshots the GDN state at e-128 (e = Tp): the next chunk (start_pos = e) resumes there
+        # (spec_resume_cap(e, L) = e-128) and recomputes [e-128, e), which also warms the drafter slot e-1.
+        force = ()
+        if not final:
+            if self.B <= 1 or getattr(model, "_prefix_cache", None) is None:
+                raise RuntimeError("non-final prefill chunk needs the batched spec engine and the GDN prefix cache")
+            if Tp - 128 > int(start_pos):
+                force = (Tp - 128,)
+            else:
+                logger.info(
+                    f"[spec_engine] chunked prefill: chunk [{start_pos}, {Tp}) is <= 128 tokens: no e-128 snapshot"
+                )
         plan = (
-            model.plan_spec_prefix(prompt[0], Tp, start_pos)
+            model.plan_spec_prefix(prompt[0], Tp, start_pos, **(dict(force_points=force) if force else {}))
             if start_pos is not None and self.B > 1 and vision_tokens is None
             else None
         )
+        if not final and plan is None and force:
+            raise RuntimeError(f"non-final chunk [{start_pos}, {Tp}): no prefix plan (forced save point {force[0]})")
+        self._note_resume_fallback(prompt_list, start_pos, Tp, plan, final)
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)  # text: the calls are unchanged
         # The prompt the drafter fuses its next-token column from. A non-final fast-prefill segment [a, b) narrows it
         # to prompt[:b+1] so padded bucket rows never fuse (and write drafter KV for) tokens past b.
@@ -2406,7 +2440,7 @@ class MTPSpecEngine:
             # Never frees `hidden` (the caller does, or it is the trace's persistent output).
             feed = model.spec_feed_rows(hidden)
             self._warm_mtp_chunk(feed, chunk_start, valid_len, mtp_prompt[0], pt_row)
-            if chunk_start + valid_len >= Tp:  # the chunk holding slot Tp-1
+            if final and chunk_start + valid_len >= Tp:  # the chunk holding slot Tp-1
                 self._capture_last_row(feed, Tp - 1 - chunk_start, slot)
                 captured_row[0] = True
             if feed is not hidden:
@@ -2416,6 +2450,8 @@ class MTPSpecEngine:
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
             fast_kw.update(vis_kw)
+            if not final:
+                fast_kw["final_row"] = False
             logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
@@ -2423,8 +2459,13 @@ class MTPSpecEngine:
         if logits_dev is None:
             if plan is None:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, **vis_kw)
-            else:
+            elif final:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan)
+            else:
+                model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, final=False)
+        if not final:
+            # nothing is registered for the row: the next chunk (or the final one) prefills it again from the e-128 snapshot
+            return torch.zeros(self.vocab)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
         if isinstance(logits_dev, torch.Tensor):
             lt = logits_dev
@@ -2450,6 +2491,7 @@ class MTPSpecEngine:
         plan=None,
         mtp_prompt=None,
         vision_tokens=None,
+        final_row=True,
     ):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
@@ -2465,7 +2507,10 @@ class MTPSpecEngine:
         request's cached blocks (see doc 40).
 
         ``vision_tokens`` (multimodal prompt; plan is None then): the packed vision rows, spliced per segment by
-        _fast_segment."""
+        _fast_segment.
+
+        ``final_row`` False (non-final chunk): the scratch is not written to the row's GDN slot and no host logits are read
+        (the returned value is meaningless)."""
         model = self.model
         batched = self.B > 1
         if plan is None:
@@ -2476,6 +2521,7 @@ class MTPSpecEngine:
         # The traces' GDN binding check (_short_trace_for) needs the binding the requests run on, so bind first.
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
+            self._skip_logits_read = not final_row
             if plan is not None:
                 assert vision_tokens is None, "a multimodal prompt bypasses the prefix cache"
                 model._build_request_rope(prompt, None)  # one table for the whole prompt: every segment slices it
@@ -2511,11 +2557,12 @@ class MTPSpecEngine:
             if plan is not None:
                 model._prefix_cache.log(Tp, -1, s0, saved)
         finally:
+            self._skip_logits_read = False
             if mtp_prompt is not None:
                 mtp_prompt[0] = prompt_list
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)
-        if batched:
+        if batched and final_row:
             # Device-to-device: scratch (B=1) -> row `slot` of the batched GDN buffers, other rows untouched (the slot-write
             # trace when captured and still valid, else TPGatedDeltaNet.write_slot(consume=False) eagerly).
             model._write_gdn_slot_from_scratch(slot)
@@ -2712,6 +2759,8 @@ class MTPSpecEngine:
         )
         ttnn.copy(tr.last_feed, self._last_hidden[slot])
         captured_row[0] = True
+        if getattr(self, "_skip_logits_read", False):  # non-final chunk: no logits use
+            return torch.zeros(0)
         if model._logits_read_comp is None:
             model._logits_read_comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
         lg = ttnn.to_torch(tr.logits, mesh_composer=model._logits_read_comp)
@@ -2719,9 +2768,31 @@ class MTPSpecEngine:
 
     def _read_replicated_logits(self, logits_dev):
         """Replicated device logits [1, 1, vocab] (one all-gathered copy per device) -> host float [vocab], freed."""
+        if getattr(self, "_skip_logits_read", False):  # non-final prefill chunk: no logits use
+            ttnn.deallocate(logits_dev)
+            return torch.zeros(0)
         lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
         ttnn.deallocate(logits_dev)
         return lt.reshape(-1)[: self.vocab].float()
+
+    def _note_resume_fallback(self, prompt_list, start_pos, Tp, plan, final):
+        """Count (and log) a prefill with start_pos > 0 that resumes from a GDN snapshot below spec_resume_cap (the
+        snapshot at the cap was evicted or never saved): correct but slower. Chunked prefill expects the e-128 snapshot.
+        """
+        if start_pos is None or int(start_pos) <= 0 or self.B <= 1:
+            return
+        from models.demos.blackhole.qwen36.tt.prefix_cache import spec_resume_cap
+
+        cap = spec_resume_cap(int(start_pos), Tp)
+        s = 0 if plan is None else int(plan[0])
+        if s >= cap:
+            return
+        self.resume_fallbacks = getattr(self, "resume_fallbacks", 0) + 1
+        # a plain APC miss is routine; with chunked prefill it means the e-128 snapshot was evicted
+        (logger.warning if os.environ.get("QWEN36_SPEC_CHUNKED_PREFILL", "0") == "1" else logger.debug)(
+            f"[spec_engine] prefix resume fallback #{self.resume_fallbacks}: start_pos={start_pos} Tp={Tp} "
+            f"({'final' if final else 'non-final'}) resumes at {s}, wanted {cap} (snapshot evicted?)"
+        )
 
     def _reprefill(self, slot):
         """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""

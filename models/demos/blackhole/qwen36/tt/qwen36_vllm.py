@@ -70,6 +70,23 @@ def _spec_prefix_cache_enabled():
     return os.environ.get("QWEN36_SPEC_PREFIX_CACHE", "1") == "1"
 
 
+def _spec_chunked_prefill_enabled():
+    """QWEN36_SPEC_CHUNKED_PREFILL=1 (default off) AND the spec GDN prefix cache on (the flags that decide whether
+    _maybe_build_spec_prefix_cache builds model._prefix_cache): the MTP class accepts chunked prefill (chunk snapshots live in
+    that cache, see spec_engine.prefill ``final``)."""
+    return (
+        os.environ.get("QWEN36_SPEC_CHUNKED_PREFILL", "0") == "1"
+        and _spec_prefix_cache_enabled()
+        and os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1"
+    )
+
+
+def _mtp_chunked_capabilities():
+    """model_capabilities keys of the MTP class that depend on QWEN36_SPEC_CHUNKED_PREFILL (read at import)."""
+    on = _spec_chunked_prefill_enabled()
+    return {"supports_chunked_prefill": on, "accepts_intermediate_prefill_mask": on}
+
+
 def _ns_slotmap_enabled():
     """QWEN36_NS_SLOTMAP (default 1): the non-spec resident decode keeps a runner-slot -> device-row map on the host
     instead of moving GDN state on the device for every plugin slot_remap; 0 = the device remap of old."""
@@ -1105,7 +1122,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # QWEN36_SPEC_PREFIX_CACHE=1 (default): APC via the model's GDN snapshot cache (tt/prefix_cache.py); the spec
         # prefill resumes from a snapshot at or below start_pos (B > 1 eager path; B == 1 recomputes from 0).
         "supports_prefix_caching": _spec_prefix_cache_enabled(),
-        "supports_chunked_prefill": False,
+        # QWEN36_SPEC_CHUNKED_PREFILL=1 + prefix cache: non-final chunks snapshot the GDN state at e-128 and the next chunk
+        # resumes there (spec_engine.prefill final=False); the plugin passes intermediate_prefill_mask.
+        **_mtp_chunked_capabilities(),
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose", "hidden_feed"),
         "spec_hidden_handoff": ("on_device",),
@@ -1138,7 +1157,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         ):
             return "prefix caching is enabled; the spec engine's prefill needs start_pos == 0 (use --no-enable-prefix-caching)"
         sc = getattr(vc, "scheduler_config", None)
-        if sc is not None and getattr(sc, "enable_chunked_prefill", False):
+        if sc is not None and getattr(sc, "enable_chunked_prefill", False) and not _spec_chunked_prefill_enabled():
             max_len = int(vc.model_config.max_model_len)
             budget = int(getattr(sc, "max_num_scheduled_tokens", None) or sc.max_num_batched_tokens)
             thr = int(getattr(sc, "long_prefill_token_threshold", 0) or 0)
@@ -1326,6 +1345,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if not use_pc:
             assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
         starts = [int(x) for x in start_pos] if use_pc and start_pos is not None else None
+        mask = kwargs.get("intermediate_prefill_mask")
+        nonfinal = [bool(mask[i]) if mask is not None else False for i in range(N)]
+        if any(nonfinal) and not _spec_chunked_prefill_enabled():
+            raise RuntimeError(
+                "non-final prefill chunk but QWEN36_SPEC_CHUNKED_PREFILL=1 with the spec prefix cache is off"
+            )
         eng = self._ensure_ready(kv_cache)
         model = self.model[0]
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
@@ -1336,7 +1361,17 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             # Multimodal request: the tower runs right before this user's prefill (it stashes model-global grids), as in
             # the non-spec batched path. Same semantics: video takes precedence, bucket checked against the warmup.
             has_mm = any(self._has_visual(kwargs, k, i) for k in ("pixel_values", "pixel_values_videos"))
+            if has_mm and nonfinal[i]:
+                raise RuntimeError(
+                    f"multimodal prefill row {i} is a non-final chunk: the MTP spec path cannot split a multimodal prompt "
+                    "(the scheduler must not chunk it)"
+                )
             vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
+            if nonfinal[i]:
+                assert starts is not None, "non-final prefill chunk without start_pos"
+                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False)
+                rows.append(out.float().reshape(-1))  # zero row: the plugin ignores a non-final chunk's output
+                continue
             if vision_tokens is not None:
                 # No prefix-cache resume: recompute from 0 (a preempted / resumed request may carry start_pos > 0).
                 out = eng.prefill(

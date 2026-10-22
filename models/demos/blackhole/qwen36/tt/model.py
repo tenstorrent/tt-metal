@@ -1630,13 +1630,15 @@ class Qwen36Model:
             if t is not None:
                 ttnn.deallocate(t)
 
-    def plan_spec_prefix(self, tokens_row, L, start_pos):
+    def plan_spec_prefix(self, tokens_row, L, start_pos, force_points=()):
         """Prefix-cache plan for ONE spec prefill (None = the unchanged from-0 path): (s, (cache, slot) | None, points).
 
         start_pos is vLLM's num_computed_tokens (None: caller does not take part in prefix caching). s = the largest
         snapshot position <= spec_resume_cap(start_pos, L) (0 = recompute everything; always correct): the snapshot is
         restored into the B=1 scratch and [s, L) is recomputed (main KV rewritten, drafter KV rewritten). `points`
-        are the positions to snapshot while prefilling (see prefix_cache.spec_save_points)."""
+        are the positions to snapshot while prefilling (see prefix_cache.spec_save_points). ``force_points``: extra
+        128-aligned positions p (s < p <= L-3) to snapshot (MTP chunked prefill: the chunk end - 128); positions that do not
+        fit are dropped."""
         cache = self._prefix_cache
         if cache is None or start_pos is None or self.args.max_batch_size <= 1:
             return None
@@ -1660,11 +1662,16 @@ class Qwen36Model:
             min_len=int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "8192")),
             stride=int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_STRIDE", "8192")),
         )
+        forced = [int(p) for p in force_points if s < int(p) <= L - 3 and int(p) % 128 == 0]
+        if forced:
+            points = sorted(set(points) | set(forced))
         if s == 0 and not points:
             return None
         return s, src, points
 
-    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0, plan=None, vision_tokens=None):
+    def prefill_for_spec(
+        self, token_ids, page_table, actual_len, on_chunk, slot=0, plan=None, vision_tokens=None, final=True
+    ):
         """Chunked prompt prefill for speculative decode; hands each chunk's hidden to ``on_chunk``.
 
         Uses the same 2048-token chunking as the demo. Prefilling the whole prompt as one masked
@@ -1683,8 +1690,12 @@ class Qwen36Model:
         ``vision_tokens`` (multimodal prompt: packed vision rows, see Qwen36ForCausalLM._compute_vision_tokens): the M-RoPE
         table is built with the grid and each chunk splices its own rows. A multimodal prompt is never prefix-cached
         (``plan`` must be None).
+
+        ``final`` False (MTP chunked prefill, a non-final chunk; needs ``plan``): the GDN state is only snapshotted at the plan's
+        save points; nothing is written to decode row ``slot`` and no logits are computed (returns None).
         """
         assert self.num_devices > 1, "prefill_for_spec is the TP path"
+        assert final or plan is not None, "a non-final prefill chunk needs a prefix plan"
         assert vision_tokens is None or plan is None, "a multimodal prompt bypasses the prefix cache"
         assert 0 <= slot < self.args.max_batch_size, f"slot {slot} out of range [0,{self.args.max_batch_size})"
         if self.args.max_batch_size > 1:
@@ -1697,7 +1708,11 @@ class Qwen36Model:
                         token_ids, page_table, actual_len, on_chunk, vision_tokens=vision_tokens
                     )
                 else:
-                    logits = self._prefill_for_spec_resumable(token_ids, page_table, actual_len, on_chunk, plan)
+                    logits = self._prefill_for_spec_resumable(
+                        token_ids, page_table, actual_len, on_chunk, plan, want_logits=final
+                    )
+                if not final:
+                    return None
                 snap = [
                     (
                         ttnn.clone(dn.rec_state, memory_config=dram),
@@ -1712,7 +1727,7 @@ class Qwen36Model:
             return logits
         return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk, vision_tokens=vision_tokens)
 
-    def _prefill_for_spec_resumable(self, token_ids, page_table, L, on_chunk, plan):
+    def _prefill_for_spec_resumable(self, token_ids, page_table, L, on_chunk, plan, want_logits=True):
         """Prefix-cached spec prefill on the BOUND B=1 scratch (plan from plan_spec_prefix): restore the snapshot at s
         (or zero the state when s == 0), prefill [s, p1), [p1, p2) ... [pk, L) at absolute positions with the same
         2048-chunk eager loop as _prefill_for_spec_b1 (``on_chunk`` gets every chunk, so the drafter KV is warmed over
@@ -1730,7 +1745,9 @@ class Qwen36Model:
         bounds = list(points) + [L]
         for i, seg_end in enumerate(bounds):
             last = i == len(bounds) - 1
-            logits = self._spec_prefill_segment(tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last)
+            logits = self._spec_prefill_segment(
+                tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last and want_logits
+            )
             if not last:
                 cache.save(tokens[0], seg_end)
                 saved.append(seg_end)
