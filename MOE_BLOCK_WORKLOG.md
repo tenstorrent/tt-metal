@@ -350,3 +350,18 @@ Tried: (a) weights issued all at once with a transaction id a block, a block str
 (GLM 97 -> 95); (b) NoC swap (weight reads + column multicasts on NOC0): K3 gate / up 316 -> 274 but down +20 us,
 GLM 97 -> 113 - reverted; (c) h exchanged all at once with counters instead of 22 kernel_lib rounds: no faster
 (the concurrent row multicasts serialize: 18-41 us) - reverted to the rounds. KB 16: K3 403 -> 367, GLM no change.
+
+### Ring readiness of the x all-gather (v3)
+- CPU protocol model (tests/test_head_protocol_model.py, host only): x_gather3's real per-port plan (port_plan, shared
+  with the device build) and the real line / balanced-ring schedule, replayed as reader / sender / fabric channel /
+  watcher / call-fence processes under a random scheduler, two calls with chips drifting apart; line and ring of 4
+  and 8, 1-2 links, channel depth 1 and 4, 6 seeds each: delivery exactly once, every chunk complete at its XREADY, no
+  write into a chip still in the previous call, termination with every counter re-armed, no deadlock - 14 / 14 pass.
+  It catches injected bugs: no fence -> 36 / 40 seeds flag a cross-call write; the old global-row link mapping -> the
+  packet-count check.
+- Mock Galaxy host build (tests/test_head_mock_galaxy.py, TT_METAL_MOCK_CLUSTER_DESC_PATH=blackhole_galaxy.yaml):
+  8 x 4, TP a ring of 4 (FABRIC_2D_TORUS_X), 12 x 10 grid, 640 rows a mesh row: the planner's ring schedule (own
+  shard both ways, the opposite shard's even / odd halves one way each = 1.5 shards on the busiest link), every chip's
+  program built and enqueued for GLM-Flash and K3 - pass.
+- Device-tested: the line only (LoudBox). Ring-verified: by the model (protocol) and the host build (plans,
+  descriptors); not on ring hardware.
