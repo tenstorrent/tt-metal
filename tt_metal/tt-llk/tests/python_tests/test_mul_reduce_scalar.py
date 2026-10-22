@@ -145,7 +145,10 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
 
     # The SrcA poison, then the SrcB poison, follow the input tiles in buffer_A; the kernel reads them as full tiles.
     poison = torch.cat(
-        [torch.full((POISON_TILES * MAX_TILE_ELEMENTS,), value, dtype=src_A.dtype) for value in (100.0, 25.0)]
+        [
+            torch.full((POISON_TILES * MAX_TILE_ELEMENTS,), value, dtype=src_A.dtype)
+            for value in (100.0, 25.0)
+        ]
     )
 
     configuration = TestConfig(
