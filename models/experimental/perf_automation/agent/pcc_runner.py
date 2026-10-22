@@ -101,13 +101,16 @@ def parse_failed_tests(out: str) -> list:
     return [UNNAMED_FAILURE] * total
 
 
-def _verdict_from_output(out: str, threshold: float, baseline_failed=None) -> dict:
+def _verdict_from_output(out: str, threshold: float, baseline_failed=None, gates=None) -> dict:
     """Correctness verdict for a captured pytest run. Split out of run_pcc so the gate's own
     logic is testable without a device -- these branches decide whether an edit is kept.
 
     `baseline_failed`: the cases of the correctness file that already fail on the UNEDITED model
     (recorded by the loop's BEFORE gate, perf_mcp.record_pcc_baseline). Only those are tolerated;
-    every other failing case is `tests_failed`, whatever the PCC. None or [] tolerates nothing."""
+    every other failing case is `tests_failed`, whatever the PCC. None or [] tolerates nothing.
+
+    `gates`: the per-gate readings of a multi-gate run ([{test, pcc, threshold}], see _gates_verdict): a
+    gate whose own PCC is under its own threshold makes the run pcc_low, whatever the whole-run number."""
     pcc = parse_pcc(out)
 
     # A SKIPPED e2e test verified NOTHING -- never accept it as correct just because a stale
@@ -170,6 +173,17 @@ def _verdict_from_output(out: str, threshold: float, baseline_failed=None) -> di
     effective = max(float(threshold or 0.0), _operator_pcc_floor())
     failed = parse_failed_tests(out)
     verdict = {"pcc": pcc, "pcc_verified": True, "threshold": effective, "failed_tests": failed}
+    low_gates = [g for g in gates or () if g["pcc"] is not None and g["pcc"] < g["threshold"]]
+    if gates:
+        verdict["gates"] = gates
+    if low_gates:
+        worst = min(low_gates, key=lambda g: g["pcc"] - g["threshold"])
+        return {
+            "status": "pcc_low",
+            **verdict,
+            "error": "gate %s: PCC %.6f is under its own threshold %.4f (every pipeline's e2e PCC test must clear "
+            "its floor)" % (worst["test"], worst["pcc"], worst["threshold"]),
+        }
     if pcc < effective:
         return {"status": "pcc_low", **verdict}
     tolerated = set(baseline_failed or ())
@@ -226,23 +240,15 @@ def _inside_repo(resolved: Path, model_root, repo) -> Path:
 
 
 def run_pcc(ctx) -> dict:
-    """Run the e2e PCC test, parse the measured PCC, compare the manifest threshold.
+    """Run every e2e PCC gate of the run (gate_nodes) in ONE pytest run, parse each gate's measured PCC,
+    compare each with its own threshold.
 
-    Returns {status: ok|pcc_low|tests_failed|crash, pcc?, failed_tests?, error?}. A parsed
-    number below threshold is pcc_low (expected pytest non-zero exit); a case of the file that
+    Returns {status: ok|pcc_low|tests_failed|crash, pcc?, failed_tests?, gates?, error?}. A parsed
+    number below threshold is pcc_low (expected pytest non-zero exit); a case of a gate file that
     fails here but passes on the unedited model (ctx.baseline_failed_tests(), when the context
     has one) is tests_failed; an unparseable result or an exception is crash.
     """
-    entry = ctx.manifest["pathmap"]["pcc"]["end_to_end"]
-    file_part, sep, fn = str(entry["path"]).partition("::")
-    repo = gitio.repo_root(ctx.model_root())
-    resolved = next(
-        (b / file_part for b in (Path(ctx.model_root()), Path(repo)) if (b / file_part).is_file()),
-        Path(ctx.model_root()) / file_part,
-    )
-    resolved = _inside_repo(resolved, ctx.model_root(), repo)
-    test = str(resolved) + (sep + fn)
-    threshold = entry["threshold"]
+    nodes = gate_nodes(ctx)
     env = dict(os.environ)
     # FULL DEPTH for correctness, expressed by REMOVING the cap rather than by a sentinel: "0"
     # arrives as a truthy string and was read by model builders as "build zero layers", which PCC'd
@@ -254,7 +260,7 @@ def run_pcc(ctx) -> dict:
     probes.wait_for_memory_headroom_before_device_work("check_pcc (full-depth)")
     # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
     argv = probes.pytest_argv("-p", _DEPTH_GUARD, *probes.PYTEST_NO_TIMEOUT)
-    cmd = [*argv, test, "-sv"]
+    cmd = [*argv, *(n["test"] for n in nodes), "-sv"]
 
     def _once():
         # a fresh log per attempt: run_with_low_memory_fallback may call this twice, and the first
@@ -287,7 +293,89 @@ def run_pcc(ctx) -> dict:
     out = (r.stdout or "") + (r.stderr or "")
     # A context without the record (the kernel_test shim, older callers) tolerates no failure.
     baseline_failed = getattr(ctx, "baseline_failed_tests", lambda: None)()
-    return _verdict_from_output(out, threshold, baseline_failed=baseline_failed)
+    return _gates_verdict(out, nodes, baseline_failed=baseline_failed)
+
+
+def _resolve_node(ctx, node, repo) -> str:
+    """A manifest test node ('path::fn', model-root- or repo-relative or absolute) as the absolute node pytest
+    runs, kept inside the tree under measurement (_inside_repo)."""
+    file_part, sep, fn = str(node).partition("::")
+    resolved = next(
+        (b / file_part for b in (Path(ctx.model_root()), Path(repo)) if (b / file_part).is_file()),
+        Path(ctx.model_root()) / file_part,
+    )
+    return str(_inside_repo(resolved, ctx.model_root(), repo)) + (sep + fn)
+
+
+def gate_nodes(ctx) -> list:
+    """EVERY correctness gate of the run, as [{test: absolute node, threshold}]: pathmap.pcc.end_to_end first
+    (the pipeline being optimized; the loop's PERF_MCP_PCC_TEST already points it there), then the e2e PCC
+    test of each OTHER discovered pipeline (pathmap.pipelines[*].pcc_test), each with the threshold its own
+    file declares.
+
+    One edit has to clear all of them. The pipelines of a multi-task model share the model code, and a
+    gate that ran only the optimized pipeline's test could not see the others break: Devstral's six optimize
+    runs (2026-10-13..22) were gated on text_generation alone while image_text_to_text's prefill hidden
+    PCC fell from 0.9954 to 0.9904 under the same 0.995 floor -- every lever that did it was banked as a win."""
+    pm = ctx.manifest["pathmap"]
+    repo = gitio.repo_root(ctx.model_root())
+    primary = pm["pcc"]["end_to_end"]
+    nodes = [{"test": _resolve_node(ctx, primary["path"], repo), "threshold": float(primary["threshold"])}]
+    for p in pm.get("pipelines") or []:
+        node = p.get("pcc_test")
+        if not node:
+            continue
+        test = _resolve_node(ctx, node, repo)
+        if any(n["test"] == test for n in nodes):
+            continue
+        from .model_files import _extract_pcc_threshold
+
+        thr = _extract_pcc_threshold(Path(test.partition("::")[0]), default=nodes[0]["threshold"])
+        nodes.append({"test": test, "threshold": float(thr)})
+    return nodes
+
+
+def _split_by_node(out: str, nodes) -> dict | None:
+    """The transcript of each gate's own case: pytest -v names a case (its node id) when it starts and -s
+    streams the case's prints after it, so the text from one gate's first name line to the next gate's is that
+    gate's own. None when a gate is never named (the run died before it, or the transcript was cut)."""
+    body = out or ""
+    banner = _TRACEBACK_BANNER.search(body)
+    if banner:  # the failure section echoes every case; only the live transcript is split
+        body = body[: banner.start()]
+    marks = []
+    for i, n in enumerate(nodes):
+        f, _, fn = str(n["test"]).partition("::")
+        pat = re.escape(Path(f).name) + "::" + (re.escape(fn) if fn else "")
+        m = re.search(r"^.*" + pat, body, re.MULTILINE)
+        if m is None:
+            return None
+        marks.append((m.start(), i))
+    marks.sort()
+    return {i: body[pos : (marks[k + 1][0] if k + 1 < len(marks) else len(body))] for k, (pos, i) in enumerate(marks)}
+
+
+def _gates_verdict(out: str, nodes, baseline_failed=None) -> dict:
+    """The verdict of one pytest run over every gate node (gate_nodes): each gate's own PCC must clear its own
+    threshold, and the failing-case rule applies to the whole run (every case of every gate file).
+
+    When the transcript cannot be split by case, or a gate prints no PCC of its own, the whole transcript is
+    judged against the STRICTEST threshold -- the conservative reading of a run that did not say which gate
+    produced which number."""
+    if len(nodes) == 1:
+        return _verdict_from_output(out, nodes[0]["threshold"], baseline_failed=baseline_failed)
+    segments = _split_by_node(out, nodes)
+    pccs = [parse_pcc(segments[i]) for i in range(len(nodes))] if segments is not None else None
+    if pccs is None or any(p is None for p in pccs):
+        v = _verdict_from_output(out, max(n["threshold"] for n in nodes), baseline_failed=baseline_failed)
+        v["gates"] = [{"test": n["test"], "threshold": n["threshold"], "pcc": None} for n in nodes]
+        return v
+    floor = _operator_pcc_floor()
+    gates = [{"test": n["test"], "threshold": max(float(n["threshold"]), floor), "pcc": p} for n, p in zip(nodes, pccs)]
+    # The whole-transcript PCC is the worst of all gates, so the loosest threshold cannot fail it by itself;
+    # each gate's own floor is enforced through `gates` below.
+    v = _verdict_from_output(out, min(n["threshold"] for n in nodes), baseline_failed=baseline_failed, gates=gates)
+    return v
 
 
 # Lines that pollute the crash excerpt: nanobind dumps ~hundreds of "leaked ..." lines at

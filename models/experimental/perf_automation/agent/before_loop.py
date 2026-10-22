@@ -340,6 +340,30 @@ def _relativize_to_model_root(path_str: str, model_root: Path) -> str:
 # ---- the driver --------------------------------------------------------------
 
 
+def _node_key(node) -> tuple:
+    """A test node id, normalized for comparison: (normalized file path, test function or '')."""
+    f, _, fn = str(node).partition("::")
+    return (os.path.normpath(f), fn)
+
+
+def _pinned_pipelines(discovered, task, perf_node, pcc_node):
+    """The pipelines of a run whose correctness gate is pinned with --pcc-test.
+
+    The optimized pipeline (the pinned gate + its perf test) comes first; every OTHER discovered pipeline
+    (model_files._enumerate_pipelines: one per demo/demo_<task>.py, each with its own e2e PCC test) stays
+    as a GATE-ONLY entry -- no perf test, so run.pipelines_from_manifest leaves it out of the optimization,
+    while pcc_runner.gate_nodes still runs its e2e PCC test on every edit. The pipelines share the model
+    code: a lever the pinned test accepts can still break another pipeline's output, and a gate that ran
+    only the pinned test could not see it (Devstral: six runs gated on text_generation alone while
+    image_text_to_text's prefill hidden PCC fell from 0.9954 to 0.9904 under the same 0.995 floor)."""
+    out = [{"task": task, "perf_test": perf_node, "pcc_test": pcc_node}]
+    for p in discovered or []:
+        node = p.get("pcc_test")
+        if node and _node_key(node) not in {_node_key(o["pcc_test"]) for o in out}:
+            out.append({"task": p.get("task", "main"), "perf_test": None, "pcc_test": node})
+    return out
+
+
 def _enforce_pcc_gate_policy(pcc_test, model_root, config) -> None:
     """Decide where the correctness gate comes from, and STOP when there is no ground truth.
 
@@ -782,7 +806,7 @@ def before_loop(
         }
         pathmap["perf_tests"] = [pathmap["perf_test"]]
         _pt_rel_node = f"{_pt_rel}::{_pt_case}" if _pt_case else _pt_rel
-        pathmap["pipelines"] = [{"task": _task, "perf_test": _pt_rel_node, "pcc_test": pcc_override["path"]}]
+        pathmap["pipelines"] = _pinned_pipelines(pathmap.get("pipelines"), _task, _pt_rel_node, pcc_override["path"])
         pathmap["is_multimodal"] = False
         print(
             f"      perf test -> {config['perf_test']} (explicit --perf-test; auto-generation skipped)",
@@ -865,9 +889,16 @@ def before_loop(
         _pp, _, _pf = perf_node.partition("::")
         pathmap["perf_test"] = {"path": _pp, "case": _pf, "note": "auto-gen from --pcc-test"}
         pathmap["perf_tests"] = [pathmap["perf_test"]]
-        pathmap["pipelines"] = [{"task": _task, "perf_test": perf_node, "pcc_test": pcc_override["path"]}]
+        pathmap["pipelines"] = _pinned_pipelines(pathmap.get("pipelines"), _task, perf_node, pcc_override["path"])
         pathmap["is_multimodal"] = False
         print(f"      auto-gen perf from pcc -> {perf_node}", file=sys.stderr, flush=True)
+    if pcc_abs is not None:
+        for _gate in (pathmap.get("pipelines") or [])[1:]:
+            print(
+                f"      also gated on -> {_gate['pcc_test']} (pipeline {_gate['task']}; every edit must clear it too)",
+                file=sys.stderr,
+                flush=True,
+            )
     usage_suffix = record_agent_call(
         "discover",
         "discovery_sub_agent",
