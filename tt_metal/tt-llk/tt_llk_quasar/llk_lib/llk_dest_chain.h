@@ -17,35 +17,21 @@ namespace dest_chain
 using dest_dvalid::NONE;
 using dest_dvalid::THIS_UNIT;
 
+// Each thread only acts for its own unit, so the copies agree on the holder and the use, and on the turns of the
+// units a thread tracks.
 struct State
 {
-    dest_dvalid_client holder     = NONE;
-    dest_dvalid_client head       = NONE;
-    dest_dvalid_client pending[2] = {NONE, NONE}; // per bank, the head whose token the last section posted
-    std::uint32_t section         = 0;
-    std::uint8_t members          = 0;
-    std::uint8_t bank             = 0;
-    bool holder_is_head           = false; // false once the head takes again later in the section
+    dest_dvalid_client holder = NONE;
+    bool holder_has_bit       = false; // on the holder's thread, false while it was admitted on an empty bank
+    bool gated                = false; // this thread's unit has a wait word, false at boot and after a leave
+    std::uint8_t members      = 0;
+    std::uint8_t turned       = 0;          // tracked units with a turn in the current bank use
+    std::uint8_t ordered[2]   = {0xF, 0xF}; // per bank, tracked units with a turn in its last use (boot orders everyone)
+    std::uint8_t use          = 0;          // bank of the current use in SyncHalf
+    std::uint8_t bank         = 0;          // bank of this thread's unit
 };
 
 inline State state;
-
-template <dest_dvalid_client UNIT>
-constexpr bool mine()
-{
-    return UNIT == THIS_UNIT;
-}
-
-constexpr bool can_start(const dest_dvalid_client unit)
-{
-    return unit != dest_dvalid_client::PACK && unit != NONE;
-}
-
-template <DstSync DST>
-inline std::uint32_t section_bank()
-{
-    return DST == DstSync::SyncFull ? 0 : (state.section & 1);
-}
 
 /**
  * @brief Select a bank on its owner's thread, preserving the bank's ownership bits.
@@ -53,60 +39,56 @@ inline std::uint32_t section_bank()
 template <dest_dvalid_client UNIT>
 inline void select_bank(const std::uint32_t target)
 {
-    if (state.bank == target)
+    if constexpr (UNIT == THIS_UNIT)
     {
-        return;
-    }
-    if (target == 0)
-    {
-        TTI_CLEARDVALID(0, 0, 0, dest_dvalid::bit_of(UNIT), 0, 0);
-    }
-    else
-    {
-        _llk_dest_dvalid_bank_flip_<UNIT>();
-    }
-    state.bank = target;
-}
-
-template <DstSync DST>
-inline void after_pulse()
-{
-    if constexpr (DST == DstSync::SyncHalf)
-    {
-        state.bank ^= 1;
-    }
-}
-
-template <dest_dvalid_client UNIT, DstSync DST>
-inline void arrive()
-{
-    if constexpr (mine<UNIT>())
-    {
-        select_bank<UNIT>(section_bank<DST>());
+        if (state.bank == target)
+        {
+            return;
+        }
+        if (target == 0)
+        {
+            TTI_CLEARDVALID(0, 0, 0, dest_dvalid::bit_of(UNIT), 0, 0);
+        }
+        else
+        {
+            _llk_dest_dvalid_bank_flip_<UNIT>();
+            state.gated = false;
+        }
+        state.bank = target;
     }
 }
 
 template <dest_dvalid_client FROM, dest_dvalid_client TO, DstSync DST>
 inline void signal()
 {
-    if constexpr (FROM != TO && mine<FROM>())
+    if constexpr (FROM != TO)
     {
-        if (state.holder_is_head)
+        constexpr bool HOLD = DST == DstSync::SyncFull;
+        if constexpr (FROM == THIS_UNIT)
         {
-            _llk_dest_dvalid_signal_<FROM, TO, DST, true /*HEAD*/>();
+            if (state.holder_has_bit)
+            {
+                _llk_dest_dvalid_signal_<FROM, TO, true /*HAS_BIT*/, HOLD>();
+            }
+            else
+            {
+                _llk_dest_dvalid_signal_<FROM, TO, false /*HAS_BIT*/, HOLD>();
+            }
+            if constexpr (!HOLD)
+            {
+                state.bank ^= 1;
+            }
         }
-        else
-        {
-            _llk_dest_dvalid_signal_<FROM, TO, DST, false /*HEAD*/>();
-        }
-        after_pulse<DST>();
     }
 }
 
+/**
+ * @brief The holder hands dest to TO. Only the holder's own thread issues anything.
+ */
 template <dest_dvalid_client TO, DstSync DST>
 inline void pass_from_holder()
 {
-    if constexpr (THIS_UNIT != NONE && !mine<TO>())
+    if constexpr (THIS_UNIT != NONE && TO != THIS_UNIT)
     {
         if (state.holder == THIS_UNIT)
         {
@@ -115,74 +97,39 @@ inline void pass_from_holder()
     }
 }
 
-template <dest_dvalid_client UNIT, DstSync DST>
-inline void admit(const bool head)
-{
-    if constexpr (mine<UNIT>())
-    {
-        if (head)
-        {
-            _llk_dest_dvalid_admit_<UNIT, true /*HEAD*/, DST>();
-        }
-        else
-        {
-            _llk_dest_dvalid_admit_<UNIT, false /*HEAD*/, DST>();
-        }
-    }
-}
-
 /**
- * @brief PACK's turn ended the section: PACK clears its bit and posts the token of this section's head.
+ * @brief PACK's turn ended the use of a bank and NEXT opens the other one.
+ *
+ * NEXT waits for the bank to be empty when it had a turn in the last use of that bank. Otherwise an empty bank
+ * could be the state before that use, so PACK hands NEXT its bit once PACK's reads are done.
+ * @return true when NEXT was handed a bit, known on the threads that track NEXT
  */
-template <DstSync DST>
-inline void close_section()
+template <dest_dvalid_client NEXT, DstSync DST>
+inline bool end_use()
 {
-    const std::uint32_t bank = section_bank<DST>();
-    if constexpr (mine<dest_dvalid_client::PACK>())
+    constexpr bool KNOWN     = NEXT == THIS_UNIT || THIS_UNIT == dest_dvalid_client::PACK;
+    const std::uint32_t bank = state.use;
+    const std::uint32_t next = bank ^ 1;
+    const bool granted       = KNOWN && !(state.ordered[next] & dest_dvalid::bit_of(NEXT));
+    if constexpr (THIS_UNIT == dest_dvalid_client::PACK)
     {
-        _llk_dest_dvalid_finish_<dest_dvalid_client::PACK>(dest_dvalid::token_sem(state.head, bank));
-        after_pulse<DST>();
-    }
-    state.pending[bank] = state.head;
-    state.section++;
-    state.holder = NONE;
-}
-
-/**
- * @brief Wait for the token of the previous section on this bank. A token posted to another unit is forwarded by it.
- */
-template <dest_dvalid_client UNIT, DstSync DST>
-inline void claim()
-{
-    const std::uint32_t bank          = section_bank<DST>();
-    const dest_dvalid_client expected = state.pending[bank];
-    if (expected == NONE)
-    {
-        return;
-    }
-    const std::uint8_t sem = dest_dvalid::token_sem(UNIT, bank);
-    if constexpr (THIS_UNIT != NONE && !mine<UNIT>())
-    {
-        if (expected == THIS_UNIT)
+        _llk_dest_dvalid_end_use_();
+        state.bank ^= 1;
+        if (granted)
         {
-            _llk_dest_dvalid_token_forward_(dest_dvalid::token_sem(THIS_UNIT, bank), sem);
+            // PACK is now on the bank NEXT opens and has nothing in flight, so this pulse sets NEXT's bit at once.
+            _llk_dest_dvalid_write_release_<dest_dvalid_client::PACK, dest_dvalid::bit_of(NEXT), true /*HOLD_BANK*/>();
+            _llk_dest_dvalid_pulse_<dest_dvalid_client::PACK>();
         }
     }
-    if constexpr (mine<UNIT>())
-    {
-        _llk_dest_dvalid_token_wait_(sem);
-    }
+    state.ordered[bank] = state.turned;
+    state.turned        = 0;
+    state.holder        = NONE;
+    state.use           = next;
+    return granted;
 }
 
 } // namespace dest_chain
-
-/**
- * @brief Seed the token semaphores. Call once from one thread at firmware boot, before any section.
- */
-inline void _llk_dest_chain_boot_init_()
-{
-    _llk_dest_dvalid_token_init_();
-}
 
 /**
  * @brief Add UNIT to the dest chain.
@@ -192,21 +139,13 @@ template <dest_dvalid_client UNIT>
 inline void _llk_dest_chain_join_()
 {
     constexpr std::uint32_t BIT = dest_dvalid::bit_of(UNIT);
-    if (dest_chain::state.members & BIT)
-    {
-        return;
-    }
-    if constexpr (dest_chain::mine<UNIT>())
-    {
-        _llk_dest_dvalid_join_<UNIT>();
-        dest_chain::state.bank = 0;
-    }
     dest_chain::state.members |= BIT;
 }
 
 /**
  * @brief Remove UNIT from the dest chain.
- * @note Call on every thread outside a section, paired with @ref _llk_dest_chain_join_.
+ * @note Call on every thread outside a turn, paired with @ref _llk_dest_chain_join_. The thread keeps running the
+ *       chain for the other units, so a handoff still owed by UNIT is issued.
  */
 template <dest_dvalid_client UNIT>
 inline void _llk_dest_chain_leave_()
@@ -216,9 +155,10 @@ inline void _llk_dest_chain_leave_()
     {
         return;
     }
-    if constexpr (dest_chain::mine<UNIT>())
+    if constexpr (UNIT == dest_dvalid::THIS_UNIT)
     {
         _llk_dest_dvalid_leave_<UNIT>();
+        dest_chain::state.gated = false;
     }
     dest_chain::state.members &= ~BIT;
 }
@@ -226,8 +166,8 @@ inline void _llk_dest_chain_leave_()
 /**
  * @brief Take dest from the current holder.
  *
- * A take after PACK's turn starts a new section: PACK's bank is released and the taker waits as the head for the
- * previous section on the bank it moves to.
+ * A take after PACK's turn in SyncHalf ends the use of PACK's bank and opens the other bank for the taker.
+ * In SyncFull dest is one handoff list on bank 0 and any unit, PACK included, hands to the next taker.
  *
  * @note Call on every thread before UNIT's dest accesses, after @ref _llk_dest_chain_join_.
  * @note Issue at least one gated dest access in each turn before handing off to another unit.
@@ -241,36 +181,38 @@ inline void _llk_dest_chain_take_()
     {
         return;
     }
-    if (s.holder == dest_dvalid_client::PACK)
+    bool has_bit = false;
+    if (DST == DstSync::SyncHalf && s.holder == dest_dvalid_client::PACK)
     {
-        dest_chain::close_section<DST>();
+        has_bit = dest_chain::end_use<UNIT, DST>();
     }
-    const bool head = s.holder == dest_chain::NONE;
-    LLK_ASSERT(!head || dest_chain::can_start(UNIT), "PACK only reads dest, so it cannot start a section");
-    if (head)
-    {
-        s.head = UNIT;
-    }
-    else
+    if (s.holder != dest_chain::NONE)
     {
         dest_chain::pass_from_holder<UNIT, DST>();
+        has_bit = true;
     }
-    dest_chain::arrive<UNIT, DST>();
-    dest_chain::admit<UNIT, DST>(head);
-    if (head)
+    LLK_ASSERT(has_bit || UNIT != dest_dvalid_client::PACK, "PACK only reads dest, so it cannot open a bank use");
+    dest_chain::select_bank<UNIT>(DST == DstSync::SyncFull ? 0 : s.use);
+    if constexpr (UNIT == dest_dvalid::THIS_UNIT)
     {
-        dest_chain::claim<UNIT, DST>();
+        // A unit handed a bit waits for its own bit. A unit that opens a bank use waits for the bank to be empty.
+        const bool stall = !s.gated || (has_bit && !s.holder_has_bit);
+        if (has_bit)
+        {
+            _llk_dest_dvalid_write_wait_<UNIT, dest_dvalid::bit_of(UNIT), dest_dvalid::bit_of(UNIT)>(stall);
+        }
+        else
+        {
+            _llk_dest_dvalid_write_wait_<UNIT, dest_dvalid::ALL_BITS, 0 /*POLARITY*/>(stall);
+        }
+        s.holder_has_bit = has_bit;
+        s.gated          = true;
     }
-    s.holder         = UNIT;
-    s.holder_is_head = head;
-}
-
-/**
- * @brief Bank this thread's unit is on. Pass it to @ref _llk_math_dest_clear_ after the FPU's take.
- */
-inline std::uint32_t _llk_dest_chain_bank_()
-{
-    return dest_chain::state.bank;
+    if constexpr (UNIT == dest_dvalid::THIS_UNIT || dest_dvalid::THIS_UNIT == dest_dvalid_client::PACK)
+    {
+        s.turned |= dest_dvalid::bit_of(UNIT);
+    }
+    s.holder = UNIT;
 }
 
 } // namespace ckernel
