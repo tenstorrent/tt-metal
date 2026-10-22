@@ -1208,7 +1208,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_unary_typecast_quasar": {
-        "version": 2,
+        "version": 1,
         "columns": [
             "approx_mode",
             "data_copy_type",

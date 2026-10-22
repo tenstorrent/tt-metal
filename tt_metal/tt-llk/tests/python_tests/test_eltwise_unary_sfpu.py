@@ -315,7 +315,7 @@ _UNARY_SWEEP_ARGNAMES = (
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize("dest_sync", [DestSync.Half])
+@pytest.mark.parametrize("dest_sync", [DestSync.Half], ids=["dest_sync:Half"])
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
     UNARY_SWEEP_PARAMS,
@@ -1328,11 +1328,16 @@ def eltwise_unary_sfpu(
     counts) are given. *unpack_to_dest* defaults to ``unpacks_to_dest(input, dest_acc)``.
 
     *is_perf* runs every *run_types* entry under *perf_report* and returns ``None``,
-    unless *collect_result* also reads the L1_TO_L1 result back.
+    unless *collect_result* also reads the L1_TO_L1 result back. *collect_result*
+    requires ``run_types == [PerfRunType.L1_TO_L1]`` (the default when *is_perf* is
+    false). The types run in order against one buffer, so a later type overwrites
+    the L1_TO_L1 output before it is read.
 
     *check_golden=False* returns the raw L1 result without a golden check.
     *return_golden* returns ``(res_tensor, golden_tensor)`` instead, for callers that
-    want a stricter gate than the op's tolerance; it needs *check_golden*.
+    want a stricter gate than the op's tolerance; it needs *check_golden*. On a perf
+    run it also needs *collect_result*, or the run returns ``None`` and there is no
+    result to pair with the golden.
 
     *gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
@@ -1348,6 +1353,21 @@ def eltwise_unary_sfpu(
         raise ValueError("perf_report must be provided when is_perf=True")
     if return_golden and not check_golden:
         raise ValueError("return_golden needs check_golden=True")
+    effective_run_types = (
+        list(run_types)
+        if run_types is not None
+        else (list(ALL_PERF_RUN_TYPES) if is_perf else [PerfRunType.L1_TO_L1])
+    )
+    if collect_result and effective_run_types != [PerfRunType.L1_TO_L1]:
+        raise ValueError(
+            "collect_result reads the L1_TO_L1 buffer after the run; a later run "
+            "type overwrites it. Pass run_types=[PerfRunType.L1_TO_L1]."
+        )
+    if return_golden and is_perf and not collect_result:
+        raise ValueError(
+            "return_golden needs the L1 result. A perf run returns None unless "
+            "collect_result=True."
+        )
 
     need_stimuli = src_A is not None or not is_perf or collect_result or check_golden
     if src_A is None and need_stimuli:
@@ -1440,7 +1460,7 @@ def eltwise_unary_sfpu(
         loop_factor=loop_factor,
         unpack_to_dest=unpack_to_dest,
         is_perf=is_perf,
-        run_types=run_types,
+        run_types=effective_run_types,
     )
 
     if is_perf and not collect_result:

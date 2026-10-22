@@ -292,6 +292,18 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
     assert hooked | builders <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
 
 
+def test_the_unary_accuracy_driver_uses_the_shared_runner():
+    """Unary accuracy must call eltwise_unary_sfpu. A hand-built TestConfig keeps the
+    old block-count contract, and the report then compiles no unary accuracy variant."""
+    import ast
+
+    tree = ast.parse(accuracy.DRIVER_SOURCE.read_text())
+    imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names}
+    called = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert "eltwise_unary_sfpu" in called
+    assert {"NUM_BLOCKS", "NUM_TILES_IN_BLOCK", "get_num_blocks_and_num_tiles_in_block"} & imported == set()
+
+
 @pytest.mark.parametrize("exit_code, builds", [(0, True), (5, True), (1, False)])
 def test_the_skew_probe_reads_the_compile_exit_code(monkeypatch, exit_code, builds):
     monkeypatch.setattr(detect, "compile_all", lambda *args, **kwargs: exit_code)

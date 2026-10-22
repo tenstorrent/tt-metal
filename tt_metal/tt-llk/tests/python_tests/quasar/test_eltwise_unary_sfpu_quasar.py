@@ -900,8 +900,6 @@ def _prepare_typecast_input(
 @dataclass(frozen=True)
 class OpConfig:
     mathop: MathOperation
-    input_dims: tuple  # list of [H, W] dimensions
-    dest_sync_modes: tuple  # DestSync values to sweep
     uniform_spec: bool = False
 
 
@@ -925,47 +923,38 @@ _QSR_EXTRA_MATHOPS = (
 _BH_UNARY_OPS = sfpu_unary_ops()
 
 OP_CONFIGS = [
-    OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
-    OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES),
-    OpConfig(MathOperation.Rsqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Abs),
+    OpConfig(MathOperation.Square),
+    OpConfig(MathOperation.Rsqrt, uniform_spec=True),
     # Nonlinear ops: identical [32,32]/[64,64] × Half/Full × uniform-spec sweep.
-    OpConfig(MathOperation.Exp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Gelu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Relu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    *[
-        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
-        for op in RELU_CC_OPS
-    ],
-    OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Exp, uniform_spec=True),
+    OpConfig(MathOperation.Gelu, uniform_spec=True),
+    OpConfig(MathOperation.Relu, uniform_spec=True),
+    *[OpConfig(op, uniform_spec=True) for op in RELU_CC_OPS],
+    OpConfig(MathOperation.Reciprocal, uniform_spec=True),
+    OpConfig(MathOperation.Sqrt, uniform_spec=True),
+    OpConfig(MathOperation.Tanh, uniform_spec=True),
+    OpConfig(MathOperation.Sigmoid, uniform_spec=True),
+    OpConfig(MathOperation.Silu, uniform_spec=True),
+    OpConfig(MathOperation.Clamp, uniform_spec=True),
+    OpConfig(MathOperation.Neg, uniform_spec=True),
     # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
-    OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
+    OpConfig(MathOperation.Dropout, uniform_spec=True),
+    OpConfig(MathOperation.Softplus, uniform_spec=True),
+    *[OpConfig(op) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
     # first=true, which zeroes that carry, so tiles are independent; covering the
     # cross-tile carry (first=false) needs the shared C++ source to thread
     # `first = (i == 0)` through its tile loop, so it is a follow-on.
-    OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Cumsum, uniform_spec=True),
     # Whole-tile like cumsum: in place, carry zeroed per tile.
-    OpConfig(MathOperation.Ema, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Ema, uniform_spec=True),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
-    *[
-        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
-        for op in TRIGONOMETRY_OPS
-    ],
-    *[
-        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
-        for op in ROUNDING_OPS
-    ],
-] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_FORMAT_OPS]
+    *[OpConfig(op, uniform_spec=True) for op in TRIGONOMETRY_OPS],
+    *[OpConfig(op, uniform_spec=True) for op in ROUNDING_OPS],
+] + [OpConfig(op) for op in COMP_FORMAT_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
@@ -1419,7 +1408,7 @@ def test_eltwise_unary_sfpu_qsr_extra_quasar(
     dest_sync,
     input_dimensions,
 ):
-    """Relu, Cumsum and Ema: in OP_CONFIGS but not in BH sfpu_unary_ops()."""
+    """Relu, Cumsum, Ema and Dropout: in OP_CONFIGS but not in BH sfpu_unary_ops()."""
     run_eltwise_unary_sfpu_quasar(
         formats,
         dest_acc,
