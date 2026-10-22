@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -42,8 +42,7 @@ _STEPS = 1
 _PRODUCTION_PERF_MARGIN = 0.05
 _SMALL_CASE = _Case("bh2-k32-v64", batch_heads=2, key_dim=32, value_dim=64)
 _PRODUCTION_PERF_CASE = _Case("p1-bh24-k128-v128", batch_heads=24, key_dim=128, value_dim=128)
-# Measured on the bh_p150b_civ2_viommu CI runner; a Blackhole Galaxy chip reads about 6% slower.
-_PRODUCTION_PERF_EXPECTED_DURATION_NS = 30_700
+_PRODUCTION_PERF_EXPECTED_DURATION_NS = 26_700
 
 
 def _chain_affine_transforms_ops(
@@ -208,7 +207,7 @@ def test_chain_affine_transforms_contract_and_trace(zero_actual_start, device: t
 
     for name, golden, actual_tt, traced_tt in zip(("entry", "final"), expected, first, traced, strict=True):
         actual = ttnn.to_torch(actual_tt)
-        assert_accurate(golden, actual, name=f"chained {name}", pcc_threshold=0.999)
+        assert_accurate(golden, actual, name=f"chained {name}", pcc_threshold=0.999, nrmse_threshold=0.004)
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
 
     assert_bit_identical(snapshots[0], ttnn.to_torch(transforms_tt), name="transforms immutability")
@@ -236,7 +235,13 @@ def test_chain_affine_transforms_shape_accuracy(
     outputs = _run(*_device_inputs(*host, device), actual_start=zero_actual_start)
 
     for name, golden, output in zip(("entry", "final"), expected, outputs, strict=True):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"shape-sweep chained {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden,
+            ttnn.to_torch(output),
+            name=f"shape-sweep chained {name}",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.005,
+        )
 
 
 def test_chain_affine_transforms_is_accurate_and_deterministic(zero_actual_start, device: ttnn.Device) -> None:
@@ -255,7 +260,7 @@ def test_chain_affine_transforms_is_accurate_and_deterministic(zero_actual_start
         name="chained outputs device-side exact-value determinism marker",
     )
     for name, golden, output in zip(("entry", "final"), expected, outputs, strict=True):
-        assert_accurate(golden, output, name=f"chained {name}", pcc_threshold=0.999)
+        assert_accurate(golden, output, name=f"chained {name}", pcc_threshold=0.999, nrmse_threshold=0.005)
     for output in reference_outputs:
         ttnn.deallocate(output)
 
@@ -283,8 +288,12 @@ def test_chain_affine_transforms_cache_hit_rebinds_fresh_tensors(
     ):
         actual_a = ttnn.to_torch(actual_a_tt)
         actual_b = ttnn.to_torch(actual_b_tt)
-        assert_accurate(golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999)
-        assert_accurate(golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999)
+        assert_accurate(
+            golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.005
+        )
+        assert_accurate(
+            golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.005
+        )
         assert not torch.equal(actual_a, actual_b)
 
 
@@ -366,7 +375,13 @@ def test_chain_affine_transforms_production_performance(zero_actual_start, devic
     assert all(tuple(output.shape) == (case.batch_heads, case.key_dim, case.value_dim) for output in outputs)
     assert all(output.dtype == ttnn.float32 for output in outputs)
     for name, golden, output in zip(("entry", "final"), expected, outputs, strict=True):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"production chained {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden,
+            ttnn.to_torch(output),
+            name=f"production chained {name}",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.005,
+        )
     performance = _chain_affine_transforms_performance(
         transforms_tt,
         initial_tt,

@@ -33,7 +33,7 @@ yourself.
 
 | variable            | default                     | what it does                                                                                                                               |
 | ------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CHIP_ARCH`         | `wormhole`                  | Architecture for build and scanner binary (`wormhole`, `blackhole`, `quasar`). Quasar uses the simulator (`EXALENS_PORT`, default `5556`). |
+| `CHIP_ARCH`         | `wormhole`                  | Architecture for build and scanner binary (`wormhole`, `blackhole`, `quasar`). Quasar uses the simulator. |
 | `TTNOP_SITE_MODE`   | `sync`                      | `sync` = sync/stall sites only. `all` = every safe instruction (slow).                                                                     |
 | `TTNOP_THREADS`     | `unpack,math`               | Comma-separated thread ELFs to scan. Add `pack` if needed.                                                                                 |
 | `TTNOP_SITES`       | empty = all                 | Limit to specific sites, e.g. `unpack:3,math:7`. Index is per thread                                            |

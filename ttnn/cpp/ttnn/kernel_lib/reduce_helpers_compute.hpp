@@ -96,7 +96,8 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  *   Bulk size depends on reduce dimension:
  *     REDUCE_SCALAR: Bulk = Ht×Wt tiles → 1 output per batch
  *     REDUCE_ROW:    Bulk = Wt tiles    → 1 output per row
- *     REDUCE_COL:    Bulk = Ht×chunk    → chunk outputs (chunk = DEST_AUTO_LIMIT)
+ *     REDUCE_COL:    Bulk = Ht×chunk    → chunk outputs (chunk = min(Wt, DEST_AUTO_LIMIT);
+ *                    the last chunk may be narrower when Wt is not a multiple of DEST_AUTO_LIMIT)
  *
  * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse).
  *   For REDUCE_COL tiles are indexed in standard row-major order (batch_offset + Ht*stride + Wt).

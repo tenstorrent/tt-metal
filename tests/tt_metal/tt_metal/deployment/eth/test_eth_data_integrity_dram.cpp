@@ -240,6 +240,9 @@ static bool run_test_integrity_dram(
 }
 
 TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     vector<LinkError> errors;

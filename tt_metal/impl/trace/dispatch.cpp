@@ -101,11 +101,6 @@ void issue_trace_commands(
     }
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        const auto& noc_data_start_idx =
-            mesh_device->impl().noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
-
-        const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? mesh_device->impl().num_virtual_eth_cores(id) : 0;
         auto index = *id;
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
@@ -121,8 +116,6 @@ void issue_trace_commands(
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-            num_noc_unicast_txns,
-            noc_data_start_idx,
             dispatcher_for_go_signal);
     }
 
@@ -134,9 +127,6 @@ void issue_trace_commands(
         uint32_t expected_num_workers = expected_num_workers_completed[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
-        }
-        if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += mesh_device->impl().num_virtual_eth_cores(id);
         }
 
         if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
@@ -213,10 +203,6 @@ void update_worker_state_post_trace_execution(
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             worker_launch_message_buffer_state[index].set_mcast_wptr(
                 desc.num_traced_programs_needing_go_signal_multicast);
-        }
-        if (desc.num_traced_programs_needing_go_signal_unicast) {
-            worker_launch_message_buffer_state[index].set_unicast_wptr(
-                desc.num_traced_programs_needing_go_signal_unicast);
         }
         // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so
         // that it will force a stall and avoid stomping on in-use state.

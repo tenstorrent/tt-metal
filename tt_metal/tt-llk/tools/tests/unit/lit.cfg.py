@@ -167,6 +167,12 @@ else:
 config.substitutions.append(("%clangxx", cxx))
 config.substitutions.append(("%split-file", split_file))
 config.substitutions.append(("%{sanitizer_include}", sanitizer_include))
+config.substitutions.append(
+    (
+        "%{tt_llk_root}",
+        os.path.abspath(os.path.join(config.test_source_root, "..", "..", "..")),
+    )
+)
 
 lit_config.note(f"clang: {cxx}")
 lit_config.note(f"LLVM tools: {llvm_bin}")

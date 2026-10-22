@@ -7,6 +7,7 @@
 #include <circular_buffer_config.hpp>
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 
 #include <kernel_types.hpp>

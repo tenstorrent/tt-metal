@@ -8,6 +8,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -52,7 +53,8 @@ ProgramDescriptor NLPConcatHeadsBoltzDeviceOperation::create_descriptor(
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.padded_shape()[-2];
+        const uint32_t rows_per_head = ashape[1] * ashape[2];  // S*S, not padded[-2]
+        num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / rows_per_head;
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
         row_major = a.shard_spec().value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     } else {

@@ -34,6 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
@@ -41,6 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces_B = params.num_faces_B;
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
+#endif
 
     set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
@@ -77,26 +79,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM = params.CT_DIM;
     const std::uint32_t RT_DIM = params.RT_DIM;
     const std::uint32_t KT_DIM = params.KT_DIM;
+#endif
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
 
-    // formats.math holds a 2x-packed register format's non-2x family member, since the 2x formats exist only in the
-    // Src registers; the ALU is configured with the register format itself, the one the unpacker implies
-    const DataFormat unpack_dst_format = static_cast<DataFormat>(formats.unpack_A_dst);
-    const bool is_2x_format            = (unpack_dst_format == DataFormat::MxFp4_2x_A) || (unpack_dst_format == DataFormat::MxFp4_2x_B);
-    DataFormat math_format             = is_2x_format ? unpack_dst_format : static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+        static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
     // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim halved per
     // MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are configured as MxFp4_2x_A/B.
-    _llk_math_matmul_init_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+    const DataFormat src_a_format = static_cast<DataFormat>(formats.math);
+    const DataFormat src_b_format = static_cast<DataFormat>(formats.math);
+    _llk_math_matmul_init_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, RT_DIM);
 
     for (std::uint32_t i = 0; i < KT_DIM; i++)
     {
-        _llk_math_matmul_block_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+        _llk_math_matmul_block_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, RT_DIM);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
@@ -115,10 +117,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM    = params.CT_DIM;
     const std::uint32_t RT_DIM    = params.RT_DIM;
     const std::uint32_t num_faces = params.num_faces;
     const Operand& buffer_Res     = params.buffer_Res;
+#endif
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 

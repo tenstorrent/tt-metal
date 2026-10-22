@@ -34,7 +34,6 @@ struct GoSignalSequenceConfig {
     uint32_t expected_num_workers_completed;
     CoreCoord dispatch_core;
     bool send_mcast;
-    bool send_unicasts;
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
     std::optional<uint32_t> config_ring_sync_count;
 };
@@ -108,8 +107,6 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
         (config.send_mcast && config.mesh_device->impl().has_noc_mcast_txns(config.sub_device_id))
             ? *config.sub_device_id
             : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-        config.send_unicasts ? config.mesh_device->impl().num_virtual_eth_cores(config.sub_device_id) : 0,
-        config.mesh_device->impl().noc_data_start_index(config.sub_device_id, config.send_unicasts),
         dispatcher);
 
     TT_ASSERT(commands.size_bytes() == commands.write_offset_bytes());
@@ -124,7 +121,6 @@ HostMemDeviceCommand build_go_signal_sequence(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
@@ -134,7 +130,6 @@ HostMemDeviceCommand build_go_signal_sequence(
         .expected_num_workers_completed = expected_num_workers_completed,
         .dispatch_core = dispatch_core,
         .send_mcast = send_mcast,
-        .send_unicasts = send_unicasts,
         .dispatch_metadata = dispatch_metadata,
         .config_ring_sync_count = config_ring_sync_count};
     HostMemDeviceCommand commands(mesh_device->impl().metal_context(), go_signal_sequence_size(config));
@@ -153,7 +148,6 @@ void write_go_signal_sequence(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
@@ -163,7 +157,6 @@ void write_go_signal_sequence(
         .expected_num_workers_completed = expected_num_workers_completed,
         .dispatch_core = dispatch_core,
         .send_mcast = send_mcast,
-        .send_unicasts = send_unicasts,
         .dispatch_metadata = dispatch_md,
         .config_ring_sync_count = config_ring_sync_count};
     const uint32_t cmd_sequence_sizeB = go_signal_sequence_size(config);

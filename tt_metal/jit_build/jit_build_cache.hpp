@@ -15,12 +15,14 @@ namespace tt::tt_metal {
 // Thread-safe build-once cache for JIT compilation.
 //
 // Ensures that for a given hash (representing a build target), the build function
-// is executed exactly once. Concurrent callers with the same hash block until the
-// build completes. Callers arriving after the build is done return immediately.
+// is executed exactly once. Concurrent build_once() callers with the same hash block
+// until the build completes. Callers arriving after the build is done return immediately.
 //
 // Used to deduplicate both kernel and firmware JIT builds across threads.
 class JitBuildCache {
 public:
+    enum class BuildOnceStatus { BuiltByCaller, AlreadyBuilt, InProgress };
+
     static JitBuildCache& inst() {
         static JitBuildCache instance;
         return instance;
@@ -32,6 +34,9 @@ public:
     // Returns false (without calling build_fn) if hash was already built.
     // If build_fn throws, the entry is removed so subsequent callers can retry.
     bool build_once(size_t hash, const std::function<void()>& build_fn);
+
+    // Like build_once(), but returns InProgress instead of waiting while another thread builds hash.
+    BuildOnceStatus build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
     // Clear completed entries. After clear(), the next build_once() for any hash
     // will re-execute the build function.

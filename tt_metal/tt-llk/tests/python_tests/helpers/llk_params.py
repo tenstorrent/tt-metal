@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import namedtuple
-from enum import Enum, auto
+from enum import Enum, IntFlag, auto
 
 import torch
 
@@ -81,6 +81,8 @@ class MathOperation(Enum):
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise EMA; its golden works on the tilized tensor.
+    Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
@@ -132,6 +134,8 @@ class MathOperation(Enum):
     Cosh = OpSpec("cosh", MathOpType.SFPU_UNARY)
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
+    # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
@@ -303,6 +307,9 @@ class MathOperation(Enum):
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
+    SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
+    SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
+    SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
@@ -504,6 +511,15 @@ class Haloize(Enum):
 class ApproximationMode(Enum):
     Yes = True
     No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
+class SfpuSrcsImpl(Enum):
+    LoadMacro = True
+    Sfpi = False
 
     @property
     def cpp_enum_value(self):
@@ -802,11 +818,6 @@ PERF_LOOP_FACTOR_QUASAR = 32
 
 
 # ******** QUASAR specific ********
-class ImpliedMathFormat(Enum):
-    No = "false"
-    Yes = "true"
-
-
 class UnpackerEngine(Enum):
     """
     Enum for unpacker engine selection.
@@ -821,6 +832,16 @@ class UnpackerEngine(Enum):
 class ReluConfig(Enum):
     NoRelu = 0
     ZeroRelu = 1
+
+
+class GatedReduceScale(IntFlag):
+    """Independent input/output scaling flags for gated-reduce tests."""
+
+    None_ = 0
+    Gate = 1
+    Up = 2
+    Out = 4
+    All = Gate | Up | Out
 
 
 class SdpaOp(Enum):

@@ -14,9 +14,16 @@
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
+// The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
+// and ttsim doesn't model the address generators.
+#if defined(NOC_ATT_ENABLED) && !defined(TT_METAL_TTSIM)
+#define DM_RESET_ADDRGENS 1
+#include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
+#endif
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -50,6 +57,9 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+#if defined(NOC_API_V1)
+uint32_t noc_cmd_buf_lock[NOC_NUM_CMD_BUFS] __attribute__((used));
+#endif
 
 // temporary for things to build
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
@@ -257,6 +267,10 @@ extern "C" uint32_t _start1() {
     // it lives in, so caching it any earlier would just be discarded.
     uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
+        do {
+            set_deassert_addresses();
+            assert_trisc_reset();
+        } while (READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR) != 0b1111);
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
@@ -278,7 +292,11 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // Reset the shared print lock and announce from DM0 only.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        DPRINT("DM0-FW: initialized\n");
+    }
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -369,6 +387,8 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
+                // The counter window runs from here to StopPerfCounters after wait_subordinates.
+                StartPerfCounters();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -411,6 +431,10 @@ extern "C" uint32_t _start1() {
                         prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/true);
                 }
                 wait_subordinates();
+
+                // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
+                StopPerfCounters();
+                ReadPerfCounters(enables);
 
                 trigger_sync_register_init();
 
@@ -484,6 +508,11 @@ extern "C" uint32_t _start1() {
         // Invalidate the i$ now the kernels have loaded and before running
         invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
+#if defined(DM_RESET_ADDRGENS)
+        // Clear the state to ensure previous state is not leaked
+        overlay::reset_addrgen<overlay::ADDRGEN_0>();
+        overlay::reset_addrgen<overlay::ADDRGEN_1>();
+#endif
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
             DeviceZoneScopedMainN("DM-FW");

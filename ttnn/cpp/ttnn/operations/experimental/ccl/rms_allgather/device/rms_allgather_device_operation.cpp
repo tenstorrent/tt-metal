@@ -12,6 +12,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -50,7 +51,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "where "
         "M <= 32 and N is a multiple of 32");
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
+        (a.device()->arch() != tt::ARCH::BLACKHOLE) || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
 
@@ -272,6 +273,9 @@ ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 
+    // The caller-supplied semaphore is excluded from the key so per-call semaphores share one program;
+    // RMSAllGatherProgramFactory::override_runtime_arguments re-applies its address on every cache hit.
+    // sub_device_id is keyed through the worker core range set it resolves to.
     auto subdevice_id = args.sub_device_id;
     auto* mesh_device = tensor_args.input.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));

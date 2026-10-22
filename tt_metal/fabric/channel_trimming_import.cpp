@@ -13,7 +13,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "tt_metal/fabric/channel_trimming_io.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // NocSendType
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"  // NocSendType
 
 namespace tt::tt_fabric {
 

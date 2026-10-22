@@ -332,6 +332,9 @@ bool noc_reader_and_writer_kernels(
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -371,6 +374,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -404,6 +410,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
@@ -449,6 +458,9 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);

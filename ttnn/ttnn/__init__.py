@@ -173,6 +173,7 @@ from ttnn._ttnn.fabric import (
     setup_routing_plane_connection,
     get_fabric_kernel_defines,
     fabric_connection_rt_args,
+    fabric_connection_rt_args_size,
     compute_fabric_connection_rt_args,
 )
 
@@ -213,6 +214,10 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStreamService,
     D2DStreamServiceSender,
     D2DStreamServiceReceiver,
+    D2DStageGateConfig,
+    D2DStageGateDescriptor,
+    D2DStageGateMode,
+    D2D_STAGE_GATE_UNGATED_SLOT,
 )
 
 from ttnn._ttnn.counter_channel import (
@@ -306,6 +311,16 @@ from ttnn.types import (
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
+    attach_absent_mcast,
+    TransferMode,
+    Mcast,
+    McastCoreOrder,
+    McastSenderPlacement,
+    McastFixedSenderConfig,
+    McastExplicitFixedSenderConfig,
+    McastRotatingSenderConfig,
+    McastConfig,
+    McastDataReady,
 )
 
 from ttnn.device import (
@@ -527,6 +542,7 @@ from ttnn.operations.reduction import (
 from ttnn.operations.ccl import (
     Topology,
     get_usable_topology,
+    get_num_links,
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,

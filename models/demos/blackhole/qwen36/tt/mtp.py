@@ -22,16 +22,16 @@ from models.tt_transformers.tt.common import Mode
 
 
 def argmax_last(logits):
-    """argmax over the vocab dim for ONE row of drafter logits -> [1,1,1] uint32 ROW_MAJOR.
+    """argmax over the vocab dim of drafter logits -> [1,1,B,1] uint32 ROW_MAJOR (one id per row).
 
     ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path that
     is catastrophically slow on a 151k-wide vocab, so untilize multicore first. The GATHERED form:
-    ``logits`` is the full replicated [1,1,1,vocab] row. Reached through draft_argmax, which is what
-    both the eager draft step (SpeculativeDecoder._draft_argmax) and the traced chain
+    ``logits`` is the full replicated [1,1,B,vocab]. Reached through draft_argmax, which is what
+    both the eager draft step (SpeculativeDecoder) and the traced chain
     (Qwen36Model._draft_body) call, so the two pick their ids through byte-identical ops.
     """
     u = ttnn.untilize(logits, use_multicore=True)
-    out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
+    out = ttnn.argmax(u, dim=-1, keepdim=True)  # [1,1,B,1] uint32 RM
     ttnn.deallocate(u)
     return out
 
@@ -39,14 +39,14 @@ def argmax_last(logits):
 def draft_argmax(mtp, logits):
     """Drafter logits -> token id, for whichever LM-head form the flag selected.
 
-    THE shared drafter pick: the eager chain (SpeculativeDecoder._draft/_draft_warmup, via
-    _draft_argmax) and the traced one (Qwen36Model._draft_body) both come through here, so the two
+    THE shared drafter pick: the eager chain (SpeculativeDecoder._draft/_draft_warmup) and the
+    traced one (Qwen36Model._draft_body) both come through here, so the two
     dispatch on one value and switch together — the same reason argmax_last was hoisted to module
-    level in the first place. Both forms take the drafter's own logits and return [1,1,1] uint32
-    ROW_MAJOR, and neither frees ``logits``: the caller owns it.
+    level in the first place. Both forms take the drafter's own logits and return [1,1,B,1] uint32
+    ROW_MAJOR (one id per row), and neither frees ``logits``: the caller owns it.
 
     QWEN36_DRAFT_SHARDED_ARGMAX (resolved once in Qwen36MTP.__init__) selects the sharded form, in
-    which ``logits`` is THIS device's [1,1,1,vocab/tp] fp32 shard and the vocab all-gather never
+    which ``logits`` is THIS device's [1,1,B,vocab/tp] fp32 shard and the vocab all-gather never
     happened; off, ``logits`` is the gathered full-vocab row and this is exactly argmax_last.
     """
     if mtp._sharded_argmax:
@@ -151,14 +151,14 @@ class Qwen36MTP:
         self.attention.decode_sdpa_max_cores = 64
 
         # QWEN36_DRAFT_SHARDED_ARGMAX=1: the DRAFTER stops all-gathering its full-vocab fp32 logit
-        # row. Each device argmaxes its own [1,1,1,vocab/tp] shard and the global winner is picked
-        # on device from two 32-lane gathers (_argmax_sharded). Default off; the gathered
+        # row. Each device argmaxes its own [1,1,B,vocab/tp] shard and the global winner is picked
+        # on device from two 32-lane gathers (_argmax_sharded). The gathered
         # _lm_head(out_dtype=float32) + argmax_last path stays the fallback and is what runs
         # whenever this resolves to False. The attributes are always defined so draft_argmax can
         # test `mtp._sharded_argmax` without a getattr dance.
         self._sharded_argmax = False
-        self._shard_off = None  # [1,1,1,_LANES] int32, per device: d * vocab_shard in every lane
-        self._sel_lane = None  # [1,1,1,_LANES*num_devices] int32 replicated: lane j holds j
+        self._shard_off = None  # [1,1,B,_LANES] int32, per device: d * vocab_shard in every lane
+        self._sel_lane = None  # [1,1,B,_LANES*num_devices] int32 replicated: lane j holds j
         self._fp32_cfg = None
         self._vocab_shard = 0
         self._maxval_c = 0
@@ -171,6 +171,8 @@ class Qwen36MTP:
 
     def _init_sharded_argmax(self, parent):
         """Resolve QWEN36_DRAFT_SHARDED_ARGMAX and allocate the two persistent constants it needs.
+        The constants are pre-expanded over B = args.max_batch_size rows, so every binary op in
+        _argmax_sharded is a plain or a column broadcast.
 
         Runs at model-build time, i.e. long before any begin_trace_capture, which is what makes the
         constants usable from inside the traced draft body: the trace bakes in their ADDRESSES and
@@ -190,9 +192,10 @@ class Qwen36MTP:
             logger.warning(f"QWEN36_DRAFT_SHARDED_ARGMAX ignored: vocab {vocab} >= sentinel {self._SENTINEL}")
             return
         shard = vocab // nd
+        B = int(self.args.max_batch_size)
         self._vocab_shard = shard
         # Multi-core max over one vocab shard: ttnn.max(dim=-1) parallelises over tile ROWS, so fold
-        # the shard into a tall/narrow [R, C=32] grid (R/32 cores) instead of reducing one 1-row,
+        # each row's shard into a tall/narrow [R, C=32] grid (R/32 cores per row) instead of reducing a
         # shard-wide tensor on a single core. Verbatim from demo/text_demo.py's greedy path.
         self._maxval_c = 32
         self._maxval_r = (((shard + self._maxval_c - 1) // self._maxval_c) + 31) // 32 * 32
@@ -209,8 +212,8 @@ class Qwen36MTP:
         # Device d's vocab shard covers [d*shard, (d+1)*shard): the LM-head weight is sharded with
         # ShardTensorToMesh(dim=-1) (Qwen36Model.__init__) and ShardTensorToMesh(dim=0) here walks
         # the mesh in the same order, so row d lands on the device that owns vocab block d. The
-        # offset is broadcast across all lanes so the id side never needs a ttnn.pad.
-        off = (torch.arange(nd, dtype=torch.int32) * shard).reshape(nd, 1, 1, 1).repeat(1, 1, 1, lanes)
+        # offset is broadcast across all B rows and lanes so the id side never needs a ttnn.pad.
+        off = (torch.arange(nd, dtype=torch.int32) * shard).reshape(nd, 1, 1, 1).repeat(1, 1, B, lanes)
         self._shard_off = ttnn.from_torch(
             off.contiguous(),
             dtype=ttnn.int32,
@@ -222,7 +225,7 @@ class Qwen36MTP:
         # Lane index of the gathered row, replicated: compared against the winning lane to build the
         # select mask. int32 so that compare is integer-exact (see _argmax_sharded).
         self._sel_lane = ttnn.from_torch(
-            torch.arange(nd * lanes, dtype=torch.int32).reshape(1, 1, 1, nd * lanes),
+            torch.arange(nd * lanes, dtype=torch.int32).reshape(1, 1, 1, nd * lanes).repeat(1, 1, B, 1),
             dtype=ttnn.int32,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
@@ -231,12 +234,12 @@ class Qwen36MTP:
         )
         self._sharded_argmax = True
         logger.info(
-            f"MTP drafter: per-shard argmax enabled (vocab {vocab} = {nd} x {shard}, "
+            f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
             f"maxval grid {self._maxval_r}x{self._maxval_c})"
         )
 
     def _maxval_dev(self, shard):
-        """Max over ONE device's [1,1,1,vocab/tp] fp32 logit shard -> [1,1,1,1] fp32 TILE.
+        """Max over ONE device's [1,1,B,vocab/tp] fp32 logit shard -> [1,1,B,1] fp32 TILE (per row).
 
         Ported from the plain greedy demo path (demo/text_demo.py _maxval_dev) with one addition:
         compute_kernel_config. fp32_dest_acc_en=True is what selects the ACCURATE SFPU reduce for a
@@ -246,28 +249,32 @@ class Qwen36MTP:
         the fp32 logits it exists to rank. The demo path passes no config because its logits are
         bfloat16, which survives that truncation intact.
         """
-        R, C = self._maxval_r, self._maxval_c
+        R, C, B = self._maxval_r, self._maxval_c, self.args.max_batch_size
         cfg = self._fp32_cfg
         padded = ttnn.pad(shard, [(0, 0), (0, 0), (0, 0), (0, R * C - self._vocab_shard)], value=self._NEG_FLOOR)
-        grid = ttnn.reshape(padded, (1, 1, R, C))
-        part = ttnn.max(grid, dim=-1, compute_kernel_config=cfg)
-        part_row = ttnn.reshape(part, (1, 1, 1, R))
-        val = ttnn.max(part_row, dim=-1, keepdim=True, compute_kernel_config=cfg)
+        grid = ttnn.reshape(padded, (1, B, R, C))  # one [R, C] grid per row
+        part = ttnn.max(grid, dim=-1, compute_kernel_config=cfg)  # [1,B,R]
+        part_row = ttnn.reshape(part, (1, 1, B, R))
+        val = ttnn.max(part_row, dim=-1, keepdim=True, compute_kernel_config=cfg)  # [1,1,B,1]
+        # Each reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed
+        # buffer, so freeing every handle frees each buffer once.
         for t in (padded, grid, part, part_row):
             ttnn.deallocate(t)
         return val
 
     def _argmax_sharded(self, logits_shard):
-        """Global vocab argmax from this device's LOGIT SHARD -> [1,1,1] uint32 ROW_MAJOR.
+        """Global vocab argmax from this device's LOGIT SHARD -> [1,1,B,1] uint32 ROW_MAJOR.
 
-        Same contract as the gathered argmax_last — same output shape, dtype, layout and tie-break —
-        but the full vocab row is never materialised. Each device argmaxes its own
-        [1,1,1,vocab/tp] fp32 shard; the winner is then picked from two _LANES-wide all-gathers
-        (2 x 32 x 4 B per device) instead of one vocab-wide fp32 one (248320 x 4 B = 993 KB).
+        Same contract as the gathered argmax_last — same output shape, dtype, layout and tie-break
+        (per row) — but the full vocab row is never materialised. Each device argmaxes its own
+        [1,1,B,vocab/tp] fp32 shard (B = args.max_batch_size rows); the winner of each row is then
+        picked from two _LANES-wide all-gathers (2 x B x 32 x 4 B per device) instead of one
+        vocab-wide fp32 one (B x 248320 x 4 B = B x 993 KB).
         Every step is a fixed-shape device op with no host readback, so this runs in the eager
         chain and captures inside the traced draft body alike.
 
-        B=1 only (all three need_logits=True callers are single-row draft steps).
+        Rows are independent: reductions are over the last dim and binary ops broadcast a column or an
+        identically-shaped constant, so row r's id depends on row r's logits alone.
         The caller owns ``logits_shard``; this never frees it.
 
         Exactness, step by step:
@@ -290,33 +297,30 @@ class Qwen36MTP:
         # 1. Local argmax over this device's shard. ttnn.argmax needs ROW_MAJOR for the multicore
         #    last-dim path (a TILE input falls back to a single-core internal untilize).
         rm = ttnn.to_layout(logits_shard, ttnn.ROW_MAJOR_LAYOUT)
-        lidx = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,1] uint32 ROW_MAJOR, LOCAL index
+        lidx4 = ttnn.argmax(rm, dim=-1, keepdim=True)  # [1,1,B,1] uint32 ROW_MAJOR, LOCAL index per row
         ttnn.deallocate(rm)
 
-        # 2. This shard's max VALUE — the only thing the other devices need in order to rank it.
-        val = self._maxval_dev(logits_shard)  # [1,1,1,1] fp32 TILE
+        # 2. This shard's max VALUE per row — the only thing the other devices need in order to rank it.
+        val = self._maxval_dev(logits_shard)  # [1,1,B,1] fp32 TILE
 
-        # 3. Candidate GLOBAL id = d * vocab_shard + local index, int32, in every lane. The reshape
-        #    is a metadata ALIAS (the last dim stays 1), so lidx and lidx4 are one buffer and
-        #    exactly one of them may be deallocated.
-        lidx4 = ttnn.reshape(lidx, (1, 1, 1, 1))
-        lidx_t = ttnn.to_layout(lidx4, ttnn.TILE_LAYOUT)  # uint32 TILE [1,1,1,1]
+        # 3. Candidate GLOBAL id = d * vocab_shard + local index, int32, in every lane.
+        lidx_t = ttnn.to_layout(lidx4, ttnn.TILE_LAYOUT)  # uint32 TILE [1,1,B,1]
         ttnn.deallocate(lidx4)
         lidx_i = ttnn.typecast(lidx_t, ttnn.int32)
         ttnn.deallocate(lidx_t)
-        gid = ttnn.add(self._shard_off, lidx_i)  # [1,1,1,lanes] int32, broadcast over W
+        gid = ttnn.add(self._shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
         ttnn.deallocate(lidx_i)
 
-        # 4. One tile-wide value block: lane 0 carries the real max, the rest a floor that can never
-        #    win. ttnn.pad is pure data movement, so the fp32 max survives bit-exact.
-        valp = ttnn.pad(val, [(0, 0), (0, 0), (0, 0), (0, lanes - 1)], value=self._NEG_FLOOR)
+        # 4. One tile-wide value block per row: lane 0 carries the real max, the rest a floor that can
+        #    never win. ttnn.pad is pure data movement, so the fp32 max survives bit-exact.
+        valp = ttnn.pad(val, [(0, 0), (0, 0), (0, 0), (0, lanes - 1)], value=self._NEG_FLOOR)  # [1,1,B,lanes]
         ttnn.deallocate(val)
 
         # 5. The two gathers, issued back to back so they overlap. Mirrors Qwen36Model._lm_head's
         #    call exactly (same helper, same tt_ccl, same topology). dtype is passed explicitly
         #    because tt_all_gather defaults its CCL dtype to bfloat16 and TYPECASTS anything else on
         #    the way in — which would put the bf16 ties straight back into the values and destroy
-        #    the ids outright.
+        #    the ids outright. Both come out [1,1,B,nd*lanes].
         vg = tt_all_gather(
             valp, self.mesh_device, self.tt_ccl, cluster_axis=None, dim=3, topology=topo, dtype=ttnn.float32
         )
@@ -326,24 +330,23 @@ class Qwen36MTP:
         ttnn.deallocate(valp)
         ttnn.deallocate(gid)
 
-        # 6. Winning LANE. Device d's block starts at lane d*lanes and only that lane holds a real
-        #    value, so the argmax's lowest-index tie-break resolves a cross-device tie to the lowest
-        #    device, hence the lowest global id — what the gathered path returns for the same tie.
+        # 6. Winning LANE per row. Device d's block starts at lane d*lanes and only that lane holds a
+        #    real value, so the argmax's lowest-index tie-break resolves a cross-device tie to the
+        #    lowest device, hence the lowest global id — what the gathered path returns for the same tie.
         vg_rm = ttnn.to_layout(vg, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(vg)
-        cw = ttnn.argmax(vg_rm, dim=-1, keepdim=False)  # [1,1,1] uint32 ROW_MAJOR, winning lane
+        cw4 = ttnn.argmax(vg_rm, dim=-1, keepdim=True)  # [1,1,B,1] uint32 ROW_MAJOR, winning lane
         ttnn.deallocate(vg_rm)
-        cw4 = ttnn.reshape(cw, (1, 1, 1, 1))
         cw_t = ttnn.to_layout(cw4, ttnn.TILE_LAYOUT)
         ttnn.deallocate(cw4)
         cw_i = ttnn.typecast(cw_t, ttnn.int32)
         ttnn.deallocate(cw_t)
 
         # 7. Read the winning lane's id out of gg without ever leaving int32: push every LOSING lane
-        #    past every real id by the sentinel, then take the row min. Exactly one lane is left
-        #    alone. The 0/1 mask goes through bfloat16 for the multiply (2**24 is exact there, and
+        #    past every real id by the sentinel, then take the row min. Exactly one lane per row is
+        #    left alone. The 0/1 mask goes through bfloat16 for the multiply (2**24 is exact there, and
         #    it is the combination tt_sampling.py validated on device) and back to int32 for the add.
-        nw = ttnn.ne(self._sel_lane, cw_i)  # [1,1,1,lanes*nd] int32 1/0, broadcast over W
+        nw = ttnn.ne(self._sel_lane, cw_i)  # [1,1,B,lanes*nd] int32 1/0, cw_i column-broadcast over W
         ttnn.deallocate(cw_i)
         nw_b = ttnn.typecast(nw, ttnn.bfloat16)
         ttnn.deallocate(nw)
@@ -354,16 +357,15 @@ class Qwen36MTP:
         masked = ttnn.add(gg, off_i)
         ttnn.deallocate(gg)
         ttnn.deallocate(off_i)
-        win = ttnn.min(masked, dim=-1, keepdim=True)  # [1,1,1,1] int32, SFPU reduce, exact
+        win = ttnn.min(masked, dim=-1, keepdim=True)  # [1,1,B,1] int32, SFPU reduce, exact
         ttnn.deallocate(masked)
 
-        # 8. Back to the argmax_last contract: [1,1,1] uint32 ROW_MAJOR, ready for the chain's
-        #    reshape(idx, (1,1)) into the next step's embedding lookup.
+        # 8. The argmax_last contract: [1,1,B,1] uint32 ROW_MAJOR.
         win_u = ttnn.typecast(win, ttnn.uint32)
         ttnn.deallocate(win)
-        out4 = ttnn.to_layout(win_u, ttnn.ROW_MAJOR_LAYOUT)  # [1,1,1,1] uint32 ROW_MAJOR
+        out = ttnn.to_layout(win_u, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(win_u)
-        return ttnn.reshape(out4, (1, 1, 1))  # metadata alias of out4: ONE buffer, ONE deallocate
+        return out
 
     def _make_norm(self, state_dict, weight_key, cache, ag_key):
         """RMSNorm (zero-centered) wrapped in DistributedNorm under TP; plain RMSNorm otherwise."""
@@ -428,15 +430,18 @@ class Qwen36MTP:
         sharded_lm_head=False,
         need_logits=True,
         alias_kv_write=False,
+        spec_n_users=1,
     ):
         """One MTP draft step, or ONE batched KV-maintenance step over B rows.
         ``hidden_states`` [1,1,B,dim/tp] fractured: the base's drafter feed (spec_feed_rows:
         fractured final-norm output), or the previous step's next_hidden when chaining.
         ``token_ids`` [B,1] uint32: token just before what we predict. ``position_idxs`` [B] int32:
         KV write index (base cur_pos + step). ``cos``/``sin``: partial-RoPE. ``page_table`` [B, blocks]
-        for the MTP layer's own paged KV. ``alias_kv_write``: B rows belong to ONE sequence at
-        consecutive positions (batched reseed), so KV writes share physical blocks and must go row
-        by row (TPAttention.forward_decode). Returns (logits, next_hidden), both fractured
+        for the MTP layer's own paged KV. ``alias_kv_write``: the B rows are NOT independent users,
+        so their KV writes can share physical blocks and must not go out as one batched call
+        (TPAttention._write_kv_aliased). ``spec_n_users``: with alias_kv_write, how many real users
+        those rows carry (rows are user-major, u*T + i); the batched reseed passes B, so the write
+        goes out as T calls of B rows. 1 keeps the per-row loop. Returns (logits, next_hidden), both fractured
         [1,1,B,dim/tp]. need_logits=True: next_hidden is mtp.norm's output re-fractured to dim/tp
         (chain value). need_logits=False skips the head norm and returns RAW block output — KV maintenance only (reseed / catch-up); callers discard it, so it is not a valid chain value.
         """
@@ -454,6 +459,7 @@ class Qwen36MTP:
             position_tensor=position_idxs,
             page_table=page_table,
             alias_kv_write=alias_kv_write,
+            n_users=spec_n_users,
         )
         ttnn.deallocate(fused)
 

@@ -15,6 +15,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt_stl/fmt.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -651,8 +653,8 @@ void AttachBorrowedDFBBuffers(
             buffer->aligned_size_per_bank());
 
         // Attach the address to the device-side DFB. Per-enqueue update_program_dispatch_commands
-        // reads from the cache this populates, so no further dispatch-command invalidation is
-        // needed for either first-call or re-entry.
+        // re-serializes the DFB config from the cache this populates, so no further dispatch-command
+        // invalidation is needed for either first-call or re-entry.
         const auto address = buffer->address();
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),

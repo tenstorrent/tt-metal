@@ -157,8 +157,8 @@ tt-metal even when the Tracy sink itself is left off.
 Setting both variables is a `TT_FATAL` at `MetalContext` construction, before any device opens.
 Mode 3 is Blackhole only (it needs DRISC drainers); on Quasar it is a `TT_FATAL`.
 
-Device-side selection is one header: `tt_metal/tools/profiler/kernel_profiler.hpp` is main's DRAM producer
-verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tt_metal/tools/profiler/kernel_profiler_streaming.hpp`.
+Device-side selection is one header: `tt_metal/hw/inc/api/debug/kernel_profiler.hpp` is main's DRAM producer
+verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp`.
 Shared streaming constants live in `hw/inc/hostdev/streaming_profiler_common.h`;
 `hw/inc/hostdev/profiler_common.h` is the DRAM profiler's own. Not supported on the streaming
 producer: sum zones (`DeviceZoneScopedSumN*`), which compile to nothing. `DeviceRecordEvent` is the same

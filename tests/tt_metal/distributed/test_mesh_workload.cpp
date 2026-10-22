@@ -527,6 +527,7 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
 INSTANTIATE_TEST_SUITE_P(QuiesceSubmeshIndex, MeshWorkloadTestSuiteSubmeshFixture, ::testing::Values(0, 1));
 
 TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
+    GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     uint32_t num_workloads = 10;
     auto random_seed = 0;
     uint32_t num_iters = 500;

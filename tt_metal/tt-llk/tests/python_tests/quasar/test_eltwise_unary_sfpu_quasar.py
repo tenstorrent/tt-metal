@@ -20,7 +20,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -36,8 +35,10 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_dispatch_constants import (
+    INT_MAXMIN_SCALAR,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
+    UNARY_MAX_MIN_VALUE,
 )
 from helpers.sfpu_domains import op_edge_points
 from helpers.stimuli_config import StimuliConfig
@@ -53,10 +54,11 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_UNARY_MAX_MIN_SCALAR,
+    SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -78,8 +80,7 @@ def _seed_rng():
     torch.manual_seed(42)
 
 
-# Formats swept by every op (none are MX formats, so the implied-math-format
-# guard below is a no-op for this list — kept for forward-compatibility).
+# Formats swept by every op.
 SFPU_UNARY_FORMATS = input_output_formats(
     [
         DataFormat.Float16,
@@ -131,6 +132,13 @@ ROUNDING_OPS = [
     MathOperation.Frac,
     MathOperation.Round,
 ]
+
+# Int32 only: Quasar has no UInt32 format, so the uint32 variants are not registered.
+UNARY_MAX_MIN_FLOAT_OPS = [MathOperation.UnaryMax, MathOperation.UnaryMin]
+UNARY_MAX_MIN_INT32_OPS = [MathOperation.UnaryMaxInt32, MathOperation.UnaryMinInt32]
+UNARY_MAX_MIN_OPS = UNARY_MAX_MIN_FLOAT_OPS + UNARY_MAX_MIN_INT32_OPS
+
+SFPU_INT32_FORMATS = input_output_formats([DataFormat.Int32], same=True)
 
 # Extra (integer) formats only COMP_FORMAT_OPS (the comp family + signbit) sweep. Int32/Int16/Int8
 # (signed) and UInt8 (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
@@ -496,10 +504,49 @@ def prepare_cumsum_inputs(
     return (-1.0 + 2.0 * u).to(format_dict[input_format])
 
 
+def prepare_ema_inputs(
+    src_A: torch.Tensor,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """Map uniform [0, 1] to [-4, 4]; alpha + beta = 1 keeps every output in range."""
+    u = src_A.to(torch.float32)
+    return (-4.0 + 8.0 * u).to(format_dict[input_format])
+
+
 # Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
 # Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
 # which is why the suite has always written the latter.
-LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.Ema)
+
+
+_INT32_SMAG_MAX = 2**31 - 1
+# Must exceed every |scalar| so negative inputs straddle a negative scalar.
+UNARY_MAX_MIN_INT32_SPAN = 5000
+UNARY_MAX_MIN_FLOAT_SPAN = 4.0
+# Width of the bands at both int32 extremes (the sampler weights a band by its integer count).
+UNARY_MAX_MIN_INT32_EXTREME_BAND = 63
+
+
+def unary_max_min_stimuli_spec(mathop: MathOperation, scalar) -> StimuliSpec:
+    """Both-sign stimuli straddling *scalar*, plus exact ties (float) or both int32 extremes.
+    Edge values at the default scalar live in the sfpu_unary_max_min_*.yaml fuser tests.
+    """
+    if mathop in UNARY_MAX_MIN_INT32_OPS:
+        span = UNARY_MAX_MIN_INT32_SPAN
+        assert span > abs(
+            scalar
+        ), f"Int32 span {span} must exceed |scalar| {abs(scalar)}"
+        band = UNARY_MAX_MIN_INT32_EXTREME_BAND
+        return StimuliSpec.uniform(
+            intervals=[
+                (-span, span),
+                (-_INT32_SMAG_MAX, -_INT32_SMAG_MAX + band),
+                (_INT32_SMAG_MAX - band, _INT32_SMAG_MAX),
+            ]
+        )
+    span = UNARY_MAX_MIN_FLOAT_SPAN
+    assert span > abs(scalar), f"float span {span} must exceed |scalar| {abs(scalar)}"
+    return StimuliSpec.uniform(intervals=[(-span, span), (scalar, scalar)])
 
 
 def prepare_unary_inputs(
@@ -516,6 +563,8 @@ def prepare_unary_inputs(
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Cumsum:
         return prepare_cumsum_inputs(src_A, input_format)
+    if mathop == MathOperation.Ema:
+        return prepare_ema_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
         return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop == MathOperation.Signbit:
@@ -875,12 +924,15 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
     # first=true, which zeroes that carry, so tiles are independent; covering the
     # cross-tile carry (first=false) needs the shared C++ source to thread
     # `first = (i == 0)` through its tile loop, so it is a follow-on.
     OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Whole-tile like cumsum: in place, carry zeroed per tile.
+    OpConfig(MathOperation.Ema, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
@@ -941,6 +993,8 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_FORMAT_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
+    if cfg.mathop in UNARY_MAX_MIN_INT32_OPS:
+        return SFPU_INT32_FORMATS
     return SFPU_UNARY_FORMATS
 
 
@@ -948,14 +1002,14 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     """
     Build the unary-SFPU sweep across all operations and their format matrices.
 
-    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
+    Functional mode sweeps dest-sync and both [32, 32]/[64, 64]
     dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
+    dest_acc, and approximation coverage while pinning those two axes to
+    DestSync.Half and the largest functional matrix
     because none of the preferred perf matrices are supported.
 
     Returns: list of (mathop, resolved format variant, dest_sync,
-    implied_math_format, approx_mode, input_dimensions) tuples.
+    approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
@@ -980,18 +1034,12 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
         ]
         if cfg.mathop == MathOperation.Signbit and not is_perf:
             # The extra FPU routes only check the datacopy keeps the sign bit, so they run at one
-            # dest-sync / size point (still both implied-math modes) instead of the full matrix.
+            # dest-sync / size point instead of the full matrix.
             format_variants += [(v, True) for v in signbit_fpu_route_variants()]
         for variant, route_only in format_variants:
             dest_sync_modes = (
                 (DestSync.Half,) if (is_perf or route_only) else cfg.dest_sync_modes
             )
-            if cfg.mathop == MathOperation.Typecast:
-                implied_math_formats = (ImpliedMathFormat.No,)
-            elif is_perf:
-                implied_math_formats = (ImpliedMathFormat.Yes,)
-            else:
-                implied_math_formats = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
             if is_perf:
                 input_dims = select_perf_input_dimensions(cfg.input_dims)
             elif route_only:
@@ -999,40 +1047,40 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
             else:
                 input_dims = cfg.input_dims
             for dest_sync in dest_sync_modes:
-                for implied_math_format in implied_math_formats:
-                    for approx_mode in approx_modes:
-                        for input_dimensions in input_dims:
-                            combinations.append(
-                                (
-                                    cfg.mathop,
-                                    variant,
-                                    dest_sync,
-                                    implied_math_format,
-                                    approx_mode,
-                                    runtime(input_dimensions),
-                                )
+                for approx_mode in approx_modes:
+                    for input_dimensions in input_dims:
+                        combinations.append(
+                            (
+                                cfg.mathop,
+                                variant,
+                                dest_sync,
+                                approx_mode,
+                                runtime(input_dimensions),
                             )
+                        )
 
     return combinations
 
 
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop_formats_dest_acc_sync_input_dims=generate_sfpu_unary_combinations(),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop_formats_dest_acc_sync_input_dims,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
+    max_min_scalar=None,
+    max_min_sign_magnitude=False,
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
-    floor/ceil/trunc/frac/round, the six
+    tanh, sigmoid, silu, rsqrt, square, cumsum, ema, typecast,
+    floor/ceil/trunc/frac/round, unary max/min (float and Int32), the six
     compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
     shared format matrix.
@@ -1041,10 +1089,9 @@ def test_eltwise_unary_sfpu_quasar(
         mathop,
         format_variant,
         dest_sync,
-        implied_math_format,
         approx_mode,
         input_dimensions,
-    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
+    ) = mathop_formats_dest_acc_sync_input_dims[0]
 
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
@@ -1057,6 +1104,15 @@ def test_eltwise_unary_sfpu_quasar(
         if (cfg.uniform_spec and not is_typecast)
         else None
     )
+    is_max_min = mathop in UNARY_MAX_MIN_OPS
+    if is_max_min:
+        default_scalar = (
+            INT_MAXMIN_SCALAR
+            if mathop in UNARY_MAX_MIN_INT32_OPS
+            else UNARY_MAX_MIN_VALUE
+        )
+        scalar = default_scalar if max_min_scalar is None else max_min_scalar
+        spec = unary_max_min_stimuli_spec(mathop, scalar)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -1071,7 +1127,7 @@ def test_eltwise_unary_sfpu_quasar(
         src_A = _prepare_typecast_input(
             src_A, src_B, formats.input_format, formats.output_format
         )
-    else:
+    elif not is_max_min:
         src_A = prepare_unary_inputs(
             mathop, src_A, src_B, formats.input_format, formats.output_format
         )
@@ -1079,7 +1135,18 @@ def test_eltwise_unary_sfpu_quasar(
     num_faces = MAX_NUM_FACES
 
     if not is_perf:
-        if format_dict[formats.input_format].is_floating_point:
+        if is_max_min:
+            generate_golden = get_golden_generator(UnarySFPUGolden)
+            golden_tensor = generate_golden(
+                mathop,
+                src_A,
+                formats.output_format,
+                dest_acc,
+                formats.input_format,
+                input_dimensions,
+                max_min_scalar=scalar,
+            )
+        elif format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
                 mathop,
@@ -1133,7 +1200,6 @@ def test_eltwise_unary_sfpu_quasar(
         "templates": [
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -1150,6 +1216,22 @@ def test_eltwise_unary_sfpu_quasar(
                 )
                 if is_typecast
                 else TYPECAST_FORMATS()
+            ),
+            *(
+                [
+                    SFPU_UNARY_MAX_MIN_SCALAR(
+                        int(max_min_scalar)
+                        if mathop in UNARY_MAX_MIN_INT32_OPS
+                        else float(max_min_scalar)
+                    )
+                ]
+                if is_max_min and max_min_scalar is not None
+                else []
+            ),
+            *(
+                [SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(True)]
+                if is_max_min and max_min_sign_magnitude
+                else []
             ),
         ],
         "runtimes": [
@@ -1169,10 +1251,9 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
-            # Unpack-to-Dest copies Int32 L1 as two's-complement. Only Int32 → Float16_b
-            # converts 2SC → SM in the kernel; other integer typecasts still pack SM.
-            twos_complement=_is_int32_to_fp16b(
-                formats.input_format, formats.output_format
+            # Int32 max/min stages two's complement unless the sign-magnitude Dest variant is selected.
+            twos_complement=(
+                mathop in UNARY_MAX_MIN_INT32_OPS and not max_min_sign_magnitude
             ),
         ),
         "unpack_to_dest": unpack_to_dest,
@@ -1211,6 +1292,69 @@ def test_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+# Unary max/min with negative scalars (the main sweep's 0.0 / 1000 never compare two negatives).
+# Dest sync is pinned: the main sweep already crosses it.
+UNARY_MAX_MIN_FLOAT_SCALARS = (-0.5, 1.5)
+UNARY_MAX_MIN_INT32_SCALARS = (-1000, -1)
+
+
+def generate_unary_max_min_scalar_combinations():
+    combinations = []
+    for mathop in UNARY_MAX_MIN_OPS:
+        scalars = (
+            UNARY_MAX_MIN_INT32_SCALARS
+            if mathop in UNARY_MAX_MIN_INT32_OPS
+            else UNARY_MAX_MIN_FLOAT_SCALARS
+        )
+        cfg = OP_CONFIG_BY_MATHOP[mathop]
+        sign_magnitude_modes = (
+            (False, True) if mathop in UNARY_MAX_MIN_INT32_OPS else (False,)
+        )
+        for variant in generate_quasar_sfpu_format_variants(
+            mathop, formats_for_op(cfg)
+        ):
+            for scalar in scalars:
+                for sign_magnitude in sign_magnitude_modes:
+                    combinations.append(
+                        (
+                            mathop,
+                            variant,
+                            scalar,
+                            sign_magnitude,
+                            runtime([64, 64]),
+                        )
+                    )
+    return combinations
+
+
+@pytest.mark.quasar
+@parametrize(
+    unary_max_min_scalar_combination=generate_unary_max_min_scalar_combinations(),
+)
+def test_unary_max_min_scalar_quasar(unary_max_min_scalar_combination):
+    """Unary max/min against a test-selected scalar, including negative scalars."""
+    (
+        mathop,
+        format_variant,
+        scalar,
+        sign_magnitude,
+        input_dimensions,
+    ) = unary_max_min_scalar_combination[0]
+    test_eltwise_unary_sfpu_quasar(
+        [
+            (
+                mathop,
+                format_variant,
+                DestSync.Half,
+                ApproximationMode.No,
+                input_dimensions,
+            )
+        ],
+        max_min_scalar=scalar,
+        max_min_sign_magnitude=sign_magnitude,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1299,7 +1443,6 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
             "templates": [
                 MATH_OP(mathop=MathOperation.Cumsum),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
                 DEST_SYNC(DestSync.Half),
@@ -1481,9 +1624,6 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
             "templates": [
                 MATH_OP(mathop=MathOperation.Typecast),
                 APPROX_MODE(ApproximationMode.No),
-                # Typecast names every Dest access format explicitly, so the implied
-                # math format must be off — same as the sweep.
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest

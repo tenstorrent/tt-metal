@@ -27,26 +27,27 @@ struct AsinBf16Config {
     static constexpr unsigned kRawExcluded = 0x80ffu;
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_half_angle_ratio.h"
+#include "ckernel_sfpu_asin_bf16_half_angle_ratio.h"
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_asin() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_asin_bf16() {
-    ckernel::sfpu::bf16::calculate_half_angle_ratio<ckernel::sfpu::AsinBf16Config, ITERATIONS>();
+    ckernel::sfpu::bf16::asin::calculate_half_angle_ratio<ckernel::sfpu::AsinBf16Config, ITERATIONS>();
 }
-inline void init_asin_bf16() {
-    if (bf16_dest_asin()) {
-        ckernel::sfpu::bf16::init_half_angle_ratio<ckernel::sfpu::AsinBf16Config>();
-    }
-}
+inline void init_asin_bf16() { ckernel::sfpu::bf16::asin::init_half_angle_ratio<ckernel::sfpu::AsinBf16Config>(); }
 
 }  // namespace ckernel::sfpu

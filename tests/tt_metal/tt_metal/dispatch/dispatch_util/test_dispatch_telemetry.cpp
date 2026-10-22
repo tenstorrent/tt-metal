@@ -7,6 +7,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -50,6 +51,19 @@ namespace {
 
 constexpr const char* kObserverChildEnv = "TT_METAL_DISPATCH_TELEMETRY_OBSERVER_PCI_DEVICE_ID";
 
+// Environment SetUp runs after test registration and before any test, so this only sees a MetalContext
+// created during registration. The observer child runs the same registration and would block on the
+// CHIP_IN_USE lock held by the parent if one were created there.
+bool metal_context_created_during_registration = false;
+
+class RecordRegistrationMetalContext : public ::testing::Environment {
+public:
+    void SetUp() override { metal_context_created_during_registration = MetalContext::instance_exists(); }
+};
+
+[[maybe_unused]] const auto* const record_registration_metal_context =
+    ::testing::AddGlobalTestEnvironment(new RecordRegistrationMetalContext);
+
 // Copies environ, replacing an existing KEY= if present. Pointers alias `observer_env`.
 std::vector<char*> envp_with_observer_pci_id(std::string& observer_env) {
     const std::string prefix = std::string(kObserverChildEnv) + "=";
@@ -88,17 +102,17 @@ void for_each_worker_core(const CoreRangeSet& worker_cores, Func func) {
 
 std::optional<std::string> smc_runtime_telemetry_unavailable_reason(tt::umd::TTDevice& tt_device) {
     try {
-        // Throws when the device has no firmware info provider (ex: simulators)
-        auto* firmware_info_provider = tt_device.get_firmware_info_provider();
-        if (!firmware_info_provider->get_runtime_telemetry_buffer_size().has_value()) {
+        // Throws when the device has no device firmware (ex: simulators)
+        auto* firmware = tt_device.get_device_firmware();
+        if (!firmware->get_runtime_telemetry_buffer_size().has_value()) {
             return "SMC runtime telemetry buffer is unavailable";
         }
-        if (!firmware_info_provider->get_runtime_telemetry_buffer_address().has_value()) {
+        if (!firmware->get_runtime_telemetry_buffer_address().has_value()) {
             return "SMC runtime telemetry buffer address is unavailable or invalid";
         }
         return std::nullopt;
     } catch (const std::exception& e) {
-        return std::string("Firmware info provider is unavailable: ") + e.what();
+        return std::string("DeviceFirmware is unavailable: ") + e.what();
     }
 }
 
@@ -575,6 +589,10 @@ TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceIn
     }
     const int pci_device_num = pci_device->get_device_num();
 
+    ASSERT_FALSE(metal_context_created_during_registration)
+        << "A MetalContext was created during test registration (e.g. by an INSTANTIATE_TEST_SUITE_P generator); "
+           "the observer child would block on the CHIP_IN_USE lock this process holds";
+
     auto& cq = devices_.at(0)->mesh_command_queue();
     const CoreCoord worker_core{0, 0};
     reset_worker_l1_state(worker_core);
@@ -603,13 +621,29 @@ TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceIn
         FAIL() << "posix_spawn() failed: " << std::strerror(spawn_ret);
     }
 
+    // A child that blocks (e.g. on the CHIP_IN_USE lock this process holds) must fail the test
+    // rather than hang the job until its timeout.
+    constexpr auto observer_child_timeout = std::chrono::seconds(60);
+    const auto deadline = std::chrono::steady_clock::now() + observer_child_timeout;
     int status = 0;
-    pid_t wait_result = -1;
+    pid_t wait_result = 0;
     do {
-        wait_result = waitpid(pid, &status, 0);
-    } while (wait_result < 0 && errno == EINTR);
+        wait_result = waitpid(pid, &status, WNOHANG);
+        if (wait_result == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    } while ((wait_result == 0 && std::chrono::steady_clock::now() < deadline) || (wait_result < 0 && errno == EINTR));
+    const bool timed_out = wait_result == 0;
+    if (timed_out) {
+        kill(pid, SIGKILL);
+        do {
+            wait_result = waitpid(pid, &status, 0);
+        } while (wait_result < 0 && errno == EINTR);
+    }
     release_core_and_finish(worker_core);
 
+    ASSERT_FALSE(timed_out) << "Observer child did not exit within " << observer_child_timeout.count()
+                            << "s and was killed";
     ASSERT_EQ(wait_result, pid) << "waitpid failed";
     ASSERT_TRUE(WIFEXITED(status)) << "Child terminated abnormally";
     EXPECT_EQ(WEXITSTATUS(status), 0) << "Child exited with code " << WEXITSTATUS(status);
@@ -1608,7 +1642,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchCoreEfficiencyAndUtilization) {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
         ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
-        // Dispatch tensix and ethernet tiles are excluded from the worker-core denominator, so a
+        // Dispatch tensix tiles are excluded from the worker-core denominator, so a
         // wait covering the full compute grid should report near-1.0 efficiency.
         EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.9f);
         ASSERT_TRUE(info->info_cqs.front().utilization_since_last_read.has_value());

@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 

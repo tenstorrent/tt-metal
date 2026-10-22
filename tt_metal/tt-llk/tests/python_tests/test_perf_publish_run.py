@@ -120,7 +120,6 @@ def test_publish_quasar_uses_quasar_schema(tmp_path, monkeypatch):
             {
                 "marker": ["INIT"],
                 "face_c_dim": [16],
-                "implied_math_format": ["ImpliedMathFormat.Yes"],
                 "unpacker_engine_sel": ["UnpackerEngine.UnpA"],
                 "tile_cnt": [8],
             }

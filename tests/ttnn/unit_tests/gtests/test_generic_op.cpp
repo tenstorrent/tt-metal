@@ -34,6 +34,7 @@
 #include "ttnn/operations/point_to_point/device/host/point_to_point_device_op.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -1392,6 +1393,18 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                  .initial_value = 0});
         }
 
+        // Keep this manual descriptor in sync with minimal_default_reader.cpp / minimal_default_writer.cpp.
+        // Tensor addresses and semaphores are common RT args laid out by ttnn::ccl::AllGatherCommonArgs;
+        // each kernel picks its direction's semaphore as semaphore_0 + direction.
+        using AllGatherArgs = ttnn::ccl::AllGatherCommonArgs;
+        tt::tt_metal::KernelDescriptor::RTArgList common_rt_args;
+        common_rt_args.reserve(AllGatherArgs::count);
+        common_rt_args.push_back(input_tensor.buffer());
+        common_rt_args.push_back(output_tensor.buffer());
+        common_rt_args.push_back(0u);  // barrier_sem (unused: use_barrier_sem = false)
+        common_rt_args.push_back(static_cast<uint32_t>(global_semaphores.at(0).address()));
+        common_rt_args.push_back(static_cast<uint32_t>(global_semaphores.at(1).address()));
+
         // Build worker RT args helper
         auto build_worker_rt_args = [&](uint32_t dir,
                                         CoreCoord worker_virtual,
@@ -1399,9 +1412,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                                         CoreCoord opposite_virtual,
                                         bool mux_valid) {
             std::vector<uint32_t> reader_rt = {
-                input_tensor.buffer()->address(),
-                output_tensor.buffer()->address(),
-                global_semaphores.at(dir).address(),
                 dir,
                 tile_start,
                 tile_end,
@@ -1411,12 +1421,9 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             };
 
             std::vector<uint32_t> writer_rt = {
-                output_tensor.buffer()->address(),
                 worker_virtual.x,
                 worker_virtual.y,
-                global_semaphores.at(dir).address(),
                 0u,  // use_barrier_sem = false
-                0u,  // barrier_sem (unused)
                 opposite_virtual.x,
                 opposite_virtual.y,
                 dir,
@@ -1496,6 +1503,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             .runtime_args = {{worker_fwd_core, fwd_writer_rt}, {worker_bwd_core, bwd_writer_rt}},
             .config = tt::tt_metal::WriterConfigDescriptor{},
         });
+        program_desc.kernels[0].emplace_common_runtime_args(common_rt_args);
+        program_desc.kernels[1].emplace_common_runtime_args(common_rt_args);
 
         if (has_forward) {
             program_desc.kernels.push_back({

@@ -10,7 +10,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/cache_dataflow_helpers.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/packed_kv_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/shared_with_host/packed_kv_layout.hpp"
 
 namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
 
@@ -89,8 +89,8 @@ static void run_reader() {
         // metadata accessor and must not name a fixed out-of-range compile-arg offset here.
         constexpr uint32_t kMetaArgsOffset = [] {
             if constexpr (HasRope || HasScaled) {
-                constexpr auto rope_args =
-                    TensorAccessorArgs<(HasRope || HasScaled) ? src_args.next_compile_time_args_offset() : 0>();
+                constexpr auto rope_args = TensorAccessorArgs<
+                    (HasRope || HasScaled) ? decltype(src_args)::next_compile_time_args_offset() : 0>();
                 if constexpr (HasScaled) {
                     constexpr auto scale_args =
                         TensorAccessorArgs<HasScaled ? rope_args.next_compile_time_args_offset() : 0>();
@@ -99,7 +99,7 @@ static void run_reader() {
                     return rope_args.next_compile_time_args_offset();
                 }
             } else {
-                return src_args.next_compile_time_args_offset();
+                return decltype(src_args)::next_compile_time_args_offset();
             }
         }();
         CircularBuffer cb_meta(cb_id_meta);

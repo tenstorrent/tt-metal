@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cassert>
-#include <cstdint>
 #include <type_traits>
 
 namespace tt {

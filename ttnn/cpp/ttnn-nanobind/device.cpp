@@ -84,7 +84,7 @@ void ttnn_device(nb::module_& mod) {
 
             Keyword Args:
                 device_id (int): The device ID to open.
-                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
+                l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`. The default is 0: ops that allocate from the L1_SMALL region (conv2d and pooling with kernel > 1, CCL semaphores) fail with an `L1_SMALL` out-of-memory error, or fall back to L1, unless this is large enough for their allocations. The conv and pool unit tests use 16384 or 32768; model demos under `models/` use 8192 to 131072.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
                 num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
                 dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.
@@ -460,14 +460,55 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def(
-        "initialize_fast_dispatch",
-        [](MeshDevice* device) { tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device); },
+        "get_dispatch_core_axis",
+        [](MeshDevice* device) {
+            return tt::tt_metal::experimental::DispatchContext::get().get_dispatch_core_axis(device);
+        },
         nb::arg("device").noconvert(),
+        R"doc(
+        Return the axis (ROW or COL) of the device's live dispatch-core configuration.
+
+        COL means dispatch sits on the last column of the worker grid (the Blackhole default); ROW means
+        the last row (Blackhole with fabric tensix enabled, or Wormhole). tt-blaze's two-phase upload uses
+        it to find that edge: cargo shards off the edge are written under Fast Dispatch, and shards on it
+        are written under Slow Dispatch after the session, because dispatch firmware occupies those cores
+        during it.
+
+        Args:
+            device (ttnn.Device): The mesh device to query.
+
+        Returns:
+            ttnn.device.DispatchCoreAxis: ROW or COL.
+    )doc");
+    m_device.def(
+        "initialize_fast_dispatch",
+        [](MeshDevice* device, bool allow_destructive) {
+            tt::tt_metal::experimental::FastDispatchSetupOptions options;
+            options.allow_destructive = allow_destructive;
+            tt::tt_metal::experimental::DispatchContext::get().initialize_fast_dispatch(device, options);
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("allow_destructive") = false,
         R"doc(
         Dynamically enable Fast Dispatch on a MeshDevice that was opened in Slow Dispatch mode.
 
+        Refuses, before any firmware is written, if an L1 or L1_SMALL allocation is resident on a core
+        that Fast Dispatch will claim; dispatch cores may not hold L1 allocations while Fast Dispatch is
+        active.
+
+        Limitations:
+            - Any interleaved L1 buffer resident when the session opens is refused, whatever its size:
+              its pages are spread over every L1 bank.
+            - A non-default sub-device manager still loaded on any view over an active chip is refused,
+              even with allow_destructive: the check sees only the default manager's allocations.
+              Sub-device managers aren't supported with manual Fast Dispatch; loading one during a
+              session raises.
+            - Every active device must be MMIO-attached; otherwise this raises before Fast Dispatch is
+              enabled.
+
         Args:
             device (ttnn.Device): The mesh device to enable Fast Dispatch on.
+            allow_destructive (bool): Warn and proceed instead of refusing. The resident L1 may be corrupted.
     )doc");
     m_device.def(
         "terminate_fast_dispatch",

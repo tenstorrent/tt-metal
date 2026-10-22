@@ -149,22 +149,15 @@ void kernel_main() {
                     uint32_t temp_addr = pad_align.get_base_address();
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
                     noc.async_read_barrier();
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-                    // Quasar DM reverse hazard: the NoC just wrote pad_align to TL1, but a CPU read goes
-                    // through the private L1 D$ and L2. invalidate_l2_cache_range only reaches L2 and
-                    // invalidate_l1_cache() is a no-op here, so a stale D$ line could survive. Read the
-                    // staged stick through the uncached L1 alias (base + MEM_L1_UNCACHED_BASE), which
-                    // bypasses both caches -- what DataflowBuffer::get_read_ptr() did for this path before
-                    // the conversion, and what #55990 / common.hpp (#51763) do.
-                    const uintptr_t pad_align_src =
-                        static_cast<uintptr_t>(pad_align.get_base_address()) + MEM_L1_UNCACHED_BASE;
-#else
-                    const uintptr_t pad_align_src = static_cast<uintptr_t>(pad_align.get_base_address());
-#endif
-                    memmove(
-                        (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(pad_align_src),
-                        (size_t)(stick_size_bytes));
+                    // Relocate the staged stick with the shared CPU copy (common.hpp): on Quasar DM it reads
+                    // the source through the uncached L1 alias (the NoC just wrote it; a stale D$ line could
+                    // otherwise survive), writes the destination through the uncached alias and fences the
+                    // stores before the DFB credit is posted. A raw memmove into the uncached write pointer
+                    // would let the consumer observe the push_back before the bytes land. On WH/BH it is the
+                    // usual memmove + load_blocking drain, and it casts through uintptr_t (the bare
+                    // (void*)(uint32_t) cast is -Werror=int-to-pointer-cast on Quasar's rv64 DM RISCs).
+                    tt::data_movement::common::copy_via_memmove<false>(
+                        l1_write_addr + stick_size_padded_front, pad_align.get_base_address(), stick_size_bytes);
                 } else if constexpr (unaligned) {
                     uint32_t temp_addr = pad_align.get_base_address();
                     read_input_stick_into_l1(noc, s, i_page, temp_addr, num_input_pages_in_row, stick_size_bytes);
