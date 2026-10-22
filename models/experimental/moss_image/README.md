@@ -40,8 +40,11 @@ not silently expanded.
 ## Setup
 
 Build the current checkout using the repository's normal source-build instructions
-and activate its Python environment. Install the model additions without replacing
-TTNN, PyTorch or the repository's pinned packages:
+with Python 3.11 or newer and activate its Python environment. Pillow 13 contains
+security fixes and no longer supports Python 3.10; use a matching TTNN source
+build, such as the repository's Ubuntu 24.04 / Python 3.12 image. Installing this
+model into the Ubuntu 22.04 / Python 3.10 image is unsupported. Install the model
+additions without replacing TTNN, PyTorch or the repository's pinned packages:
 
 ```bash
 python -m pip install -r models/experimental/moss_image/requirements.txt

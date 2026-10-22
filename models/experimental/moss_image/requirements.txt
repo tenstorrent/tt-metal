@@ -5,4 +5,4 @@ diffusers>=0.38,<0.41
 accelerate>=1.7,<2
 huggingface-hub>=1.0,<2
 safetensors>=0.6,<1
-Pillow>=10,<13
+Pillow>=13.0.0,<14
