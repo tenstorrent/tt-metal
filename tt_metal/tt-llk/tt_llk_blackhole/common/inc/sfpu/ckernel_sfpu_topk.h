@@ -2630,15 +2630,33 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                         while (datums_compared < total_datums_to_compare)
                         {
                             // Groups of 8 datums being sorted at the same time
-                            if constexpr (STABLE_SORT)
+                            if constexpr (STABLE_SORT && STEP64)
+                            {
+                                // load8, the stable body and store8 with its dest step: 30 of the 32 slots.
+                                if (init_rebuild)
+                                {
+                                    load_replay_buf<Exec>(
+                                        0,
+                                        30,
+                                        [ld_offset]
+                                        {
+                                            bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
+                                            bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                            bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, true>(0, ld_offset);
+                                        });
+                                    init_rebuild = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(0, 30);
+                                }
+                            }
+                            else if constexpr (STABLE_SORT)
                             {
                                 bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
-                                bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, STEP64>(0, ld_offset);
-                                if constexpr (!STEP64)
-                                {
-                                    bitonic_topk_inc_dest_const<64, false>();
-                                }
+                                bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
+                                bitonic_topk_inc_dest_const<64, false>();
                             }
                             else
                             {
@@ -2672,8 +2690,31 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                         {
                             if constexpr (STABLE_SORT)
                             {
-                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(ld_offset, ld_dist);
-                                bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                if constexpr (STEP64)
+                                {
+                                    // load16 and the stable body: 30 of the 32 slots; the stores stay inline.
+                                    if (init_rebuild)
+                                    {
+                                        load_replay_buf<Exec>(
+                                            0,
+                                            30,
+                                            [ld_offset, ld_dist]
+                                            {
+                                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(ld_offset, ld_dist);
+                                                bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                            });
+                                        init_rebuild = false;
+                                    }
+                                    else
+                                    {
+                                        lltt::replay(0, 30);
+                                    }
+                                }
+                                else
+                                {
+                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(ld_offset, ld_dist);
+                                    bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
+                                }
                                 bitonic_topk_store16_group<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, STEP64>(ld_offset, ld_dist);
                             }
                             else
@@ -2707,7 +2748,23 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                         if constexpr (STABLE_SORT)
                         {
                             bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, ld_offset);
-                            bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
+                            if constexpr (STEP64)
+                            {
+                                // The stable body fills the replay buffer; the loads and stores stay inline.
+                                if (init_rebuild)
+                                {
+                                    load_replay_buf<Exec>(0, 32, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>(); });
+                                    init_rebuild = false;
+                                }
+                                else
+                                {
+                                    lltt::replay(0, 32);
+                                }
+                            }
+                            else
+                            {
+                                bitonic_topk_ph2_st3_to_1<STABLE_SORT, TIE_ORDER>();
+                            }
                             bitonic_topk_store16_group<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, STEP64>(4, ld_offset);
                         }
                         else
