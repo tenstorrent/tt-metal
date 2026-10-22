@@ -2402,3 +2402,20 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
+
+# Qwen3-Embedding-8B (#61997). Weights come from the shared cache when present, else a job-local download.
+- name: Qwen3-Embedding-8B unit tests
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-Embedding-8B TT_CACHE_PATH=/work/generated/tt_cache/Qwen3-Embedding-8B
+    if [ ! -d /mnt/MLPerf/huggingface/hub/models--Qwen--Qwen3-Embedding-8B/snapshots ]; then export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub; fi
+    pytest --timeout 3000 models/demos/wormhole/qwen3_embedding_8b/tests
+  model: qwen3-embedding-8b
+  model_family: Qwen
+  skus:
+    wh_n300:
+      timeout: 90
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external fix by EazyHood)
+  team: models
+  budget_type: unit
