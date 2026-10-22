@@ -30,7 +30,7 @@ struct BwRow {
 };
 
 // 2048 B rows of noc_dram_bw, noc_l1_read_bw, noc_l1_write_bw, noc_l1_local_bw.
-// Clocks are wormhole::AICLK_BUSY_VAL (1000) and blackhole::AICLK_BUSY_VAL (1350).
+// Clocks are tt::umd::wormhole::AICLK_BUSY_VAL (1000 MHz) and tt::umd::blackhole::AICLK_BUSY_VAL (1350 MHz).
 constexpr BwRow kRows[] = {
     {true, false, true, 28.411, 49.164, 358, 529},
     {false, false, true, 29.742, 47.977, 259, 403},
@@ -55,7 +55,7 @@ TEST(NocBwPerfModel, Row2048RoundTripMatchesBytesOverGbps) {
 }
 
 // noc_dram_bw Blackhole: 16 B is 0.387 GB/s. 24 B takes the 32 B entry, 0.772, not Wormhole's 0.868.
-TEST(NocBwPerfModel, SubBurstClampsAndOffTableUsesUpperBlackholeEntry) {
+TEST(NocBwPerfModel, BelowMinSizeClampsAndTieUsesUpperBlackholeEntry) {
     constexpr uint32_t kNum = 4096;
     const auto [clamped, clamped_latency] = get_cycles_for_transaction_size(
         /*transaction_size=*/1, true, false, kNum, tt::ARCH::BLACKHOLE, true);
