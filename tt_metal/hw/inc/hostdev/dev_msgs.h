@@ -390,10 +390,9 @@ struct watcher_msg_t {
 struct l1_ecc_halt_msg_t {
     volatile uint32_t reason;
     volatile uint32_t ecc_ctrl;
-    volatile uint32_t l1_and_local_mem_counts;             // ECC_STATUS view 1
-    volatile uint32_t icache_and_ncrisc_local_mem_counts;  // ECC_STATUS view 5
-    volatile uint32_t last_l1_error;                       // ECC_STATUS view 3
-    volatile uint32_t last_l1_error_banks_16_31;           // ECC_STATUS view 6
+    volatile uint32_t l1_counts;                  // ECC_STATUS view 2
+    volatile uint32_t last_l1_error_banks_0_15;   // ECC_STATUS view 3
+    volatile uint32_t last_l1_error_banks_16_31;  // ECC_STATUS view 6
     volatile uint32_t program_id;
 };
 

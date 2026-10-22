@@ -4,14 +4,15 @@
 
 #include "debug/l1_ecc_halt.hpp"
 
-#include <array>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
-#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -29,25 +30,9 @@ namespace {
 constexpr auto l1_ecc_check_interval = std::chrono::seconds(10);
 constexpr uint32_t l1_ecc_polls_per_clock_read = 1024;
 static_assert(std::has_single_bit(l1_ecc_polls_per_clock_read));
-
-struct RiscMemoryField {
-    EccView view;
-    uint32_t mask;
-    const char* name;
-};
-
-constexpr auto risc_memory_fields = std::to_array<RiscMemoryField>({
-    {EccView::L1_AND_LOCAL_MEM_COUNTS, ECC_BRISC_LOCAL_MEM_MASK, "BRISC local memory DBE"},
-    {EccView::L1_AND_LOCAL_MEM_COUNTS, ECC_TRISC0_LOCAL_MEM_MASK, "TRISC0 local memory DBE"},
-    {EccView::L1_AND_LOCAL_MEM_COUNTS, ECC_TRISC1_LOCAL_MEM_MASK, "TRISC1 local memory DBE"},
-    {EccView::L1_AND_LOCAL_MEM_COUNTS, ECC_TRISC2_LOCAL_MEM_MASK, "TRISC2 local memory DBE"},
-    {EccView::ICACHE_AND_NCRISC_LOCAL_MEM_COUNTS, ECC_NCRISC_LOCAL_MEM_MASK, "NCRISC local memory DBE"},
-    {EccView::ICACHE_AND_NCRISC_LOCAL_MEM_COUNTS, ECC_BRISC_ICACHE_MASK, "BRISC instruction cache parity error"},
-    {EccView::ICACHE_AND_NCRISC_LOCAL_MEM_COUNTS, ECC_TRISC0_ICACHE_MASK, "TRISC0 instruction cache parity error"},
-    {EccView::ICACHE_AND_NCRISC_LOCAL_MEM_COUNTS, ECC_TRISC1_ICACHE_MASK, "TRISC1 instruction cache parity error"},
-    {EccView::ICACHE_AND_NCRISC_LOCAL_MEM_COUNTS, ECC_TRISC2_ICACHE_MASK, "TRISC2 instruction cache parity error"},
-    {EccView::ICACHE_AND_NCRISC_LOCAL_MEM_COUNTS, ECC_NCRISC_ICACHE_MASK, "NCRISC instruction cache parity error"},
-});
+// A false error keeps BRISC in the handler for well under a microsecond, so a BRISC still in it after this long is
+// stuck.
+constexpr auto brisc_stuck_recheck_delay = std::chrono::milliseconds(10);
 
 // Mock devices have no registers to read, and ttsim exits on any ECC register access.
 bool is_blackhole_silicon(const MetalContext& ctx) {
@@ -60,8 +45,7 @@ bool l1_ecc_halt_enabled(const MetalContext& ctx) {
 }
 
 bool is_halt_reason(uint32_t reason) {
-    return reason == L1_ECC_HALT_REASON_DBE || reason == L1_ECC_HALT_REASON_UNEXPECTED ||
-           reason == L1_ECC_HALT_REASON_RISC_MEMORY;
+    return reason == L1_ECC_HALT_REASON_DBE || reason == L1_ECC_HALT_REASON_UNEXPECTED;
 }
 
 uint64_t halt_record_addr(const MetalContext& ctx) {
@@ -73,38 +57,22 @@ uint64_t halt_record_addr(const MetalContext& ctx) {
 
 // "bank B row R (L1 0x...)" from ECC_STATUS views 3 (banks 0-15) and 6 (banks 16-31). Assumes the default L1 bank
 // interleave.
-std::string last_error_location(uint32_t last_l1_error, uint32_t last_l1_error_banks_16_31) {
-    uint32_t banks_0_15 = (last_l1_error & ECC_LAST_ERR_BANKS_MASK) >> ECC_LAST_ERR_BANKS_SHIFT;
+std::string last_error_location(uint32_t last_l1_error_banks_0_15, uint32_t last_l1_error_banks_16_31) {
+    uint32_t banks_0_15 = (last_l1_error_banks_0_15 & ECC_LAST_ERR_BANKS_MASK) >> ECC_LAST_ERR_BANKS_SHIFT;
     uint32_t banks_16_31 = (last_l1_error_banks_16_31 & ECC_LAST_ERR_BANKS_MASK) >> ECC_LAST_ERR_BANKS_SHIFT;
-    if ((last_l1_error & ECC_LAST_ERR_VALID_MASK) == 0 || (banks_0_15 | banks_16_31) == 0) {
+    if ((last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK) == 0 || (banks_0_15 | banks_16_31) == 0) {
         return "unknown location";
     }
     uint32_t bank = banks_0_15 != 0 ? std::countr_zero(banks_0_15) : l1_ecc_banks / 2 + std::countr_zero(banks_16_31);
-    uint32_t row = last_l1_error & ECC_LAST_ERR_ROW_MASK;
+    uint32_t row = last_l1_error_banks_0_15 & ECC_LAST_ERR_ROW_MASK;
     return fmt::format("bank {} row {} (L1 0x{:x})", bank, row, (row * l1_ecc_banks + bank) * l1_ecc_word_bytes);
-}
-
-// Names the RISC memories with a non-zero count in ECC_STATUS views 1 and 5.
-std::string risc_memory_errors(uint32_t l1_and_local_mem_counts, uint32_t icache_and_ncrisc_local_mem_counts) {
-    std::vector<std::string> errors;
-    for (const RiscMemoryField& field : risc_memory_fields) {
-        uint32_t counts = field.view == EccView::L1_AND_LOCAL_MEM_COUNTS ? l1_and_local_mem_counts
-                                                                         : icache_and_ncrisc_local_mem_counts;
-        if (counts & field.mask) {
-            errors.push_back(field.name);
-        }
-    }
-    return fmt::format("{}", fmt::join(errors, ", "));
 }
 
 std::string halt_cause(const auto& view) {
     switch (view.reason()) {
         case L1_ECC_HALT_REASON_DBE:
             return "an L1 double-bit error at " +
-                   last_error_location(view.last_l1_error(), view.last_l1_error_banks_16_31());
-        case L1_ECC_HALT_REASON_RISC_MEMORY:
-            return "a RISC memory error: " +
-                   risc_memory_errors(view.l1_and_local_mem_counts(), view.icache_and_ncrisc_local_mem_counts());
+                   last_error_location(view.last_l1_error_banks_0_15(), view.last_l1_error_banks_16_31());
         default: return "an unexpected IRQ 3";
     }
 }
@@ -116,11 +84,20 @@ void check_chips(MetalContext& ctx, const std::vector<ChipId>& device_ids) {
     const auto& factory = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     auto record = factory.create<dev_msgs::l1_ecc_halt_msg_t>();
     const uint64_t record_addr = halt_record_addr(ctx);
+    const uint32_t brisc_int_no_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO);
+    // Cores whose BRISC is inside an interrupt handler without a halt record, for example after the record's stores
+    // never landed.
+    std::vector<std::pair<ChipId, CoreCoord>> in_handler;
     for (ChipId device_id : device_ids) {
         for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
             ctx.get_cluster().read_core(record.data(), record.size(), tt_cxy_pair(device_id, core), record_addr);
             auto view = record.view();
             if (!is_halt_reason(view.reason())) {
+                uint32_t int_no = 0;
+                ctx.get_cluster().read_reg(&int_no, tt_cxy_pair(device_id, core), brisc_int_no_addr);
+                if (int_no != 0) {
+                    in_handler.emplace_back(device_id, core);
+                }
                 continue;
             }
             ctx.set_l1_ecc_halt_detected(true);
@@ -131,9 +108,26 @@ void check_chips(MetalContext& ctx, const std::vector<ChipId>& device_ids) {
                 core.str(),
                 halt_cause(view),
                 view.program_id(),
-                view.l1_and_local_mem_counts() & ECC_DBE_COUNT_MASK,
-                (view.l1_and_local_mem_counts() & ECC_SBE_COUNT_MASK) >> ECC_SBE_COUNT_SHIFT,
+                view.l1_counts() & ECC_DBE_COUNT_MASK,
+                (view.l1_counts() & ECC_SBE_COUNT_MASK) >> ECC_SBE_COUNT_SHIFT,
                 view.ecc_ctrl());
+        }
+    }
+    if (in_handler.empty()) {
+        return;
+    }
+    std::this_thread::sleep_for(brisc_stuck_recheck_delay);
+    for (const auto& [device_id, core] : in_handler) {
+        uint32_t int_no = 0;
+        ctx.get_cluster().read_reg(&int_no, tt_cxy_pair(device_id, core), brisc_int_no_addr);
+        if (int_no != 0) {
+            ctx.set_l1_ecc_halt_detected(true);
+            TT_THROW(
+                "Chip {} core {}: BRISC is stuck in an interrupt handler (BRISC_INT_NO {}) without an L1 ECC halt "
+                "record. Reset the chip with tt-smi -r.",
+                device_id,
+                core.str(),
+                int_no);
         }
     }
 }
