@@ -48,7 +48,7 @@ void kernel_main() {
     const uint32_t ab0 = r0 + G, nab = 0;  // (the tail: ab0 + nab + 2 ..)
     {  // (the top-K's done words: zero before anyone can write them - they are written after the scores)
         const uint32_t w0 = get_arg_val<uint32_t>(ab0 + nab + 2);
-        for (uint32_t i = 0; i < 5; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
+        for (uint32_t i = 0; i < 8; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
     }
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const auto wg = TensorAccessor(w_args, w_addr, 2048);
@@ -295,6 +295,21 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
             *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
         }));
+#ifdef RT_ROUTE
+        // dispatch prep: the route words of my 32 owned tokens from the joint rows (BRISC's word 80: all shares
+        // written), into L1 for the BRISC's write (word 96); off the routing chain (the UNPACK thread is idle here)
+        const uint32_t rl1 = get_arg_val<uint32_t>(t1 + 5), tok0 = get_arg_val<uint32_t>(t1 + 6);
+        const uint32_t ol1 = get_arg_val<uint32_t>(t1 + 2);
+        UNPACK(({
+            volatile uint32_t* rd = reinterpret_cast<volatile uint32_t*>(words + 80);
+            while (*rd == 0) {
+            }
+            *rd = 0;
+            volatile uint32_t* o = reinterpret_cast<volatile uint32_t*>(rl1);
+            for (uint32_t c = 0; c < 32; ++c) rw_::word(o, c, reinterpret_cast<volatile const uint16_t*>(ol1 + c * 4 * K), tok0 + c);
+            *reinterpret_cast<volatile uint32_t*>(words + 96) = 1;
+        }));
+#endif
     }
 }
 """
@@ -428,6 +443,9 @@ void kernel_main() {
             while (*wd == 0) invalidate_l1_cache();
             *wd = 0;  // (re-arm)
         }
+#ifdef RT_ROUTE
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 80) = 1;  // (every share of the rows written)
+#endif
     }
     const auto og = TensorAccessor(o_args, o_addr, 32 * 4 * K);
     noc_async_write(o_l1, og.get_noc_addr(page), 32 * 4 * K);
@@ -435,7 +453,7 @@ void kernel_main() {
 #ifdef RA_PLAN
     {  // the routing exchange + planner (routing_stream): every router core's rows written, then routing_a2a's planner
         DeviceZoneScopedN("SE-RPLAN");
-        const uint32_t r0 = t0 + 6, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
+        const uint32_t r0 = t0 + 9, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
         const uint32_t B = get_arg_val<uint32_t>(r0 + 2);
         for (uint32_t i = 0; i < RA_NC_; ++i) {  // (my rows are written: every router core's two planner RISCs told)
             const uint32_t x = get_arg_val<uint32_t>(r0 + 3 + 2 * i), y = get_arg_val<uint32_t>(r0 + 4 + 2 * i);
@@ -445,6 +463,17 @@ void kernel_main() {
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_NC_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all increments landed)
         ra::plan(r0 + 3 + 2 * RA_NC_, B);
+    }
+#endif
+#ifdef RT_ROUTE
+    {  // dispatch prep: my owned tokens' route words (the compute's, word 96) to the route tensor
+        volatile tt_l1_ptr uint32_t* rd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 96);
+        while (*rd == 0) invalidate_l1_cache();
+        *rd = 0;  // (re-arm)
+        const uint32_t rl1 = get_arg_val<uint32_t>(t0 + 6), tok0 = get_arg_val<uint32_t>(t0 + 8);
+        const auto rg = TensorAccessor(TensorAccessorArgs<RT_CT0>(), get_arg_val<uint32_t>(t0 + 7), RT_PAGE);
+        noc_async_write(rl1, rg.get_noc_addr(0) + tok0 * 4 * RT_RW, 32 * 4 * RT_RW);
+        noc_async_write_barrier();
     }
 #endif
 }
@@ -559,7 +588,8 @@ class RouterStream:
                 ("finc", 16 * 8),
                 ("psync", 16 * 2),
                 ("out", 32 * 4 * K),
-                ("words", 64),
+                ("words", 128),
+                ("route", 32 * 4 * 2),
             ]:
                 off[k], o = o, al(o + v)
             return off, o
@@ -719,8 +749,11 @@ class RouterStream:
 
     ra = None  # (the routing exchange + planner riding the router BRISC: routing_stream.RoutingStream)
 
-    def pieces(self, coord, x, w, b, ix, out):
-        """(CBs, kernels) of the router cores on chip coord. x: the own shard [rows, H / TP] (DRAM)."""
+    prep = None  # (dispatch prep's route words: dict(EPC, torus) - fused_head sets it with a RoutingSpec's prep)
+
+    def pieces(self, coord, x, w, b, ix, out, route=None):
+        """(CBs, kernels) of the router cores on chip coord. x: the own shard [rows, H / TP] (DRAM); route: the route
+        words' tensor [1, 1, 1, S] uint32 (dispatch prep, with self.prep)."""
         G, ET, RB, K = self.G, self.ET, self.RB, self.K
         p = self._pos(coord)
         virt = self.mesh.worker_core_from_logical_core
@@ -765,7 +798,11 @@ class RouterStream:
             )
             ops = [1 | bb << 8 for bb in hand] + [2 | p << 8]
             c_rt[core.x][core.y] = (
-                [len(ops)] + ops + [G - 1 if bb == p else 0 for bb in range(G)] + tail + [b0 + off["bias"]]
+                [len(ops)]
+                + ops
+                + [G - 1 if bb == p else 0 for bb in range(G)]
+                + tail
+                + [b0 + off["bias"], b0 + off["route"], 32 * j]
             )
             hs = []
             l = j % self.nv
@@ -780,7 +817,7 @@ class RouterStream:
                 [len(hs) // 5]
                 + hs
                 + [int(out.buffer_address()), j, self.scale_bits, b0 + off["out"], b0 + off["words"]]
-                + [b0 + off["best"]]
+                + [b0 + off["best"], b0 + off["route"], int(route.buffer_address()) if route is not None else 0, 32 * j]
                 + (self._ra_args(coord, j) if self.ra is not None else [])
             )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
@@ -808,10 +845,25 @@ class RouterStream:
             runtime_args=n_rt,
             config=dm("RISCV_1", ttnn.NOC.NOC_0),
         )
+        rt_c, rt_b, rt_ct = "", "", []
+        if route is not None:
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import route_words
+
+            from models.demos.moe_block.tt.prep_stream import route_src
+
+            R_, C_ = tuple(self.mesh.shape)
+            rt_c = "#define RT_ROUTE\n" + route_src(
+                (R_, C_), coord[0] * C_ + coord[1], E=ET * 32, EPC=self.prep["EPC"], K=K, torus=self.prep["torus"]
+            )
+            rt_ct = acc(route)
+            n0 = len(ct + acc(out) + (self._ra_ct() if self.ra is not None else []))
+            rw = route_words(R_ * C_)
+            rt_b = f"#define RT_ROUTE\n#define RT_CT0 {n0}\n#define RT_PAGE {int(route.buffer_aligned_page_size())}\n"
+            rt_b += f"#define RT_RW {rw}\n"
         kernels = [
             self.ncrisc,
             ttnn.KernelDescriptor(
-                kernel_source=_COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
+                kernel_source=_COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS + rt_c, 1),
                 source_type=st,
                 core_ranges=self.crs,
                 compile_time_args=ct,
@@ -819,10 +871,10 @@ class RouterStream:
                 config=comp,
             ),
             ttnn.KernelDescriptor(
-                kernel_source=self._ra_src(coord, len(ct + acc(out))) + _BRISC,
+                kernel_source=rt_b + self._ra_src(coord, len(ct + acc(out))) + _BRISC,
                 source_type=st,
                 core_ranges=self.crs,
-                compile_time_args=ct + acc(out) + (self._ra_ct() if self.ra is not None else []),
+                compile_time_args=ct + acc(out) + (self._ra_ct() if self.ra is not None else []) + rt_ct,
                 runtime_args=b_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_1),
             ),

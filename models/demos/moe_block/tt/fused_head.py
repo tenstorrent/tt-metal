@@ -213,11 +213,14 @@ class RouterSpec:
 @dataclass(frozen=True)
 class RoutingSpec:
     """The fused head's routing exchange + combine planner: A combine accumulators, L links of the combine's ports
-    (its port tables), rows_cap the plan's row capacity (default 2 S K + 32 EPC)."""
+    (its port tables), rows_cap the plan's row capacity (default 2 S K + 32 EPC). prep: dispatch prep in the program
+    (the owned tokens' route words, self.outputs["route"]); torus: (wrap X, wrap Y) of the dispatch's mesh."""
 
     A: int
     L: int = 2
     rows_cap: int = 0
+    prep: bool = True
+    torus: tuple = (False, False)
 
 
 class HeadSE3:
@@ -404,6 +407,8 @@ class HeadSE3:
                 flags=int(self.mbox.buffer_address()) + 16 * 2 * GX * GY + 128,
             )
             self.router.ra = self.routing
+            if routing.prep:
+                self.router.prep = dict(EPC=EPC, torus=tuple(routing.torus))
             ttnn.synchronize_device(mesh_device)
         self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
         self.latent = latent
@@ -484,6 +489,17 @@ class HeadSE3:
                 self.rout = self.outputs["rows"] = self.router.out_tensor()
                 if self.routing is not None:
                     self.routing.router_out = self.rout
+                if self.router.prep is not None:
+                    from ttnn.bringup.combine_rf.sparse_all_gather_2d import route_words
+
+                    rw = route_words(self.mesh.get_num_devices())
+                    self.outputs["route"] = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, 1, rw * self.rows // G]),
+                        ttnn.uint32,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                        self.mesh,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
             if self.latent:
                 self.lout = self.outputs["latent"] = ttnn.allocate_tensor_on_device(
                     ttnn.Shape([1, 1, self.rows // G, self.latent]),
@@ -551,7 +567,7 @@ class HeadSE3:
                         la=la,
                     )
                 if self.router is not None:  # (first: the routing's serve plan is made by the router's planner args)
-                    c2, k2 = self.router.pieces(coord, x, *self.rw, self.rout)
+                    c2, k2 = self.router.pieces(coord, x, *self.rw, self.rout, route=self.outputs.get("route"))
                 c0, k0 = self.xg.pieces(
                     coord, prog, x, XREADY, rs=rsx, router=self.router, la=rse.get("la"), routing=self.routing
                 )

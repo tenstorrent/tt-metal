@@ -121,6 +121,34 @@ class _LazyR(dict):
 ROUTING = _LazyR()
 
 
+def _check_route(head, rows, name):
+    """The head's route words (dispatch prep in the program) vs combine_rf/dispatch_prep's route kernel run on the
+    head's own joint rows, bit for bit."""
+    from ttnn.bringup.combine_rf.dispatch_prep import dispatch_prep_prepare
+
+    spec, S = ROUTER[name], rows // C
+    mesh = head.mesh
+    ref = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 1, S]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    xb = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 64]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    run = dispatch_prep_prepare(
+        mesh, S=S, K=spec.K, EPC=head.routing.EPC, tokens_per_page=32, own_routing=True, copy=False
+    )
+    run(head.outputs["rows"], None, xb, ref)
+    got = [
+        ttnn.to_torch(t).to(torch.int64).reshape(-1) & 0xFFFFFFFF
+        for t in ttnn.get_device_tensors(head.outputs["route"])
+    ]
+    exp = [ttnn.to_torch(t).to(torch.int64).reshape(-1) & 0xFFFFFFFF for t in ttnn.get_device_tensors(ref)]
+    for ci, (g, e) in enumerate(zip(got, exp)):
+        bad = (g != e).nonzero().flatten()
+        assert bad.numel() == 0, f"{name} chip {ci} route words: {bad.numel()} differ, first {bad[:8].tolist()}"
+    logger.info(f"HSE3 {name} route words: all {R * C} chips bit-exact vs dispatch_prep")
+
+
 def _check_plan(head, rows, name):
     """combine_plan's per-chip tables from the head's routing exchange + planner vs its host model (plan_reference) on
     the device's own routing (every chip's joint rows), bit for bit."""
@@ -607,6 +635,8 @@ def test_head_se3(mesh_device, device_params):
             _check_latent(head, xs, w_l, rows, name)
         if head.routing is not None:
             _check_plan(head, rows, name)
+            if "route" in head.outputs:
+                _check_route(head, rows, name)
         ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
         act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
         ps, refs = [], []

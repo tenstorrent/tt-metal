@@ -6,8 +6,10 @@ ring of 4 (FABRIC_2D_TORUS_X), on the mock Galaxy (no execution, no numerics). R
 TT_METAL_MOCK_CLUSTER_DESC_PATH=$TT_METAL_HOME/tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_galaxy.yaml
 (skipped otherwise). Checks: the TP ring schedule (own shard both ways, the opposite shard's even / odd row halves one
 way each: 1.5 shards on the busiest link), every chip's program builds and enqueues at the Galaxy per-chip shapes;
-also with the down + SE reduce-scatter and the router chain in the program (ring-balanced schedules)."""
+also with the down + SE reduce-scatter, the router chain, the routing exchange + planner and the dispatch prep in
+the program (ring-balanced schedules; the route words with both mesh axes wrapped: two words a token at 32 chips)."""
 
+import dataclasses
 import gc
 import os
 
@@ -44,7 +46,7 @@ def test_head_mock_galaxy(rs):
                 rs_dim=RS_DIM[name] if rs else None,
                 router=ROUTER[name] if rs else None,
                 latent=LATENT.get(name) if rs else None,
-                routing=ROUTING[name] if rs else None,
+                routing=dataclasses.replace(ROUTING[name], torus=(True, True)) if rs else None,
             )
             assert head.xg.ring
             if rs:  # (the reduce-scatter's ring-balanced schedule: the opposite block split by core halves)
