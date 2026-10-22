@@ -184,17 +184,10 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     // Replicate cannot drop a shard silently (see verify_shards_match_topology).
     verify_shards_match_topology(tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
 
-    // Replica groups: coordinates that differ only along Replicate dimensions share one group, keyed by the
-    // coordinates at the sharded dimensions. Each group remembers the index into `buffers` of the copy written for it.
-    const auto& placements = topology.placements();
+    // Replica groups (replica_group_key): coordinates that differ only along Replicate dimensions share one group.
+    // Each group remembers the index into `buffers` of the copy written for it.
     const auto& mesh_shape = topology.distribution_shape();
-    size_t unique_keys = 1;
-    for (size_t dim = 0; dim < placements.size(); ++dim) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-            unique_keys *= mesh_shape[dim];
-        }
-    }
-    std::vector<std::optional<size_t>> group_buffer_index(unique_keys);
+    std::vector<std::optional<size_t>> group_buffer_index(num_replica_groups(topology));
 
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     shards_vector.reserve(mesh_shape.mesh_size());
@@ -220,12 +213,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
         const auto* buffer_address = buffer->view_bytes().data();
         const std::size_t buffer_size = buffer->view_bytes().size();
 
-        size_t key = 0;
-        for (size_t dim = 0; dim < placements.size(); ++dim) {
-            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-                key = key * mesh_shape[dim] + dist_coord[dim];
-            }
-        }
+        const size_t key = replica_group_key(topology, dist_coord);
 
         // Same address and same length: the same bytes, so the same copy. Otherwise the group's copy stands for this
         // shard, or this shard starts its group. An address is recorded only for the buffer written from it, so a

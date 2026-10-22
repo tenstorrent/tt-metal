@@ -35,6 +35,31 @@ std::string describe(const tt::tt_metal::TensorTopology& topology) {
 
 }  // namespace
 
+size_t num_replica_groups(const tt::tt_metal::TensorTopology& topology) {
+    const auto& placements = topology.placements();
+    const auto& mesh_shape = topology.distribution_shape();
+    size_t groups = 1;
+    for (size_t dim = 0; dim < placements.size(); ++dim) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+            groups *= mesh_shape[dim];
+        }
+    }
+    return groups;
+}
+
+size_t replica_group_key(
+    const tt::tt_metal::TensorTopology& topology, const tt::tt_metal::distributed::MeshCoordinate& distribution_coord) {
+    const auto& placements = topology.placements();
+    const auto& mesh_shape = topology.distribution_shape();
+    size_t key = 0;
+    for (size_t dim = 0; dim < placements.size(); ++dim) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+            key = key * mesh_shape[dim] + distribution_coord[dim];
+        }
+    }
+    return key;
+}
+
 void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_contents) {
     TT_FATAL(
         !is_device_tensor(tensor),
@@ -77,20 +102,14 @@ void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_con
             distributed_buffer.shape());
     }
 
-    // Replica groups: coordinates that differ only along Replicate dimensions, keyed by the coordinates at the
-    // sharded dimensions. The first member met stands for its group; every later member must match it.
-    size_t unique_keys = 1;
-    for (size_t dim = 0; dim < placements.size(); ++dim) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-            unique_keys *= mesh_shape[dim];
-        }
-    }
+    // Replica groups (replica_group_key): coordinates that differ only along Replicate dimensions. The first member
+    // met stands for its group; every later member must match it.
     struct Representative {
         tt::tt_metal::distributed::MeshCoordinate coord;
         const std::byte* data = nullptr;
         size_t size = 0;
     };
-    std::vector<std::optional<Representative>> groups(unique_keys);
+    std::vector<std::optional<Representative>> groups(num_replica_groups(topology));
     size_t dist_idx = 0;
     for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
         const auto& coord = mesh_coords[dist_idx++];
@@ -112,14 +131,7 @@ void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_con
             continue;
         }
         const auto bytes = buffer->view_bytes();
-
-        size_t key = 0;
-        for (size_t dim = 0; dim < placements.size(); ++dim) {
-            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-                key = key * mesh_shape[dim] + dist_coord[dim];
-            }
-        }
-        auto& group = groups[key];
+        auto& group = groups[replica_group_key(topology, dist_coord)];
         if (!group.has_value()) {
             group = Representative{.coord = coord, .data = bytes.data(), .size = bytes.size()};
             continue;

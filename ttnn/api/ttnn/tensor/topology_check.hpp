@@ -8,6 +8,13 @@
 
 namespace ttnn {
 
+// Replica groups of a label: distribution coordinates that differ only along Replicate dimensions belong to one
+// group, keyed by their coordinates at the Shard dimensions in row-major order; keys run from 0 to
+// num_replica_groups(topology) - 1. verify_shards_match_topology and the flatbuffer writer group shards this way.
+size_t num_replica_groups(const tt::tt_metal::TensorTopology& topology);
+size_t replica_group_key(
+    const tt::tt_metal::TensorTopology& topology, const tt::tt_metal::distributed::MeshCoordinate& distribution_coord);
+
 // Checks that a host tensor's topology label describes its shards, and throws (TT_FATAL) naming the mesh coordinates
 // and the label where it does not:
 //  - every populated local shard sits at a coordinate the label lists, and every labelled coordinate holds a shard
