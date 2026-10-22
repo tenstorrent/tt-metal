@@ -166,7 +166,11 @@ PIDX_SHARD_MIN_L = int(
 
 def _pdbg(md, tag):
     if os.environ.get("DSV41_PIDX_DEBUG") == "1":
-        print(f"PIDX_DBG {tag} cache_entries={md.num_program_cache_entries()}", flush=True)
+        mv = ttnn.get_memory_view(md, ttnn.BufferType.L1)
+        print(
+            f"PIDX_DBG {tag} cache_entries={md.num_program_cache_entries()} l1_alloc_bank={mv.total_bytes_allocated_per_bank} l1_largest_free={mv.largest_contiguous_bytes_free_per_bank} l1_free={mv.total_bytes_free_per_bank}",
+            flush=True,
+        )
 
 
 def shard_len(L, cols):
@@ -573,6 +577,24 @@ class DSV41PrefillIndexer:
         ttnn.copy(new, self.keys_rm)
         ttnn.copy(ttnn.to_layout(ttnn.concat([new, sh["pad"]], dim=2), ttnn.TILE_LAYOUT), self.keys)
         ttnn.deallocate(new)
+
+    def warm_gather(self, C):
+        """Compile (eagerly, on dummy tensors of the real shapes/layouts) the ``ttnn.gather`` of the "vals" stage of ``select_dyn_sharded``. Call it right before a chunk-trace capture.
+
+        ``ttnn.gather`` (codegen) streams a score row that does not fit L1 in blocks whose depth derives from the LIVE L1 frontier (lowest occupied L1 address) and that depth is part of the program hash. The row
+        here is Lc + 32 columns: at S_pad 524288 (Lc 65536) that is 2049 tiles = 3 * 683 and the budget is 683 tiles (1,404,928 B per core) to within 128 B, so the 128 B persistent L1 buffer that the head
+        compile allocates after the compile pass moves the plan from 3 to 4 blocks: a new program hash, compiled INSIDE the capture ("Cannot load new binaries during trace capture"). Compiled here, after
+        every such allocation, the capture finds its program."""
+        sh = self.sh
+        if sh is None:
+            return
+        md = self.md
+        scm = ttnn.zeros([1, 1, C, sh["Lc"] + 32], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
+        idc = ttnn.zeros([1, 1, C, TOPK], dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=md)
+        out = ttnn.gather(scm, 3, index=idc)
+        ttnn.synchronize_device(md)
+        for t in (scm, idc, out):
+            ttnn.deallocate(t)
 
     def select_dyn_sharded(self, h, qr, tab, vis, C, L):
         """Same result as ``select_dyn`` (FIFO slots of the top-512 entries, 0xFFFFFFFF where fewer are visible) from the sharded slab; vis [1,1,C,L/cols + 32] (columns = this

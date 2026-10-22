@@ -972,6 +972,16 @@ class DSV41PrefillModel:
             flush=True,
         )
 
+    def _warm_gather_plans(self, C):
+        """``DSV41PrefillIndexer.warm_gather`` for every distinct score width of the column-sharded indexers of the active context; right before a chunk-trace capture (DSV41_PF_WARM_GATHER=0 disables it)."""
+        if os.environ.get("DSV41_PF_WARM_GATHER", "1") != "1":
+            return
+        seen = set()
+        for ix in self._dyn_objs()[2]:
+            if ix.sh is not None and ix.sh["Lc"] not in seen:
+                seen.add(ix.sh["Lc"])
+                ix.warm_gather(C)
+
     def capture_dyn_trace(self, C):
         """Second half of ``capture_dyn``: capture the chunk trace (everything is compiled and allocated)."""
         C_, bufs, t0 = self._dyn_compiled
@@ -992,6 +1002,7 @@ class DSV41PrefillModel:
                 pl.pa.reset_dyn()
             ttnn.synchronize_device(self.md)
         tr0 = self._trace_region_mib()
+        self._warm_gather_plans(C)
         self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
         _PS.CAPTURING[0] = True
         with corruptible(self.md):
@@ -1121,6 +1132,7 @@ class DSV41PrefillModel:
             for _, pl in self.layers:
                 pl.pa.reset_dyn()  # before any capture only
             ttnn.synchronize_device(self.md)
+            self._warm_gather_plans(C)
             if (
                 moe_overlap.enabled()
             ):  # the shared expert / dispatch overlap switches sub-device managers: segmented trace
