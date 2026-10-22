@@ -290,6 +290,12 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
+    // The unpack-to-dest ROW MOP copies row 0 of faces 0 and 1 into dest faces 0 and 1. On a 32x16 tile
+    // face 1 is the bottom face, so its half of the output takes the wrong row.
+    LLK_ASSERT(
+        !(BType == BroadcastType::ROW && should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) &&
+          tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == 1),
+        "Row broadcast with unpack to dest does not support 32x16 tiles");
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
