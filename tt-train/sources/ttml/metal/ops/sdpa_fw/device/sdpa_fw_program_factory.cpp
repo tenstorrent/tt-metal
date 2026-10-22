@@ -261,8 +261,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // The two knobs in tiles (_t): Sq_chunk_t query tile-rows are processed together against one
     // pass over K/V, Sk_chunk_t K/V tiles are consumed per step. 0 = default (1 Q row, up to 4 K tiles).
-    const uint32_t Sq_chunk_t = chunk_size_to_tiles(args.q_chunk_size, qS, /* fallback */ 1U, "q_chunk_size");
-    const uint32_t Sk_chunk_t = chunk_size_to_tiles(args.k_chunk_size, qS, pick_default_sk_chunk_t(St), "k_chunk_size");
+    const uint32_t Sq_chunk_t = chunk_size_to_tiles(args.program_config.q_chunk_size, qS, /* fallback */ 1U, "q_chunk_size");
+    const uint32_t Sk_chunk_t = chunk_size_to_tiles(args.program_config.k_chunk_size, qS, pick_default_sk_chunk_t(St), "k_chunk_size");
 
     const uint32_t q_num_chunks = St / Sq_chunk_t;
     const uint32_t total_q_chunks = NC * q_num_chunks;
