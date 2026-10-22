@@ -568,6 +568,8 @@ Next: the routing gather (needs SP-axis ports) + planner + prep in the program (
 | **routing exchange + combine planner in the program** (37c22bcb94d; bit-exact vs combine_plan's host model) | 295 | 534 |
 | joint-row weights in integer math, 2 RISCs; router HiFi3 (same picks as HiFi4; HiFi2 changes them) | 278-287 | 515-540 |
 | logits straight to their owners (no relay chain); routing exchange store-and-forward through the ports | 284-302 | 517-537 |
+| planner on 10 instances (eae243c76ba) | 279.0 | 510.8 |
+| top-K: pairs of score tiles to K-runs + bitonic folds, fp32 keys (top-K 35 -> 14 / 55 -> 20 us) | 273.5-274.3 | 511.0-511.4 |
 | floor (TP-link bytes) / 1.5x target | 180 / 270 | 330 / 495 |
 Everything is in the one program now except dispatch prep (route words + owners' rows into the dispatch buffer).
 - Routing exchange + planner (tt/routing_stream.py): routing_a2a's planner runs on the 5 router cores' BRISC after
@@ -597,3 +599,25 @@ Everything is in the one program now except dispatch prep (route words + owners'
   skew (logits arriving 76-127 us across chips under the gather's load, plus launch skew - every device's zone times
   are relative to its own start, so cross-chip gaps include it) carried into an all-to-all that waits for the last
   chip. Not tried yet: a cheaper top-K network (13 full 64-sorts: 35 / 55 us), the router matmul on more cores.
+
+### Lever 1 (1.5x push): a cheaper top-K - K-runs and bitonic folds instead of 64-wide sorts (tt/router_stream.py)
+- Was: the running best 32 against each next 32 experts, a full 64-wide bitonic sort a step (ET - 1 sorts: 8 GLM,
+  13 K3), the best pair packed and re-read every step: 35 us (GLM, K = 8) / 55 (K3, K = 16).
+- Now, all in DEST under one acquire, nothing packed until the end:
+  - keys: fp32 score with its low 9 mantissa bits replaced by the expert id (made on the SFPU in the sigmoid / bias
+    pass from the id tiles, 4 score tiles a pass) - ttnn.topk's fused-key mode, one word a datum, no id tiles
+    riding the swaps; but fp32 - 9 bits instead of bf16 (bf16 keys would change picks). The joint-row RISCs take
+    the id from the key's low bits (the weight's score loses 9 bits: ~6e-5 absolute, far under a bf16 weight).
+  - each PAIR of score tiles (64 experts a token column): bitonic phases 0 .. log K - 1 (sorted K-runs), then
+    log(64 / K) merge + rebuild rounds down to one sorted K-run. The pair's last merge keeps the max in tile 1
+    (ascending run: the network's K = 8 rebuild has no direction knob - its run 0 is always descending, run 1
+    ascending), the running top K (parked in DEST tile 4, descending) is copied into tile 0, one bitonic merge
+    (max on top) + rebuild of K -> the new running top K. GLM's odd 9th tile: one full round against it.
+  - work: ceil(ET / 2) pair reductions + folds instead of ET - 1 full sorts (+ their packs / unpacks).
+- Timeline (zone SE-RTOPK, GLM): 34 -> 26 (DEST-resident running best, K-run merges instead of the full sort) ->
+  22.5 (fused keys) -> 18.5 (keys made in the sigmoid pass) -> 13.5-14.7 (pairs + folds). K3: 55 -> 19-21.
+- Picks: GLM 99.30% (unchanged), K3 99.45% (was 99.37 - the fp32 keys are finer than the old bf16-ish id
+  tie-breaking); weights PCC 0.99540 / 0.99171; plan tables bit-exact; protocol model 33 pass, mock Galaxy 2 pass.
+- Whole head: GLM 273.5-274.3 us (279.0 before), K3 511.0-511.4 (510.8: K3's top-K was not on its critical path -
+  its routing chain waits for the x gather's rows). Target 270 / 495.
+- Tried and dropped: the fold in a second DEST window (topk's LLK addresses DEST absolutely - window 0 only).

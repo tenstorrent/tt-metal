@@ -24,7 +24,7 @@ import torch
 
 import ttnn
 
-XR, WR, HOLD, ARRF, ARRB, BIAS, SC, FINC, PSYNC, BEST, BESTI, IDX = range(12)  # (ARRB unused)
+XR, WR, HOLD, ARRF, ARRB, BIAS, SC, FINC, PSYNC, BEST, BESTI, IDX = range(12)  # (ARRB, BESTI unused)
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -107,14 +107,14 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();
         invalidate_l1_cache();
-        rows_::make<K>(get_arg_val<uint32_t>(t2 + 1), get_arg_val<uint32_t>(t2 + 2), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 3),
-                       get_arg_val<uint32_t>(t2 + 4), 16, 32);
+        rows_::make<K, ET>(get_arg_val<uint32_t>(t2 + 1), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 2),
+                           get_arg_val<uint32_t>(t2 + 3), 16, 32);
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
 #ifdef RA_PLAN
     {  // the second planner instance on this core (the routing exchange + planner: routing_stream)
-        const uint32_t rr = 4 + G + 2 + 5, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
+        const uint32_t rr = 4 + G + 2 + 4, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NC_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
         if (B) ra::plan(rr + 2, B);  // (no instance here when the chip has fewer experts than planner RISCs)
@@ -133,11 +133,34 @@ _COMPUTE = r"""
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/topk.h"
+#include "api/compute/copy_dest_values.h"
 #include "tools/profiler/kernel_profiler.hpp"
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
 constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
 constexpr uint32_t XR = 0, WR = 1, HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, FINC = 7, PSYNC = 8;
-constexpr uint32_t BEST = 9, BESTI = 10, IDX = 11;
+constexpr uint32_t BEST = 9, IDX = 11;
+constexpr uint32_t EM = rows_::em_of(ET);
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+// a score tile's top-K keys: the fp32 score with its low mantissa bits (EM) replaced by the expert id (the uint16 id
+// tile four DEST tiles on): ttnn.topk's fused keys at fp32 - 9 bits instead of bf16, raw INT32 words
+template <uint32_t M>
+inline void rt_key() {
+    TOPK_SFPENCC_ALL_LANES_ON();
+    sfpi::vConstIntPrgm0 = M;
+    for (int i = 0; i < 32; i++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 256);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);  // the id (the high half of a uint16 in 32-bit DEST: junk)
+        TTI_SFPOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // the score's low bits cleared
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
 // args: nops, ops (kind | entry << 8: 1 hand, 2 fin), per entry: arrivals to add (the fin: G - 1, from the zone's
 // slots 0 ..; a hand-off: 0); then the top-K's done word. Every tile here is TRANSPOSED: logits^T [ET][32 tokens] - a token is a column.
 void kernel_main() {
@@ -181,9 +204,10 @@ void kernel_main() {
         const uint32_t na = get_arg_val<uint32_t>(et0 + e);  // (the one fin: the owner's - G - 1 sources)
         cb_wait_front(ARRF, na * ET);
         cb_reserve_back(SC, ET);
+        cb_wait_front(IDX, ET);
         pack_reconfig_data_format(HOLD);
-        for (uint32_t i0 = 0; i0 < ET; i0 += 8) {
-            const uint32_t n = ET - i0 < 8 ? ET - i0 : 8;
+        for (uint32_t i0 = 0; i0 < ET; i0 += 4) {  // (4 score tiles a pass: their id tiles in DEST 4 .. 7)
+            const uint32_t n = ET - i0 < 4 ? ET - i0 : 4;
             tile_regs_acquire();
             reconfig_data_format(HOLD, ARRF);
             add_init(HOLD, ARRF);
@@ -201,6 +225,11 @@ void kernel_main() {
                 reconfig_data_format(HOLD, BIAS);
                 add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(BIAS);
                 for (uint32_t j = 0; j < n; ++j) add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(BIAS, i0 + j, j);
+                // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key)
+                reconfig_data_format_srca(BIAS, IDX);
+                copy_init(IDX);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(IDX, i0 + j, 4 + j);
+                for (uint32_t j = 0; j < n; ++j) MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rt_key<EM>, j, VectorMode::RC_custom)));
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -208,47 +237,55 @@ void kernel_main() {
             tile_regs_release();
         }
         cb_push_back(SC, ET);
-        // the owner's 32 tokens' top-K on the SFPU (ttnn.topk's bitonic network): each token a column; the running
-        // best 32 of every column (fp32 values, uint16 expert ids) against the next 32 experts, 64-wide sort,
-        // descending; fp32 straight to DEST (no srcA rounding of the scores)
+        // the owner's 32 tokens' top-K on the SFPU (ttnn.topk's bitonic network), each token a column, fp32 straight
+        // to DEST (no srcA rounding): the running top K of every column in DEST tile 0, each next 32 experts copied
+        // into tile 1 as keys (rt_key: the expert id in the low mantissa bits - one word a datum, no id tiles riding
+        // the swaps); the 64-wide column sorted into K-runs (bitonic phases 0 .. log K - 1), then merged run against
+        // run down to one sorted K-run on top (log(64 / K) merge + rebuild rounds) - no full 64-wide sorts, nothing
+        // packed until the end
         DeviceZoneScopedN("SE-RTOPK");
         cb_wait_front(SC, ET);
-        cb_wait_front(IDX, ET);
-        ckernel::topk_tile_init<false, false>();
-        for (uint32_t t = 1; t < ET; ++t) {
-            tile_regs_acquire();
-            const uint32_t vb = t == 1 ? SC : BEST, ib = t == 1 ? IDX : BESTI;
-            const uint32_t vi = t == 1 ? 0 : t - 2, ii = t == 1 ? 0 : t - 2;
-            if (t > 1) {
-                cb_wait_front(BEST, t - 1);
-                cb_wait_front(BESTI, t - 1);
+        constexpr uint32_t LK = K == 8 ? 3 : K == 16 ? 4 : K == 32 ? 5 : 2, NM = 6 - LK;
+        constexpr auto TIE = ckernel::TopkTieOrder::Unset;
+        tile_regs_acquire();
+        reconfig_data_format_srca(SC);
+        copy_init(SC);
+        ckernel::topk_tile_init<true, false>();
+        for (uint32_t t = 0; t < ET; t += 2) {
+            const bool odd = t + 1 == ET;  // (a last tile alone: against the running top K, a full round)
+            const bool fold = t > 0 && !odd;  // (a pair after the first: its run folded into the running top K)
+            if (odd) {
+                copy_dest_values<DataFormat::Int32>(4, 0);
+                copy_tile(SC, t, 1);
+            } else {
+                copy_tile(SC, t, 0);
+                copy_tile(SC, t + 1, 1);
             }
-            reconfig_data_format_srca(vb);
-            copy_init(vb);
-            copy_tile(vb, vi, 0);
-            reconfig_data_format_srca(vb, ib);
-            copy_init(ib);
-            copy_tile(ib, ii, 2);
-            reconfig_data_format_srca(ib, SC);
-            copy_init(SC);
-            copy_tile(SC, t, 1);
-            reconfig_data_format_srca(SC, IDX);
-            copy_init(IDX);
-            copy_tile(IDX, t, 3);
-            ckernel::topk_tile_init<false, false>();
-            ckernel::topk_local_sort<false, DST_ACCUM_MODE, false, false, ckernel::TopkTieOrder::Unset>(0, 0, 5);
-            tile_regs_commit();
-            cb_reserve_back(BEST, 1);
-            cb_reserve_back(BESTI, 1);
-            tile_regs_wait();
-            pack_reconfig_data_format(BEST);
-            pack_tile(0, BEST);
-            pack_reconfig_data_format(BESTI);
-            pack_tile(2, BESTI);
-            tile_regs_release();
-            cb_push_back(BEST, 1);
-            cb_push_back(BESTI, 1);
+            ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
+            for (uint32_t m = 0; m + 1 < NM; ++m) {
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, K);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, K, LK, false);
+            }
+            if (!fold) {  // the top K of the 64 a column on top: tile 0's run, descending
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
+            } else {  // the pair's top K into tile 1's run, ascending; the running top K (descending) into tile 0 ->
+                      // one bitonic merge (max on top) + rebuild of K
+                ckernel::topk_merge<true, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, false);
+                copy_dest_values<DataFormat::Int32>(4, 0);
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
+            }
+            if (t + 2 < ET) copy_dest_values<DataFormat::Int32>(0, 4);  // (parked in DEST tile 4)
         }
+        tile_regs_commit();
+        cb_reserve_back(BEST, 1);
+        tile_regs_wait();
+        pack_reconfig_data_format(BEST);
+        pack_tile(0, BEST);
+        tile_regs_release();
+        cb_push_back(BEST, 1);
         const uint32_t t1 = et0 + G, words = get_arg_val<uint32_t>(t1);
         PACK(({  // (the last best pair packed: the joint rows can go - BRISC and NCRISC told)
             *reinterpret_cast<volatile uint32_t*>(words) = 1;
@@ -304,8 +341,10 @@ FORCE_INLINE uint32_t bf16_of(uint32_t x, int32_t f) {
     }
     return ((uint32_t)(e - f + 127) << 7) | (t & 0x7F);
 }
-template <uint32_t K>
-inline void make(uint32_t bv, uint32_t bi, uint32_t bias, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
+// the expert id bits of a top-K key (the low mantissa bits of its fp32 score)
+constexpr uint32_t em_of(uint32_t et) { return et * 32 <= 256 ? 0xFF : et * 32 <= 512 ? 0x1FF : 0x3FF; }
+template <uint32_t K, uint32_t ET>
+inline void make(uint32_t bv, uint32_t bias, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
     // weights = (biased - bias[id]) / their sum x scale in integers (the RISCs have no FPU, no 64-bit divide): scores
     // Q5.26, the sum normalized to bit 30, its reciprocal by one 32-bit divide (16 bits: a bf16 weight needs 8 +
     // rounding), x the scale's mantissa, then one 32 x 32 -> 64 product a weight
@@ -316,9 +355,10 @@ inline void make(uint32_t bv, uint32_t bi, uint32_t bias, uint32_t o_l1, uint32_
         int32_t w[K];
         uint32_t sum = 0;
         for (uint32_t q = 0; q < K; ++q) {
-            const uint32_t eid = reinterpret_cast<const uint16_t*>(bi)[fo(q, c)];
+            const uint32_t key = reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];  // (the top-K's key: id in the low bits)
+            constexpr uint32_t EM = em_of(ET);
+            const uint32_t eid = key & EM, b = key & ~EM;
             ids[q] = eid;
-            const uint32_t b = reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];
             const uint32_t bb = reinterpret_cast<const uint32_t*>(bias + (eid >> 5) * 4096)[fo(eid & 31, 0)];
             w[q] = fx(b) - fx(bb);
             if (w[q] < 0) w[q] = 0;  // (sigmoid scores are >= 0)
@@ -346,12 +386,12 @@ _BRISC = (
 #include "tools/profiler/kernel_profiler.hpp"
 constexpr uint32_t ET = get_compile_time_arg_val(1), K = get_compile_time_arg_val(4);
 constexpr auto o_args = TensorAccessorArgs<5>();
-constexpr uint32_t HOLD = 2, BIAS = 5, FINC = 7, BEST = 9, BESTI = 10;
+constexpr uint32_t HOLD = 2, BIAS = 5, FINC = 7, BEST = 9;
 """
     + _ROWS
     + r"""
 // args: nh, per hand-off (entry, port x, port y, port L1 offset of the sub-block, port word address); the out address,
-// my owner page, route scale bits, the joint rows' L1 scratch, the done word, BEST / BESTI addresses
+// my owner page, route scale bits, the joint rows' L1 scratch, the done word, the BEST page
 void kernel_main() {
     const uint32_t nh = get_arg_val<uint32_t>(0), h0 = 1;
     const uint32_t hold = get_read_ptr(HOLD);
@@ -368,9 +408,9 @@ void kernel_main() {
     const uint32_t o_addr = get_arg_val<uint32_t>(t0), page = get_arg_val<uint32_t>(t0 + 1);
     const uint32_t o_l1 = get_arg_val<uint32_t>(t0 + 3);
     const uint32_t words = get_arg_val<uint32_t>(t0 + 4);
-    // the best 32 of every token column, sorted descending: rows 0 .. K - 1 are its top K (the last best page);
+    // the top K of every token column, sorted descending in rows 0 .. K - 1 of the best page;
     // tokens 0 .. 10 here, 11 .. 21 the NCRISC, 22 .. 31 the compute's UNPACK thread (done words 16 / 32 / 48)
-    const uint32_t bv = get_arg_val<uint32_t>(t0 + 5) + (ET - 2) * 4096, bi = get_arg_val<uint32_t>(t0 + 6) + (ET - 2) * 2048;
+    const uint32_t bv = get_arg_val<uint32_t>(t0 + 5);
     cb_wait_front(BIAS, ET);
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
     while (*done == 0) invalidate_l1_cache();
@@ -380,7 +420,7 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
         invalidate_l1_cache();
-        rows_::make<K>(bv, bi, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 16);
+        rows_::make<K, ET>(bv, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 16);
         set_l1_data_cache<false>();
         }
         for (uint32_t i = 1; i < 4; ++i) {
@@ -395,7 +435,7 @@ void kernel_main() {
 #ifdef RA_PLAN
     {  // the routing exchange + planner (routing_stream): every router core's rows written, then routing_a2a's planner
         DeviceZoneScopedN("SE-RPLAN");
-        const uint32_t r0 = t0 + 7, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
+        const uint32_t r0 = t0 + 6, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
         const uint32_t B = get_arg_val<uint32_t>(r0 + 2);
         for (uint32_t i = 0; i < RA_NC_; ++i) {  // (my rows are written: every router core's two planner RISCs told)
             const uint32_t x = get_arg_val<uint32_t>(r0 + 3 + 2 * i), y = get_arg_val<uint32_t>(r0 + 4 + 2 * i);
@@ -513,8 +553,7 @@ class RouterStream:
             ("bias", ET * 4096),
             ("sc", ET * 4096),
             ("idx", ET * 2048),
-            ("best", ET * 4096),
-            ("besti", ET * 2048),
+            ("best", 4096),
             ("finc", 16 * 8),
             ("psync", 16 * 2),
             ("out", 32 * 4 * K),
@@ -689,15 +728,13 @@ class RouterStream:
         cb(BIAS, "bias", ET * 4096, ttnn.float32, 4096)
         cb(SC, "sc", ET * 4096, ttnn.float32, 4096)
         cb(IDX, "idx", ET * 2048, ttnn.uint16, 2048)
-        cb(BEST, "best", ET * 4096, ttnn.float32, 4096)
-        cb(BESTI, "besti", ET * 2048, ttnn.uint16, 2048)
+        cb(BEST, "best", 4096, ttnn.float32, 4096)
         cb(FINC, "finc", 16 * 8, ttnn.bfloat16, 16)
         cb(PSYNC, "psync", 16 * 2, ttnn.bfloat16, 16)
         n_rt, c_rt, b_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         tail = [
             b0 + off["words"],
-            b0 + off["best"] + (ET - 2) * 4096,
-            b0 + off["besti"] + (ET - 2) * 2048,
+            b0 + off["best"],
             b0 + off["out"],
             self.scale_bits,
         ]
@@ -729,7 +766,7 @@ class RouterStream:
                 [len(hs) // 5]
                 + hs
                 + [int(out.buffer_address()), j, self.scale_bits, b0 + off["out"], b0 + off["words"]]
-                + [b0 + off["best"], b0 + off["besti"]]
+                + [b0 + off["best"]]
                 + (self._ra_args(coord, j) if self.ra is not None else [])
             )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
