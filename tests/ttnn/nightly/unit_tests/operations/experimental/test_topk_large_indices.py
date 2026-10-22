@@ -292,7 +292,7 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
     ("prefill", 640, 51200, None, 1536, 923_100),
-    ("bounded_cache", 2, 102400, 56320, 1536, 36_100),
+    ("bounded_cache", 2, 102400, 56320, 1536, 34_400),
 ]
 
 
