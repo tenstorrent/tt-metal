@@ -10317,6 +10317,41 @@ tasks:
       device_ms_total: '> 0'
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
+- id: P.22
+  title: 'Router through Marko''s fused moe_grouped_topk (fp32_selection): fewer host calls: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.20
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      ROUTER_IMPL: fused
+    env:
+      ROUTER_IMPL: ops
+  brief:
+    details: 'Owner (2026-10-22): bring in Marko Staletovic''s fused MoE routing op and use it for DS41''s router; the main goal is FEWER HOST CALLS (the chunk is host-bound). Source: ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk
+      with the fp32_selection option, commits 71062e76a38 and 570d95b6e7d on branch mstaletovic/galaxy-unified-k3-v41-combine (owner: agents may read Marko''s branches; the branch is fetched in the checkout
+      /localdev/dnijemcevic/tt-metal, not in this tree: `git -C /localdev/dnijemcevic/tt-metal show <sha>`; GLM-5.3''s router there shows the usage). Fork it into ttnn/ttnn/bringup (skill bringup-fork-op;
+      new options default off; source tests carried; CHANGELOG/INDEX). Use it with fp32_selection=True for DS41''s routing (sqrtsoftplus scores, one group, top 6 of 384 (96 scaled), route_scale 1.5, norm_topk_prob,
+      the bias added for selection only) to replace the ~10 ops after the gate matmul in tt/router.py; outputs in the dtypes/layout the experts and the dense-routing consumers need. The gate matmul stays
+      as it is (fp32 accumulation; TF32 in-tile partials are waived). One setting ROUTER_IMPL {ops, fused (default)}. Report host calls per chunk and the router section''s host and device ms before/after,
+      and the routing (selected experts, weights) vs the old path on the golden. Verify with `gate P.22 --check` (F170). Final check: `python -m models.demos.common.bringup.orchestrator measure --task P.22`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py
+      || exit 1; done && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13 dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -10340,6 +10375,7 @@ tasks:
   - P.19
   - P.20
   - P.21
+  - P.22
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
