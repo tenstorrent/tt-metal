@@ -2049,8 +2049,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Weight load dominates, as on the K3 verifier leg above (42.6-65.9 min to serving); same budget.
-      timeout: 200
+      # Measured ~10 min with the TTNN weight cache built (load ~4 min, compile ~2 min, 256k request
+      # 14 s, PCC readback ~1 min). Raise it for a run that has to rebuild that cache.
+      timeout: 30
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
