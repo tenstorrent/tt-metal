@@ -33,14 +33,16 @@ struct MhcPreXingParams {
     uint32_t sinkhorn_iters = 20;
     double clamp_min = -30.0;
     double clamp_max = 30.0;
-    bool deepseek = false;  // DeepSeek-V4 coefficient math (compute define MHC_XING_DEEPSEEK; off: Xing's program)
+    bool deepseek = false;   // DeepSeek-V4 coefficient math (compute define MHC_XING_DEEPSEEK; off: Xing's program)
     bool given_pre = false;  // y collapses with tensor_args.collapse_pre (DM define MHC_XING_GIVEN_PRE; off: unchanged)
+    uint32_t partials = 1;   // > 1: the input row is (1, partials, T, 32), summed in dim-1 order (define
+                             // MHC_XING_PARTIALS; 1 = off: the program and hash it always had)
     tt::tt_metal::ComputeConfigDescriptor compute_config;
 };
 
 struct MhcPreXingInputs {
-    Tensor input;                   // (..., T, 32) mix row, or (..., T, n(n+2)) hc
-    std::optional<Tensor> streams;  // (..., T, n*C) fp32
+    Tensor input;                        // (..., T, 32) mix row, or (..., T, n(n+2)) hc
+    std::optional<Tensor> streams;       // (..., T, n*C) fp32
     std::optional<Tensor> collapse_pre;  // (..., T, n..32) fp32: the pre y collapses with (given_pre)
 };
 

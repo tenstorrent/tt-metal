@@ -51,6 +51,7 @@ import torch
 import ttnn
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, fp32_acc, tp_sum
 from .settings import settings
 
@@ -104,20 +105,20 @@ class TtDistributedRmsNorm:
         rows = x.shape[-2]
         mix = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, 32], memory_config=DRAM)
         packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=PACK_N)
-        ttnn.deallocate(mix)
+        dealloc(mix)
         part = ttnn.slice(packed, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1], memory_config=DRAM)
-        ttnn.deallocate(packed)
+        dealloc(packed)
         if self.split:
             ss = tp_sum(self.mesh, part)
-            ttnn.deallocate(part)
+            dealloc(part)
         else:
             ss = part
         ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(ss)
+        dealloc(ss)
         t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(ms)
+        dealloc(ms)
         rs = ttnn.rsqrt(t, memory_config=DRAM)
-        ttnn.deallocate(t)
+        dealloc(t)
         return rs
 
     def _fork(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
@@ -134,15 +135,15 @@ class TtDistributedRmsNorm:
         part = ttnn.bringup.rms_norm(x, stats_out=True, compute_kernel_config=self.ckc, memory_config=DRAM)
         if self.tp > 1:
             gathered = ccl.all_gather(part, 3, TP_AXIS)
-            ttnn.deallocate(part)
+            dealloc(part)
         else:
             gathered = part
         y = ttnn.bringup.rms_norm(x, partial_stats=gathered, stats_width=self.hidden, **kw)
-        ttnn.deallocate(gathered)
+        dealloc(gathered)
         if not self.gather:
             return y
         full = ccl.all_gather(y, 3, TP_AXIS)  # ffn_norm: whole token rows on every chip of the mesh row
-        ttnn.deallocate(y)
+        dealloc(y)
         return full
 
     def __call__(self, x: ttnn.Tensor, window=None) -> ttnn.Tensor:
@@ -154,21 +155,21 @@ class TtDistributedRmsNorm:
             rows = x.shape[-2]
             xs = ttnn.slice(x, [0, 0, 0, window[0]], [1, 1, rows, window[1]], memory_config=DRAM)
             y = self(xs)
-            ttnn.deallocate(xs)
+            dealloc(xs)
             return y
         assert x.dtype == ttnn.float32, x.dtype
         assert x.shape[-1] * self.tp == self.hidden, (x.shape, self.hidden)
         rs = self.rstd(x)
         xn = ttnn.multiply(x, rs, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(rs)
+        dealloc(rs)
         y = ttnn.multiply(xn, self.weight, dtype=self.out_dtype, memory_config=DRAM)
-        ttnn.deallocate(xn)
+        dealloc(xn)
         if not self.gather:
             return y
         # ffn_norm: whole token rows on every chip of the mesh row (router, dispatch, shared expert); chip column c's
         # slice lands at columns [c H/TP, (c+1) H/TP) (mesh-column order), so the rows are the reference's.
         full = ccl.all_gather(y, 3, TP_AXIS)
-        ttnn.deallocate(y)
+        dealloc(y)
         return full
 
     @staticmethod

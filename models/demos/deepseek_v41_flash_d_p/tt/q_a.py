@@ -29,6 +29,7 @@ import torch
 import ttnn
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, TP_AXIS, attn_compute_config, cast, dense_dtype, tp_sum
 from .norm import TtDistributedRmsNorm
 from .settings import settings
@@ -75,7 +76,7 @@ class TtAttnInProj:
         pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
         part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM)
         out = tp_sum(self.mesh, part)
-        ttnn.deallocate(part)
+        dealloc(part)
         return out
 
 
@@ -96,14 +97,14 @@ class TtQa:
         xq = cast(x, ttnn.bfloat16)
         p = self.proj(xq)
         if xq is not x:
-            ttnn.deallocate(xq)
+            dealloc(xq)
         # q_norm on p's wq_a columns (NORM_IMPL=on, P.18: read in place by the fork's input_window; off: a slice)
         y = self.norm(p, window=(self.q0, self.q1))
         return y, p
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         y, p = self.with_proj(x)
-        ttnn.deallocate(p)
+        dealloc(p)
         return y
 
 

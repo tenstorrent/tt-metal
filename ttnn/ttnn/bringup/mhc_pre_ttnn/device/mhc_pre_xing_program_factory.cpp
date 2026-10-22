@@ -132,7 +132,9 @@ ProgramDescriptor create_xing_program_descriptor(
         "mhc_pre_xing: collapse_pre needs streams and the coefficients");
 
     const uint32_t n = p.n;
-    const int64_t rows = token_tiles(row.padded_shape());
+    const uint32_t np = p.partials;  // partial rows stacked on dim 1 (1: off)
+    TT_FATAL(np == 1 || (p.compute_coef && !p.pack_stats), "mhc_pre_xing: partials needs the coefficient stage");
+    const int64_t rows = token_tiles(row.padded_shape()) / np;  // token tile-rows of one partial
     const uint32_t ct = has_streams ? static_cast<uint32_t>(x.logical_shape()[-1] / n / TILE_HW) : 1;
     const int64_t units = rows * ((has_streams && !p.pack_stats) ? ct : 1);
     // pack_stats: stream tiles per SFPU round (<= 7 = the free fp32 DEST tiles at full sync), a divisor of n * Ct.
@@ -152,14 +154,14 @@ ProgramDescriptor create_xing_program_descriptor(
         tt::tt_metal::split_work_to_cores(grid, static_cast<uint32_t>(units), true);
 
     ProgramDescriptor desc;
-    desc.cbs.push_back(make_cb(CB_ROW, page, 2, all_cores));
+    desc.cbs.push_back(make_cb(CB_ROW, page, 2 * np, all_cores));
     if (p.pack_stats) {
         desc.cbs.push_back(make_cb(CB_SOA, page, 1, all_cores));
         desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 1, all_cores));
         desc.cbs.push_back(make_cb(CB_ACC, page, 1, all_cores));
         desc.cbs.push_back(make_cb(CB_X, page, 2 * chunk, all_cores));
     } else if (p.compute_coef) {
-        desc.cbs.push_back(make_cb(CB_SOA, page, 2, all_cores));
+        desc.cbs.push_back(make_cb(CB_SOA, page, 2 * np, all_cores));
         desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 2, all_cores));
         desc.cbs.push_back(make_cb(CB_HC_STAGE, page, 1, all_cores));
     }
@@ -273,6 +275,12 @@ ProgramDescriptor create_xing_program_descriptor(
     if (p.given_pre) {  // absent when off: the reader / writer are the ones they were
         for (uint32_t k : {READER_KERNEL, WRITER_KERNEL}) {
             desc.kernels[k].defines.emplace_back("MHC_XING_GIVEN_PRE", "1");
+        }
+    }
+    if (np > 1) {  // absent when off (partials = 1): every kernel unchanged
+        for (uint32_t k : {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL}) {
+            desc.kernels[k].defines.emplace_back("MHC_XING_PARTIALS", std::to_string(np));
+            desc.kernels[k].defines.emplace_back("MHC_XING_ROW_TILES", std::to_string(rows));
         }
     }
     return desc;

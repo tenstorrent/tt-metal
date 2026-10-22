@@ -29,7 +29,14 @@ void kernel_main() {
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
+#ifdef MHC_POST_STATS_F16
+    // P.19: F bf16 -> its own CB (cb_f, B tiles a unit); the F slots of cb_in stay unused
+    constexpr uint32_t cb_f = get_compile_time_arg_val(s_args.next_compile_time_args_offset());
+    constexpr uint32_t f_page = get_compile_time_arg_val(s_args.next_compile_time_args_offset() + 1);
+    const auto f_acc = TensorAccessor(f_args, get_arg_val<uint32_t>(0), f_page);
+#else
     const auto f_acc = TensorAccessor(f_args, get_arg_val<uint32_t>(0), page);
+#endif
     const auto x_acc = TensorAccessor(x_args, get_arg_val<uint32_t>(1), page);
     const auto w_acc = TensorAccessor(w_args, get_arg_val<uint32_t>(2), page);
     const auto s_acc = TensorAccessor(s_args, get_arg_val<uint32_t>(3), page);
@@ -56,9 +63,17 @@ void kernel_main() {
         // always B columns reserved / pushed so the compute's tile indices never wrap the CB
         cb_reserve_back(cb_in, (n + 1) * bw);
         const uint32_t base = get_write_ptr(cb_in);
+#ifdef MHC_POST_STATS_F16
+        cb_reserve_back(cb_f, bw);
+        const uint32_t f_base = get_write_ptr(cb_f);
+#endif
         for (uint32_t c = 0; c < U.valid; ++c) {
             uint32_t dst = base + c * (n + 1) * page;
+#ifdef MHC_POST_STATS_F16
+            noc_async_read_page(U.r * ct + U.col0 + c, f_acc, f_base + c * f_page);
+#else
             noc_async_read_page(U.r * ct + U.col0 + c, f_acc, dst);
+#endif
             for (uint32_t j = 0; j < n; ++j) {
                 dst += page;
                 noc_async_read_page(U.r * n * ct + j * ct + U.col0 + c, x_acc, dst);
@@ -66,6 +81,9 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_in, (n + 1) * bw);
+#ifdef MHC_POST_STATS_F16
+        cb_push_back(cb_f, bw);
+#endif
     }
 
     if (n_rooted) {

@@ -2646,3 +2646,62 @@ Gotchas:
 Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.18`; fork tests
 `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_split.py`;
 probe `scripts/tt-probe.sh ds41_norm_split < tests/ttnn/unit_tests/operations/ds41_norm_split/probes/probe_002.py`.
+
+## P.19 perf attempt 1 (2026-10-22): GLUE_FOLD=on, the rest of the fusion report (owner comparison)
+
+What: setting GLUE_FOLD (tt/settings.py, default on; off = the P.18 path, kept for the owner's A/B). On:
+- (a) mHC exchange (report item 7): attn_hc / ffn_hc send the chips' fp32 partial rows [S/SP, 32] through ONE
+  ccl.all_gather on dim 1 -> [1, TP, S/SP, 32]; ttnn.bringup.mhc_pre_xing(partials=TP) adds them in mesh-column order
+  on the SFPU (fork mhc_pre CHANGELOG 10). Was: typecast fp32 -> bf16, bf16 fabric reduce-scatter, all_gather,
+  typecast back (DS41-82). Numerics: the exact fp32 sum (= CCL_IMPL=fabric's / stock gather_add), not the bf16 RS:
+  closer to the reference's fp32 mixes; any TP (4x4 / 8x4: partials=4).
+- (b) mhc_post (item 9): post / comb read from the packed [S/SP, 24] mixes (post_col=4, comb_col=8; both programs),
+  and the stats pass takes the bf16 attention / MoE sums as F (fork mhc_post CHANGELOG 8); moe_add's
+  experts.reduce(fp32=False). Removes 2 slices + 1 typecast per residual and the MoE _to_fp32 (bit-identical: bf16 ->
+  fp32 is exact).
+- (c) fabric_reduce_scatter(program_hash=True) (item 4; fork CHANGELOG "program_hash"; DS41-98).
+- (d) window path (item 6): no pad mask when end - start == chunk; TtWindowCache.keep_rows keeps the chunk's kv rows
+  when the chunk is whole, and the next chunk at start = end slices its carry from their last 128 rows (any other
+  write start, a host load or free() drops them; the cache read stays the fallback); WindowTables.srv_row memoizes the
+  server-order index row of the latest start (8 window + 6 compressed writes a chunk); tt/served.DeviceScalars(memo=)
+  keeps the latest 8 sliced scalars (the r2 writes' slot / start / end).
+- (e) deallocations through the binding (tt/ccl.py:dealloc, bound at load by ccl.configure; every tt/ forward
+  module): ~1.3 us of the wrapper a call. The bring-up profiler's op sequences skip them on both of its runs alike.
+- Not done: the moe_add fold into the reduce-scatter (report item 10): it removes one add a layer, measured ceiling
+  0.09 ms host + 0.073 ms device a call = ~1.3 ms a chunk, against new reader code in every port / final kernel of
+  the RS; the combine planner / zero / barrier generic_ops (24 a chunk, 0.09 ms host): their descriptors bake
+  addresses per object, so a custom hash per object would add program-cache misses whenever addresses change; the
+  engram rows (report item 8): ROW_MAJOR upload + device tilize = TILE upload (3.4 ms both, probe ds41_p19_fork), the
+  host cost is the table lookup itself (DS41-99).
+- stock ttnn.slice instead of ttnn.bringup.rms_norm: the carry is a row slice of the kept kv rows (no norm).
+Measured (2x2, chunk 53248-55296):
+- Final `measure --task P.19` (quick A/B side on, rc 0): chunk wall 118.8 ms (spread 39.1; P.18 127.9), worst layer
+  L03 pcc 0.99680, pcc_chunk_out 0.99960, host_transfers_per_layer 0; every err_* within its limit: err_layer L00
+  .0250/.0570, L01 .0337/.0720, L02 .0508/.1077, L03 .0800/.1587, L14 .0605/.1380, L20 .0301/.0507, L21 .0510/.1312,
+  L24 .0282/.0418 (P.18: .0253 .. .0282); state worst window_kv_L03 .0525/.1314.
+- Plain profile (on; profiles/P.19_20261022T114503.json) vs P.18's: device 93.18 -> 91.87 ms a chunk; programs (4
+  chips) 4580 -> 3776 (-201 program calls a chunk); attn_residual 3.31 -> 2.52 ms (programs 256 -> 32), ffn_residual
+  3.29 -> 2.88 (248 -> 56), moe_add 1.58 -> 1.22 (96 -> 64), attn_hc 2.56 -> 2.64 (184 -> 88), ffn_hc 1.46 -> 1.57
+  (160 -> 64), attention 34.49 -> 34.32 (1476 -> 1380), compressor 1.37 -> 1.37 (448 -> 380).
+- Host ms per section, off -> on (10 warm clean-wall runs, a FastOperation timer + profiler.signpost hook, a test
+  under generated/ (not committed); calls = outermost ttnn calls, the on side's binding deallocations not counted):
+  wall 130.3 -> 117.5 ms; in-layer host 102.3 -> 83.0 ms; attention 29.88 -> 26.18, attn_hc 6.27 -> 2.28, ffn_hc 4.53
+  -> 1.39, attn_residual 3.25 -> 0.86, ffn_residual 2.91 -> 1.02, moe_add 4.55 -> 3.40, compressor 8.80 -> 7.91,
+  experts 11.83 -> 9.74, router 6.97 / 7.04, q_a 5.27 / 5.40, indexer 4.85 / 4.82; outside the layers begin_chunk +
+  embed 29.1 / 30.9, final drain 2.0 / 3.2. fabric_reduce_scatter 49 -> 33 calls, 0.305 -> 0.271 ms host a call.
+  The wall is now the host dispatch (DS41-99).
+- Ladder s4096 by hand (on; chunk 2 takes its carry from chunk 1's kept rows): pass, err_layer L00 .0267/.0561 ..
+  L03 .0823/.1558 (FIX.8: .0273 .. .0847), state worst window_kv_L03 .0582/.1334.
+- Fork tests: new tests/unit/test_xing_partials.py (13), test_mhc_post_mixes.py (19), test_fabric_rs_program_hash.py
+  (9), all bit-identical; regressions with the options off: mhc_pre unit + golden 345 / 1 skipped (= 332 / 1 + 13),
+  model cases 103; mhc_post unit + golden + cases 401 (= 382 + 19); fabric RS unit 19 / 13 skipped, cases 2. Build OK.
+Gotchas:
+- The hashed RS path needs its own descriptor cache entries (DS41-98): sharing the default path's dkey silently reuses
+  an unhashed descriptor.
+- The carry from the kept rows never hits in the repeated-chunk profile (same start every run, the prefix reload drops
+  it); only consecutive chunks (ladder s4096 / s55296, serving) use it.
+- When the owner accepts: delete GLUE_FOLD=off (ccl.tp_sum's bf16 path for the hc rows, the mhc_post slices / typecasts,
+  the window mask for whole chunks), and the wrapper branch of ccl.dealloc.
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.19`; fork tests
+`scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_partials.py`,
+`.../mhc_post_ttnn/tests/unit/test_mhc_post_mixes.py`, `.../fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_program_hash.py`.

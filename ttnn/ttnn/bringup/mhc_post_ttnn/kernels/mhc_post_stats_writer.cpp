@@ -49,7 +49,13 @@ inline void build_coefficients(
         for (uint32_t t = 0; t < TERMS; ++t) {
             const uint32_t k = t / (N + 1), m = t % (N + 1);
             const volatile tt_l1_ptr uint32_t* src = m == 0 ? post : comb;
+#ifdef MHC_POST_POST_COL
+            // P.19: post / comb at column offsets of a wider tile row (the packed mixes)
+            const uint32_t col =
+                m == 0 ? MHC_POST_POST_COL + k : MHC_POST_COMB_COL + (COMB_T ? (m - 1) * N + k : k * N + (m - 1));
+#else
             const uint32_t col = m == 0 ? k : (COMB_T ? (m - 1) * N + k : k * N + (m - 1));
+#endif
 #pragma GCC unroll 1
             for (uint32_t q4 = 0; q4 < 4; ++q4) {
                 const uint32_t q = 4 * t + q4;

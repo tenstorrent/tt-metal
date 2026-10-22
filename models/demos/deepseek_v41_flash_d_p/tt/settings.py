@@ -144,6 +144,23 @@ TABLE = {
         "-1.6e-4. off = the P.17 path (fp32 SFPU compositions: mhc_pre_xing_pack + slice + exact tp_sum + scale, eps, "
         "rsqrt, two multiplies; 8-15 calls a norm)",
     ),
+    "GLUE_FOLD": Setting(
+        "on",
+        ("on", "off"),
+        "P.19 (owner comparison 2026-10-22, the rest of the fusion report: items 4, 6, 7, 9 and the host overhead): "
+        "on = (a) the mHC exchange as ONE fabric all_gather of the chips' fp32 partial hc rows [S/SP, 32] over TP, "
+        "summed in mesh order inside ttnn.bringup.mhc_pre_xing (fork option partials=TP, exact fp32 SFPU adds; was "
+        "typecast to bf16 + bf16 reduce-scatter + gather + typecast back, CCL_IMPL=fabric_bf16); (b) "
+        "ttnn.bringup.mhc_post reading post / comb from the packed [S/SP, 24] mixes (fork option mixes=, no slices) "
+        "and its stats pass taking the bf16 sublayer output as is (no typecast to fp32; the attention's and the MoE's "
+        "bf16 reduce-scatter results); (c) fabric_reduce_scatter(program_hash=True): the cached descriptors carry a "
+        "custom_program_hash (no per-call hashing of the kernel sources in generic_op); (d) the window path: no pad "
+        "mask when the chunk is whole (end - start == chunk), the carry rows [start - 128, start) sliced from the "
+        "previous chunk's kv rows when this chunk follows it, the server-order index row and the r2 caches' device "
+        "scalars memoized per start; (e) the model's deallocations through the binding (no FastOperation wrapper). "
+        "off = the P.18 path. (a) changes the rounding of the hc mixes' exchange (exact fp32 instead of bf16: closer "
+        "to the reference's fp32 mixes); the rest are data moves",
+    ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
         "on",

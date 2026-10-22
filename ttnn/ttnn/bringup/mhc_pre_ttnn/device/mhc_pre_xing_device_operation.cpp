@@ -32,7 +32,7 @@ MhcPreXingDeviceOperation::spec_return_value_t MhcPreXingDeviceOperation::comput
     auto spec = [&](uint32_t last) {
         ttsl::SmallVector<uint32_t> dims;
         for (size_t i = 0; i + 1 < s.rank(); ++i) {
-            dims.push_back(s[i]);
+            dims.push_back((attrs.partials > 1 && i + 3 == s.rank()) ? 1 : s[i]);  // partials: (1, 1, T, ...)
         }
         dims.push_back(last);
         return tt::tt_metal::TensorSpec(
@@ -68,6 +68,21 @@ ttsl::hash::hash_t MhcPreXingDeviceOperation::compute_program_hash(
     // The scalars (scale, base, eps, clamp, iterations) are runtime args patched on every call.
     const auto& cc = attrs.compute_config;
     const bool has_streams = tensor_args.streams.has_value();
+    if (attrs.partials > 1) {  // a separate program (define MHC_XING_PARTIALS); off: the hashes below, unchanged
+        return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
+            attrs.n,
+            attrs.compute_coef,
+            attrs.pack_stats,
+            has_streams,
+            static_cast<uint32_t>(cc.math_fidelity),
+            cc.math_approx_mode,
+            tensor_args.input.tensor_spec(),
+            has_streams ? tensor_args.streams->tensor_spec() : tensor_args.input.tensor_spec(),
+            attrs.deepseek,
+            attrs.given_pre,
+            attrs.given_pre ? tensor_args.collapse_pre->tensor_spec() : tensor_args.input.tensor_spec(),
+            attrs.partials);
+    }
     if (attrs.given_pre) {  // a separate program (DM define + the pre tensor); off: the hashes below, unchanged
         return tt::tt_metal::operation::hash_operation<MhcPreXingDeviceOperation>(
             attrs.n,

@@ -135,6 +135,11 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         collapse_pre (..., T, n..32) fp32, optional (default None; needs streams, coefficients_given=False): y
         collapses with collapse_pre's columns 0..n-1 instead of the pre just computed; hc is still returned
         (single-pass mHC: a sublayer collapses with the previous sublayer's pre; deepseek_v41_flash_d_p P.14).
+        partials (default 1 = off; coefficients_given=False only): input is (1, partials, T, 32), the chips' partial
+        rows of a TP group stacked on dim 1 (an all_gather of each chip's (1, 1, T, 32) row on dim 1); the op adds
+        them in dim-1 order, ((p0 + p1) + p2) + ..., in fp32 on the SFPU (each add one IEEE rounding: the sum
+        all_gather + ttnn.add gives) before the coefficient math; hc / y are (1, 1, T, ...) (deepseek_v41_flash_d_p
+        P.19: the mHC exchange as one all_gather).
 
         Returns:
             tuple[ttnn.Tensor | None, ttnn.Tensor | None]: (hc, y); hc when computed, y when streams are given.
@@ -155,7 +160,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("coefficients_given") = false,
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("deepseek") = false,
-        nb::arg("collapse_pre") = nb::none());
+        nb::arg("collapse_pre") = nb::none(),
+        nb::arg("partials") = 1);
 
     ttnn::bind_function<"mhc_pre_xing_pack", "ttnn.bringup.">(
         mod,

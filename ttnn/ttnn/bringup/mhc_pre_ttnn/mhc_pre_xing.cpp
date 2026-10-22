@@ -49,7 +49,8 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     bool coefficients_given,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     bool deepseek,
-    const std::optional<Tensor>& collapse_pre) {
+    const std::optional<Tensor>& collapse_pre,
+    int64_t partials) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     if (!cfg.fp32_dest_acc_en) {
         throw UnsupportedAxisError("mhc_pre_xing: fp32_dest_acc_en=False not in SUPPORTED [True]");
@@ -59,6 +60,24 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     }
     const int64_t ng = n * (n + 2);
     check_tile_dram_f32(input, "input");
+    if (partials < 1 || partials > 16) {
+        throw ValueErrorCpp(fmt::format("mhc_pre_xing: partials={} must be in [1, 16]", partials));
+    }
+    // partials > 1: input (1, P, T, 32); the leading-dim checks below compare its dim -3 as 1
+    const bool stacked = partials > 1;
+    if (stacked) {
+        if (coefficients_given) {
+            throw ValueErrorCpp("mhc_pre_xing: partials needs the mix row (coefficients_given=False)");
+        }
+        const auto& is = input.logical_shape();
+        if (is.rank() != 4 || is[0] != 1 || is[1] != partials || is[2] % TILE_HW != 0) {
+            throw ValueErrorCpp(fmt::format(
+                "mhc_pre_xing: partials={} needs input (1, {}, T, 32) with T % 32 == 0", partials, partials));
+        }
+    }
+    auto lead_of_input = [&](size_t i) -> int64_t {
+        return (stacked && i + 3 == input.logical_shape().rank()) ? 1 : input.logical_shape()[i];
+    };
     const int64_t in_last = input.logical_shape()[-1];
     if (coefficients_given) {
         if (in_last != ng) {
@@ -95,7 +114,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
             throw ValueErrorCpp("mhc_pre_xing: streams and input ranks differ");
         }
         for (size_t i = 0; i + 1 < ss.rank(); ++i) {
-            if (ss[i] != is[i]) {
+            if (ss[i] != (i + 1 < is.rank() ? lead_of_input(i) : is[i])) {
                 throw ValueErrorCpp("mhc_pre_xing: streams and input leading dims differ");
             }
         }
@@ -116,7 +135,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
             throw ValueErrorCpp("mhc_pre_xing: collapse_pre and input ranks differ");
         }
         for (size_t i = 0; i + 1 < ps.rank(); ++i) {
-            if (ps[i] != is[i]) {
+            if (ps[i] != (i + 1 < is.rank() ? lead_of_input(i) : is[i])) {
                 throw ValueErrorCpp("mhc_pre_xing: collapse_pre and input leading dims differ");
             }
         }
@@ -129,6 +148,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     p.n = static_cast<uint32_t>(n);
     p.compute_coef = !coefficients_given;
     p.given_pre = collapse_pre.has_value();
+    p.partials = static_cast<uint32_t>(partials);
     if (!coefficients_given) {
         p.scale = {scale[0], scale[1], scale[2]};
         p.base = base;

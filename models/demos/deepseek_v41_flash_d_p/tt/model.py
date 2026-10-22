@@ -42,6 +42,7 @@ from models.demos.common.bringup.reference.interface import Ctx, run_block
 
 from . import ccl
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
+from .ccl import dealloc
 from .collapse import TtHcCollapse
 from .common import DRAM, SP_AXIS, TP_AXIS, set_load_layer
 from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights
@@ -110,7 +111,7 @@ def _tensors(v) -> list:
 def _free(v, protect: set[int] = frozenset()) -> None:
     for t in _tensors(v):
         if id(t) not in protect and t.is_allocated():
-            ttnn.deallocate(t)
+            dealloc(t)  # GLUE_FOLD=on (P.19): the binding itself (tt/ccl.py:dealloc)
 
 
 def _ids_to_host(t: ttnn.Tensor, mesh) -> torch.Tensor:
@@ -322,6 +323,7 @@ class TtDS41Block:
         self.ffn_hc = build_hc(mesh, ck, cfg, i, "ffn_hc")
         self.collapse = TtHcCollapse(n=cfg.hc)
         self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
+        self.fold = ccl.glue_fold()  # GLUE_FOLD=on (P.19)
         self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm")
         self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm")
         self.attn_res = build_residual(cfg)
@@ -401,14 +403,14 @@ class TtDS41Block:
         def kv(ctx, x):
             p = ctx.extra.pop("attn_proj")
             out = self.kv.from_proj(p, ctx.start)
-            ttnn.deallocate(p)
+            dealloc(p)
             return out
 
         def compressor(ctx, x):
             ckv, k = self.compressor(x, ctx.start)
             self.compressor.write(ckv, k, ctx.start, ctx.extra["end"], ctx.state.compress[i])
-            ttnn.deallocate(ckv)
-            ttnn.deallocate(k)
+            dealloc(ckv)
+            dealloc(k)
             return Keep()  # the chunk's rows live in the served caches the indexer and the attention read
 
         def indexer(ctx, x, qr, *compressed):
@@ -471,8 +473,9 @@ class TtDS41Block:
             # CCL_IMPL=fabric_bf16 (P.6): the sum written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
             sdt = ccl.partial_dtype(self.mesh) if self.experts.sum_mode == "gather_add" else ttnn.float32
             s = ttnn.add(a, b, dtype=sdt, memory_config=DRAM)
-            out = self.experts.reduce(s)
-            ttnn.deallocate(s)
+            # GLUE_FOLD=on (P.19): the bf16 sum as is (ffn_residual's mhc_post takes bf16)
+            out = self.experts.reduce(s, fp32=not self.fold)
+            dealloc(s)
             return out
 
         def ffn_residual(ctx, h, mix, y):
@@ -595,6 +598,7 @@ class TtDS41Model:
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
+        ccl.configure()  # GLUE_FOLD=on (P.19): tt/ccl.py:dealloc through the binding
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]
             assert not missing, f"layer {i} reads the state of layers {missing}, which are not loaded"
@@ -725,15 +729,15 @@ class TtDS41Model:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
         )
         e = ttnn.embedding(dev_ids, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=DRAM)
-        ttnn.deallocate(dev_ids)
+        dealloc(dev_ids)
         rows, w = self.chunk // self.sp, self.cfg.dim // self.tp
         e4 = ttnn.reshape(e, [1, 1, rows, w])
         ef = ttnn.typecast(e4, ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(e4)  # a view of e's buffer (K-1): then e is freed with it
+        dealloc(e4)  # a view of e's buffer (K-1): then e is freed with it
         if e.is_allocated():
-            ttnn.deallocate(e)
+            dealloc(e)
         streams = ttnn.concat([ef] * HC, dim=-1, memory_config=DRAM)
-        ttnn.deallocate(ef)
+        dealloc(ef)
         return DevH(streams, ttnn.clone(self.pre0, memory_config=DRAM))
 
     def layer(self, i: int, h: DevH, start: int, state: DS41DeviceState, end: int | None = None) -> DevH:
@@ -743,7 +747,7 @@ class TtDS41Model:
         """rms(sum_n pre_n stream_n) w -> [1, 1, S/SP, H/TP] fp32 (hidden split)."""
         x = self.final_collapse(h.streams, h.pre)
         out = self.final_norm_mod(x)
-        ttnn.deallocate(x)
+        dealloc(x)
         return out
 
     # ------------------------------------------------------------------ harness boundary (host)

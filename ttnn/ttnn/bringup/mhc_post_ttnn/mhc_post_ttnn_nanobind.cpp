@@ -87,7 +87,12 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 from the same pass, stats (..., T, 32) float32 = X' @ W (FPU, fp32 DEST, compute_kernel_config's
                 fidelity) with column n (n + 2) replaced by sum over the row of X'^2 (exact fp32 SFPU) =
                 mhc_pre_xing_pack(X' @ W, X'). Needs float32 F and X, n <= 4. X' is bit-identical to the op without
-                it (deepseek_v41_flash_d_p P.14).
+                it (deepseek_v41_flash_d_p P.14). input_tensor may then also be bfloat16 (read into the fp32 DEST
+                exactly; deepseek_v41_flash_d_p P.19).
+            post_col / comb_col (int, optional): column offsets of post_k (post_col + k) and comb[i*n + j]
+                (comb_col + i*n + j) in their tensors (default 0 / 0: as above). Nonzero: n is the residual's stream
+                count, post and comb may be one packed tensor, e.g. the mHC mixes [pre | post | comb] with
+                post=comb=mixes, post_col=n, comb_col=2n (no slices; deepseek_v41_flash_d_p P.19).
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -101,7 +106,9 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("comb_transposed") = true,
-        nb::arg("stats_weight") = nb::none());
+        nb::arg("stats_weight") = nb::none(),
+        nb::arg("post_col") = 0,
+        nb::arg("comb_col") = 0);
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

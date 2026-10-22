@@ -19,10 +19,13 @@ one slab per cache (slots = layers = 1); the serving runtime allocates the engin
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import torch
 
 import ttnn
 
+from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
 
 
@@ -91,7 +94,7 @@ class CacheSlab:
         """This slab's local rows [rows, width] of every chip (chip-linear r TP + c), host."""
         sl = self.slice_rows(0, self.rows)
         out = [ttnn.to_torch(t).reshape(self.rows, self.width) for t in ttnn.get_device_tensors(sl)]
-        ttnn.deallocate(sl)
+        dealloc(sl)
         return out
 
     @property
@@ -100,7 +103,7 @@ class CacheSlab:
 
     def free(self) -> None:
         if self.owned and self.tensor.is_allocated():
-            ttnn.deallocate(self.tensor)
+            dealloc(self.tensor)
 
 
 class DeviceScalars:
@@ -108,7 +111,10 @@ class DeviceScalars:
     slices the k-th value as a 1-element device tensor of its own (a device op, no host transfer; the caller frees
     it). The table has at least 2 rows, so a slice is never full-range (DS41-52)."""
 
-    def __init__(self, mesh, values):
+    MEMO = 8  # GLUE_FOLD=on (P.19): the latest values sliced, kept for the chunk's other writes
+
+    def __init__(self, mesh, values, memo: bool = False):
+        self._memo = OrderedDict() if memo else None
         v = torch.as_tensor(list(values), dtype=torch.int64).reshape(-1, 1)
         self.n = v.shape[0]
         if self.n < 2:  # a one-row slice of a one-row table is full-range: ttnn.slice returns the table's own buffer,
@@ -123,8 +129,22 @@ class DeviceScalars:
         )
 
     def at(self, k: int) -> ttnn.Tensor:
+        """The k-th value; release it with ``release`` (memo: kept while it is among the latest MEMO)."""
         assert 0 <= k < self.n, (k, self.n)
-        return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM)
+        if self._memo is None:
+            return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM)
+        t = self._memo.get(k)
+        if t is not None:
+            self._memo.move_to_end(k)
+            return t
+        t = self._memo[k] = ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM)
+        while len(self._memo) > self.MEMO:
+            dealloc(self._memo.popitem(last=False)[1])
+        return t
+
+    def release(self, t: ttnn.Tensor) -> None:
+        if self._memo is None or not any(t is u for u in self._memo.values()):
+            dealloc(t)
 
 
 def sp_tp(mesh) -> tuple[int, int]:
