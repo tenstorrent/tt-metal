@@ -145,8 +145,9 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     // face base this call is given. The rewrite is the same value on every face. Ops relying on slot 6
     // from their own init (e.g. topk, square, sfpu reduce) must re-run that init after rand. This is the
     // only state rand re-establishes: an init that changes SFPU control state (topk enables index
-    // tracking, which replaces this kernel's LREG4-7 results) must be followed by rand_tile_init before
-    // rand -- its generic SFPU config init clears that state; rand_init alone does not touch it.
+    // tracking, which replaces this kernel's LREG4-7 results) must be followed by a control-register
+    // clear before rand -- any generic SFPU *_tile_init does that, or the op that enabled it clears it on
+    // exit. rand_tile_init clears it too but reseeds the stream; rand_init alone does not touch it.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
     make_lane_salt();
