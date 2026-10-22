@@ -145,7 +145,7 @@ SCENARIOS = {
         },
     },
     # 4) GLM-5.3 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
-    #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
+    #    MERGED two-config KV chunk address table: config 0 = the scaled-FP8 MLA KVPE cache (all 78
     #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
     #    The runner builds that single merged table and the producer reads BOTH configs back through it
     #    over UMD, so a wrong address in either config shows up as a PCC failure. 11 x 5120 = 56320 is
