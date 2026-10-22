@@ -30,7 +30,7 @@ run_python_model_tests_wormhole_b0() {
     MESH_DEVICE=AUTO pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
 
     # Generalized MoE gate op (ungrouped top-k + DeepSeek grouped)
-    pytest models/common/tests/modules/moe/test_generalized_moe_gate.py
+    pytest models/common/tests/moe/test_generalized_moe_gate.py
 
     pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
