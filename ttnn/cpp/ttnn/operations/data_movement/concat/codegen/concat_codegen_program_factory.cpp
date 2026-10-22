@@ -215,6 +215,7 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     } else if (!width) {
         reader_source = kReaderRmNonwidthNway;
         reader_ct_args = {kCbOut, batches->read_batch, num_inputs, pages.out_page};
+        reader_ct_args.insert(reader_ct_args.end(), src_page_bytes.begin(), src_page_bytes.end());
         for (const Buffer* src_buffer : src_buffers) {
             TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
         }
@@ -267,9 +268,6 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     if (!width && !two_input) {
         for (const uint32_t pages : pages_per_block) {
             reader_common_args.push_back(pages);
-        }
-        for (const uint32_t page_bytes : src_page_bytes) {
-            reader_common_args.push_back(page_bytes);
         }
     } else if (width && !two_input) {
         for (const uint32_t stick_bytes : src_stick_bytes) {

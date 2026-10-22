@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // N-way non-width reader: every output stick comes whole from one input, so a cursor walks per-input blocks.
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -11,22 +15,40 @@ constexpr uint32_t cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t BATCH = get_compile_time_arg_val(1);
 constexpr uint32_t NUM_INPUTS = get_compile_time_arg_val(2);
 constexpr uint32_t CB_PAGE_SIZE = get_compile_time_arg_val(3);
-constexpr uint32_t FIRST_ACCESSOR_ARGS = 4;
+constexpr uint32_t FIRST_PAGE_BYTES_ARG = 4;
+constexpr uint32_t FIRST_ACCESSOR_ARGS = FIRST_PAGE_BYTES_ARG + NUM_INPUTS;
 
 constexpr uint32_t BASE_OFFSET = 0;
 constexpr uint32_t BLOCK_OFFSET = BASE_OFFSET + NUM_INPUTS;
-constexpr uint32_t PAGE_BYTES_OFFSET = BLOCK_OFFSET + NUM_INPUTS;
 constexpr uint32_t STICK_ID_OFFSET = 3;
 
 constexpr auto source_args = make_tensor_accessor_args_tuple<NUM_INPUTS, FIRST_ACCESSOR_ARGS>();
 
-// Each input carries its own accessor type (DRAM vs L1), so the one to read through is picked by walking the inputs.
+using SourceArgsTuple = std::remove_const_t<decltype(source_args)>;
+
+template <size_t... Index>
+constexpr bool same_bank_type(std::index_sequence<Index...>) {
+    return (
+        (std::tuple_element_t<Index, SourceArgsTuple>::is_dram == std::tuple_element_t<0, SourceArgsTuple>::is_dram) &&
+        ...);
+}
+
+// Every input has the same width, so with a common bank type they share one accessor and page size.
+constexpr bool UNIFORM_PLACEMENT = same_bank_type(std::make_index_sequence<NUM_INPUTS>{});
+
+// Mixed DRAM/L1 inputs carry distinct accessor types, so the one to read through is picked by walking the inputs.
 template <uint32_t Index>
 FORCE_INLINE void read_stick(Noc& noc, CircularBuffer& cb, uint32_t input, uint32_t stick_id, uint32_t l1_offset) {
-    if constexpr (Index < NUM_INPUTS) {
+    if constexpr (UNIFORM_PLACEMENT) {
+        constexpr auto args = std::get<0>(source_args);
+        constexpr uint32_t page_bytes = get_compile_time_arg_val(FIRST_PAGE_BYTES_ARG);
+        const auto source = TensorAccessor(args, get_common_arg_val<uint32_t>(BASE_OFFSET + input), page_bytes);
+        noc.async_read(source, cb, page_bytes, {.page_id = stick_id}, {.offset_bytes = l1_offset});
+    } else if constexpr (Index < NUM_INPUTS) {
         if (input == Index) {
             constexpr auto args = std::get<Index>(source_args);
-            const uint32_t page_bytes = get_common_arg_val<uint32_t>(PAGE_BYTES_OFFSET + Index);
+            // Compile-time so the accessor's page arithmetic and the read size fold to constants.
+            constexpr uint32_t page_bytes = get_compile_time_arg_val(FIRST_PAGE_BYTES_ARG + Index);
             const auto source = TensorAccessor(args, get_common_arg_val<uint32_t>(BASE_OFFSET + Index), page_bytes);
             noc.async_read(source, cb, page_bytes, {.page_id = stick_id}, {.offset_bytes = l1_offset});
         } else {

@@ -202,84 +202,41 @@ bool supported_by_codegen(const std::vector<Tensor>& input_tensors, const ttnn::
 
 namespace {
 
-using Shape = std::vector<uint32_t>;
-using Placement = std::vector<BufferType>;
+// The N-way width reader dispatches per input at runtime and builds a TensorAccessor per page, a fixed cost of
+// roughly 80-85 ns per call; it is amortized only when each core streams many sticks. Up to this many output sticks
+// the split leaves about one stick per core, so the native path wins.
+constexpr uint32_t kMaxSticksForWidthNwayFixedCost = 32;
+constexpr size_t kMinNwayInputs = 3;
 
-bool shape_matches(const Tensor& tensor, const Shape& expected) {
-    const auto& logical = tensor.logical_shape();
-    if (logical.rank() != expected.size()) {
-        return false;
-    }
-    for (size_t d = 0; d < expected.size(); ++d) {
-        if (logical[d] != expected[d]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool inputs_match(
-    const std::vector<Tensor>& input_tensors, const std::vector<Shape>& shapes, const Placement& placement) {
-    if (input_tensors.size() != shapes.size() || input_tensors.size() != placement.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < input_tensors.size(); ++i) {
-        if (!shape_matches(input_tensors[i], shapes[i]) ||
-            input_tensors[i].memory_config().buffer_type() != placement[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool dtype_in(DataType dtype, std::initializer_list<DataType> dtypes) {
-    return std::find(dtypes.begin(), dtypes.end(), dtype) != dtypes.end();
-}
-
-// Exact match on the normalized attributes of one measured last-axis case: dtype, per-input shape and buffer
-// placement, and an interleaved DRAM output.
-bool is_exact_case(
-    const std::vector<Tensor>& input_tensors,
-    const ttnn::prim::ConcatCodegenParams& attrs,
-    std::initializer_list<DataType> dtypes,
-    const std::vector<Shape>& shapes,
-    const Placement& placement) {
-    const auto last_dim = static_cast<uint32_t>(shapes.front().size() - 1);
-    return attrs.dim == last_dim && attrs.output_mem_config.buffer_type() == BufferType::DRAM &&
-           inputs_match(input_tensors, shapes, placement) && dtype_in(input_tensors.front().dtype(), dtypes);
+bool has_equal_widths(const std::vector<Tensor>& input_tensors) {
+    const uint32_t width = input_tensors.front().logical_shape()[kLastAxis];
+    return std::all_of(input_tensors.begin(), input_tensors.end(), [width](const Tensor& input) {
+        return input.logical_shape()[kLastAxis] == width;
+    });
 }
 
 }  // namespace
 
 bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
-    constexpr auto kDram = BufferType::DRAM;
-    constexpr auto kL1 = BufferType::L1;
-    constexpr auto kBf16 = DataType::BFLOAT16;
-    constexpr auto kInt32 = DataType::INT32;
-    constexpr auto kUint32 = DataType::UINT32;
-
-    // Every measured extent is a multiple of one tile edge.
-    constexpr uint32_t kUnit = 32;
-    constexpr uint32_t kDouble = 2 * kUnit;
-    constexpr uint32_t kTriple = kUnit + kDouble;
-
-    // Unsettled: measured slower than the native path, mechanism not analyzed; matched case by case.
-    const std::vector<Shape> three_input_rank3 = {{1, kUnit, kUnit}, {1, kUnit, kDouble}, {1, kUnit, kUnit}};
-    const std::vector<Placement> placements = {{kDram, kL1, kDram}, {kL1, kDram, kL1}, {kDram, kDram, kDram}};
-    for (const Placement& placement : placements) {
-        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, three_input_rank3, placement)) {
-            return true;
-        }
+    if (input_tensors.size() < kMinNwayInputs || input_tensors.front().layout() != ttnn::ROW_MAJOR_LAYOUT ||
+        !concats_width(input_tensors, attrs)) {
+        return false;
     }
-
-    // Unsettled: same as above, width concat of three rank-2 inputs.
-    const std::vector<Shape> three_input_width = {{kUnit, kUnit}, {kUnit, kDouble}, {kUnit, kTriple}};
-    for (const Placement& placement : placements) {
-        if (is_exact_case(input_tensors, attrs, {kBf16, kInt32, kUint32}, three_input_width, placement)) {
-            return true;
-        }
+    const ttnn::Shape out_shape = concat_output_shape(input_tensors, attrs.dim);
+    if (out_shape.volume() == 0 || out_shape[kLastAxis] == 0) {
+        return false;
     }
-    return false;
+    if (out_shape.volume() / out_shape[kLastAxis] > kMaxSticksForWidthNwayFixedCost) {
+        return false;
+    }
+    // Equal-width 32-bit inputs stay on codegen; bfloat16 and unequal-width 32-bit inputs do not amortize the fixed
+    // cost.
+    switch (input_tensors.front().dtype()) {
+        case DataType::BFLOAT16: return true;
+        case DataType::INT32:
+        case DataType::UINT32: return !has_equal_widths(input_tensors);
+        default: return false;
+    }
 }
 
 bool supported_execution_controls(
