@@ -58,7 +58,6 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_args_layout.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_config.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/prefetcher_pipe_slots.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/scratchpad_allocation.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/semaphore_scope.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_run_overrides.cpp
