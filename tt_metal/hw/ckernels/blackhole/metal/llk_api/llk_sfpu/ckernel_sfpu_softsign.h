@@ -17,7 +17,7 @@ inline void calculate_softsign() {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::abs(v);
         sfpi::vFloat r = a * sfpu_reciprocal<APPROXIMATION_MODE>(a + 1.0f);
-        // 1/(1+|x|) underflows near FLT_MAX; for |x| >= 2^24 softsign rounds to 1 anyway
+        // 1/(1+|x|) underflows near FLT_MAX; for |x| >= 2^24 softsign is within 1 ULP of ±1, so saturate
         v_if(a >= 16777216.0f) { r = 1.0f; }
         v_endif;
         // copysgn restores the sign, including for -0

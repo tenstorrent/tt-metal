@@ -40,7 +40,7 @@ Accuracy criteria
                               test_hardswish)
   silu, swish    : ULP ≤ 2  (near-zero and negative-sigmoid FTZ bands
                               verified explicitly; see test_silu_swish_ops)
-  softsign       : ULP ≤ 2  (whole domain, including ±1 saturation near
+  softsign       : ULP ≤ 1  (whole domain, including ±1 saturation near
                               bf16_max; see test_softsign)
   log_sigmoid    : ULP ≤ 2 for x <= 0; PCC ≥ 0.999 for 0 < x <= 170; see
                               test_log_sigmoid for a known kernel bug above 170
@@ -217,7 +217,7 @@ def test_softsign(device):
 
     The SFPU computes this via reciprocal(1 + |x|). Near bf16_max that
     reciprocal underflows, so the kernel saturates |x| >= 2^24 to ±1
-    directly; ULP ≤ 2 therefore holds over the whole domain. A whole-domain PCC
+    directly; ULP ≤ 1 therefore holds over the whole domain. A whole-domain PCC
     would not constrain the reciprocal path at all here, since the ~46%
     of that domain already saturating to exactly ±1 (|x| >= 512) is
     enough alone to satisfy PCC ≥ 0.999 for a badly broken kernel.
@@ -232,7 +232,7 @@ def test_softsign(device):
     tt_result = ttnn.softsign(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

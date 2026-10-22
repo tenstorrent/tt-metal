@@ -102,8 +102,7 @@ read off the failing elements.
     not use this path and needs no exclusion.
   - rdiv(rounding_mode=None) is value * reciprocal(x), so once |x| >= 1/tiny
     the reciprocal underflows and is flushed to zero before the multiply,
-    zeroing the product regardless of value (mirrors softsign in
-    test_unary_category4_bfloat16.py).
+    zeroing the product regardless of value.
   - selu/sigmoid/tanh hit a flush-to-zero boundary near the smallest normal
     where the device and a float64 reference legitimately round to opposite
     sides. The mask keys off the *expected* side only (see _ftz_boundary_mask).

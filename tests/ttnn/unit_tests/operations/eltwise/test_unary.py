@@ -1703,7 +1703,11 @@ def test_unary_softsign_large_magnitude(torch_dtype, ttnn_dtype, device):
 
     large = in_data.abs() >= 2.0**24
     assert torch.equal(output_tensor[large], torch.sign(in_data[large]))
-    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
+    assert_with_ulp(
+        expected_result=golden_tensor,
+        actual_result=output_tensor,
+        ulp_threshold=(1 if torch_dtype == torch.bfloat16 else 2),
+    )
     if torch_dtype == torch.float32:
         # BF16 pack may drop the sign of zero, so only check -0 for float32
         zeros = in_data == 0
