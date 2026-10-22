@@ -683,7 +683,7 @@ Each checkpoint directory contains:
 
 | File | Contents | Source |
 |------|----------|--------|
-| `checkpoint.pkl` | Model parameters and optimizer state; header: `global_step`, `learning_rate`, `rng` (Python, NumPy, PyTorch RNG states), `grpo_config` | `ttml.checkpointing.save_checkpoint` |
+| `checkpoint.pkl` | Model parameters and optimizer state; header: `global_step`, `learning_rate` (the LR the step trained at), `rng` (Python, NumPy, PyTorch RNG states), `grpo_config` | `ttml.checkpointing.save_checkpoint` |
 | `config.json` | HuggingFace model configuration | `AutoConfig.from_pretrained(model_source)` |
 | `tokenizer_config.json` | Tokenizer configuration | `tokenizer.save_pretrained()` |
 | `tokenizer.json` | Full tokenizer (vocabulary, merges, etc.) | `tokenizer.save_pretrained()` |

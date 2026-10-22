@@ -358,6 +358,16 @@ def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_path):
+    headers = []
+    monkeypatch.setattr(ttml.checkpointing, "save_checkpoint", lambda path, header, **_: headers.append(header))
+    optimizer = SimpleNamespace(get_lr=lambda: 0.75)
+
+    save_checkpoint(SimpleNamespace(parameters=lambda: {}), 2, str(tmp_path), optimizer=optimizer, learning_rate=0.5)
+
+    assert headers[0]["learning_rate"] == 0.5
+
+
 def test_layout_microbatch_aligns_old_logprobs_mask_and_targets():
     """pi_old columns, mask columns and target tokens refer to the same
     completion tokens on ragged prompts/completions, with pi_old sign-flipped.
