@@ -61,6 +61,11 @@
 #endif
 
 // 1 where the tree packs a BFP output block with one closed tile per MOP run
+#if __has_include("llk_tilize_pack_nr.h")
+#include "llk_tilize_pack_nr.h"
+#else
+#define TA_PACK_NR 0
+#endif
 #ifndef TA_BFP_CLOSED
 #if __has_include("llk_tilize_bfp_closed.h")
 #define TA_BFP_CLOSED 1
@@ -375,7 +380,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             for (std::uint32_t i = 0; i < n; ++i)
                             {
-                                _llk_pack_<TA_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(i, PERF_ADDRESS(PERF_OUTPUT, i));
+                                _llk_pack_<TA_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>, false, !TA_PACK_NR>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                             }
                         }
                         if constexpr (wait_math)
@@ -406,7 +411,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                     for (std::uint32_t i = 0; i < num_tiles; ++i)
                     {
-                        _llk_pack_<TA_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(i, PERF_ADDRESS(PERF_OUTPUT, i));
+                        _llk_pack_<TA_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>, false, !TA_PACK_NR>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                     }
                     remaining_tiles -= num_tiles;
                 }
@@ -432,7 +437,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                 for (std::uint32_t i = 0; i < num_tiles; ++i)
                 {
-                    _llk_pack_<TA_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(i, PERF_ADDRESS(PERF_OUTPUT, i));
+                    _llk_pack_<TA_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>, false, !TA_PACK_NR>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                 }
                 _llk_pack_dest_section_done_<TA_SYNC, is_fp32_dest_acc_en>();
                 remaining_tiles -= num_tiles;

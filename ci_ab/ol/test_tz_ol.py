@@ -8,13 +8,16 @@ import torch
 import ttnn
 
 CASES = {
-    "uint8_1024x96": (ttnn.uint8, (1, 1, 1024, 96)),
-    "uint8_32x96": (ttnn.uint8, (1, 1, 32, 96)),
-    "uint8_256x96": (ttnn.uint8, (1, 1, 256, 96)),
-    "uint8_4096x96": (ttnn.uint8, (1, 1, 4096, 96)),
-    "uint8_1024x64": (ttnn.uint8, (1, 1, 1024, 64)),
-    "uint8_1024x128": (ttnn.uint8, (1, 1, 1024, 128)),
-    "uint8_512x1024": (ttnn.uint8, (1, 1, 512, 1024)),
+    "bf16_2048x32": (ttnn.bfloat16, (1, 1, 2048, 32)),
+    "bf16_4096x64": (ttnn.bfloat16, (1, 1, 4096, 64)),
+    "bf16_32x32": (ttnn.bfloat16, (1, 1, 32, 32)),
+    "fp32_2048x32": (ttnn.float32, (1, 1, 2048, 32)),
+    "bf16_to_bfp8_2048x32": (ttnn.bfloat16, (1, 1, 2048, 32)),
+    "twvp_bf16_2000x40": (ttnn.bfloat16, (1, 1, 2000, 40)),
+    "bf16_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
+    "conv2d_1x1": (None, None),
+    "conv2d_3x3": (None, None),
+    "c3d_audio": (None, None),
 }
 _CW = {}
 
