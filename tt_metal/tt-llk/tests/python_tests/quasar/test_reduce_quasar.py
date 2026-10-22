@@ -57,7 +57,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test, tolerances
+from helpers.utils import passed_test
 
 # Helper dictionary to map reduce dimensions to math operations
 mathop_mapping = {
@@ -284,24 +284,12 @@ def test_reduce_quasar(
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    # Reduce-to-one Sum accumulates every tile, so its error budget grows with the tile count.
-    # Max selects exactly, so it keeps the default check.
-    accumulation_tolerance = (
-        dict(
-            custom_pcc_threshold=0.90,
-            custom_atol=tolerances[formats.output_format].atol * tile_cnt,
-            custom_rtol=tolerances[formats.output_format].rtol * tile_cnt,
-        )
-        if is_reduce_to_one and pool_type == ReducePool.Sum
-        else {}
-    )
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
         tile_shape=tile_shape,
         print_errors=True,
-        **accumulation_tolerance,
     ), "Assert against golden failed"
 
 

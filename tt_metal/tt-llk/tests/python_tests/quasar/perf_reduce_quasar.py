@@ -8,6 +8,7 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
+    MathFidelity,
     ReduceDimension,
     ReducePool,
 )
@@ -169,14 +170,13 @@ def test_perf_reduce_scalar_quasar(
     )
 
 
-# Float16_b is already full precision at LoFi on Quasar, so the representative config
-# takes the highest valid fidelity rather than HiFi4.
+# HiFi4 past the Float16_b LoFi cap, as for the core rows, so these pair with WH/BH.
 @pytest.mark.perf
 @pytest.mark.quasar
 @pytest.mark.nightly
 @parametrize(
     **BLOCK_LENGTH_REPRESENTATIVE,
-    math_fidelity=lambda formats: get_valid_math_fidelities(formats)[-1:],
+    math_fidelity=[MathFidelity.HiFi4],
     tile_dimensions=CORE_TILE_DIMENSIONS,
     is_reduce_to_one=[False],
     tile_count=BLOCK_LENGTH_TILE_COUNTS,
