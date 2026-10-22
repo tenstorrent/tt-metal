@@ -697,6 +697,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             &ttnn::verify_shards_match_topology,
             nb::arg("tensor"),
             nb::arg("compare_replica_contents") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Check that a host tensor's topology label describes its shards: every populated shard is labelled,
                 every labelled coordinate holds a shard, and shards the label calls replicas of each other have the
