@@ -113,6 +113,7 @@ def _param_dtypes(model) -> set:
     return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
 
 
+@pytest.mark.requires_device
 @pytest.mark.parametrize(
     "precision, expected",
     [
@@ -135,8 +136,13 @@ def test_create_optimizer_applies_param_dtype(precision, expected):
     assert _param_dtypes(model) == {expected}
 
 
+class _ModelWithoutParameters:
+    def parameters(self):
+        return ttml.NamedParameters()
+
+
 def test_create_optimizer_rejects_an_unknown_param_dtype(expect_error):
-    model = ttml.modules.LinearLayer(32, 32)
+    """The name is checked before any parameter is touched, so this needs no device."""
     config = {"training_config": {"precision": {"param_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
     with expect_error(RuntimeError, "param_dtype"):
-        create_optimizer(model, config)
+        create_optimizer(_ModelWithoutParameters(), config)
