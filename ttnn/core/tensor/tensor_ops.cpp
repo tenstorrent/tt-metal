@@ -183,6 +183,9 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         const bool replicate = host.buffer().shape() == tt::tt_metal::distributed::MeshShape(1, 1);
         for (const auto& coord : view_coords) {
             const auto host_coord = replicate ? tt::tt_metal::distributed::MeshCoordinate(0, 0) : coord;
+            if (!host.buffer().shard_coords().contains(host_coord)) {
+                continue;
+            }
             if (auto shard = host.buffer().get_shard(host_coord)) {
                 view_buffer.emplace_shard(coord, [&]() { return *shard; });
             }
