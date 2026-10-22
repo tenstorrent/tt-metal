@@ -35,8 +35,9 @@ enum class DumpTensorMode : std::uint8_t {
 //    fails any of these checks throws before the output file is created, so a rejected dump leaves no file behind.
 //    The checks are `verify_shards_match_topology` (ttnn/tensor/topology_check.hpp); a caller that keeps one copy per
 //    replica group itself can run them on a host tensor.
-//    In DISTRIBUTED_GATHER mode only rank 0 runs these checks, on the gathered tensor; the rejection is raised
-//    there, and the other ranks stay in the final barrier until rank 0 exits, as for any other rank-0 failure.
+//    In DISTRIBUTED_GATHER mode every rank runs these checks on the gathered tensor (every rank holds every shard
+//    after the gather), so a rejected tensor throws on all ranks; a failed write on rank 0 still leaves the other
+//    ranks in the final barrier.
 //    Known gap: `DistributedHostBuffer::transform` rebuilds its container with every unpopulated shard marked
 //    remote, so after a host-side layout or dtype conversion a partial tensor's missing local coordinates read as
 //    remote and pass the exemption above. That is a missed rejection, never a false one.
