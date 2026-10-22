@@ -48,6 +48,7 @@ class MistralSmall4Config:
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
     # MoE configuration
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     NUM_ROUTED_EXPERTS = 128  # n_routed_experts
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
