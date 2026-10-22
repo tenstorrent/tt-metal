@@ -4264,6 +4264,100 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step(
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 }
 
+// ---- M9 (Tier 2) helpers, outlined: each is reached from several sites on every TRISC, and the kernel config
+// buffer at 5 s has ~3 KB of margin (M9's first build overflowed it). ----
+
+// Packs a DEST batch of units into the compact score scratch: unit u = member unit_g[u], score column unit_c0[u],
+// width unit_cw[u]; row r of member g is at off[g] + r * W[g]. Blocked (one call per row) when the unit is at least
+// MIN_BLOCKED_PACK_TILES wide, per tile otherwise; the pack width is reconfigured only when it changes (pk_w).
+template <uint32_t Sq_chunk_t, uint32_t cb>
+static __attribute__((noinline, noclone)) void sol_res_pack_units(
+    const uint8_t* unit_g,
+    const uint8_t* unit_c0,
+    const uint8_t* unit_cw,
+    uint32_t uu,
+    const uint16_t* off,
+    const uint8_t* W,
+    uint32_t& pk_w) {
+    uint32_t dst = 0;
+    for (uint32_t u = 0; u < uu; ++u) {
+        const uint32_t cw = unit_cw[u];
+        const bool blocked = should_use_blocked_pack_width(cw);
+        const uint32_t want = blocked ? cw : 1u;
+        if (want != pk_w) {
+            configure_pack_width(cb, want);
+            pk_w = want;
+        }
+        const uint32_t g = unit_g[u];
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            const uint32_t idx = off[g] + r * W[g] + unit_c0[u];
+            if (blocked) {
+                sdpa_pack_tile_ooo(dst, cb, idx);
+                dst += cw;
+            } else {
+                for (uint32_t c = 0; c < cw; ++c) {
+                    sdpa_pack_tile_ooo(dst++, cb, idx + c);
+                }
+            }
+        }
+    }
+}
+
+// Members sorted by width (stable insertion sort of an index permutation), then stepped in groups of at most
+// kQkCap scratch tiles (Sq_chunk_t x width per member); SOL_RES_CHUNK_MAJOR: one member per step.
+template <uint32_t kSlots, uint32_t kBlocksPerPiece, uint32_t Sq_chunk_t, uint32_t kQkCap, typename StepFn>
+static __attribute__((noinline, noclone)) void sol_res_run_groups(
+    StepFn& run_step,
+    const uint8_t* members,
+    const uint8_t* widths,
+    const uint8_t* mruns,
+    const uint8_t* mrunws,
+    const uint8_t* mnruns,
+    const uint32_t n,
+    const bool apply_col_bias) {
+    uint8_t order[kSlots];
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t j = i;
+        while (j > 0 && widths[order[j - 1]] > widths[i]) {
+            order[j] = order[j - 1];
+            --j;
+        }
+        order[j] = static_cast<uint8_t>(i);
+    }
+    uint8_t sg[kSlots];
+    uint8_t sruns[kSlots * kBlocksPerPiece];
+    uint8_t srunws[kSlots * kBlocksPerPiece];
+    uint8_t snr[kSlots];
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t m = order[i];
+        sg[i] = members[m];
+        snr[i] = mnruns[m];
+        for (uint32_t s = 0; s < mnruns[m]; ++s) {
+            sruns[i * kBlocksPerPiece + s] = mruns[m * kBlocksPerPiece + s];
+            srunws[i * kBlocksPerPiece + s] = mrunws[m * kBlocksPerPiece + s];
+        }
+    }
+#ifndef SOL_RES_CHUNK_MAJOR
+    uint32_t g0 = 0;
+    while (g0 < n) {
+        uint32_t g1 = g0;
+        uint32_t tiles = 0;
+        while (g1 < n && tiles + Sq_chunk_t * widths[order[g1]] <= kQkCap) {
+            tiles += Sq_chunk_t * widths[order[g1]];
+            ++g1;
+        }
+        ASSERT(g1 > g0);  // one member always fits: Sq_chunk_t x Sk_chunk_t <= kQkCap
+        run_step(
+            sg + g0, g1 - g0, sruns + g0 * kBlocksPerPiece, srunws + g0 * kBlocksPerPiece, snr + g0, apply_col_bias);
+        g0 = g1;
+    }
+#else
+    for (uint32_t g = 0; g < n; ++g) {
+        run_step(sg + g, 1, sruns + g * kBlocksPerPiece, srunws + g * kBlocksPerPiece, snr + g, apply_col_bias);
+    }
+#endif
+}
+
 // ---- M9 (Tier 2) compact per-piece step ----
 /**
  * The M5 step with three changes to how the work is issued (the M6 profile: ~1 us per score tile against the dense
@@ -4383,27 +4477,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         const auto flush = [&]() {
             tile_regs_commit();
             tile_regs_wait();
-            uint32_t dst = 0;
-            for (uint32_t u = 0; u < uu; ++u) {
-                const uint32_t cw = unit_cw[u];
-                const bool blocked = should_use_blocked_pack_width(cw);
-                const uint32_t want = blocked ? cw : 1u;
-                if (want != pk_w) {
-                    configure_pack_width(cb_qkt_im, want);
-                    pk_w = want;
-                }
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t idx = sidx(unit_g[u], r, unit_c0[u]);
-                    if (blocked) {
-                        sdpa_pack_tile_ooo(dst, cb_qkt_im, idx);
-                        dst += cw;
-                    } else {
-                        for (uint32_t c = 0; c < cw; ++c) {
-                            sdpa_pack_tile_ooo(dst++, cb_qkt_im, idx + c);
-                        }
-                    }
-                }
-            }
+            sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
             tile_regs_release();
             uu = 0;
             uu_tiles = 0;
@@ -4702,27 +4776,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 }
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             }
-            uint32_t dst = 0;
-            for (uint32_t u = 0; u < uu; ++u) {
-                const uint32_t cw = unit_cw[u];
-                const bool blocked = should_use_blocked_pack_width(cw);
-                const uint32_t want = blocked ? cw : 1u;
-                if (want != pk_w) {
-                    configure_pack_width(cb_qkt_im, want);
-                    pk_w = want;
-                }
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t idx = sidx(unit_g[u], r, unit_c0[u]);
-                    if (blocked) {
-                        sdpa_pack_tile_ooo(dst, cb_qkt_im, idx);
-                        dst += cw;
-                    } else {
-                        for (uint32_t c = 0; c < cw; ++c) {
-                            sdpa_pack_tile_ooo(dst++, cb_qkt_im, idx + c);
-                        }
-                    }
-                }
-            }
+            sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(unit_g, unit_c0, unit_cw, uu, off, W, pk_w);
             PACK((llk_pack_relu_config(ReluConfig::none())));
             tile_regs_release();
             uu = 0;
@@ -5095,8 +5149,8 @@ void sdpa_ring_resident(
             initialized |= 1u << slots[g];
         }
     };
-    // Members sorted by width (stable insertion sort of an index permutation) and split into steps of at most
-    // kQkCap scratch tiles (Sq_chunk_t x width per member); SOL_RES_CHUNK_MAJOR: one member per step.
+    // Members sorted by width and stepped in groups of at most kQkCap scratch tiles (sol_res_run_groups, outlined:
+    // reached from the piece loop and the pooled loop).
     const auto run_groups = [&](const uint8_t* members,
                                 const uint8_t* widths,
                                 const uint8_t* mruns,
@@ -5104,52 +5158,8 @@ void sdpa_ring_resident(
                                 const uint8_t* mnruns,
                                 const uint32_t n,
                                 const bool apply_col_bias) {
-        uint8_t order[sol_resident_slots];
-        for (uint32_t i = 0; i < n; ++i) {
-            uint32_t j = i;
-            while (j > 0 && widths[order[j - 1]] > widths[i]) {
-                order[j] = order[j - 1];
-                --j;
-            }
-            order[j] = static_cast<uint8_t>(i);
-        }
-        uint8_t sg[sol_resident_slots];
-        uint8_t sruns[sol_resident_slots * kBlocksPerPiece];
-        uint8_t srunws[sol_resident_slots * kBlocksPerPiece];
-        uint8_t snr[sol_resident_slots];
-        for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t m = order[i];
-            sg[i] = members[m];
-            snr[i] = mnruns[m];
-            for (uint32_t s = 0; s < mnruns[m]; ++s) {
-                sruns[i * kBlocksPerPiece + s] = mruns[m * kBlocksPerPiece + s];
-                srunws[i * kBlocksPerPiece + s] = mrunws[m * kBlocksPerPiece + s];
-            }
-        }
-#ifndef SOL_RES_CHUNK_MAJOR
-        uint32_t g0 = 0;
-        while (g0 < n) {
-            uint32_t g1 = g0;
-            uint32_t tiles = 0;
-            while (g1 < n && tiles + Sq_chunk_t * widths[order[g1]] <= kQkCap) {
-                tiles += Sq_chunk_t * widths[order[g1]];
-                ++g1;
-            }
-            ASSERT(g1 > g0);  // one member always fits: Sq_chunk_t x Sk_chunk_t <= kQkCap
-            run_step(
-                sg + g0,
-                g1 - g0,
-                sruns + g0 * kBlocksPerPiece,
-                srunws + g0 * kBlocksPerPiece,
-                snr + g0,
-                apply_col_bias);
-            g0 = g1;
-        }
-#else
-        for (uint32_t g = 0; g < n; ++g) {
-            run_step(sg + g, 1, sruns + g * kBlocksPerPiece, srunws + g * kBlocksPerPiece, snr + g, apply_col_bias);
-        }
-#endif
+        sol_res_run_groups<sol_resident_slots, kBlocksPerPiece, Sq_chunk_t, kQkCap>(
+            run_step, members, widths, mruns, mrunws, mnruns, n, apply_col_bias);
     };
     // One K/V entry, after its last step (or untouched: streamed for another chain member only).
     const auto pop_kv = [&]() {
