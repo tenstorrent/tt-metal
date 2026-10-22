@@ -210,6 +210,7 @@ class V41ChunkTables:
         }
         self._query_rows = rows
         self._chunk_start = None
+        self._host_cache: dict[int, list] = {}
 
     def _sharded_u32(self, host):
         return ttnn.from_torch(
@@ -233,12 +234,25 @@ class V41ChunkTables:
         """The indexer's score width (rows of a ratio-``ratio`` source) of the chunk at ``start``: its bucket."""
         return self.bucket(start, length) // ratio
 
+    HOST_CACHE = 64  # chunk starts whose ``prepare_chunk_host`` tensors are kept (~2 MB each at chunk 5,120)
+
     def prepare_chunk_host(self, start: int) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
         """The host tensors ``prepare_chunk`` copies into the chunk's input buffers, each with its buffer: RoPE
         rows, the pin page, the visible counts, the row indices. Depends on ``start`` only, so it can run ahead of
-        the device (on the prefill's prefetch thread)."""
+        the device (on the prefill's prefetch thread), and the last ``HOST_CACHE`` starts' tensors are kept (every
+        prompt's first chunk shares one set; 10 ms to build)."""
         assert self.generic
         assert start % self.chunk == 0 or start == 0, start
+        cached = self._host_cache.get(start)
+        if cached is not None:
+            return cached
+        pairs = self._prepare_chunk_host(start)
+        if len(self._host_cache) >= self.HOST_CACHE:
+            self._host_cache.pop(next(iter(self._host_cache)))
+        self._host_cache[start] = pairs
+        return pairs
+
+    def _prepare_chunk_host(self, start: int) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
         chunk = self.chunk
         pairs = []
         for (compressed, stride), buffers in self._rope_buffers.items():
