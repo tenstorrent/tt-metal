@@ -262,26 +262,30 @@ struct NocBwArchParams {
     uint32_t read_latency;
 };
 
+constexpr NocBwArchParams kWormholeNocBw{
+    .table_index = WormholeIndex,
+    .clock_hz = 1.0e9f,
+    .l1_peak_gbps = 32.0f,
+    .dram_latency = 358,
+    .local_latency = 56,
+    .write_latency = 256,
+    .read_latency = 259,
+};
+
+constexpr NocBwArchParams kBlackholeNocBw{
+    .table_index = BlackholeIndex,
+    .clock_hz = 1.35e9f,
+    .l1_peak_gbps = 50.0f,
+    .dram_latency = 529,
+    .local_latency = 88,
+    .write_latency = 404,
+    .read_latency = 403,
+};
+
 NocBwArchParams noc_bw_arch_params(tt::ARCH arch) {
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0:
-            return {
-                .table_index = WormholeIndex,
-                .clock_hz = 1.0e9f,
-                .l1_peak_gbps = 32.0f,
-                .dram_latency = 358,
-                .local_latency = 56,
-                .write_latency = 256,
-                .read_latency = 259};
-        case tt::ARCH::BLACKHOLE:
-            return {
-                .table_index = BlackholeIndex,
-                .clock_hz = 1.35e9f,
-                .l1_peak_gbps = 50.0f,
-                .dram_latency = 529,
-                .local_latency = 88,
-                .write_latency = 404,
-                .read_latency = 403};
+        case tt::ARCH::WORMHOLE_B0: return kWormholeNocBw;
+        case tt::ARCH::BLACKHOLE: return kBlackholeNocBw;
         default: TT_THROW("Unsupported architecture for NOC bandwidth model: {}", arch);
     }
 }
