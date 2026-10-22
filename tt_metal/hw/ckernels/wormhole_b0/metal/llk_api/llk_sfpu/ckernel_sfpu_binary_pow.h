@@ -40,7 +40,7 @@ namespace sfpu {
  * Parity: the odd/even test converts |pow| through vSMag16, which saturates at +/-32767.
  * It is exact here because pow comes from a bf16 DST: with 8 significant bits every
  * |pow| >= 256 is an even integer, so |pow| is clamped to 16384 (even, fits int16) before
- * the conversion and (-1)**40000 gives 1. This relies on pow being bf16-representable.
+ * the conversion and (-1)**32768 gives 1. This relies on pow being bf16-representable.
  * A negative base with a NaN or +/-inf pow returns NaN.
  *
  * @note This function assumes that the programmable constants are set to the following values:
