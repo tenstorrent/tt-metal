@@ -97,6 +97,22 @@ std::pair<ttnn::Tensor, ttnn::Tensor> rms_norm_with_residual_sum(
     const std::optional<ProgramConfigArg>& program_config = std::nullopt,
     const std::optional<ComputeConfigArg>& compute_kernel_config = std::nullopt);
 
+// CHANGELOG 6 (opt-in, the split program, device/rms_norm_split_device_operation.hpp): `stats_out` returns the
+// partial sums of squares of the input's (window's) columns; `partial_stats` normalizes by the row sum of the
+// gathered partials over `stats_width` columns; `input_window` reads only columns [c0, c1); `dtype` sets the
+// output's dtype.  None of them set -> rms_norm_full's program, unchanged.
+ttnn::Tensor rms_norm_split_full(
+    const ttnn::Tensor& input_tensor,
+    double epsilon,
+    const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ComputeConfigArg>& compute_kernel_config,
+    bool stats_out,
+    const std::optional<const ttnn::Tensor>& partial_stats,
+    int64_t stats_width,
+    const std::optional<std::pair<int64_t, int64_t>>& input_window,
+    const std::optional<tt::tt_metal::DataType>& dtype);
+
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn
 
 namespace ttnn::bringup {

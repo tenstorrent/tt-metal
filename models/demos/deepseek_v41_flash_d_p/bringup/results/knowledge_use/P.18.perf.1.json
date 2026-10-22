@@ -1,0 +1,70 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "K-12",
+   "how": "stock rms_norm_pre_all_gather leaves junk in stats columns 1-31 on fp32 and post reduces the whole tile: the fork's stats_out writes a partial sum in EVERY element instead, and the model calls no stock pre/post op",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-44",
+   "how": "the fork's FPU statistic is TF32-grade: accepted (no exact-statistics option, brief) and its bias measured instead (-1.6e-4 bf16 rows, -3.5e-4 fp32 rows, probe ds41_norm_split/probe_002)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "every FPU read of fp32 truncates to TF32: the weight multiply moved from an fp32 L1 intermediate + FPU into DEST on the SFPU (unary_bcast unpack-to-dest), ratio -1.4e-3 -> -3.5e-4 (DS41-97)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-33",
+   "how": "the fork's new tests and the probe gate rel L2 and the median row-norm ratio (a scale error), not PCC",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to run an RMS norm over rows split across chips (TP) with ttnn.bringup.rms_norm: no option existed (now CHANGELOG 6: stats_out -> all_gather -> partial_stats)",
+  "srcB holds 19 bits: an fp32 operand reaches an SFPU step exactly only through unpack-to-dest (unary_bcast / copy of an fp32 CB)"
+ ],
+ "cited_only": [
+  "DS41-97"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.18",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T10:18:51",
+  "head": "96c039ad56d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.18.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/README.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/device/rms_norm_split_device_operation.cpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/device/rms_norm_split_device_operation.hpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/kernels/rms_norm_split_compute.cpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/kernels/rms_norm_split_reader.cpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/kernels/rms_norm_split_writer.cpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/rms_norm_ttnn.cpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/rms_norm_ttnn.hpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/rms_norm_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/sources.cmake",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_split.py"
+  ]
+ }
+}

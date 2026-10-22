@@ -2595,3 +2595,54 @@ Gotchas:
   0.149 on / 0.151 off (<= 0.142). test_c_swa_experts passes (waived).
 Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.17`; probe
 `scripts/tt-probe.sh ds41_rope_stock < tests/ttnn/unit_tests/operations/ds41_rope_stock/probes/probe_002.py`.
+
+## P.18 perf attempt 1 (2026-10-22): NORM_IMPL=on, the RMS norms through ttnn.bringup.rms_norm (precision-debt J4)
+
+What: setting NORM_IMPL (tt/settings.py, default on; off = the P.17 path, kept for the owner's A/B). On, every norm
+(tt/norm.py:TtDistributedRmsNorm._fork) is ttnn.bringup.rms_norm at the fork's normal settings (HiFi4, fp32 DEST):
+- column-split (attn_norm, ffn_norm, final norm): rms_norm(x, stats_out=True) -> ccl.all_gather of the [S/SP, 32 B]
+  fp32 partials over TP (dim 3) -> rms_norm(x, partial_stats=, stats_width=H, weight=, dtype=): 3 calls (+ ffn_norm's
+  output all_gather, as before). TP is read from the mesh; any TP works (galaxy 4x4 / 8x4: 4 partial sets gathered).
+- q_norm / kv_norm: one call on the fused [wq_a | wkv] output p with input_window=(c0, c1), no slice (tt/q_a.py,
+  tt/kv.py pass the window; the off path slices inside the norm, as before); kv_norm / k_norm write bf16 (dtype=);
+  the compressor norm (fp32 in / out, whole rows) is the fork's default program.
+Fork extension (rms_norm_ttnn CHANGELOG 6, README, INDEX): a second device operation behind the new keyword options
+(stats_out, partial_stats, stats_width, input_window, dtype), routed to only when one is set; the default program is
+untouched. Kernels kernels/rms_norm_split_*.cpp, host device/rms_norm_split_device_operation.*.
+Decisions:
+- Stats exchange as partials (K-12: stock rms_norm_pre_all_gather leaves junk in stats columns 1-31 on fp32 and post
+  reduces the whole tile): stats_out writes a partial in EVERY element (packer-L1-accumulated x^2 tiles, fp32), so the
+  apply reduces all columns of all gathered tiles. One gather of [1024, 64] fp32 per norm (0.04 ms) instead of an
+  all_gather of the rows (10 MB fp32) + mesh_partition.
+- The statistic is FPU-grade (DS41-44: x^2 and the row sum read fp32 at TF32); no exact-statistics option (brief).
+  DS41-97: the weight multiply moved into DEST on the SFPU (v1 through an fp32 L1 intermediate: ratio -1.4e-3).
+- attn_norm / final norm keep writing fp32 (consumers unchanged; ATTN_NORM_DTYPE is J5's), ffn_norm FFN_NORM_DTYPE.
+- No stock norm op is called (rule 16): the INDEX line now lists rms_norm_pre/post_all_gather and slice + rms_norm
+  under the fork's "Consider instead of".
+Measured (2x2, chunk 53248-55296):
+- Quick A/B side on (`measure --task P.18`): chunk wall 127.9 ms (spread 49.4; P.17 on: 153.6, spread 22.4),
+  host_transfers_per_layer 0, worst layer L03 pcc 0.99678; every err_* within its limit, equal to P.17 within noise:
+  err_layer L00 .0253/.0570 (P.17 .0261), L01 .0337/.0720, L02 .0509/.1077, L03 .0803/.1587, L14 .0603/.1380,
+  L20 .0301/.0507, L21 .0512/.1312, L24 .0282/.0418 (.0281); window_kv L02 .0362/.0954 (.0330), L03 .0555/.1314.
+- Plain profile (on; profiles/P.18_20261022T100716.json) vs P.17's: device 96.91 -> 93.18 ms a chunk; programs (4
+  chips) 6140 -> 4580 (-390 calls a chip a chunk); attn_norm 1.83 -> 0.89 ms (programs 448 -> 96), ffn_norm 2.11 ->
+  1.19 (480 -> 128), q_a 4.76 -> 3.79 (512 -> 192), kv 0.81 -> 0.22 (384 -> 64), compressor 1.65 -> 1.37 (664 -> 448);
+  the norm-touched sections 11.16 -> 7.46 ms.
+- Probe ds41_norm_split/probe_002 (bf16-valued weights, vs float64): split norm fp32 rows -> fp32 rel 6.1e-4, ratio
+  -3.5e-4; -> bf16 rel 1.77e-3 (one bf16 rounding 1.66e-3); bf16-valued rows ratio -1.6e-4; deterministic.
+- Swap test swa_12 by hand: attn_norm vs CPU rel 3.2e-4 (<= 3.3e-3; off 0), ffn_norm 1.77e-3 (<= 3.3e-3; off 1.66e-3),
+  q_a 2.9e-3 (<= 0.024), kv 4.2e-3 (<= 0.058). The test still fails, identically with NORM_IMPL=off (pre-existing, P.17
+  gotchas): err_swap_out 0.0260 on / 0.0248 off (<= 0.0185), swap_router_vs_golden_err 0.1457 on / 0.1489 off
+  (<= 0.1425), swap_router vs CPU 7.9e-4 both (<= 3.6e-4).
+- Fork regression with the options off: unit 1375 passed / 47 skipped (= 1327 + 48 new), fork_source 263 tests 0
+  regressions, model cases 10 passed / 2 skipped (8-device cases).
+Gotchas:
+- unary_bcast of an fp32 CB unpacks to DEST (exact; srcB is 19 bits): the way to bring an fp32 operand into an SFPU
+  step without TF32 truncation.
+- O.1 should add the model's new calls (stats_out [1024, 2560] fp32, partial_stats [1024, 128], input_window q / kv
+  of [1024, 1792], k_norm dtype bf16 [512, 128]) to the fork's cases.
+- When the owner accepts: delete NORM_IMPL=off (TtDistributedRmsNorm.rstd, the mhc_pre_xing_pack statistic, the
+  slice branch) and the norm-only exact sums in tt/ccl.py if nothing else uses them.
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.18`; fork tests
+`scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_split.py`;
+probe `scripts/tt-probe.sh ds41_norm_split < tests/ttnn/unit_tests/operations/ds41_norm_split/probes/probe_002.py`.

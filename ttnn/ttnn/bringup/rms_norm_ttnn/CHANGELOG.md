@@ -119,6 +119,49 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
      blocks and several chunks), `tests/unit/test_rms_norm_ttnn_fp32_stats.py` (no `cb_normalized` at fp32 DEST,
      precision limits tightened to 0.0021 / 0.0028).
 
+6. opt-in split program: `stats_out`, `partial_stats` / `stats_width`, `input_window`, `dtype` (default off: none
+   of them set = the default program, unchanged)
+   - What: a second device operation in the fork (`device/rms_norm_split_device_operation.*`, kernels
+     `kernels/rms_norm_split_{reader,compute,writer}.cpp`), routed to by the binding only when one of the new options
+     is set; the default program's factory, kernels, CBs and hash are untouched. Work unit = (row tile, column block
+     of the window); reader / compute / writer on the whole grid.
+     - `stats_out=True`: the chip's partial sums of x^2 over the input's (window's) columns, [.., R, 32 B] float32
+       TILE (B <= 2 column blocks, chosen by the op): x^2 on the FPU (fp32 DEST), packer L1-accumulated in fp32;
+       EVERY element of the output is a partial (no junk columns, unlike rms_norm_pre_all_gather on fp32, K-12), so
+       an all_gather of it over the chips holding the row's other columns is the `partial_stats` input.
+     - `partial_stats=s, stats_width=H`: rs = rsqrt(row sum of all of s's elements / H + eps) (FPU row reduce with a
+       1.0 scaler, then scale, eps and rsqrt on the SFPU in fp32 DEST); y = x * rs (FPU, column broadcast) * weight
+       (SFPU in DEST, the weight unpacked with its row broadcast; fp32 through unpack-to-dest, exact), packed once.
+     - neither (window / dtype only): the statistic of the window itself (pass A + pass B on one core per row tile).
+     - `input_window=(c0, c1)`: only the input's columns [c0, c1) (multiples of 32) are read; the output and the
+       weight are c1 - c0 wide. `dtype`: the output's dtype (default the input's).
+     Takes TILE interleaved float32 / bfloat16 inputs, a [1, 1, 1, W] TILE weight, fp32_dest_acc_en=True; refuses
+     bias / residual / program_config with these options.
+   - Why: deepseek_v41_flash_d_p P.18 (precision-debt J4): its norms were hand-built fp32 SFPU chains (8-15 calls a
+     norm, ~330 a chunk). A column-split (TP) norm is now rms_norm(stats_out) + all_gather of the partials +
+     rms_norm(partial_stats=): 3 calls; q_norm / kv_norm read their columns of the fused [wq_a | wkv] output in place
+     (input_window), kv_norm / k_norm write bf16 (dtype): 1 call.
+   - Measured: probe ds41_norm_split/probe_002 (2x2 BH, HiFi4 + fp32 DEST, bf16-valued weights, vs float64): split
+     norm [1024, 2560] per chip fp32 rows -> fp32 rel 6.1e-4, median row-norm ratio -3.5e-4; -> bf16 rel 1.77e-3 (one
+     bf16 rounding 1.66e-3); bf16-valued rows -1.6e-4 (the default program: -1.9e-4 on the same fp32 rows). The first
+     version applied the weight through an fp32 L1 intermediate on the FPU: ratio -1.4e-3 with an fp32 weight
+     (-7e-4 after moving it into DEST). Time (20 synced calls): stats_out [1024, 2560] fp32 0.032 ms, all_gather of
+     the [1024, 64] partials 0.040 ms, apply fp32 -> bf16 0.060 ms, -> fp32 0.071 ms; input_window q [1024, 1280] of
+     [1024, 1792] fp32 0.045 ms (the default program on a sliced copy 0.043 ms + the slice). Model (2x2, chunk
+     53248-55296, plain profile, NORM_IMPL off -> on): attn_norm 1.83 -> 0.89 ms a chunk, ffn_norm 2.11 -> 1.19, q_a
+     4.76 -> 3.79, kv 0.81 -> 0.22, compressor 1.65 -> 1.37; programs (4 chips) 6140 -> 4580; device 96.91 -> 93.18 ms.
+   - Tests: new `tests/unit/test_rms_norm_ttnn_split.py` (48 cases: stats_out row sums vs float64; a row split in
+     two halves through stats_out + concat + partial_stats vs the whole-row float64 norm, with a wrong stats_width
+     shown to fail the same check; input_window at the model's columns and an off-centre one; dtype alone;
+     refusals). Option-off regression: unit suite 1375 passed / 47 skipped (= 1327 + the 48 new; skips unchanged);
+     fork_source 263 tests, 0 regressions; model cases 10 passed / 2 skipped (the 4x2-mesh xing40 cases on a
+     4-device box).
+   - Needed by: deepseek_v41_flash_d_p P.18
+   - Files: `device/rms_norm_split_device_operation.hpp`, `device/rms_norm_split_device_operation.cpp`,
+     `kernels/rms_norm_split_reader.cpp`, `kernels/rms_norm_split_compute.cpp`, `kernels/rms_norm_split_writer.cpp`,
+     `rms_norm_ttnn.cpp` / `.hpp` (`rms_norm_split_full`), `rms_norm_ttnn_nanobind.cpp` (the five keyword
+     arguments), `sources.cmake`, `tests/unit/test_rms_norm_ttnn_split.py`
+
 ### Tests: hy4_preview_d_p cases
 - What: appended the three random-input cases for the calls hy4_preview_d_p makes (2x2 mesh, 2560 rows per chip,
   widths 2048 / 512 / 6144, fp32 TILE input, fp32 ROW_MAJOR weight [1, 1, W/32, 32], HiFi4 + fp32 dest). The test
