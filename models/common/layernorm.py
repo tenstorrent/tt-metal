@@ -73,6 +73,7 @@ class LayerNorm(LightweightModule):
         elif not isinstance(norm_type, LayerNormTypes):
             raise ValueError(f"Invalid layernorm norm type: {norm_type}")
 
+        self.norm_type = norm_type
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
         else:
@@ -102,7 +103,7 @@ class LayerNorm(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
-        if norm_type == LayerNormTypes.LAYERNORM:
+        if self.norm_type == LayerNormTypes.LAYERNORM:
             torch_weight_tiled = state_dict[weight_name].reshape(1, 1, 1, dim)
             if add_unit_offset:
                 torch_weight_tiled = torch_weight_tiled + 1.0
