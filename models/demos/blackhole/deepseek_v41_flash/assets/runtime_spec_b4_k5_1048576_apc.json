@@ -27,7 +27,7 @@
                 "max_num_batched_tokens": "4096",
                 "max-log-len": "32",
                 "seed": "9472",
-                "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 780000000, \"sample_on_device_mode\": \"all\"}}",
+                "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 1200000000, \"sample_on_device_mode\": \"all\"}}",
                 "hf_config_path": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config",
                 "tokenizer": "/ckpt",
                 "chat_template": "../../tt-metal/models/demos/blackhole/deepseek_v41_flash/vllm_config/chat_template.jinja",
@@ -39,7 +39,7 @@
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
                 "l1_small_size": 16384,
-                "trace_region_size": 780000000,
+                "trace_region_size": 1200000000,
                 "sample_on_device_mode": "all"
             },
             "env_vars": {
@@ -49,7 +49,7 @@
                 "DSV41_LAYERS": "0-39",
                 "DSV41_ENGRAM_RAM": "1",
                 "DSV41_POOL_DTYPE": "fp8",
-                "DSV41_TRACE_REGION": "780000000",
+                "DSV41_TRACE_REGION": "1200000000",
                 "DSV41_CKPT": "/ckpt",
                 "DSV41_WEIGHT_CACHE": "/cache/weights",
                 "DSV41_UNIFIED_CACHE": "/cache/unified",
@@ -78,7 +78,7 @@
             "DSV41_LAYERS": "0-39",
             "DSV41_ENGRAM_RAM": "1",
             "DSV41_POOL_DTYPE": "fp8",
-            "DSV41_TRACE_REGION": "780000000",
+            "DSV41_TRACE_REGION": "1200000000",
             "DSV41_CKPT": "/ckpt",
             "DSV41_WEIGHT_CACHE": "/cache/weights",
             "DSV41_UNIFIED_CACHE": "/cache/unified",
@@ -107,7 +107,7 @@
         "override_tt_config": {
             "fabric_config": "FABRIC_1D_RING",
             "l1_small_size": 16384,
-            "trace_region_size": 780000000,
+            "trace_region_size": 1200000000,
             "sample_on_device_mode": "all"
         },
         "supported_modalities": [
