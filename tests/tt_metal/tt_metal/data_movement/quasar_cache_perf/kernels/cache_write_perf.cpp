@@ -26,13 +26,44 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"  // pulls in DeviceZoneScopedN / DeviceTimestampedData
+#include "api/debug/device_print.h"
+#include "cache_write_probe.hpp"
 #include "dev_mem_map.h"                // MEM_L1_UNCACHED_BASE
+#include "dev_msgs.h"                   // watcher mailbox
 #include "experimental/kernel_args.h"   // get_arg(args::name)
+#include "hostdev/debug_ring_buffer_common.h"
 #include "risc_common.h"                // flush_l2_cache_range, L2_FLUSH_ADDR
 
 namespace {
 constexpr std::uint64_t kFillWord = 0x5A5A5A5A5A5A5A5AULL;
 constexpr std::uint8_t kFillByte = 0x5A;
+
+static_assert(sizeof(CacheWriteProbe) <= sizeof(debug_mpsc_ring_buf_msg_quasar_t));
+
+struct CacheWriteProbeIds {
+    std::uint32_t probe_id;
+    std::uint32_t mode;
+    std::uint32_t size_bytes;
+    std::uint32_t num_iterations;
+};
+
+inline __attribute__((always_inline)) volatile tt_l1_ptr CacheWriteProbe* cache_write_probe() {
+    return reinterpret_cast<volatile tt_l1_ptr CacheWriteProbe*>(GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf));
+}
+
+// phase is stored last so a host read sees the other fields for that phase.
+inline __attribute__((always_inline)) void publish_cache_write_probe(
+    const CacheWriteProbeIds& ids, CacheWriteProbePhase phase, std::uint32_t iteration, std::uint32_t flush_addr) {
+    volatile tt_l1_ptr CacheWriteProbe* probe = cache_write_probe();
+    probe->magic = kCacheWriteProbeMagic;
+    probe->probe_id = ids.probe_id;
+    probe->mode = ids.mode;
+    probe->size_bytes = ids.size_bytes;
+    probe->num_iterations = ids.num_iterations;
+    probe->iteration = iteration;
+    probe->flush_addr = flush_addr;
+    probe->phase = static_cast<std::uint32_t>(phase);
+}
 
 // Write num_words 64-bit words.
 inline __attribute__((always_inline)) void store_words(volatile std::uint64_t* dst64, std::uint32_t num_words) {
@@ -42,9 +73,14 @@ inline __attribute__((always_inline)) void store_words(volatile std::uint64_t* d
 }
 
 // Mode 0: uncached, byte-at-a-time stores; per-iteration completion fence (April-faithful).
+// One print every 32 iterations. A print on every iteration paces the byte-store loop
+// enough that the hang no longer reproduces.
 inline __attribute__((always_inline)) void write_uncached_1b(
     volatile std::uint8_t* dst8, std::uint32_t size_bytes, std::uint32_t num_iterations) {
     for (std::uint32_t iter = 0; iter < num_iterations; iter++) {
+        if ((iter & 31) == 0) {
+            DEVICE_PRINT("uncached_1b size={} iter={} before stores\n", size_bytes, iter);
+        }
         for (std::uint32_t i = 0; i < size_bytes; i++) {
             dst8[i] = kFillByte;
         }
@@ -67,10 +103,15 @@ inline __attribute__((always_inline)) void write_cached_range_flush(
     std::uint32_t num_words,
     std::uint32_t base_addr,
     std::uint32_t size_bytes,
-    std::uint32_t num_iterations) {
+    std::uint32_t num_iterations,
+    const CacheWriteProbeIds& ids) {
+    const std::uint32_t flush_addr = base_addr & ~std::uint32_t{63};
     for (std::uint32_t iter = 0; iter < num_iterations; iter++) {
+        publish_cache_write_probe(ids, CacheWriteProbePhase::BeforeStores, iter, flush_addr);
         store_words(dst64, num_words);
+        publish_cache_write_probe(ids, CacheWriteProbePhase::BeforeFlush, iter, flush_addr);
         flush_l2_cache_range(base_addr, size_bytes);
+        publish_cache_write_probe(ids, CacheWriteProbePhase::AfterFlush, iter, flush_addr);
     }
 }
 
@@ -99,6 +140,10 @@ void kernel_main() {
     std::uint32_t mode = get_arg(args::write_path);  // 0=unc 1B, 1=unc 8B, 2=cached range, 3=cached fast
     std::uint32_t num_iterations = get_arg(args::num_iterations);
     std::uint32_t test_id = get_arg(args::test_id);
+    const CacheWriteProbeIds probe_ids{get_arg(args::probe_id), mode, size_bytes, num_iterations};
+    publish_cache_write_probe(probe_ids, CacheWriteProbePhase::Entered, 0, 0);
+
+    DEVICE_PRINT("cache_write_perf start mode={} size={} iters={}\n", mode, size_bytes, num_iterations);
 
     bool cached = (mode == 2 || mode == 3);
     std::uint32_t dst_addr = cached ? base_addr : (base_addr + MEM_L1_UNCACHED_BASE);
@@ -117,11 +162,15 @@ void kernel_main() {
         } else if (mode == 1) {
             write_uncached_8b(dst64, num_words, num_iterations);
         } else if (mode == 2) {
-            write_cached_range_flush(dst64, num_words, base_addr, size_bytes, num_iterations);
+            write_cached_range_flush(dst64, num_words, base_addr, size_bytes, num_iterations, probe_ids);
         } else {
             write_cached_fast_flush(dst64, num_words, flush_start, flush_end, num_iterations);
         }
     }
+
+    publish_cache_write_probe(probe_ids, CacheWriteProbePhase::Done, num_iterations, 0);
+
+    DEVICE_PRINT("cache_write_perf done mode={} size={}\n", mode, size_bytes);
 
     DeviceTimestampedData("Test id", test_id);
     // "Number of transactions" = iteration count; host divides zone duration by this

@@ -17,6 +17,7 @@ using namespace tt::tt_metal::quasar::dram;
 
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
+#include "hostdev/cce_spa_routes.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -43,6 +44,7 @@ HalCoreInfoType create_dram_mem_map(uint64_t cce_l1_noc_offset) {
     static_assert(sizeof(mailboxes_t) <= MEM_CCE_MAILBOX_SIZE);
     static_assert(MEM_CCE_WATCHER_RING_BUFFER_LOCK % 64 == 0);
     static_assert(MEM_CCE_WATCHER_RING_BUFFER_LOCK + 64 <= MEM_CCE_MAILBOX_BASE);
+    static_assert(sizeof(CceSpaRoutes) <= MEM_CCE_SPA_ROUTES_SIZE);
     static_assert(MEM_CCE_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
     static_assert((MEM_CCE_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
     static_assert((MEM_CCE_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
