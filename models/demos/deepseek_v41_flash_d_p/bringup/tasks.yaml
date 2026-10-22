@@ -10195,7 +10195,7 @@ tasks:
   step: perf
   role: perf
   deps:
-  - P.19
+  - P.21
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
@@ -10233,7 +10233,7 @@ tasks:
   step: perf
   role: perf
   deps:
-  - P.20
+  - P.19
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
