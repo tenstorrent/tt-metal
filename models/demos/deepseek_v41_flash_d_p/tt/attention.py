@@ -138,14 +138,7 @@ class WindowTables:
         self.srv = _upload(mesh, srv.unsqueeze(1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, None))
         # attention index lists: query d reads table rows d + 1 + j (positions start + d - 127 + j); rows of
         # positions < 0 (start < 128) dropped, the valid ones first, a sentinel tail
-        d = g.query_offsets().unsqueeze(-1)  # [SP, TP, q, 1]
-        j = torch.arange(WINDOW)
-        self.index = {}
-        for cls in range(0, WINDOW + 1, 32):
-            lo = torch.clamp(d + 1, min=WINDOW - cls)
-            n = d + WINDOW - lo + 1
-            ids = torch.where(j < n, lo + j, torch.full_like(lo + j, SENTINEL))
-            self.index[cls] = _upload(mesh, ids.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, 1))
+        self.index = self.index_lists(0)
         self.iota = _upload(
             mesh, torch.arange(chunk, dtype=torch.float32).view(1, 1, chunk, 1), ttnn.float32, ttnn.TILE_LAYOUT
         )
@@ -155,6 +148,20 @@ class WindowTables:
         # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
         self.fold = settings.get("GLUE_FOLD") == "on"
         self._srv_row = None  # (k, [1, 1, 1, W] uint32)
+
+    def index_lists(self, base: int) -> dict:
+        """The window index lists per start class with the window region at table row ``base`` (load time): query d
+        reads rows base + d + 1 + j; positions < 0 dropped, the valid ids first, a sentinel tail. {class: [SP, TP,
+        q_rows, 128] uint32 ROW_MAJOR, chip (r, c) its own query rows}."""
+        d = self.geo.query_offsets().unsqueeze(-1)  # [SP, TP, q, 1]
+        j = torch.arange(WINDOW)
+        out = {}
+        for cls in range(0, WINDOW + 1, 32):
+            lo = torch.clamp(d + 1, min=WINDOW - cls)
+            n = d + WINDOW - lo + 1
+            ids = torch.where(j < n, base + lo + j, torch.full_like(lo + j, SENTINEL))
+            out[cls] = _upload(self.mesh, ids.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, 1))
+        return out
 
     def scalars(self, step: int, n: int) -> DeviceScalars:
         """Load-time device values 0, step, .., (n - 1) step (tt/served.DeviceScalars), shared by every cache."""
@@ -432,10 +439,9 @@ class TtWindowAttention:
             t, in_dim=in_dim, out_dim=out_dim, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
         )
 
-    def _table(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache) -> ttnn.Tensor:
-        """Writes the chunk's rows into the cache; returns the sparse table [1, 1, 128 + S, 512] bf16 ROW_MAJOR
-        (carry | chunk), rope tail de-interleaved (as stored, the reference's interleaved order, when
-        ``INTERLEAVED``: q is then interleaved too)."""
+    def _window_rows(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache):
+        """Writes the chunk's rows into the cache; returns (carry [1, 1, 128, 512], kv_rm [1, 1, S, 512]) bf16
+        ROW_MAJOR, replicated, natural order (rope tail as stored). Release both with ``_release_window``."""
         g = self.geo
         full = kv
         if g.sp > 1:
@@ -452,14 +458,23 @@ class TtWindowAttention:
         if masked is not kv:
             dealloc(masked)
         cache.write(kv_rm, start, end)
-        carry = cache.carry(start)
-        table = ttnn.concat([carry, kv_rm], dim=2, memory_config=DRAM)
+        return cache.carry(start), kv_rm
+
+    def _release_window(self, carry, kv_rm, cache: TtWindowCache, start: int, end: int) -> None:
         if carry is not self.tables.zero_carry:
             dealloc(carry)
         if self.fold:  # GLUE_FOLD=on (P.19): the rows stay as the next chunk's carry source
             cache.keep_rows(kv_rm, start, end)
         else:
             dealloc(kv_rm)
+
+    def _table(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache) -> ttnn.Tensor:
+        """Writes the chunk's rows into the cache; returns the sparse table [1, 1, 128 + S, 512] bf16 ROW_MAJOR
+        (carry | chunk), rope tail de-interleaved (as stored, the reference's interleaved order, when
+        ``INTERLEAVED``: q is then interleaved too)."""
+        carry, kv_rm = self._window_rows(kv, start, end, cache)
+        table = ttnn.concat([carry, kv_rm], dim=2, memory_config=DRAM)
+        self._release_window(carry, kv_rm, cache, start, end)
         if self.INTERLEAVED:
             return table
         # the rope tail [interleaved pairs] -> [even | odd] (q's order): ROW_MAJOR transpose, exact
