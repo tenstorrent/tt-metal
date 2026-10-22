@@ -10,6 +10,8 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include <mutex>
+
 namespace ttnn::experimental {
 
 ttnn::Tensor reduce_scatter_minimal_async(
@@ -101,6 +103,17 @@ ttnn::Tensor reduce_scatter_minimal_async(
     const bool using_persistent_buffers = optional_intermediate_tensor.has_value() &&
                                           optional_output_tensor.has_value() &&
                                           (optional_penult_intermediate_tensor.has_value() || !use_contiguous_interm);
+    if (!using_persistent_buffers && !barrier_semaphore.has_value()) {
+        static std::once_flag no_barrier_warned;
+        std::call_once(no_barrier_warned, [] {
+            log_warning(
+                tt::LogOp,
+                "reduce_scatter_minimal_async: no barrier_semaphore, but the op allocates some of its buffers. It "
+                "writes into them on its neighbours without waiting, which is only safe if every device is idle when "
+                "it starts (e.g. after ttnn.synchronize_device). Pass a barrier_semaphore, or persistent intermediate, "
+                "output and (contiguous ring path) penult intermediate buffers.");
+        });
+    }
 
     // Call the prim operation
     auto result = ttnn::prim::reduce_scatter_minimal_async(
