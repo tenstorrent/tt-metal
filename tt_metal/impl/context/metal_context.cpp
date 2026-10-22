@@ -107,8 +107,7 @@ ContextId extract_context_id(const IDevice* device) {
     if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
         return device_concrete->get_context_id();  // Its mesh's, without locking the mesh.
     }
-    // get_mesh_device is not const
-    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
+    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();  // get_mesh_device is not const
     TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
     return mesh_device->impl().get_context_id();
 }
