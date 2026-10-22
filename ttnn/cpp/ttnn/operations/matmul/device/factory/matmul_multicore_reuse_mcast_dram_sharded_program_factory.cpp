@@ -1396,22 +1396,31 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     };
     const auto in0_shard_spec = in0_tensor.shard_spec().value();
     const auto out_shard_spec = out_tensor.shard_spec().value();
-    std::vector<uint32_t> x_cores, out_cores, group_cores;
-    for (const auto& c : corerange_to_cores(in0_shard_spec.grid, std::nullopt, true)) {
-        x_cores.push_back(virt(c));
-    }
-    for (const auto& c : corerange_to_cores(out_shard_spec.grid, std::nullopt, true)) {
-        out_cores.push_back(virt(c));
-    }
+    // The reader addresses the activation and output shards by shard id (ShardView), walking them in the shard
+    // grid's row-major core order: shard i must sit on core i of that order, at most one shard per core.
+    const auto num_row_major_shards = [](const auto& t, const char* what) {
+        const auto bds = t.tensor_spec().compute_buffer_sharding_args().buffer_distribution_spec();
+        const auto cores = corerange_to_cores(t.shard_spec().value().grid, std::nullopt, true);
+        TT_FATAL(
+            bds.has_value() && bds->num_shards() <= bds->cores().size() && bds->num_shards() <= cores.size() &&
+                std::equal(cores.begin(), cores.begin() + bds->num_shards(), bds->cores().begin()),
+            "num_workers_per_dram_bank: the {} needs shard i on core i of its shard grid in row-major order, at most "
+            "one shard per core",
+            what);
+        return static_cast<uint32_t>(bds->num_shards());
+    };
+    const uint32_t x_num_shards = num_row_major_shards(in0_tensor, "activation");
+    const uint32_t out_num_shards = num_row_major_shards(out_tensor, "output");
+    std::vector<uint32_t> group_cores;
     for (const auto& c : work_cores) {
         group_cores.push_back(virt(c));
     }
     const uint32_t x_shard_w = in0_shard_spec.shape[1] / in0_tile.get_tile_shape()[1];
     const uint32_t out_shard_w = out_shard_spec.shape[1] / output_tile.get_tile_shape()[1];
     TT_FATAL(
-        x_shard_w * x_cores.size() >= Kt,
+        x_shard_w * x_num_shards >= Kt,
         "num_workers_per_dram_bank: the activation shards ({} x {} tiles) do not cover K ({} tiles)",
-        x_cores.size(),
+        x_num_shards,
         x_shard_w,
         Kt);
 
@@ -1542,14 +1551,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         }
         if (stream1) {
             defines["DSMC_STREAM1"] = "1";
-            defines["DSMC_XC"] = join(x_cores);
-            defines["DSMC_OC"] = join(out_cores);
             k.compile_time_args.insert({"XT", x_tile_size});
             k.compile_time_args.insert({"SW", x_shard_w});
             k.compile_time_args.insert({"XL", x_lookahead});
             k.compile_time_args.insert({"OT", out_tile_size});
             k.compile_time_args.insert({"OW", out_shard_w});
-            k.compile_time_args.insert({"OCAP", static_cast<uint32_t>(out_cores.size()) * out_shard_w});
+            k.compile_time_args.insert({"OCAP", out_num_shards * out_shard_w});
             k.dfb_bindings.push_back(
                 DFBBinding{.dfb_spec_name = X_DFB, .accessor_name = "x", .endpoint_type = DFBEndpointType::PRODUCER});
             k.dfb_bindings.push_back(DFBBinding{
