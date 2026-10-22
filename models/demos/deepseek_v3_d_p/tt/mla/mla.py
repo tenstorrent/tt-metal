@@ -29,7 +29,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
     MlaKvCacheFormat,
     MlaKvCacheGeometry,
-    assert_full_mesh_stripe_order,
     declared_seq_shard_factor,
     is_tp_deduped_kv_cache,
     striped_cache_to_host,
@@ -2827,7 +2826,6 @@ class ttMLA:
 
         compact: ``kvpe`` is a pushed compact buffer, addressed by the rewritten slots directly (no block-cyclic
         remap). prefetch: a push to run beside the attention on the push sub-device (see _beside_prefetch)."""
-        assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
         # A row-major q comes from _q_stem_seq_sharded, already sequence-sharded over TP.
         q_seq_ready = q.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -2939,8 +2937,9 @@ class ttMLA:
         physical block-cyclic pages in-kernel (invP), so the buffer is LEFT in block-cyclic order -- no
         host reorder.
 
-        Each device holds seq_len/(sp*tp) rows in sp*tp row-major order, which is what the snake ring
-        reassembles directly -- no TP-inner stage, no intermediate allocation, and the result lands in the
+        Each device holds seq_len/(sp*tp) rows in SP-major (sp_coord*tp + tp_coord) order. The snake ring
+        gathers with sp_axis outermost (full_mesh_outer_axis), so it reassembles that order directly on
+        either SP axis -- no TP-inner stage, no intermediate allocation, and the result lands in the
         persistent worst-case scratch rather than being transient. Same linear chip-major buffer that
         sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True.
 
@@ -2992,8 +2991,9 @@ class ttMLA:
         )
         assert self._sparse_kv_gather_buffer is not None
         # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
-        # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
-        assert_full_mesh_stripe_order(storage, self.sp_axis, "full-mesh KVPE gather")
+        # No assert_full_mesh_stripe_order: the gather below passes full_mesh_outer_axis=sp_axis, so it orders its
+        # ranks by physical coordinates (SP outermost), the stripe order on either SP axis, not by the cache's
+        # row-major label.
         # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would
         # under-gather. This is the assertion that catches an allocator which forgot tp_axis.
         assert self._declared_seq_shard_factor(storage) == stripes, (
@@ -3014,6 +3014,8 @@ class ttMLA:
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
             cluster_axis=None,
+            # SP-major stripes: row-major on the mesh at sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
             **slot_meta_kwargs,
             **extent_kwargs,
         )
