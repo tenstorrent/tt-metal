@@ -2558,6 +2558,17 @@ void append_to_descriptor(
 
 void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    // This half's kernels are built for LoFi, a bf16 DEST and exact SFPU whatever the caller
+    // asks for, while the fused half honours the config. Reject any other setting so the two
+    // halves never silently run at different fidelities.
+    if (op.compute_kernel_config.has_value()) {
+        const auto& config = *op.compute_kernel_config;
+        TT_FATAL(
+            config.math_fidelity == tt::tt_metal::MathFidelity::LoFi,
+            "hybrid_routed_expert_ffn runs at LoFi only; pass math_fidelity=LoFi");
+        TT_FATAL(!config.fp32_dest_acc_en, "hybrid_routed_expert_ffn needs fp32_dest_acc_en=False (bf16 DEST)");
+        TT_FATAL(!config.math_approx_mode, "hybrid_routed_expert_ffn needs math_approx_mode=False");
+    }
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {

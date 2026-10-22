@@ -46,11 +46,26 @@ bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
     return shard_shape[-2] >= tt::constants::TILE_HEIGHT && shard_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
            shard_shape[-1] % tt::constants::TILE_WIDTH == 0;
 }
+
+// The program factory builds the kernels for LoFi, a bf16 DEST and exact SFPU whatever the
+// caller asks for, and compute_kernel_config is not in the program hash. Reject any other
+// setting instead of silently running LoFi.
+void validate_compute_kernel_config(const std::optional<ttnn::DeviceComputeKernelConfig>& config) {
+    if (!config.has_value()) {
+        return;
+    }
+    TT_FATAL(
+        config->math_fidelity == tt::tt_metal::MathFidelity::LoFi,
+        "unified_routed_expert_ffn runs at LoFi only; pass math_fidelity=LoFi");
+    TT_FATAL(!config->fp32_dest_acc_en, "unified_routed_expert_ffn needs fp32_dest_acc_en=False (bf16 DEST)");
+    TT_FATAL(!config->math_approx_mode, "unified_routed_expert_ffn needs math_approx_mode=False");
+}
 }  // namespace
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    validate_compute_kernel_config(op.compute_kernel_config);
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
@@ -362,7 +377,11 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
 }
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {}
+    const operation_attributes_t& op, const tensor_args_t&) {
+    // compute_kernel_config is not in the program hash, so a hit can carry a config the
+    // cached program never validated.
+    validate_compute_kernel_config(op.compute_kernel_config);
+}
 
 UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFfnDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& t) {
