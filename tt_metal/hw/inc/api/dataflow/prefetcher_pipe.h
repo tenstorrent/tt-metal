@@ -824,12 +824,13 @@ private:
         // it does not drain payload already in flight at the peer's old entry size.
         // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
         // Drop any cached copy of this core's credit words before anyone touches them, so a
-        // host reset / the previous program's flushed values in TL1 are what every hart sees.
+        // host reset / the previous program's flushed values in TL1 are what every hart sees
+        // (as long as the lines are clean, as the previous pipe's dtor flush leaves them).
         // Not multi-DM specific: it is the Quasar cost of reading credit words through the
         // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
         // immediately when the kernel has one thread, so the single-thread path only pays
         // the one-time invalidate here and the flush in the dtor.
-        invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
+        writeback_invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
         sync_threads();
         if (dense_entry_size != applied_entry_size) {
             if (get_my_thread_id() == 0) {
@@ -908,18 +909,18 @@ private:
         return get_my_thread_id() * L1_ALIGNMENT;
     }
 
-    // Quasar: discard cached copies (L1 D$ of this hart + shared L2) of the local credit
-    // lines. Only safe when nothing is dirty, i.e. after the previous pipe's dtor flushed.
-    FORCE_INLINE void invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
+    // Quasar: write back and invalidate the cached copies (L1 D$ of this hart + shared L2) of the local credit lines,
+    // so the next reads come from TL1. Not a discard, which would lose a dirty line's credit writes or neighbours.
+    FORCE_INLINE void writeback_invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
 #ifdef ARCH_QUASAR
         uint32_t base = 0;
         uint32_t size = 0;
         local_credit_range(lane_offset_bytes, base, size);
         constexpr uint32_t line = 64;
         for (uint32_t addr = base & ~(line - 1); addr < base + size; addr += line) {
-            invalidate_l1_dcache(addr);
+            flush_l1_dcache(addr);
         }
-        invalidate_l2_cache_range(base, size);
+        flush_l2_cache_range(base, size);
 #else
         (void)lane_offset_bytes;
 #endif
@@ -1021,8 +1022,9 @@ private:
     // remote_dfb_config_layout.h): Quasar's DM L2 writes back whole 64B lines, so a dirty line
     // may only ever contain words this core wrote. Peer-written words are always read through
     // load_remote_l1_credit. Cached copies are dropped at construction
-    // (invalidate_local_credit_lines) so a host reset in TL1 is observed, and written back at
-    // destruction (flush_local_credit_lines) so the values persist into the next program.
+    // (writeback_invalidate_local_credit_lines) so a host reset in TL1 is observed while the lines are clean,
+    // and written back at destruction (flush_local_credit_lines) so the values persist into the next
+    // program.
 
     // Byte offset of (receiver_idx, lane)'s slot within either credit block. Layout stride is
     // credit_lane_capacity() (allocated slots); active P only selects which are used.
