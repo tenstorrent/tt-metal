@@ -115,9 +115,9 @@ ttsl::hash::hash_t ConcatCodegenDeviceOperation::compute_program_hash(
     uint32_t write_batch = 0;
     const bool plannable = all_inputs_plannable(operation_attributes, tensor_args);
     if (plannable) {
-        // A missing output is allocated after the hash, so its L1 is reserved here to match the factory's live view.
+        // The launcher allocates the output before hashing, so live L1 already excludes it, as in the factory.
         const auto batches = ttnn::operations::data_movement::concat_codegen::plan_batches_live(
-            input_tensors, operation_attributes, tensor_args.optional_output_tensor.has_value());
+            input_tensors, operation_attributes, /*output_allocated=*/true);
         if (batches.has_value()) {
             read_batch = batches->read_batch;
             write_batch = batches->write_batch;

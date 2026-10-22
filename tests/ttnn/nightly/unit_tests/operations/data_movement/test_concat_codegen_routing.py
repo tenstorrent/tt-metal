@@ -1129,6 +1129,33 @@ def test_concat_codegen_cache_key_ignores_a_frontier_move_that_keeps_the_plan(de
         ttnn.deallocate(small)
 
 
+def test_concat_codegen_l1_output_cache_key_matches_the_built_plan(device):
+    # The launcher allocates the output before the cache lookup, so the key must read the live L1 the factory
+    # reads. With the output charged a second time the key lags the built plan by one batch: the batch-4 program
+    # built at 8.5 slots free below would be replayed at 6.5 slots, where only a batch-2 plan fits.
+    stick = _stick_bytes(device)
+    shapes, dim = _L1_CASES["rows_2in"](stick)
+    xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    kwargs = {"dim": dim, "memory_config": _L1}
+    golden = _reference(xt, **kwargs)
+    device.clear_program_cache()
+
+    # The 8-page output takes one `stick` page from each of 8 banks, so the headroom left once it is allocated is
+    # one slot below what is pinned here.
+    entries = device.num_program_cache_entries()
+    for pinned_slots, step in ((9.5, "batch-4 plan"), (7.5, "batch-2 plan"), (9.5, "cached batch-4 plan")):
+        resident, _ = _pin_l1_headroom(device, int(pinned_slots * stick))
+        try:
+            out = _force_codegen(xt, **kwargs)
+            assert_equal(golden, ttnn.to_torch(out))
+            ttnn.deallocate(out)
+        finally:
+            ttnn.deallocate(resident)
+        expected = 0 if step.startswith("cached") else 1
+        assert device.num_program_cache_entries() == entries + expected, f"{step}: wrong program-cache growth"
+        entries += expected
+
+
 def test_concat_falls_back_to_native_when_free_l1_holds_no_codegen_plan(device):
     # A width concat needs a scratch stick of alignment bytes on top of the two output slots; with
     # just over two slots free codegen has no plan and native, which stages less, must serve the call.
