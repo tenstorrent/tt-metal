@@ -274,11 +274,11 @@ void kernel_main() {
     // Slots 31/32 are trace-safe metadata controls. Attention-sink and sliding-window
     // fields occupy 28..30 in this branch.
     // Slot 31: trace-safe slot select. When set, kv_cache_batch_idx is read from the slot_id tensor[0]
-    // on-device (common runtime arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
+    // on-device (metadata common arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
     // captured trace replays across cache slots.
     constexpr bool slot_from_metadata = get_compile_time_arg_val(31) == 1;
     // Slot 32: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
-    // kv_actual_isl tensor[0] (common runtime arg 4 = its DRAM addr), derives logical_nt / q-mapping /
+    // kv_actual_isl tensor[0] (metadata common arg 4 = its DRAM addr), derives logical_nt / q-mapping /
     // ring masks on-device, and hands the compute-needed values to the compute kernel via
     // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(32) == 1;
@@ -372,29 +372,33 @@ void kernel_main() {
     constexpr uint32_t chains_base_offset =
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
 
-    uint32_t argidx = 0;
-    const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
+    // Tensor addresses are the same on every core, so the factory passes them as the first common runtime args.
+    uint32_t common_argidx = 0;
+    const uint32_t q_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t gathered_k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t gathered_v_addr = get_common_arg_val<uint32_t>(common_argidx++);
     uint32_t joint_q_addr = 0;
     uint32_t joint_k_addr = 0;
     uint32_t joint_v_addr = 0;
     if constexpr (has_joint_inputs) {
-        joint_q_addr = get_arg_val<uint32_t>(argidx++);
-        joint_k_addr = get_arg_val<uint32_t>(argidx++);
-        joint_v_addr = get_arg_val<uint32_t>(argidx++);
+        joint_q_addr = get_common_arg_val<uint32_t>(common_argidx++);
+        joint_k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+        joint_v_addr = get_common_arg_val<uint32_t>(common_argidx++);
     }
-    const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
-    // Gathered joint K/V buffer addresses (sharded path only) — pushed by the factory right after the
-    // attention-sink address, so they must be read here before global_q_start to keep argidx aligned.
+    const uint32_t attention_sink_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    // Gathered joint K/V buffer addresses (sharded path only), right after the attention-sink address.
     uint32_t gathered_joint_k_addr = 0;
     uint32_t gathered_joint_v_addr = 0;
     if constexpr (has_gathered_joint_k) {
-        gathered_joint_k_addr = get_arg_val<uint32_t>(argidx++);
-        gathered_joint_v_addr = get_arg_val<uint32_t>(argidx++);
+        gathered_joint_k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+        gathered_joint_v_addr = get_common_arg_val<uint32_t>(common_argidx++);
     }
+    constexpr uint32_t address_common_arg_count =
+        ring_joint::reader_address_common_arg_count(has_joint_inputs, has_gathered_joint_k);
+
+    uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
@@ -520,9 +524,10 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
-    // Common runtime args: metadata block first when present, then the logical-length pair.
+    // Common runtime args after the addresses: metadata block first when present, then the logical-length pair.
+    constexpr uint32_t metadata_common_arg_base = address_common_arg_count;
     constexpr uint32_t logical_length_common_arg_base =
-        slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0;
+        metadata_common_arg_base + (slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0);
     // kv_valid_end is validated incompatible with the logical_n / logical_l tensors, so its arg directly
     // follows the metadata block.
     static_assert(!has_kv_valid_end || !has_logical_length_tensor);
@@ -536,13 +541,13 @@ void kernel_main() {
         CircularBuffer cb_q_scratch(cb_q_in);
         const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
         if constexpr (slot_from_metadata) {
-            const uint32_t slot_id =
-                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1);
+            const uint32_t slot_id = trace_metadata::read_metadata_scalar_u32(
+                meta_noc, meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base), meta_l1);
             kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
                 slot_id,
-                get_common_arg_val<uint32_t>(1),
-                get_common_arg_val<uint32_t>(2),
-                get_common_arg_val<uint32_t>(3));
+                get_common_arg_val<uint32_t>(metadata_common_arg_base + 1),
+                get_common_arg_val<uint32_t>(metadata_common_arg_base + 2),
+                get_common_arg_val<uint32_t>(metadata_common_arg_base + 3));
         }
         if constexpr (has_logical_n_tensor) {
             const uint32_t logical_n_live = trace_metadata::read_metadata_scalar_u32(
@@ -559,7 +564,7 @@ void kernel_main() {
         }
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base + 4), meta_l1);
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);

@@ -244,9 +244,8 @@ std::vector<uint32_t> multicast_origin_rows(
 
 // Runtime-arg offsets used by cache-hit patching. Descriptor construction appends the same slots through
 // CheckedRuntimeArgList, so future layout edits fail on program creation instead of corrupting cache hits.
-// Q, K, V, gathered K, gathered V, and attention sink (nullable).
-constexpr uint32_t kReaderBaseBufferArgCount = 6;
-constexpr uint32_t kReaderJointBufferArgCount = 3;
+// Buffer addresses are common runtime args (see the reader/writer kernel descriptors), so per-core args start
+// with the Q work range.
 constexpr uint32_t kReaderQWorkArgCount = 3;
 constexpr uint32_t kRingJointChainConfigArgCount = ring_joint::kChainConfigRuntimeArgCount;
 constexpr uint32_t kRingJointChainCompileArgCount = ring_joint::kChainCompileArgCount;
@@ -254,7 +253,8 @@ constexpr uint32_t kRingJointChainSemaphoreCompileArgCount = ring_joint::kChainS
 constexpr uint32_t kRingJointChainMcastEnabledCompileArgOffset = ring_joint::kChainMcastEnabledCompileArgOffset;
 constexpr uint32_t kReaderBatchChainExtraArgCount = 1;
 constexpr uint32_t kReaderGQAChainExtraArgCount = 1;
-constexpr uint32_t kWriterBaseArgCount = 5;
+// global_q_start, global_q_end.
+constexpr uint32_t kWriterBaseArgCount = 2;
 constexpr uint32_t kComputeRingSequencerArgCount = 6;
 
 struct CheckedRuntimeArgList {
@@ -538,7 +538,6 @@ RingJointRuntimePlan build_runtime_plan(
 RingJointRuntimeArgLayout get_runtime_arg_layout(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
     const auto& k_shape = tensor_args.gathered_k.logical_shape();
-    const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
@@ -550,9 +549,6 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     layout.grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                        : tensor_args.input_q.device()->compute_with_storage_grid_size();
 
-    const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
-    // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
-    const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
@@ -560,9 +556,8 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
-    layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+    layout.reader_kv_cache_batch_idx = 2;
+    layout.reader_logical_nt = kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -3114,12 +3109,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    // Layout: metadata block first (when present), then the logical-length pair, so the kernel's base index
-    // is ring_joint::kReaderMetadataCommonArgCount (or kWriterMetadataCommonArgCount) when its metadata block
-    // is present, else 0. Both slots are emplaced whenever either tensor is present. Passed as Buffer* (not
-    // ->address()) so a program-cache hit re-patches them if the tensor was reallocated.
+    // Layout: the tensor addresses first, then the metadata block (when present), then the logical-length pair,
+    // so the kernel's metadata base index is its address count (shared counts in ring_joint_derived_slots.hpp,
+    // checked below). The addresses are the same on every core, so a
+    // program-cache hit re-patches one common slot per kernel instead of one per-core arg per core. Both
+    // logical-length slots are emplaced whenever either tensor is present. Passed as Buffer* (not ->address()) so
+    // a program-cache hit re-patches them if the tensor was reallocated.
     const bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
-    const auto append_logical_length_common_args = [&](KernelDescriptor::RTArgList& into) {
+    const auto append_logical_length_common_args = [&](CheckedRuntimeArgList& into) {
         if (!has_logical_length_tensor) {
             return;
         }
@@ -3131,11 +3128,36 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
     };
-    if (slot_from_metadata || has_logical_length_tensor) {
-        KernelDescriptor::RTArgList reader_common_args;
+    {
+        CheckedRuntimeArgList reader_common_args;
+        reader_common_args.push_back(q_buf);
+        reader_common_args.push_back(k_buf);
+        reader_common_args.push_back(v_buf);
+        reader_common_args.push_back(gathered_k_buf);
+        reader_common_args.push_back(gathered_v_buf);
+        if (L != 0) {
+            reader_common_args.push_back(joint_tensor_q->buffer());
+            reader_common_args.push_back(joint_tensor_k->buffer());
+            reader_common_args.push_back(joint_tensor_v->buffer());
+        }
+        reader_common_args.push_back(attention_sink_buf);
+        if (joint_is_sharded) {
+            reader_common_args.push_back(gathered_joint_tensor_k->buffer());
+            reader_common_args.push_back(gathered_joint_tensor_v->buffer());
+        }
+        // The kernel derives its address count from its compile-time joint flags, which come from these values.
+        const bool kernel_has_joint_inputs = num_joint_q_chunks > 0 || num_joint_k_chunks > 0;
+        const bool kernel_has_gathered_joint_k = joint_is_sharded && num_joint_k_chunks > 0;
+        const uint32_t reader_address_common_arg_count =
+            ring_joint::reader_address_common_arg_count(kernel_has_joint_inputs, kernel_has_gathered_joint_k);
+        TT_FATAL(
+            reader_common_args.size == reader_address_common_arg_count,
+            "RingJoint reader address common args: kernel expects {}, got {}",
+            reader_address_common_arg_count,
+            reader_common_args.size);
         if (slot_from_metadata) {
             // Bound as buffers so a cache hit with different metadata tensors follows them; the reader takes
-            // these as get_common_arg_val(0..4).
+            // these as the 5 common args after the addresses.
             reader_common_args.push_back(tensor_args.slot_id->buffer());
             reader_common_args.push_back(args.kv_cache_num_layers);
             reader_common_args.push_back(args.kv_cache_layer_idx);
@@ -3149,7 +3171,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (tensor_args.has_kv_valid_end()) {
             reader_common_args.push_back(tensor_args.kv_valid_end->buffer());
         }
-        reader_kernel.emplace_common_runtime_args(reader_common_args);
+        reader_kernel.emplace_common_runtime_args(reader_common_args.args);
     }
 
     KernelDescriptor writer_kernel{};
@@ -3160,18 +3182,26 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
-    if (kv_pad_from_metadata || has_logical_length_tensor) {
-        KernelDescriptor::RTArgList writer_common_args;
+    {
+        CheckedRuntimeArgList writer_common_args;
+        writer_common_args.push_back(out_buf);
+        writer_common_args.push_back(joint_out_buf);
+        writer_common_args.push_back(stats_buf);
+        TT_FATAL(
+            writer_common_args.size == ring_joint::kWriterAddressCommonArgCount,
+            "RingJoint writer address common args: kernel expects {}, got {}",
+            ring_joint::kWriterAddressCommonArgCount,
+            writer_common_args.size);
         if (kv_pad_from_metadata) {
             // Bound as a buffer so a cache hit with a different metadata tensor follows it; the writer takes
-            // it as get_common_arg_val(0).
+            // it as the common arg after the addresses.
             writer_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(writer_common_args);
         if (tensor_args.has_kv_valid_end()) {
             writer_common_args.push_back(tensor_args.kv_valid_end->buffer());
         }
-        writer_kernel.emplace_common_runtime_args(writer_common_args);
+        writer_kernel.emplace_common_runtime_args(writer_common_args.args);
     }
 
     KernelDescriptor compute_kernel{};
@@ -3229,22 +3259,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
 
         CheckedRuntimeArgList reader_args;
-        reader_args.push_back(q_buf);
-        reader_args.push_back(k_buf);
-        reader_args.push_back(v_buf);
-        reader_args.push_back(gathered_k_buf);
-        reader_args.push_back(gathered_v_buf);
-        if (L != 0) {
-            reader_args.push_back(joint_tensor_q->buffer());
-            reader_args.push_back(joint_tensor_k->buffer());
-            reader_args.push_back(joint_tensor_v->buffer());
-        }
-        reader_args.push_back(attention_sink_buf);
-        // Read by the kernel right after attention_sink_addr and before global_q_start.
-        if (joint_is_sharded) {
-            reader_args.push_back(gathered_joint_tensor_k->buffer());
-            reader_args.push_back(gathered_joint_tensor_v->buffer());
-        }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
         reader_args.push_checked(
@@ -3319,9 +3333,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         // Writer args
         CheckedRuntimeArgList writer_args;
-        writer_args.push_back(out_buf);
-        writer_args.push_back(joint_out_buf);
-        writer_args.push_back(stats_buf);
         writer_args.push_back(global_q_start);
         writer_args.push_back(global_q_end);
         writer_args.push_checked(runtime_arg_layout.writer_logical_nt, logical_nt, "writer.logical_nt");
