@@ -178,6 +178,16 @@ class Ledger:
             visit(t)
         return order
 
+    def upstream(self, tid: str) -> list[str]:
+        """tid and every task it depends on, directly or not, in topological order."""
+        tasks, need, todo = self.tasks(), set(), [tid]
+        while todo:
+            t = todo.pop()
+            if t in tasks and t not in need:
+                need.add(t)
+                todo += tasks[t].get("deps") or []
+        return [t for t in self.topo_order() if t in need]
+
     def downstream(self, tid: str) -> list[str]:
         """tid and every task that depends on it, directly or not, in topological order."""
         tasks = self.tasks()
