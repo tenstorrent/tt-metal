@@ -782,7 +782,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyO
 // note, so a regression to the public get_noc_addr adds a WRITE on src, and one to a plain Page drops the READ.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwShardedPagesIteratorIsExact) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     const exp::NodeCoord node{0, 0};
 
     // Four one-page rows in one L1 shard, so the iterator walks a multi-page contiguous run.
