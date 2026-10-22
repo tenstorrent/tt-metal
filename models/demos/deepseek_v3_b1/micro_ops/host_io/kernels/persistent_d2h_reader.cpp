@@ -73,8 +73,8 @@ void kernel_main() {
         while (true) {
             invalidate_l1_cache();
             const uint32_t cur = *write_ack_ptr;
-            if ((cur - last_write_ack) == num_workers) {
-                last_write_ack = cur;
+            if ((cur - last_write_ack) >= num_workers) {
+                last_write_ack += num_workers;
                 break;
             }
             if (termination_semaphore[0] == 1) {

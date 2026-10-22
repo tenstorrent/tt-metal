@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def measure_quality(torch_output, tt_output, pcc_threshold=0.9995, rel_rmse_threshold=0.02):

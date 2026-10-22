@@ -712,8 +712,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // CLAMPED_SILU_GLU through a different SFPU implementation; kept because the DeepSeek-V4/V4.1 prefill was
 // validated on device with it (tt-blaze postmortem DS4F-0251).
 #define BINARY_ACT_INIT() MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
-#define BINARY_ACT_TILE(fp32, g, u, o) \
-    MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<fp32, ckernel::sfpu::SwiGLUConfigDeepSeekV4>(g, u, o)))
+#define BINARY_ACT_TILE(fp32, g, u, o)                                                                               \
+    MATH((ckernel::                                                                                                  \
+              llk_math_eltwise_binary_sfpu_swiglu<fp32, ckernel::sfpu::SwiGLUConfigDeepSeekV4, /*AddUpBias=*/false>( \
+                  g, u, o)))
 #else
 #error "FUSED_BINARY_ACT is set but no activation variant matched"
 #endif

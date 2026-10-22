@@ -153,24 +153,29 @@ void tilize_in(
         remap_mode>(in_num_subblocks);
 }  // tilize_in()
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(DataflowBuffer& in_cb) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
+inline void tilize_single_block(DFBIn& in_cb) {
     in_cb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
     in_cb.pop_front(in_block_w);
 }
 
-template <uint32_t window_reuse_offset>
-inline uint32_t update_in_cb(DataflowBuffer& in_cb, uint32_t in_cb_addr) {
+template <uint32_t window_reuse_offset, typename DFBIn>
+inline uint32_t update_in_cb(DFBIn& in_cb, uint32_t in_cb_addr) {
 #ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
     UNPACK((in_cb.evil_set_read_ptr(in_cb_addr)));
 #endif
     return in_cb_addr + window_reuse_offset;
 }
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(
-    DataflowBuffer& in_cb, DataflowBuffer& out_cb, uint32_t& out_cb_addr) {
+template <
+    uint32_t in_cb_id,
+    uint32_t in_block_w,
+    uint32_t out_cb_id,
+    uint32_t tilized_cb_row_offset,
+    typename DFBIn,
+    typename DFBOut>
+inline void tilize_single_block_with_out_cb_update(DFBIn& in_cb, DFBOut& out_cb, uint32_t& out_cb_addr) {
 #ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
     PACK((out_cb.evil_set_write_ptr(out_cb_addr)));
 #endif
@@ -189,11 +194,14 @@ template <
     uint32_t window_reuse_offset,
     uint32_t tilized_cb_row_offset,
     uint32_t tilized_cb_second_reader_offset,
-    uint32_t image_width_in_tiles>
+    uint32_t image_width_in_tiles,
+    typename DFBIn1,
+    typename DFBIn2,
+    typename DFBOut>
 inline void tilize_in_reuse_split_reader(
-    DataflowBuffer& in1_cb,
-    DataflowBuffer& in2_cb,
-    DataflowBuffer& out_cb,
+    DFBIn1& in1_cb,
+    DFBIn2& in2_cb,
+    DFBOut& out_cb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     out_cb.reserve_back(out_cb_tiles);
@@ -256,10 +264,10 @@ inline void tilize_in_reuse_split_reader(
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename DFBInterm, typename DFBOut>
 inline void reblock_and_untilize(
-    DataflowBuffer& interm_cb,
-    DataflowBuffer& out_cb,
+    DFBInterm& interm_cb,
+    DFBOut& out_cb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -611,25 +619,30 @@ void kernel_main() {
 #endif
                         tile_regs_commit();
                         {
-                            DataflowBuffer curr_out_cb =
-                                curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                            curr_out_cb.reserve_back(out_subblock_num_tiles);
-                            tile_regs_wait();
+                            auto pack_subblock_to = [&](auto& curr_out_cb) {
+                                curr_out_cb.reserve_back(out_subblock_num_tiles);
+                                tile_regs_wait();
 
-                            if constexpr (packer_l1_acc) {
-                                if (in0_block_w_i == 0) {
-                                    pack_reconfig_l1_acc(0);
-                                } else if (last_inner_dim_block) {
-                                    pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
-                                } else {
-                                    pack_reconfig_l1_acc(1);
+                                if constexpr (packer_l1_acc) {
+                                    if (in0_block_w_i == 0) {
+                                        pack_reconfig_l1_acc(0);
+                                    } else if (last_inner_dim_block) {
+                                        pack_reconfig_l1_acc(fuse_bias ? 1 : 0);
+                                    } else {
+                                        pack_reconfig_l1_acc(1);
+                                    }
                                 }
-                            }
 
-                            uint32_t start_dst_index = 0;
-                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
-                            tile_regs_release();
-                            curr_out_cb.push_back(out_subblock_num_tiles);
+                                uint32_t start_dst_index = 0;
+                                pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                                tile_regs_release();
+                                curr_out_cb.push_back(out_subblock_num_tiles);
+                            };
+                            if (curr_matmul_out_cb == matmul_partials_cb) {
+                                pack_subblock_to(cb_matmul_partials);
+                            } else {
+                                pack_subblock_to(cb_mm_out);
+                            }
                         }
 
                         in1_index_subblock_offset += out_subblock_w;
