@@ -136,7 +136,7 @@ class MatmulGolden(Golden):
                         )
                     )
         else:
-            self.fpu.warn_split_unmodelled(self.op_name, stacklevel=2)
+            self.fpu.warn_split_unmodelled(self.op_name)
             # Still one step per K face: the missing mantissa split is a
             # separate gap from the missing Dest rounding, and modelling only
             # the exact product here would hide the second one too.
