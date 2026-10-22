@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Greedy speculative decode on the full ``DeepSeekV41Model``.
 
-Runs on ``DEEPSEEK_V4_NUM_STAGES`` 1x4 stages (default eight), with DSpark.
+Decode runs on the first seven 1x4 rows of the 8x4 mesh; DSpark runs alone on the eighth.
 
 One model serves three runs of the demo prompt, each from position 0:
 
@@ -45,9 +45,12 @@ from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, 
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
 from models.experimental.deepseek_v41_flash.tt.spec import DSparkSpeculator
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 DRAFTS = 4
 CORRUPT = 1 / 3
+# Decode rows; the eighth row is the drafter's.
+DECODE_STAGES = 7
 _ENGRAM_RAM_MARGIN = 1.25
 
 
@@ -56,7 +59,15 @@ _ENGRAM_RAM_MARGIN = 1.25
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "num_command_queues": 2}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "num_command_queues": 2,
+            # As in test_full_model_decode_demo: without L1_SMALL the CCL semaphores and all-reduce scratch land in
+            # L1 and cap fused_experts' circular buffers.
+            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+        }
+    ],
     indirect=["device_params"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["tp4_8stage"])
@@ -74,9 +85,13 @@ def test_dspark_spec_decode(mesh_device):
     rope = _build_rope(config, loader.snapshot_dir, max_seq)
 
     with contextlib.ExitStack() as stack:
-        model, lm_head, loader, config = _construct_model(mesh_device, stack, loader=loader, config=config)
+        model, lm_head, loader, config = _construct_model(
+            mesh_device, stack, loader=loader, config=config, num_stages=DECODE_STAGES
+        )
         model.prepare_static_decode(rope, max_seq, lm_head=lm_head)
         model.prepare_spec_decode(rope["main"])
+        if model.use_prefetcher:
+            stack.enter_context(tensor_prefetcher_session(model.dspark.device))
         model.activate_session(model.open_session())
         model.capture_spec_traces(prompt[0], 0)
 
