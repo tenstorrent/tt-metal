@@ -370,7 +370,9 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # Package tests use installed binaries and runtime files. Their minimal
+          # image has no Git, so allow checkout's archive fallback without submodules.
+          submodules: ${{ !matrix.leg.gate_packages && 'recursive' || 'false' }}
           path: docker-job
 
       - name: ⬇️ Setup Job
@@ -413,7 +415,7 @@ jobs:
           # container already has /opt/tenstorrent/sfpi for the JIT-build runtime fallback
           # (see tt_metal/jit_build/build.cpp).
           shopt -s nullglob
-          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb ./pkgs/tt-metalium-validation_*.deb)
           apt install -y "${pkgs[@]}"
 
       - name: Set up tt-train
