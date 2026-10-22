@@ -580,7 +580,7 @@ public:
         ParallelJob::ParticipantOfCall participant_of_call(device_ids.size());
         for (size_t call = 0; call < device_ids.size(); call++) {
             auto* executor = workers_[phys_device_to_thread_id_.at(device_ids[call])].get();
-            auto participant = std::find(executors.begin(), executors.end(), executor);
+            auto* participant = std::find(executors.begin(), executors.end(), executor);
             participant_of_call[call] = participant - executors.begin();
             if (participant == executors.end()) {
                 executors.push_back(executor);
