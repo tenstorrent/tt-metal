@@ -92,8 +92,10 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
         StateDiscard<std::uint32_t>(dst_index)));
 
+    // The execute keeps main's 4-face Dest zero-flag clear on 32-bit unpack to dest (it never got the
+    // operand's face count), so pass the default shape here, not the operand's.
     llk_math_eltwise_unary_datacopy_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], get_operand_tensor_shape(operand_id));
+        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], ckernel::DEFAULT_TENSOR_SHAPE);
 }
 
 template <
@@ -104,8 +106,6 @@ template <
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-
     SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
@@ -117,8 +117,9 @@ inline void llk_math_eltwise_unary_datacopy_block(
     for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
+        // Same as llk_math_eltwise_unary_datacopy: keep main's 4-face Dest zero-flag clear.
         _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], tensor_shape);
+            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], ckernel::DEFAULT_TENSOR_SHAPE);
     }
 }
 
