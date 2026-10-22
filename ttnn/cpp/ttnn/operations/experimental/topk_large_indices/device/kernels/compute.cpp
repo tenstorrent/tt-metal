@@ -587,6 +587,7 @@ void kernel_main() {
     // Whole rows run split across MATH and PACK; a core's split row stays on one thread.
     if constexpr (split_whole_rows && !columns) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
+        // Shorter rows run on one thread; K 512 gains nothing from the split at two chunks.
         constexpr uint32_t min_split_chunks = (K == 1024 || (K == 512 && !tree)) ? 3 : 2;
         if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
             (num_chunks <= max_fused_chunks || split_segments)) {
