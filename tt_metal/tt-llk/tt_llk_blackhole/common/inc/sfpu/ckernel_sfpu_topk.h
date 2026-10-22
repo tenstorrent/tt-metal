@@ -1403,9 +1403,11 @@ template <
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
     bool TILE0_SORTED      = false,
-    bool CT_STEPS          = false>
+    bool CT_STEPS          = false,
+    bool BOTTOM_DEAD       = false>
 // TILE0_SORTED: the first value tile (and its index tile) is already sorted in direction idir; phases 0 to 4 then run on the
 // second tile only. A template parameter, since the phase loops below unroll only with constant group bounds.
+// BOTTOM_DEAD: the caller keeps only the first tile of a 64 datum sort, so phase 5 sorts that tile alone.
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
     // NOTE (stable sort): TIE_ORDER is the GLOBAL sort order, not this call's idir. Callers may run
@@ -1768,7 +1770,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         std::uint32_t sorted_seq_length       = 1 << num_steps;
                         std::uint32_t datums_compared         = 0;
                         // The second tile alone is the second 32-datum sequence of phase 4, sorted in the flipped direction.
-                        const std::uint32_t total_datums_to_compare = tile1_only ? 32 : 64;
+                        const bool top_only                         = BOTTOM_DEAD && ph == 5;
+                        const std::uint32_t total_datums_to_compare = (tile1_only || top_only) ? 32 : 64;
                         const bool pass_dir                         = tile1_only ? !static_cast<bool>(idir) : static_cast<bool>(idir);
                         for (std::uint32_t ss = start_step; ss > end_step; ss--)
                         {
@@ -1778,7 +1781,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             std::uint32_t dist       = (ss == 5) ? 16 : 32;
                             if constexpr (TOPK_STEP_LOADMACRO && !STABLE_SORT)
                             {
-                                bitonic_topk_step_pass_macro<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dist, pass_dir, tile1_only, sorted_seq_length);
+                                bitonic_topk_step_pass_macro<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dist, pass_dir, tile1_only || top_only, sorted_seq_length);
                             }
                             else if (CT_STEPS && i_start_phase != i_end_phase)
                             {
@@ -1788,7 +1791,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                 }
                                 else if (ph == 5)
                                 {
-                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, 64, 64>(pass_dir);
+                                    topk_step_pass_ct<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 16, BOTTOM_DEAD ? 32 : 64, 64>(pass_dir);
                                 }
                                 else
                                 {
@@ -1923,11 +1926,12 @@ template <
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
-    bool CT_STEPS          = false>
+    bool CT_STEPS          = false,
+    bool BOTTOM_DEAD       = false>
 inline __attribute__((always_inline, flatten)) void _bitonic_topk_phases_steps_tile0_sorted_(
     const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
-    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, CT_STEPS>(
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, CT_STEPS, BOTTOM_DEAD>(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
