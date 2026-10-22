@@ -328,3 +328,8 @@ tt/se_engine3.py SeEngine3 + tt/x_gather3.py XGather3 + fused_head.HeadSE3.
 Rounds matter: each x / h round is a blocking handshake (receivers ack, the sender waits all acks): MT 1 / KB 4 doubled
 the rounds and cost 30-60%. Gaps to the floor: the gather runs 35-50% slower beside the engine (336 -> ~470,
 585 -> ~870: GLM is gather-bound), and the engine computes at ~100 / 160 TFLOP/s (2 x 4 sub-blocks, unpack-bound).
+Gather gap split (v3): standalone on the same single mover column (simple placement) 414 / 724 us vs 336 / 585 with
+Ethernet placement - ~25% placement, the rest (~15-20%) the engine's NoC traffic. Next levers: ports placed by their
+Ethernet cores within the mover column (a placement table instead of the probe that needs 4 cores in a row); engine
+compute (2 x 4 sub-blocks at ~100-160 TFLOP/s); then down + the reduce-scatter per chunk (matmul_reduce_scatter port).
+(A gather-only probe inside the fused program aborted on the host - free(): invalid next size - not chased.)
