@@ -231,6 +231,45 @@ inline void perform_reduce_col_sum_avg() {
     // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
     // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
     // and halves the second reduction pass, saving 4 instructions per iteration.
+    if constexpr (!is_integer_mode) {
+        // Float: the half reduce after SFPTRANSP is a chain of dependent SFPADDs, each of which (and the
+        // store after it) would stall a cycle waiting for its predecessor. SFPTRANSP has consumed LREG4-7 by
+        // then, so the next iteration's lower-face loads fill those slots instead.
+        load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(LOWER_FACE_ADDRS[0], COLUMN_OFFSETS[0]);
+#pragma GCC unroll 4
+        for (std::uint32_t i = 0; i < NUM_FACES; i++) {
+            const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
+            load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0>(upper_face_addr, COLUMN_OFFSETS[i]);
+            lltt::replay(0, 6);
+            TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPTRANSP(0, 0, 0, 0);
+            if (i + 1 < NUM_FACES) {
+                const std::uint32_t next = LOWER_FACE_ADDRS[i + 1] + COLUMN_OFFSETS[i + 1];
+                TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+                load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, next);
+                TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, next + ROWS_PER_LOAD);
+                TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, next + 2 * ROWS_PER_LOAD);
+                if constexpr (pool_type == PoolType::AVG) {
+                    perform_float_average();
+                }
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, next + 3 * ROWS_PER_LOAD);
+            } else {
+                lltt::replay(6, 3);
+                if constexpr (pool_type == PoolType::AVG) {
+                    perform_float_average();
+                }
+            }
+            constexpr std::uint32_t STORE_MODE =
+                pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+            TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, upper_face_addr + COLUMN_OFFSETS[i]);
+        }
+        return;
+    }
     for (std::uint32_t i = 0; i < NUM_FACES; i++) {
         const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
         const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
