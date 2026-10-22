@@ -23,7 +23,12 @@ from loguru import logger
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
 from ttnn.bringup.combine_rf.sparse_combine_l1 import route
-from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto, sparse_combine_rf_prepare
+from ttnn.bringup.combine_rf.sparse_combine_rf import (
+    WRITER_WORDS_ROWS,
+    combine_auto,
+    fused_arena_reserve,
+    sparse_combine_rf_prepare,
+)
 from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import CHUNKS, GALAXY, MODELS, fabric_payload, per_chip
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert, act_ref
 from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
@@ -65,7 +70,7 @@ class FC:
     ring_depth: int = None
     local_keep: int = 8
     arena_kb: int = None
-    arena_reserve_kb: int = 48
+    arena_reserve_kb: int = None  # None: the flat plan's static CBs and the writers' words (fused_arena_reserve)
     det_repeat: int = 0
     pipe: bool = False
     timing: bool = True
@@ -76,6 +81,9 @@ class FC:
     plan_cores: int = 32
     token_major: bool = True
     layout: object = None  # the flat layout (FlatLayoutOptions / preset dict; None: the plan's defaults)
+    closeout: bool = False  # a close-out case (closeout_cfg): the plan's defaults are checked
+    combine_mode: str = None  # combine_auto's mode ("ports apart" / "acc_on_ports"); None: its choice
+    a_max: int = 16  # combine_auto's accumulators at most (A_MAX)
 
     @property
     def E(self):
@@ -110,7 +118,7 @@ def _env_cfg():
         inj_slots=int(e.get("SPC_QP", "64")),
         ring_depth=int(e["SPC_D"]) if e.get("SPC_D") else None,
         arena_kb=int(e["FC_ARENA_KB"]) if e.get("FC_ARENA_KB") else None,
-        arena_reserve_kb=int(e.get("FC_ARENA_RESERVE_KB", "48")),
+        arena_reserve_kb=int(e["FC_ARENA_RESERVE_KB"]) if e.get("FC_ARENA_RESERVE_KB") else None,
         det_repeat=int(e.get("FC_DET_REPEAT", "10")),
         pipe=e.get("FC_PIPE") == "1",
         weights=e.get("FC_WEIGHTS", "fake"),
@@ -123,7 +131,7 @@ def _env_cfg():
     )
 
 
-def closeout_cfg(model, chunk, routings=("uniform",)):
+def closeout_cfg(model, chunk, routings=("uniform",), **kw):
     """A close-out case (EXPERTS_COMBINE_CLOSEOUT.md): the model's Galaxy 8x4 per-chip load (experts and home tokens a
     chip) on the LoudBox 2x4, every choice the planners' defaults (flat: DRISC only, even splits; combine: sized from
     the cells and the arena); real weights (one random expert set shared by all chips), correctness only."""
@@ -139,8 +147,10 @@ def closeout_cfg(model, chunk, routings=("uniform",)):
         payload=fabric_payload(md["H"]),
         piece_max=max(7168, 2 * md["H"]),  # (the L1 hand-off: one piece a row)
         weights="real",
-        timing=False,
+        timing=kw.pop("timing", False),
         routings=routings,
+        closeout=True,
+        **kw,
     )
 
 
@@ -164,6 +174,7 @@ _CLOSEOUT = [
     for m in MODELS
     if m != "dsv41_flash"  # (host planning only: tests/unit/test_closeout_plans.py)
     for chunk in CHUNKS
+    if (m, chunk) != ("k27", 16384)  # (K2.7: being deprecated, chunk 5120 only)
 ]
 
 
@@ -270,6 +281,41 @@ def test_flat_combine_closeout(mesh_device, device_params, model, chunk):
     _run(mesh_device, c)
 
 
+# the combine's mode A/B (accumulators on the ports or apart, at the same accumulator count, and combine_auto's own
+# choice): pipelined fused calls, uniform routing (needs TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+# TT_METAL_PROFILER_CPP_POST_PROCESS=1)
+_AB = [
+    ("glm53", "ports apart", 12),
+    ("glm53", "acc_on_ports", 12),
+    ("glm53", None, 16),
+    ("k3", "ports apart", 16),
+    ("k3", "acc_on_ports", 16),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, mode, a_max",
+    [
+        pytest.param(
+            (R, C),
+            fabric2d_device_params(fabric_payload_size=fabric_payload(MODELS[m]["H"]), l1_small_size=0),
+            m,
+            mode,
+            a,
+            id=f"{m}-{'auto' if mode is None else mode.replace(' ', '_')}-A{a}",
+        )
+        for m, mode, a in _AB
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(3600)
+def test_flat_combine_closeout_perf(mesh_device, device_params, model, mode, a_max):
+    """The combine mode A/B at chunk 5120: the close-out case, timed (pipelined, ITERS calls)."""
+    c = closeout_cfg(model, 5120, combine_mode=mode, a_max=a_max, timing=True, pipe=True, ITERS=12)
+    logger.info(f"closeout perf {model} mode {mode} A <= {a_max}: {c}")
+    _run(mesh_device, c)
+
+
 def _run(mesh_device, c):
     assert tuple(mesh_device.shape) == (R, C)
     H, I, EPC = c.H, c.I, c.EPC
@@ -294,6 +340,8 @@ def _run(mesh_device, c):
         layout=c.layout,
     )
     logger.info(f"flat layout {op.layout}")
+    if c.closeout:  # (the plan's defaults must give the even split)
+        assert op.plan["even_split"], "the gate/up split is not the even one"
     logger.info(f"flat expert built in {time.time() - t0:.1f} s (weights {c.weights})")
     for routing in c.routings:
         t0 = time.time()
@@ -351,18 +399,21 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
     assert not DEVPLAN or L1, "the device planner needs the L1 hand-off (l1)"
     # the arena: every worker core, zero at creation, kept for the test (the combine's state lives in it). It takes all
     # the L1 the allocator has left (the combine sizes its rings from it), less a reserve for the programs' static CBs
-    # (the flat expert's few non-arena CBs, below the arena) and the L1 tensors allocated after it (the writers'
-    # words); arena_kb: a fixed size instead. Sized before the device planner runs (its CBs must not sit under the
-    # arena), allocated after it
+    # (the flat expert's non-arena CBs, below the arena: its plan's static_l1_bytes) and the L1 tensors allocated after
+    # it (the writers' words) - fused_arena_reserve; arena_kb / arena_reserve_kb: a fixed size / reserve instead. Sized
+    # before the device planner runs (its CBs must not sit under the arena), allocated after it
     grid = mesh_device.compute_with_storage_grid_size()
     a_rows = int(plan["arena_tiles"]) * 32
     if c.arena_kb:
         a_rows = max(a_rows, c.arena_kb * 1024 // 64 // 32 * 32)
     else:
         mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
-        a_rows = max(
-            a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - c.arena_reserve_kb * 1024) // 64 // 32 * 32
+        reserve = (
+            c.arena_reserve_kb * 1024
+            if c.arena_reserve_kb is not None
+            else fused_arena_reserve(int(plan["static_l1_bytes"]), l1=c.l1)
         )
+        a_rows = max(a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32)
     arena_bytes = a_rows * 64
     copt = dict(
         n_acc=c.n_acc,
@@ -378,8 +429,9 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         chips_, _, _ = mesh_plan(mesh_device, L)
         port_cells = {(v.x, v.y) for v in place_ports(mesh_device, chips_, cells).values()}
         auto = combine_auto(
-            N, S, H, len(cells), len(port_cells), arena_bytes=arena_bytes, l1=L1, depth=c.depth, piece_max=c.piece_max
-        )
+            N, S, H, len(cells), len(port_cells), arena_bytes=arena_bytes, l1=L1, depth=c.depth, piece_max=c.piece_max,
+            a_max=c.a_max, mode=c.combine_mode,
+        )  # fmt: skip
         assert auto[
             "fits"
         ], f"{routing}: the combine does not fit ({len(cells)} cells, {arena_bytes >> 10} KB): {auto['why']}"
@@ -487,14 +539,14 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         wcores = [tuple(v) for v in plan["y_writers"]]  # (the factory's writer order: reader tails, then down)
         wcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*v), ttnn.CoreCoord(*v)) for v in wcores])
         words_t = ttnn.from_torch(  # the writers' grants / grant bases / table page / trailer stages
-            torch.zeros(len(wcores) * 192, 16, dtype=torch.int32),
+            torch.zeros(len(wcores) * WRITER_WORDS_ROWS, 16, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(wcrs, [192, 16], ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(wcrs, [WRITER_WORDS_ROWS, 16], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )

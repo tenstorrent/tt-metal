@@ -373,6 +373,16 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
+    p.even_gu = found;
+    if (lo.even_split && !found) {  // (the close-out tests assert even_gu; other callers get the older split, loudly)
+        log_warning(
+            tt::LogOp,
+            "flat_routed_expert: no even gate/up split for I {} ({} weight tiles a K row over at most 64 cores, a "
+            "multiple of 16; subgrids {}): the older split rules pick it",
+            p.I,
+            2 * p.It,
+            p.nsg);
+    }
     // the x ring shrinks (24 -> 16 -> 12 slots) before the gate/up split gives up
     // bfp8 x: the first ring size with a split. bf16 x: the split with the most gate/up cores over all ring sizes
     // (ties: the larger ring); the first-fit choice halved the gate/up cores (NP 2 at 24 slots instead of NP 1 at 16:
@@ -597,6 +607,17 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // 58.9 / 61.3 / 70.6 / 215.0
     const char* hgd = cstr(pr.hg_drisc);
     p.drisc = p.drisc && (!p.nu || !hgd || std::atoi(hgd) != 0);
+    // DRISC only (layout.drisc_pure 1, the default): no silent fall back to Tensix weight readers
+    TT_FATAL(
+        p.drisc || !lo.drisc || lo.drisc_pure != 1,
+        "flat_routed_expert: the layout asks for DRISC only (drisc_pure 1) but this plan cannot use the DRAM cores "
+        "(DRISC firmware {}, subgrids {}, inside a combine overlap {} with drisc_in_overlap {}, MIMO_FL_HG_DRISC {}); "
+        "layout drisc false or drisc_pure -1 (flat_layouts.LEGACY) allows Tensix weight readers",
+        flat_drisc_enabled(),
+        p.nsg,
+        cfg.cmb_rt != 0,
+        lo.drisc_in_overlap,
+        hgd ? hgd : "unset");
     p.mtg = p.mt / p.g;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.nh = p.g > 1 ? 2 : 1;
@@ -1172,6 +1193,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.o_off + al(std::max(pcd, p.rdown ? p.pcd_r : 0u) * 2048) + 2048 <= L1_BANK,
         "flat_routed_expert: down core arena does not fit");
     const uint32_t gu_bytes = p.hl_off + (p.hl_in_arena ? al(p.hl_slots * p.mtg * p.hpc * p.h_tile) : 0);
+    {  // (the program factory's static CBs, an upper bound: CB 9 counted whether or not the schedule pull is on)
+        const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
+        const uint32_t meta_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);
+        const auto a64 = [](uint32_t b) { return (b + 63) / 64 * 64; };
+        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 1024 + 2048 +
+                            (p.hl_in_arena ? 0 : a64(p.hl_slots * p.mtg * p.hpc * p.h_tile));
+    }
     TT_FATAL(gu_bytes <= L1_BANK, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.Ht % t == 0 && t % KBLK == 0) {

@@ -1758,3 +1758,52 @@ model stage: 2048 tokens a chip) nothing; K2.7 2x4 5120 neither. Cause in every 
 most 16 accumulators (K2.7 8x4 16384: 896 KB each) leave less than one landing slot per source chip. Levers: bf16 sums,
 more than 16 accumulators (the state layout and the device planner cap A at 16), or the combine's cells' leftover L1
 on the flat roles' cores.
+
+### Close-out planner, codex review fixes; accumulators on the ports A/B (2026-10-22, LoudBox 2 x 4, bh-lb-09)
+Codex review of d045c20acbf: five findings, all fixed here.
+- **combine_auto took the first fitting ring size** (finding 4). It now tries every injection ring (64 / 32 / 16 / 8)
+  and kept local ring (8 / 2) per mode and keeps the deepest landing pool (ring depth D), ties to the deeper injection
+  ring, then the larger kept local ring. With the old arena (1379 KB) this alone moved: 4x4 GLM-5.3 / M3 5120 D 2 -> 3,
+  8x4 GLM-5.3-Flash 5120 3 -> 4 and 16384 1 -> 2, 4x4 GLM-5.3-Flash 5120 6 -> 7, 8x4 K3 5120 4 -> 5, 4x4 K3 16384
+  1 -> 2, 4x4 K2.7 5120 1 -> 2, 2x4 GLM-5.3 / M3 5120 1 -> 2, 2x4 V4.1 5120 6 -> 7; the 2x4 mesh at Galaxy load
+  GLM-5.3 / M3 16384 2 -> 4 (on the ports). Most gains come from keeping a 2-slot local ring when that buys a depth
+  step (ports apart: the injection ring is on the port cells and does not touch the accumulators' arena).
+- **One piece a row with the L1 hand-off** (finding 2): combine_l1_layout reports no fit when piece_max < the row
+  (sparse_combine_rf_prepare asserts it), so combine_auto can no longer report a two-piece plan.
+- **The arena reserve is computed** (finding 1): the flat plan exports `static_l1_bytes` (its static CBs: meta, counts /
+  regions / ids, the schedule inputs, gate/up CB 16, h_local when not in the arena; the program factory asserts its
+  CBs stay within it) and `fused_arena_reserve` = that + the writers' words (192 x 64 B) + 2 KB. Was a fixed 48 KB; now
+  ~25-35 KB, so the arena is 1378-1394 KB a core instead of 1379 (K3, 896 global experts, has the biggest counts CB).
+  The device planner still runs before the arena is allocated (its static CBs are not in the reserve).
+- **No silent uneven split** (finding 3): the plan exports `even_split` (the gate/up split came from the even search)
+  and logs a warning when layout.even_split asked for one and none exists (I 1056: 66 tiles); the close-out tests
+  assert it. Not fatal: other callers keep the older split rules.
+- **No silent Tensix readers** (finding 5): with drisc_pure 1 (the default) and layout.drisc on, a plan that cannot
+  use the DRAM cores (no DRISC firmware, 2-3 subgrids, a combine overlap without drisc_in_overlap, MIMO_FL_HG_DRISC=0)
+  is a TT_FATAL naming the reason; layout drisc false or drisc_pure -1 (LEGACY) allows Tensix readers. The tp4 cases
+  of test_flat_expert_yrm / test_flat_expert_indexed_shapes now stop there (they could not run on this 12 x 10 grid
+  before either: the factory no longer builds 2-3 subgrids).
+
+Accumulators on the ports, A/B (test_flat_combine_closeout_perf: close-out case at chunk 5120, pipelined fused calls,
+uniform routing, median of 11; GLM-5.3 three runs each):
+
+| case | mode | A | inj ring | D | fused us |
+|---|---|---|---|---|---|
+| GLM-5.3 (E8, S160) | ports apart | 12 | 64 | 8 | 584 / 582 / 588 |
+| GLM-5.3 | on the ports | 12 | 16 | 8 | 593 / 592 / 600 (+1.5%) |
+| GLM-5.3 | on the ports (combine_auto preferring more A) | 16 | 16 | 8 | 613 / 597 / 598 (+2.4%) |
+| K3 (E28, S160) | ports apart | 16 | 64 | 8 | 1200 |
+| K3 | on the ports | 16 | 64 | 8 | 1201 (+0.1%) |
+
+At the same A the ports' double duty costs 0-1.5%; more accumulators at the same depth buy nothing (the 2x4 rings are
+at depth 8 already) and cost 2.4% on GLM-5.3. So combine_auto keeps ports apart unless the accumulators on the ports give
+a deeper landing pool (or ports apart does not fit): on the ports for the 2x4 mesh at Galaxy load GLM-5.3 / M3 16384
+(D 5 vs 3), 4x4 GLM-5.3-Flash 5120 (7 vs 6), 4x4 K3 16384 (2 vs 1), and where only they fit (8x4 GLM-5.3 / M3 16384,
+4x4 GLM-5.3-Flash 16384, 2x4 GLM-5.3 / M3 5120).
+
+Correctness after the changes: test_flat_combine_closeout (GLM-5.3, GLM-5.3-Flash, K3, M3 at 5120 / 16384, K2.7 at
+5120 - K2.7 is being deprecated and stays at 5120, its 16384 cases are dropped) with uniform, zipf spread and packed
+routing: all pass, combine worst per-token rel err 2.43e-3. test_closeout_flat: 9 pass. test_flat_uneven_split: 6
+pass. test_closeout_plans passes (CANNOT_FIT unchanged but for K2.7 16384, which is no longer planned).
+Still not fitting (fp32 sums over <= 16 accumulators): 4x4 at 16384 GLM-5.3, M3, V4.1-Flash; the LoudBox stage 2x4 at
+16384 GLM-5.3, GLM-5.3-Flash, M3, V4.1-Flash, and K2.7 at 5120. K3 on the 2x4 stage: 112 experts a chip > 64.

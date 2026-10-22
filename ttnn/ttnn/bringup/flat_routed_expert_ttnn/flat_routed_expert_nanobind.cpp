@@ -94,6 +94,8 @@ nb::dict plan_dict(
     d["gu_rp"] = p->gu_rp;
     d["gu_l1acc"] = p->gu_l1acc;
     d["arena_tiles"] = p->arena_tiles;
+    d["static_l1_bytes"] = p->static_l1_bytes;  // (the program's static CBs: leave this much L1 below the arena)
+    d["even_split"] = p->even_gu;               // (the gate/up split is the even one)
     // (per-role arena offsets, bytes: gate/up x ring at x_off .. h_local at hl_off; down h at h_off, out at o_off;
     // Tensix readers' rings end at rd_off; relays' staging ends at ti_off)
     d["role_offsets"] = std::map<std::string, uint32_t>{

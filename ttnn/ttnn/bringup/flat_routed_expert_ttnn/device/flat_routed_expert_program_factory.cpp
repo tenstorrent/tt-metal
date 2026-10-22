@@ -1500,11 +1500,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         c.set_address_offset(off);
         sv.arena_cbs.emplace_back(CreateCircularBuffer(program, rect_ranges(cores), c), off);
     };
+    uint32_t static_bytes = 0;  // (every static CB, summed: at most the plan's static_l1_bytes, checked below)
     auto static_cb =
         [&](uint8_t idx, uint32_t size, const std::vector<CoreCoord>& cores, tt::DataFormat fmt, uint32_t page) {
             CircularBufferConfig c(size, {{idx, fmt}});
             c.set_page_size(idx, page);
             CreateCircularBuffer(program, rect_ranges(cores), c);
+            static_bytes += (size + 63) / 64 * 64;
         };
     const auto wf = w_format(cfg.weights_bf8);
     // the down output CB in the arena's out region (bytes = the bfp8 double block): bfp8 tiles, or with row-major y
@@ -1567,6 +1569,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (dyn_pull) {  // the leader's compact schedule inputs (2 x SE_MAX_E words; the CB exists on every core)
         static_cb(9, 1024, arena_cores, tt::DataFormat::UInt32, 1024);
     }
+    TT_FATAL(
+        static_bytes <= p.static_l1_bytes,
+        "flat_routed_expert: static CBs {} B > the plan's static_l1_bytes {} B (callers size the arena with it)",
+        static_bytes,
+        p.static_l1_bytes);
 
     cached_program_t cached{std::move(program), std::move(sv)};
     override_runtime_arguments(cached, cfg, t, output);

@@ -153,6 +153,13 @@ struct FlatRoutedExpertPlan {
     // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
     bool gu_full_sync = false;
     bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
+    // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), the schedule
+    // inputs (9), gate/up CB 16 and h_local (3) when not in the arena. A caller sizing the arena leaves this much L1
+    // below it (the program factory checks its CBs against it)
+    uint32_t static_l1_bytes = 0;
+    // even split (layout.even_split): whether the gate/up split is the even one; false: the older searches picked it
+    // (no even split for this I, or the even split did not apply - see flat_routed_expert_plan.cpp)
+    bool even_gu = false;
     bool group_rect = false;
     // DRISC mode (layout.drisc, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
     bool drisc = false;

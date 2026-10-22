@@ -1202,6 +1202,15 @@ def first_hop(src, dst, R, C, wrap_x, wrap_y):
 
 
 A_MAX = 16  # accumulators at most (the state layout, the device planner)
+WRITER_WORDS_ROWS = 192  # the L1 hand-off writers' words (grants, grant bases, table page, trailer stages): 64 B rows
+
+
+def fused_arena_reserve(flat_static_bytes, *, l1=True):
+    """L1 a core leaves below the fused flat + combine arena: the flat program's static CBs (its plan's
+    static_l1_bytes, checked by its program factory; the combine's CBs all sit in the arena) and, with the L1 hand-off,
+    the writers' words tensor allocated after the arena (WRITER_WORDS_ROWS x 64 B), plus 2 KB for the allocator's
+    alignment. Programs that run while the arena is allocated must fit their static CBs in it."""
+    return (flat_static_bytes + 63) // 64 * 64 + (WRITER_WORDS_ROWS * 64 if l1 else 0) + 2048
 
 
 def combine_l1_layout(
@@ -1241,6 +1250,12 @@ def combine_l1_layout(
     acc_cb_list = [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
     acc_cbs = sum(al(v) for v in acc_cb_list)
     out = dict(slot=SLOT, acc_fp32=MAXT * NT * 4096, acc_cbs=acc_cbs, rings=RINGS, fits=True, why="")
+    if l1 and NP != 1:  # (sparse_combine_rf_prepare asserts it: the hand-off grants one slot a row, one packet)
+        return {
+            **out,
+            "fits": False,
+            "why": f"the L1 hand-off takes one piece a row: piece {PIECE_MAX_} < {row_bytes} B",
+        }
     QP = inj_slots
     keep = (local_keep + min(32, QP)) * ISLOT if FUSED else (local_keep * ISLOT if l1 else 0)
     fit = (arena_bytes - RINGS - acc_cbs - keep) // SLOT
@@ -1273,39 +1288,48 @@ def combine_l1_layout(
     return {**out, "QP": QP, "QL": QL, "acc_used": acc_used, "port_used": port_used}
 
 
-def combine_auto(N, S, W, n_cells, port_cells, *, arena_bytes, l1=True, depth=8, piece_max=None, a_max=A_MAX):
+def combine_auto(
+    N, S, W, n_cells, port_cells, *, arena_bytes, l1=True, depth=8, piece_max=None, a_max=A_MAX, mode=None
+):
     """The combine's configuration from what the flat plan leaves (n_cells free cells per chip, port_cells of them
     the ports' - the union over the chips) and the arena: ports on their own cells with A = n_cells - port_cells
     accumulators (at most a_max), or the accumulators on the ports' cells (acc_on_ports: A = n_cells, at most a_max) -
-    whichever leaves the deeper landing pool (ties: separate ports). Shallower injection rings (64 -> 8 slots), then a
-    2-slot local ring kept instead of 8, only when nothing else fits. Returns dict(acc_on_ports, n_acc, inj_slots,
-    depth, local_keep, layout = combine_l1_layout's) or, when nothing fits, dict(fits=False, why=...)."""
-    best, why = None, []
+    whichever leaves the deeper landing pool (ties: separate ports - accumulators on the ports cost GLM-5.3 1.5% at the
+    same A, and more of them at the same depth 2.4%: FLAT_COMBINE_OVERLAP_WORKLOG.md 2026-10-22). Every injection ring
+    (64 -> 8 slots) and kept local ring (8 or 2 slots) that fits is tried: the deepest landing pool wins (ring depth D,
+    the pool's slots per source chip), ties to the deeper injection ring, then the larger kept local ring. Returns dict(acc_on_ports, n_acc,
+    inj_slots, depth, local_keep, layout = combine_l1_layout's, modes = each mode's best) or, when nothing fits,
+    dict(fits=False, why=...). mode "ports apart" / "acc_on_ports": that mode only (A/B runs)."""
+    best, why, modes = None, [], {}
+    score = lambda c: (c["layout"]["D"], c["inj_slots"], c["local_keep"], c["layout"]["PSL"])  # noqa: E731
     for fused in (False, True):
         A = min(a_max, n_cells if fused else n_cells - port_cells)
-        mode = "acc_on_ports" if fused else "ports apart"
-        if A < 1 or (fused and port_cells > A):
-            why.append(f"{mode}: {A} accumulator cells")
+        name = "acc_on_ports" if fused else "ports apart"
+        if mode is not None and mode != name:
             continue
-        last = None
+        if A < 1 or (fused and port_cells > A):
+            why.append(f"{name}: {A} accumulator cells")
+            continue
+        mode_best, last = None, None
         for keep in (8, 2):
             for qp in (64, 32, 16, 8):
                 lay = combine_l1_layout(
                     N, S, W, A, arena_bytes=arena_bytes, l1=l1, acc_on_ports=fused, inj_slots=qp, depth=depth,
                     piece_max=piece_max, local_keep=keep,
                 )  # fmt: skip
-                if lay["fits"]:
-                    cand = dict(acc_on_ports=fused, n_acc=A, inj_slots=qp, depth=depth, local_keep=keep, layout=lay)
-                    if best is None or lay["D"] > best["layout"]["D"]:
-                        best = cand
-                    break
-                last = lay
-            else:
-                continue
-            break
-        else:
-            why.append(f"{mode} A {A}: {last['why']} at the shallowest rings")
-    return {**best, "fits": True} if best else dict(fits=False, why="; ".join(why))
+                if not lay["fits"]:
+                    last = lay
+                    continue
+                cand = dict(acc_on_ports=fused, n_acc=A, inj_slots=qp, depth=depth, local_keep=keep, layout=lay)
+                if mode_best is None or score(cand) > score(mode_best):
+                    mode_best = cand
+        if mode_best is None:
+            why.append(f"{name} A {A}: {last['why']} at the shallowest rings")
+            continue
+        modes[name] = mode_best
+        if best is None or mode_best["layout"]["D"] > best["layout"]["D"]:
+            best = mode_best
+    return {**best, "fits": True, "modes": modes} if best else dict(fits=False, why="; ".join(why), modes=modes)
 
 
 def sparse_combine_rf_prepare(

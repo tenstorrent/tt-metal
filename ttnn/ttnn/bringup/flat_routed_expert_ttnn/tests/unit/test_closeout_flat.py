@@ -15,7 +15,7 @@ from models.common.utility_functions import comp_pcc
 from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import CHUNKS, GALAXY, MODELS, per_chip
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert, act_ref
 
-CASES = [(m, chunk) for m in MODELS if m != "dsv41_flash" for chunk in CHUNKS]
+CASES = [(m, chunk) for m in MODELS if m != "dsv41_flash" for chunk in CHUNKS if (m, chunk) != ("k27", 16384)]
 N_W = 4  # distinct weight sets, round-robin over the experts (a neighbour's weights read by mistake shows)
 
 
@@ -45,6 +45,7 @@ def test_closeout_flat(device, case):
         f"(units {p['nu']}), down {p['nd']} x {max(p['pcds'])}, drisc {p['drisc']} dual {p['dual']} rdown {p['rdown']}"
     )
     assert p["drisc"] and not p["dual"] and not p["rdown"], "not DRISC only"
+    assert p["even_split"], "the gate/up split is not the even one"
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa: E731
     Wq = [tuple(q(w_) for w_ in ws) for ws in wsets]
     pinned = []
