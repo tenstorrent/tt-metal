@@ -34,7 +34,6 @@ from helpers.sfpu_accuracy_budget import (
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
-    Metric,
     accuracy_contract,
     assert_against_contract,
     domains_of,
@@ -47,7 +46,7 @@ from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import ULP_FORMATS, has_ulp_gate, mantissa_bits, ulp_dtype
 from helpers.ulp_domains import Domain, Problem, usable_budget_ceiling
 from helpers.ulp_sweep import sweep_cells
-from helpers.ulp_table import MEASURED_ARCH, Row, load_table
+from helpers.ulp_table import MEASURED_ARCH, Metric, Row, load_table
 from helpers.utils import passed_test
 
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
@@ -311,6 +310,21 @@ def test_an_enrolled_op_keeps_todays_gate_on_a_format_the_sfpu_does_not_compute_
     assert (
         accuracy_contract(output_format=DataFormat.Bfp8_b, **query)
         is TOLERANCE_CONTRACT
+    )
+
+
+def test_an_enrolled_op_keeps_todays_gate_when_the_input_is_not_a_compute_format():
+    """The input-axis twin: Abs's rows wildcard `input`, so only `steps_bind` reading
+    the input format keeps a block-float input off the step budget."""
+    query = dict(
+        op=MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+    )
+    assert (
+        accuracy_contract(input_format=DataFormat.Float16_b, **query).metric
+        is Metric.ULP
+    )
+    assert (
+        accuracy_contract(input_format=DataFormat.Bfp8_b, **query) is TOLERANCE_CONTRACT
     )
 
 
@@ -906,7 +920,11 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
 
 def test_a_demoted_row_measured_past_the_ceiling():
     """A tolerance row the emitter wrote (it pins `in` and `out`) with a measurement
-    inside the ceiling should have been enrolled."""
+    inside the ceiling should have been enrolled.
+
+    Empty today: the emitter writes a demotion as a `domains` list with no `metric` or
+    `measured`, and the only tolerance rows with a `measured` are the `nonfinite`
+    ones, which are not measurable. A tripwire for a hand-edited row."""
     wrong = [
         (op, row)
         for op, rows in load_table().items()

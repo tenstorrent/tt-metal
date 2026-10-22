@@ -12,7 +12,6 @@ measured on (:func:`steps_bind`); elsewhere the op's declared tolerance applies.
 
 import os
 from dataclasses import dataclass
-from itertools import product
 
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat, InputOutputFormat
@@ -23,9 +22,9 @@ from .ulp_table import (
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
-    Metric,
     load_table,
     most_specific,
+    resolve_variant,
     steps_bind,
     validate_contracts,
 )
@@ -93,27 +92,7 @@ def accuracy_contract(
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
-    found = most_specific(table, query)
-    if found is None:
-        return TOLERANCE_CONTRACT
-    key, contract = found
-    if contract.metric is Metric.ULP:
-        if steps_bind(key, query):
-            return contract
-        return _declared_tolerance(table, query, TOLERANCE_CONTRACT)
-    if not contract.declares_tolerance:
-        # A numberless tolerance row opts its cell out of the ULP metric without
-        # retracting an atol/rtol the op declares on a broader row.
-        return _declared_tolerance(table, query, contract)
-    return contract
-
-
-def _declared_tolerance(
-    table: _Contracts, query: BudgetKey, fallback: AccuracyContract
-) -> AccuracyContract:
-    """The most specific tolerance row *with numbers* covering *query*, or *fallback*."""
-    found = most_specific(table, query, only=lambda c: c.declares_tolerance)
-    return fallback if found is None else found[1]
+    return resolve_variant(table, query)
 
 
 def assert_against_contract(
@@ -185,26 +164,7 @@ def enrolled_ops() -> tuple[MathOperation, ...]:
 
 
 def validate_registry() -> None:
-    """Raise if any op resolves ambiguously for any variant a driver may ask about: per
-    op, each axis is the values its rows pin plus ``None``, with the output format and
-    architecture whole because :func:`steps_bind` reads them."""
-    for op, table in _SFPU_ACCURACY_BUDGET.items():
-
-        def pinned(field: str) -> list:
-            return sorted({getattr(k, field) for k in table} - {None}, key=str) + [None]
-
-        for approx_mode, input_format, output_format, dest_acc, arch in product(
-            pinned("approx_mode"),
-            pinned("input_format"),
-            DataFormat,
-            pinned("dest_acc"),
-            ChipArchitecture,
-        ):
-            accuracy_contract(
-                op,
-                output_format=output_format,
-                input_format=input_format,
-                approx_mode=approx_mode,
-                dest_acc=dest_acc,
-                arch=arch,
-            )
+    """Raise if any op of the loaded registry can resolve ambiguously; the writer runs
+    the same check on a proposed table (:func:`~helpers.ulp_table.validate_contracts`).
+    """
+    validate_contracts(_SFPU_ACCURACY_BUDGET)

@@ -328,29 +328,24 @@ Table = dict[MathOperation, tuple[Row, ...]]
 
 
 def declared_tolerance(
-    contracts: Dict[BudgetKey, AccuracyContract],
+    contracts: dict[BudgetKey, AccuracyContract],
     query: BudgetKey,
     fallback: AccuracyContract,
 ) -> AccuracyContract:
     """The most specific tolerance row *with numbers* covering *query*, or
     *fallback*."""
-    numbered = {
-        key: contract
-        for key, contract in contracts.items()
-        if contract.declares_tolerance
-    }
-    found = _winner(numbered, query)
+    found = most_specific(contracts, query, only=lambda c: c.declares_tolerance)
     return fallback if found is None else found[1]
 
 
 def resolve_variant(
-    contracts: Dict[BudgetKey, AccuracyContract], query: BudgetKey
+    contracts: dict[BudgetKey, AccuracyContract], query: BudgetKey
 ) -> AccuracyContract:
     """The contract one op variant is held to, given that op's keyed *contracts*: the
     most specific row, a step budget only where :func:`steps_bind` says it binds, and
     the op's declared tolerance where it does not. Pure; the driver-facing lookup is
     ``sfpu_accuracy_budget.accuracy_contract``."""
-    found = _winner(contracts, query)
+    found = most_specific(contracts, query)
     if found is None:
         return TOLERANCE_CONTRACT
     key, contract = found
@@ -367,13 +362,13 @@ def resolve_variant(
 
 def contracts_of(
     table: Table,
-) -> Dict[MathOperation, Dict[BudgetKey, AccuracyContract]]:
+) -> dict[MathOperation, dict[BudgetKey, AccuracyContract]]:
     """Each op of *table* as its keyed contracts, the shape the resolver reads."""
     return {op: {row.key: row.contract for row in rows} for op, rows in table.items()}
 
 
 def validate_contracts(
-    by_op: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]],
+    by_op: dict[MathOperation, dict[BudgetKey, AccuracyContract]],
 ) -> None:
     """Raise if any op of *by_op* can resolve ambiguously, for any variant a driver may
     ask about. Per op, an axis is the values its own rows pin, plus ``None``; the output
@@ -518,6 +513,8 @@ def read_table(text: str) -> Table:
         loaded = yaml.load(text, Loader=_Loader)
     except yaml.YAMLError as error:
         raise TableError(Problem.BAD_YAML, error)
+    if loaded is None:  # an empty document; `false`, `0` and `[]` are not tables
+        loaded = {}
     if not isinstance(loaded, dict):
         raise TableError(Problem.WRONG_SHAPE, "the top level")
     table: Table = {}
