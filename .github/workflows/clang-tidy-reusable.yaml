@@ -227,7 +227,7 @@ jobs:
         # (IAM policy, ACL, proxy stripping PUT) with nothing to catch it. Writes,
         # reads back, and deletes a per-invocation sentinel object; warns (does not
         # fail the job) on error so a broken ctcache doesn't block clang-tidy analysis.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: ${{ !inputs.disable-ctcache && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           python3 - << 'PYEOF'
           import os, sys, uuid
