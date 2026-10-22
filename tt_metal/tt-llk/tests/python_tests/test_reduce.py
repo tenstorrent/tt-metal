@@ -118,7 +118,6 @@ REDUCE_FORMATS = input_output_formats(
     ]
 )
 
-# Shared with perf_reduce.py; perf narrows formats, tiles and fidelity on top of it.
 REDUCE_SWEEP = dict(
     tile_dimensions=REDUCE_TILE_DIMENSIONS,
     formats=REDUCE_FORMATS,
