@@ -373,28 +373,54 @@ def test_pipeline_performance(
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
 
+    # Gate clips are timed too: each prompt's mean over its seeds must also clear that prompt's timing
+    # limits (for now the same expected_metrics as the timed run).
+    gate_prompts = []
+    gate_timings = []
     if run_vbench:
         gate_prompts = [
-            {"text": prompts[i], "thresholds": vbench_thresholds(model_type, height)} for i in VBENCH_PROMPTS
+            {"text": prompts[i], "thresholds": vbench_thresholds(model_type, height), "timing": expected_metrics}
+            for i in VBENCH_PROMPTS
         ]
+        gate_profiler = BenchmarkProfiler()
         if is_global_rank_zero():
             vbench_bundle.create_bundle(vbench_dir)
         for index, gate_prompt in enumerate(gate_prompts):
-            for seed in VBENCH_SEEDS:
+            iterations = range(index * len(VBENCH_SEEDS), (index + 1) * len(VBENCH_SEEDS))
+            for iteration, seed in zip(iterations, VBENCH_SEEDS):
                 logger.info(f"VBench clip: prompt {index}, seed {seed}")
-                with torch.no_grad():
-                    clip = pipeline(
-                        prompts=[gate_prompt["text"]],
-                        image_prompt=image_prompt,
-                        num_inference_steps=num_inference_steps,
-                        seed=seed,
-                        traced=traced,
-                        output_type="uint8",
-                    )
+                with gate_profiler("run", iteration=iteration):
+                    with torch.no_grad():
+                        clip = pipeline(
+                            prompts=[gate_prompt["text"]],
+                            image_prompt=image_prompt,
+                            num_inference_steps=num_inference_steps,
+                            on_event=profiler_event_callback(gate_profiler, iteration),
+                            seed=seed,
+                            traced=traced,
+                            output_type="uint8",
+                        )
+                        ttnn.synchronize_device(mesh_device)
+                logger.info(f"  completed in {gate_profiler.get_duration('run', iteration):.2f}s")
                 if is_global_rank_zero():
                     export_to_video(clip[0], str(vbench_bundle.clip_path(vbench_dir, index, seed)), fps=16)
+            gate_timings.append(
+                {
+                    name: statistics.mean(gate_profiler.get_duration(step, i) for i in iterations)
+                    for name, step in (
+                        ("encoder", "encoder"),
+                        ("denoising", "denoising"),
+                        ("vae", "vae"),
+                        ("total", "run"),
+                    )
+                }
+            )
         if is_global_rank_zero():
-            vbench_bundle.write_manifest(vbench_dir, prompts=gate_prompts, seeds=VBENCH_SEEDS)
+            vbench_bundle.write_manifest(
+                vbench_dir,
+                prompts=[{"text": p["text"], "thresholds": p["thresholds"]} for p in gate_prompts],
+                seeds=VBENCH_SEEDS,
+            )
 
     pipeline.release_traces()
 
@@ -467,6 +493,11 @@ def test_pipeline_performance(
     print_stats("Denoising", denoising_times)
     print_stats("VAE Decoding", vae_times)
     print_stats("Total Pipeline", total_times)
+    for index, timing in enumerate(gate_timings):
+        print(
+            f"VBench prompt {index} (mean of {len(VBENCH_SEEDS)} seeds) | "
+            + " | ".join(f"{name}: {seconds:8.4f}s" for name, seconds in timing.items())
+        )
     print("-" * 80)
 
     # Validate performance
@@ -526,6 +557,13 @@ def test_pipeline_performance(
                 f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
             )
             pass_perf_check = False
+    for index, (gate_prompt, timing) in enumerate(zip(gate_prompts, gate_timings)):
+        for k, limit in gate_prompt["timing"].items():
+            if timing[k] > limit:
+                assert_msgs.append(
+                    f"Warning: VBench prompt {index} mean {k} is outside of the tolerance range. Expected: {limit}, Actual: {timing[k]}"
+                )
+                pass_perf_check = False
 
     assert pass_perf_check, "\n".join(assert_msgs)
 
