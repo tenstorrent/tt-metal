@@ -957,3 +957,10 @@ tests pass on chip 0 (`ledger_unit_chip0.log`); reduce-scatter EP combine (`GLM5
 per step (8.1 tok/s per user, 2075 aggregate; op combine 139.2, a2a 126.3; hybrid dense 115.5), in the ledger's
 predicted range. `rs` is now the EP combine default (T % 32 == 0; 4 users/row stays on the op until the down writer's
 row stride remap). The hybrid 32-user run with the rectangular ranges (B6) follows.
+
+**B6 result (03:55, `e2e_hybrid_B4_rect.log`):** hybrid 32 users with rectangular core ranges in `kda_decode` and
+`paged_pool_gather`: 83.08 ms per step vs 83.07 before: no measurable change. The ledger's 64 us/layer "dispatch
+gap before the generic ops" is therefore not the one-range-per-core program descriptor (or trace replay already
+amortises it); the change is kept (unit tests pass, simpler descriptors) but the 1.3 ms claim is withdrawn. To
+locate the gap: a layer-4 tracy profile of the traced step with the change, comparing the op start times around
+`kda_decode` and `paged_pool_gather` with `report_prof_ep32_ep_b4`.
