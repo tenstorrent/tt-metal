@@ -47,6 +47,11 @@ def _iter_modules(root):
         yield from _iter_modules(child)
 
 
+def lora_modules(root):
+    """Every LoRA-aware module under ``root``, root included."""
+    return (module for module in _iter_modules(root) if isinstance(module, LoRAMixin))
+
+
 def promote_to_lora(root, *, mode: str = "fuse") -> int:
     """Upgrade every plain Linear-family descendant of ``root`` to a LoRA-aware
     class in place. Returns the number promoted. Idempotent: modules already
