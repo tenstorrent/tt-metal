@@ -117,7 +117,7 @@ void kernel_main() {
         const uint32_t rr = 4 + G + 2 + 5, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NC_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
-        ra::plan(rr + 2, B);
+        if (B) ra::plan(rr + 2, B);  // (no instance here when the chip has fewer experts than planner RISCs)
     }
 #endif
 }
@@ -646,6 +646,8 @@ class RouterStream:
         if not hasattr(self, "_ra_pargs") or self._ra_coord != coord:
             self._ra_pargs, self._ra_coord = self.ra.planner_args(coord), coord
         q = j + len(self.cores)
+        if q >= self.ra.M:
+            return [self.ra.addr["rows2"], 0]
         return [self.ra.addr["rows2"], self.ra.pbases[q]] + self._ra_pargs(q)
 
     def attach_mcast(self, prog):

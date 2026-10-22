@@ -304,7 +304,8 @@ class RoutingStream:
         self.R, self.C, self.N = R, C, R * C
         self.S, self.K, self.EPC, self.A, self.L = S, K, EPC, A, L
         self.luts, self.nps, self.rows_cap = luts, nps, rows_cap
-        self.M = 2 * len(router.cores)  # (planner instances: every router core's BRISC, then its NCRISC)
+        # planner instances: every router core's BRISC, then NCRISCs while there are experts (an instance needs one)
+        self.M = min(2 * len(router.cores), EPC, A, 16)
         M = self.M
         assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0 and 1 <= M <= min(EPC, A, 16)
         sz = routing_a2a_sizes(N=self.N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
