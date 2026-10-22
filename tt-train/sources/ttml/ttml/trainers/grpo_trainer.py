@@ -774,6 +774,7 @@ def save_checkpoint(
     optimizer: Any = None,
     model_source: Optional[str] = None,
     scheduler: Any = None,
+    learning_rate: Optional[float] = None,
 ) -> None:
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -805,13 +806,22 @@ def save_checkpoint(
             json.dump(gen_config, f, indent=2)
 
     trainer_state = {"global_step": step}
-    if optimizer is not None:
+    if learning_rate is not None:
+        trainer_state["learning_rate"] = learning_rate
+    elif optimizer is not None:
         trainer_state["learning_rate"] = optimizer.get_group_lrs()
     with open(os.path.join(ckpt_dir, "trainer_state.json"), "w") as f:
         json.dump(trainer_state, f, indent=2)
 
     if scheduler is not None:
         torch.save(scheduler.get_state_dict(), os.path.join(ckpt_dir, "scheduler.pt"))
+    else:
+        scheduler_state = {
+            "base_lr": optimizer.get_initial_lr() if optimizer else None,
+            "warmup_steps": grpo_config.warmup_steps if grpo_config else 0,
+            "last_step": step,
+        }
+        torch.save(scheduler_state, os.path.join(ckpt_dir, "scheduler.pt"))
 
     rng_state = {
         "python": random.getstate(),
@@ -1432,6 +1442,8 @@ class GRPOTrainer:
             grpo_config=cfg,
             optimizer=self._optimizer,
             model_source=self.model_source,
+            scheduler=self._lr_scheduler,
+            learning_rate=self.metrics["lr"],
         )
         ckpt_dir = os.path.join(cfg.output_dir, "checkpoints", f"grpo_step_{step}")
         for cb in self.callbacks:
