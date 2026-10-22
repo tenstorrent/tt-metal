@@ -639,6 +639,16 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     )
 
 
+# Int32 / UInt32 MAX/MIN block shapes. The multi-tile rows exercise the cross-tile
+# combine, and the UInt32 bit-31 flip over every tile of the block.
+INT32_MAX_MIN_BLOCKS = [
+    pytest.param(MathOperation.ReduceColumn, [TILE_DIM, TILE_DIM], id="col-1x1"),
+    pytest.param(MathOperation.ReduceRow, [TILE_DIM, TILE_DIM], id="row-1x1"),
+    pytest.param(MathOperation.ReduceRow, [TILE_DIM, 2 * TILE_DIM], id="row-1x2"),
+    pytest.param(MathOperation.ReduceRow, [2 * TILE_DIM, 2 * TILE_DIM], id="row-2x2"),
+]
+
+
 def _int32_sign_boundary_block(dims):
     """Int32 block whose rows each pivot on the -1 / 0 boundary (or a neighbour of it), so the row result is
     decided by exactly the pairs the Blackhole row path's sign-magnitude order map sends to -0 / +0.
@@ -655,8 +665,9 @@ def _int32_sign_boundary_block(dims):
             values[r, :] = 0
             values[r, c] = -1
         elif pattern == 2:  # {-1, 0, 1}
+            shift = (r // 6) % 3  # rotate the layout between pattern-2 rows
             values[r, :] = torch.tensor([-1, 0, 1]).repeat(cols // 3 + 2)[
-                r % 3 : r % 3 + cols
+                shift : shift + cols
             ]
         elif pattern == 3:  # {-2, -1}: MAX -1, MIN -2
             values[r, :] = -2
@@ -671,17 +682,7 @@ def _int32_sign_boundary_block(dims):
     return values
 
 
-@pytest.mark.parametrize(
-    "mathop, dims",
-    [
-        (MathOperation.ReduceColumn, [TILE_DIM, TILE_DIM]),
-        (MathOperation.ReduceRow, [TILE_DIM, TILE_DIM]),
-        # Multi-tile rows: the per-tile results meet again in the cross-tile combine.
-        (MathOperation.ReduceRow, [TILE_DIM, 2 * TILE_DIM]),
-        (MathOperation.ReduceRow, [2 * TILE_DIM, 2 * TILE_DIM]),
-    ],
-    ids=["col-1x1", "row-1x1", "row-1x2", "row-2x2"],
-)
+@pytest.mark.parametrize("mathop, dims", INT32_MAX_MIN_BLOCKS)
 @pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
 def test_int32_reduce_max_min_sign_boundary(mathop, dims, reduce_pool):
     """Int32 MAX/MIN where -1 against 0 (and -2 against -1) decides every row.
@@ -713,17 +714,7 @@ def test_int32_reduce_max_min_sign_boundary(mathop, dims, reduce_pool):
     )
 
 
-@pytest.mark.parametrize(
-    "mathop, dims",
-    [
-        (MathOperation.ReduceColumn, [TILE_DIM, TILE_DIM]),
-        (MathOperation.ReduceRow, [TILE_DIM, TILE_DIM]),
-        # Multi-tile rows: the bit-31 flip must cover every tile of the block.
-        (MathOperation.ReduceRow, [TILE_DIM, 2 * TILE_DIM]),
-        (MathOperation.ReduceRow, [2 * TILE_DIM, 2 * TILE_DIM]),
-    ],
-    ids=["col-1x1", "row-1x1", "row-1x2", "row-2x2"],
-)
+@pytest.mark.parametrize("mathop, dims", INT32_MAX_MIN_BLOCKS)
 @pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
 def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     """UInt32 MAX/MIN must order words with bit 31 set above the rest.

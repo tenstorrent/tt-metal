@@ -494,19 +494,23 @@ constexpr std::uint32_t ROW_MERGE_MASK_BIT1 = p_sfpu::LREG14;  // sign set in co
 constexpr std::uint32_t ROW_MERGE_ODD_SHIFT = 30;
 constexpr std::uint32_t ROW_MERGE_BIT1_SHIFT = 29;
 
+// SFPSHFT Mod1 ARG_IMM | ARG_IMM_USE_VC (tt-isa SFPSHFT.md): shift LREG[VC] by Imm12 into VD.
+constexpr std::uint32_t SFPSHFT_MOD1_IMM_USE_VC = 0b101;
+
 /**
  * @brief Write the merge masks into ROW_MERGE_MASK_ODD / ROW_MERGE_MASK_BIT1 from LTILEID. Clobbers LREG0.
  */
 inline void init_row_merge_masks() {
-    TTI_SFPSHFT(ROW_MERGE_ODD_SHIFT, p_sfpu::LTILEID, p_sfpu::LREG0, 5 /* ARG_IMM | ARG_IMM_USE_VC */);
+    TTI_SFPSHFT(ROW_MERGE_ODD_SHIFT, p_sfpu::LTILEID, p_sfpu::LREG0, SFPSHFT_MOD1_IMM_USE_VC);
     TTI_SFPCONFIG(0, ROW_MERGE_MASK_ODD, 0);
-    TTI_SFPSHFT(ROW_MERGE_BIT1_SHIFT, p_sfpu::LTILEID, p_sfpu::LREG0, 5 /* ARG_IMM | ARG_IMM_USE_VC */);
+    TTI_SFPSHFT(ROW_MERGE_BIT1_SHIFT, p_sfpu::LTILEID, p_sfpu::LREG0, SFPSHFT_MOD1_IMM_USE_VC);
     TTI_SFPCONFIG(0, ROW_MERGE_MASK_BIT1, 0);
 }
 
 // Programmable constant register holding 0x7FFFFFFF for int32_to_swap_order. Written by
 // init_reduce_max_min_int32_signed; LREG12 holds the UInt16 mask or the float AVG 1/32 only in other inits.
 constexpr std::uint32_t INT32_SWAP_ORDER_REG = p_sfpu::LREG12;
+constexpr std::uint32_t INT32_SWAP_ORDER_MASK = 0x7FFFFFFF;
 
 /**
  * @brief Map a two's-complement Int32 in @p reg, in place, to the sign-magnitude word that SFPSWAP(VEC_MIN_MAX)
@@ -563,9 +567,9 @@ inline void row_fold() {
     if constexpr (fold == RowFold::FloatAdd) {
         TTI_SFPADD(dst, p_sfpu::LCONST_1, src, dst, 0);
     } else if constexpr (fold == RowFold::IntAdd) {
-        TTI_SFPIADD(0, src, dst, 4);
+        TTI_SFPIADD(0, src, dst, sfpi::SFPIADD_MOD1_CC_NONE);
     } else {
-        TTI_SFPSWAP(0, dst, src, 1);
+        TTI_SFPSWAP(0, dst, src, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     }
 }
 
@@ -621,12 +625,12 @@ inline void perform_reduce_row_face_pair(
     load_row_group<p_sfpu::LREG0, INSTRUCTION_MODE, clear_high_bits, int32_order>(a);
     load_row_group<p_sfpu::LREG4, INSTRUCTION_MODE, clear_high_bits, int32_order>(b);
     if constexpr (fold == RowFold::MinMax) {
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     } else {
         lltt::replay(0, 6);
     }
@@ -1029,8 +1033,8 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
  * After per-tile row reduction, each tile has partial row sums in its column 0.
  * This function accumulates those row sums across all tiles into tile_row_base (first tile in this row of tiles in
  * tensor). Each tile already has 8 partial row-sum results in column 0 (written by perform_reduce_row_tile): 2
- * face-pairs × 2 row-groups × 2 sums per group (first 4 rows and next 4 rows of each 8-row group) = 8. They are stored
- * at row offsets 0, 4, 8, 12, 32, 36, 40, 44. Each result occupies 4 rows (one LREG).
+ * face pairs × 4 four-row groups (A-D, see perform_reduce_row_face_pair) = 8. They are stored at row offsets 0, 4, 8,
+ * 12, 32, 36, 40, 44. Each result occupies 4 rows (one LREG).
  *
  * We process these 8 results in two batches of 4. For each batch:
  * - Load tile 0's four LREGs into LREG0-3 from the first batch's offsets.
@@ -1714,8 +1718,12 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
             // The merged face-pair reduce on plain INT32 loads mapped by int32_to_swap_order, so a plain SFPSWAP
             // orders them as signed Int32 (INT32_MIN included). The stored results are two's-complement again.
-            perform_reduce_row_tile<RowFold::MinMax, INSTRUCTION_MODE, false, false /*is_avg*/, true /*int32_order*/>(
-                tile_offset, tile_store_mode);
+            perform_reduce_row_tile<
+                RowFold::MinMax,
+                INSTRUCTION_MODE,
+                false /*clear_high_bits*/,
+                false /*is_avg*/,
+                true /*int32_order*/>(tile_offset, tile_store_mode);
         }
 
         if (block_ct_dim > 1) {
@@ -1740,7 +1748,7 @@ inline void init_reduce_max_min_int32_signed() {
     _init_sfpu_config_reg();
 
     // The row path maps its operands with int32_to_swap_order, which XORs with this constant.
-    sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
+    sfpi::vConstIntPrgm0 = INT32_SWAP_ORDER_MASK;
 
     lltt::record(0, 3 * INT32_SIGNED_CSWAP_LEN);
     _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
