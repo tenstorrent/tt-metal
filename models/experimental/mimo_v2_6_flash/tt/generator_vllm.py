@@ -40,8 +40,9 @@ with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin
 "num_speculative_tokens": 3}'``): the MTP layer drafts up to MAX_DRAFTS tokens for a lane that ran one request in its
 last step, and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
 with several requests decline to draft and decode as usual; a verify block that still carries drafts beside other
-rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. Greedy requests only (the
-plugin's accept walk compares token ids).
+rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. A verify answers the
+plugin's argmax ids when every request of the step is greedy, else its logits: the plugin then walks acceptance on
+the host with each request's own sampling (temperature, top-p, ...), so sampled requests speculate losslessly.
 """
 
 import math
@@ -217,7 +218,9 @@ class MiMoV2ForCausalLM:
             # The MTP ring cache is per lane, not per request; its weights are the replica's.
             extra_bytes_per_seq=0,
             extra_bytes_per_token=0,
-            accept_modes=("argmax_ids",),
+            # argmax_ids for all-greedy steps; logits when a sampled request shares the step (the plugin's host
+            # accept walk then samples losslessly, ``_verify``).
+            accept_modes=("argmax_ids", "logits"),
             drafter_state="internal",
             supports_narrow_decode=True,
         )
@@ -602,14 +605,16 @@ class MiMoV2ForCausalLM:
     def _verify(self, tokens, start_pos, page_table, page_tables_per_layer, num_valid_drafts, spec_mode):
         """A verify of the plugin's candidate block tokens / start_pos [B, 1 + K] (-1: no position): each lane's
         active rows packed into verify passes (reference.spec_decode.plan_verify_passes), a lane's passes one after
-        another, the lanes side by side. Returns argmax_ids [B, 1 + K]: column j the target's greedy token after
-        column j (unused columns 0)."""
+        another, the lanes side by side. Returns argmax_ids [B, 1 + K] (column j the target's greedy token after
+        column j, unused columns 0), or with ``spec_mode`` "logits" the fp32 logits [B, 1 + K, vocab] of the same
+        cells for the plugin's host accept walk: every answered cell holds its slot's full logit row; the others
+        (gap rows, columns past a row's drafts) are never read and keep a finite earlier value (``_spec_logits``)."""
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         t0 = time.perf_counter()
         self._verify_tables_s = 0.0
-        if spec_mode != "argmax_ids":
-            raise ValueError(f"MiMo verifies greedy argmax ids; got spec_mode {spec_mode!r}")
+        if spec_mode not in ("argmax_ids", "logits"):
+            raise ValueError(f"MiMo verifies argmax ids or logits; got spec_mode {spec_mode!r}")
         if any(model.verify_trace is None for model in self.models):
             raise RuntimeError("a verify before warmup_model_decode captured the verify traces (MIMO_SPEC_DECODE=mtp)")
         tables = self._layer_tables(page_table, page_tables_per_layer)
@@ -620,6 +625,7 @@ class MiMoV2ForCausalLM:
         if rows > self.dp * self.per_lane:
             raise ValueError(f"{rows} verify rows > {self.dp} lanes x {self.per_lane} slots")
         argmax = torch.zeros(tokens.shape, dtype=torch.int32)
+        logits = self._spec_logits(tuple(tokens.shape)) if spec_mode == "logits" else None
         lanes = []
         for lane in range(self.dp):
             first, last = lane * self.per_lane, min((lane + 1) * self.per_lane, rows)
@@ -643,12 +649,28 @@ class MiMoV2ForCausalLM:
             for lane, vp, handle in pending:
                 t = time.perf_counter()
                 out = self.models[lane].read_next_tokens(handle)
+                rows = self.models[lane].decode_read_rows(handle) if logits is not None else None
                 waited += time.perf_counter() - t
                 for s, row, col in vp.answers:
                     argmax[row, col] = int(out[s])
+                    if rows is not None:
+                        logits[row, col] = rows[s]
         if TIMING:
             self._spec_timing("verify", t0, waited, sum(map(len, lanes)), self._verify_tables_s)
+        if logits is not None:
+            return VerifyOutput(spec_mode="logits", logits=logits)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=argmax)
+
+    def _spec_logits(self, shape):
+        """The host buffer a logits verify of candidate block ``shape`` [B, 1 + K] fills, kept across steps: a
+        fresh [B, 1 + K, vocab] fp32 tensor would be zeroed every step (16 x 4 x vocab: ~40 MB). Lane DP is
+        synchronous, so the plugin has finished reading a step's logits before the next verify writes them."""
+        buffers = getattr(self, "_spec_logit_buffers", None)
+        if buffers is None:
+            buffers = self._spec_logit_buffers = {}
+        if shape not in buffers:
+            buffers[shape] = torch.zeros(*shape, self.gen.cfg.vocab_size, dtype=torch.float32)
+        return buffers[shape]
 
     def _enqueue_verify_pass(self, lane, vp, tables):
         model = self.models[lane]

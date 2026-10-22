@@ -29,6 +29,8 @@ SPEC_DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 1_200_000_000
 PER_LANE = 4
 MAX_SEQ_LEN = 1024
 STEPS = 96
+# The first verifies also run in logits mode (sampled requests) and must agree with argmax_ids.
+LOGITS_CHECKS = 2
 PROMPT = (
     "Write a Python function that returns the n-th Fibonacci number using memoization, then explain how the "
     "memoization changes its time complexity."
@@ -93,7 +95,7 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
     seq = prompt.tolist() + [prefill(spec_row)]
     t0 = time.perf_counter()
     seq.append(decode(spec_row, seq[-1], len(seq) - 1))
-    committed, accepted, counts = [seq[-1]], 1, []
+    committed, accepted, counts, check_s = [seq[-1]], 1, [], 0.0
 
     def propose():
         tok = torch.zeros(rows, 1 + MAX_DRAFTS, dtype=torch.int32)
@@ -113,6 +115,22 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
         positions[spec_row] = torch.arange(p, p + 1 + MAX_DRAFTS, dtype=torch.int32)
         valid = torch.zeros(rows, dtype=torch.int32)
         valid[spec_row] = MAX_DRAFTS
+        if len(counts) < LOGITS_CHECKS:
+            # A logits verify (sampled requests) answers the same cells: each one's argmax is the argmax_ids
+            # verify's token. It runs first, so the state the argmax verify leaves for the next step is unchanged.
+            t = time.perf_counter()
+            full = model.decode_forward(
+                tokens,
+                positions,
+                page_table,
+                kv,
+                spec_mode="logits",
+                num_valid_drafts=valid,
+                accepted_counts=torch.ones(rows, dtype=torch.int32),
+            ).logits
+            assert full.shape == (rows, 1 + MAX_DRAFTS, model.gen.cfg.vocab_size) and bool(full.isfinite().all())
+            logits_argmax = full[spec_row].argmax(dim=-1)
+            check_s += time.perf_counter() - t
         out = model.decode_forward(
             tokens,
             positions,
@@ -122,11 +140,13 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
             num_valid_drafts=valid,
             accepted_counts=torch.ones(rows, dtype=torch.int32),
         )
+        if len(counts) < LOGITS_CHECKS:
+            assert logits_argmax.tolist() == out.argmax_ids[spec_row].tolist(), "logits verify disagrees with ids"
         committed = accept_greedy(out.argmax_ids[spec_row].tolist(), drafts, MAX_DRAFTS)
         accepted = len(committed)
         counts.append(accepted)
         seq += committed
-    spec_s = time.perf_counter() - t0
+    spec_s = time.perf_counter() - t0 - check_s
 
     n = prompt.numel() + STEPS
     logger.info(
