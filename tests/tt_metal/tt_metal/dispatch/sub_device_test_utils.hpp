@@ -20,7 +20,7 @@ inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_progra
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto global_sem = GlobalSemaphore(*device, sub_device.impl()->cores(HalProgrammableCoreType::TENSIX), INVALID);
 
-    Program syncer_program = CreateProgram();
+    Program syncer_program = CreateProgram(*device);
     auto syncer_kernel = CreateKernel(
         syncer_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
@@ -43,7 +43,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
     auto all_cores = waiter_core.merge(incrementer_cores).merge(syncer_core);
     auto global_sem = GlobalSemaphore(*device, all_cores, INVALID);
 
-    Program waiter_program = CreateProgram();
+    Program waiter_program = CreateProgram(*device);
     auto waiter_kernel = CreateKernel(
         waiter_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_waiter.cpp",
@@ -53,7 +53,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
         global_sem.address(), incrementer_cores.num_cores(), syncer_core_physical.x, syncer_core_physical.y};
     SetRuntimeArgs(waiter_program, waiter_kernel, waiter_core, waiter_rt_args);
 
-    Program syncer_program = CreateProgram();
+    Program syncer_program = CreateProgram(*device);
     auto syncer_kernel = CreateKernel(
         syncer_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
@@ -62,7 +62,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
     std::array<uint32_t, 1> syncer_rt_args = {global_sem.address()};
     SetRuntimeArgs(syncer_program, syncer_kernel, syncer_core, syncer_rt_args);
 
-    Program incrementer_program = CreateProgram();
+    Program incrementer_program = CreateProgram(*device);
     auto incrementer_kernel = CreateKernel(
         incrementer_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/incrementer.cpp",
@@ -92,7 +92,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     auto all_cores = tensix_waiter_core.merge(incrementer_cores).merge(syncer_core);
     auto global_sem = GlobalSemaphore(*device, all_cores, INVALID);
 
-    Program waiter_program = CreateProgram();
+    Program waiter_program = CreateProgram(*device);
     auto waiter_kernel = CreateKernel(
         waiter_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_remote_waiter.cpp",
@@ -109,7 +109,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     };
     SetRuntimeArgs(waiter_program, waiter_kernel, waiter_core, waiter_rt_args);
 
-    Program syncer_program = CreateProgram();
+    Program syncer_program = CreateProgram(*device);
     auto syncer_kernel = CreateKernel(
         syncer_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
@@ -118,7 +118,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     std::array<uint32_t, 1> syncer_rt_args = {global_sem.address()};
     SetRuntimeArgs(syncer_program, syncer_kernel, syncer_core, syncer_rt_args);
 
-    Program incrementer_program = CreateProgram();
+    Program incrementer_program = CreateProgram(*device);
     auto incrementer_kernel = CreateKernel(
         incrementer_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/incrementer.cpp",

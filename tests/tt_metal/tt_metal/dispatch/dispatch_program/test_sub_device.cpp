@@ -56,8 +56,8 @@ namespace tt::tt_metal {
 constexpr uint32_t k_local_l1_size = 3200;
 const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
 
-static tt_metal::Program create_blank_program(const CoreRange& cores) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+static tt_metal::Program create_blank_program(distributed::MeshDevice& mesh_device, const CoreRange& cores) {
+    tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -92,7 +92,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
         .bottom_up = false,
     };
     auto global_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -347,7 +347,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     // Start kernels on each sub device and verify their coordinates
-    Program program_1 = tt::tt_metal::CreateProgram();
+    Program program_1 = tt::tt_metal::CreateProgram(*mesh_device);
     tt::tt_metal::CreateKernel(
         program_1,
         k_coordinates_kernel_path,
@@ -355,7 +355,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compile_args});
 
-    Program program_2 = tt::tt_metal::CreateProgram();
+    Program program_2 = tt::tt_metal::CreateProgram(*mesh_device);
     tt::tt_metal::CreateKernel(
         program_2,
         k_coordinates_kernel_path,
@@ -406,7 +406,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         mesh_device->load_sub_device_manager(sub_device_managers[i]);
         const auto sub_device_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{i});
 
-        Program program = tt::tt_metal::CreateProgram();
+        Program program = tt::tt_metal::CreateProgram(*mesh_device);
         tt::tt_metal::CreateKernel(
             program,
             k_coordinates_kernel_path,
@@ -463,7 +463,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 
             // Create fresh program for each iteration and set runtime args
             auto create_program_with_args = [&]() {
-                tt_metal::Program program = tt_metal::CreateProgram();
+                tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
                 tt_metal::KernelHandle add_two_ints_kernel = tt_metal::CreateKernel(
                     program,
                     "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/add_common_and_unique_rta.cpp",
@@ -508,7 +508,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     // Helper functions to create fresh programs each time
     auto create_program_1 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
         // On sub device 1.
         tt_metal::CreateKernel(
             program,
@@ -520,7 +520,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     };
 
     auto create_program_2 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
         // On sub device 2.
         tt_metal::CreateKernel(
             program,
@@ -599,7 +599,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestSubDeviceCQOwnershipAf
         slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
     }
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
@@ -672,7 +672,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestTraceReplayOnOtherCQ) 
         slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
     }
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
@@ -726,9 +726,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipTakenByEmptyWork
     auto& cq1 = mesh_device->mesh_command_queue(1);
 
     distributed::MeshWorkload blank_workload;
-    blank_workload.add_program(device_range_, create_blank_program(CoreRange({0, 0}, {0, 0})));
+    blank_workload.add_program(device_range_, create_blank_program(*mesh_device, CoreRange({0, 0}, {0, 0})));
     distributed::MeshWorkload empty_workload;
-    empty_workload.add_program(device_range_, tt_metal::CreateProgram());
+    empty_workload.add_program(device_range_, tt_metal::CreateProgram(*mesh_device));
 
     distributed::EnqueueMeshWorkload(cq0, blank_workload, false);
     distributed::Finish(cq0);
@@ -748,7 +748,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipHandoffBehindRun
 
     const CoreCoord blocked_core{0, 0};
     auto semaphore = CreateGlobalSemaphore(*mesh_device, CoreRangeSet(CoreRange(blocked_core, blocked_core)), 0);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
@@ -759,7 +759,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipHandoffBehindRun
     distributed::MeshWorkload blocked_workload;
     blocked_workload.add_program(device_range_, std::move(program));
     distributed::MeshWorkload blank_workload;
-    blank_workload.add_program(device_range_, create_blank_program(CoreRange({1, 1}, {1, 1})));
+    blank_workload.add_program(device_range_, create_blank_program(*mesh_device, CoreRange({1, 1}, {1, 1})));
 
     distributed::EnqueueMeshWorkload(cq0, blocked_workload, false);
     auto event = cq0.enqueue_record_event_to_host();
@@ -792,7 +792,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSwitchToDefaultNoStrayRes
 
     const CoreCoord blocked_core{0, 0};
     auto semaphore = CreateGlobalSemaphore(*mesh_device, CoreRangeSet(CoreRange(blocked_core, blocked_core)), 0);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     auto kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
@@ -843,7 +843,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixTestSubDeviceSwitchBehindTraceReplay) {
 
     // A counter on RISCV_1, optionally alongside a delay on RISCV_0 so each launch stays on the workers a while.
     auto make_counter_workload = [&](std::optional<uint32_t> delay_iters) {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
@@ -952,7 +952,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSwitchFromEveryLaunchSlot
         slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
     }
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",

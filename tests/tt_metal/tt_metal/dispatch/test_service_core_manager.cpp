@@ -48,10 +48,10 @@ static void assert_counter_incrementing(const std::function<uint32_t()>& read_fn
 }
 
 // Builds a trivial workload to exercise the FD/SD dispatch pipeline
-static std::shared_ptr<MeshWorkload> make_trivial_workload(IDevice* device) {
+static std::shared_ptr<MeshWorkload> make_trivial_workload(MeshDevice& mesh_device, IDevice* device) {
     const uint32_t l1_scratch = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    Program prog;
+    Program prog = CreateProgram(mesh_device);
     CreateKernel(
         prog,
         "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
@@ -231,7 +231,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         cluster.write_core(&zero, sizeof(uint32_t), phys_cxy, service_done_addr);
 
         // Phase 2: launch persistent kernel (SD, non-blocking).
-        Program prog;
+        Program prog = CreateProgram(*mesh_device);
         auto kernel = CreateKernel(
             prog,
             "tests/tt_metal/tt_metal/test_kernels/misc/service_counter.cpp",
@@ -273,7 +273,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         assert_counter_incrementing(read_counter, "after FD terminate (cycle " + std::to_string(cycle) + ")");
 
         // Dispatch a trivial workload to stress the dispatch path
-        auto stressor = make_trivial_workload(device);
+        auto stressor = make_trivial_workload(*mesh_device, device);
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *stressor, true);
         Finish(mesh_device->mesh_command_queue());
 
@@ -464,7 +464,7 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
 
     // Build one program targeting all service cores with per-core runtime args.
     CoreRangeSet svc_cores(claimable);
-    Program svc_prog;
+    Program svc_prog = CreateProgram(*mesh_device);
     auto kernel = CreateKernel(
         svc_prog,
         "tests/tt_metal/tt_metal/test_kernels/misc/service_counter.cpp",
@@ -499,7 +499,7 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     assert_counter_incrementing(read_counter, "after service launch");
 
     // Launch FD workloads on the regular worker grid while the service kernel runs.
-    auto fd_workload = make_trivial_workload(device);
+    auto fd_workload = make_trivial_workload(*mesh_device, device);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *fd_workload, false);
     assert_counter_incrementing(read_counter, "during FD workload");
     Finish(mesh_device->mesh_command_queue());
@@ -543,7 +543,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadReenqueueRequiresRelease) {
     const CoreCoord svc_core = claimable[0];
 
     auto build_service_workload = [&]() {
-        Program prog;
+        Program prog = CreateProgram(*mesh_device);
         CreateKernel(
             prog,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -587,7 +587,7 @@ TEST_F(ServiceCoreFdFixture, ServiceWorkloadMixingFatal) {
     MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
 
     // One program spanning the claimed service core and an unclaimed worker core -> mixed -> TT_FATAL.
-    Program prog;
+    Program prog = CreateProgram(*mesh_device);
     CreateKernel(
         prog,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
