@@ -78,10 +78,12 @@ a new path in an existing one (for example a config option that changes which te
 
 `training_config.precision.param_dtype: float32` stores every trainable parameter in fp32. It is applied by
 `core::apply_precision_config()` (`sources/ttml/core/parameter_dtype.{hpp,cpp}`) right before the optimizer is created,
-so the optimizer state follows: in Python by `ttml.common.utils.create_optimizer()`, which every runner uses, and in C++
-by the `nano_gpt` runner and the 3-tier optimizer worker. 3-tier workers keep bf16 parameters for `RemoteOptimizer`; the
-optimizer worker holds the fp32 master weights. The fp32 parameter is the master weight: fused `AdamW` updates it in
-place with fp32 moments, and forward and backward read its bf16 view, which is refreshed in place after the step. Frozen
+so the optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config
+(as in `train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the
+optimizer section, such as the SFT and GRPO trainers, don't apply it. 3-tier workers keep bf16 parameters for
+`RemoteOptimizer`; the optimizer worker holds the fp32 master weights. The fp32 parameter is the master weight: fused
+`AdamW` updates it in place with fp32 moments, and forward and backward read its bf16 view, which is refreshed into its
+existing buffer the first time it is read after the step. Frozen
 parameters and non-float tensors keep their dtype. `bfloat16` stores the trainable parameters in bf16; unset, they keep
 the dtype the model builds them in, so existing configs don't change.
 

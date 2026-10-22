@@ -51,7 +51,7 @@ TEST_F(ParameterDtypeTest, ParsesTheTwoNames) {
     EXPECT_ANY_THROW((void)core::parse_param_dtype("float16"));
 }
 
-// Unset or null means "keep the dtype the model builds", as in Python.
+// Unset or null means "keep the dtype the model builds".
 TEST_F(ParameterDtypeTest, ReadsParamDtypeFromTheTrainingConfig) {
     EXPECT_EQ(core::param_dtype_from_config(YAML::Load("precision: {param_dtype: float32}")), ttnn::DataType::FLOAT32);
     EXPECT_EQ(core::param_dtype_from_config(YAML::Load("seed: 5489")), std::nullopt);

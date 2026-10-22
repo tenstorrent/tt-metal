@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Configuration classes for transformer training."""
-
 import os
 import yaml
 from dataclasses import dataclass

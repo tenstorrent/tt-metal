@@ -8,12 +8,12 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/parameter_dtype.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/parameter_dtype.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.cpp
