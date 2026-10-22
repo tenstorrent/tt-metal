@@ -15,9 +15,7 @@ struct SDPAForwardParams {
     AttentionMaskType mask_type{AttentionMaskType::Causal};
     float dropout_probability{0.0F};
     bool has_gate{false};
-    // Flattened SDPAForwardProgramConfig (0 = auto). Part of the program-cache hash.
-    uint32_t q_chunk_size{0};
-    uint32_t k_chunk_size{0};
+    SDPAForwardProgramConfig program_config{};
 };
 
 struct SDPAForwardInputs {
