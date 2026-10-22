@@ -819,6 +819,12 @@ void kernel_main() {
                 reconfig_data_format(cb_w_down, cb_h);
                 pack_reconfig_data_format(cb_out_tiles);
                 if (wd_mrow) {
+                    // At bfp8 output cb_h_slice shares SRAM with cb_out_tiles, and nothing orders the
+                    // rows below my_row after the writer's NoC read of this core's h fragment.
+                    // Reserving the slice CB's whole capacity on PACK waits for the writer's pop.
+                    uint32_t h_slice_pages = 0;
+                    PACK((h_slice_pages = get_local_cb_interface(cb_h_slice).fifo_num_pages));
+                    h_slice_buf.reserve_back(h_slice_pages);
                     // The reader publishes the complete resident W_down shard once, while cb_h carries
                     // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
                     // result never leaves DEST for an intermediate BF16 accumulation spill.
