@@ -6,6 +6,8 @@
 //
 // Mirrors the ttnn compute-kernel flow of ckernel::mul_reduce_scalar_tile:
 //   1. Multiply phase: C[i] = A[i] * B[i] element-wise (ELWMUL) into DEST tiles.
+//      ELTWISE_BINARY_OP selects the op. ELWADD and ELWSUB run the same flow, to
+//      check that the unpacker also zeroes the SrcB rows past a short face.
 //   2. Switch UNPACK -> reduce phase (DEST reused as SrcA/SrcB via MOVD2A/MOVD2B).
 //   3. Column-reduce every tile with GAPOOL, accumulating into DEST[0].
 //   4. Collapse DEST[0] to a single scalar (transpose + GAPOOL).
@@ -151,7 +153,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest.
-    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+    // Only ELWMUL takes fidelity phases. ELWADD and ELWSUB need LoFi, and the reduce keeps MATH_FIDELITY.
+    constexpr ckernel::MathFidelity ELTWISE_FIDELITY = ELTWISE_BINARY_OP == EltwiseBinaryType::ELWMUL ? MATH_FIDELITY : ckernel::MathFidelity::LoFi;
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, ELTWISE_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         tensor_shape, 0 /* acc_to_dest */);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
@@ -160,13 +164,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Multiply tile index exceeds maximum destination tiles");
-        _llk_math_eltwise_binary_<
-            EltwiseBinaryType::ELWMUL,
-            BroadcastType::NONE,
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            MATH_FIDELITY,
-            EltwiseBinaryReuseDestType::NONE>(tensor_shape, i, true /* clear_fp32_dst_acc */);
+        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DST_SYNC, is_fp32_dest_acc_en, ELTWISE_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+            tensor_shape, i, true /* clear_fp32_dst_acc */);
     }
 
     // Step 3 - initialize the reduce phase (addr mods + counter reset).

@@ -349,18 +349,22 @@ inline void _llk_unpack_set_srcb_dummy_valid_()
 }
 
 /**
- * @brief Zero both SrcA banks.
+ * @brief Zero both banks of one source register.
  *
  * A face shorter than the rows the math op reads fills only its own rows. The rest keep the previous op's data.
  * Unpacks never write those rows, so zeroing both banks once at init keeps them zero for every later tile.
  * Without Stall_Clr_Cntrl the clear waits for the Matrix Unit to release both banks, so it cannot zero operands
  * the previous op still uses. The stalls keep the unpackers from writing during the clear, which drops those writes.
+ *
+ * @tparam src: Source register to clear, values = <SrcA/SrcB>
  */
-inline void _llk_unpack_clear_srca_banks_()
+template <Srcs src>
+inline void _llk_unpack_clear_src_banks_()
 {
+    static_assert(src == SrcA || src == SrcB, "src must be SrcA or SrcB");
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0 /*Stall_Clr_Cntrl*/, 1 /*Bank_Clr_Ctrl: both banks*/, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK0);
+    TTI_UNPACR_NOP(src, 0, 0, 0, 0, 0 /*Stall_Clr_Cntrl*/, 1 /*Bank_Clr_Ctrl: both banks*/, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, src == SrcA ? p_stall::UNPACK0 : p_stall::UNPACK1);
 }
 
 /**
