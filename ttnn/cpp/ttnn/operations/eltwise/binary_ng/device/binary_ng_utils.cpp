@@ -419,6 +419,8 @@ OpConfig::OpConfig(
             postprocess = unary::UnaryOpType::SQRT;
             break;
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
+        // situ_glu(gate=lhs, up=rhs) with Kimi K3's betas compiled into the LLK; see api/compute/situ_glu.h.
+        case BinaryOpType::SITU_GLU: binary_op = SfpuBinaryOp::SITU_GLU; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -592,6 +594,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

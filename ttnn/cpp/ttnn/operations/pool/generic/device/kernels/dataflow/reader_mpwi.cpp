@@ -144,7 +144,7 @@ ALWI void initialize_return_indices_data() {
     // c dimensions so for now we do it one at a time for both 16 and 32 bit indexes
     constexpr uint32_t inc_rows = is_large_kernel ? sticks_per_chunk : window_size_hw;
     if constexpr (indexes_32_bit) {
-        auto fill_inc_32 = [&](DataflowBuffer& inc_dfb, uint32_t inc) __attribute__((always_inline)) {
+        auto fill_inc_32 = [&](auto& inc_dfb, uint32_t inc) __attribute__((always_inline)) {
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_dfb.get_write_ptr());
             for (uint32_t k = 0; k < inc_rows; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
@@ -180,7 +180,7 @@ ALWI void initialize_return_indices_data() {
             intra_kernel_down_left_wrap_inc_dfb.push_back(1);
         }
     } else {
-        auto fill_inc = [&](DataflowBuffer& inc_dfb, uint32_t inc) __attribute__((always_inline)) {
+        auto fill_inc = [&](auto& inc_dfb, uint32_t inc) __attribute__((always_inline)) {
             uint16_t inc_16 = (uint16_t)inc;
             uint32_t inc_32_bit = (uint32_t)inc_16 | ((uint32_t)inc_16 << 16);
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_dfb.get_write_ptr());

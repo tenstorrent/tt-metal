@@ -8,7 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import skip_with_watcher
+from tt_py_test_utils_common.utility_functions import skip_with_watcher
 
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     setup_conv3d_test,

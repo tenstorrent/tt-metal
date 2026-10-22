@@ -161,3 +161,214 @@ def load_expert_weights(
         down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
     )
+
+
+@dataclass(frozen=True)
+class DenseDecodeExpertWeights:
+    """Per device, every expert's TP shard side by side (experts/decode.py decode_forward_dense):
+    gate / up: [H, E * I_local] with expert e in columns [e * I_local, (e + 1) * I_local), DRAM width-sharded over the
+    banks; their biases expanded to [32, E * I_local] (one row per token, DRAM interleaved);
+    down: [E * I_local, H] with expert e in rows [e * I_local, (e + 1) * I_local), DRAM width-sharded;
+    down_bias: [E, H] (real on the first TP device only: row-parallel), applied as routing_weights @ down_bias;
+    expand: [E, E * I_local] with expand[e, e * I_local + i] = 1 (routing weight of expert e on its columns)."""
+
+    gate: ttnn.Tensor
+    up: ttnn.Tensor
+    down: ttnn.Tensor
+    gate_bias: ttnn.Tensor
+    up_bias: ttnn.Tensor
+    down_bias: ttnn.Tensor
+    expand: ttnn.Tensor
+    intermediate_local: int
+
+
+def _dram_width_sharded(mesh_device, k, n):
+    banks = mesh_device.dram_grid_size().x
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    shard_n = -(-n // (ttnn.TILE_SIZE * banks)) * ttnn.TILE_SIZE
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, (k, shard_n), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def load_dense_decode_expert_weights(
+    mesh_device,
+    config: ExpertConfig,
+    state_dict,
+    mesh_config: MeshConfig,
+    tokens,
+    weight_dtype=ttnn.bfloat4_b,
+    tensor_cache_path=None,
+) -> DenseDecodeExpertWeights:
+    tp = mesh_config.decode.tp
+    E, H, I = config.num_experts, config.hidden_size, config.intermediate_size
+    il = I // tp
+    columns = mesh_config.column_parallel(mesh_device)
+    rows = mesh_config.row_parallel(mesh_device)
+    gate = up = down = gate_bias = up_bias = down_bias = None
+    if state_dict:
+        gate_up = state_dict["gate_up_proj"]  # [E, H, 2 * I], gate / up interleaved
+        gate_up_bias = state_dict["gate_up_proj_bias"]  # [E, 2 * I]
+
+        def side_by_side(w):
+            """[E, H, I] -> [1, 1, H, tp * E * il]: TP shard d of every expert, experts side by side, shards in order."""
+            return torch.cat(
+                [w[:, :, d * il : (d + 1) * il].permute(1, 0, 2).reshape(H, E * il) for d in range(tp)], dim=-1
+            ).reshape(1, 1, H, tp * E * il)
+
+        def bias_rows(b):
+            """[E, I] -> [1, 1, tokens, tp * E * il], one identical row per token."""
+            flat = torch.cat([b[:, d * il : (d + 1) * il].reshape(E * il) for d in range(tp)])
+            return flat.reshape(1, 1, 1, -1).expand(1, 1, tokens, tp * E * il).contiguous()
+
+        gate = side_by_side(gate_up[..., ::2])
+        up = side_by_side(gate_up[..., 1::2])
+        gate_bias = bias_rows(gate_up_bias[..., ::2])
+        up_bias = bias_rows(gate_up_bias[..., 1::2])
+        down_w = state_dict["down_proj"]  # [E, I, H]
+        down = torch.cat([down_w[:, d * il : (d + 1) * il, :].reshape(E * il, H) for d in range(tp)], dim=0)
+        down = down.reshape(1, 1, tp * E * il, H)
+        db = state_dict["down_proj_bias"].reshape(1, 1, E, H)
+        down_bias = torch.cat([db] + [torch.zeros_like(db)] * (tp - 1), dim=-1)
+    expand = torch.zeros(1, 1, E, E * il)
+    for e in range(E):
+        expand[0, 0, e, e * il : (e + 1) * il] = 1
+
+    def weight(t, name, mapper, k, n):
+        return ttnn.as_tensor(
+            t,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, name),
+            memory_config=_dram_width_sharded(mesh_device, k, n),
+        )
+
+    def bias(t, name, mapper):
+        return ttnn.as_tensor(
+            t,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, name),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    return DenseDecodeExpertWeights(
+        gate=weight(gate, "dense_decode_gate", columns, H, E * il),
+        up=weight(up, "dense_decode_up", columns, H, E * il),
+        down=weight(down, "dense_decode_down", rows, E * il, H),
+        gate_bias=bias(gate_bias, f"dense_decode_gate_bias_t{tokens}", columns),
+        up_bias=bias(up_bias, f"dense_decode_up_bias_t{tokens}", columns),
+        down_bias=bias(down_bias, "dense_decode_down_bias", columns),
+        expand=ttnn.from_torch(
+            expand,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+        intermediate_local=il,
+    )
+
+
+# Decode-only expert weights for the streamed MoE (fused_decode/stream.py). Each TP shard of the intermediate dimension
+# is zero-padded up to a multiple of DECODE_INTERMEDIATE_ALIGN so the gate|up column pairs split evenly over the DRAM
+# banks (720 -> 768 = 24 tiles = 3 pairs per bank for gpt-oss-20b at TP=4). Padded gate/up columns are zero (weight
+# and bias), so their SwiGLU output is exactly zero and the padded down rows contribute nothing.
+DECODE_INTERMEDIATE_ALIGN = 256
+
+
+@dataclass(frozen=True)
+class DecodeExpertWeights:
+    # Per device: packed [gate | up] (+ bias) and down (+ bias, real on the first TP device only) of every expert, in
+    # the per-DRAM-bank streamed layouts of fused_decode/stream.py.
+    gate_up_stream: ttnn.Tensor
+    down_stream: ttnn.Tensor
+    intermediate_padded: int
+
+
+def load_decode_expert_weights(
+    mesh_device,
+    config: ExpertConfig,
+    state_dict,
+    mesh_config: MeshConfig,
+    weight_dtype=ttnn.bfloat4_b,
+    tensor_cache_path=None,
+) -> DecodeExpertWeights:
+    from ..fused_decode.stream import (
+        NBIAS,
+        as_stream_tensor,
+        columns_per_bank,
+        stream_down_layout,
+        stream_gate_up_layout,
+    )
+
+    tp = mesh_config.decode.tp
+    inter_local = config.intermediate_size // tp
+    inter_pad = -(-inter_local // DECODE_INTERMEDIATE_ALIGN) * DECODE_INTERMEDIATE_ALIGN
+    E, H = config.num_experts, config.hidden_size
+    banks = mesh_device.dram_grid_size().x
+    tile = ttnn.TILE_SIZE
+
+    def pad_shards(t, dim):
+        """Split t along dim into tp shards, zero-pad each shard to inter_pad, concatenate."""
+        chunks = torch.chunk(t, tp, dim=dim)
+        pad = [0, 0] * (t.dim() - 1 - (dim % t.dim())) + [0, inter_pad - inter_local]
+        return torch.cat([torch.nn.functional.pad(c, pad) for c in chunks], dim=dim)
+
+    gu_layouts = dn_layouts = None
+    if state_dict:
+        gate_up = state_dict["gate_up_proj"]
+        gate_up_bias = state_dict["gate_up_proj_bias"]
+        gate = pad_shards(gate_up[..., ::2].reshape(1, E, H, config.intermediate_size), -1)
+        up = pad_shards(gate_up[..., 1::2].reshape(1, E, H, config.intermediate_size), -1)
+        gate_bias = pad_shards(gate_up_bias[..., ::2].reshape(E, 1, config.intermediate_size), -1)
+        up_bias = pad_shards(gate_up_bias[..., 1::2].reshape(E, 1, config.intermediate_size), -1)
+        down = pad_shards(state_dict["down_proj"].reshape(1, E, config.intermediate_size, H), -2)
+        down_bias = state_dict["down_proj_bias"].reshape(E, 1, H)
+        # Row-parallel down: the bias is added once, on the first TP device.
+        down_bias = torch.cat([down_bias] + [torch.zeros_like(down_bias)] * (tp - 1), dim=-1)
+        # One streamed layout per TP shard: [E, H, 2 * I_pad] = [gate shard | up shard] and its [E, 2 * I_pad] bias;
+        # [E, I_pad, H] down rows and the [E, H] bias.
+        gu_layouts = [
+            stream_gate_up_layout(torch.cat([g[0], u[0]], -1), torch.cat([gb[:, 0], ub[:, 0]], -1), banks)
+            for g, u, gb, ub in zip(
+                torch.chunk(gate, tp, -1),
+                torch.chunk(up, tp, -1),
+                torch.chunk(gate_bias, tp, -1),
+                torch.chunk(up_bias, tp, -1),
+            )
+        ]
+        dn_layouts = [
+            stream_down_layout(w[0], b[:, 0], banks)
+            for w, b in zip(torch.chunk(down, tp, -2), torch.chunk(down_bias, tp, -1))
+        ]
+
+    suffix = f"decode_i{inter_pad}_b{banks}_nb{NBIAS}"
+    rows = {
+        "gate_up": E * 2 * inter_pad // tile // banks * (H // tile + 1) * tile,
+        "down": E * columns_per_bank(H, banks) * (inter_pad // tile + 1) * tile,
+    }
+    return DecodeExpertWeights(
+        gate_up_stream=as_stream_tensor(
+            mesh_device,
+            gu_layouts,
+            rows["gate_up"],
+            weight_dtype,
+            get_cache_file_name(tensor_cache_path, f"gate_up_stream_{suffix}"),
+        ),
+        down_stream=as_stream_tensor(
+            mesh_device,
+            dn_layouts,
+            rows["down"],
+            weight_dtype,
+            get_cache_file_name(tensor_cache_path, f"down_stream_{suffix}"),
+        ),
+        intermediate_padded=inter_pad,
+    )

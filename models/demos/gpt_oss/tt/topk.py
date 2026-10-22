@@ -15,6 +15,9 @@ import torch
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
+from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE
+from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
     typecast_needed = False
@@ -45,7 +48,9 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
 
 
 class TopKRouter:
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None):
+    def __init__(
+        self, mesh_device, hf_config, state_dict, tensor_cache_path=None, indexed_decode=False, ccl_manager=None
+    ):
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
@@ -82,6 +87,10 @@ class TopKRouter:
             packer_l1_acc=False,
         )
 
+        if indexed_decode:
+            assert ccl_manager is not None, "fused decode routing shares its output buffers through the CCL manager"
+            self._init_indexed_decode(mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager)
+
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
         # each), so it requires exactly 128 experts and 12 DRAM-aligned cores.
@@ -96,6 +105,22 @@ class TopKRouter:
             self._bias_torch = state_dict["bias"].unsqueeze(0).to(torch.bfloat16)
         else:
             self._bias_torch = None
+
+    def _init_indexed_decode(self, mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager):
+        # Fused decode router (fused_decode/stream.py: LinearStream out_mode 4): [hidden, num_experts] + bias streamed
+        # from DRAM, then top-k and the softmax over the selected logits in the same op.
+        self.ccl_manager = ccl_manager
+        banks = mesh_device.dram_grid_size().x
+        layout = None
+        if torch_weight is not None:
+            layout = stream_linear_layout(torch_weight, torch_bias.reshape(-1), banks)
+        self.weight_stream = as_stream_tensor(
+            mesh_device,
+            [layout] * mesh_device.shape[1] if layout is not None else None,
+            linear_stream_rows(mesh_device, self.hidden_dim, self.num_experts),
+            ROUTER_DECODE_WEIGHT_DTYPE,
+            get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}"),
+        )
 
     def _init_fused_op(self, device, B):
         """Lazily initialize fused op tensors (bias broadcast + output pre-alloc)."""
@@ -145,6 +170,86 @@ class TopKRouter:
         )
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
+
+    def dense_decode(self, hidden_states):
+        """Batched decode routing (one 32-token tile per device, fused_decode.config.dense_moe_decode_supported).
+
+        hidden_states: [1, 1, 32, hidden] L1 interleaved. Returns the dense [32, num_experts] routing weights (each
+        token's softmax over its top-k logits, zeros elsewhere) that experts.decode_forward_dense consumes.
+
+        The logits matmul runs on one core with the whole K in one block (in0_block_w = K tiles): the same tile
+        accumulation order as the auto-configured ttnn.linear, so the logits are bitwise identical, in ~8 us instead of
+        ~62 us, with the bias fused. The routing weights are built from a top-k threshold mask instead of
+        softmax + scatter (whose row-major index round trip is most of the original routing time)."""
+        k_tiles = self.hidden_dim // ttnn.TILE_SIZE
+        tokens = hidden_states.shape[-2]
+        if not hasattr(self, "_dense_logits_program_config"):
+            self._dense_logits_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+                in0_block_w=k_tiles,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=-(-self.num_experts // ttnn.TILE_SIZE),
+                per_core_M=-(-tokens // ttnn.TILE_SIZE),
+                per_core_N=-(-self.num_experts // ttnn.TILE_SIZE),
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            # The compute config ttnn.linear picks without a program config (BFP8 x BF16: HiFi2, no FP32 accumulation,
+            # packer L1 accumulation); an explicit program config would otherwise default to LoFi.
+            self._dense_logits_compute_config = ttnn.init_device_compute_kernel_config(
+                hidden_states.device().arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        logits = ttnn.linear(
+            hidden_states,
+            self.weight,
+            bias=self.bias,
+            program_config=self._dense_logits_program_config,
+            compute_kernel_config=self._dense_logits_compute_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+        values, indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
+        indices.deallocate(True)
+        # Reductions, not column slices: a slice inside a tile becomes untilize + slice + tilize.
+        kth = ttnn.min(values, dim=-1, keepdim=True)
+        values.deallocate(True)
+        top = ttnn.max(logits, dim=-1, keepdim=True)
+        selected = ttnn.ge(logits, kth)
+        kth.deallocate(True)
+        e = ttnn.exp(ttnn.subtract(logits, top, output_tensor=logits), output_tensor=logits)
+        top.deallocate(True)
+        e = ttnn.multiply(e, selected, output_tensor=e)
+        selected.deallocate(True)
+        total = ttnn.sum(e, dim=-1, keepdim=True)
+        weights = ttnn.divide(e, total)
+        total.deallocate(True)
+        e.deallocate(True)
+        return ttnn.reshape(weights, (tokens, self.num_experts))
+
+    def decode_indexed(self, hidden_states):
+        """Fused decode routing for one token.
+
+        hidden_states: the flat norm output of the layer boundary (fused_decode/boundary.py).
+        Returns persistent [1, 32] UINT16 expert ids and BF16 softmax weights holding the top-k in their first k
+        entries (shared by every layer; not to be deallocated)."""
+        router = self.ccl_manager.get_decode_linear_stream(
+            "router",
+            self.hidden_dim // ttnn.TILE_SIZE,
+            self.num_experts,
+            ROUTER_DECODE_WEIGHT_DTYPE,
+            readers=1,
+            out_mode=4,
+            out_page_bytes=64,
+            heads=(self.top_k, self.num_experts),
+        )
+        return router(hidden_states, self.weight_stream, self.ccl_manager.get_decode_router_out())
 
     def _fused_call(self, hidden_states, use_throughput_experts):
         """Forward pass using fused matmul+topk+softmax kernel.

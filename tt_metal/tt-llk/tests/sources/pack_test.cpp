@@ -218,6 +218,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             RELU_CONFIG /* relu_config */);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        if constexpr (pack_block_en)
+        {
+            _llk_pack_block_fast_init_<false>();
+        }
         PROFILER_SYNC();
     }
     {
@@ -240,7 +244,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             // Block-float blocks close every tile; one-tile blocks keep the per-tile pack.
                             if (NUM_TILES_IN_BLOCK > 1 && IS_BFP_FORMAT(formats.pack_dst))
                             {
-                                _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(
+                                _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(
                                     DST_INDEX + tile,
                                     L1_ADDRESS(buffer_Res[res_tile_idx]),
                                     NUM_TILES_IN_BLOCK,
@@ -252,7 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 LLK_ASSERT(
                                     ((DST_INDEX + NUM_TILES_IN_BLOCK) <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                     "Block exceeds maximum destination tiles");
-                                _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(
                                     DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK);
                                 break;
                             }
@@ -282,7 +286,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             // Block-float blocks close every tile; one-tile blocks keep the per-tile pack.
                             if (NUM_TILES_IN_BLOCK > 1 && IS_BFP_FORMAT(formats.pack_dst))
                             {
-                                _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(
+                                _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(
                                     DST_INDEX + tile,
                                     L1_ADDRESS(buffer_Res[res_tile_idx]),
                                     NUM_TILES_IN_BLOCK,
@@ -294,7 +298,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 LLK_ASSERT(
                                     ((DST_INDEX + NUM_TILES_IN_BLOCK) <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                     "Block exceeds maximum destination tiles");
-                                _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(
                                     DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK);
                                 break;
                             }

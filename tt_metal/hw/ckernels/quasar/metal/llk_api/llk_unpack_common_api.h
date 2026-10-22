@@ -15,7 +15,9 @@
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
+#include "llk_sync.h"
 #include "llk_unpack_common.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -52,6 +54,8 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
+ * Also the unpack thread's once-per-program DEST bank reset in the unpack-to-dest path (see below).
+ *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
  */
@@ -62,6 +66,60 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
+
+    // Unpack-to-dest: the unpack thread owns the DEST section base, and this is its once-per-program init. Every
+    // compute-API site that calls llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and
+    // math reset their bank parity together. The reset must NOT live in the per-op llk_unpack_A_init: op writers
+    // call copy_init inside their tile loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
+    if constexpr (UnpackToDestEn) {
+        _llk_unpack_dest_init_();
+    }
+}
+
+/**
+ * @brief Unpack thread of tile_regs_acquire: wait until a DEST bank is free for the unpack thread to write:
+ * unpack-to-dest section begin.
+ *
+ * Unpack side of the DEST section handshake, the counterpart of @ref _llk_math_wait_for_dest_available_ and
+ * @ref _llk_packer_wait_for_math_done_. Math is the middleman with two semaphores of max N (1 in SyncFull, 2 in
+ * SyncHalf): UNPACK_MATH counts sections unpacked but not yet committed by math, MATH_PACK counts sections committed
+ * but not yet released by pack. Waiting on both keeps unpack within N sections of pack.
+ *
+ * @note One call per section, paired with one @ref llk_unpack_dest_section_done. The section is the unit on all
+ *       three threads: however many tiles the section holds, each thread posts or gets once.
+ * @note In SyncHalf the per-semaphore wait still admits UNPACK_MATH = 1 and MATH_PACK = 1 at once, i.e. a third section
+ *       into a two-bank DEST (tt-metal #58903). A DEST occupancy count that unpack posts and pack gets closes that.
+ */
+inline void llk_unpack_wait_for_dest_available() {
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
+    }
+}
+
+/**
+ * @brief Unpack thread of tile_regs_commit: hand the current DEST section to math: unpack-to-dest section end.
+ *
+ * Posts UNPACK_MATH once UNPACK0 has drained, so the post cannot overtake the DEST writes math and pack will read, then
+ * (SyncHalf) moves the unpack thread's section base to the other bank. Counterpart of @ref llk_math_dest_section_done
+ * and @ref llk_pack_dest_section_done.
+ *
+ * @tparam EN_32BIT_DEST: Sizes the SyncHalf bank flip: bank-1 base at 256 rows when true, 512 when false (see
+ *         @ref _update_dest_register_offset_). Must equal the value the pack thread passes to
+ *         @ref _llk_sync_advance_dest_section_ for this op, or the two sides address different DEST halves (the two
+ *         calls live in different TRISC TUs, so no static_assert can compare them). values = <true/false>
+ * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
+ *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
+ *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
+ *       this contract and stalls both threads!
+ */
+template <bool EN_32BIT_DEST>
+inline void llk_unpack_dest_section_done() {
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            _llk_sync_advance_dest_section_<to_underlying(TriscID::Unpack), EN_32BIT_DEST, p_stall::UNPACK0>();
+        }
+    }
 }
 
 /**

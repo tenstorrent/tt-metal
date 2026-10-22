@@ -1248,6 +1248,48 @@ def passed_test(
     return is_within_tolerance and (pcc > target_pcc)
 
 
+def bf16_from_bits(bits: int) -> float:
+    """One bfloat16 value, as a Python float, from its 16-bit pattern."""
+    return float(torch.tensor([bits], dtype=torch.int16).view(torch.bfloat16).item())
+
+
+def assert_bf16_separates_rne(wide: torch.Tensor) -> None:
+    """Fail when every lane rounds the same under truncation and round-to-nearest-even.
+
+    A bit-exact NearestEven check is vacuous on values that are already bf16.
+    """
+    rne = wide.to(torch.bfloat16)
+    trunc = (wide.view(torch.int32) & 0xFFFF0000).view(torch.float32).to(torch.bfloat16)
+    if torch.equal(rne.view(torch.int16), trunc.view(torch.int16)):
+        raise AssertionError("stimulus does not separate NearestEven from truncation")
+
+
+def assert_bit_exact(got: torch.Tensor, want: torch.Tensor, what: str) -> None:
+    """Fail unless two 16-bit tensors have the same dtype and the same bits."""
+    if got.dtype != want.dtype:
+        raise AssertionError(f"{what}: dtype {got.dtype} vs {want.dtype}")
+    if torch.equal(got, want):
+        return
+    differ = int((got.view(torch.int16) != want.view(torch.int16)).sum())
+    raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
+
+
+def fp32_bits_as_int32(tensor: torch.Tensor) -> torch.Tensor:
+    """Reinterpret a float32 tensor's bits as int32 (no numeric conversion)."""
+    return tensor.to(torch.float32).contiguous().view(torch.int32)
+
+
+def int32_to_smag32(tensor: torch.Tensor) -> torch.Tensor:
+    """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32).
+
+    Bit 31 is the sign and bits [30:0] are the magnitude. Used to stage operands
+    for and model the SIGN_MAGNITUDE_FORMAT kernel path, which skips the
+    2's-comp<->SM casts.
+    """
+    values = tensor.to(torch.int64)
+    return (values.abs() | ((values < 0).to(torch.int64) << 31)).to(torch.int32)
+
+
 def create_directories(dirs: list[Path]):
     """Create directories with file lock to handle race conditions in parallel execution."""
 

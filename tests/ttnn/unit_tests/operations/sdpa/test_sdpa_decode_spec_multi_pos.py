@@ -51,7 +51,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 # One module-scoped device: the KV caches below are up to 32k tokens and every case

@@ -259,10 +259,13 @@ void kernel_main() {
     noc.async_write_barrier();
     noc.async_atomic_barrier();
     update_socket_config(receiver_socket);
-    // In LEASE mode the connection is already closed between transfers (and on the
-    // termination path, which only fires from an idle wait); in OWN mode it is held
-    // open for the kernel's life and closed here.
+    // OWN mode holds the connection for the kernel's life, so close it here. LEASE mode
+    // only holds it here if termination hit mid-transfer (waiting for data or for the
+    // workers); hand the links back too, or a pending wait_for_fabric_links() never returns.
     if (fabric_open) {
         fabric_connection.close();
+        if constexpr (share_fabric_links) {
+            link_grant[0] = 0;
+        }
     }
 }

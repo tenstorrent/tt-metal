@@ -34,7 +34,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
-    MATMUL_PACK_BLOCK,
+    MATMUL_STREAM_NARROW,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -280,18 +280,12 @@ def test_math_matmul(
             THROTTLE_LEVEL(throttle),
             DEST_SYNC(matmul_config.dest_sync),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-            MATMUL_PACK_BLOCK(
-                0
-                if matmul_config.tile_dimensions.rt_dim
-                * matmul_config.tile_dimensions.ct_dim
-                == 1
-                else (
-                    2
-                    if formats.output_format.is_block_float()
-                    or matmul_config.tile_dimensions.in0_tile_r_dim < 32
-                    or matmul_config.tile_dimensions.in1_tile_c_dim < 32
-                    else 1
-                )
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                matmul_config.dest_acc,
+                matmul_config.dest_sync,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
             ),
         ],
         runtimes=[

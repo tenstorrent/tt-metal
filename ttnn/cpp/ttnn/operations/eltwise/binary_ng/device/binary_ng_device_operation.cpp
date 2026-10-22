@@ -104,7 +104,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case POWER:
         case WHERE_TST:
         case WHERE_TTS:
-        case ISCLOSE: return true;
+        case ISCLOSE:
+        // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
+        case SITU_GLU: return true;
         default: return false;
     }
     return false;
@@ -326,6 +328,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(
             input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
+    }
+    if (attributes.binary_op_type == BinaryOpType::SITU_GLU) {
+        // situ_glu_tile builds on softcap and approx_recip, which only Blackhole and Quasar have.
+        const auto arch = input_tensor_a.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR,
+            "situ_glu: the fused SFPU kernel is Blackhole/Quasar only, got arch {}",
+            arch);
+        TT_FATAL(input_tensor_b.has_value(), "situ_glu: the up operand must be a tensor, not a scalar");
+        TT_FATAL(
+            input_tensor_a.dtype() == input_tensor_b->dtype(),
+            "situ_glu: gate and up must share a dtype, got {} and {}",
+            input_tensor_a.dtype(),
+            input_tensor_b->dtype());
     }
 
     TT_FATAL(
