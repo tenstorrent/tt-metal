@@ -4,7 +4,6 @@
 
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
-#include "impl/buffers/sram_address.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -18,25 +17,6 @@
 #include <limits>
 #include <map>
 #include <unordered_set>
-
-namespace tt::tt_metal::detail {
-
-// Reject reserved, misaligned and out-of-range SRAM before any device write occurs.
-void validate_sram_address(IDevice& device, uint64_t address, uint64_t bytes) {
-    const auto alignment = device.allocator()->get_alignment(BufferType::L1);
-    TT_FATAL(address % alignment == 0, "SRAM address must be aligned");
-    TT_FATAL(
-        address >= device.allocator()->get_base_allocator_addr(HalMemType::L1),
-        "SRAM address is below allocatable SRAM");
-    TT_FATAL(
-        bytes <= std::numeric_limits<DeviceAddr>::max() && address <= std::numeric_limits<DeviceAddr>::max() - bytes,
-        "SRAM address overflows");
-    TT_FATAL(
-        address <= device.l1_size_per_core() && bytes <= device.l1_size_per_core() - address,
-        "SRAM range exceeds device SRAM");
-}
-
-}  // namespace tt::tt_metal::detail
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
