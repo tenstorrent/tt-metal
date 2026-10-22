@@ -70,7 +70,7 @@ and defines it leaves out. [README.md](README.md) explains the shape they fit in
 | `connection` | l1 | `u32` | control_info | a runtime argument | Where the producer opens and closes its connection. In the router's runtime args. |
 | `conn_info` | l1 | `struct:EDMChannelWorkerLocationInfo` | control_info | `LOCAL_SENDER_CH_{}_CONN_INFO_ADDR` | Where the producer writes where it is, and the router its read counter. |
 | `buffer_index_sem` | l1 | `struct:SenderChannelProducerCursor` | control_info | a runtime argument | Where the producer keeps its write cursor across connections. In the producer's runtime args, from the channel's connection spec. |
-| `static_connection` | flag |  | control_info | `SENDER_CH_{}_WAIT_STATIC_CONNECTION` | Whether a sibling router connects to the channel once, at startup: before its main loop, the router waits for that connection. |
+| `static_connection` | flag |  | control_info | `SENDER_CH_{}_WAIT_STATIC_CONNECTION` | Whether a sibling router connects to the channel once, at startup: before its main loop, each ERISC that runs the channel waits for that connection. The builder gives an ERISC that doesn't run it 0. |
 
 ### Receiver channel fields
 
