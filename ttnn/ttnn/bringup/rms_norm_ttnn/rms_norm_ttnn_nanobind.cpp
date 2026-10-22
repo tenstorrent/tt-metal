@@ -10,6 +10,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -139,7 +140,35 @@ RmsNormPyResult rms_norm_py(
     const std::optional<ProgramConfigArg>& program_config,
     const std::optional<ComputeConfigArg>& compute_kernel_config,
     bool return_residual_sum,
-    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config) {
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config,
+    bool stats_out,
+    const std::optional<const ttnn::Tensor>& partial_stats,
+    int64_t stats_width,
+    const std::optional<std::pair<int64_t, int64_t>>& input_window,
+    const std::optional<tt::tt_metal::DataType>& dtype) {
+    // CHANGELOG 6: any split option -> the split program (the default program never sees them)
+    if (stats_out || partial_stats.has_value() || stats_width != 0 || input_window.has_value() || dtype.has_value()) {
+        if (bias.has_value() || residual_input_tensor.has_value() || program_config.has_value() ||
+            return_residual_sum || residual_sum_memory_config.has_value()) {
+            throw ValueErrorCpp(
+                "rms_norm_ttnn: stats_out / partial_stats / stats_width / input_window / dtype take no bias, residual, "
+                "program_config or return_residual_sum");
+        }
+        return RmsNormPyResult{
+            .alias = nullptr,
+            .value = rms_norm_split_full(
+                input_tensor,
+                epsilon,
+                weight,
+                memory_config,
+                compute_kernel_config,
+                stats_out,
+                partial_stats,
+                stats_width,
+                input_window,
+                dtype),
+            .residual_sum = std::nullopt};
+    }
     auto r = rms_norm_full(
         input_tensor,
         epsilon,
@@ -236,6 +265,19 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
             residual_sum_memory_config (ttnn.MemoryConfig, optional): t's placement (any TILE placement,
                 interleaved or sharded). Defaults to the input's. Only with return_residual_sum=True.
 
+            stats_out (bool): opt-in (CHANGELOG 6, split program): return only this chip's partial sums of
+                squares of the input's (window's) columns, [.., R, 32 B] float32 TILE; every element is a partial,
+                the row's sum of squares is the sum of all of its elements. All-gather it over the chips that hold
+                the row's other columns and pass it as ``partial_stats``. Needs fp32_dest_acc_en. Defaults to False.
+            partial_stats (ttnn.Tensor, optional): opt-in (split program): the gathered partials (float32 / bfloat16
+                TILE, the input's rows): y = x * rsqrt(sum of the row's partials / stats_width + epsilon) * weight.
+            stats_width (int): the full row width the mean divides by. Defaults to 0 = the window's width.
+            input_window (tuple[int, int], optional): opt-in (split program): normalize only the input's columns
+                [c0, c1) (multiples of 32); the output is c1 - c0 wide, the weight covers the window.
+            dtype (ttnn.DataType, optional): opt-in (split program): the output's dtype. Defaults to the input's.
+                The split program takes TILE interleaved float32 / bfloat16 inputs, a [1, 1, 1, W] TILE weight, no
+                bias / residual / program_config, and fp32_dest_acc_en=True.
+
         Returns:
             ttnn.Tensor: the normalized tensor (the input tensor itself under ``inplace``); with
             ``return_residual_sum=True`` a tuple ``(normalized, residual_sum)``.
@@ -251,7 +293,12 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("return_residual_sum") = false,
-        nb::arg("residual_sum_memory_config") = nb::none());
+        nb::arg("residual_sum_memory_config") = nb::none(),
+        nb::arg("stats_out") = false,
+        nb::arg("partial_stats") = nb::none(),
+        nb::arg("stats_width") = 0,
+        nb::arg("input_window") = nb::none(),
+        nb::arg("dtype") = nb::none());
 
     // For the parity test: the C++ builder's ProgramDescriptor, without dispatching.
     mod.def(
