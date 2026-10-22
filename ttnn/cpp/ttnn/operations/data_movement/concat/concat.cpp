@@ -269,7 +269,6 @@ namespace {
 ttnn::Tensor concat_native(
     const std::vector<ttnn::Tensor>& input_tensors,
     int dim,
-    const std::optional<MemoryConfig>& memory_config,
     const MemoryConfig& mem_config,
     unsigned int groups,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
@@ -390,14 +389,13 @@ ttnn::Tensor concat_native(
                     chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
                 }
 
-                chunk_outputs.push_back(
-                    concat_native(chunk_inputs, dim, memory_config, mem_config, groups, sub_core_grids));
+                chunk_outputs.push_back(concat_native(chunk_inputs, dim, mem_config, groups, sub_core_grids));
             }
 
             if (chunk_outputs.size() == 1) {
                 return chunk_outputs[0];
             }
-            return concat_native(chunk_outputs, rank - 2, memory_config, mem_config, 1, sub_core_grids);
+            return concat_native(chunk_outputs, rank - 2, mem_config, 1, sub_core_grids);
         }
     }
 
@@ -490,7 +488,7 @@ ttnn::Tensor concat_force_native(
     if (input_tensors.size() == 1) {
         return ttnn::to_memory_config(input_tensors.at(0), prepared.mem_config, std::nullopt);
     }
-    return concat_native(input_tensors, prepared.dim, memory_config, prepared.mem_config, groups, sub_core_grids);
+    return concat_native(input_tensors, prepared.dim, prepared.mem_config, groups, sub_core_grids);
 }
 
 ttnn::Tensor concat_force_codegen(
@@ -501,6 +499,7 @@ ttnn::Tensor concat_force_codegen(
     unsigned int groups,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     namespace cc = ttnn::operations::data_movement::concat_codegen;
+    TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     auto prepared = prepare_concat(input_tensors, dim, memory_config, groups);
     const ttnn::prim::ConcatCodegenParams params{
         .dim = static_cast<uint32_t>(prepared.dim), .output_mem_config = prepared.mem_config};
@@ -508,7 +507,7 @@ ttnn::Tensor concat_force_codegen(
         cc::supported_execution_controls(groups, sub_core_grids),
         "ttnn.concat: codegen path does not support groups > 1 or sub_core_grids");
     TT_FATAL(cc::supported_by_codegen(input_tensors, params), "ttnn.concat: codegen path does not support this input");
-    return ttnn::prim::concat_codegen(input_tensors, params, optional_output_tensor);
+    return ttnn::prim::concat_codegen(input_tensors, params);
 }
 
 }  // namespace ttnn::operations::data_movement::detail
@@ -533,13 +532,16 @@ ttnn::Tensor concat(
 
     const ttnn::prim::ConcatCodegenParams params{
         .dim = static_cast<uint32_t>(prepared.dim), .output_mem_config = prepared.mem_config};
+    // Five gates, in order: architecture (codegen_supported_on_arch), execution controls, static scope
+    // (supported_by_codegen), perf (is_demoted: native measured faster) and live L1 (fits_live_l1: a CB plan exists for
+    // the L1 free now). Failing any one sends the whole call to native. Forced codegen applies the first three, skips
+    // the perf gate, and raises instead of falling back when L1 holds no plan.
     if (dm::codegen_supported_on_arch(input_tensors.front()) &&
         cc::supported_execution_controls(groups, sub_core_grids) && cc::supported_by_codegen(input_tensors, params) &&
         !cc::is_demoted(input_tensors, params) && cc::fits_live_l1(input_tensors, params)) {
         return ttnn::prim::concat_codegen(input_tensors, params);
     }
-    return dm::detail::concat_native(
-        input_tensors, prepared.dim, memory_config, prepared.mem_config, groups, sub_core_grids);
+    return dm::detail::concat_native(input_tensors, prepared.dim, prepared.mem_config, groups, sub_core_grids);
 }
 
 }  // namespace ttnn

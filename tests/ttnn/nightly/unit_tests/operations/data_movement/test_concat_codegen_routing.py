@@ -1020,6 +1020,13 @@ def test_concat_forced_codegen_refuses_sub_core_grids(device, expect_error):
         _force_codegen(xt, dim=0, sub_core_grids=grid)
 
 
+def test_concat_forced_codegen_rejects_output_tensor(device, expect_error):
+    xt = _device_inputs([[40, 32]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = _device_inputs([[80, 32]], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)[0]
+    with expect_error(RuntimeError, "optional output tensor currently unsupported"):
+        _force_codegen(xt, dim=0, output_tensor=out)
+
+
 def test_concat_forced_codegen_refuses_empty_input(device, expect_error):
     empty = ttnn.from_torch(
         torch.zeros([0, 32], dtype=torch.bfloat16),

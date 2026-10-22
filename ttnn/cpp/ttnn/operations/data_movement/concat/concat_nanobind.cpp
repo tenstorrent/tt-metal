@@ -76,8 +76,8 @@ void bind_concat(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-                groups (int, optional): number of interleaved groups. Defaults to `1`.
+                output_tensor (ttnn.Tensor, optional): must be `None`; a preallocated output is rejected. Defaults to `None`.
+                groups (int, optional): number of interleaved groups. Defaults to `1`. Only supported for two height-sharded input tensors.
                 sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on. Defaults to `None`.
 
             Returns:
@@ -106,8 +106,7 @@ void bind_concat(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): preallocated output tensor, which must match the spec concat
-                    builds for these inputs. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): must be `None`; a preallocated output is rejected. Defaults to `None`.
                 groups (int, optional): must be `1`. Defaults to `1`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): must be `None`. Defaults to `None`.
 
