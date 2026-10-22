@@ -245,16 +245,17 @@ void kernel_main() {
                                 DST_ACCUM_MODE,
                                 /*fused=*/false,
                                 /*rank_stamped=*/false,
-                                tie_order>(
+                                tie_order,
+                                /*ct_steps=*/stable>(
                                 /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge<
+                            ckernel::topk_merge<64,
                                 /*idir=*/false,
                                 stable,
                                 DST_ACCUM_MODE,
                                 /*fused=*/false,
                                 /*rank_stamped=*/false,
-                                tie_order>(/*idst=*/0, m_iter, /*k=*/64);
+                                tie_order>(/*idst=*/0, m_iter);
 
                             if (dir) {
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]

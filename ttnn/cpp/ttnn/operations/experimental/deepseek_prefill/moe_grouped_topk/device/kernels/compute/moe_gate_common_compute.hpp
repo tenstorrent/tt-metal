@@ -84,16 +84,16 @@ ALWI void gate_topk_local_sort(uint32_t idst, bool ascending, int end_phase) {
         GATE_TOPK_TIE_ORDER>(idst, (int)ascending, end_phase);
 }
 
-template <bool stable_sort, bool rank_tag>
-ALWI void gate_topk_merge(uint32_t idst, int m_iter, int k) {
-    ckernel::topk_merge<
+template <bool stable_sort, bool rank_tag, std::uint32_t k>
+ALWI void gate_topk_merge(uint32_t idst, int m_iter) {
+    ckernel::topk_merge<k,
         /*idir=*/false,
         gate_comparator_stable<stable_sort, rank_tag>(),
         DST_ACCUM_MODE,
         GATE_TOPK_FUSED,
         rank_tag,
         GATE_TOPK_TIE_ORDER,
-        gate_tag_bits<rank_tag>()>(idst, m_iter, k);
+        gate_tag_bits<rank_tag>()>(idst, m_iter);
 }
 
 template <bool stable_sort, bool rank_tag>
@@ -424,7 +424,7 @@ void topk(
         ckernel::topk_canonicalize_negzero_values(0);
     }
     gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
-    gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
+    gate_topk_merge<stable_sort, rank_tag, 32>(0 /*idst*/, 0 /*m_iter*/);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -450,7 +450,7 @@ void topk(
             ckernel::topk_canonicalize_negzero_values(0);
         }
         gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
-        gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
+        gate_topk_merge<stable_sort, rank_tag, 32>(0 /*idst*/, 0 /*m_iter*/);
     }
     gate_topk_rebuild<stable_sort, rank_tag>(
         0 /*idst*/, ascending, 0 /*m_iter*/, 32 /*k*/, 5 /*logk*/, true /*skip_second*/);
