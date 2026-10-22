@@ -11,6 +11,7 @@ working for existing tests.
 
 pytest_plugins = ["helpers.llk_pytest_plugin", "fuser.pytest_plugin"]
 
+import math  # noqa: E402
 from contextlib import contextmanager  # noqa: E402
 
 import pytest  # noqa: E402
@@ -23,9 +24,10 @@ from helpers.llk_pytest_plugin import (  # noqa: E402
     skip_for_wormhole,
     wormhole_only,
 )
-from helpers.ulp_domains import Problem, TableError  # noqa: E402
+from helpers.ulp_domains import Domain, Problem, TableError  # noqa: E402
 
 __all__ = [
+    "TANH_DOMAINS",
     "blackhole_only",
     "problem_id",
     "refuses",
@@ -37,6 +39,10 @@ __all__ = [
     "skip_for_wormhole",
     "wormhole_only",
 ]
+
+# A list of the shape the sweep writes for tanh on a bf16 output: gated at 3 steps on
+# both tails, 10 (past bf16's ceiling of 6) on [-1, 1).
+TANH_DOMAINS = (Domain(-math.inf, -1, 3), Domain(-1, 1, 10), Domain(1, math.inf, 3))
 
 
 @contextmanager

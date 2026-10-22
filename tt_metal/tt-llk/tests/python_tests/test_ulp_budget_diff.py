@@ -7,6 +7,7 @@ to the gates, and how the ``--ulp-measure`` records are judged against it."""
 import math
 
 import pytest
+from conftest import TANH_DOMAINS
 from helpers import ulp_budget_diff
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
@@ -273,16 +274,56 @@ def test_diff_exit_status(tmp_path, head, flags, status):
 
 @pytest.mark.parametrize(
     "head_text",
-    ["Abs: [{input: Bfp8_b, measured: 1}]\n", "Abs: [\n", None],
-    ids=["refused-row", "not-yaml", "missing-file"],
+    [
+        "Abs: [{input: Bfp8_b, measured: 1}]\n",
+        "Abs: [\n",
+        "<<<<<<< HEAD\nAbs: [\n",
+        "Abs:\n- {{measured: 1}}\n",
+        "Abs:\n- {input: Float16_b, output: Float16_b, domains: [{low: -.inf}]}\n",
+        None,
+    ],
+    ids=[
+        "refused-row",
+        "not-yaml",
+        "conflict-marker",
+        "doubled-braces",
+        "entry-without-high",
+        "missing-file",
+    ],
 )
 def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
+    """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
+    gate, not a table no gate can be read from. A conflict marker, a mapping used as a
+    key and an entry missing a field used to escape as tracebacks with exit 1."""
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
     write_table_file(_BASE, base_path)
     if head_text is not None:
         head_path.write_text(head_text)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
-    assert main(argv) == 2
+    assert main([*argv, "--allow-raises"]) == 2
+
+
+def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
+    """`helpers.sfpu_accuracy_budget` loads the table at import. The guard judges tables
+    by path, and a PR head whose table the loader refuses is exactly its case: that
+    refusal must reach `main` as "cannot load" (exit 2), not kill the process at import
+    with the regression status. So the guard takes the resolution rule from
+    `ulp_table`, and the registry stays out of its import chain."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys, helpers.ulp_budget_diff; "
+        "sys.exit('helpers.sfpu_accuracy_budget' in sys.modules)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parent,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
 
 
 # ── Rows with a `domains` list ────────────────────────────────────────────────
@@ -541,13 +582,13 @@ def test_each_entry_of_a_list_is_judged_on_its_own_lanes():
     ]
     findings = judge(table, [_tanh_measured(readings)]).findings
     assert [(f.verdict, f.entry) for f in findings] == [
-        (Verdict.REGRESSED, _TANH[0]),
-        (Verdict.TIGHTENS, _TANH[1]),
+        (Verdict.REGRESSED, TANH_DOMAINS[0]),
+        (Verdict.TIGHTENS, TANH_DOMAINS[1]),
     ]
 
 
 def test_ranked_lanes_in_a_null_entry_are_held_to_the_largest_figure():
-    table = _tanh((_TANH[0], Domain(-1, 1, 10), Domain(1, INF)))
+    table = _tanh((TANH_DOMAINS[0], Domain(-1, 1, 10), Domain(1, INF)))
     readings = [Reading(-INF, -1.0, 3, 16000), Reading(-1.0, 1.0, 10, 33000)]
     stray = Reading(1.0, INF, 1000, 5)
     assert _verdicts(table, _tanh_measured([*readings, stray])) == [Verdict.REGRESSED]

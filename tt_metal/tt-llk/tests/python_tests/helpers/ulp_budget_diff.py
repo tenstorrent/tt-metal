@@ -35,7 +35,6 @@ from .ulp_table import (
     Metric,
     Row,
     Table,
-    _winner,
     load_table,
     most_specific,
     read_measurements,
@@ -101,30 +100,37 @@ _REPORT_ORDER = list(Kind)
 
 class State(Enum):
     """What one segment of the input is held to: a gated figure, a figure past the
-    ceiling the headroom report holds, an entry no lane is ranked in, or nothing."""
+    ceiling the headroom report holds, or nothing."""
 
     GATED = "gated"
     PAST = "past the ceiling"
-    NULL = "unranked"
     NONE = "none"
 
 
 @dataclass(frozen=True)
 class Span:
+    """One run of the input and what holds it. *strays* marks an entry with no ``ulp``:
+    its few ranked lanes are held to the row's largest figure, which is *figure*."""
+
     low: float
     high: float
     state: State
     figure: int | None = None
+    strays: bool = False
 
 
-def _held_text(state: State, figure: int | None, row: Row | None) -> str:
+def _held_text(
+    state: State, figure: int | None, row: Row | None, strays: bool = False
+) -> str:
     """What a span is held to, for the report."""
+    if state is State.NONE:
+        return "—"
     if state is State.GATED:
         floor = row.near_zero_atol if row is not None else None
-        return f"{figure} (floor {floor:g})" if floor else str(figure)
-    if state is State.PAST:
-        return f"tolerance (max {figure})"
-    return "unranked" if state is State.NULL else "—"
+        text = f"{figure} (floor {floor:g})" if floor else str(figure)
+    else:
+        text = f"tolerance (max {figure})"
+    return f"unranked, strays held to {text}" if strays else text
 
 
 @dataclass(frozen=True)
@@ -261,20 +267,23 @@ def _classify(was: Held, now: Held) -> Kind | None:
 
 def _spans(held: Held, query: BudgetKey) -> list[Span]:
     """*held*'s row over ``(-inf, inf)``: its list's entries, or one span for a plain
-    row."""
+    row. An entry with no ``ulp`` is held to the row's largest figure (by the sweep
+    where that figure fits the ceiling, by the headroom report past it), so it is
+    compared as that figure: an entry that gains a worse figure of its own reads as the
+    raise it is."""
     row = held.row
     if row is None:
         return [Span(-_INF, _INF, State.NONE)]
     if row.domains:
         binds, ceiling = steps_bind(row.key, query), usable_budget_ceiling(row.output)
+        largest = max(d.ulp for d in row.domains if d.ulp is not None)
         spans = []
         for d in row.domains:
-            if d.ulp is None:
-                spans.append(Span(d.low, d.high, State.NULL))
-            elif binds and d.ulp <= ceiling:
-                spans.append(Span(d.low, d.high, State.GATED, d.ulp))
+            figure, strays = (largest, True) if d.ulp is None else (d.ulp, False)
+            if binds and figure <= ceiling:
+                spans.append(Span(d.low, d.high, State.GATED, figure, strays))
             elif held.full:
-                spans.append(Span(d.low, d.high, State.PAST, d.ulp))
+                spans.append(Span(d.low, d.high, State.PAST, figure, strays))
             else:
                 spans.append(Span(d.low, d.high, State.NONE))
         return spans
@@ -367,8 +376,8 @@ def _segment_changes(
             continue
         held = (
             kind,
-            _held_text(a.state, a.figure, was.row),
-            _held_text(b.state, b.figure, now.row),
+            _held_text(a.state, a.figure, was.row, a.strays),
+            _held_text(b.state, b.figure, now.row, b.strays),
         )
         if found and found[-1][0] == held and found[-1][2] == low:
             found[-1][2] = high

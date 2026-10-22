@@ -18,7 +18,7 @@ import pytest
 import test_eltwise_binary_sfpu as binary
 import test_eltwise_unary_sfpu as unary
 import torch
-from conftest import refused
+from conftest import TANH_DOMAINS, refused
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_reason_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc
@@ -53,7 +53,7 @@ from helpers.utils import passed_test
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
 
 # The input axis for the live-table sweeps: the formats a row may name, and None, which
-# resolves the rows that wildcard `in:`.
+# resolves the rows that wildcard `input`.
 QUERYABLE_INPUT_FORMATS = [*ULP_FORMATS, None]
 
 _LANES = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -579,8 +579,9 @@ EXACT_IN_EVERY_FORMAT = tuple(
     )
 )
 
-# What the output pack may cost an exact op on a cell that converts.
-_PACK_PATH_STEPS = 2
+# What the output pack may cost an exact op on a cell that converts: one step. The
+# figure is the measurement itself, so one is also the most such a cell may read.
+_PACK_PATH_STEPS = 1
 
 
 def _mantissa_bits(fmt):

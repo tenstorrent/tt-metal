@@ -1188,8 +1188,6 @@ def pytest_testnodedown(node, error):
 def _finish_ulp_emit(session):
     """Under ``--ulp-emit``, write the session's measurements into the table once; a
     refusal fails a clean session and leaves an interrupted one's status alone."""
-    import yaml
-
     from . import ulp_sweep
     from .ulp_table import TABLE_PATH
 
@@ -1208,7 +1206,9 @@ def _finish_ulp_emit(session):
         clean = session.testsfailed == 0 and session.exitstatus == pytest.ExitCode.OK
         written = ulp_sweep.finish_emit(get_chip_architecture(), clean, TABLE_PATH)
         message = f"--ulp-emit: rewrote {len(written)} op(s) in {TABLE_PATH.name}"
-    except (RuntimeError, ValueError, yaml.YAMLError) as exc:
+    except (RuntimeError, ValueError) as exc:
+        # A ValueError is a TableError: the table on disk does not load, or the rewrite
+        # would not (`write_table_file` reads its dump back first); nothing was written.
         message = f"--ulp-emit: {exc}"
         if session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED

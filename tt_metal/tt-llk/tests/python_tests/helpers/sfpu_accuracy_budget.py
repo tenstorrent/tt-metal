@@ -24,8 +24,6 @@ from .ulp_table import (
     AccuracyContract,
     BudgetKey,
     Metric,
-    _winner,
-    contracts_of,
     load_table,
     most_specific,
     steps_bind,

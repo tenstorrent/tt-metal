@@ -212,36 +212,6 @@ def steps_bind(key: BudgetKey, query: BudgetKey) -> bool:
     )
     return formats_ok and (query.arch == MEASURED_ARCH or key.arch is not None)
 
-#: The architecture every unkeyed budget was measured on.
-MEASURED_ARCH = ChipArchitecture.WORMHOLE
-
-V = TypeVar("V")
-
-
-def _winner(
-    table: Dict[BudgetKey, V], query: BudgetKey
-) -> Optional[Tuple[BudgetKey, V]]:
-    """The single most specific entry of *table* covering *query*, or ``None``."""
-    matched = [(key, value) for key, value in table.items() if key.matches(query)]
-    if not matched:
-        return None
-    best = max(key.specificity for key, _ in matched)
-    winners = [(key, value) for key, value in matched if key.specificity == best]
-    if len(winners) > 1:
-        raise TableError(Problem.AMBIGUOUS, [key.describe() for key, _ in winners])
-    return winners[0]
-
-
-def steps_bind(key: BudgetKey, query: BudgetKey) -> bool:
-    """Whether a step budget on the row keyed *key* binds the variant *query*: every
-    format named is one the SFPU computes in, and the variant is on the architecture
-    the row was measured on -- :data:`MEASURED_ARCH` for a row that names none."""
-    formats_ok = all(
-        fmt is None or fmt in ULP_FORMATS
-        for fmt in (query.input_format, query.output_format)
-    )
-    return formats_ok and (query.arch == MEASURED_ARCH or key.arch is not None)
-
 
 @dataclass(frozen=True)
 class Row:
@@ -641,11 +611,7 @@ class Measurement:
 
     @classmethod
     def from_json(cls, line: str) -> "Measurement":
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise TableError(Problem.UNREADABLE, error) from error
-        return from_plain(cls, data)
+        return from_plain(cls, json.loads(line))
 
 
 #: How :meth:`Measurement.to_json` spells an infinite float, and what

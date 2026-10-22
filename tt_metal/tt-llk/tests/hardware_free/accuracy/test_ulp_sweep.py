@@ -23,7 +23,12 @@ from helpers.golden_generators import (
     get_golden_generator,
     widen_to_float32,
 )
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    MathOperation,
+    format_dict,
+)
 from helpers.stimuli_generator.strategies.structured import _enumerate_representable
 from helpers.test_config import TestConfig
 from helpers.ulp import has_ulp_gate, ulp_distance, ulp_stats
@@ -63,6 +68,7 @@ from helpers.ulp_sweep import (
     record_unmeasurable,
     stale_excuses,
     sweep_cells,
+    sweep_spec,
     swept_value_count,
     write_table,
 )
@@ -279,7 +285,46 @@ def test_a_cell_that_ranked_no_lane_is_written_without_a_figure_when_a_number_ar
         ]
         for step in steps[::order]:
             step()
-        assert MEASURED[GELU][_CELL] == Unmeasurable(why="no lane"), order
+        assert MEASURED[GELU][_CELL].nonfinite == 0, order
+        write_table(table)
+        assert _rows(table)[_pair(F16, F16)] == Row(
+            input=F16,
+            output=F16,
+            metric=Metric.TOLERANCE,
+            note="not measurable: no lane",
+        ), order
+
+
+def test_three_readings_of_one_cell_merge_alike_in_any_order():
+    """9, then a no-lane verdict, then an overflow verdict with a figure of its own, 2:
+    the no-lane verdict dropped the 9, so the overflow won with its 2, while in the
+    other order the cell kept 9. The order the workers' readings arrived in picked the
+    baseline. Every order now gives the overflow verdict with the worst figure, read in
+    one process or each in a worker of its own and merged by the controller."""
+    from itertools import permutations
+
+    readings = (
+        lambda: record(GELU, _CELL, 9),
+        lambda: record_unmeasurable(GELU, _CELL, Unmeasurable(why="no lane")),
+        lambda: record_unmeasurable(
+            GELU, _CELL, Unmeasurable(why="overflow", nonfinite=3, measured=2)
+        ),
+    )
+    worst = Unmeasurable(why="overflow", nonfinite=3, measured=9)
+    for order in permutations(range(len(readings))):
+        MEASURED.clear()
+        for i in order:
+            readings[i]()
+        assert MEASURED[GELU][_CELL] == worst, order
+        exported = []
+        for i in order:
+            MEASURED.clear()
+            readings[i]()
+            exported.append(export_measured())
+        MEASURED.clear()
+        for blob in exported:
+            merge_measured(blob)
+        assert MEASURED[GELU][_CELL] == worst, order
 
 
 @pytest.mark.parametrize(
@@ -1108,7 +1153,7 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
     assert judged.tolist() == [i != 3 for i in range(10)]
     assert bins[rule.binade(-3.0)] == (2, 2, 2) and bins[rule.binade(1.5)] == (1, 1, 9)
     assert bins[rule.binade(-1.25)] == (2, 1, 1)  # -1.5 shares it; -1.25 is unranked
-    spans = rule.partition(bins, 6.0)
+    spans = rule.partition(bins, rule.usable_budget_ceiling(F16B))
     # 1.5 (9 steps) and 2.0 (8 steps) are both past bf16's ceiling of 6: one bad range.
     assert spans == ((-_INF, 1.0, True), (1.0, 4.0, True), (4.0, _INF, True))
     drawn = domain_figures(spans, x, distance, ranked, judged)
@@ -1145,7 +1190,11 @@ def test_a_worst_lane_on_a_negative_edge_is_figured_on_the_side_its_entry_holds(
     every = torch.ones(3 * n, dtype=torch.bool)
     bins = binade_maxima(x, distance, every, every)
     drawn = domain_figures(
-        rule.partition(bins, usable_budget_ceiling(F16B)), x, distance, every, every
+        rule.partition(bins, rule.usable_budget_ceiling(F16B)),
+        x,
+        distance,
+        every,
+        every,
     )
     assert drawn == (Domain(-_INF, -1, 1), Domain(-1, _INF, 9))
     key = cell_key(F16B, F16B, NO, D_NO)
@@ -1168,6 +1217,6 @@ def test_a_cell_with_no_ranked_span_writes_no_list():
     present = torch.ones(128, dtype=torch.bool)
     few = torch.tensor([i < 3 for i in range(128)])
     nothing = rule.partition(
-        binade_maxima(x, distance, few, present), usable_budget_ceiling(F16B)
+        binade_maxima(x, distance, few, present), rule.usable_budget_ceiling(F16B)
     )
     assert domain_figures(nothing, x, distance, few, few) == ()

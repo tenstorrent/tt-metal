@@ -9,7 +9,7 @@ import math
 
 import pytest
 import yaml
-from conftest import problem_id, refused
+from conftest import TANH_DOMAINS, problem_id, refused
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
@@ -48,8 +48,11 @@ F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
             dict(input=F16B, output=F16B, measured=10, domains=TANH_DOMAINS),
             Problem.BESIDE_DOMAINS,
         ),
-        (dict(output=F16B, domains=TANH), Problem.UNPINNED_DOMAINS),
-        (dict(input=F16B, output=F16B, domains=TANH[:1]), Problem.NOT_COVERING),
+        (dict(output=F16B, domains=TANH_DOMAINS), Problem.UNPINNED_DOMAINS),
+        (
+            dict(input=F16B, output=F16B, domains=TANH_DOMAINS[:1]),
+            Problem.NOT_COVERING,
+        ),
     ],
     ids=problem_id,
 )
@@ -96,8 +99,12 @@ def test_a_plain_value_that_does_not_fit_its_field_is_refused(plain, problem):
 
 
 def test_a_record_missing_a_required_field_is_refused():
+    """A dataclass built without a required field raises ``TypeError``, which is not a
+    refusal; the reader names the fields instead."""
     with refused(Problem.MISSING_FIELD):
         from_plain(Measurement, {"op": "Abs", "key": {}})
+    with refused(Problem.MISSING_FIELD):
+        from_plain(Domain, {"low": 0})
 
 
 @pytest.mark.parametrize(
@@ -129,32 +136,15 @@ def test_a_repeated_yaml_key_is_refused_not_overwritten():
 
 
 @pytest.mark.parametrize(
-    "text, problem",
-    [
-        ("Abs:\n- {{measured: 1}}\n", Problem.WRONG_SHAPE),
-        ("<<<<<<< HEAD\nAbs: [\n", Problem.UNREADABLE),
-        ("Abs:\n- &a {measured: 1}\n- {<<: *a, output: Float16}\n", Problem.UNREADABLE),
-        ("Abs: &rows\n- *rows\n", Problem.WRONG_SHAPE),
-    ],
-    ids=["doubled-braces", "conflict-marker", "merge-key", "self-containing-anchor"],
+    "text",
+    ["Abs:\n- {{measured: 1}}\n", "Abs: &rows\n- *rows\n"],
+    ids=["doubled-braces", "self-containing-anchor"],
 )
-def test_text_no_reader_can_hold_is_refused_not_crashed(text, problem):
+def test_a_key_that_is_not_a_name_is_refused_not_a_type_error(text):
     """A mapping used as a key (doubled braces pasted from an f-string) raised a bare
-    ``TypeError``, and text PyYAML cannot scan or construct escaped as its own error:
-    both past the guard's "cannot load" handling, as tracebacks."""
-    with refused(problem):
+    ``TypeError`` from the loader, past the guard's "cannot load" handling."""
+    with refused(Problem.WRONG_SHAPE):
         read_table(text)
-
-
-def test_a_record_missing_a_required_field_is_refused():
-    """A dataclass built without a required field raises ``TypeError``, which is not a
-    refusal; the reader names the fields instead."""
-    with refused(Problem.MISSING_FIELD):
-        from_plain(Domain, {"low": 0})
-    with refused(Problem.MISSING_FIELD):
-        Measurement.from_json('{"op": "Abs"}')
-    with refused(Problem.UNREADABLE):
-        Measurement.from_json("{\n")
 
 
 def test_a_typed_table_round_trips_through_the_one_serializer():

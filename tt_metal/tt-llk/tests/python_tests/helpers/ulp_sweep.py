@@ -543,8 +543,8 @@ def nonfinite_failures(
     )
 
 
-# How many offending lanes a not-measurable note names; the count beside them says how
-# many there are, and at four the notes took the table past the repo's size limit.
+# How many offending lanes a not-measurable note names: the row's `nonfinite` count says
+# how many there are, two lanes show the kind, and more would only lengthen every note.
 NAMED_LANES = 2
 
 
@@ -785,12 +785,12 @@ def record_unmeasurable(
 
 
 def _with_measured(verdict: Unmeasurable, measured: int | None) -> Unmeasurable:
-    """*verdict* with *measured* as its finite-lane figure if that is worse; a verdict
-    that ranked no lane takes no figure."""
-    if (
-        measured is None
-        or verdict.nonfinite == 0
-        or (verdict.measured is not None and verdict.measured >= measured)
+    """*verdict* with *measured* as its finite-lane figure if that is worse. Kept on a
+    verdict of no rankable lane too, though its row will not write it (:func:`_decide`):
+    dropped here, a later non-finite verdict would win with only its own figure, and the
+    cell's worst lane would depend on the order the workers' readings arrived in."""
+    if measured is None or (
+        verdict.measured is not None and verdict.measured >= measured
     ):
         return verdict
     return replace(verdict, measured=measured)
