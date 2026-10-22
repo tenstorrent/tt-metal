@@ -241,6 +241,7 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
                 auto cl = dfb->core_lookup_.find(core);
                 dd.has_finalize = (cl != dfb->core_lookup_.end());
                 dd.finalize_l1_offset = dd.has_finalize ? cl->second.second : 0;  // 0-based L1 offset
+                dd.borrows_memory = c.borrows_memory;
                 cs.dfbs.push_back(std::move(dd));
             }
 
