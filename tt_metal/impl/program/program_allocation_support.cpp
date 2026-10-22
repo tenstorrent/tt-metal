@@ -11,9 +11,19 @@
 
 namespace tt::tt_metal::detail {
 
-void L1RegionAllocator::mark_address(uint64_t address, uint64_t size, uint64_t base_address) {
+namespace {
+
+// Returns address for next allocation
+// Allocations are placed sequentially on a core so the next available address gets appended to the last L1 region
+uint64_t get_region_end(const L1RegionAllocator& allocator) {
+    return allocator.l1_regions.empty() ? 0 : allocator.l1_regions.back().second;
+}
+
+}  // namespace
+
+void L1RegionAllocator::mark_address(uint64_t address, uint64_t size) {
     if (this->l1_regions.empty()) {
-        this->l1_regions.emplace_back(base_address, base_address);
+        this->l1_regions.emplace_back(this->base_address, this->base_address);
     }
     auto& last_region = this->l1_regions.back();
     if (address < last_region.second) {
@@ -44,34 +54,47 @@ void register_ephemeral_allocation(std::vector<L1RegionAllocator>& allocators, c
     }
 }
 
-DeviceAddr allocate_ephemeral_memory(
+void prepare_ephemeral_allocation(
     std::vector<L1RegionAllocator>& allocators,
-    const CoreRangeSet& cores,
-    uint64_t size,
-    DeviceAddr reserved_base,
-    uint32_t alignment,
-    const std::function<DeviceAddr(const CoreRange&)>& allocator_base) {
-    uint64_t computed_addr = reserved_base;
+    PersistentL1Arena& persistent_l1,
+    std::unordered_map<CoreCoord, PersistentL1Arena::Seal>& seals) {
+    for (L1RegionAllocator& allocator : allocators) {
+        const CoreRangeSet cores(allocator.core_range);
+        for (const CoreCoord& core : corerange_to_cores(cores)) {
+            if (seals.contains(core)) {
+                continue;
+            }
+            seals.emplace(core, persistent_l1.seal(CoreRangeSet(CoreRange(core))));
+        }
+        allocator.base_address = persistent_l1.high_water_mark(cores);
+    }
+}
+
+DeviceAddr allocate_ephemeral_memory(
+    std::vector<L1RegionAllocator>& allocators, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
+    uint64_t computed_addr = 0;
     for (const CoreRange& core_range : cores.ranges()) {
         // Need the max available address across all cores the allocation is placed on
-        for (const L1RegionAllocator& allocator : allocators) {
-            if (allocator.core_range == core_range) {
-                computed_addr = std::max(computed_addr, allocator.get_cb_region_end());
-                break;
-            }
-        }
+        auto it = std::find_if(allocators.begin(), allocators.end(), [&core_range](const L1RegionAllocator& allocator) {
+            return allocator.core_range == core_range;
+        });
+        TT_FATAL(
+            it != allocators.end(),
+            "Internal error: core range {} was not registered before allocation",
+            core_range.str());
+        computed_addr = std::max({computed_addr, it->base_address, get_region_end(*it)});
     }
     computed_addr = align(computed_addr, alignment);
     for (const CoreRange& core_range : cores.ranges()) {
         for (L1RegionAllocator& allocator : allocators) {
             if (allocator.core_range.intersects(core_range)) {
-                if (allocator.core_range != core_range and computed_addr < allocator.get_cb_region_end()) {
+                if (allocator.core_range != core_range and computed_addr < get_region_end(allocator)) {
                     // Intersecting core range has already been marked to have allocation at this address. This
                     // could have been marked by an allocation on a core range disjoint from current `core_range`
                     // but also intersecting `allocator.core_range`
                     continue;
                 }
-                allocator.mark_address(computed_addr, size, allocator_base(allocator.core_range));
+                allocator.mark_address(computed_addr, size);
             }
         }
     }

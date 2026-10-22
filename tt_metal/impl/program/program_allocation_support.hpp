@@ -5,12 +5,13 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"  // DeviceAddr
+#include "impl/allocator/persistent_l1_arena.hpp"
 
 namespace tt::tt_metal::detail {
 
@@ -26,14 +27,12 @@ struct L1RegionAllocator {
     // amongst all of its target cores This vector is sorted from lower to higher address spaces
     std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
-    // Returns address for next circular buffer
-    // Circular buffers are placed sequentially on a core so the next available address gets appended to the
-    // last L1 region
-    uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
+    // Lowest address allocations may use on this core range, set by prepare_ephemeral_allocation()
+    uint64_t base_address = 0;
 
     // If address is the end of the last L1 region, the last region is extended by size bytes,
     //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-    void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+    void mark_address(uint64_t address, uint64_t size);
 
     // Reset when circular buffer allocation is invalidated
     void reset_available_addresses() { this->l1_regions.clear(); }
@@ -44,16 +43,19 @@ struct L1RegionAllocator {
 // are recorded on it.
 void register_ephemeral_allocation(std::vector<L1RegionAllocator>& allocators, const CoreRangeSet& cores);
 
-// Places `size` bytes at one address on every core of `cores` and returns that address.
-// The address is aligned to `alignment`, at or above `reserved_base`, and at or above the end of the allocators
-// registered for the ranges of `cores`. The allocation is recorded on every allocator whose range intersects
-// `cores`; `allocator_base` gives the base address an allocator's first region starts from.
-DeviceAddr allocate_ephemeral_memory(
+// Sets each allocator's base address to the top of `persistent_l1` on its core range, and seals those cores so no
+// persistent allocation can be placed under the ephemeral memory while the seals in `seals` are held. Cores already in
+// `seals` are not sealed again. Call before allocate_ephemeral_memory() on `allocators`.
+void prepare_ephemeral_allocation(
     std::vector<L1RegionAllocator>& allocators,
-    const CoreRangeSet& cores,
-    uint64_t size,
-    DeviceAddr reserved_base,
-    uint32_t alignment,
-    const std::function<DeviceAddr(const CoreRange&)>& allocator_base);
+    PersistentL1Arena& persistent_l1,
+    std::unordered_map<CoreCoord, PersistentL1Arena::Seal>& seals);
+
+// Places `size` bytes at one address on every core of `cores` and returns that address.
+// Every range of `cores` must be registered and have its base address set. The address is aligned to `alignment`, at
+// or above the base address and the end of the allocators registered for the ranges of `cores`. The allocation is
+// recorded on every allocator whose range intersects `cores`.
+DeviceAddr allocate_ephemeral_memory(
+    std::vector<L1RegionAllocator>& allocators, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
 
 }  // namespace tt::tt_metal::detail

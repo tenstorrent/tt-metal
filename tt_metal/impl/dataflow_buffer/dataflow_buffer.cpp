@@ -2980,9 +2980,8 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         return;
     }
 
-    for (const auto& dfb : this->dataflow_buffers_) {
-        reserve_program_local_l1(device, dfb->core_ranges);
-    }
+    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
+    prepare_ephemeral_allocation(this->dfb_allocators_, persistent_l1, this->persistent_l1_seals_[&persistent_l1]);
     for (auto& dfb : this->dataflow_buffers_) {
         // Alias secondaries share the primary's L1 address; skip allocation here
         // and propagate the address inline after the primary is processed below.
@@ -2999,11 +2998,7 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
                 this->dfb_allocators_,
                 dfb->core_ranges,
                 dfb->total_size(),
-                reserve_program_local_l1(device, dfb->core_ranges),
-                device->allocator()->get_alignment(BufferType::DRAM),
-                [&](const CoreRange& core_range) {
-                    return reserve_program_local_l1(device, CoreRangeSet(core_range));
-                });
+                device->allocator()->get_alignment(BufferType::DRAM));
             alloc_addr = static_cast<uint32_t>(computed_addr);
         }
         // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a

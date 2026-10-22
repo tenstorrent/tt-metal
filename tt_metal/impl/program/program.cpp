@@ -472,18 +472,6 @@ detail::ProgramImpl::~ProgramImpl() noexcept {
     Inspector::program_destroyed(this);
 }
 
-DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores) {
-    auto& arena = device->allocator_impl()->persistent_l1();
-    auto& sealed_cores = persistent_l1_seals_[&arena];
-    for (const CoreCoord& core : corerange_to_cores(cores)) {
-        if (sealed_cores.contains(core)) {
-            continue;
-        }
-        sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
-    }
-    return arena.high_water_mark(cores);
-}
-
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
@@ -2204,6 +2192,9 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         return;
     }
 
+    // Scratchpad ranges are in dfb_allocators_, but a program with no DFBs never runs allocate_dataflow_buffers.
+    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
+    prepare_ephemeral_allocation(this->dfb_allocators_, persistent_l1, this->persistent_l1_seals_[&persistent_l1]);
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
@@ -2212,22 +2203,14 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 continue;
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            const DeviceAddr persistent_base = reserve_program_local_l1(device, kernel_cores);
 
             for (auto& handle : scratchpad_handles) {
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
                 // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
                 // The scratchpad address is delivered as a CRTA, so it sits at the same L1 offset on every core of
                 // the kernel. The kernel's core ranges were registered in add_kernel.
-                const uint64_t addr = allocate_ephemeral_memory(
-                    this->dfb_allocators_,
-                    kernel_cores,
-                    handle.size_bytes,
-                    persistent_base,
-                    alignment,
-                    [&](const CoreRange& core_range) {
-                        return reserve_program_local_l1(device, CoreRangeSet(core_range));
-                    });
+                const uint64_t addr =
+                    allocate_ephemeral_memory(this->dfb_allocators_, kernel_cores, handle.size_bytes, alignment);
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
@@ -2317,11 +2300,8 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    for (const auto& circular_buffer : this->circular_buffers_) {
-        if (!circular_buffer->globally_allocated()) {
-            reserve_program_local_l1(device, circular_buffer->core_ranges());
-        }
-    }
+    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
+    prepare_ephemeral_allocation(this->cb_allocators_, persistent_l1, this->persistent_l1_seals_[&persistent_l1]);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
@@ -2340,9 +2320,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             this->cb_allocators_,
             circular_buffer->core_ranges(),
             circular_buffer->size(),
-            reserve_program_local_l1(device, circular_buffer->core_ranges()),
-            device->allocator()->get_alignment(BufferType::DRAM),
-            [&](const CoreRange& core_range) { return reserve_program_local_l1(device, CoreRangeSet(core_range)); });
+            device->allocator()->get_alignment(BufferType::DRAM));
         // Report CB allocation for ALL devices being tracked
         for (const IDevice* dev : devices_to_track) {
             tt::tt_metal::GraphTracker::instance().track_allocate_cb(
