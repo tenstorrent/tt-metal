@@ -99,8 +99,8 @@ bool is_tile_axis_accumulation(
     switch (op) {
         // fp32 cumsum keeps the permuted path for its compensated (Kahan) sum from #56811.
         case AccumulationOp::CUMSUM: return output_dtype == DataType::BFLOAT16;
-        // There is no Quasar cumprod_tile yet (#52337). preprocess_input_tensor also calls this on
-        // host tensors, which have no device.
+        // There is no Quasar cumprod_tile. preprocess_input_tensor also calls this on host tensors,
+        // which have no device.
         case AccumulationOp::CUMPROD:
             return (output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32) &&
                    input_tensor.device() != nullptr && input_tensor.device()->arch() != tt::ARCH::QUASAR;

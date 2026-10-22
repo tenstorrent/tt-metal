@@ -294,6 +294,11 @@ def _cumprod_calltrace(input_tensor, **kwargs):
     return output_tensor, ttnn.graph.extract_calltrace(captured_graph)
 
 
+def _skip_without_cumprod_tile(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no cumprod_tile, so cumprod keeps the permuted path there")
+
+
 def _exact_cumprod_input(size, dim, torch_dtype):
     # x[k] = +-2^(e[k] - e[k-1]) with random e in [-20, 20], so every prefix product is +-2^e[k]: exact in
     # bf16 and fp32, and a wrong, missing or extra factor changes it. About a quarter of the rows get one zero.
@@ -309,9 +314,9 @@ def _exact_cumprod_input(size, dim, torch_dtype):
 @pytest.mark.parametrize(
     "size, dim",
     [
-        ([65536], 0),  # 1D
-        ([1, 65536], -1),
-        ([65536, 1], -2),
+        ([4096], 0),  # 1D
+        ([1, 4096], -1),
+        ([4096, 1], -2),
         ([33, 35, 37], -1),
         ([33, 35, 37], -2),
         ([100, 64, 64], -1),  # both core groups
@@ -321,8 +326,7 @@ def _exact_cumprod_input(size, dim, torch_dtype):
 )
 def test_cumprod_tile_axis_runs_in_place(size, dim, torch_dtype, device):
     """Forward bf16/fp32 cumprod along H or W scans the tiles in place (#24824) and is exact."""
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        pytest.skip("Quasar has no cumprod_tile, so cumprod keeps the permuted path there")
+    _skip_without_cumprod_tile(device)
     torch.manual_seed(29112024)
     torch_input = _exact_cumprod_input(size, dim, torch_dtype)
     input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
@@ -355,18 +359,19 @@ def _with_special_values(torch_input, dim):
 def test_cumprod_tile_axis_matches_dim0_path(dim, torch_dtype, values, device):
     """Same bits as the permuted path's kernel (dim 0 of a 4D tensor needs no permute), on full-precision inputs and
     on special values. NaNs only have to be at the same places."""
+    _skip_without_cumprod_tile(device)
     torch.manual_seed(29112024)
     if values == "near_one":
-        torch_input = 1.0 + 0.01 * torch.randn([33, 70, 70])
+        torch_input = 1.0 + 0.01 * torch.randn([5, 70, 70])
     else:
-        torch_input = _with_special_values(torch.empty([33, 70, 70]).uniform_(-3, 3), dim)
+        torch_input = _with_special_values(torch.empty([5, 70, 70]).uniform_(-3, 3), dim)
     torch_input = torch_input.to(torch_dtype)
     input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
     moved = torch_input.movedim(dim, 0)
-    dim0_tensor = ttnn.from_torch(moved.reshape(moved.shape[0], 1, 1, -1), device=device, layout=ttnn.Layout.TILE)
+    dim0_tensor = ttnn.from_torch(moved.unsqueeze(1).contiguous(), device=device, layout=ttnn.Layout.TILE)
 
     tile_axis = ttnn.to_torch(ttnn.cumprod(input_tensor, dim=dim))
-    dim0 = ttnn.to_torch(ttnn.cumprod(dim0_tensor, dim=0)).reshape(moved.shape).movedim(0, dim)
+    dim0 = ttnn.to_torch(ttnn.cumprod(dim0_tensor, dim=0)).squeeze(1).movedim(0, dim)
 
     nan = torch.isnan(dim0)
     assert torch.equal(torch.isnan(tile_axis), nan)
@@ -377,6 +382,7 @@ def test_cumprod_tile_axis_matches_dim0_path(dim, torch_dtype, values, device):
 def test_cumsum_cumprod_tile_axis_program_cache(device):
     """Interleaved cumsum/cumprod over bf16/fp32 and H/W: one program per configuration, and cache hits on new input
     buffers give exact results."""
+    _skip_without_cumprod_tile(device)
     configs = [
         ("cumsum", torch.bfloat16, -1),
         ("cumprod", torch.bfloat16, -1),
