@@ -16,7 +16,7 @@
 # Env (all optional): CACHED=0  NEW=5120,32768  ITERS=2  USERS=2  TARGET_CHUNKS=64  REQS  SKIP_IDLE=1
 #   CHUNK=5120  LAYER_COUNTS=<per-stage comma list>  MAX_NEW=51200  EXPERT_DTYPE=bf4
 #   HF_MODEL / TT_CACHE_PATH / PREFILL_TRACE_DIR (weka defaults)  MATRIX_CI_LAUNCH=discovery|binding
-#   TABLE_WAIT_SECS=2400 (bring-up bound per launch)  PRODUCER_TIMEOUT_SECS=3600 (per cached row)
+#   TABLE_WAIT_SECS=2400 (bring-up bound per launch)  PRODUCER_TIMEOUT_SECS=900 (per cached row; a hung row fails before the job timeout)
 #   SHUTDOWN_WAIT_SECS=240 (how long a runner gets to exit after the SHUTDOWN sentinel before it is killed)
 #   MATRIX_CI_DRY_RUN=1: print the launch commands and exit (no MPI, no devices; TTRUN_DIR may point at a fake
 #   hostfile/rankfile).
@@ -47,7 +47,7 @@ MAX_NEW=${MAX_NEW:-$MATRIX_MAX_NEW}
 LAUNCH=${MATRIX_CI_LAUNCH:-discovery}
 DRY_RUN=${MATRIX_CI_DRY_RUN:-0}
 TABLE_WAIT_SECS=${TABLE_WAIT_SECS:-2400}
-PRODUCER_TIMEOUT_SECS=${PRODUCER_TIMEOUT_SECS:-3600}
+PRODUCER_TIMEOUT_SECS=${PRODUCER_TIMEOUT_SECS:-900}
 SHUTDOWN_WAIT_SECS=${SHUTDOWN_WAIT_SECS:-240}
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 export HF_MODEL=${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}
