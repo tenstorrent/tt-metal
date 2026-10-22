@@ -637,8 +637,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     });
 
     // Preserve Float32 input precision and every buffer a bitcast interprets as Float32. Bitcast formats
-    // its input buffer as the output dtype, so a bitcast to Float32 must carry all 32 bits of each word,
-    // whatever the source dtype (ttnn::bitcast does not check widths, so this includes bfloat16).
+    // its input buffer as the output dtype, so for the supported pairs UINT32 -> FLOAT32 and INT32 -> FLOAT32
+    // that buffer must carry all 32 bits of each word. ttnn::bitcast does not check widths, so unsupported
+    // pairs such as BFLOAT16 -> FLOAT32 also reach this branch; they remain unsupported.
     // Any other Float32 buffer under a 32-bit Dest keeps the explicit UnpackToSrc mode Metal 2.0 requires.
     //
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
