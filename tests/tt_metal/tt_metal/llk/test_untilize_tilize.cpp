@@ -46,7 +46,7 @@
 #include "tt_metal/test_utils/uint8.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -362,9 +362,6 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
         compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
-    }
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
         compute_defines.emplace("FAST_TILIZE", "1");
@@ -686,9 +683,6 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         {"REDUCE_OP", "PoolType::MAX"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
     };
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     compute_hw_config = experimental::ComputeHardwareConfig{
