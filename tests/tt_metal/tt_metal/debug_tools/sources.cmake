@@ -27,6 +27,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_mcast_wrap_around_device.cpp
     watcher/test_noc_sanitize_delays.cpp
     watcher/test_sanitize.cpp
+    watcher/test_sanitize_shared_noc.cpp
     watcher/test_pause.cpp
     watcher/test_ringbuf.cpp
     watcher/test_stack_usage.cpp
