@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from itertools import product
 
 import pytest
 import torch
@@ -11,7 +10,10 @@ from helpers.chip_architecture import (
     get_chip_architecture,
     is_4row_arch,
 )
-from helpers.constraints import get_valid_math_fidelities
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    get_valid_math_fidelities,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -21,7 +23,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -33,6 +34,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
+    runtime,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -40,7 +42,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -66,24 +67,23 @@ mathop_mapping = {
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
-REDUCE_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-    ],
-) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+# Float32 joins only through the two pairs the shared perf matrix uses.
+REDUCE_FORMATS = (
+    input_output_formats([DataFormat.Float16_b, DataFormat.Float16])
+    + [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 
 def reduce_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def reduce_dest_acc_modes(*, is_perf=False):
-    return (
-        [DestAccumulation.No]
-        if is_perf
-        else [DestAccumulation.No, DestAccumulation.Yes]
-    )
+def reduce_dest_acc_modes(formats):
+    return get_valid_dest_accumulation_modes(formats)
 
 
 def reduce_tile_dimensions(formats, *, is_perf=False):
@@ -101,54 +101,30 @@ def reduce_tile_dimensions(formats, *, is_perf=False):
     )
 
 
-def reduce_implied_math_formats(formats, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 def reduce_input_dimensions():
     return [64, 64]
 
 
-def generate_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
-    def is_valid_combination(pool_type, math_fidelity):
-        # Max pool only supports LoFi
-        if pool_type == ReducePool.Max:
-            return math_fidelity == MathFidelity.LoFi
-        # Sum and Average support all fidelities
-        return True
-
+def reduce_math_fidelities(formats, pool_type):
+    # GMPOOL (Max) ignores fidelity, so only LoFi is meaningful.
+    if pool_type == ReducePool.Max:
+        return [MathFidelity.LoFi]
     # MX inputs decode to Float16_b in the src registers, so LoFi is already full
     # precision for them; get_valid_math_fidelities applies that cap.
-    fidelities = [MathFidelity.LoFi] if is_perf else get_valid_math_fidelities(formats)
-
-    return [
-        combo
-        for combo in product(POOL_TYPES, fidelities)
-        if is_valid_combination(*combo)
-    ]
-
-
-def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
-    return generate_pool_type_and_math_fidelity_combinations(formats, is_perf=is_perf)
+    return get_valid_math_fidelities(formats)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
+    tile_dimensions=runtime(
+        lambda formats: reduce_tile_dimensions(formats, is_perf=False)
+    ),
+    dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
-        formats, is_perf=False
-    ),
+    pool_type=POOL_TYPES,
+    math_fidelity=reduce_math_fidelities,
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
-    implied_math_format=lambda formats: reduce_implied_math_formats(
-        formats, is_perf=False
-    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -157,24 +133,20 @@ def test_reduce_quasar(
     tile_dimensions,
     dest_acc,
     reduce_dim,
-    pool_type_and_math_fidelity,
+    pool_type,
+    math_fidelity,
     dest_sync_mode,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
+    input_dimensions=None,
 ):
-
-    pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    input_dimensions = (
-        reduce_input_dimensions()
-        if is_perf
-        else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
-    )
+    if input_dimensions is None:
+        input_dimensions = [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -239,7 +211,6 @@ def test_reduce_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -269,14 +240,9 @@ def test_reduce_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        # Reduce needs its operands in SrcA/SrcB; it never unpacks to Dest.
+        "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": (
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     }
 
     configuration = create_test_or_perf_config(
@@ -403,7 +369,6 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
@@ -431,7 +396,6 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
-        "disable_format_inference": False,
     }
 
     configuration = create_test_or_perf_config(

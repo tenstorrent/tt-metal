@@ -73,6 +73,21 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
+    TT_FATAL(num_heads > 0, "num_heads must be greater than 0");
+    TT_FATAL(!num_kv_heads.has_value() || num_kv_heads.value() > 0, "num_kv_heads must be greater than 0");
+    // Every head takes at least one column; bounding the head counts by the width they split also keeps the
+    // uint32_t head-count sums below from wrapping to 0.
+    const uint64_t kv_heads = num_kv_heads.value_or(num_heads);
+    const uint64_t heads_in_input = input_tensor_kv.has_value() ? uint64_t{num_heads} : num_heads + 2 * kv_heads;
+    TT_FATAL(
+        heads_in_input <= input_shape[2],
+        "{} heads do not fit in the hidden dimension ({})",
+        heads_in_input,
+        input_shape[2]);
+    TT_FATAL(
+        !input_tensor_kv.has_value() || 2 * kv_heads <= input_tensor_kv->logical_shape()[-1],
+        "2 * num_kv_heads ({}) exceeds the KV hidden dimension",
+        kv_heads);
 
     TT_FATAL(
         input_tensor.layout() == tt::tt_metal::Layout::TILE,

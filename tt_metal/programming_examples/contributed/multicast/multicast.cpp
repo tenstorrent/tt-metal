@@ -51,7 +51,10 @@ std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
 
 CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    return CreateCircularBuffer(program, core, CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_size));
+    return CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, tile_size));
 }
 
 void VerifyDPRINTEnvironment(const std::string& program_path) {
@@ -199,7 +202,8 @@ int main(int /*argc*/, char** argv) {
         MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// DATA MOVEMENT CONFIG SETUP //////////
-        DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        DataMovementConfig DataMovementConfigIn = {
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
         std::vector<uint32_t> writer_compile_time_args;
         TensorAccessorArgs(*output_dram_buffer).append_to(writer_compile_time_args);
         DataMovementConfig DataMovementConfigOut = {
@@ -233,7 +237,7 @@ int main(int /*argc*/, char** argv) {
             "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
             receiver_cores_logical,
             ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_kernel_args});

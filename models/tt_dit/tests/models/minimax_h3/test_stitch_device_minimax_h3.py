@@ -6,6 +6,7 @@
 Separate file because these run FABRIC_1D_RING while test_vae_parallel_minimax_h3.py runs
 FABRIC_1D, and fabric_config is a process-global one-shot (second distinct value is TT_FATAL)."""
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -21,7 +22,10 @@ from ....models.vae.minimax_h3.vae_minimax_h3 import (
     split_tiles,
     stitch_tiles,
 )
+from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
+from .common import GALAXY_MESHES
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
@@ -390,3 +394,88 @@ def test_temporal_crossfade_survives_the_yuv_conversion():
     assert convert_last.shape == blend_last.shape, f"{convert_last.shape} != {blend_last.shape}"
     worst = np.abs(convert_last.astype(int) - blend_last.astype(int)).max()
     assert worst <= 1, f"reordering the cross-fade past the YUV conversion costs {worst} LSB, not <=1"
+
+
+@pytest.mark.parametrize("width", [1152, 1120], ids=["w1152", "w1120"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+def test_replicated_readback_matches_gather_path(mesh_device, width):
+    """`replicated_to_host_yuv` must produce the same bytes as partitioning the canvas and
+    reading it back through `fast_device_to_host_yuv`'s gather path. Both end in the same
+    `rgb_to_yuv` and planar assembly, so any difference is a layout bug and must be zero.
+    W = 1120 splits oddly over 32 columns, so the reference pads to an even per-device width
+    and crops on host, as `_read_canvas_yuv` used to."""
+    frames, height = 28, 768
+    _, mesh_cols = tuple(mesh_device.shape)
+
+    # Independent random pixels, so a misplaced slab changes nearly every byte it covers.
+    generator = torch.Generator().manual_seed(0)
+    canvas_torch = torch.rand(1, CHANNELS, frames, height, width, generator=generator) * 2 - 1
+    canvas = ttnn.from_torch(
+        canvas_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    padded_width = -(-width // (2 * mesh_cols)) * (2 * mesh_cols)
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+
+    def gather_path():
+        reference_in = canvas
+        if padded_width != width:
+            reference_in = ttnn.pad(canvas, [(0, 0), (0, 0), (0, 0), (0, 0), (0, padded_width - width)], value=0.0)
+        reference_in = ttnn.mesh_partition(reference_in, dim=-2, cluster_axis=0)
+        reference_in = ttnn.mesh_partition(reference_in, dim=-1, cluster_axis=1)
+        return fast_device_to_host_yuv(
+            reference_in, mesh_device, ccl_manager=ccl_manager, use_persistent_buffer=False, logical_w=width
+        )
+
+    # Unrounded BT.601 limited-range planes from the bf16 the device saw: at a differing byte,
+    # whichever path is nearer to this is the one that rounded correctly.
+    rgb = canvas_torch.to(torch.bfloat16).float()[0]
+    r, g, b = ((rgb + 1) / 2).unbind(0)
+    host_y = 16 + 219 * (0.299 * r + 0.587 * g + 0.114 * b)
+    host_cb = 128 + 224 * (-0.168736 * r - 0.331264 * g + 0.5 * b)
+    host_cr = 128 + 224 * (0.5 * r - 0.418688 * g - 0.081312 * b)
+    sub = lambda p: p.reshape(frames, height // 2, 2, width // 2, 2).mean(dim=(2, 4))
+    host_planes = {"Y": host_y, "Cb": sub(host_cb), "Cr": sub(host_cr)}
+
+    hw, uv = height * width, (height // 2) * (width // 2)
+    n_hosts = int(ttnn.distributed_context_get_size()) if ttnn.using_distributed_env() else 1
+    # Per-device column extents on the two paths, so a differing byte can be placed within its device slab.
+    new_w_per, gather_w_per = width * n_hosts // mesh_cols, padded_width // mesh_cols
+
+    def describe(flat_index, actual, expected):
+        t, offset = divmod(int(flat_index), hw + 2 * uv)
+        if offset < hw:
+            plane, (y, x), chroma = "Y", divmod(offset, width), 1
+        else:
+            plane, (y, x), chroma = ("Cb", "Cr")[(offset - hw) // uv], divmod((offset - hw) % uv, width // 2), 2
+        return (
+            f"t={t} {plane}[{y},{x}] new={int(actual.flat[flat_index])} gather={int(expected.flat[flat_index])} "
+            f"host={float(host_planes[plane][t, y, x]):.3f} "
+            f"(x within new slab: {x % (new_w_per // chroma)}/{new_w_per // chroma}, "
+            f"within gather slab: {x % (gather_w_per // chroma)}/{gather_w_per // chroma})"
+        )
+
+    reports = []
+    for run in range(2):
+        actual = replicated_to_host_yuv(canvas, mesh_device)
+        expected = gather_path()
+        assert actual.shape == expected.shape, f"{actual.shape} != {expected.shape}"
+        where = np.flatnonzero(actual != expected)
+        reports.append((set(where.tolist()), [describe(i, actual, expected) for i in where[:16]]))
+        logger.info(
+            f"run {run}: {len(where)} of {actual.size} bytes differ" + "".join(f"\n  {d}" for d in reports[-1][1])
+        )
+
+    (first, first_desc), (second, _) = reports
+    stability = (
+        "same positions both runs"
+        if first == second
+        else f"positions differ between runs ({len(first ^ second)} changed)"
+    )
+    assert (
+        not first and not second
+    ), f"{len(first)}/{len(second)} bytes differ from the gather path; {stability}\n" + "\n".join(first_desc)

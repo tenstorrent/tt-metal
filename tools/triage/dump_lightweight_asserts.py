@@ -21,12 +21,13 @@ from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
     format_callstack_with_message,
+    serialize_variables,
     run as get_callstack_provider,
     CallstackProvider,
 )
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
-from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import CallstackEntryVariable
@@ -152,30 +153,16 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
         return "?"
 
 
-def serialize_variables(variables: list[CallstackEntryVariable], assert_code: str) -> str:
-    result = ""
-    for var in variables:
-        var_name = var.name or "?"
-        var_value = var.value if var.value is not None else "?"
-        if var_name in assert_code:
-            serialized = f"- [info]{var_name}[/] = [command]{var_value}[/]\n"
-        else:
-            serialized = f"- {var_name} = {var_value}\n"
-        result += serialized
-    return result
-
-
 def dump_lightweight_asserts(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_debug: RiscDebug,
     dispatcher_data: DispatcherData,
     callstack_provider: CallstackProvider,
 ) -> LightweightAssertInfo | None:
+    risc_name = risc_debug.risc_location.risc_name
+    location = risc_debug.risc_location.location
     try:
         if not dispatcher_data.risc_enabled(risc_name):
             return None
-
-        risc_debug = location.device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
         if risc_debug.is_in_reset():
@@ -189,7 +176,7 @@ def dump_lightweight_asserts(
         pc = risc_debug.get_pc()
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(risc_debug.risc_location)
             if dispatcher_core_data.kernel_path is None:
                 return None
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path]
@@ -218,7 +205,7 @@ def dump_lightweight_asserts(
             return None
 
         callstack_data = callstack_provider.get_cached_callstacks(
-            location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
+            risc_debug, rewind_pc_for_ebreak, use_full_callstack=True
         )
         arguments_and_locals = None
         assert_code = "?"
@@ -294,9 +281,8 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
 
     callstacks_data = run_checks.run_per_core_check(
-        lambda location, risc_name: dump_lightweight_asserts(
-            location,
-            risc_name,
+        lambda risc_debug: dump_lightweight_asserts(
+            risc_debug,
             dispatcher_data,
             callstack_provider,
         ),

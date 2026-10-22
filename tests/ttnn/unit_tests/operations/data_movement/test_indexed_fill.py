@@ -57,6 +57,32 @@ def test_indexed_fill_tile_layout(device, input_a_shape, input_b_shape):
     assert_with_pcc(golden, ttnn.to_torch(output_tensor), 0.9999)
 
 
+def test_indexed_fill_row_major_mixed_buffer_types(device):
+    # Regression: a DRAM input_b made the writer write 32 B into 16 B L1 output pages, overwriting the
+    # next page. Needs several pages per L1 bank (288 here) for the overrun to hit real data.
+    B, b, H, D = 8, 3, 36, 8
+    l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    batch_id = torch.randperm(B)[:b].reshape(1, 1, 1, b)
+    batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(device, l1)
+    torch_a = torch.rand((B, 1, H, D), dtype=torch.bfloat16)
+    torch_b = torch.rand((b, 1, H, D), dtype=torch.bfloat16)
+    input_tensor_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=l1
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=dram
+    )
+
+    output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, memory_config=l1)
+
+    golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
+    assert_equal(golden, ttnn.to_torch(output_tensor))
+    # The last page in each bank can overrun into the next L1 allocation, so check input_a too.
+    assert_equal(torch_a, ttnn.to_torch(input_tensor_a))
+
+
 @pytest.mark.parametrize(
     "B, b, D",
     [

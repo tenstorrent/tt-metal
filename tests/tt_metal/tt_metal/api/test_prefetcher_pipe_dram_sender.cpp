@@ -131,7 +131,7 @@ uint64_t drisc_noc_addr(distributed::MeshDevice& mesh_device, DeviceAddr local_a
 }
 
 tt_cxy_pair drisc_cxy(distributed::MeshDevice& mesh_device, const CoreCoord& sender_logical) {
-    IDevice* device = mesh_device.get_devices().at(0);
+    auto* device = mesh_device.impl().get_devices().at(0);
     return tt_cxy_pair(device->id(), device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM));
 }
 
@@ -262,7 +262,7 @@ std::vector<uint32_t> read_ring_slot(
     uint32_t entry_size) {
     std::vector<uint32_t> out;
     detail::ReadFromDeviceL1(
-        mesh_device.get_devices().at(0),
+        mesh_device.impl().get_devices().at(0),
         receiver_logical,
         pipe.buffer_address() + slot * entry_size,
         entry_size,
@@ -553,6 +553,30 @@ TEST_F(PrefetcherPipeDramSenderFixture, RecarveSwitchesBetweenOneAndTwoSendersPe
     ASSERT_EQ(single.size(), 1u);
     EXPECT_EQ(single[0].sender_core(), primary_sender);
     EXPECT_EQ(experimental::sender_state_drisc_l1_base(single[0]), primary_state_address);
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, ReceiverShardsFollowEachSendersBankLocalBase) {
+    // Two senders split bank 0's three receivers two and one, so the second sender's receiver is
+    // sent the bank's third shard, not its first. Bank 1's one receiver is sent that bank's first.
+    const CoreRangeSet bank0_receivers(CoreRange({0, 0}, {2, 0}));
+    const CoreRangeSet bank1_receivers(CoreRange({0, 1}));
+    PipeSet set =
+        make_pipe_set(*mesh_device_, {{0, bank0_receivers}, {1, bank1_receivers}}, /*dual_senders_per_bank=*/true);
+    ASSERT_EQ(set.pipes.size(), 3u);
+
+    const auto shards = experimental::GetTensorPrefetcherReceiverShards(set.pipe_refs());
+    const std::vector<experimental::TensorPrefetcherReceiverShard> expected = {
+        {.receiver = {0, 0}, .bank = 0, .bank_local_shard = 0},
+        {.receiver = {1, 0}, .bank = 0, .bank_local_shard = 1},
+        {.receiver = {2, 0}, .bank = 0, .bank_local_shard = 2},
+        {.receiver = {0, 1}, .bank = 1, .bank_local_shard = 0},
+    };
+    ASSERT_EQ(shards.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_EQ(shards[i].receiver, expected[i].receiver) << "entry " << i;
+        EXPECT_EQ(shards[i].bank, expected[i].bank) << "entry " << i;
+        EXPECT_EQ(shards[i].bank_local_shard, expected[i].bank_local_shard) << "entry " << i;
+    }
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) {

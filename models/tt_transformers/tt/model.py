@@ -646,6 +646,13 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
+            if chunk_page_table is not None:
+                # Chunked SDPA cannot read -1 blocks. Use an initialized block from
+                # this request for padded reads; causal masking excludes those
+                # positions from valid queries. Keep -1 in the separate write table.
+                if page_table.shape[1] == 0 or torch.any(page_table[:, :1] < 0):
+                    raise ValueError("Chunked prefill requires an owned first KV cache block")
+                page_table = torch.where(page_table == -1, page_table[:, :1], page_table)
             # For batched prefill, replicate page_table to all devices (same as single-user path)
             # The KV cache fill will loop over users and use batch_idx=user_id for each
             tt_page_table = ttnn.from_torch(
@@ -837,7 +844,8 @@ class Transformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
         return tt_out
 
     def ttnn_prefill_forward(

@@ -42,6 +42,7 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
+| Qwen Image 2.1 | BH P150 | 3 | Full 40-step image API: one text image against a CUDA reference, one two-image edit regression, repeated requests and prompt eviction |
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
 | Gemma4 31B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC, trace and API tests; GPQA 10/198 subset; fixed-length serving performance |
 | Qwen3.8-27B QB2 TP4 | BH QuietBox 2 | 3 | Full decoder serving; linear-attention convolution PCC; GPQA 10/198 subset; API and fixed-length performance |
@@ -74,8 +75,8 @@ it is classified differently on different systems.
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
 | Flux.2-dev | BH QuietBox 2, BH Single Galaxy |
-| Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
-| Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
+| Wan2.2-T2V-A14B | WH Galaxy, BH QuietBox 2, BH SC1, BH SC4 |
+| Wan2.2-I2V-A14B | WH Galaxy, BH SC1, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
 | TT-DiT encoders (shared) | WH LLMBox |
@@ -106,6 +107,8 @@ it is classified differently on different systems.
 | ViT | WH N150, WH N300 |
 | Motif-Image-6B | WH LLMBox |
 | BGE-M3 | WH N150 |
+| Qwen3-TTS-1.7B | WH N150, BH P150 |
+| Qwen3-TTS-0.6B | WH N150, BH P150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
@@ -120,6 +123,7 @@ it is classified differently on different systems.
 | Qwen2.5-7B | WH N300 |
 | Qwen2.5-72B | WH LLMBox |
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen2.5-VL-7B | WH LLMBox |
 | Qwen3-0.6B | WH N150, BH P150 |
 | Qwen3-1.7B | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
@@ -233,6 +237,7 @@ Models covered (system · classification tier):
 | Qwen3-32B | WH Galaxy | 1 |
 | Qwen3.6-27B | BH QuietBox 2 | 1 |
 | Qwen2.5-VL-72B | WH LLMBox | 2 |
+| Qwen2.5-VL-7B | WH LLMBox | 3 |
 | Qwen3-VL-32B | WH LLMBox | 2 |
 | GPT-OSS 120B | WH Galaxy | 1 |
 | Gemma-3-27B | WH LLMBox, WH Galaxy | 2 |

@@ -70,7 +70,7 @@ inline void _llk_math_eltwise_unary_sfpu_init_()
 // therefore only need to run once per kernel: the SFPU config register (SFPCONFIG(0, 0xF, 1)) and the
 // invariant ADDR_MOD_7 = {srca:0, srcb:0, dest:0}. Hoisted out of the per-op path so that the self-contained
 // per-op init (ckernel::sfpu::_init_<op>_) does not re-run these on every op init. Metal wires this into every
-// "full init" entry point (compute_kernel_hw_startup, init_sfpu, unary_op_init_common, binary_op_init_common),
+// "full init" entry point (compute_kernel_hw_startup, init_sfpu, unary_op_init_common),
 // and the tt-llk standalone SFPU test harness wires it into its init prelude.
 inline void _llk_math_eltwise_unary_sfpu_init_once_()
 {

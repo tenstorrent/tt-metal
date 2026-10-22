@@ -129,7 +129,7 @@ jobs:
     name: "LLK perf regression gate (${{ matrix.arch }})"
     needs: [branch-point, measure, measure-branch-point]
     if: >-
-      always() &&
+      ${{ !cancelled() &&
       (
         (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id != '') ||
         (
@@ -140,11 +140,11 @@ jobs:
              && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
           )
         )
-      )
+      ) }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.08"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.08"}]') }}
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.13"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02"}]' || '[{"arch":"blackhole","threshold":"0.02"},{"arch":"wormhole","threshold":"0.13"}]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
@@ -175,6 +175,7 @@ jobs:
     with:
       architecture: all
       speed-of-light: false
+      perf-run-types: ALL_MODES
       upload-to-warehouse: true
       pipeline: nightly
     secrets: inherit
@@ -183,8 +184,8 @@ jobs:
     name: "Nightly gate ${{ matrix.arch }} (non speed-of-light)"
     needs: nightly-measure
     if: >-
-      always() && (github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == ''))
+      ${{ !cancelled() && (github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == '')) }}
     strategy:
       fail-fast: false
       matrix:

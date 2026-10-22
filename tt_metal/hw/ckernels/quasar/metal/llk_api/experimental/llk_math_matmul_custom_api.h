@@ -73,9 +73,9 @@ inline void llk_math_matmul_init_no_mop(
         srcA_format, srcB_format);
 
     if (operands_use_2x_format(operandA, operandB)) {
-        _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
     } else {
-        _llk_math_matmul_init_no_mop_<math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_init_no_mop_<math_fidelity, false /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
     }
 }
 
@@ -111,11 +111,14 @@ inline void llk_math_matmul_no_mop(
         "Quasar no-mop matmul only supports THROTTLE_LEVEL == 0; Quasar has no throttled MVMUL sequences");
     LLK_ASSERT(dst_index == 0, "non-default dst_index not supported on Quasar");
 
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
+
     // Re-derive 2x-ness so the execute issues the same MVMUL count that init recorded.
     if (operands_use_2x_format(operandA, operandB)) {
-        _llk_math_matmul_block_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_block_no_mop_<math_fidelity, true /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
     } else {
-        _llk_math_matmul_block_no_mop_<math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_block_no_mop_<math_fidelity, false /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
     }
 }
 
@@ -150,9 +153,12 @@ inline void llk_math_matmul_reinit_no_mop(
         THROTTLE_LEVEL == 0,
         "Quasar no-mop matmul only supports THROTTLE_LEVEL == 0; Quasar has no throttled MVMUL sequences");
 
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
+
     if (operands_use_2x_format(operandA, operandB)) {
-        _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
     } else {
-        _llk_math_matmul_init_no_mop_<math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
+        _llk_math_matmul_init_no_mop_<math_fidelity, false /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
     }
 }

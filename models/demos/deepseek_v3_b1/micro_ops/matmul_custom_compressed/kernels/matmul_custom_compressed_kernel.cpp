@@ -96,7 +96,7 @@ void kernel_main() {
     compressed::custom_mm_compressed_block_init_short<use_barrier, out_w, split_acc, dense_packing>(
         cb_in0, cb_in1, cb_out);
 #else
-    compressed_custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_in0, cb_in1, cb_out);
+    compressed_custom_mm_block_init_short<transpose, split_acc, dense_packing, clear_src>(cb_in0, cb_in1, cb_out);
 #endif
 
 #if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5
@@ -120,7 +120,7 @@ void kernel_main() {
     compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 6
-    compressed_custom_mm_block<split_acc, clear_src>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
+    compressed_custom_mm_block<split_acc>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
 #endif
 
     tile_regs_commit();

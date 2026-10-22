@@ -19,9 +19,9 @@
 #include <memory>
 #include <ostream>
 #include <string_view>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -34,8 +34,8 @@
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
@@ -57,6 +57,49 @@ struct HalProcessorIdentifier {
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+enum class HalL1MemAddrType : uint8_t {
+    BASE,
+    BARRIER,
+    MAILBOX,
+    LAUNCH,
+    WATCHER,
+    DPRINT_BUFFERS,
+    PROFILER,
+    KERNEL_CONFIG,  // End is start of unreserved memory
+    UNRESERVED,     // For ethernet and DRAM cores
+    DEFAULT_UNRESERVED,
+    CORE_INFO,
+    GO_MSG,
+    LAUNCH_MSG_BUFFER_RD_PTR,
+    GO_MSG_INDEX,
+    LOCAL,
+    BANK_TO_NOC_SCRATCH,
+    LOGICAL_TO_VIRTUAL_SCRATCH,
+    APP_SYNC_INFO,
+    APP_ROUTING_INFO,
+    RETRAIN_COUNT,
+    RETRAIN_FORCE,
+    CRC_ERR,          // Link status - CRC error count
+    CORR_CW,          // Link status - Corrected Codewords count
+    UNCORR_CW,        // Link status - Uncorrected Codewords count
+    TXQ0_RESEND_CNT,  // Link status - TX queue 0 packet resend count (Blackhole only)
+    TXQ1_RESEND_CNT,  // Link status - TX queue 1 packet resend count (Blackhole only)
+    TXQ2_RESEND_CNT,  // Link status - TX queue 2 packet resend count (Blackhole only)
+    RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
+    RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
+    RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    LINK_UP,          // Link status - Link up status
+    FABRIC_TELEMETRY,
+    ROUTING_TABLE,
+    ROUTER_STATE,
+    ROUTER_COMMAND,
+    ETH_FW_MAILBOX,
+    TENSIX_FABRIC_CONNECTIONS,
+    FABRIC_CONNECTION_LOCK,
+    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
+    COUNT           // Keep this last so it always indicates number of enum options
+};
 
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
@@ -680,7 +723,9 @@ public:
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
-    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+    // The dispatcher that sends the go fills in its own coordinates and adds its CQ's completion counter base to
+    // dispatch_message_offset, so a go names only the sub-device's completion counter.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t dispatch_message_offset) const;
 
     // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
     void set_iram_text_size(

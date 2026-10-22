@@ -1,4 +1,4 @@
-name: "TTNOP Injector implementation"
+name: "LLK TTNOP Injector implementation"
 
 on:
   workflow_call:
@@ -19,6 +19,7 @@ on:
 
 permissions:
   actions: read
+  checks: write
   contents: read
   packages: read
 
@@ -92,7 +93,7 @@ jobs:
 
           # One selector is shared with ci.sh so planning and execution cannot drift.
           selection="$(
-            python3 tt_metal/tt-llk/tests/python_tests/ttnop/changed_tests.py \
+            python3 tt_metal/tt-llk/tests/python_tests/ttnop/tools/changed_tests.py \
               --repo . --base "$base" --arch "$ARCHITECTURE"
           )"
           mapfile -t selected_tests < <(
@@ -300,6 +301,14 @@ jobs:
           name: ttnop-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
           if-no-files-found: warn
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
+          include_passed: true
+          annotate_only: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

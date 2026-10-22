@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <tuple>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 

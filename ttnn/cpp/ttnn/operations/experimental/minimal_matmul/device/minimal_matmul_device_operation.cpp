@@ -265,10 +265,16 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             cfg.N_block_size,
             cfg.subblock_w);
 
-        // Grid must be at least 1x1
+        // Grid must be at least 2x2 on WH/BH (the sender/receiver split assumes both axes span more
+        // than one core). Quasar: the factory declares only the regions/kernels that exist on the grid,
+        // so a 1xN / Nx1 / 1x1 grid (the single-core Quasar emulator) is accepted there.
+        const uint32_t min_grid_dim = act_tensor.device()->arch() == tt::ARCH::QUASAR ? 1 : 2;
         TT_FATAL(
-            cfg.compute_with_storage_grid_size.x >= 2 && cfg.compute_with_storage_grid_size.y >= 2,
-            "compute_with_storage_grid_size must be >= 2x2");
+            cfg.compute_with_storage_grid_size.x >= min_grid_dim &&
+                cfg.compute_with_storage_grid_size.y >= min_grid_dim,
+            "compute_with_storage_grid_size must be >= {}x{}",
+            min_grid_dim,
+            min_grid_dim);
 
         // Additional grid checks are performed when creating the program
         auto device_grid = act_tensor.device()->compute_with_storage_grid_size();

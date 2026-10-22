@@ -13,8 +13,9 @@
 //   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
 //     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
 //   - The decisive property is BORROWED vs NoC-READ, all-or-nothing. An operand is BORROWED only when the
-//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, all sharded
-//     grids == the output grid, all buffers L1) AND every operand is itself L1-sharded with a shard spec.
+//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, every sharded
+//     input carrying the output's shard spec, all buffers L1) AND every operand is itself L1-sharded with a
+//     shard spec.
 //     is_native_L1_sharding can hold with an L1-interleaved input (a single sharded operand satisfies it),
 //     and an interleaved operand has no shard spec to back a DFB, so any interleaved operand forces the
 //     whole op to the NoC path. When borrowed, all three are co-resident L1 shards on one grid with
@@ -37,9 +38,9 @@
 // Deferred to the descriptor (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
 // layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
-// three operands are co-resident L1 shards on one matching grid; everything else (interleaved output OR
-// input, mixed strategies, divergent grids) takes the NoC path via sharding-aware TensorAccessors. A
-// borrowed operand is L1-sharded-tiled (height/block/width).
+// three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
+// input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
+// operand is L1-sharded-tiled (height/block/width).
 
 #include "binary_ng_device_operation.hpp"
 #include "binary_ng_utils.hpp"
@@ -249,7 +250,9 @@ uint32_t extract_nD_dims(const Tensor& x, int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             nD_dim *= shape[i];
         }
     }
@@ -376,7 +379,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // from it, but this no-broadcast slice collapses borrow to all-or-nothing: an operand is BORROWED (its
     // resident L1 shard backs the DFB; reader/writer do no NoC work) only when EVERY operand is sharded, so
     // all three are co-resident L1 shards on one grid with identical per-core tile partitions. Otherwise --
-    // an interleaved output OR input, mixed strategies, or a divergent grid -- NONE are borrowed and every
+    // an interleaved output OR input, or a different shard spec -- NONE are borrowed and every
     // operand is read/written through its own sharding-aware TensorAccessor over a linear page-id walk (the
     // get_shard_volumes == nullopt / single-or-partial-sharded case). The per-operand a/b/c_borrowed flags
     // are kept separate (the DFB specs, SRC_SHARDED defines, tensor bindings and placement already branch
@@ -437,9 +440,9 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- Activation assembly (faithful copy of the descriptor factory). ---
     {
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -578,7 +581,7 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard (num_entries == full shard, borrowed_from set); any NoC-read operand
-    // (interleaved, or sharded on a non-matching grid) is a 2-entry ring filled over the NoC.
+    // (interleaved, or sharded with a different shard spec) is a 2-entry ring filled over the NoC.
     // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
     // Float16_b intermediate on the FPU path, else the operand's own format. ---
     const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : 2u;
@@ -740,7 +743,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // Reader: publishes a borrowed shard (borrowed operand) or reads it over the NoC (via
     // TensorAccessor(tensor::in0/in1)). A borrowed operand needs no tensor binding (its tensor::
     // reference is compiled out under SRC_SHARDED) and borrows via the DFB; every NoC-read operand is
-    // bound — including a sharded input on a non-matching grid, whose accessor is sharding-aware.
+    // bound — including a sharded input with a different shard spec, whose accessor is sharding-aware.
     m2::Group<m2::TensorBinding> reader_tensor_bindings;
     if (!a_borrowed) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_A, "in0"});

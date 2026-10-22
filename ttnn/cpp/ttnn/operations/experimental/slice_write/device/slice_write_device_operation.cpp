@@ -83,6 +83,19 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape().rank());
 }
 
+ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto factory = select_program_factory(args, tensor_args);
+    // The interleaved factory derives every outer-dim start offset in its runtime args, which
+    // override_runtime_arguments recomputes on a hit; only the last-dim start is compiled in.
+    // The sharded factories bake the whole start into shared state, so they keep the full key.
+    if (std::holds_alternative<SliceWriteRMInterleavedProgramFactory>(factory)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            factory.index(), args.slice_start[-1], args.step, tensor_args);
+    }
+    return ttsl::hash::hash_objects_with_default_seed(factory.index(), args, tensor_args);
+}
+
 tt::tt_metal::TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output.tensor_spec();

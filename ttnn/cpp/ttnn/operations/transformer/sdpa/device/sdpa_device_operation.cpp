@@ -69,7 +69,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto Sk = k_shape[2];
-        if (attrs.is_causal) {
+        // Windowed causal is exempt: its diagonal is at global positions (windowed_q_token_offset + Q row),
+        // so a sequence-parallel Q shard with Sq < Sk is well defined; validate_windowed_mode bounds it.
+        if (attrs.is_causal && !is_windowed_mode(attrs.windowed_mode)) {
             TT_FATAL(
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
@@ -175,6 +177,37 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
+        }
+
+        if (tensors.attn_mask_block_map.has_value()) {
+            const auto& map = tensors.attn_mask_block_map.value();
+            TT_FATAL(mask_option.has_value(), "attn_mask_block_map needs attn_mask");
+            TT_FATAL(
+                attrs.program_config.has_value(), "attn_mask_block_map needs a program_config with the chunk sizes");
+            TT_FATAL(
+                map.storage_type() == StorageType::DEVICE && q.device() == map.device(),
+                "attn_mask_block_map must be on the same device as Q");
+            TT_FATAL(
+                map.layout() == Layout::ROW_MAJOR &&
+                    (map.dtype() == DataType::INT32 || map.dtype() == DataType::UINT32),
+                "attn_mask_block_map must be a ROW_MAJOR int32 or uint32 tensor");
+            TT_FATAL(
+                map.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "attn_mask_block_map must be in DRAM");
+            const auto& mask_shape = mask_option->logical_shape();
+            const auto& map_shape = map.logical_shape();
+            const uint32_t qc = attrs.program_config->q_chunk_size;
+            const uint32_t kc = attrs.program_config->k_chunk_size;
+            const uint32_t nq = (q.logical_shape()[2] + qc - 1) / qc;
+            const uint32_t nk = (k.logical_shape()[2] + kc - 1) / kc;
+            TT_FATAL(
+                map_shape.rank() == 4 && map_shape[0] == mask_shape[0] && map_shape[1] == mask_shape[1] &&
+                    map_shape[2] == nq && map_shape[3] == nk,
+                "attn_mask_block_map must be [{}, {}, {}, {}], got {}",
+                mask_shape[0],
+                mask_shape[1],
+                nq,
+                nk,
+                map_shape);
         }
 
         validate_shapes_and_chunks();
@@ -434,7 +467,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
     auto validate_windowed_mode = [&]() {
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
-        TT_FATAL(!attrs.is_causal, "Windowed SDPA is non-causal; is_causal must be false.");
         TT_FATAL(
             !tensors.attn_mask.has_value(),
             "Windowed SDPA builds its mask from cu_window_seqlens; attn_mask must not be provided.");
@@ -445,8 +477,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         TT_FATAL(attrs.sliding_window_size.value_or(0) == 0, "Windowed SDPA does not support sliding_window_size.");
         TT_FATAL(!tensors.attention_sink.has_value(), "Windowed SDPA does not support attention_sink.");
 
-        // Windowed attention is otherwise plain non-causal SDPA, so apply the same Q/K/V shape and
-        // chunk-size validation as the regular path.
+        // Windowed attention is otherwise plain SDPA, so apply the same Q/K/V shape and chunk-size
+        // validation as the regular path.
         validate_shapes_and_chunks();
 
         const auto& cu = tensors.cu_window_seqlens.value();
@@ -520,7 +552,13 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
-    if (attrs.is_windowed) {
+    // The block map sets the reader's k range itself, which the windowed, sliding and chunked k ranges would fight.
+    TT_FATAL(
+        !tensors.attn_mask_block_map.has_value() ||
+            (!is_windowed_mode(attrs.windowed_mode) && !is_chunked_mode && attrs.sliding_window_size.value_or(0) == 0),
+        "attn_mask_block_map cannot be combined with cu_window_seqlens, sliding_window_size or chunked prefill");
+
+    if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();
     } else if (is_chunked_mode) {
         validate_chunked_mode();
@@ -659,7 +697,8 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    bool output_concat_heads) {
+    bool output_concat_heads,
+    const std::optional<Tensor>& attn_mask_block_map) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -673,7 +712,9 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
-            .is_windowed = cu_window_seqlens.has_value(),
+            .windowed_mode = !cu_window_seqlens.has_value() ? WindowedMode::None
+                             : is_causal                    ? WindowedMode::Causal
+                                                            : WindowedMode::Bidirectional,
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
@@ -689,6 +730,7 @@ Tensor sdpa(
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
+            .attn_mask_block_map = attn_mask_block_map,
         });
 }
 }  // namespace ttnn::prim
