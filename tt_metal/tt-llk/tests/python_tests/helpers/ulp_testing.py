@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the ULP host tests share: asserting a refusal by its typed reason, and one
-well-formed ``domains`` list."""
+"""What the ULP host tests share: asserting a refusal by its typed reason, naming a
+parametrized case by it, and one well-formed ``domains`` list."""
 
 import math
 from contextlib import contextmanager
@@ -26,3 +26,9 @@ def refused(problem: Problem):
     with pytest.raises(TableError) as caught:  # allow-pytest.raises: host-only test
         yield
     assert caught.value.problem is problem, caught.value
+
+
+def problem_id(value) -> str:
+    """A pytest ``ids=`` callable: a :class:`Problem` is named by its member, any other
+    parameter is left to pytest's own numbering."""
+    return value.name if isinstance(value, Problem) else ""

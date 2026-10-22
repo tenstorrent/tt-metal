@@ -698,7 +698,6 @@ def test_the_sweeps_own_zero_padding_is_not_data():
 
     By position, not by value: one legitimate `0.0` is swept, in the middle.
     """
-    from helpers.ulp_sweep import padding_lanes, swept_value_count
 
     fmt = DataFormat.Float16_b
     swept = swept_value_count(fmt)
@@ -884,7 +883,6 @@ def test_the_binary_golden_hands_a_16bit_output_back_in_the_operand_dtype():
 
 def test_widening_an_fp16_nan_keeps_its_sign():
     """torch's fp16 -> fp32 cast drops a NaN's sign; the goldens' permutations must not."""
-    import math
 
     from helpers.golden_generators import widen_to_float32
 
@@ -896,7 +894,6 @@ def test_widening_an_fp16_nan_keeps_its_sign():
 
 def test_an_fp16_dest_saturates_an_infinity_of_either_sign():
     """An fp16 Dest has no infinity; both overflows pack out as its top magnitude."""
-    import math
 
     from helpers.golden_generators import convert_inf_to_value
 
@@ -1003,7 +1000,7 @@ def test_an_emit_refusal_fails_only_a_clean_session(monkeypatch, exitstatus, exp
     its own status: a Ctrl-C read as exit 1 is an ordinary test failure to a script."""
     from types import SimpleNamespace
 
-    from helpers import llk_pytest_plugin, ulp_sweep
+    from helpers import llk_pytest_plugin
 
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     # MEASURED is empty: refused for having measured nothing.
@@ -1030,7 +1027,7 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
     measurement would be keyed on a kernel that never ran. The promoted exponent-B ->
     Float16 `No` cells are the ones left out, and their `Yes` twins stay."""
     from helpers.test_config import TestConfig
-    from helpers.ulp_sweep import SWEEP_FORMATS, sweep_cells
+    from helpers.ulp_sweep import SWEEP_FORMATS
 
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
     built_as_asked = [
@@ -1080,7 +1077,7 @@ def test_the_sweep_tile_count_holds_every_swept_value():
     format's values keeps only the lowest-sorted of them, and nothing else notices."""
     import test_unary_sfpu_ulp as sweep
     from helpers.golden_generators import TILE_DIMENSIONS
-    from helpers.ulp_sweep import SWEEP_FORMATS, swept_value_count
+    from helpers.ulp_sweep import SWEEP_FORMATS
 
     lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     assert sweep.SWEEP_DIMENSIONS[0] * sweep.SWEEP_DIMENSIONS[1] == lanes
@@ -1108,7 +1105,7 @@ def test_the_float32_walk_is_pinned_end_to_end():
     from helpers.stimuli_generator.strategies.structured import (
         _enumerate_representable,
     )
-    from helpers.ulp_sweep import _FP32_STRIDE, _SWEEP_TENSOR, swept_value_count
+    from helpers.ulp_sweep import _FP32_STRIDE, _SWEEP_TENSOR
 
     lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     assert _SWEEP_TENSOR == lanes
@@ -1230,12 +1227,12 @@ def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
 
 
 def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatch):
-    """The key line is the enrolment and the only place a measurement can land, so both
-    runs take exactly the unary ops that have one. Gating used to take only the ops with
-    a step budget somewhere, which left every op on tolerance everywhere (Erfc,
-    SigmoidAppx, ...) with recorded figures that no gate run ever re-measured."""
+    """The key line is the enrolment, and the sweep collects only the ops the table
+    names, so both runs take exactly the unary ops that have one. Gating used to take
+    only the ops with a step budget somewhere, which left every op on tolerance
+    everywhere (Erfc, SigmoidAppx, ...) with recorded figures that no gate run ever
+    re-measured."""
     import test_unary_sfpu_ulp as sweep
-    from helpers import ulp_sweep
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, Metric
     from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
 
@@ -1436,7 +1433,6 @@ def test_the_near_zero_floor_is_derived_from_the_band_and_capped():
     mask = torch.ones(32, dtype=torch.bool)
 
     def floor(res):
-        from helpers.ulp import ulp_distance
 
         return near_zero_floor(
             golden, res, ulp_distance(golden, res, flush_subnormals=True), mask, fmt
@@ -1531,8 +1527,6 @@ def test_the_trig_claim_reaches_65504_on_a_wide_input():
 def test_a_cell_whose_every_claimed_lane_is_non_finite_records_no_figure():
     """Over no ranked lane `ulp_stats` reads `max: 0`, which written as `measured: 0`
     would claim the rest of the cell bit-exact; there is no rest."""
-    from helpers.ulp import ulp_distance, ulp_stats
-    from helpers.ulp_sweep import nonfinite_verdict
 
     src = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
@@ -1558,6 +1552,7 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
         domain_figures,
         entry_readings,
         floor_covered,
+        floored_distance,
     )
 
     monkeypatch.setattr(rule, "DOMAIN_MIN_BIN_LANES", 1)
@@ -1566,31 +1561,28 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
         [-3.0, -2.5, -1.5, -1.25, 0.5, 0.75, 1.5, 2.0, 3.0, 6.0], dtype=torch.float64
     )
     distance = torch.tensor([1, 2, 1, 1, 0, 0, 9, 8, 1, 1])
-    judged = torch.ones(10, dtype=torch.bool)
-    judged[3] = False  # -1.25 is not ranked
+    ranked = torch.ones(10, dtype=torch.bool)
     present = torch.ones(10, dtype=torch.bool)
-    bins = binade_maxima(x, distance, judged, present)
+    covered = torch.zeros(10, dtype=torch.bool)
+    covered[3] = True  # -1.25 is ranked, and a floor covers it: held at 0 steps
+    judged = ranked & ~covered
+    bins = binade_maxima(x, floored_distance(distance, covered), ranked, present)
     assert bins[rule.binade(-3.0)] == (2, 2, 2) and bins[rule.binade(1.5)] == (1, 1, 9)
-    assert bins[rule.binade(-1.25)] == (
-        2,
-        1,
-        1,
-    )  # -1.5 shares the binade; -1.25 is unranked
+    assert bins[rule.binade(-1.25)] == (2, 2, 1)  # -1.5 shares the binade
     spans = rule.partition(bins, usable_budget_ceiling(F16B))
     # 1.5 (9 steps) and 2.0 (8 steps) are both past bf16's ceiling of 6: one bad range.
     assert spans == ((-_INF, 1.0, True), (1.0, 4.0, True), (4.0, _INF, True))
-    drawn = domain_figures(spans, x, distance, present, judged)
+    drawn = domain_figures(spans, x, distance, ranked, judged)
     assert [d.ulp for d in drawn] == [2, 9, 1]
-    assert entry_readings(drawn, x, distance, present, judged) == (
-        Reading(
-            -_INF, 1.0, 2, 6
-        ),  # six ranked lanes; the figure is over the five outside
+    assert entry_readings(drawn, x, distance, ranked, judged) == (
+        # six ranked lanes; the figure is over the five outside the floor
+        Reading(-_INF, 1.0, 2, 6),
         Reading(1.0, 4.0, 9, 3),
         Reading(4.0, _INF, 1, 1),
     )
     # An entry the floor covers entirely reads 0, not null: its lanes are held.
     none_outside = torch.zeros(10, dtype=torch.bool)
-    assert domain_figures(spans, x, distance, present, none_outside)[0].ulp == 0
+    assert domain_figures(spans, x, distance, ranked, none_outside)[0].ulp == 0
     golden = torch.tensor([1.0, 1e-6, 2.0], dtype=torch.float32)
     result = torch.tensor([1.0, 0.0, 2.5], dtype=torch.float32)
     assert floor_covered(
@@ -1662,10 +1654,10 @@ def test_a_cell_whose_strays_beat_every_figure_writes_a_list_its_gate_passes(
     bins = binade_maxima(x, distance, ranked, present)
     spans = rule.partition(bins, usable_budget_ceiling(F16B))
     assert [r for _, _, r in spans] == [False, True]
-    drawn = domain_figures(spans, x, distance, present, ranked)
+    drawn = domain_figures(spans, x, distance, ranked, ranked)
     assert [d.ulp for d in drawn] == [30, 1]
     few = torch.tensor([i < 3 for i in range(128)])
     nothing = rule.partition(
         binade_maxima(x, distance, few, present), usable_budget_ceiling(F16B)
     )
-    assert domain_figures(nothing, x, distance, present, few) == ()
+    assert domain_figures(nothing, x, distance, few, few) == ()

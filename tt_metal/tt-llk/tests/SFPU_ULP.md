@@ -44,8 +44,9 @@ so both write nothing and say so. Of a measured op it replaces every row of each
 measured `(input, output)` pair, and keeps the rows no measurement re-derives: one that
 names an `arch`, declares `atol`/`rtol`, or names a pair this run did not measure. Each
 refusal is its own exception type (`WrongArch`, `SessionNotClean`, `IncompleteGrid`,
-`AmbiguousCollapse`); a rewrite the loader would refuse is a `TableError` raised before
-anything is written, since `write_table_file` reads its dump back first. A successful
+`AmbiguousCollapse`); a rewrite the loader would refuse, or that would resolve ambiguously for some
+variant, is a `TableError` raised before anything is written, since `write_table_file`
+reads its dump back and resolves it first. A successful
 emit returns a `WriteReport` that the one-line summary is rendered from.
 
 ## Why a step budget rather than a tolerance
@@ -330,16 +331,18 @@ One line per format combination says how the op behaves over the whole swept ran
 
 ```yaml
 Tanh:
-- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: -1.0, ulp: 3}, {low: -1.0, high: 1.0, ulp: 10}, {low: 1.0, high: .inf, ulp: 3}]}
+- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', near_zero_atol: 0.00042724609375, domains: [{low: -.inf, high: -1.0, ulp: 3}, {low: -1.0, high: -0.0078125, ulp: 10}, {low: -0.0078125, high: 0.0078125, ulp: 0}, {low: 0.0078125, high: 1.0, ulp: 10}, {low: 1.0, high: .inf, ulp: 3}]}
 Log:
 - {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 1}]}
 Abs:
 - {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 ```
 
-Read: approximate `tanh` is 3 steps everywhere except on `[-1, 1)`, where it is 10,
-past bfloat16's ceiling of 6 — that one entry is why the cell as a whole is not
-gated, and the two others are gated at 3. `log` answers nothing below 0 and is 1 step
+Read: approximate `tanh` is 3 steps outside `[-1, 1)` and 10 on either side of the
+origin, past bfloat16's ceiling of 6 — those two entries are why the cell as a whole
+is not gated; the three others are, at 3, 0 and 3. The 0 is `[-2^-7, 2^-7)`, which
+reads 0 steps outside the row's `near_zero_atol` floor (the lanes it rescues are
+judged on absolute error instead). `log` answers nothing below 0 and is 1 step
 from 0 up. `abs` is exact over the whole range.
 
 - **An entry** `{low: L, high: H, ulp: U}` holds the lanes whose input, *as the kernel
@@ -720,8 +723,8 @@ Carries GeluAppx's op-wide `atol`/`rtol`: see the note there.
 
 #### Sign
 
-Sign and Heaviside gate at 0 steps on every input below, the strided Float32 one
-included: they are exact by construction, and the measured 0 is the gate there as
+Sign and Heaviside gate at 0 steps on every input format the sweep drives (Float16_b,
+Float16, Float32), the strided Float32 one included: they are exact by construction, and the measured 0 is the gate there as
 everywhere. The in-tree WH kernels
 branch on `abs(v) == 0`, so -0.0 is answered as zero (fixed in #55306), and a
 recurrence is a regression, not specified behaviour. The op-wide tolerance row answers

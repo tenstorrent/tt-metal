@@ -7,8 +7,9 @@ Not a test in the usual sense: it asserts nothing about accuracy. It runs each
 requested op over two stimuli per variant and saves ``(src, golden, result)``, so
 the report can compare the base side's results with the head side's lane by lane:
 
-* ``sweep``    -- every finite value of the input format (float32: a stride of
-  them), the same stimuli as the nightly ULP sweep in ``test_unary_sfpu_ulp.py``;
+* ``sweep``    -- every normal value of the input format, and zero on a 16-bit one
+  (float32: a stride of them), the same stimuli as the nightly ULP sweep in
+  ``test_unary_sfpu_ulp.py``; no subnormal, which the unpack path flushes;
 * ``specials`` -- the inputs a sweep never feeds: NaNs, infinities, signed zeros
   and subnormals.
 

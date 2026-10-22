@@ -18,6 +18,7 @@ import json
 import math
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from enum import Enum
+from itertools import product
 from pathlib import Path
 from typing import (
     Any,
@@ -342,6 +343,86 @@ class Row:
 Table = Dict[MathOperation, Tuple[Row, ...]]
 
 
+def declared_tolerance(
+    contracts: Dict[BudgetKey, AccuracyContract],
+    query: BudgetKey,
+    fallback: AccuracyContract,
+) -> AccuracyContract:
+    """The most specific tolerance row *with numbers* covering *query*, or
+    *fallback*."""
+    numbered = {
+        key: contract
+        for key, contract in contracts.items()
+        if contract.declares_tolerance
+    }
+    found = _winner(numbered, query)
+    return fallback if found is None else found[1]
+
+
+def resolve_variant(
+    contracts: Dict[BudgetKey, AccuracyContract], query: BudgetKey
+) -> AccuracyContract:
+    """The contract one op variant is held to, given that op's keyed *contracts*: the
+    most specific row, a step budget only where :func:`steps_bind` says it binds, and
+    the op's declared tolerance where it does not. Pure; the driver-facing lookup is
+    ``sfpu_accuracy_budget.accuracy_contract``."""
+    found = _winner(contracts, query)
+    if found is None:
+        return TOLERANCE_CONTRACT
+    key, contract = found
+    if contract.metric is Metric.ULP:
+        if steps_bind(key, query):
+            return contract
+        return declared_tolerance(contracts, query, TOLERANCE_CONTRACT)
+    if not contract.declares_tolerance:
+        # A numberless tolerance row opts its cell out of the ULP metric without
+        # retracting an atol/rtol the op declares on a broader row.
+        return declared_tolerance(contracts, query, contract)
+    return contract
+
+
+def contracts_of(
+    table: Table,
+) -> Dict[MathOperation, Dict[BudgetKey, AccuracyContract]]:
+    """Each op of *table* as its keyed contracts, the shape the resolver reads."""
+    return {op: {row.key: row.contract for row in rows} for op, rows in table.items()}
+
+
+def validate_contracts(
+    by_op: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]],
+) -> None:
+    """Raise if any op of *by_op* can resolve ambiguously, for any variant a driver may
+    ask about. Per op, an axis is the values its own rows pin, plus ``None``; the output
+    format and the architecture stay whole, because :func:`steps_bind` reads them."""
+    for op, contracts in by_op.items():
+
+        def pinned(field: str) -> list:
+            return sorted(
+                {getattr(key, field) for key in contracts} - {None}, key=str
+            ) + [None]
+
+        for approx_mode, input_format, output_format, dest_acc, arch in product(
+            pinned("approx_mode"),
+            pinned("input_format"),
+            DataFormat,
+            pinned("dest_acc"),
+            ChipArchitecture,
+        ):
+            try:
+                resolve_variant(
+                    contracts,
+                    BudgetKey(
+                        approx_mode=approx_mode,
+                        input_format=input_format,
+                        output_format=output_format,
+                        dest_acc=dest_acc,
+                        arch=arch,
+                    ),
+                )
+            except TableError as error:
+                raise TableError(error.problem, f"{op.name}: {error}") from error
+
+
 # ── Plain values: the one conversion between the dataclasses and YAML/JSON ─────
 
 
@@ -449,9 +530,11 @@ def read_table(text: str) -> Table:
     refuses. Text PyYAML cannot read at all (a conflict marker, a ``<<`` merge key) is
     refused as :attr:`Problem.UNREADABLE` rather than escaping as PyYAML's own error."""
     try:
-        loaded = yaml.load(text, Loader=_Loader) or {}
+        loaded = yaml.load(text, Loader=_Loader)
     except yaml.YAMLError as error:
         raise TableError(Problem.UNREADABLE, " ".join(str(error).split())) from error
+    if loaded is None:  # an empty document; `false`, `0` and `[]` are not tables
+        loaded = {}
     if not isinstance(loaded, dict):
         raise TableError(Problem.WRONG_SHAPE, "the top level")
     table: Table = {}
@@ -522,10 +605,11 @@ def dump_table(table: Table) -> str:
 
 
 def write_table_file(table: Table, path: Path = TABLE_PATH) -> None:
-    """Dump *table* to *path*, after reading the dump back: a table that would not load
-    is never written."""
+    """Dump *table* to *path*, after reading the dump back and resolving every variant
+    of it: a table that would not load, or that a driver could not resolve, is never
+    written."""
     text = dump_table(table)
-    read_table(text)
+    validate_contracts(contracts_of(read_table(text)))
     Path(path).write_text(text, encoding="utf-8")
 
 

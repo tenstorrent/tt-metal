@@ -322,7 +322,12 @@ def _span_text(span: Span, row: Optional[Row]) -> str:
         floor = row.near_zero_atol if row is not None else None
         text = _figure_text(span.figure, floor)
     else:
-        text = f"tolerance (max {span.figure})"
+        floor = row.near_zero_atol if row is not None else None
+        text = (
+            f"tolerance (max {span.figure}, floor {floor:g})"
+            if floor
+            else (f"tolerance (max {span.figure})")
+        )
     return f"unranked, strays held to {text}" if span.strays else text
 
 
@@ -381,9 +386,11 @@ def _segment_changes(
     was: Held, now: Held, query: BudgetKey
 ) -> List[Tuple[Kind, Tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` for each run of the input over which
-    the two rows' gates differ, over the union of both lists' edges. On a segment gated
-    on both sides a widened floor ranks after a raise and before a tightening, as in
-    :func:`_classify`."""
+    the two rows' gates differ, over the union of both lists' edges, then the cell-wide
+    rise in excused non-finite lanes, if any (``segment`` ``None``). On a segment held
+    on both sides, gated or past the ceiling, a widened floor ranks after a raise and
+    before a tightening, as in :func:`_classify`; the entry readings of a past segment
+    are taken outside that floor too."""
     before, after = _spans(was, query), _spans(now, query)
     edges = sorted(
         {e for spans in (before, after) for s in spans for e in (s.low, s.high)}
@@ -399,8 +406,9 @@ def _segment_changes(
         kind = _classify_segment(a, b)
         if (
             floor_widened
-            and a.state is b.state is State.GATED
-            and kind is not Kind.RAISED
+            and a.state is b.state
+            and a.state is not State.NONE
+            and kind not in (Kind.RAISED, Kind.BASELINE_RAISED)
         ):
             kind = Kind.FLOOR_WIDENED
         if kind is None:
@@ -410,7 +418,11 @@ def _segment_changes(
             found[-1][2] = high
         else:
             found.append([held, low, high])
-    return [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
+    changes = [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
+    if now.nonfinite > was.nonfinite:
+        # Lanes the headroom report excuses are a cell-wide figure, not a segment's.
+        changes.append((Kind.BASELINE_RAISED, None, was.describe(), now.describe()))
+    return changes
 
 
 def compare(base: Table, head: Table) -> List[Change]:

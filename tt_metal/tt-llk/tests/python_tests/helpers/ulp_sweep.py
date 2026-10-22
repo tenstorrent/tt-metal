@@ -111,7 +111,8 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
 
 
 def is_exhaustive(input_format: DataFormat) -> bool:
-    """Whether the sweep sees *every* value the input can take, or a stride of them."""
+    """Whether the sweep sees *every* normal value the input can take (and zero), or a
+    stride of them."""
     return input_format != DataFormat.Float32
 
 
@@ -947,8 +948,8 @@ Recorded = Union[int, "Floored", Unmeasurable]
 MEASURED: Dict[MathOperation, Dict[BudgetKey, Recorded]] = {}
 
 #: The list each measured cell was recorded with, beside its figure in ``MEASURED``. The
-#: reading that wins a cell keeps its list; a cell read twice with differing readings,
-#: or parked as unmeasurable, keeps none (:func:`record`).
+#: reading that wins a cell keeps its list; a cell read twice with unequal readings,
+#: one of them floored, or parked as unmeasurable, keeps none (:func:`record`).
 DOMAINS: Dict[MathOperation, Dict[BudgetKey, Tuple[Domain, ...]]] = {}
 
 #: The widest ``near_zero_atol`` the emitter writes on its own. A cell whose only
@@ -1261,7 +1262,11 @@ def _incomplete_grids() -> List[Tuple[MathOperation, DataFormat, DataFormat, int
 def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> "WriteReport":
     """Write this session's measurements into the table (:func:`write_table`), or raise
     an :class:`EmitRefused` subclass naming why nothing was written. *exitstatus* is
-    pytest's; *testsfailed* is read first to give a failed run its own message."""
+    pytest's; *testsfailed* is read first to give a failed run its own message.
+
+    :func:`write_table` can also raise :class:`~helpers.ulp_domains.TableError` (a
+    ``ValueError``, not an :class:`EmitRefused`): the table on disk does not load, or
+    the rewrite would not read back, or would not resolve, once written."""
     import pytest
     from helpers.sfpu_accuracy_budget import MEASURED_ARCH
 

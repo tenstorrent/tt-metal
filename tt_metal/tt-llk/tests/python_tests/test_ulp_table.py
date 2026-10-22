@@ -27,14 +27,10 @@ from helpers.ulp_table import (
     read_table,
     write_table_file,
 )
-from helpers.ulp_testing import TANH_DOMAINS, refused
+from helpers.ulp_testing import TANH_DOMAINS, problem_id, refused
 
 INF = math.inf
 F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
-
-
-def _ids(value):
-    return value.name if isinstance(value, Problem) else ""
 
 
 @pytest.mark.parametrize(
@@ -62,7 +58,7 @@ def _ids(value):
         (dict(output=F16B, domains=TANH_DOMAINS), Problem.UNPINNED_DOMAINS),
         (dict(input=F16B, output=F16B, domains=TANH_DOMAINS[:1]), Problem.NOT_COVERING),
     ],
-    ids=_ids,
+    ids=problem_id,
 )
 def test_a_row_the_table_cannot_hold_is_refused(fields, problem):
     with refused(problem):
@@ -113,7 +109,7 @@ def test_a_plain_value_that_does_not_fit_its_field_is_refused(plain, problem):
         ({"Abs": []}, Problem.NO_ROWS),
         ({"Abs": [{"output": "Float16_b", "measured": 1}] * 2}, Problem.REPEATED_KEY),
     ],
-    ids=_ids,
+    ids=problem_id,
 )
 def test_a_table_the_registry_cannot_load_is_refused(data, problem):
     with refused(problem):
@@ -190,6 +186,29 @@ def test_a_table_the_loader_would_refuse_is_never_written(tmp_path):
     with refused(Problem.REPEATED_KEY):
         write_table_file({MathOperation.Abs: twice}, path)
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_a_table_no_driver_could_resolve_is_never_written(tmp_path):
+    """Two rows that are equally specific for Float16 -> Float16_b each load alone, and
+    each is a valid table to read back; the query is what is ambiguous."""
+    path = tmp_path / "budget.yaml"
+    before = dump_table({MathOperation.Abs: (Row(output=F16B, measured=1),)})
+    path.write_text(before, encoding="utf-8")
+    overlapping = (Row(input=F16, measured=1), Row(output=F16B, measured=1))
+    with refused(Problem.AMBIGUOUS):
+        write_table_file({MathOperation.Abs: overlapping}, path)
+    assert path.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("text", ["false", "0", "[]", "''"], ids=repr)
+def test_a_falsy_document_that_is_not_a_mapping_is_not_an_empty_table(text):
+    with refused(Problem.WRONG_SHAPE):
+        read_table(text)
+
+
+@pytest.mark.parametrize("text", ["", "# only a comment\n", "null"], ids=repr)
+def test_an_empty_document_is_an_empty_table(text):
+    assert read_table(text) == {}
 
 
 def test_the_table_on_disk_is_exactly_what_the_serializer_writes():

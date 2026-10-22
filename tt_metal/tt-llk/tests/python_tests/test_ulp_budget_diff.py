@@ -385,10 +385,39 @@ def test_a_raise_in_a_large_negative_tail_is_seen():
 def test_a_widened_floor_beside_an_unchanged_list_is_a_regression():
     wider = (*TANH_DOMAINS[:2], Domain(1, INF, 2))
     changes = compare(_tanh(near_zero_atol=1e-7), _tanh(wider, near_zero_atol=1e-3))
+    # The middle entry is past bf16's ceiling: not gated, but read outside the floor.
     assert [(c.kind, c.segment) for c in changes] == [
         (Kind.FLOOR_WIDENED, (-INF, -1.0)),
+        (Kind.FLOOR_WIDENED, (-1.0, 1.0)),
         (Kind.FLOOR_WIDENED, (1.0, INF)),
     ]
+
+
+def test_a_widened_floor_beside_an_all_past_list_is_a_regression():
+    """No segment is gated, but the headroom report takes each entry's reading outside
+    the floor, so a wider floor excuses more lanes there too."""
+    past = (Domain(-INF, 0, 9), Domain(0, INF, 10))
+    changes = compare(
+        _tanh(past, near_zero_atol=1e-7), _tanh(past, near_zero_atol=1e-3)
+    )
+    assert [(c.kind, c.segment) for c in changes] == [
+        (Kind.FLOOR_WIDENED, (-INF, 0.0)),
+        (Kind.FLOOR_WIDENED, (0.0, INF)),
+    ]
+
+
+def test_a_list_re_emitted_as_an_unmeasurable_row_raises_the_baseline():
+    """Past the ceiling nothing is gated, and the plain row's figures sit at or below
+    the list's -- but it lets the headroom report excuse lanes the list did not."""
+    past = (Domain(-INF, 0, 9), Domain(0, INF, 10))
+    plain = _table(
+        Row(input=F16B, output=F16B, dest=D_NO, metric=TOL, measured=9, nonfinite=3),
+        op=TANH,
+    )
+    changes = compare(_tanh(past), plain)
+    assert [(c.kind, c.segment) for c in changes] == [(Kind.BASELINE_RAISED, None)]
+    assert changes[0].is_regression
+    assert compare(plain, plain) == []
 
 
 def test_a_re_emit_that_splits_a_list_row_drops_no_baseline():

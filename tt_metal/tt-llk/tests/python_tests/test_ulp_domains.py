@@ -27,7 +27,7 @@ from helpers.ulp_domains import (
     partition,
     usable_budget_ceiling,
 )
-from helpers.ulp_testing import TANH_DOMAINS, refused
+from helpers.ulp_testing import TANH_DOMAINS, problem_id, refused
 
 INF = math.inf
 BF16 = usable_budget_ceiling(DataFormat.Float16_b)
@@ -213,7 +213,7 @@ def test_a_well_formed_list_is_accepted():
         ((Domain(-INF, 3, 1), Domain(3, INF, 1)), Problem.EDGE_NOT_POWER_OF_TWO),
         ((Domain(-INF, INF),), Problem.NO_FIGURE),
     ],
-    ids=lambda v: v.name if isinstance(v, Problem) else "",
+    ids=problem_id,
 )
 def test_a_malformed_list_is_refused(domains, problem):
     with refused(problem):
@@ -223,7 +223,7 @@ def test_a_malformed_list_is_refused(domains, problem):
 @pytest.mark.parametrize(
     "low, high, ulp, problem",
     [(1, 1, 0, Problem.EMPTY_RANGE), (-INF, INF, -1, Problem.BAD_NUMBER)],
-    ids=lambda v: v.name if isinstance(v, Problem) else "",
+    ids=problem_id,
 )
 def test_a_malformed_entry_is_refused(low, high, ulp, problem):
     with refused(problem):

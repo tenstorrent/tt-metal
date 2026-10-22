@@ -125,8 +125,9 @@ _FLUSH_SUBNORMALS = FLUSH_SUBNORMAL_OUTPUTS
 
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
-    """One variant on hardware, over every value of a 16-bit input or a stride of a
-    Float32 one (``ulp_sweep.is_exhaustive``). Returns ``(src, golden, result)``."""
+    """One variant on hardware, over every normal value (and zero) of a 16-bit input or
+    a stride of a Float32 one (``ulp_sweep.is_exhaustive``). Returns ``(src, golden, result)``.
+    """
     torch.manual_seed(0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -201,9 +202,9 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
 def _sweep_ops():
     """Every unary op with a key line in the table, whatever its rows say, gating or
     emitting. The key line is the enrolment (SFPU_ULP.md, step 2) and the measurement
-    fills it in; an op without one has nowhere to be written, and `sfpu_unary_ops()`
-    admits every newly registered op, so a wider set would turn a whole-table emit red
-    the day anyone adds an op."""
+    fills it in; the sweep collects only the ops the table names, and `sfpu_unary_ops()`
+    admits every newly registered op, so a wider set would sweep each new op the day
+    anyone adds it, whether or not it was meant to be swept."""
     unary = sfpu_unary_ops()
     ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
         _UNARY_OPS_NOT_SWEPT
@@ -381,8 +382,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
                 "recorded figure."
             )
         # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol`
-        # floor (Erfinv Float16_b->Float16_b reads 14704 steps raw, and 2 with it) is
-        # honoured. That makes `stats` the raw maximum, which can be a lane the floor
+        # floor is honoured. That makes `stats` the raw maximum, which can be a lane the floor
         # rescued: the failing lanes are the ones passed_test logs.
         assert passed_test(
             golden,

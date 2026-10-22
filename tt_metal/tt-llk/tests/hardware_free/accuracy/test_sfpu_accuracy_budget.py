@@ -429,6 +429,22 @@ def test_an_enrolled_op_keeps_todays_gate_on_a_format_the_sfpu_does_not_compute_
     assert accuracy_contract(output_format=fmt, **query) is TOLERANCE_CONTRACT
 
 
+@pytest.mark.parametrize("fmt", NOT_COMPUTE_FORMATS, ids=lambda f: f.name)
+def test_an_enrolled_op_keeps_todays_gate_when_the_input_is_not_a_compute_format(fmt):
+    """The input-axis twin: Abs's rows wildcard ``input``, so only ``steps_bind``
+    reading the input format keeps a block-float input off the step budget."""
+    query = dict(
+        op=MathOperation.Abs,
+        output_format=DataFormat.Float16_b,
+        arch=MEASURED_ARCH,
+    )
+    assert (
+        accuracy_contract(input_format=DataFormat.Float16_b, **query).metric
+        is Metric.ULP
+    )
+    assert accuracy_contract(input_format=fmt, **query) is TOLERANCE_CONTRACT
+
+
 @pytest.mark.parametrize("arch", UNSWEPT_ARCHS, ids=lambda a: a.name)
 def test_a_step_budget_does_not_bind_on_an_unswept_architecture(arch):
     """Unkeyed rows are Wormhole measurements with no headroom for another kernel."""
@@ -1359,7 +1375,9 @@ def test_no_declared_tolerance_is_shadowed_by_a_numberless_row():
                 dest_acc=query.dest_acc,
                 arch=query.arch,
             )
-            if contract == TOLERANCE_CONTRACT:
+            # A list cell's contract carries `domains`, so it is never `==` the default;
+            # ask what the fallback is, not what it equals.
+            if contract.metric is Metric.TOLERANCE and not contract.declares_tolerance:
                 shadowed.append(f"{op.name} {query.describe()}")
     assert not shadowed, "\n".join(shadowed[:20])
 
@@ -1444,7 +1462,11 @@ def test_a_demoted_row_measured_past_the_ceiling():
     """A tolerance row the emitter wrote -- it pins ``input`` and ``output``, as every row it
     writes does -- with a measurement is a demotion only if its ``measured`` is past
     ``usable_budget_ceiling``: ``_verdict``'s call for that figure. One inside the
-    ceiling should have been enrolled. A broader row is a sampled hand judgement."""
+    ceiling should have been enrolled. A broader row is a sampled hand judgement.
+
+    Empty today: the emitter now writes a demotion as a ``domains`` list with no
+    ``metric`` or ``measured``, and the only tolerance rows with a ``measured`` are the
+    ``nonfinite`` ones, which are not measurable. A tripwire for a hand-edited row."""
     wrong = [
         (op, row)
         for op, rows in load_table().items()
@@ -1795,8 +1817,9 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
 
 def test_every_unary_op_is_enrolled_or_excused():
     """ "Never measured" and "deliberately left on tolerance" both read as absent from
-    the table, and the emitter cannot create an op's block. So every unary op either
-    has one or ``_UNARY_OPS_NOT_SWEPT`` says why not (Erfc, Lgamma and Xielu sat here).
+    the table, and the sweep collects only the ops the table names. So every unary op
+    either has a block or ``_UNARY_OPS_NOT_SWEPT`` says why not (Erfc, Lgamma and Xielu
+    sat here).
     """
     unaccounted = sorted(
         set(sfpu_unary_ops()) - set(enrolled_ops()) - set(_UNARY_OPS_NOT_SWEPT),
