@@ -8,6 +8,11 @@ architecture is assembled from units rather than subclassed. When a future
 generation changes one unit and reuses the rest, only that unit needs a second
 implementation -- see :mod:`..arch`.
 
+Not every module here is a unit. :mod:`.fidelity` is the FPU multiplier's
+decomposition -- the phase tables, the mantissa split, the pre-carry flush --
+which :class:`.Fpu` applies and no other unit touches. It sits beside the FPU
+because that is whose behaviour it describes.
+
 There is no SFPU unit yet: nothing in this golden models the SFPU, so the class
 would be empty and every architecture would have to supply a no-op. It gets
 added with the first real SFPU block; the shape here does not change when it

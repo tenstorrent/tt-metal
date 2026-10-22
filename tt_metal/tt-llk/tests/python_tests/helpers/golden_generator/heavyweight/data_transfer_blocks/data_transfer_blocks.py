@@ -18,6 +18,12 @@ That leaves one real conversion for these blocks to model: the unpacker lands
 every L1 format in one of a small number of src-register storage families. The
 family, not the L1 format, is what the FPU reads.
 
+One unit does more than move: the FPU also computes, so it owns the arithmetic
+and everything about how this device performs it -- the multiplier's width, the
+fidelity phases, the pre-carry flush. An operation reaches it through
+:attr:`DataTransferBlocks.fpu` and says *which* instruction to run; the FPU
+says what that instruction does.
+
 **This class is the façade, not the implementation.** The transfers live on the
 units in :mod:`.units` -- one per hardware stage -- and an architecture is a
 set of those units (:mod:`.arch`), injected here. Nothing subclasses this and
@@ -61,6 +67,7 @@ from .storage import (  # noqa: F401
     truncate_mantissa,
     truncate_src_mantissa,
 )
+from .units import Fpu
 from .units.pack import UnmodelledHardwareWarning  # noqa: F401
 
 
@@ -248,6 +255,24 @@ class DataTransferBlocks:
         return self.arch.unpack.resolve_dest_format(
             dest_format, l1_input_format, dest_acc
         )
+
+    # ------------------------------------------------------------------
+    # The unit that computes
+    # ------------------------------------------------------------------
+
+    @property
+    def fpu(self) -> Fpu:
+        """The FPU, for an operation that needs it to compute rather than move.
+
+        Handed over as the unit rather than forwarded method by method. The
+        methods above are *transfers*, each named for the hardware path it
+        models; multiplying two src registers is not one, and dressing it up as
+        a transfer would hide which unit decides how the multiply behaves. An
+        operation selects the instruction -- ``blocks.fpu.elementwise(Elwmul,
+        a, b)`` -- and the FPU supplies the phases, the mantissa window and the
+        flush that go with it.
+        """
+        return self.arch.fpu
 
 
 # ----------------------------------------------------------------------
