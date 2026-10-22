@@ -68,6 +68,8 @@ void kernel_main() {
         noc.write_zeros_l1_barrier();
 
         map_buffer.wait_front(1);
+        // wait_front does not invalidate. With the Blackhole L1 data cache enabled, the RISC loads below could hit
+        // lines cached from this CB slot's previous contents instead of the reader's NoC write.
         invalidate_l1_cache();
         CoreLocalMem<volatile SegmentMapData> segments(map_buffer.get_read_ptr());
         uint32_t output_page = row;
@@ -92,6 +94,7 @@ void kernel_main() {
                     input_buffer.pop_front(1);
                 }
                 input_buffer.wait_front(1);
+                // The RISC copies read this tile too, so the same invalidation applies.
                 invalidate_l1_cache();
                 input_l1 = input_buffer.get_read_ptr();
                 previous_page = segments[index].input_page_index;

@@ -69,7 +69,7 @@ def _assert_bits(expected, actual, dtype):
     assert bad == 0, f"{bad} of {expected.numel()} datums differ"
 
 
-def _to_device(device, source, dtype, layout, mem):
+def _to_device(device, source, dtype, layout, mem=_DRAM):
     return ttnn.from_torch(source, dtype=dtype, layout=layout, device=device, memory_config=mem)
 
 
