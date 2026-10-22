@@ -398,14 +398,14 @@ class WeightedCombine:
     def routing(self, idx: ttnn.Tensor, wts: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """idx [1, 1, s, K] (TILE, any integer dtype), wts [1, 1, s, K] fp32 (TILE) of the chip's mesh row -> the
         column's uint32 ids / bf16 weights [1, 1, R s, K] TILE (gathered over axis 0, home row-major; the planners
-        read the tiles, tile_in)."""
-        w16 = ttnn.typecast(wts, ttnn.bfloat16, memory_config=DRAM)
+        read the tiles, tile_in). wts may already be bf16 (ROUTER_IMPL=fused, P.22: no typecast)."""
+        w16 = wts if wts.dtype == ttnn.bfloat16 else ttnn.typecast(wts, ttnn.bfloat16, memory_config=DRAM)
         i32 = idx if idx.dtype == ttnn.uint32 else ttnn.typecast(idx, ttnn.uint32, memory_config=DRAM)
         out = []
         for t in (i32, w16):
             out.append(ttnn.all_gather(t, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM) if self.R > 1 else t)
         for t, o in zip((i32, w16), out):
-            if t is not o and t is not idx:
+            if t is not o and t is not idx and t is not wts:  # (idx / wts: the caller's)
                 dealloc(t)
         return out[0], out[1]
 

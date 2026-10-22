@@ -1,0 +1,817 @@
+{
+ "upstream_sha": "f3149480fb1ea88ee719599f69600eee49e4069d",
+ "tests": {
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-four_tiles-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-just_over_one_tile-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-minimal-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad0-realistic-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-four_tiles-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-just_over_one_tile-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-minimal-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-deepseek-8g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-deepseek-8g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-dsv4pro-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-dsv4pro-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk::test_moe_grouped_topk[pad50-realistic-kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[batched_tail-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[batched_tail-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[batched_tail-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[batched_tail-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_cross-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_cross-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_cross-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_cross-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_low-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_low-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_low-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[face_low-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[kimi-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[kimi-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[kimi-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[kimi-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[moe-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[moe-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[moe-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[moe-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[multi_batch-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[multi_batch-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[multi_batch-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[multi_batch-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[single-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[single-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[single-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[single-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[sqrtsoftplus-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[sqrtsoftplus-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[sqrtsoftplus-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[sqrtsoftplus-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[tile_full-dram-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[tile_full-dram-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[tile_full-l1-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights[tile_full-l1-fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights_fresh_bindings_and_old_trace[dram-device_params={'trace_region_size': 1048576}]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights_fresh_bindings_and_old_trace[l1-device_params={'trace_region_size': 1048576}]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_row_major_weights::test_row_major_weights_rejects_unsupported_width": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad0-stable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad0-stable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad0-unstable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad0-unstable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad50-stable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad50-stable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad50-unstable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[deepseek-8g256e-pad50-unstable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad0-stable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad0-stable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad0-unstable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad0-unstable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad50-stable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad50-stable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad50-unstable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[dsv4flash-1g256e-pad50-unstable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad0-stable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad0-stable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad0-unstable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad0-unstable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad50-stable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad50-stable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad50-unstable-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_index_domain[kimi-1g384e-pad50-unstable-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e128-4tiles-2rounds-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e128-4tiles-2rounds-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e128-4tiles-2rounds-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e128-4tiles-2rounds-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e256-8tiles-6rounds-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e256-8tiles-6rounds-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e256-8tiles-6rounds-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e256-8tiles-6rounds-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e384-12tiles-10rounds-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e384-12tiles-10rounds-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e384-12tiles-10rounds-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e384-12tiles-10rounds-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e512-16tiles-14rounds-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e512-16tiles-14rounds-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e512-16tiles-14rounds-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e512-16tiles-14rounds-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e64-2tiles-0rounds-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e64-2tiles-0rounds-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e64-2tiles-0rounds-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_exact_vs_golden[e64-2tiles-0rounds-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[dsv4flash-1g256e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[dsv4flash-1g256e-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[dsv4flash-1g256e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[dsv4flash-1g256e-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[kimi-1g384e-score_func=sigmoid-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[kimi-1g384e-score_func=sigmoid-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[kimi-1g384e-score_func=sqrtsoftplus-in_bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_stable::test_stable_matches_unstable[kimi-1g384e-score_func=sqrtsoftplus-in_fp32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_activation_matches_torch[score_func=sigmoid]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_activation_matches_torch[score_func=sqrtsoftplus]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[all_ones-stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[all_ones-unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[high_ones-stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[high_ones-unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[low_ones-stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[low_ones-unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[neg_one-stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[neg_one-unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[neg_zero-stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[neg_zero-unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[pos_inf-stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_dest_pollution_before_gate[pos_inf-unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_mixed_sign_topk": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_more_tiles_than_cores": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=15]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=17]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=31]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=33]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=47]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=48]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_padding_boundary_inside_tile[num_real=63]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_production_token_count[stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_production_token_count[unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_sequential_distinct_inputs[stable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_sequential_distinct_inputs[unstable]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_state::test_trace_replay[device_params={'trace_region_size': 33554432}]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_all_equal_identity_across_widths[total_experts=256]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_all_equal_identity_across_widths[total_experts=288]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_all_equal_identity_across_widths[total_experts=384]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_all_equal_identity_across_widths[total_experts=544]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_all_equal_row_is_identity": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_grouped_inverted_group_order_ties": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_grouped_tie_order_matches_stable_golden": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_natural_inputs_follow_stable_order": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_negative_zero_is_unreachable": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_stable_and_unstable_differ_on_ties": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_tie_order_is_deterministic": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_tie_order_matches_stable_golden[pattern=all_equal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_tie_order_matches_stable_golden[pattern=boundary_tie]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_tie_order_matches_stable_golden[pattern=chain_spanning]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_tie_order_under_padding": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_ties_made_by_the_activation[pattern=plateau_at_cut]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_grouped_topk_ties::test_ties_made_by_the_activation[pattern=plateau_top]": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}
