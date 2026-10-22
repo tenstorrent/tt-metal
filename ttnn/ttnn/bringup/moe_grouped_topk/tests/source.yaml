@@ -1,0 +1,22 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.moe_grouped_topk), run in place against this fork
+# (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". Every file of the op's nightly folder is op-only and single-device, so all five are
+# carried whole (203 cases). They call the op without the fork's one option (fp32_activation, default off), so the
+# fork runs the source program; the option has its own tests in tests/unit/.
+#
+# The source tree already holds Marko Staletovic's fp32_selection commits (71062e76a38 / 570d95b6e7d on
+# mstaletovic/galaxy-unified-k3-v41-combine, here 5e47659815e / 27c5c2a16ae + the rebase fix 9780c18f0d0).
+upstream_sha: f3149480fb1ea88ee719599f69600eee49e4069d
+swap:
+  ttnn.experimental.deepseek_prefill.moe_grouped_topk: ttnn.bringup.moe_grouped_topk
+tests:
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py
+    why: "the sanity-tier file: grouped DeepSeek-V3 (8 groups of 32, 256 experts) and single-group Kimi 384 / DeepSeek-V4 Flash 256 / Pro 384, sigmoid and sqrtsoftplus, 1 / 33 / 128 / realistic tokens, right padding via padding_config, recall + weights PCC vs the torch golden"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk_row_major_weights.py
+    why: "weights_layout=ROW_MAJOR (interleaved DRAM / L1) vs the TILE output, bit-equal"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk_stable.py
+    why: "stable_sort strict bars: index sets vs the golden on distinct logits, biased_scores debug output"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk_state.py
+    why: "state coverage: many distinct calls back to back, DEST polluted before the gate, padding inside a tile / face, more height tiles than cores, a top-k straddling zero, trace capture and replay"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk_ties.py
+    why: "tie order on the single-group and grouped paths (stable and rank-tag engines)"

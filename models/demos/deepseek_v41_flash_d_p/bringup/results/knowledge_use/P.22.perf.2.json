@@ -1,0 +1,50 @@
+{
+ "used": [
+  {
+   "id": "K-53",
+   "how": "ran the gate, ops_lint / settings_lint probes and measure with PYTHONPATH=$PWD",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "no new probes; left only attempt 1's probes/probe_NNN.py under tests/ttnn/unit_tests/operations/ds41_router (the path check ignores them)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-105",
+   "how": "kept the fork call ttnn.bringup.moe_grouped_topk(fp32_activation=...) and named the fork, not the stock op, in the ROUTER_IMPL help text",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "The F113 stock-op lint (testing/ops_lint.py) matches a listed stock op's name followed by '(' inside strings and docstrings, not only calls (added as DS41-107)."
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-106",
+  "DS41-107"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.22",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T23:36:45",
+  "head": "f3149480fb1",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/common/bringup/knowledge/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.22.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.22.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

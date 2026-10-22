@@ -1,0 +1,107 @@
+{
+ "used": [
+  {
+   "id": "K-23",
+   "how": "kept the bias for the selection only and fp32 keys / normalization: fp32_selection=True on the fused gate, recentred fp32 bias at load",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "routing() / partial() no longer free tensors that routing hands through (bf16 weights, a one-row mesh): the router's outputs stay owned by the block",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-4",
+   "how": "the dense routing of the fused path is still scattered in fp32 ROW_MAJOR (bf16 weights typecast to fp32 first)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "probes kept under tests/ttnn/unit_tests/operations/ds41_router/probes/probe_NNN.py only",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "separated the gate matmul's TF32 flips (both paths 25-45 rows vs float64 on host logits) from the gate op's own error by comparing against float64 on the device's logits",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-103",
+   "how": "expected the fused weights (packer bf16) to differ from the chain's fp32 weights by one bf16 rounding (rel 1.5-1.6e-3), not bit-equal",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-87",
+   "how": "no device-profiler op mode: the real-time profiler's op rows (one run, no syncs) for the router section's host / device ms on both sides",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "K-23",
+   "evidence": "For sqrtsoftplus routers fp32_selection alone does not give fp32 keys: stock moe_grouped_topk compiles softplus without INP_FLOAT32 (bf16 polynomial, 0 below -5); keys max error 8.2e-2 vs 2.5e-5, 0-13 of 2048 rows reselected per DS41 layer (probe ds41_router/probe_002.py, probe_003.py). Fix: ttnn.bringup.moe_grouped_topk(fp32_activation=True) (DS41-105). The shared repo_map row 'Sigmoid + correction-bias (noaux_tc) router ... exact fp32 selection' has the same gap for sqrtsoftplus.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "The brief said Marko's moe_grouped_topk commits are only on his branch; they were already cherry-picked into this tree (5e47659815e, 27c5c2a16ae, 9780c18f0d0): check `git log -- <op dir>` before forking from another checkout.",
+  "Router step limits assume fp32 weights although the reference's Gate returns bf16 (DS41-106)."
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-105",
+  "DS41-106"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.22",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T22:46:18",
+  "head": "f3149480fb1",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.22.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.22.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/router.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/bringup_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_grouped_topk/CMakeLists.txt",
+   "ttnn/ttnn/bringup/moe_grouped_topk/README.md",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/kernels/compute/moe_gate_common_compute.hpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/kernels/compute/moe_grouped_topk.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/kernels/dataflow/moe_gate_common_dataflow.hpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/kernels/dataflow/reader_moe_grouped_topk.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/kernels/dataflow/writer_moe_grouped_topk.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/moe_grouped_topk_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/moe_grouped_topk_device_operation.hpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/device/moe_grouped_topk_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/moe_grouped_topk.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/moe_grouped_topk.hpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/moe_grouped_topk_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/moe_grouped_topk_nanobind.hpp",
+   "ttnn/ttnn/bringup/moe_grouped_topk/sources.cmake",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/__init__.py",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/source.yaml",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/source_baseline.json",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/unit/conftest.py",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/unit/test_fp32_activation.py"
+  ]
+ }
+}
