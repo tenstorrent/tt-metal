@@ -7,6 +7,7 @@
 
 #include "gtest/gtest.h"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/device/kernels/moe_ring_common.h"
 
 namespace {
 
@@ -111,3 +112,31 @@ TEST(MoEComputeHostHelpers, FusedSourceBufferLayoutRejectsBadInputs) {
 }
 
 }  // namespace
+
+// Packed token lists of the local output path (moe_ring_common.h, moe_ring::token_list), mirrored by
+// tests/nightly/tg/ccl/moe/test_moe_compute_6U.py (token_list_*).
+TEST(MoEComputeHostHelpers, TokenListLayoutForThePrefillSlab) {
+    using namespace moe_ring::token_list;
+    // 2048 tokens, K = 10, 128 experts per device, 32-token chunks.
+    EXPECT_EQ(header_words(128), 144u);                       // 129 words padded to 16
+    EXPECT_EQ(entry_capacity(2048, 10, 128, 32), 22432u);     // align16(20480 + 15 x 128) + 32
+    EXPECT_EQ(page_words(2048, 10, 128, 32), 144u + 22432u);  // 90,304 B
+    EXPECT_EQ(page_words(128, 10, 128, 32), 144u + 3232u);    // the 128-token form: 13,504 B
+    EXPECT_EQ(page_words(1, 8, 16, 32), 32u + 288u);          // the 1-token / 16-expert unit-test rows
+}
+
+TEST(MoEComputeHostHelpers, TokenListSegmentsAndEntries) {
+    using namespace moe_ring::token_list;
+    // Segment starts follow the counts on 16-entry boundaries; a zero count keeps an aligned start in place.
+    EXPECT_EQ(next_segment_start(0, 0), 0u);
+    EXPECT_EQ(next_segment_start(0, 1), 16u);
+    EXPECT_EQ(next_segment_start(16, 16), 32u);
+    EXPECT_EQ(next_segment_start(32, 17), 64u);
+    EXPECT_EQ(next_segment_start(64, 2048), 2112u);
+    // The entry packs the k slot above a 24-bit token id and unpacks to the same pair.
+    constexpr uint32_t entry = pack_entry(TOKEN_MASK, MAX_K_SLOTS - 1);
+    EXPECT_EQ(entry_token(entry), TOKEN_MASK);
+    EXPECT_EQ(entry_k_slot(entry), MAX_K_SLOTS - 1);
+    EXPECT_EQ(entry_token(pack_entry(2047, 9)), 2047u);
+    EXPECT_EQ(entry_k_slot(pack_entry(2047, 9)), 9u);
+}

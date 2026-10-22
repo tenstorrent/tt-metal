@@ -21,6 +21,8 @@ constexpr uint32_t div_up() {
 }  // namespace detail
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
+// Tokens per expert chunk: one tile row of activations (the kernels' "tokens_per_chunk" compile arg).
+constexpr uint32_t TOKENS_PER_CHUNK = 32;
 // DRAM transaction sizes in tiles. The host picks one per shape (tiles_per_txn_for_shape) and passes it to the kernels
 // as the "tiles_per_txn" compile arg; every block height derives from it (block_tiles_h, half_block_tiles_h).
 constexpr uint32_t DEFAULT_TILES_PER_TXN = 14;  // 8,064 B BF4 (one Wormhole NoC packet); blocks 4 wide x 7 K rows
@@ -310,5 +312,49 @@ struct MoeRingConfig {
                                     (w2_last_iter_half ? w2_blocks_per_half_a2a_iter : 0u),
         "W2 blocks per expert must be the full iterations' blocks plus the half iteration's");
 };
+
+//-----------------------------------------------------------------------------
+// Packed (token, k) lists of the local output path (tilize_reader / tilize_writer produce, dm1 consumes).
+//-----------------------------------------------------------------------------
+// One page: `header_words` words of segment starts (`offsets[0..experts_per_device]`, the rest padding), then the
+// entries of every local expert back to back, expert e's `count_e` entries at `offsets[e]`. An entry is
+// `(k_slot << TOKEN_BITS) | token_id`. Segment starts are aligned to SEGMENT_ALIGN_ENTRIES entries (64 B) so that
+// dm1's per-chunk read of `tokens_per_chunk` entries at `(header_words + offsets[e] + tokens_per_chunk * c) * 4` B
+// starts on a DRAM-aligned address; the capacity keeps one chunk of tail (the bound needs half of one) so that read
+// never leaves the page. Mirrored by tests/nightly/tg/ccl/moe/test_moe_compute_6U.py (token_list_*).
+namespace token_list {
+
+constexpr uint32_t TOKEN_BITS = 24;
+constexpr uint32_t TOKEN_MASK = (1u << TOKEN_BITS) - 1;
+constexpr uint32_t MAX_K_SLOTS = 1u << (32 - TOKEN_BITS);
+constexpr uint32_t SEGMENT_ALIGN_ENTRIES = 16;
+constexpr uint32_t ENTRY_BYTES = 4;
+// A producer's pair: word 0 the token id, word 1 the local expert index in the high half and the k slot in the low.
+constexpr uint32_t PAIR_BYTES = 8;
+constexpr uint32_t PAIR_EXPERT_SHIFT = 16;
+
+constexpr uint32_t pack_entry(uint32_t token_id, uint32_t k_slot) { return (k_slot << TOKEN_BITS) | token_id; }
+constexpr uint32_t entry_token(uint32_t entry) { return entry & TOKEN_MASK; }
+constexpr uint32_t entry_k_slot(uint32_t entry) { return entry >> TOKEN_BITS; }
+
+constexpr uint32_t align_entries(uint32_t entries) {
+    return detail::div_up(entries, SEGMENT_ALIGN_ENTRIES) * SEGMENT_ALIGN_ENTRIES;
+}
+// Start of the segment after one that starts at `start` and holds `count` entries.
+constexpr uint32_t next_segment_start(uint32_t start, uint32_t count) { return align_entries(start + count); }
+constexpr uint32_t header_words(uint32_t experts_per_device) { return align_entries(experts_per_device + 1); }
+// Every (token, k slot) is listed at most once; every segment may carry SEGMENT_ALIGN_ENTRIES - 1 entries of padding.
+constexpr uint32_t entry_capacity(
+    uint32_t tokens, uint32_t selected_experts_k, uint32_t experts_per_device, uint32_t tokens_per_chunk) {
+    return align_entries(tokens * selected_experts_k + (SEGMENT_ALIGN_ENTRIES - 1) * experts_per_device) +
+           tokens_per_chunk;
+}
+constexpr uint32_t page_words(
+    uint32_t tokens, uint32_t selected_experts_k, uint32_t experts_per_device, uint32_t tokens_per_chunk) {
+    return header_words(experts_per_device) +
+           entry_capacity(tokens, selected_experts_k, experts_per_device, tokens_per_chunk);
+}
+
+}  // namespace token_list
 
 }  // namespace moe_ring
