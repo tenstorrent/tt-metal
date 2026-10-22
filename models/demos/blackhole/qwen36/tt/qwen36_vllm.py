@@ -915,7 +915,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 dn.warmup_exit_packed(p)
 
 
-_MESH_TP = {"N150": 1, "N300": 2, "P150x4": 4, "N150x4": 4, "T3K": 8}
+_MESH_TP = {"N150": 1, "N300": 2, "P150x2": 2, "P150x4": 4, "N150x4": 4, "P150x8": 8, "T3K": 8}
 
 
 def _mesh_tp(default=4):
@@ -982,14 +982,16 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 reason=f"block_size={bs} unsupported; the engine's page tables use {_BLOCK_SIZE}", supported_k=()
             )
         try:
-            from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
+            from models.demos.blackhole.qwen36.tt.spec_engine import paged_kv_dtype_bytes, spec_memory_costs
 
             mc = vllm_config.model_config
             tc = mc.hf_config
             tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
             if int(getattr(tc, "mtp_num_hidden_layers", 0) or 0) < 1:
                 return SpecReject(reason="checkpoint has no MTP weights (mtp_num_hidden_layers < 1)", supported_k=())
-            costs = spec_memory_costs(tc, _mesh_tp(), max_num_seqs, k, max_seq_len=mc.max_model_len)
+            costs = spec_memory_costs(
+                tc, _mesh_tp(), max_num_seqs, k, max_seq_len=mc.max_model_len, kv_dtype_bytes=paged_kv_dtype_bytes()
+            )
             # costs are for the whole batch: per_seq scales with B, fixed is shared
             per_seq = math.ceil((costs["per_seq"]["total"] + costs["fixed"]["total"]) / max_num_seqs)
             per_token = int(costs["per_token"]["total"])

@@ -25,6 +25,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -305,7 +306,8 @@ def spec_memory_costs(
     Dims follow the model: TILE tensors pad their last two dims to 32; ROW_MAJOR are exact.
     ``fixed`` scales with B only through page tables / selectors / feed rows (all small). Page-table width nb =
     ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``num_layers`` overrides
-    num_hidden_layers (truncated test models); ``mask_buckets`` the engine's last-row selector buckets."""
+    num_hidden_layers (truncated test models); ``mask_buckets`` the engine's last-row selector buckets.
+    ``kv_dtype_bytes`` is bytes per KV element (default bf16); paged_kv_dtype_bytes() gives the model's cache dtype."""
     tp, B, K = int(tp), int(batch_size), int(draft_len)
     T, rows = K + 1, B * (K + 1)
     dim = int(_cfg(text_config, "hidden_size"))
@@ -354,7 +356,7 @@ def spec_memory_costs(
         + _tile_bytes([1, 1, rows, dim_frac], bf)  # rows_out (drafter feed)
         + _rm_bytes([1, 1, rows], i32)  # ids_out
     )
-    block_bytes = 2 * n_local_kv * int(block_size) * head_dim * int(kv_dtype_bytes)
+    block_bytes = round(2 * n_local_kv * int(block_size) * head_dim * kv_dtype_bytes)
     buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
     engine = (
         sum(_tile_bytes([1, 1, 1, b], bf) for b in buckets)  # _last_sel
@@ -366,13 +368,21 @@ def spec_memory_costs(
         + (_tile_bytes([1, 1, rows, B], bf) + _tile_bytes([1, 1, rows, rows], bf) if B > 1 else 0)  # _join_take/keep
     )
     fixed = {"verify_io": verify_io, "mtp_scratch_block": block_bytes, "engine_buffers": engine}
-    per_token = {"mtp_kv": 2 * n_local_kv * head_dim * int(kv_dtype_bytes)}
+    per_token = {"mtp_kv": round(2 * n_local_kv * head_dim * kv_dtype_bytes)}
     for d in (per_seq, fixed, per_token):
         d["total"] = sum(d.values())
     return {"per_seq": per_seq, "fixed": fixed, "per_token": per_token}
 
 
 _ELEM_BYTES = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.int32: 4, ttnn.uint32: 4, ttnn.uint16: 2, ttnn.uint8: 1}
+# Block-float: bytes per 32x32 tile (mantissas + one shared exponent byte per 16-element row segment).
+_BLOCK_FLOAT_TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
+
+
+def paged_kv_dtype_bytes():
+    """Bytes per element of the paged KV caches (MTP included) as allocate_kv_caches lays them out: bf8 under
+    kv_cache_bf8_enabled() (1088 B per 1024-element tile), else bf16. The ``kv_dtype_bytes`` of spec_memory_costs."""
+    return _BLOCK_FLOAT_TILE_BYTES[ttnn.bfloat8_b] / 1024 if kv_cache_bf8_enabled() else 2
 
 
 def _elem_bytes(dtype):
@@ -387,7 +397,10 @@ def _device_bytes(t):
     if t is None:
         return 0
     shape = getattr(t, "padded_shape", None) or t.shape
-    return math.prod(int(d) for d in shape) * _elem_bytes(t.dtype)
+    vol = math.prod(int(d) for d in shape)
+    if t.dtype in _BLOCK_FLOAT_TILE_BYTES:  # TILE layout only: the padded volume is a whole number of tiles
+        return vol // 1024 * _BLOCK_FLOAT_TILE_BYTES[t.dtype]
+    return vol * _elem_bytes(t.dtype)
 
 
 class MTPSpecEngine:

@@ -57,6 +57,7 @@ from models.demos.blackhole.qwen36.tt.qwen36_vllm import (  # noqa: E402
 from models.demos.blackhole.qwen36.tt.spec_engine import (  # noqa: E402
     DraftResult,
     VerifyResult,
+    paged_kv_dtype_bytes,
     spec_memory_costs,
     spec_table_width,
 )
@@ -388,7 +389,7 @@ def test_spec_plan_accept(hf_config):
     assert plan.drafter_state == "internal"
     assert plan.supports_narrow_decode is True
     tc = hf_config.get_text_config()
-    c = spec_memory_costs(tc, 4, 1, 3, max_seq_len=MAX_LEN)
+    c = spec_memory_costs(tc, 4, 1, 3, max_seq_len=MAX_LEN, kv_dtype_bytes=paged_kv_dtype_bytes())
     assert plan.extra_bytes_per_seq == int(c["per_seq"]["total"] + c["fixed"]["total"])
     assert plan.extra_bytes_per_token == int(c["per_token"]["total"])
     assert plan.extra_bytes_per_seq > 0 and plan.extra_bytes_per_token > 0
@@ -409,7 +410,9 @@ def test_spec_plan_multi_seq(hf_config):
     """K=3 fits the 32-row verify tile up to 8 sequences; 9 is rejected with the supported K list."""
     plan = CLS.spec_plan(_vcfg(hf_config), 8, 3)
     assert isinstance(plan, SpecPlan) and plan.effective_k == 3
-    c = spec_memory_costs(hf_config.get_text_config(), 4, 8, 3, max_seq_len=MAX_LEN)
+    c = spec_memory_costs(
+        hf_config.get_text_config(), 4, 8, 3, max_seq_len=MAX_LEN, kv_dtype_bytes=paged_kv_dtype_bytes()
+    )
     assert plan.extra_bytes_per_seq == math.ceil((c["per_seq"]["total"] + c["fixed"]["total"]) / 8)
     r = CLS.spec_plan(_vcfg(hf_config), 9, 3)
     assert isinstance(r, SpecReject) and "32-row" in r.reason and 3 not in r.supported_k
