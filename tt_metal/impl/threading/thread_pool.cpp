@@ -437,8 +437,7 @@ private:
 
     // Valid until the caller returns, which happens only after every claimed call has finished.
     const std::function<void(size_t)>& fn_;
-    // Indexed by participant.
-    std::vector<Claim> claims_;
+    std::vector<Claim> claims_;  // Indexed by participant.
     ParticipantOfCall participant_of_call_;
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     Participants participants_;
