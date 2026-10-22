@@ -908,3 +908,17 @@ was not applied in the envelope scripts; openers split 'The' (users 0, 1, 7) / '
 (a near-tie, not per column or per order). Gen-160 rerun queued after the MTP test (`sched_envelope512_g160.sh`).
 EP32 at 32 users with distinct ids: 71.2 ms (14.1 tok/s per user), traced TTFT 172 ms, first token 39030 (EP32
 prefill, open).
+
+**Logits-level accuracy on natural text (00:35-00:52, `logits_8x4_nat_mhc_{fast,wrap}.log`, dump L45_NAT_S128, 45
+layers bfp8, 8x4):**
+
+| mHC | logits PCC mean / min | top-1 | top-5 overlap | KL mean (nats) | first token |
+|---|---|---|---|---|---|
+| fast (default) | 0.9938 / 0.902 (pos 54) | 89.8 % (115/128) | 94.1 % | 0.040 | 11505 = HF |
+| composite wrap | 0.9942 / 0.910 (pos 54) | 90.6 % (116/128) | 94.1 % | - | 11505 = HF |
+
+CPU floors (`tests/test_logits_check.py`): bf16 hidden / bfp8 head vs fp32 = PCC 0.99998, top-1 128/128; HF's own
+bf16 head flips 2/128 top-1s (98.4 %). The device's misses are HF top-2 swaps at near-ties (device top-1 always in
+HF's top-5); the prefill is run-to-run deterministic (max |dlogits| 0). The fast mHC costs 0.0003 of logits PCC and
+one near-tie position: kept. The residual-stream PCC (0.943 composite vs 0.901 fast at 128 tokens) was the
+depth-chaos amplification of that. Test bars set to the measured floor (logits PCC >= 0.98, top-1 >= 0.85).

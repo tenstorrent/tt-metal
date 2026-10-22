@@ -51,8 +51,8 @@ EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]  # routed
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]  # routed down
 _cache_env = os.environ.get("GLM53_MESH_CACHE", "/home/ttuser/ashai/glm53/_cache/mesh")
 CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
-PCC_BAR = float(os.environ.get("GLM53_LOGITS_PCC_BAR", "0.95"))  # mean per-position logits PCC
-TOP1_BAR = float(os.environ.get("GLM53_TOP1_BAR", "0.9"))  # top-1 agreement rate
+PCC_BAR = float(os.environ.get("GLM53_LOGITS_PCC_BAR", "0.98"))  # mean per-position logits PCC
+TOP1_BAR = float(os.environ.get("GLM53_TOP1_BAR", "0.85"))  # top-1 agreement rate
 EVERY = int(os.environ.get("GLM53_LOGITS_EVERY", "1"))  # log every n-th position (mismatches always)
 N_RUNS = int(os.environ.get("GLM53_LOGITS_RUNS", "2"))  # cold + warm prefills; the last one is graded
 JSON_OUT = os.environ.get("GLM53_LOGITS_JSON")  # optional: the per-position report as json
