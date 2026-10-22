@@ -205,7 +205,9 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device
         this->cluster_->get_quasar_ip_variant());
-    log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
+    if (platform_arch == tt::ARCH::QUASAR) {
+        log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
+    }
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
