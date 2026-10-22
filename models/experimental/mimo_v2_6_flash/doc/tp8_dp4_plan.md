@@ -504,3 +504,26 @@ Validation in serving:
   letter); 6 truncated at 64K; 0 failed requests, 0 decode-trace recaptures; 1046 tok/s while all 16 requests decode
   (host sampling: ~133). On the 62 questions both runs answered, host sampling 56 and device sampling 52 (with the
   reasoning fallback), within T=1 run-to-run spread.
+
+## Speculative acceptance on device, 2026-10-22 (branch `mimo-v2.6/dev-mtp-spec-decode-sampled-device-accept`)
+
+Not yet run on hardware. Sampled MTP speculation in the plugin's `logits` mode, BH Galaxy, c=1 SPEED-Bench coding at
+temperature 1.0 / top_p 0.95: 2.60 accepted tokens per step and a 40 ms step (TPOT 14.7 ms): verify on device 16.2 ms
+(2.4 ms of it reading back 16 x 4 x 152k fp32 logits), verify host 6.0, the plugin's host accept walk 6.1, MTP draft
+5.6 + 2.6, gap 3.2. A greedy MTP step is ~28 ms; plain decode with the device sampler 13.1 ms TPOT.
+
+`fused_sample` (`tt/verify_sampler.py`) accepts on device instead: after each verify pass a small trace runs
+SampleScan and SampleChipMerge over the pass's slots with each slot's request parameters, the row all_gather, and
+SampleVerify (`kernels/sample_verify.cpp`, one core), which walks each request of the pass as the plugin's host walk
+does (point-mass drafts: accept draft j when p_j(d_j) > 0 and p_j(d_j) >= u_j; at the first rejection draw from p_j
+without d_j; else the bonus from p_n) with uniforms the plugin draws from the request's own generator, in fixed point
+as the decode sampler (Q30 probabilities, Q24 uniforms). Inverse-CDF draws walk the candidates in the plugin's table
+order (logit then id for a top_k row, id for a nucleus row), so the same uniform draws the same token as the host.
+Greedy requests compare with the verify's GreedyHead tokens, exactly the argmax_ids walk. A request whose nucleus
+runs past the candidates is accepted on them and counted.
+
+Expected per step: the 2.4 ms logits readback and the 6.1 ms host walk go, and the part of the verify host time that
+fills the plugin's [16, 4, 152k] logits buffer; the accept trace adds the sampler head per pass (the decode head takes
+0.164 ms) and a 128-byte read. Roughly 40 -> 30-32 ms per step, TPOT ~11.5-12 ms at 2.6 accepted tokens: about a
+greedy MTP step plus the accept head. The MTP draft (8.2 ms) and the gap (3.2 ms) are unchanged.
+

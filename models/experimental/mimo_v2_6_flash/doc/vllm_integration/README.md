@@ -196,7 +196,10 @@ vllm serve ... --no-async-scheduling \
 ```
 
 - **Who speculates.** A lane drafts after a step that ran one request in it; a lane with several requests declines
-  (`num_valid` 0) and decodes as before. Greedy requests only (the plugin's accept walk compares token ids).
+  (`num_valid` 0) and decodes as before. A verify answers in the accept mode the plugin asks for: `argmax_ids` when
+  every request of the step is greedy; `fused_sample` when a request samples with only temperature / top_k / top_p
+  inside the device sampler's bounds (acceptance on device, below); `logits` otherwise (the plugin's host walk, for
+  penalties, logprobs, grammar, token filters).
 - **Verify** (`reference/spec_decode.py`, `TtMiMoModel.capture_verify_trace`): the decode step with the request in
   every decode slot of its replica, column j of the candidate block in slot j at position p + j, each slot with the
   request's page tables. It stays on the 4-user fast path (streaming MoE, SwaDecodeQkv, GreedyHead). The slots share
@@ -208,10 +211,23 @@ vllm serve ... --no-async-scheduling \
   each slot taking the target's final normed hidden there (the persistent buffer of the last layer's fused norm) and
   the embedding of the committed token; two steps on the last slot feed the layer its own output (vLLM's MTP
   proposer with one layer). Its KV cache is a ring of 256 positions, addressed at 256 + t % 256 with RoPE at t.
+- **Acceptance on device** (`fused_sample`, `tt/verify_sampler.py`, `kernels/sample_verify.cpp`, host mirror
+  `reference/sample_verify.py`): after each verify pass a small trace runs DeviceSampler's SampleScan and
+  SampleChipMerge over the pass's slots (each with its request's temperature / top_k / top_p), the row all_gather,
+  and SampleVerify on one core: per request, the plugin's point-mass accept walk with the uniforms the plugin drew
+  from the request's generator (`spec_sampling`), greedy requests on the verify's argmax ids. The step reads 128 bytes
+  per pass (each request's committed tokens and count) instead of 4 x 152k fp32 logits, and the host walks nothing.
+  Exact where the slot's 256 candidates hold the nucleus (the decode sampler's condition); otherwise the request is
+  accepted on its candidates and counted (`MiMo vLLM fused accept` log line, every 1024 fused verifies).
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
+  `tests/test_sample_verify_host.py` (no device): the accept kernel's integer mirror against the plugin's accept-walk
+  semantics (accept boundaries, the residual without the draft, the bonus, greedy ties, top_k and top_p, truncation),
+  and against `vllm_tt_plugin.spec_accept` itself when the plugin is installed.
   `tests/test_spec_decode_tp8_dp4.py` (Galaxy, needs vllm-tt-plugin): the adapter's speculative tokens equal its
-  greedy tokens; logs the mean accepted length and ms per token.
+  greedy tokens, and its first verifies agree across modes (logits argmax, greedy and sampled fused_sample against the
+  plugin's walk); logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
+  kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
 - **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first
   ~128 decode tokens draft from less context); async scheduling; more than one speculating request per lane (16 / 32
   verify rows exceed the 4-user kernels); the 3-layer MTP chain; the trace region size with both extra traces.

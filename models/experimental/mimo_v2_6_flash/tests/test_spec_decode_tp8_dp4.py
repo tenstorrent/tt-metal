@@ -7,6 +7,12 @@ Lane 0 decodes a prompt greedily one token per step; lane 1 serves the same prom
 speculating request: a plain step, then propose (MTP drafts) / verify (the request in every slot of its replica) /
 greedy acceptance. The speculative tokens must equal the plain greedy tokens. Logs the mean accepted length and the
 time per token of both loops. Needs vllm-tt-plugin (its spec_decode value types) and the MiMo checkpoint.
+
+The first verifies also run as the plugin's other modes on the same block: logits (its argmax must be the ids), and
+fused_sample (acceptance on device, tt/verify_sampler.py): with every row greedy it must commit what the ids walk
+commits, and with the request sampled (temperature 1, top_p 0.95) and given uniforms it must commit what the plugin's
+host walk (vllm_tt_plugin.spec_accept.accept_speculated_tokens) commits on the logits verify's logits with the same
+uniforms, unless the device flagged the request's candidates truncated.
 """
 
 import time
@@ -29,8 +35,8 @@ SPEC_DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 1_200_000_000
 PER_LANE = 4
 MAX_SEQ_LEN = 1024
 STEPS = 96
-# The first verifies also run in logits mode (sampled requests) and must agree with argmax_ids.
-LOGITS_CHECKS = 2
+# The first verifies also run in logits and fused_sample mode and must agree with argmax_ids and the host walk.
+LOGITS_CHECKS = 4
 PROMPT = (
     "Write a Python function that returns the n-th Fibonacci number using memoization, then explain how the "
     "memoization changes its time complexity."
@@ -106,6 +112,55 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
         assert int(out.num_valid[spec_row]) == MAX_DRAFTS and int(out.num_valid.sum()) == MAX_DRAFTS
         return out.draft_token_ids[spec_row].tolist()
 
+    def fused_verify(tokens, positions, valid, spec_sampling):
+        out = model.decode_forward(
+            tokens,
+            positions,
+            page_table,
+            kv,
+            spec_mode="fused_sample",
+            num_valid_drafts=valid,
+            accepted_counts=torch.ones(rows, dtype=torch.int32),
+            **({} if spec_sampling is None else {"spec_sampling": spec_sampling}),
+        )
+        assert out.spec_mode == "fused_sample" and out.accepted_counts.shape == (rows,)
+        return out
+
+    fused_mismatch = []
+
+    def check_fused_sampled(tokens, positions, valid, full):
+        from vllm_tt_plugin.spec_accept import accept_speculated_tokens
+
+        vocab = model.gen.cfg.vocab_size
+        # Uniforms on the Q24 grid, so the device's floor(u * 2^24) and the host's float see one value.
+        uniforms = torch.zeros(rows, MAX_DRAFTS + 2)
+        uniforms[spec_row] = torch.randint(0, 1 << 24, (MAX_DRAFTS + 2,)).float() / (1 << 24)
+        sampled = torch.zeros(rows, dtype=torch.bool)
+        sampled[spec_row] = True
+        spec_sampling = {
+            "temperature": sampled.float(),
+            "top_k": torch.where(sampled, vocab, 1).to(torch.int32),
+            "top_p": torch.where(sampled, 0.95, 1.0).float(),
+            "greedy": ~sampled,
+            "uniforms": uniforms,
+        }
+        lane = model.models[spec_row // PER_LANE].verify_sampler
+        truncated = lane.truncated
+        out = fused_verify(tokens, positions, valid, spec_sampling)
+        ref = accept_speculated_tokens(
+            target_logits=full[spec_row : spec_row + 1],
+            draft_token_ids=tokens[spec_row : spec_row + 1, 1:],
+            num_valid_drafts=valid[spec_row : spec_row + 1],
+            temperature=torch.ones(1),
+            top_p=torch.tensor([0.95]),
+            uniforms=uniforms[spec_row : spec_row + 1].double(),
+        )
+        got = out.accepted_token_ids[spec_row, : int(out.accepted_counts[spec_row])].tolist()
+        want = ref.committed_token_ids[0, : int(ref.accepted_counts[0])].tolist()
+        if got != want:
+            fused_mismatch.append((got, want))
+            assert lane.truncated > truncated, f"sampled fused {got} != host walk {want} on untruncated candidates"
+
     while len(seq) < prompt.numel() + STEPS:
         drafts = propose()
         p = len(seq) - 1
@@ -130,6 +185,8 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
             ).logits
             assert full.shape == (rows, 1 + MAX_DRAFTS, model.gen.cfg.vocab_size) and bool(full.isfinite().all())
             logits_argmax = full[spec_row].argmax(dim=-1)
+            fused_greedy = fused_verify(tokens, positions, valid, None)
+            check_fused_sampled(tokens, positions, valid, full)
             check_s += time.perf_counter() - t
         out = model.decode_forward(
             tokens,
@@ -140,9 +197,11 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
             num_valid_drafts=valid,
             accepted_counts=torch.ones(rows, dtype=torch.int32),
         )
+        committed = accept_greedy(out.argmax_ids[spec_row].tolist(), drafts, MAX_DRAFTS)
         if len(counts) < LOGITS_CHECKS:
             assert logits_argmax.tolist() == out.argmax_ids[spec_row].tolist(), "logits verify disagrees with ids"
-        committed = accept_greedy(out.argmax_ids[spec_row].tolist(), drafts, MAX_DRAFTS)
+            count = int(fused_greedy.accepted_counts[spec_row])
+            assert fused_greedy.accepted_token_ids[spec_row, :count].tolist() == committed, "greedy fused != ids walk"
         accepted = len(committed)
         counts.append(accepted)
         seq += committed
@@ -153,7 +212,8 @@ def test_spec_decode_tp8_dp4(mesh_device, monkeypatch):
         f"MTP spec decode: mean accepted {sum(counts) / len(counts):.2f} over {len(counts)} verifies "
         f"(histogram {[counts.count(m) for m in range(1, MAX_DRAFTS + 2)]}); "
         f"{1e3 * plain_s / STEPS:.1f} ms/token plain, {1e3 * spec_s / (len(seq) - prompt.numel() - 1):.1f} ms/token "
-        "speculative (host-driven, sync reads)"
+        "speculative (host-driven, sync reads); sampled fused checks differing on truncated candidates: "
+        f"{len(fused_mismatch)} of {LOGITS_CHECKS}"
     )
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)
     assert first_diff is None, f"speculative tokens diverge from greedy at position {first_diff}"
