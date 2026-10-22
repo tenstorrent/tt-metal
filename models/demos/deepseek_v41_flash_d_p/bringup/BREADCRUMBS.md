@@ -2760,3 +2760,67 @@ Gotchas:
   the ChunkMemo "comp" slot and model.memo_last's ("comp", src) entries, the [window | comp] concat).
 Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.21`; trace ceiling
 `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_trace.py`.
+
+## FIX.10 overseer (attempt 1, 2026-10-22): "remove P.21's second copy of the compressed history": DISAGREE, no code change
+
+Request: make the served compressed cache and P.21's AttnTable one storage, to recover "+1.25 GiB per chip per slot at
+524,288 (+2.5 at 1M)" on galaxy_4x4. Answer: disagree (knowledge-use report, overseer FIX.10). Nothing in tt/,
+hooks.py or the forks changed.
+Why (DS41-101):
+- The served copy is not a second full copy. 1_compress_kv_r2 / 3_compress_kv_r1 are TP-dedup and SP-sharded: each
+  chip holds 1 / (SP x TP) of a source's history (tt/compressor.py TtServedRows: owners = sp x tp, rows =
+  ceil(max_seq / chunk) x W / TP). The AttnTable is the whole history on every chip, because sparse_sdpa reads only its
+  own chip's table and a top-k id may name any earlier group. The 1.25 GiB is that table.
+- Measured (probe tests/ttnn/unit_tests/operations/ds41_fix10_mem/probes/probe_001.py, 2x2, DRAM allocated per chip
+  via ttnn.get_memory_view, one TtServedRows(dedup=True, attn_table=True), STATIC_TABLES off / on), MiB per chip:
+  max_seq 55,296: r2 6.87 / 37.12 (served slab 6.75, table 29.12 = 27,648 history + 128 + 2,048 window rows);
+  r1 13.52 / 70.88 (served 13.50, table 56.12). max_seq 57,344: r2 7.13 / 38.38; r1 14.02 / 73.38. This run's three
+  sources (L2, L14 r2; L20 r1) at 55,296: served 27.0 MiB, tables 114.4 MiB a chip.
+- Full model, 4 sources (L2, L8, L14 r2; L20 r1), 1 KiB a row, chunk 4096 (window region 4,224 rows = 4.1 MiB each),
+  per chip per slot: table 1.266 GiB at 524,288 and 2.516 GiB at 1,048,576 on every box. Served dedup copy:
+  galaxy_4x4 80 MiB (524k) / 160 MiB (1M); galaxy_8x4 40 / 80 MiB. Today (P.21): 4x4 1.344 / 2.672 GiB, 8x4 1.305 /
+  2.594 GiB. One storage readable by sparse_sdpa must still hold the whole history per chip: 1.266 / 2.516 GiB on both
+  boxes. The merge saves 80 MiB (4x4, 524k), 40 MiB (8x4, 524k), 160 / 80 MiB at 1M: 6 % of the 1.25 GiB.
+- What the merge would cost: the served configs replicated over SP and TP in natural order (serving_contract.md
+  "Placement" shards the sequence over SP rows; the KV Manager would write each migrated record to all 16 chips), and a
+  sparse_sdpa fork option to read an ND-sharded engine tensor [slots x layers, 1, rows, 512] at a (slot, layer) base row
+  with the window region inside it. Not worth 80 MiB.
+- Budget at 524k on galaxy_4x4 (plan_boxes.json gb_at_deploy_seq 26.49 GiB, which counts ONE r1-sized table, 0.5 GiB,
+  plus the 80 MiB served copy): P.21 adds 3 r2 tables + 3 window regions = +0.76 GiB -> ~27.25 of 27.2; the merge
+  would give ~27.17. But 26.49 predates two shipped settings: dense fp8 weights as bfp8 (DENSE_WEIGHTS, P.13; plan.md:
+  bf16 dense costs +1.5 GiB on 4x4) and routed experts as bfp4 (0.5625 B a value vs the plan's packed 0.531: about
+  +1.0 GiB). Estimate with both: ~26.7 GiB with P.21 as it is. The plan check should be re-run with the shipped dtypes
+  and the per-source tables before anyone trades speed for memory.
+- If memory is needed, options that do cut it (not done; a perf / plan decision): (a) the plan's one shared r1-sized
+  table refilled per source per chunk (0.5 GiB at 524k; pays the per-chunk history gather P.21 removed); (b) keep the
+  persistent table only for L20 (read by layers 20-39) and one shared r2 buffer refilled per r2 source per chunk
+  (0.77 GiB at 524k, -0.5 GiB vs P.21; 3 r2 history gathers per chunk).
+Gate: not run (no code changed since P.21's passing gate; agent rule 8). Chunk wall / device time / err_* unchanged:
+P.21's quick wall 103.5 ms, err_* as in the P.21 section.
+Re-run the measurement: `PYTHONPATH=$PWD scripts/tt-probe.sh ds41_fix10_mem < tests/ttnn/unit_tests/operations/ds41_fix10_mem/probes/probe_001.py`.
+
+## FIX.10 overseer (attempt 3, 2026-10-22): disagree kept, no code change; the gate's failures are the indexer swap checks (DS41-102)
+
+- FIX.10: answer stays `disagree` (attempt 1's evidence, accepted by the overseer 14:20; DS41-101). Nothing in tt/,
+  hooks.py or the forks changed. Memory, chunk wall (quick 103.5 ms), device time and err_* are P.21's.
+- OV-31: done. The owner waivers are in the spec (5fb7d75926d); swap swa_12 and swa_engram_15 now pass (orchestrator log
+  FIX.10.log, 14:46-14:54).
+- Gate status on P.21 code (the first full run of P.21's frozen tests; P.21 was accepted on a quick A/B):
+  - test_c_*_experts (8): pass (FIX.10.log).
+  - swap enc_source_14: FAIL, swap_indexer_vs_cpu match 0.0015 (>= 0.922), vs_golden 0.0015 (>= 0.830), near ties
+    flips 1967 unexplained 1471 recall 0.9942 (FIX.10.log). Every other failed check there is waived.
+  - swap enc_source_engram_17 (my run): FAIL, the same indexer checks (match 0.0016 >= 0.860; unexplained 218, recall
+    0.9979) and pytest-timeout 300 s (the test ran 300.65 s; 291 s on the earlier run).
+  - dec_candidate_14 and dec_reindex_13 run an indexer through the same checks: expect the same. enc_reuse_12,
+    dec_reuse_12, the P.21 ladder and the profile: not reached.
+  - K.1 contract tests (my runs, P.21 code): test_contract PASS (691 s; 335 s at K.1), test_kv_layout PASS,
+    test_adapter_acks PASS, test_runner_contract PASS, test_runner_smoke PASS.
+  - Ladder L.last: not finished. It runs > 20 min, beyond the agent's tool limit (10 min foreground + 10 background),
+    and was stopped by SIGTERM at 1200 s (card marked dirty, run_safe_pytest resets it on the next run).
+- Indexer diagnosis (CPU only, /tmp/fix10diag/idx_ties.py, layer 2, golden inputs, NF.flips, details in
+  known_issues_detail.md DS41-102): native scores rounded to bf16 (topk_large_indices is bf16-only) give 1277
+  unexplained / recall 0.9946 (device 1471 / 0.9942); the official bf16 arithmetic gives 2048 / 0.9638. The match is
+  order: the reference returns ids ascending, the device by score (the native set by score: 0.0014). K-42 says index
+  outputs need topk_overlap. Not a logic bug, not from P.21: a framework / frozen-test or waiver decision.
+- No fix in the model: sorting the device ids would add a device sort only for the test and still not pass (a flip shifts
+  positions), and fp32 top-k scores would raise precision above the official code (rule 7).

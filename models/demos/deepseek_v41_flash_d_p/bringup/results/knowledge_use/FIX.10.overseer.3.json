@@ -1,0 +1,62 @@
+{
+ "overseer": [
+  {
+   "id": "FIX.10",
+   "answer": "disagree",
+   "evidence": "Same as attempt 1 (accepted by the overseer, supervision.md 2026-10-22 14:20): the served compressed cache is TP-dedup + SP-sharded, 1/(SP x TP) of a source's history per chip (tt/compressor.py TtServedRows: owners = sp*tp); the AttnTable is the full-history replica sparse_sdpa needs on every chip (a top-k id may name any earlier group). Probe tests/ttnn/unit_tests/operations/ds41_fix10_mem/probes/probe_001.py, 2x2, max_seq 55296, MiB per chip: r2 served 6.75 vs table 29.12; r1 13.50 vs 56.12. Full model, 4 sources, per chip per slot: P.21 1.344 GiB (4x4) / 1.305 (8x4) at 524k; one merged storage still 1.266 GiB: saves 80 / 40 MiB at 524k, 160 / 80 at 1M, and would need the served configs replicated over SP and TP (a contract placement change) plus a sparse_sdpa fork option. No code changed; chunk wall / device time / err_* as P.21 (quick wall 103.5 ms). Owner since made galaxy_8x4 the target (supervision.md 14:50)."
+  },
+  {
+   "id": "OV-31",
+   "answer": "done",
+   "evidence": "No code change. With the waivers in the spec (5fb7d75926d) swap swa_12 and swa_engram_15 pass (FIX.10.log). The gate now fails at swap enc_source_14 (and enc_source_engram_17, my run): swap_indexer match 0.0015 vs limit 0.92 (order: reference ids ascending, device by score) and near-tie unexplained flips 1471, which bf16 scores alone reproduce on the CPU (1277; official bf16 code 2048, recall 0.964): DS41-102. Needs a test-mode / waiver decision, not a model change. K.1 contract tests all pass on P.21 code."
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-101",
+   "how": "kept attempt 1's disagree: the served slab is 1/(SP x TP) of the history, the replicated table is the memory; no merge",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-17",
+   "how": "the TP-dedup placement is why the served copy is not a second full copy",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-42",
+   "how": "identified the swap tests' indexer 'match' failure as positional order (index outputs need topk_overlap); no device sort added",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-102",
+   "how": "new: diagnosed the indexer swap failures as order + bf16 score ties (CPU reproduction), not a model bug; no code change",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the swap tests take an index step's compare mode from its component test (COMPARE None -> positional match) although K-42 says top-k ids need topk_overlap; the flip rule does not include the official arithmetic's own flips (official bf16: recall 0.964 vs native)",
+  "the L.last ladder runs > 20 min, beyond an agent's tool limit; agents cannot run the full gate's ladder themselves"
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.10",
+  "role": "overseer",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T16:01:20",
+  "head": "2a740c6a811",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.10.overseer.3.json"
+  ]
+ }
+}

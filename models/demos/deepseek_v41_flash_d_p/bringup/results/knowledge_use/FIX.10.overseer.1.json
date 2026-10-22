@@ -1,0 +1,45 @@
+{
+ "overseer": [
+  {
+   "id": "FIX.10",
+   "answer": "disagree",
+   "evidence": "The served compressed cache is not a second full copy: 1_compress_kv_r2 / 3_compress_kv_r1 are TP-dedup + SP-sharded, 1/(SP x TP) of the history per chip (tt/compressor.py TtServedRows: owners = sp*tp, rows = ceil(max_seq/chunk)*W/TP). Measured on 2x2 (probe tests/ttnn/unit_tests/operations/ds41_fix10_mem/probes/probe_001.py, ttnn.get_memory_view DRAM per chip, max_seq 55296): r2 served 6.75 MiB vs AttnTable 29.12 MiB; r1 13.50 vs 56.12. The 1.25 GiB at 524k (2.5 at 1M) is the table itself: sparse_sdpa reads only its own chip's tensor and a top-k id may name any earlier group, so ONE storage the attention reads must still hold the whole history on every chip. Merging removes only the dedup share: per chip per slot 1.344 -> 1.266 GiB on galaxy_4x4 at 524k (-80 MiB), 1.305 -> 1.266 on galaxy_8x4 (-40 MiB); at 1M -160 / -80 MiB. It would need the served configs replicated over SP and TP (contract placement change, the KVM writing each migrated record to every chip) and a sparse_sdpa fork option for an ND-sharded engine tensor at a (slot, layer) base row: not worth 80 MiB. The 4x4 524k budget line (26.49 GiB) predates the shipped bfp8 dense weights (-1.5 GiB, plan.md) and bfp4 experts (~+1.0 GiB); estimate with P.21 as is ~26.7 of 27.2. Options that do cut memory (shared / refilled tables) are in BREADCRUMBS FIX.10. No code changed."
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-17",
+   "how": "the TP-dedup placement (token g on row (g/W)%SP, column stripe W/TP) is why the served copy is 1/(SP x TP) of the history: the basis of the per-box served numbers",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-5",
+   "how": "took the contract's per-position served caches and per-config memory model (1 KiB per compressed row) for the full-model 524k / 1M numbers",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the per-chip memory of P.21's AttnTable vs the served (dedup) caches per box was not recorded as a lesson; added DS41-101"
+ ],
+ "cited_only": [
+  "DS41-101"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.10",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T13:53:16",
+  "head": "f66d16327b6",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.10.overseer.1.json"
+  ]
+ }
+}
