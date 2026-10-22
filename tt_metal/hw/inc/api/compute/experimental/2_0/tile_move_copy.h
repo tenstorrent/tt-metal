@@ -81,6 +81,8 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uin
 /**
  * Id-free block copy, Quasar: copy_tile over a ct_dim x rt_dim block, source tiles start_itile + i -> Dest tiles
  * start_idst + i, i < ct_dim * rt_dim. The block must fit one Dest section (static_assert).
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
  * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
@@ -103,15 +105,15 @@ ALWI void copy_block(LLKOperand<Format, Shape> src, std::uint32_t start_itile, s
     static_assert(
         ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(),
         "copy_block: block exceeds the Dest section");
-    for (std::uint32_t i = 0; i < ct_dim * rt_dim; ++i) {
-        copy_tile<unpack_to_dest>(src, start_itile + i, start_idst + i);
-    }
+    copy_block<unpack_to_dest, is_fp32_dest_acc_en>(src, start_itile, start_idst, ct_dim * rt_dim);
 }
 
 // clang-format off
 /**
- * Id-free block copy with a runtime tile count (tails), Quasar: copy_tile over `ntiles` tiles, source tiles
+ * Id-free block copy with a runtime tile count, Quasar: copy_tile over `ntiles` tiles, source tiles
  * start_itile + i -> Dest tiles start_idst + i.
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                          | Required |
  * |------------|---------------------|-------------------------------------------|------------|--------------------------------------|----------|
@@ -128,6 +130,7 @@ ALWI void copy_block(
     LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
     LLK_ASSERT(
         start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "copy_block: block exceeds Dest");
+    detail::check_block_tiles<unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU>(ntiles);
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         copy_tile<unpack_to_dest>(src, start_itile + i, start_idst + i);
     }

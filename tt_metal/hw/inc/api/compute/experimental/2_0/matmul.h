@@ -118,6 +118,8 @@ ALWI void matmul_tile(
  * C[rt, ct] = in0[rt, kt] x in1[kt, ct] call it for k < kt_dim with in0_tile = k, in1_tile = k * ct_dim inside one
  * section. Dest starts at tile 0. The tiles inside a block step are contiguous, so both operands must have
  * stride_tiles == 1 unless the block is 1x1 (asserted). Pair with matmul_init of the same shape.
+ * No tails: every block op between two inits must cover the same tile count (LLK_ASSERT); for leftover tiles
+ * re-init, then run the shorter block.
  *
  * | Param Type | Name                | Description                               | Type       | Valid Range                     | Required |
  * |------------|---------------------|-------------------------------------------|------------|---------------------------------|----------|
@@ -139,6 +141,7 @@ ALWI void matmul_block(
     LLK_ASSERT(
         (ct_dim == 1 && rt_dim == 1) || (in0.stride_tiles == 1 && in1.stride_tiles == 1),
         "matmul_block: a block step needs contiguous operand tiles");
+    detail::check_block_tiles<dest_dvalid_client::FPU>(ct_dim * rt_dim);
     detail::matmul_dest_take();
     UNPACK((llk_2_0::unpack_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0.tile(in0_tile), in1.tile(in1_tile), ct_dim, rt_dim, kt_dim)));
