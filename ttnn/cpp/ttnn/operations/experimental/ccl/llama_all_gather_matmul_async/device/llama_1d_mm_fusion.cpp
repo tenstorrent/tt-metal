@@ -429,7 +429,7 @@ process_agmm_fusion_program_and_create_override_variables(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(src1_cb_index));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 

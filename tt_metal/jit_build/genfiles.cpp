@@ -242,9 +242,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             uint8_t prefetcher_pipe_id,
             const std::optional<LLKMetadata>& metadata,
             uint8_t pap,
-            uint8_t cap) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
-        });
+            uint8_t cap) { dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap}); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -335,6 +333,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
+
+    // The device slot of every DFB binding as a preprocessor constant. The includes below pull in the LLK io
+    // headers before the dfb:: tokens are declared, so a header that must know a binding's slot while it is
+    // being parsed (the matmul stagger hook's MM_STAGGER_OPERAND in llk_io_unpack.h) reads DFB_SLOT_<name>
+    // instead of the token.
+    for (const auto& entry : dfb_entries) {
+        content << "#define DFB_SLOT_" << entry.name << " " << entry.id << "\n";
+    }
+    if (!dfb_entries.empty()) {
+        content << "\n";
+    }
 
     // Emit Includes:
     // Support get_token_if_present() helper.

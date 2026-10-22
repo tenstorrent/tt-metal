@@ -718,7 +718,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), cores.size(), mm_kernel_defines);
+        device.arch(),
+        cores.size(),
+        mm_kernel_defines,
+        ttnn::operations::compute_throttle_utils::dfb_slot_operand("in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), cores.size(), mm_kernel_defines, throttle_level);
 

@@ -536,7 +536,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -1496,7 +1496,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -2382,7 +2382,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(src1_cb_index));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -3393,7 +3393,7 @@ void override_program_parameters(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -4350,7 +4350,7 @@ void override_program_parameters(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -5672,7 +5672,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_defines["IN0_TRANSPOSE_TILE_PATH"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::operations::compute_throttle_utils::dfb_slot_operand("cb_in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
@@ -6692,7 +6695,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         mm_kernel_defines["IN0_TRANSPOSE_TILE_PATH"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::operations::compute_throttle_utils::dfb_slot_operand("cb_in1"));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 

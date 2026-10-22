@@ -633,7 +633,7 @@ ttnn::device_operation::CachedProgram<Mcast2DSharedVariables> create_program_mca
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), cores.size(), mm_kernel_defines);
+        device.arch(), cores.size(), mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), cores.size(), mm_kernel_defines, throttle_level);
 
@@ -2498,7 +2498,7 @@ void create_program_mcast_in0_in1_descriptor(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), cores.size(), mm_kernel_defines);
+        device.arch(), cores.size(), mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), cores.size(), mm_kernel_defines, throttle_level);
 

@@ -364,7 +364,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 

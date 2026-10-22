@@ -379,7 +379,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device.arch(), num_compute_cores, mm_kernel_defines);
+        device.arch(), num_compute_cores, mm_kernel_defines, std::to_string(tt::CBIndex::c_1));
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
