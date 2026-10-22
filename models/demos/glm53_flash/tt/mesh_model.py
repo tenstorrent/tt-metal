@@ -36,6 +36,11 @@ from models.demos.glm53_flash.tt.trace_prefill import (
 
 
 class GLM53MeshModel:
+    # the attached MTP drafter (``attach_mtp``; ``tt/mtp.py`` ``TtMTPBlock``) and its own level-1 positions
+    # (``set_mtp_positions``): the speculative-decode draft step (``decode_step_with_draft``, ``tt/spec_decode.py``)
+    mtp = None
+    mtp_positions: DecodePositions | None = None
+
     def __init__(
         self,
         mesh_device,
@@ -373,3 +378,89 @@ class GLM53MeshModel:
                 )
                 ttnn.copy(z, t)
                 ttnn.deallocate(z)
+
+    # ------------------------------------------------------------- MTP draft step (speculative decoding, step 3)
+    def head_forward_with_hidden(self, streams: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """``TtModelHead.forward_greedy`` that also hands back the normed hidden: packed streams (or the last
+        layer's collapsed mean) ``[1,1,T,*]`` -> ``(hn [1,1,T,4096] bf16, logits [1,1,T,V] bf16, ids [1,1,T,1]
+        uint32)``. ``hn`` is the LM-head input = the MTP's ``H`` row (``tt/mtp.py``); the caller deallocates all
+        three. Trace-capturable (device ops only)."""
+        h = self.head.collapse(streams)
+        hn = self.head.norm(h)
+        if h is not streams:
+            ttnn.deallocate(h)
+        logits = self.head.logits(hn)
+        ids = self.head.greedy(logits)
+        return hn, logits, ids
+
+    def attach_mtp(self, mtp):
+        """Attach the MTP drafter (a ``TtMTPBlock`` built with this model's embedding / head, ``max_batch`` user
+        slots per row and a cache of at least ``max_seq_len`` positions). Allocate it, like the layers, before
+        any trace capture."""
+        if mtp.max_batch != self.max_batch or mtp.mesh.rows != self.mesh.rows:
+            raise ValueError(f"MTP block ({mtp.max_batch} users/row) does not match the model ({self.max_batch})")
+        if mtp.max_seq_len < self.max_seq_len:
+            raise ValueError(f"MTP cache holds {mtp.max_seq_len} positions, the model decodes up to {self.max_seq_len}")
+        self.mtp = mtp
+        self.mtp_positions = None
+
+    def set_mtp_positions(self, host_positions: list[int]):
+        """The MTP's level-1 positions of the step: the same values as ``set_positions`` (the level-1 row of main
+        position ``p`` sits at MTP position ``p``), held in the MTP's own persistent ``DecodePositions``."""
+        if self.mtp is None:
+            raise RuntimeError("attach_mtp first")
+        if self.mtp_positions is None:
+            self.mtp_positions = self.mtp.make_decode_positions(host_positions)
+        else:
+            self.mtp.update_decode_positions(self.mtp_positions, host_positions)
+
+    def set_spec_positions(self, host_positions: list[int]):
+        """``set_positions`` + ``set_mtp_positions`` with the same values (one call per step)."""
+        self.set_positions(host_positions)
+        self.set_mtp_positions(host_positions)
+
+    def decode_step_with_draft(self, ids_dev: ttnn.Tensor, positions: DecodePositions, mtp_positions: DecodePositions):
+        """``decode_step`` followed by MTP level 1: the normal step on ``ids_dev`` ``[1,1,1,B]`` (per row) at
+        ``positions``, then the drafter on the head's normed hidden and the step's greedy id (re-embedded on
+        device from the argmax output) at ``mtp_positions`` (= the same positions). Returns ``(logits [1,1,B,V],
+        ids [1,1,B,1], draft ids [1,1,B,1], hn [1,1,B,4096] bf16)``: the step's greedy token per user slot and
+        the MTP's prediction of the token after it. Every op is a device op on persistent inputs (trace-safe;
+        ``capture_with_draft``). ``hn`` is returned for diagnostics (the eager MTP re-run of a test)."""
+        if self.mtp is None:
+            raise RuntimeError("attach_mtp first")
+        streams = self.embedding(ids_dev)
+        last = len(self.layers) - 1
+        for k, dec in enumerate(self.layers):
+            collapse = k == last and dec.supports_collapse
+            out = dec.decode_forward(streams, positions=positions, collapse=collapse)
+            ttnn.deallocate(streams)
+            streams = out
+        hn, logits, ids = self.head_forward_with_hidden(streams)
+        ttnn.deallocate(streams)
+        # the id row is a view of ``ids`` (never deallocated); ``project`` reads it and ``hn`` without consuming
+        out, normed, mlogits, draft = self.mtp.decode_forward(self.mtp.ids_row(ids), hn, mtp_positions)
+        for t in (out, normed, mlogits):
+            ttnn.deallocate(t)
+        return logits, ids, draft, hn
+
+    def warmup_decode_with_draft(self, ids: torch.Tensor, host_positions: list[int]):
+        """``warmup_decode`` for the draft step: allocates the persistent inputs (ids, both position sets) and
+        runs one eager step (compiles the programs, builds the lazy constants). Consumes the token."""
+        if self.ids_dev is None:
+            self.ids_dev = self.ids_to_device(ids)
+        else:
+            self.load_ids(ids)
+        self.set_spec_positions(host_positions)
+        for t in self.decode_step_with_draft(self.ids_dev, self.positions, self.mtp_positions):
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(self.device)
+
+    def capture_with_draft(self, ids: torch.Tensor, host_positions: list[int], cq_id: int = 0):
+        """Warm-up + capture of ``decode_step_with_draft`` on the persistent inputs (``capture`` with the drafter):
+        returns ``(trace id, (logits, ids, draft ids, hn))``, transient outputs read after each ``replay``. Both
+        passes consume the token (the KDA states advance twice; the MTP cache row at the position is rewritten)."""
+        self.warmup_decode_with_draft(ids, host_positions)
+        trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
+        outs = self.decode_step_with_draft(self.ids_dev, self.positions, self.mtp_positions)
+        ttnn.end_trace_capture(self.device, trace_id, cq_id=cq_id)
+        return trace_id, outs
