@@ -42,6 +42,7 @@ from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
@@ -805,6 +806,7 @@ class LTXPipeline:
         self._prepare_vae_encoder()
         return self.vae_encoder(image_BCFHW)
 
+    @cap_torch_threads_to_half_the_cpus()
     def decode_latents(
         self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
     ) -> torch.Tensor:
@@ -1333,6 +1335,7 @@ class LTXPipeline:
             return self.tt_mel_decoder.forward_traced(audio_spatial)
         return self.tt_mel_decoder(audio_spatial)
 
+    @cap_torch_threads_to_half_the_cpus()
     def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 

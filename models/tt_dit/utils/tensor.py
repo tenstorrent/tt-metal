@@ -4,16 +4,16 @@
 
 from __future__ import annotations
 
-import functools
 import itertools
 import math
-import os
 from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
 
 import ttnn
+
+from .torch_threads import cap_torch_threads_to_half_the_cpus
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -548,42 +548,9 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
-def _half_of_affinity_mask() -> int:
-    """Half the CPUs this process may run on. Uses the affinity mask, which ``os.cpu_count()`` ignores."""
-    try:
-        cpus = len(os.sched_getaffinity(0))
-    except AttributeError:  # no sched_getaffinity on this platform
-        cpus = os.cpu_count() or 1
-    return max(1, cpus // 2)
-
-
-def _cap_torch_threads_to_half_the_cpus(fn):
-    """Run ``fn`` with at most half of this process's CPUs as torch threads, then restore the thread count.
-
-    Each per-shard copy in ``_reassemble_2d`` is a small OpenMP parallel region. When torch has as many
-    threads as the process has CPUs and some of those CPUs are busy with another process, every region
-    waits for the threads stuck behind it. On the BH galaxy hosts the Weka client pins two polling
-    threads at 100% on CPUs 1 and 2, which made the Wan VAE readback take ~430 ms instead of ~20 ms
-    (#60670). Leaving half the CPUs free lets the scheduler avoid busy ones, including when the process
-    is launched on a subset of CPUs (e.g. with ``taskset``). Bulk host work keeps the full thread count.
-    """
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        prev = torch.get_num_threads()
-        cap = _half_of_affinity_mask()
-        if prev <= cap:
-            return fn(*args, **kwargs)
-        torch.set_num_threads(cap)
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            torch.set_num_threads(prev)
-
-    return wrapper
-
-
-@_cap_torch_threads_to_half_the_cpus
+# Its 32 per-shard copies are where #60670 showed up. Pipelines cap their whole call as well; this
+# covers callers of fast_device_to_host outside a pipeline call (a no-op inside one).
+@cap_torch_threads_to_half_the_cpus()
 def _reassemble_2d(
     mesh_coords: list,
     shards: list[torch.Tensor],
