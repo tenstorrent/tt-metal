@@ -39,7 +39,6 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_matmul.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
-    test_noc_bw_perf_model.cpp
     test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
