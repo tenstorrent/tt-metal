@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdlib>
+
 #include "kernels/topk_large_indices_compute_body_mode.hpp"
 #include "topk_large_indices_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -68,6 +70,9 @@ struct TopkLargeIndicesProgramFactory {
 // Rows split across cores only when two cores per split row are free (all rows, or the rows left after whole
 // rounds), so other programs carry no tree code.
 inline bool row_split_possible(uint32_t num_rows, uint32_t num_cores) {
+    if (std::getenv("TOPK_FORCE_WHOLE") != nullptr) {
+        return false;  // scratch stress override: the whole-row arm in the same process
+    }
     const uint32_t split_rows = num_rows < num_cores ? num_rows : num_rows % num_cores;
     return split_rows != 0 && 2ull * split_rows <= num_cores;
 }
