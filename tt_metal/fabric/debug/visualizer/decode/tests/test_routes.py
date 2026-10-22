@@ -22,7 +22,10 @@ from tt_metal.fabric.debug.visualizer.decode.routes import (
     ScatterChunk,
     Step2D,
     TreeEdge2D,
+    get_chips_1d,
     get_encodings_from_manifest,
+    get_landing_route_map_2d,
+    get_line_view_1d,
     get_mcast_tree_edges_2d,
     get_mesh_view,
     get_path_table_entry_1d,
@@ -177,12 +180,87 @@ class GetPathTableEntry1DTest(unittest.TestCase):
             get_path_table_entry_1d(self.PATHS, 3, 1)
 
 
+def line_router(peer, through=None):
+    """A 1D router whose link reaches `peer`, and whose receiver forwards through the router `through` on its chip."""
+    edges = {"vc0": {"edge1": {"downstream_channel": f"{through}/channels/senders/vc0/ch1"}}} if through else {}
+    return {"link": {"peer": peer}, "intra_chip_downstream_edges": edges}
+
+
+# A 1D line through a 2x2 mesh: from C0 east to C1, which turns south to C3, which turns west to C2, a chip on another
+# host. Packets the other way retrace it, and the line ends at C0.
+LINE_MANIFEST = {
+    "fabric_context": {"is_2d_routing": False},
+    "meshes": {
+        "M0": {
+            "chips": {
+                "C0": {"is_local": True, "routers": {"E0": line_router("M0/C1/W0")}},
+                "C1": {
+                    "is_local": True,
+                    "routers": {
+                        "W0": line_router("M0/C0/E0", through="M0/C1/S0"),
+                        "S0": line_router("M0/C3/N0", through="M0/C1/W0"),
+                    },
+                },
+                "C2": {"is_local": False},
+                "C3": {
+                    "is_local": True,
+                    "routers": {
+                        "N0": line_router("M0/C1/S0", through="M0/C3/W0"),
+                        "W0": line_router("M0/C2/E0", through="M0/C3/N0"),
+                    },
+                },
+            },
+        },
+    },
+}
+LINE = get_line_view_1d(LINE_MANIFEST)
+
+
+class Line1DTest(unittest.TestCase):
+    def test_a_line_turns_where_a_receiver_forwards_through_another_side(self):
+        # A packet sent east from C0 arrives at C1's west router, which forwards it through C1's south router.
+        self.assertEqual(get_chips_1d(LINE.peers["M0/C0/E0"], 3, LINE), ["M0/C1", "M0/C3", "M0/C2"])
+
+    def test_a_line_ends_at_a_router_with_no_downstream_channel(self):
+        # Coming back west, C0's east router has nowhere to forward to.
+        self.assertEqual(get_chips_1d("M0/C0/E0", 2, LINE), ["M0/C0", None])
+
+    def test_a_chip_on_another_host_is_reached_but_not_passed(self):
+        self.assertEqual(get_chips_1d("M0/C3/N0", 3, LINE), ["M0/C3", "M0/C2", None])
+
+    def test_an_unconnected_link_ends_the_line(self):
+        line = get_line_view_1d(with_value(LINE_MANIFEST, "meshes.M0.chips.C1.routers.S0.link.peer", None))
+        self.assertEqual(get_chips_1d("M0/C1/W0", 2, line), ["M0/C1", None])
+
+    def test_a_router_with_two_downstream_channels_is_refused(self):
+        edges = "meshes.M0.chips.C1.routers.W0.intra_chip_downstream_edges"
+        second = {"downstream_channel": "M0/C1/S0/channels/senders/vc0/ch2"}
+        with self.assertRaisesRegex(ManifestError, r"W0\.intra_chip_downstream_edges has 2 downstream channels"):
+            get_line_view_1d(with_value(LINE_MANIFEST, f"{edges}.vc0.edge2", second))
+
+    def test_wiring_that_names_no_router_is_refused(self):
+        channel = "meshes.M0.chips.C1.routers.W0.intra_chip_downstream_edges.vc0.edge1.downstream_channel"
+        cases = {
+            "a channel of another chip": (channel, "M0/C3/N0/channels/senders/vc0/ch1", "isn't a channel of a router"),
+            "a channel path in another format": (channel, "M0:C1:S0/channels/senders/vc0/ch1", "doesn't start with"),
+            "a peer its chip doesn't have": ("meshes.M0.chips.C0.routers.E0.link.peer", "M0/C1/E0", "doesn't have"),
+        }
+        for name, (path, value, named) in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(ManifestError, named):
+                get_line_view_1d(with_value(LINE_MANIFEST, path, value))
+
+    def test_a_2d_run_is_refused(self):
+        with self.assertRaisesRegex(ManifestError, "is_2d_routing"):
+            get_line_view_1d(with_value(LINE_MANIFEST, "fabric_context.is_2d_routing", True))
+
+
 def router(peer):
     return {"link": {"peer": peer}}
 
 
 # A 4x1 column whose Z express chords skip a row.
 MESH_MANIFEST = {
+    "fabric_context": {"is_2d_routing": True},
     "vocabulary": {"z_port_roles": ["none", "intermesh_boundary", "express_chord"]},
     "meshes": {
         "M0": {
@@ -417,6 +495,41 @@ class GetRouteMapFromTable2DTest(unittest.TestCase):
             get_route_map_from_table_2d(bytes(6), 3, 3, (3, 0), ENC.two_d)
 
 
+class GetLandingRouteMap2DTest(unittest.TestCase):
+    # GetRouteMapFromTable2DTest's 3x3 table: codes toward (2, 1), which is chip 7, and 0xFF for every other destination.
+    ACTION_VECTORS = bytes([0xFF, 0xFF, 0b00_10_10, 0xFF, 0b10_00_01, 0xFF])
+    TOWARD_CHIP_7 = bytes([S, S, 0, E, D, W])
+    # Mesh 0 is the landing's own. Its exit toward mesh 1 is chip 7, and it has none toward mesh 2.
+    EXIT_NODE_TABLE = [0xFF, 7, 0xFF]
+
+    def landing(self, dst_mesh, dst_chip=0, mcast_params=(0, 0, 0, 0)):
+        return get_landing_route_map_2d(
+            dst_mesh, dst_chip, mcast_params, mesh(3, 3), self.ACTION_VECTORS, self.EXIT_NODE_TABLE, ENC.two_d
+        )
+
+    def test_a_unicast_for_this_mesh_goes_toward_its_chip(self):
+        # Chip 7 is row 7 // 3 = 2, column 7 % 3 = 1.
+        self.assertEqual(self.landing(0, dst_chip=7), self.TOWARD_CHIP_7)
+
+    def test_a_packet_for_another_mesh_goes_toward_this_meshs_exit(self):
+        self.assertEqual(self.landing(1), self.TOWARD_CHIP_7)
+        # A multicast for another mesh goes to the exit the same way.
+        self.assertEqual(self.landing(1, mcast_params=(1, 0, 0, 0)), self.TOWARD_CHIP_7)
+
+    def test_a_multicast_for_this_mesh_is_not_rebuilt(self):
+        self.assertIsNone(self.landing(0, mcast_params=(0, 2, 0, 0)))
+
+    def test_a_chip_outside_the_mesh_is_refused(self):
+        cases = {
+            "no exit toward mesh 2": (2, 0),
+            "a destination chip past the mesh": (0, 9),
+            "a mesh past the exit node table": (3, 0),
+        }
+        for name, (dst_mesh, dst_chip) in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.landing(dst_mesh, dst_chip)
+
+
 def tree_edge(child, parent, code):
     return (child | parent << 6 | code << 12).to_bytes(2, "little")
 
@@ -447,41 +560,47 @@ class GetMcastTreeEdges2DTest(unittest.TestCase):
             get_mcast_tree_edges_2d(bytes(4), 2, 3, ENC.two_d)
 
 
-WRITE, SEMINC, SEMINC_FLUSH = ChunkEncoding.UNICAST_WRITE, ChunkEncoding.SEMINC_NO_FLUSH, ChunkEncoding.SEMINC_FLUSH
+NOP, WRITE = ChunkEncoding.NOP, ChunkEncoding.UNICAST_WRITE
+SEMINC, SEMINC_FLUSH = ChunkEncoding.SEMINC_NO_FLUSH, ChunkEncoding.SEMINC_FLUSH
+# A plain scatter write marks all four chunks as writes: chunk_encoding 0x55, whatever chunk_count is.
+ALL_WRITES = [WRITE] * 4
 
 
 class GetScatterChunksTest(unittest.TestCase):
     def test_two_writes_then_a_flushed_increment(self):
-        # The fused write and increment: types 0b11_01_01, so chunk 2 adds its chunk_size slot after a flush.
+        # The fused write and increment: chunk_encoding 0b00_11_01_01, which the layout splits into chunk 0 first.
+        # Chunk 2 adds its chunk_size slot after a flush.
         self.assertEqual(
-            get_scatter_chunks(3, [64, 192, 1], 0b110101, 256, ENC.scatter),
+            get_scatter_chunks(3, [64, 192, 1], [WRITE, WRITE, SEMINC_FLUSH, NOP], 256, ENC.scatter),
             [ScatterChunk(WRITE, 64), ScatterChunk(WRITE, 192), ScatterChunk(SEMINC_FLUSH, 1)],
         )
 
     def test_the_last_write_gets_the_rest_of_the_payload(self):
-        # A plain scatter write marks all four chunks as writes (0x55), whatever chunk_count is.
         self.assertEqual(
-            get_scatter_chunks(2, [64, 0, 0], 0x55, 100, ENC.scatter),
+            get_scatter_chunks(2, [64, 0, 0], ALL_WRITES, 100, ENC.scatter),
             [ScatterChunk(WRITE, 64), ScatterChunk(WRITE, 36)],
         )
         self.assertEqual(
-            [chunk.amount for chunk in get_scatter_chunks(4, [10, 20, 30], 0x55, 100, ENC.scatter)], [10, 20, 30, 40]
+            [chunk.amount for chunk in get_scatter_chunks(4, [10, 20, 30], ALL_WRITES, 100, ENC.scatter)],
+            [10, 20, 30, 40],
         )
 
     def test_only_the_last_chunk_type_is_read(self):
         # Chunk 0's type says nop, but the router writes chunk 0 without reading it.
         self.assertEqual(
-            get_scatter_chunks(2, [16, 5, 0], 0b10_00, 16, ENC.scatter),
+            get_scatter_chunks(2, [16, 5, 0], [NOP, SEMINC, NOP, NOP], 16, ENC.scatter),
             [ScatterChunk(WRITE, 16), ScatterChunk(SEMINC, 5)],
         )
 
     def test_a_scatter_the_router_cannot_carry_out_is_refused(self):
         cases = {
-            "one chunk": (1, [16, 0, 0], 0x55, 32),
-            "five chunks": (5, [1, 2, 3], 0x55, 32),
-            "a nop last": (2, [16, 0, 0], 0b00_01, 32),
-            "an increment fourth, past the 3 chunk_size slots": (4, [1, 2, 3], 0b10_01_01_01, 6),
-            "writes past the payload": (3, [16, 32, 0], 0x55, 40),
+            "one chunk": (1, [16, 0, 0], ALL_WRITES, 32),
+            "five chunks": (5, [1, 2, 3], ALL_WRITES, 32),
+            "a nop last": (2, [16, 0, 0], [WRITE, NOP, NOP, NOP], 32),
+            "an increment fourth, past the 3 chunk_size slots": (4, [1, 2, 3], [WRITE, WRITE, WRITE, SEMINC], 6),
+            "writes past the payload": (3, [16, 32, 0], ALL_WRITES, 40),
+            "a last type with no name": (2, [16, 0, 0], [WRITE, None, NOP, NOP], 32),
+            "fewer types than chunks": (3, [16, 32, 0], [WRITE, WRITE], 64),
         }
         for name, args in cases.items():
             with self.subTest(name), self.assertRaises(ValueError):

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from tt_metal.fabric.debug.visualizer.common.manifest_lookup import ManifestError, lookup
+from tt_metal.fabric.debug.visualizer.common.router_paths import get_router_path
 
 # Route words are uint32, little-endian as on the device. The loader checks that the manifest's 1D hops fill one.
 WORD_BYTES = 4
@@ -115,9 +116,7 @@ class Encodings2D:
 
 @dataclass(frozen=True)
 class EncodingsScatter:
-    chunk_type_bits: int
     max_chunks: int
-    chunk_encodings: tuple[ChunkEncoding, ...]  # indexed by a chunk type's value
 
 
 @dataclass(frozen=True)
@@ -229,8 +228,7 @@ def _encodings_scatter(manifest: dict) -> EncodingsScatter:
             f"enums.NocScatterWriteChunkEncoding values {sorted(types.values())} aren't each {chunk_type_bits}-bit "
             "value once"
         )
-    by_value = sorted(types.items(), key=lambda item: item[1])
-    return EncodingsScatter(chunk_type_bits, max_chunks, tuple(ChunkEncoding(name) for name, _ in by_value))
+    return EncodingsScatter(max_chunks)
 
 
 def get_encodings_from_manifest(manifest: dict) -> Encodings:
@@ -294,6 +292,96 @@ def get_path_table_entry_1d(paths: bytes, hops: int, extension_words: int) -> li
         raise ValueError(f"entry {hops} ends at byte {start + entry_bytes}, past the {len(paths)}-byte table")
     offsets = range(start, start + entry_bytes, WORD_BYTES)
     return [int.from_bytes(paths[at : at + WORD_BYTES], "little") for at in offsets]
+
+
+@dataclass(frozen=True)
+class LineView1D:
+    """
+    The wiring a 1D route follows, read from the manifest's routers on local chips. Routers are named by their paths,
+    M<mesh>/C<chip>/<router>, as the manifest's links name them.
+    """
+
+    peers: dict[str, str | None]  # the router at the other end of each router's link, or None when it's unconnected
+    forwards_through: dict[str, str | None]  # the router holding each router's downstream channel, or None
+
+
+def _split_router_path(path: str, where: str) -> tuple[str, str, str]:
+    """The mesh, chip and router keys of a path that starts with a router's, such as M0/C1/W0/channels/..."""
+    keys = path.split("/")
+    if len(keys) < 3 or not keys[0].startswith("M") or not keys[1].startswith("C"):
+        raise ManifestError(f"{where} is {path!r}, which doesn't start with a router's path, M<mesh>/C<chip>/<router>")
+    return keys[0], keys[1], keys[2]
+
+
+def get_line_view_1d(manifest: dict) -> LineView1D:
+    """
+    Reads a 1D run's wiring: each local router's link peer, and the router whose sender channel its receiver forwards
+    to, the one downstream channel its intra_chip_downstream_edges names. Raises ManifestError for a 2D run, for a router
+    with more than one downstream channel, for a downstream channel or link peer that names no router the manifest has,
+    and for a value it reads that's missing or of the wrong type.
+    """
+    if lookup(manifest, "fabric_context.is_2d_routing", "boolean"):
+        raise ManifestError("fabric_context.is_2d_routing is true; the 1D line rule reads 1D runs")
+    # The routers of each local chip, by the chip's path. Only local chips have routers.
+    routers_of = {}
+    for mesh_key in lookup(manifest, "meshes", "object"):
+        for chip_key in lookup(manifest, f"meshes.{mesh_key}.chips", "object"):
+            chip_where = f"meshes.{mesh_key}.chips.{chip_key}"
+            if lookup(manifest, f"{chip_where}.is_local", "boolean"):
+                routers_of[(mesh_key, chip_key)] = lookup(manifest, f"{chip_where}.routers", "object")
+
+    peers, forwards_through = {}, {}
+    for (mesh_key, chip_key), routers in routers_of.items():
+        for router_key in routers:
+            where = f"meshes.{mesh_key}.chips.{chip_key}.routers.{router_key}"
+            path = get_router_path(mesh_key, chip_key, router_key)
+
+            # A peer on a chip of another host can't be checked: the manifest has no routers for it.
+            peer = lookup(manifest, f"{where}.link.peer", ("string", "null"))
+            if peer is not None:
+                peer_mesh, peer_chip, peer_router = _split_router_path(peer, f"{where}.link.peer")
+                if (peer_mesh, peer_chip) in routers_of and peer_router not in routers_of[(peer_mesh, peer_chip)]:
+                    raise ManifestError(f"{where}.link.peer is {peer!r}, a router its chip doesn't have")
+            peers[path] = peer
+
+            edges_where = f"{where}.intra_chip_downstream_edges"
+            channels = [
+                f"{edges_where}.{vc}.{edge}.downstream_channel"
+                for vc, edges in lookup(manifest, edges_where, "object", of="object").items()
+                for edge in edges
+            ]
+            if len(channels) > 1:
+                raise ManifestError(f"{edges_where} has {len(channels)} downstream channels; a 1D receiver has one")
+            forwards_through[path] = None
+            if channels:
+                channel_where = channels[0]
+                channel = lookup(manifest, channel_where, "string")
+                through_mesh, through_chip, through_router = _split_router_path(channel, channel_where)
+                if (through_mesh, through_chip) != (mesh_key, chip_key) or through_router not in routers:
+                    raise ManifestError(f"{channel_where} is {channel!r}, which isn't a channel of a router on its chip")
+                forwards_through[path] = get_router_path(through_mesh, through_chip, through_router)
+    return LineView1D(peers, forwards_through)
+
+
+def get_chips_1d(first_receiver: str | None, hop_count: int, line: LineView1D) -> list[str | None]:
+    """
+    The chip that reads each of a 1D route's first `hop_count` hops, as M<mesh>/C<chip>. Hop 0 is read at the chip of
+    `first_receiver`, the router the packet arrives at. Each hop after it is read one chip along the line: a receiver
+    forwards to the router holding its downstream channel, which sends the packet over its inter-chip link. A chip is None once
+    the line can't be followed: past a router with no downstream channel or no link, or past a chip whose routers the
+    manifest doesn't have, such as one on another host.
+    """
+    chips = []
+    receiver = first_receiver
+    for _ in range(hop_count):
+        if receiver is None:
+            chips.append(None)
+            continue
+        mesh_key, chip_key, _ = _split_router_path(receiver, "a 1D receiver")
+        chips.append(f"{mesh_key}/{chip_key}")
+        through = line.forwards_through.get(receiver)
+        receiver = None if through is None else line.peers.get(through)
+    return chips
 
 
 @dataclass(frozen=True)
@@ -547,6 +635,37 @@ def get_route_map_from_table_2d(action_vectors: bytes, y_size: int, x_size: int,
     return bytes(route_map)
 
 
+def get_landing_route_map_2d(
+    dst_mesh: int,
+    dst_chip: int,
+    mcast_params: Sequence[int],
+    mesh: MeshView,
+    action_vectors: bytes,
+    exit_node_table: Sequence[int],
+    enc: Encodings2D,
+) -> bytes | None:
+    """
+    The route map an intermesh landing gives a packet before reading it, built from the landing chip's 2D route table.
+    `dst_mesh`, `dst_chip` and `mcast_params` are the header's dst_start_mesh_id, dst_start_chip_id and mcast_params, and
+    `exit_node_table` is the landing chip's. A packet for another mesh is routed toward this mesh's exit for that mesh,
+    exit_node_table[dst_mesh]; a unicast for this mesh toward dst_chip. A chip id is a coordinate in row order. None for
+    a multicast for this mesh, which the fabric doesn't support. Raises ValueError when the chip it would route toward
+    isn't in the mesh, which the router asserts on.
+    """
+    y_size, x_size = mesh.shape
+    if dst_mesh != mesh.mesh_id:
+        if not 0 <= dst_mesh < len(exit_node_table):
+            raise ValueError(f"mesh {dst_mesh} is past the {len(exit_node_table)}-entry exit node table")
+        target = exit_node_table[dst_mesh]
+    elif any(mcast_params):
+        return None
+    else:
+        target = dst_chip
+    if not 0 <= target < y_size * x_size:
+        raise ValueError(f"chip {target} isn't in a {y_size}x{x_size} mesh")
+    return get_route_map_from_table_2d(action_vectors, y_size, x_size, divmod(target, x_size), enc)
+
+
 @dataclass(frozen=True)
 class TreeEdge2D:
     """One edge of a multicast tree: routers in row (or column) `parent` reach `child` by sending in `direction`."""
@@ -611,25 +730,34 @@ class ScatterChunk:
 
 
 def get_scatter_chunks(
-    chunk_count: int, chunk_size: Sequence[int], chunk_encoding: int, payload_size_bytes: int, enc: EncodingsScatter
+    chunk_count: int,
+    chunk_size: Sequence[int],
+    chunk_types: Sequence[str | None],
+    payload_size_bytes: int,
+    enc: EncodingsScatter,
 ) -> list[ScatterChunk]:
     """
-    What each chunk of a scatter write does, chunk 0 first, as the router carries it out. Every chunk but the last
-    writes its chunk_size, whatever its type. The last chunk's type (chunk i's is chunk_type_bits bits at bit
-    i * chunk_type_bits of `chunk_encoding`) decides what it does: a write gets the rest of the payload, and an
-    increment adds its chunk_size slot. Raises ValueError for a scatter the router can't carry out.
+    What each chunk of a scatter write does, chunk 0 first, as the router carries it out. `chunk_types` are the names
+    of chunk_encoding's entries, chunk 0 first, as the header's layout splits them out; None is a value with no name.
+    Every chunk but the last writes its chunk_size, whatever its type. The last chunk's type decides what it does: a
+    write gets the rest of the payload, and an increment adds its chunk_size slot. Raises ValueError for a scatter the
+    router can't carry out.
     """
     # The router writes chunk 0 before it reads the last chunk's type, so chunk 0 can't be the last.
     if not 2 <= chunk_count <= enc.max_chunks:
         raise ValueError(f"chunk_count is {chunk_count}; a scatter has 2 to {enc.max_chunks} chunks")
+    if len(chunk_types) < chunk_count:
+        raise ValueError(f"chunk_count is {chunk_count}, but there are {len(chunk_types)} chunk types")
 
     # We write every chunk but the last
     last = chunk_count - 1
     written = sum(chunk_size[:last])
     chunks = [ScatterChunk(ChunkEncoding.UNICAST_WRITE, size) for size in chunk_size[:last]]
 
-    # Decode the last chunk's type
-    encoding = enc.chunk_encodings[BitField(last * enc.chunk_type_bits, enc.chunk_type_bits).read(chunk_encoding)]
+    # The last chunk's type
+    if chunk_types[last] not in {encoding.value for encoding in ChunkEncoding}:
+        raise ValueError(f"the last chunk, chunk {last}, has type {chunk_types[last]!r}, which the rule doesn't know")
+    encoding = ChunkEncoding(chunk_types[last])
     if encoding == ChunkEncoding.NOP:
         raise ValueError(f"the last chunk, chunk {last}, is a nop")
     if encoding == ChunkEncoding.UNICAST_WRITE:

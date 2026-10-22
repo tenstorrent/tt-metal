@@ -1,6 +1,6 @@
 # Route rules
 
-[`routes.py`](../routes.py) reads fabric routes from raw bytes: the route fields of a packet header, the routing tables in a router's L1, and the chunks of a scatter write. The manifest gives it every value routes are encoded with (`routing_encodings`, and the `compressed_routing_values` and `NocScatterWriteChunkEncoding` enums). How to read a route with those values isn't data the manifest can carry, so `routes.py` holds it as rules, each written to match the fabric's C++.
+[`routes.py`](../routes.py) reads fabric routes from raw bytes: the route fields of a packet header, the routing tables in a router's L1, and the chunks of a scatter write. The manifest gives it every value routes are encoded with (`routing_encodings`, and the `compressed_routing_values` and `NocScatterWriteChunkEncoding` enums), and the wiring a 1D route follows (each router's link and downstream channel). How to read a route with those values isn't data the manifest can carry, so `routes.py` holds it as rules, each written to match the fabric's C++.
 
 This page lists the rules, for fabric owners to check against the fabric, and names the code each one mirrors. A fabric
 change to that code should update the rule, its function and its tests in the same change: nothing else catches it
@@ -21,11 +21,15 @@ enc = get_encodings_from_manifest(manifest)  # enc.one_d, enc.two_d, enc.scatter
 mesh = get_mesh_view(manifest, "M0")
 walk = walk_2d(route_buffer, start=(0, 0), mesh=mesh, enc=enc.two_d, dst_mesh=dst_start_mesh_id)
 walk.delivers, walk.exits, walk.odd
+
+line = get_line_view_1d(manifest)  # a 1D run's wiring
+hops = walk_1d(route_words, enc.one_d)
+chips = get_chips_1d(first_receiver="M0/C1/W0", hop_count=len(hops), line=line)  # the chip that reads each hop
 ```
 
 ## Design decisions
 
-- **Values come from the manifest, by name.** `get_encodings_from_manifest` looks up each value by its key, checks its JSON type and its value (for example, that the action bits are distinct bits of a byte, and that the 1D hop fields fill a route word), and raises `ManifestError` naming the first key it can't use. `get_mesh_view` does the same for the mesh values it reads.
+- **Values come from the manifest, by name.** `get_encodings_from_manifest` looks up each value by its key, checks its JSON type and its value (for example, that the action bits are distinct bits of a byte, and that the 1D hop fields fill a route word), and raises `ManifestError` naming the first key it can't use. `get_mesh_view` and `get_line_view_1d` do the same for the mesh and wiring values they read, and `get_line_view_1d` also checks that each link and downstream channel names a router the manifest has.
 - **Meaning is tied to names, and only the known names are accepted.** The rules hardcode what some names mean: which 1D hop names write and which forward (`HOP_ACTIONS`), the direction names (`Direction`), `local_deliver`, the Z port roles (`Z_PORT_ROLES`), and the scatter chunk type names (`ChunkEncoding`). The loaders check those names against the manifest's full list of each (`routing_encodings.1d.hop`, `routing_encodings.2d.action_bits`, `vocabulary.z_port_roles` and `enums.NocScatterWriteChunkEncoding`), not only the values a run uses, so a renamed, added or removed value fails at load, naming what the manifest holds and what the rules know, instead of decoding wrong.
 - **Names are enum values.** `Direction` and `ChunkEncoding` are `str` enums whose values are the manifest's names. A member equals its name, looks up the manifest's keys, and writes to JSON as the name. `OddKind`, what an `Odd2D` reports, is a `str` enum too, so a misspelt kind is an `AttributeError` rather than a comparison that never matches.
 - **The rules mirror the router, not the API.** Where the code that builds a route and the router that reads it
@@ -74,6 +78,19 @@ The router has no case for `noop`, and asserts on it. With the watcher off, the 
 - **Function:** `get_path_table_entry_1d`.
 - **Mirrors:** `intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields`
   (`compressed_routing_path.cpp`), which fills the table by hop count, and `intra_mesh_routing_path_t<1, false>::decode_route_to_buffer` (`fabric_routing_path_interface.h`), which reads it. Its parameter is named `dst_chip_id`, but its caller, `fabric_set_unicast_route` (`tt_fabric_api.h`), passes a hop count.
+
+### 1D: following the line
+
+A 1D route says what each hop does, not which chip reads it: the wiring says that. A receiver that forwards a 1D packet hands it to the one downstream channel its router was connected to, a sender channel of another router on the same chip, and that router sends it over its link. So the chip that reads hop k + 1 is the link peer of the router holding the downstream channel of the receiver that read hop k. A line can turn where it crosses a chip, so hops can't be placed by coordinate: on a 2x4 mesh, a 1D line can run along the top row, turn down at the corner and come back along the bottom row.
+
+```
+hop k is read here          its downstream channel          over that router's link     hop k + 1 is read here
+C3's W0 receiver      ->    C3's S0 sender channel    ->    S0's link             ->    C7's N0 receiver
+```
+
+- **Functions:** `get_line_view_1d` reads each local router's `link.peer` and its one `intra_chip_downstream_edges` entry, and `get_chips_1d` gives the chip that reads each hop, from the router a packet arrives at. A chip is `None` once the line can't be followed: past a router with no downstream channel or no link, or past a chip on another host, whose routers the manifest doesn't have.
+- **Mirrors:** `receiver_forward_packet` (`fabric_erisc_router.cpp`), which forwards a 1D packet to the receiver's one downstream sender (`downstream_edm_interfaces[0]`), and the builder's connections between a chip's routers, which the manifest records as each router's `intra_chip_downstream_edges` (`join_edges`, `fabric_manifest_chip_pass.cpp`).
+- `get_line_view_1d` refuses a router with more than one downstream channel, which a 1D receiver doesn't have, and a link or downstream channel that names a router the manifest doesn't have, so a change to the path format fails at load.
 
 ### 2D: the route map
 
@@ -141,6 +158,13 @@ route map toward (2, 1) = widen_y(dst row 2) + widen_x(dst col 1), with local_de
   `widen_y` and `widen_x` (`fabric_common.h`). Workers call it to send a unicast and to route toward their mesh's
   exit, and an intermesh landing calls it to rebuild a unicast's map in the new mesh.
 
+### 2D: an intermesh landing
+
+A receiver whose packets arrive from another mesh gives each packet a new route map before reading it, built from its own chip's route table as a worker's would be. A packet bound for another mesh is routed toward this mesh's exit for it, the chip `exit_node_table[dst_start_mesh_id]` names; a unicast for this mesh is routed toward `dst_start_chip_id`. A chip id is a coordinate in row order: row `id / x_size`, column `id % x_size`. The router rebuilds the map each time the packet is at the head of the receiver, before it knows whether it can send it on, and gets the same map each time: the rebuild reads only `dst_start_mesh_id`, `dst_start_chip_id`, `mcast_params` and the chip's own tables, which nothing writes.
+
+- **Function:** `get_landing_route_map_2d`. It returns `None` for a multicast bound for this mesh (`mcast_params` nonzero), which the fabric doesn't support, and raises `ValueError` when the chip it would route toward isn't in the mesh, which the router asserts on. The walk from a landing starts with `entered_from=None`, since after the rebuild the router reads the row's byte first.
+- **Mirrors:** `fabric_set_2d_intermesh_landing_route` (`tt_fabric_api.h`), which the receiver step calls on channels built as intermesh ingress (`fabric_erisc_router.cpp`), and `widen_2d_route_to_chip` (`fabric_2d_route_interface.h`).
+
 ### 2D: multicast trees
 
 `route_table_2d.mcast_trees` holds this chip's two multicast trees: a Y tree over the rows, rooted at the chip's row, then an X tree over the columns, rooted at its column. An axis of n chips has n - 1 edges, and none for one chip, so the X tree starts at byte `tree_edge_bytes * (y_size - 1)`. Each edge is `tree_edge_bytes` bytes, lowest byte first, with the `child`, `parent` and `output` fields `routing_encodings.2d.mcast_tree_edge` gives. `output` is a table code of the edge's axis: widened through `y_code_action` or `x_code_action`, it's the direction routers in the parent row or column send in to reach the child. Edges are stored with every edge below a row before the edge into it.
@@ -167,8 +191,9 @@ one edge (2 bytes):
 ### Scatter writes
 
 A scatter write has `chunk_count` chunks, 2 to `max_chunks`. Every chunk but the last writes `chunk_size[i]` bytes of
-the payload to its `noc_address[i]`, whatever its type. The last chunk's type, `chunk_encoding_bits` bits at bit
-`i * chunk_encoding_bits` of `chunk_encoding`, decides what it does:
+the payload to its `noc_address[i]`, whatever its type. The last chunk's type decides what it does. The header's
+layout describes `chunk_encoding` as a packed table of the chunks' types, `chunk_encoding_bits` bits each with chunk 0
+lowest, so the type parser splits it and the rule takes the types by name:
 
 - `chunk_encoding_unicast_write`: writes the rest of the payload;
 - `chunk_encoding_seminc_no_flush`: adds `chunk_size[last]` to the semaphore at its address;
@@ -176,16 +201,18 @@ the payload to its `noc_address[i]`, whatever its type. The last chunk's type, `
 - `chunk_encoding_nop`: the router asserts.
 
 ```
-chunk_count 3, chunk_size [64, 192, 1], chunk_encoding 0b11_01_01, a 256-byte payload:
+chunk_count 3, chunk_size [64, 192, 1], chunk_encoding 0b00_11_01_01, a 256-byte payload:
 
+  chunk types, chunk 0 first: unicast_write, unicast_write, seminc_flush, nop
   chunk 0: writes 64 bytes        (its type isn't read)
   chunk 1: writes 192 bytes       (its type isn't read)
-  chunk 2: type 0b11, seminc_flush: flushes chunks 0 and 1, then adds 1
+  chunk 2: seminc_flush: flushes chunks 0 and 1, then adds 1
 ```
 
-- **Function:** `get_scatter_chunks`. It raises for a scatter the router can't carry out: fewer than 2 or more than
-  `max_chunks` chunks, a nop last, earlier writes longer than the payload, or an increment as the fourth chunk.
-  `chunk_size` has `max_chunks - 1` slots, so the router would read past it.
+- **Function:** `get_scatter_chunks`, which takes the chunk types as the type parser names them. It raises for a
+  scatter the router can't carry out: fewer than 2 or more than `max_chunks` chunks, a nop last or a last type with no
+  name, earlier writes longer than the payload, or an increment as the fourth chunk. `chunk_size` has
+  `max_chunks - 1` slots, so the router would read past it.
 - **Mirrors:** the `NOC_UNICAST_SCATTER_WRITE` case of `execute_chip_unicast_to_local_chip_impl`
   (`fabric_edm_packet_transmission.hpp`), and `NocUnicastScatterCommandHeader` (`fabric_edm_packet_header.hpp`).
 
@@ -200,7 +227,7 @@ chunk_count 3, chunk_size [64, 192, 1], chunk_encoding 0b11_01_01, a 256-byte pa
 
 ## What the rules don't cover
 
-- **A multicast into another mesh.** The fabric has code for it (the carrier leg in `fabric_set_2d_mcast_route` and the multicast branch of `fabric_set_2d_intermesh_landing_route`, both in `tt_fabric_api.h`), but intermesh multicast isn't supported, and the fabric's test infrastructure refuses to generate it (`tt_fabric_test_config.cpp`). The rules don't mirror the landing's rebuild, so `walk_2d` follows such a packet only as far as its exit.
+- **A multicast into another mesh.** The fabric has code for it (the carrier leg in `fabric_set_2d_mcast_route` and the multicast branch of `fabric_set_2d_intermesh_landing_route`, both in `tt_fabric_api.h`), but intermesh multicast isn't supported, and the fabric's test infrastructure refuses to generate it (`tt_fabric_test_config.cpp`). The landing rule rebuilds a unicast's map, and a multicast's only while it's bound for another mesh, so `walk_2d` follows a multicast for the landing's own mesh only as far as the landing.
 - **Finding the bytes.** Reading a header's members, deciding which captured slots hold a live packet, and knowing
   which way a channel faces belong to the caller.
 
@@ -216,10 +243,11 @@ meaning the manifest carries, a value whose meaning is in `routes.py`, and a cha
 | A value the rules read changes type, such as an object where an array was | The same check: `ManifestError`, naming the key, the type it has and the type the rules need | The read in `routes.py`, and its `lookup` type |
 | A 1D hop, 2D action bit, Z port role or scatter chunk type is renamed, added or removed | The same check: `ManifestError`, naming what the manifest holds and what the rules know | `HOP_ACTIONS`, `Direction` and `LOCAL_DELIVER`, `Z_PORT_ROLES`, or `ChunkEncoding`, and the rule on this page |
 | A Z router's key (`Z0`) or its peer's format (`M0/C5/Z0`) changes | The same check, run with `--expect-z-peers` on the `express_32x4` manifests: "finds no Z peer in", naming the manifest | The Z peer read in `get_mesh_view` |
+| A router's `intra_chip_downstream_edges` or `link.peer` is renamed, or the format of a downstream channel or link peer changes | The same check, on the 1D manifests: `get_line_view_1d` raises `ManifestError`, naming the key or the path it can't read | The wiring read in `get_line_view_1d` |
 | The code a rule mirrors changes what it does | Nothing | The rule on this page, its function in `routes.py`, and its tests |
 
-`tests/check_manifest_routes.py` runs the loaders on every manifest `run_fabric_manifest_tests.sh` writes, which is
-what makes the second to fifth rows fail in CI. Decode reads a Z router's peer (`routers.<Z key>.link.peer`) only at an express chord chip, and only the `express_32x4` mock has them. A changed key or peer format there raises nothing, but leaves every Z peer unknown, so the script checks those manifests again with `--expect-z-peers`, which fails a manifest in which `get_mesh_view` finds no Z peer.
+`tests/check_manifest_routes.py` runs the loaders on every manifest `run_fabric_manifest_tests.sh` writes, and
+`get_line_view_1d` on the 1D ones, which is what makes the second to sixth rows fail in CI. Decode reads a Z router's peer (`routers.<Z key>.link.peer`) only at an express chord chip, and only the `express_32x4` mock has them. A changed key or peer format there raises nothing, but leaves every Z peer unknown, so the script checks those manifests again with `--expect-z-peers`, which fails a manifest in which `get_mesh_view` finds no Z peer.
 
 `tests/test_routes.py` holds hand-written cases, one or two for each branch of each rule. They catch a change to
 `routes.py` that breaks a rule, not a fabric change the rules missed.
@@ -236,4 +264,5 @@ what makes the second to fifth rows fail in CI. Decode reads a Z router's peer (
 | `fabric_2d_route_interface.h`, `tt_fabric_api.h` | `tt_metal/fabric/hw/inc/` |
 | `compressed_routing_path.cpp`, `mcast_reverse_tree.cpp` | `tt_metal/fabric/` |
 | `fabric_edge_capability.hpp` | `tt_metal/fabric/builder/` |
+| `fabric_manifest_chip_pass.cpp` | `tt_metal/fabric/debug/visualizer/manifest/` |
 | `tt_fabric_test_config.cpp` | `tests/tt_metal/tt_fabric/test_infra/` |

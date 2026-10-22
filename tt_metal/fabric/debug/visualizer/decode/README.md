@@ -140,7 +140,7 @@ python3 -m tt_metal.fabric.debug.visualizer.decode generated/fabric
 
 | File | What it does |
 | --- | --- |
-| [`routes.py`](routes.py) | The route rules. Reads 1D route words, 2D route maps, the routing tables, multicast trees and scatter writes from raw bytes, the way the fabric's routers and route setters do. In depth: [ROUTES.md](docs/ROUTES.md) |
+| [`routes.py`](routes.py) | The route rules. Reads 1D route words, 2D route maps, the routing tables, multicast trees and scatter writes from raw bytes, the way the fabric's routers and route setters do. Follows a 1D route along the manifest's wiring, and builds the map an intermesh landing gives a packet. In depth: [ROUTES.md](docs/ROUTES.md) |
 | [`type_parser.py`](type_parser.py) | Reads the struct, union and enum layouts the manifest describes, checks them, and decodes bytes into values with them. It holds no fabric names. In depth: [TYPE_PARSER.md](docs/TYPE_PARSER.md) |
 | [`inputs.py`](inputs.py) | Loads a snapshot, its `.bin` and the manifest it was taken with, refuses them when they don't belong together, and warns when the run's build and decode's checkout may differ. In depth: [INPUTS.md](docs/INPUTS.md) |
 | [`routers.py`](routers.py) | `decode_router`: decodes one router's part of a snapshot, its areas and regions and each stream and element reference, keyed by its path in the router. It puts the path rule, the type parser and `inputs.py` together, and has no rules of its own |
@@ -171,8 +171,8 @@ python3 -m unittest discover -s tt_metal/fabric/debug/visualizer/decode/tests -t
 The tests import `tt_metal.fabric...`, so `-t .` makes the repo root the top level they're imported from. They use `unittest` rather than pytest because the repo's root `conftest.py` imports torch.
 
 `tests/scripts/run_fabric_manifest_tests.sh` runs the same command, then runs `tests/check_manifest_routes.py` on every manifest it writes.
-The check runs `get_encodings_from_manifest`, then `get_mesh_view` on each mesh, and fails, naming the manifest and the
-key, when a fabric change renames or removes a key or name `routes.py` reads, changes a value's type, or adds a value it doesn't know. The script then checks the express mock's manifests again with `--expect-z-peers`, which fails a manifest in which `get_mesh_view` finds no Z peer. To run it on other manifests, pass their files or directories:
+The check runs `get_encodings_from_manifest`, then `get_mesh_view` on each mesh, then `get_line_view_1d` on a 1D run, and
+fails, naming the manifest and the key, when a fabric change renames or removes a key or name `routes.py` reads, changes a value's type or a path's format, or adds a value it doesn't know. The script then checks the express mock's manifests again with `--expect-z-peers`, which fails a manifest in which `get_mesh_view` finds no Z peer. To run it on other manifests, pass their files or directories:
 
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes generated/fabric
