@@ -638,16 +638,17 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
     constexpr uint64_t KB = 1024;
     const auto BH = tt::ARCH::BLACKHOLE;
     const auto WH = tt::ARCH::WORMHOLE_B0;
-    // BH: ring 320*(N/2-2) KB, line 384+544*(N-4) KB, floored at 0.
-    EXPECT_FALSE(prefer_unicast(BH, true, 8, 2, (640 * KB) - 1));
-    EXPECT_TRUE(prefer_unicast(BH, true, 8, 2, 640 * KB));
-    EXPECT_FALSE(prefer_unicast(BH, false, 8, 2, (2560 * KB) - 1));
-    EXPECT_TRUE(prefer_unicast(BH, false, 8, 2, 2560 * KB));
-    EXPECT_TRUE(prefer_unicast(BH, true, 4, 2, 0));
-    EXPECT_TRUE(prefer_unicast(BH, false, 3, 2, 0));
-    EXPECT_TRUE(prefer_unicast(BH, false, 2, 2, 0));
-    EXPECT_FALSE(prefer_unicast(BH, false, 5, 2, (928 * KB) - 1));
-    EXPECT_TRUE(prefer_unicast(BH, false, 5, 2, 928 * KB));
+    // BH: by N alone. Ring unicast for N <= 5, line for N <= 3; multicast otherwise, at any size.
+    for (const uint64_t bytes : {uint64_t(0), 640 * KB, uint64_t(1) << 40}) {
+        EXPECT_FALSE(prefer_unicast(BH, true, 8, 2, bytes));
+        EXPECT_FALSE(prefer_unicast(BH, true, 6, 2, bytes));
+        EXPECT_TRUE(prefer_unicast(BH, true, 5, 2, bytes));
+        EXPECT_TRUE(prefer_unicast(BH, true, 4, 2, bytes));
+        EXPECT_FALSE(prefer_unicast(BH, false, 8, 2, bytes));
+        EXPECT_FALSE(prefer_unicast(BH, false, 4, 2, bytes));
+        EXPECT_TRUE(prefer_unicast(BH, false, 3, 2, bytes));
+        EXPECT_TRUE(prefer_unicast(BH, false, 2, 2, bytes));
+    }
     // WH: ring multicast; 2 unicast; 3-6 multicast; 7+ by size.
     EXPECT_FALSE(prefer_unicast(WH, true, 8, 2, uint64_t(1) << 40));
     EXPECT_TRUE(prefer_unicast(WH, false, 2, 2, 0));
@@ -655,15 +656,16 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
     EXPECT_FALSE(prefer_unicast(WH, false, 8, 2, 2'999'999));
     EXPECT_TRUE(prefer_unicast(WH, false, 8, 2, 3'000'000));
 
-    // The busiest link carries output / effective unicast links; fewer cores cut unicast's links first.
+    // The busiest link carries output / effective unicast links; fewer cores cut unicast's links first. (WH line:
+    // the one size-dependent choice left.)
     PlanIn p{
-        .arch = BH, .geo = GeoIn{2048, 2048, 2048, 2048, 64, 64, 1024, 4, 8, 15168}, .shape_ok = true, .ring = true};
+        .arch = WH, .geo = GeoIn{2048, 2048, 2048, 2048, 64, 64, 1024, 4, 8, 15168}, .shape_ok = true, .ring = false};
     p.N = 8;
     p.links = 2;
     p.avail_cores = 64;
-    p.output_packed_bytes = 2 * 640 * KB;
+    p.output_packed_bytes = 2 * 3'000'000;
     EXPECT_EQ(make_plan(p).algo, AgAlgo::Unicast);
-    p.output_packed_bytes = (2 * 640 * KB) - 2;
+    p.output_packed_bytes = (2 * 3'000'000) - 2;
     EXPECT_EQ(make_plan(p).algo, AgAlgo::Multicast);
     p.avail_cores = 3;  // one unicast link left: the same bytes now cross one link
     EXPECT_EQ(make_plan(p).algo, AgAlgo::Unicast);
@@ -675,6 +677,7 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
 
     // 2-device ring is a line.
     p.avail_cores = 64;
+    p.ring = true;
     p.N = 2;
     EXPECT_FALSE(make_plan(p).ring);
 
@@ -729,7 +732,8 @@ TEST(AllGatherPlan, G6CrossoverAndDeterminism) {
 // G7: every device-matrix instance (tests/.../test_all_gather_matrix.py) gets the algorithm it claims, so a
 // recalibrated threshold that flips one fails here. BH, (1,8) mesh, 2 links unless noted. Shapes are output shapes.
 // Instances dropped because the table forces unicast at every size: M on a 3-device line, a 2-device ring (a line)
-// and a 4-device ring (D11, D12); G6 pins those zero thresholds.
+// and a 4-device ring (D11, D12). BH picks multicast at every size on an 8-device ring or line, so unicast relays
+// run on neighbor exchange (U-NE) only. G6 pins the table.
 TEST(AllGatherPlan, G7MatrixPin) {
     const auto U = AgAlgo::Unicast;
     const auto M = AgAlgo::Multicast;
@@ -766,8 +770,8 @@ TEST(AllGatherPlan, G7MatrixPin) {
     };
     const std::vector<Instance> instances = {
         {"D1 U-NE", {1, 1, 1024, 2560}, -1, bf16, TILE, dram, dram, Fab::NeighborExchange, 8, U},
-        {"D1 U-size ring", {1, 1, 1024, 2560}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, U},
-        {"D1 U-size line", {1, 1, 4096, 2560}, -1, bf16, TILE, dram, dram, Fab::Line, 8, U},
+        {"D1 M ring", {1, 1, 1024, 2560}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, M},
+        {"D1 M big line", {1, 1, 4096, 2560}, -1, bf16, TILE, dram, dram, Fab::Line, 8, M},
         {"D1 M", {1, 1, 256, 2560}, -1, bf16, TILE, dram, dram, Fab::Line, 8, M},
         {"D2 U-NE", {1, 1, 256, 256}, -1, bfp8, TILE, dram, dram, Fab::NeighborExchange, 8, U},
         {"D2 M", {1, 1, 256, 256}, -1, bfp8, TILE, dram, dram, Fab::Line, 8, M},
@@ -788,7 +792,7 @@ TEST(AllGatherPlan, G7MatrixPin) {
         {"D7 dram -> l1 M", {1, 1, 256, 256}, -1, bf16, TILE, dram, l1, Fab::Line, 8, M},
         {"D8 nd dram U-NE", {1, 1, 256, 256}, -1, bf16, TILE, nd_dram, nd_dram, Fab::NeighborExchange, 8, U},
         {"D8 nd dram M", {1, 1, 256, 256}, -1, bf16, TILE, nd_dram, nd_dram, Fab::Line, 8, M},
-        {"D9 mismatched_alignment U-size ring", {8, 1, 20480, 16}, -4, bf16, RM, d9_in, d9_out, Fab::Ring, 8, U},
+        {"D9 mismatched_alignment U-NE", {8, 1, 20480, 16}, -4, bf16, RM, d9_in, d9_out, Fab::NeighborExchange, 8, U},
         {"D9 mismatched_alignment M", {8, 1, 4096, 16}, -4, bf16, RM, d9s_in, d9s_out, Fab::Line, 8, M},
         {"D9b 16B rows l1 -> dram", {1, 1, 64, 64}, -1, bf16, RM, l1, dram, Fab::Line, 8, M},
         {"D9b at unicast size", {1, 1, 65536, 64}, -1, bf16, RM, l1, dram, Fab::Line, 8, M},
@@ -797,20 +801,21 @@ TEST(AllGatherPlan, G7MatrixPin) {
         {"D11 (1,3) U-NE", {1, 1, 64, 384}, -1, bf16, TILE, dram, dram, Fab::NeighborExchange, 3, U},
         {"D11 (1,2) ring U-NE", {1, 1, 64, 256}, -1, bf16, TILE, dram, dram, Fab::NeighborExchange, 2, U},
         {"D12 1 tile/dev ring", {1, 1, 32, 128}, -1, bf16, TILE, dram, dram, Fab::Ring, 4, U},
-        {"D13 U-size ring", {1, 1, 1024, 2560}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, U},
+        {"D12 384KB page ring8 M", {1, 1, 8, 196608}, -2, bf16, RM, dram, dram, Fab::Ring, 8, M},
+        {"D13 U-NE", {1, 1, 1024, 2560}, -1, bf16, TILE, dram, dram, Fab::NeighborExchange, 8, U},
         {"D13 M ring", {1, 1, 64, 2560}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, M},
         {"D14 gather-dim padded", {1, 1, 32, 40}, -1, bf16, TILE, dram, dram, Fab::Line, 8, C},
         {"D14 bfp8 16x32 dram -> l1", {1, 1, 64, 256}, -1, bfp8, TILE, dram, l1, Fab::Line, 8, C, Tile({16, 32})},
         {"D14 48B rows dram -> l1", {1, 1, 4096, 24}, -2, bf16, RM, dram, l1, Fab::Line, 8, C},
         {"D15 two rows U-NE", {1, 1, 1024, 2560}, -1, bf16, TILE, dram, dram, Fab::NeighborExchange, 8, U, Tile(), 26},
         {"D15 two rows M", {1, 1, 256, 2560}, -1, bf16, TILE, dram, dram, Fab::Line, 8, M, Tile(), 26},
-        {"D16 2D fabric axis U-size", {1, 1, 4096, 2560}, -1, bf16, TILE, dram, dram, Fab::Fabric2DLine, 4, U},
+        {"D16 2D fabric axis M big", {1, 1, 4096, 2560}, -1, bf16, TILE, dram, dram, Fab::Fabric2DLine, 4, M},
         {"D16 2D fabric axis M", {1, 1, 32, 1024}, -1, bf16, TILE, dram, dram, Fab::Fabric2DLine, 4, M},
         {"D16 true 2D (2,4)", {1, 1, 256, 256}, -1, bf16, TILE, dram, dram, Fab::True2D, 8, M},
         {"D17 D9b on neighbor exchange", {1, 1, 64, 64}, -1, bf16, RM, l1, dram, Fab::NeighborExchange, 8, C},
         {"D18 26MB U-NE", {1, 1, 4096, 3328}, -1, bf16, TILE, dram, dram, Fab::NeighborExchange, 8, U},
-        {"D18 26MB ring", {1, 1, 4096, 3328}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, U},
-        {"D18 26MB line", {1, 1, 4096, 3328}, -1, bf16, TILE, dram, dram, Fab::Line, 8, U},
+        {"D18 26MB M ring", {1, 1, 4096, 3328}, -1, bf16, TILE, dram, dram, Fab::Ring, 8, M},
+        {"D18 26MB M line", {1, 1, 4096, 3328}, -1, bf16, TILE, dram, dram, Fab::Line, 8, M},
     };
 
     for (const auto& inst : instances) {

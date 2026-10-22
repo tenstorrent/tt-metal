@@ -23,7 +23,9 @@
 // the runtime-arg override.
 namespace ttnn::operations::ccl::all_gather_program {
 
-// Pipeline constants. Wrong values cost speed, never correctness.
+// Pipeline constants. Wrong values cost speed, never correctness. Measured on BH (8x p150b, 2 links, payload
+// 15168): no K x D in {1..4} x {4, 6, 8} and no G in {1, 2, 8, ends only} beats (3, 6, 4) on any cell; K = D - 2
+// (no spare slot) is up to 5% slower, G >= 8 up to 8% on a 2 MB ring. The builders are CPU-bound, not read-bound.
 inline constexpr uint32_t kSlots = 6;          // CB slots: even (slot parity = packet parity) and fixed, so a
                                                // cached program never depends on later allocator state
 inline constexpr uint32_t kInflight = 3;       // builder reads in flight; <= kSlots - 2 (one held by the pump)

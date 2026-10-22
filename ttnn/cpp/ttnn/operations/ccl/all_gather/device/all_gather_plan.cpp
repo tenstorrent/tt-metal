@@ -226,16 +226,15 @@ Plan make_plan(const PlanIn& in) {
 }
 
 bool prefer_unicast(tt::ARCH arch, bool ring, uint32_t N, uint32_t /*links*/, uint64_t busiest_link_bytes) {
-    // Placeholders: today's thresholds, measured at 2 links. Not covered: BH at 1 link, and at 4+ links where
-    // unicast's DRAM reads bind; WH beyond T3000.
+    // Not covered: BH at 1 link, and at 4+ links where unicast's DRAM reads bind; WH beyond T3000.
     switch (arch) {
-        case tt::ARCH::BLACKHOLE: {
-            // Multicast saves the relay hops (N/2 on a ring, N-1 on a line). Two-point fit at 4 and 8 devices,
-            // floored at zero: one or two hops of relay are never worth a multicast.
-            const int64_t n = N;
-            const int64_t threshold_kb = std::max<int64_t>(0, ring ? 320 * (n / 2 - 2) : 384 + 544 * (n - 4));
-            return busiest_link_bytes >= static_cast<uint64_t>(threshold_kb) * 1024;
-        }
+        case tt::ARCH::BLACKHOLE:
+            // Measured at 2 links, payload 15168, 64 KB - 12.8 MB per link: multicast ties or wins at every size on
+            // the 8-device ring (up to 1.7x) and line (up to 2.1x) and the 4-device line (up to 1.9x), so N alone
+            // decides. Both are CPU-bound per packet: unicast's busiest core builds (N-1)/2 (ring) or N-1 (line)
+            // stripes at ~1300 cycles/packet, multicast's pump one stripe at ~2900. By that model unicast wins only
+            // with few relays: ring N <= 5, line N <= 3 (unmeasured: no smaller ring on the box).
+            return ring ? N <= 5 : N <= 3;
         case tt::ARCH::WORMHOLE_B0:
             // Ring: the fabric relays for free. Two devices: unicast never relays. 3-6: multicast's edge shrinks
             // with N. 7+: near tie, so size decides.
