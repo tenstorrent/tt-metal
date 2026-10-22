@@ -9,7 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
