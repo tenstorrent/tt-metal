@@ -11,6 +11,7 @@
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
@@ -130,6 +131,11 @@ int main(int argc, char **argv) {
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());
 
+    // The optimizer worker holds the master weights, so precision.param_dtype applies here; it still sends the bf16
+    // view to the workers.
+    if (auto param_dtype = ttml::core::param_dtype_from_config(yaml_config["training_config"])) {
+        ttml::core::store_trainable_parameters_as(model_parameters, *param_dtype);
+    }
     auto optimizer = ttml::optimizers::create_optimizer(optimizer_node, model_parameters);
 
     auto aggregator_and_optimizer_ctx = distributed_ctx->create_sub_context(aggregator_and_optimizer_ranks);

@@ -508,11 +508,7 @@ def run_training(
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
-    # Before the optimizer is created, so its state follows the stored dtype; a resumed checkpoint loads into it too.
-    if training_cfg.param_dtype is not None:
-        dtype = {"bfloat16": ttnn.DataType.BFLOAT16, "float32": ttnn.DataType.FLOAT32}[training_cfg.param_dtype]
-        ttml.core.store_trainable_parameters_as(model.parameters(), dtype)
-
+    # Applies precision.param_dtype before building the optimizer; a resumed checkpoint loads into those tensors later.
     optimizer = create_optimizer(model, yaml_config)
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
@@ -658,6 +654,8 @@ def run_training(
         ("lr", f"{optimizer.get_lr():.2e}"),
         ("schedule", schedule_str),
     ]
+    if training_cfg.param_dtype is not None:
+        optimizer_fields.append(("params", training_cfg.param_dtype))
     if training_cfg.use_clip_grad_norm:
         optimizer_fields.append(("clip", f"max-norm {training_cfg.clip_grad_norm_max_norm}"))
 

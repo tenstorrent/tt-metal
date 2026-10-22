@@ -129,6 +129,11 @@ void py_module(nb::module_& m) {
 
     // Parameter precision (training_config.precision.param_dtype)
     m.def(
+        "parse_param_dtype",
+        [](const std::string& name) { return ttml::core::parse_param_dtype(name); },
+        nb::arg("name"),
+        "The dtype named by precision.param_dtype: \"bfloat16\" or \"float32\"; any other name raises.");
+    m.def(
         "store_trainable_parameters_as",
         [](const ttml::serialization::NamedParameters& parameters, ttnn::DataType dtype) {
             ttml::core::store_trainable_parameters_as(parameters, dtype);

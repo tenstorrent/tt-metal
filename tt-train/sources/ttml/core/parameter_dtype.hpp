@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <yaml-cpp/yaml.h>
+
 #include <optional>
 #include <string_view>
 
@@ -14,6 +16,10 @@ namespace ttml::core {
 
 // The dtype named by training_config.precision.param_dtype: "bfloat16" or "float32". Any other name is a TT_FATAL.
 [[nodiscard]] ttnn::DataType parse_param_dtype(std::string_view name);
+
+// precision.param_dtype read from a training_config node. Unset, or set to null, gives nullopt: the parameters keep
+// the dtype the model builds them in.
+[[nodiscard]] std::optional<ttnn::DataType> param_dtype_from_config(const YAML::Node& training_config);
 
 // Stores every trainable bf16 or fp32 parameter in dtype (BFLOAT16 or FLOAT32), cast from its current value. Frozen
 // parameters and non-float tensors keep their dtype. Call it after the model is built and before the optimizer is

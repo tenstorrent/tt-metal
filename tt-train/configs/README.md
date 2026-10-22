@@ -57,7 +57,7 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 ### Precision Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `precision.param_dtype` | str | unset | Dtype trainable parameters are stored in: `"bfloat16"` or `"float32"`. With `"float32"`, fused `AdamW` keeps fp32 master weights and moments in the parameters, and forward and backward run on their bf16 view. Unset keeps the dtype the model builds (bf16). Read by `train.py` and the C++ `nano_gpt` runner |
+| `precision.param_dtype` | str | unset | Dtype trainable parameters are stored in: `"bfloat16"` or `"float32"`. With `"float32"`, fused `AdamW` keeps fp32 master weights and moments in the parameters, and forward and backward run on their bf16 view. Unset keeps the dtype the model builds (bf16). Applied by `create_optimizer` in Python, and in C++ by `nano_gpt` and the 3-tier optimizer worker |
 
 ### Example
 ```yaml

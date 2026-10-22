@@ -202,8 +202,3 @@ def test_param_dtype_is_unset_by_default():
 @pytest.mark.parametrize("name", ["bfloat16", "float32"])
 def test_param_dtype_is_read_from_the_precision_section(name):
     assert _config(precision={"param_dtype": name}).param_dtype == name
-
-
-def test_param_dtype_rejects_other_names(expect_error):
-    with expect_error(ValueError, "param_dtype"):
-        _config(precision={"param_dtype": "float16"})

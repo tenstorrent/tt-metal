@@ -195,11 +195,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
-    if (auto precision_node = training_config["precision"]) {
-        if (auto param_dtype_node = precision_node["param_dtype"]) {
-            config.param_dtype = ttml::core::parse_param_dtype(param_dtype_node.as<std::string>());
-        }
-    }
+    config.param_dtype = ttml::core::param_dtype_from_config(training_config);
 
     return config;
 }
@@ -725,9 +721,11 @@ int main(int argc, char **argv) {
         std::exit(0);
     }
 
-    // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype.
-    if (training_config.param_dtype) {
+    // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype. 3-tier workers
+    // keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
+    if (training_config.param_dtype && !is_three_tier_training(multihost_config)) {
         ttml::core::store_trainable_parameters_as(get_model_parameters(model), *training_config.param_dtype);
+        fmt::print("Parameter dtype: {}\n", *training_config.param_dtype);
     }
 
     // Load model parameters if in eval mode and model path exists

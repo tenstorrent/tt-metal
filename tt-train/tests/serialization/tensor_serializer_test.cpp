@@ -222,15 +222,6 @@ protected:
         }
     }
 
-    // Stores every parameter as `dtype`, as a run that trains in that precision does. New parameters are bf16.
-    static void store_as(const ttml::serialization::NamedParameters& params, ttnn::DataType dtype) {
-        const auto precision = dtype == ttnn::DataType::FLOAT32 ? ttml::autograd::PreferredPrecision::FULL
-                                                                : ttml::autograd::PreferredPrecision::HALF;
-        for (const auto& [name, param] : params) {
-            param->set_value(param->get_value(precision));
-        }
-    }
-
     // A loaded tensor keeps the dtype it is stored in and holds the checkpoint's values cast to it.
     static void expect_loaded(
         ttml::serialization::FlatBufferFile& file,
@@ -250,14 +241,14 @@ protected:
     void expect_resume_keeps_the_models_dtype(ttnn::DataType saved, ttnn::DataType resumed) {
         ttml::modules::LinearLayer model(32, 64);
         auto params = model.parameters();
-        store_as(params, saved);
+        ttml::core::store_trainable_parameters_as(params, saved);
         ttml::optimizers::AdamW optimizer(params, adamw_config());
         step_with_random_grads(params, optimizer, 1);
         const auto path = save("saved", model, optimizer);
 
         ttml::modules::LinearLayer resumed_model(32, 64);
         auto resumed_params = resumed_model.parameters();
-        store_as(resumed_params, resumed);
+        ttml::core::store_trainable_parameters_as(resumed_params, resumed);
         ttml::optimizers::AdamW resumed_optimizer(resumed_params, adamw_config());
         ttml::serialization::FlatBufferFile file;
         file.deserialize(path.string());

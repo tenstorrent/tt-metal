@@ -6,6 +6,8 @@
 
 import pytest
 import ttml
+import ttnn
+from ttml.common.utils import create_optimizer
 
 
 def _make_python_optimizer_class():
@@ -51,9 +53,7 @@ def test_register_and_create_python_optimizer():
     """Test registering a Python optimizer and creating it via create_optimizer."""
     PyOptimizer = _make_python_optimizer_class()
 
-    ttml.optimizers.register_optimizer(
-        "PyOpt", lambda config, params: PyOptimizer(params)
-    )
+    ttml.optimizers.register_optimizer("PyOpt", lambda config, params: PyOptimizer(params))
 
     params = ttml.NamedParameters()
     opt = ttml.optimizers.create_optimizer({"type": "PyOpt"}, params)
@@ -66,9 +66,7 @@ def test_python_optimizer_methods():
     """Test that virtual method dispatch works for Python optimizers."""
     PyOptimizer = _make_python_optimizer_class()
 
-    ttml.optimizers.register_optimizer(
-        "PyOptMethods", lambda config, params: PyOptimizer(params)
-    )
+    ttml.optimizers.register_optimizer("PyOptMethods", lambda config, params: PyOptimizer(params))
 
     params = ttml.NamedParameters()
     opt = ttml.optimizers.create_optimizer({"type": "PyOptMethods"}, params)
@@ -109,3 +107,37 @@ def test_cpp_optimizer_still_works():
     opt = ttml.optimizers.create_optimizer({"type": "AdamW", "lr": 0.001}, params)
     assert opt.get_name() == "AdamW"
     assert opt.get_lr() == pytest.approx(0.001, abs=1e-6)
+
+
+def _param_dtypes(model) -> set:
+    return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
+
+
+def test_create_optimizer_applies_param_dtype():
+    """With a full config, create_optimizer first stores the trainable parameters in precision.param_dtype, so every
+    runner that calls it gets fp32 master weights for float32."""
+    model = ttml.modules.LinearLayer(32, 32)
+    config = {"training_config": {"precision": {"param_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
+
+    create_optimizer(model, config)
+
+    assert _param_dtypes(model) == {ttnn.DataType.FLOAT32}
+
+
+@pytest.mark.parametrize("precision", [None, {}, {"param_dtype": None}])
+def test_create_optimizer_without_param_dtype_keeps_the_parameters(precision):
+    model = ttml.modules.LinearLayer(32, 32)
+    training_config = {"optimizer": {"type": "AdamW"}}
+    if precision is not None:
+        training_config["precision"] = precision
+
+    create_optimizer(model, {"training_config": training_config})
+
+    assert _param_dtypes(model) == {ttnn.DataType.BFLOAT16}
+
+
+def test_create_optimizer_rejects_an_unknown_param_dtype(expect_error):
+    model = ttml.modules.LinearLayer(32, 32)
+    config = {"training_config": {"precision": {"param_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
+    with expect_error(RuntimeError, "param_dtype"):
+        create_optimizer(model, config)

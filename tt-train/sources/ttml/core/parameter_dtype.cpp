@@ -26,6 +26,17 @@ ttnn::DataType parse_param_dtype(std::string_view name) {
     return ttnn::DataType::FLOAT32;
 }
 
+std::optional<ttnn::DataType> param_dtype_from_config(const YAML::Node& training_config) {
+    if (!training_config || !training_config["precision"]) {
+        return std::nullopt;
+    }
+    const auto name = training_config["precision"]["param_dtype"];
+    if (!name || name.IsNull()) {
+        return std::nullopt;
+    }
+    return parse_param_dtype(name.as<std::string>());
+}
+
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype) {
     TT_FATAL(
         is_float_dtype(dtype), "Parameters can be stored as BFLOAT16 or FLOAT32, got {}", enchantum::to_string(dtype));
