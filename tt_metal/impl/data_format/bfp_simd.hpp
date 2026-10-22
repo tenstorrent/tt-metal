@@ -12,6 +12,8 @@
 #endif
 
 namespace tt::tt_metal::bfp_simd {
+// Header-only CPU row encoder. Source-integrated host packers can reuse these
+// kernels without linking the Metal runtime. This is not a stable public API.
 // BFP_B uses the maximum FP32 exponent of each 16-value face row.
 // Match Metal's integer conversion exactly: flush exponent-zero inputs,
 // align significands, round ties to even, saturate, suppress signed zero.
@@ -20,8 +22,13 @@ static inline void row_scalar(const T* src, uint8_t* exp_out, uint8_t* out) {
     uint32_t words[16], codes[16];
     uint32_t shared = 0;
     for (int j = 0; j < 16; ++j) {
-        float value = static_cast<float>(src[j]);
-        std::memcpy(&words[j], &value, 4);
+        if constexpr (std::is_same_v<T, float>) {
+            std::memcpy(&words[j], src + j, sizeof(uint32_t));
+        } else {
+            uint16_t value;
+            std::memcpy(&value, src + j, sizeof(uint16_t));
+            words[j] = static_cast<uint32_t>(value) << 16;
+        }
         shared = std::max(shared, (words[j] >> 23) & 255);
     }
     *exp_out = static_cast<uint8_t>(shared);

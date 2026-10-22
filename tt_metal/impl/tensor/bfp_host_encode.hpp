@@ -5,17 +5,14 @@
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
-#include "../data_format/bfp_simd.hpp"
-#include "../data_format/bfp_tasks.hpp"
-#include "common/executor.hpp"
+#include "../data_format/bfp_tile_encode.hpp"
 
 #include <algorithm>
 #include <bit>
-#include <future>
+#include <memory>
 #include <optional>
 #include <span>
 #include <type_traits>
-#include <vector>
 
 namespace tt::tt_metal::detail {
 
@@ -46,39 +43,28 @@ std::optional<HostTensor> try_encode_bfp_matrix(
             return std::nullopt;
         }
         auto encode = [&]<int bits>() {
-            constexpr size_t tile_bytes = 64 + 1024 * (bits + 1) / 8;
-            const size_t tile_count = height * width / 1024;
-            const size_t tiles_wide = width / 32;
-            std::vector<uint32_t> packed(tile_count * tile_bytes / sizeof(uint32_t));
-            const auto pack_row = bfp_simd::select_row_packer<bits, T>();
-            auto process = [&](size_t begin, size_t end) {
-                for (size_t tile_id = begin; tile_id < end; ++tile_id) {
-                    const auto* source =
-                        buffer.data() + (tile_id / tiles_wide) * 32 * row_stride + (tile_id % tiles_wide) * 32;
-                    auto* dest = reinterpret_cast<uint8_t*>(packed.data()) + tile_id * tile_bytes;
-                    for (size_t face = 0; face < 4; ++face) {
-                        for (size_t row = 0; row < 16; ++row) {
-                            const size_t packed_row = face * 16 + row;
-                            pack_row(
-                                source + (face / 2 * 16 + row) * row_stride + face % 2 * 16,
-                                dest + packed_row,
-                                dest + 64 + packed_row * 2 * (bits + 1));
-                        }
-                    }
-                }
-            };
-            // Nested conversion must not wait for work queued to the same pool.
-            if (tile_count < 256 || GetExecutor().this_worker_id() != -1) {
-                process(0, tile_count);
-            } else {
-                const size_t chunks = std::max<size_t>(1, std::min(GetExecutor().num_workers(), tile_count / 128));
-                run_bfp_tasks(chunks, [&](size_t chunk) {
-                    const size_t begin = tile_count * chunk / chunks;
-                    const size_t end = tile_count * (chunk + 1) / chunks;
-                    return async([&, begin, end] { process(begin, end); });
-                });
-            }
-            return HostTensor::from_buffer(HostBuffer(std::move(packed)), spec);
+            const BfpTileGeometry geometry(tile);
+            const size_t tile_count = height * width / (geometry.height * geometry.width);
+            const size_t bytes = tile_count * geometry.packed_bytes<bits>();
+            TT_FATAL(
+                bytes == spec.compute_packed_buffer_size_bytes(),
+                "BFP encoder buffer size {} differs from tensor specification {}",
+                bytes,
+                spec.compute_packed_buffer_size_bytes());
+            const size_t words = bytes / sizeof(uint32_t);
+            // Workers initialize their own output pages. The array owner stays
+            // attached to HostBuffer through every host-tensor copy and upload.
+            auto packed = std::make_shared_for_overwrite<uint32_t[]>(words);
+            encode_bfp_tiles<bits>(
+                buffer.data(),
+                reinterpret_cast<uint8_t*>(packed.get()),
+                tile_count,
+                geometry,
+                true,
+                row_stride,
+                width / geometry.width);
+            HostBuffer output(ttsl::Span<uint32_t>(packed.get(), words), MemoryPin(packed));
+            return HostTensor::from_buffer(std::move(output), spec);
         };
         return dtype == DataType::BFLOAT8_B ? encode.template operator()<7>() : encode.template operator()<3>();
     }
