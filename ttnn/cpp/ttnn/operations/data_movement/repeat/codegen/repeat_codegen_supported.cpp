@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -406,6 +407,11 @@ bool is_partial_stick_shard_native_in_place(
     const auto& input_mc = input.memory_config();
     if (input.layout() != Layout::ROW_MAJOR || !input_mc.is_sharded() ||
         shard_spec_is_page_identical(input_mc, input.logical_shape(), Layout::ROW_MAJOR)) {
+        return false;
+    }
+    // With an interleaved output, codegen can unshard once and batch the copies. Staging each
+    // unaligned shard fragment natively is slower; reserve that route for sharded output placement.
+    if (!output_mem_config.is_sharded() && input.buffer()->page_size() != input.buffer()->aligned_page_size()) {
         return false;
     }
     const auto single = repeat::single_repeated_dim(repeat_dims);

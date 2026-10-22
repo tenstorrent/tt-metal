@@ -98,6 +98,14 @@ bool is_native_repeat_sharding(
     if (is_unevenly_sharded(input_spec)) {
         return false;
     }
+    // The native rank-collapse view cannot discard padding from a split row's final shard.
+    // Keep partial final shards on codegen/composite; a full row on one core can still be viewed.
+    if (input_spec.layout() == Layout::ROW_MAJOR) {
+        const auto& shard = input_spec.memory_config().shard_spec()->shape;
+        if (input_spec.padded_shape()[-1] > shard[1] && input_spec.logical_shape()[-1] % shard[1] != 0) {
+            return false;
+        }
+    }
     // TILE input: reject non-tile-aligned H/W (native tile path requires alignment).
     if (input_spec.layout() == tt::tt_metal::Layout::TILE) {
         const auto& lshape = input_spec.logical_shape();
@@ -106,21 +114,12 @@ bool is_native_repeat_sharding(
             return false;
         }
     }
-    // RM WIDTH/BLOCK: reject last-dim repeats (ttnn::view breaks shard width), and any repeat whose shard row
-    // is not buffer-aligned: noc_async_{read,write}_sharded size each chunk by the aligned page, so the tail of
-    // every sub-aligned row is never written.
-    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+    // RM WIDTH/BLOCK last-dim: reject (ttnn::view breaks shard width).
+    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR && repeat_dim >= 0 &&
+        repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
         const auto in_layout = input_spec.memory_config().memory_layout();
         if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            if (repeat_dim >= 0 && repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
-                return false;
-            }
-            const uint32_t alignment = input_spec.memory_config().buffer_type() == BufferType::DRAM
-                                           ? hal::get_dram_alignment()
-                                           : hal::get_l1_alignment();
-            if (input_spec.compute_page_size_bytes() % alignment != 0) {
-                return false;
-            }
+            return false;
         }
     }
     if (output_memory_config.has_value()) {

@@ -294,3 +294,209 @@ def test_repeat_width_sharded_row_major_subaligned_rows(device, dtype, shape, gr
     assert torch.equal(read(input_tensor), expected_input)
     output = ttnn.repeat(input_tensor, ttnn.Shape(repeats))
     assert torch.equal(read(output), expected_input.repeat(*repeats))
+    expected_memory = ttnn.create_sharded_memory_config(
+        [extent * count for extent, count in zip(shape, repeats)],
+        core_grid=ttnn.CoreGrid(y=grid[0], x=grid[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    assert output.memory_config() == expected_memory
+
+
+@pytest.mark.parametrize("rank", [3, 4, 5])
+@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
+@pytest.mark.parametrize("split_row", [False, True])
+@pytest.mark.parametrize("aligned", [False, True])
+@pytest.mark.parametrize("output_mode", ["implicit", "memory_config", "preallocated", "both"])
+def test_repeat_sharded_row_major_placement(device, rank, strategy, split_row, aligned, output_mode):
+    shard_width = 8 if aligned else 5
+    if strategy == ttnn.ShardStrategy.WIDTH:
+        grid = ttnn.CoreGrid(y=4, x=2) if split_row else ttnn.CoreGrid(y=1, x=1)
+        shape = [1, 7, shard_width * (8 if split_row else 1)]
+    else:
+        grid = ttnn.CoreGrid(y=1, x=2) if split_row else ttnn.CoreGrid(y=1, x=1)
+        shape = [1, 4, shard_width * (2 if split_row else 1)]
+    shape = [1] * (rank - 3) + shape
+    repeats = [1] * rank
+    repeats[1] = 2
+    expected_shape = [size * count for size, count in zip(shape, repeats)]
+    input_memory = ttnn.create_sharded_memory_config(
+        shape, core_grid=grid, strategy=strategy, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    expected_memory = ttnn.create_sharded_memory_config(
+        expected_shape, core_grid=grid, strategy=strategy, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    words = torch.arange(prod(shape), dtype=torch.int64).reshape(shape)
+    values = ((words * 1000003 + 7) % (2**32)).to(torch.int32)
+    tensor = ttnn.from_torch(
+        values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory
+    )
+    expected_input = values.to(torch.int64) & 0xFFFFFFFF
+    assert torch.equal(ttnn.to_torch(tensor).to(torch.int64) & 0xFFFFFFFF, expected_input)
+    kwargs = {}
+    if output_mode in ("memory_config", "both"):
+        kwargs["memory_config"] = expected_memory
+    if output_mode in ("preallocated", "both"):
+        preallocated = ttnn.from_torch(
+            torch.full(expected_shape, -1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=expected_memory,
+        )
+        kwargs["optional_output_tensor"] = preallocated
+    output = ttnn.repeat(tensor, repeats, **kwargs)
+    assert torch.equal(ttnn.to_torch(output).to(torch.int64) & 0xFFFFFFFF, expected_input.repeat(*repeats))
+    assert output.memory_config() == expected_memory
+    if output_mode in ("preallocated", "both"):
+        assert output.buffer_address() == preallocated.buffer_address()
+        assert torch.equal(ttnn.to_torch(preallocated).to(torch.int64) & 0xFFFFFFFF, expected_input.repeat(*repeats))
+
+
+@pytest.mark.parametrize("input_shard_width, output_shard_width", [(5, 10), (10, 5), (5, 8), (8, 5)])
+@pytest.mark.parametrize("preallocate", [False, True])
+def test_repeat_sharded_row_major_different_page_widths(device, input_shard_width, output_shard_width, preallocate):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))})
+    input_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [7, input_shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [14, output_shard_width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    values = (torch.arange(280, dtype=torch.int64).reshape(1, 1, 1, 7, 40) * 1000003 + 7).to(torch.int32)
+    tensor = ttnn.from_torch(
+        values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory
+    )
+    expected = (values.to(torch.int64) & 0xFFFFFFFF).repeat(1, 2, 1, 1, 1)
+    kwargs = {"memory_config": output_memory}
+    if preallocate:
+        target = ttnn.from_torch(
+            torch.full(list(expected.shape), -1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=output_memory,
+        )
+        kwargs["optional_output_tensor"] = target
+    output = ttnn.repeat(tensor, [1, 2, 1, 1, 1], **kwargs)
+    assert output.memory_config() == output_memory
+    assert torch.equal(ttnn.to_torch(output).to(torch.int64) & 0xFFFFFFFF, expected)
+    if preallocate:
+        assert output.buffer_address() == target.buffer_address()
+
+
+def test_repeat_large_split_row_scratch_space(device):
+    width = 8 * 30005
+    shape = [1, 1, width]
+    repeats = [1, 2, 1]
+    grid = ttnn.CoreGrid(y=4, x=2)
+
+    def config(rows):
+        return ttnn.create_sharded_memory_config(
+            [1, rows, width],
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    values = (torch.arange(width, dtype=torch.int64) * 1000003 + 7).to(torch.int32).reshape(shape)
+    source = ttnn.from_torch(
+        values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config(1)
+    )
+    target = ttnn.from_torch(
+        torch.full([1, 2, width], -1, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=config(2),
+    )
+    result = ttnn.repeat(source, repeats, memory_config=config(2), optional_output_tensor=target)
+    assert result.memory_config() == config(2)
+    assert result.buffer_address() == target.buffer_address()
+    assert torch.equal(
+        ttnn.to_torch(result).to(torch.int64) & 0xFFFFFFFF, (values.to(torch.int64) & 0xFFFFFFFF).repeat(*repeats)
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32, ttnn.float32, ttnn.bfloat16, ttnn.uint16])
+@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
+@pytest.mark.parametrize("aligned", [False, True])
+@pytest.mark.parametrize("preallocate", [False, True])
+def test_repeat_split_shards_supported_dtypes(device, dtype, strategy, aligned, preallocate):
+    element_bytes = 2 if dtype in (ttnn.bfloat16, ttnn.uint16) else 4
+    shard_width = 48 // element_bytes if aligned else 5
+    shape = [1, 4, 2 * shard_width]
+    repeats = [1, 2, 1]
+    output_shape = [1, 8, 2 * shard_width]
+    grid = ttnn.CoreGrid(y=1, x=2)
+
+    def config(shape):
+        return ttnn.create_sharded_memory_config(
+            shape, core_grid=grid, strategy=strategy, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
+
+    words = torch.arange(prod(shape), dtype=torch.int64).reshape(shape)
+    if dtype == ttnn.float32:
+        values = words.to(torch.float32) / 4 - 17.5
+    elif dtype == ttnn.bfloat16:
+        values = (words % 251 - 125).to(torch.bfloat16)
+    elif dtype == ttnn.uint16:
+        values = (words * 251 % 32749).to(torch.int16)
+    elif dtype == ttnn.int32:
+        values = (words * 1000003 - 100000007).to(torch.int32)
+    else:
+        values = (words * 100000003 + 7).to(torch.int32)
+
+    def read(tensor):
+        result = ttnn.to_torch(tensor)
+        if dtype == ttnn.uint32:
+            return result.to(torch.int64) & 0xFFFFFFFF
+        return result.to(torch.int64) if dtype == ttnn.uint16 else result
+
+    expected_input = values.to(torch.int64) & 0xFFFFFFFF if dtype == ttnn.uint32 else values
+    if dtype == ttnn.uint16:
+        expected_input = values.to(torch.int64)
+    source = ttnn.from_torch(
+        values, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config(shape)
+    )
+    assert torch.equal(read(source), expected_input)
+    kwargs = {}
+    if preallocate:
+        target = ttnn.from_torch(
+            torch.zeros(output_shape, dtype=values.dtype),
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=config(output_shape),
+        )
+        kwargs = {"memory_config": config(output_shape), "optional_output_tensor": target}
+    output = ttnn.repeat(source, repeats, **kwargs)
+    assert torch.equal(read(output), expected_input.repeat(*repeats))
+    assert output.memory_config() == config(output_shape)
+    if preallocate:
+        assert output.buffer_address() == target.buffer_address()
+        assert torch.equal(read(target), expected_input.repeat(*repeats))
+
+
+@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
+def test_repeat_sharded_multiple_axes_control(device, strategy):
+    # Multiple repeated axes retain their existing route. A 48-byte shard row is aligned to 16, not 32.
+    shape, output_shape, repeats = [1, 4, 24], [2, 8, 24], [2, 2, 1]
+    grid = ttnn.CoreGrid(y=1, x=2)
+
+    def config(shape):
+        return ttnn.create_sharded_memory_config(
+            shape, core_grid=grid, strategy=strategy, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
+
+    values = torch.arange(prod(shape), dtype=torch.float32).reshape(shape) / 4
+    source = ttnn.from_torch(
+        values, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config(shape)
+    )
+    output = ttnn.repeat(source, repeats, memory_config=config(output_shape))
+    assert output.memory_config() == config(output_shape)
+    assert torch.equal(ttnn.to_torch(output), values.repeat(*repeats))
