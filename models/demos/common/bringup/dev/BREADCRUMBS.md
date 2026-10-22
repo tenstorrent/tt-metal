@@ -1643,3 +1643,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   and an overseer abort with the pause file set stops the attempt loop (exit PAUSED) instead of starting the next
   attempt. DeepSeek-V4.1 FIX.9: abort + pause still started attempt 3 in the old orchestrator while a resumed second
   one began the gate. Selftest: test_overseer.py::test_a_second_orchestrator_on_a_live_run_is_refused.
+- F148 (overseer, 2026-10-22): a profile's per-op rows go gzipped beside it (`<task>_ops.json.gz`, `ops_file` in the
+  profile; gate_outputs commits it; the dashboard reads it). DeepSeek-V4.1 FIX.5's gate passed every metric, then git
+  refused results/FIX.5_profile.json (613 KB, 498 KB of op rows) under the 500 KB hook. Selftest: test_dashboard.py.
