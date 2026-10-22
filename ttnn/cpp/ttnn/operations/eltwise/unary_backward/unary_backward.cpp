@@ -1750,7 +1750,16 @@ std::vector<Tensor> prod_bw(
 
     // all_dimensions = False
     auto step = ttsl::SmallVector<std::uint32_t>({1, 1, 1, 1});
-    Tensor temp = ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);
+    Tensor reduced_grad = grad;
+    const int reduced_dim = (*dim == 3 || *dim == -1) ? 3 : (*dim == 2 || *dim == -2) ? 2 : -1;
+    if (reduced_dim >= 0 && grad.logical_shape()[reduced_dim] != 1) {
+        const auto& g = grad.logical_shape();
+        ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> end_index = {g[0], g[1], g[2], g[3]};
+        end_index[reduced_dim] = 1;
+        reduced_grad = ttnn::slice(grad, start_index, end_index, step, std::nullopt);
+    }
+    Tensor temp = ttnn::multiply(prod_result, reduced_grad, std::nullopt, output_memory_config);
     if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
