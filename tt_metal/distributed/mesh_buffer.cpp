@@ -490,15 +490,8 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     // Builds the entry on first use; see initialize_device_buffers(). The entries live in the container's heap storage,
     // not in the MeshBuffer object, so filling one in from this const method is well defined.
     auto& device_buffer = const_cast<std::shared_ptr<Buffer>&>(buffers_.at(device_coord).value());
-    std::mutex& entry_mutex = lazy_device_buffer_mutex(this);
-    {
-        std::lock_guard<std::mutex> lock(entry_mutex);
-        if (device_buffer != nullptr) {
-            return device_buffer.get();
-        }
-    }
 
-    // After deallocate() the address may already belong to another buffer.
+    // After deallocate() the address may already belong to another buffer, so no entry is returned, built or not.
     auto mesh_device = mesh_device_.lock();
     TT_FATAL(
         !std::holds_alternative<DeallocatedState>(state_) && mesh_device != nullptr,
@@ -507,6 +500,14 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     IDevice* device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(
         device->is_initialized(), "MeshBuffer::get_device_buffer({}): device {} is closed", device_coord, device->id());
+
+    std::mutex& entry_mutex = lazy_device_buffer_mutex(this);
+    {
+        std::lock_guard<std::mutex> lock(entry_mutex);
+        if (device_buffer != nullptr) {
+            return device_buffer.get();
+        }
+    }
 
     // Build outside the lock; if another thread publishes the entry first, this copy is dropped.
     std::shared_ptr<Buffer> buffer;

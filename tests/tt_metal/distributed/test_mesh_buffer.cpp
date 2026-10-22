@@ -375,23 +375,26 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferConcurrentFirstUse) {
 }
 
 TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
-    // A device buffer that was not used before deallocate() is not built afterwards: its address may already belong
-    // to another buffer.
-    if (getenv("TT_METAL_EMULE_MODE")) {
-        GTEST_SKIP() << "Emule builds every device buffer at allocation";
-    }
+    // After deallocate() the address may already belong to another buffer, so no device buffer is returned, whether it
+    // was built before or not.
     const auto coords = local_coords(*mesh_device_);
     if (coords.size() < 2) {
         GTEST_SKIP() << "Needs two local devices";
     }
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
-    auto mesh_buffer =
-        MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto used_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_NE(used_buffer->get_device_buffer(coords[1]), nullptr);
+    auto unused_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
-    mesh_buffer->deallocate();
-    EXPECT_FALSE(mesh_buffer->is_allocated());
-    EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[1]));
+    for (const auto& mesh_buffer : {used_buffer, unused_buffer}) {
+        mesh_buffer->deallocate();
+        EXPECT_FALSE(mesh_buffer->is_allocated());
+        // The reference buffer and the second device's buffer.
+        EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[0]));
+        EXPECT_ANY_THROW(mesh_buffer->get_device_buffer(coords[1]));
+    }
 }
 
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
