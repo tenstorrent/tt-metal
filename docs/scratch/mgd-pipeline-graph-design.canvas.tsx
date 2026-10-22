@@ -3296,7 +3296,8 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
       <Stack gap={8}>
         <H2>Edge policy: STRICT or RELAXED, per edge</H2>
         <Text tone="secondary">
-          Each edge says whether it must ride the fabric; the words match channels policy. Every edge STRICT is blaze's
+          Each edge says whether it must ride the fabric; the words match channels policy. STRICT is the default (enum value
+          0): an edge with no policy is STRICT, and only edges marked policy: RELAXED may go over host. Every edge STRICT is blaze's
           placement="strict" and every edge RELAXED is placement="flexible"; a mix, such as a STRICT ring whose only RELAXED edge
           is the loopback, is what neither mode can say. There is no HOST value: an edge that always goes over host needs no
           link, so to the mapper it is RELAXED. Blaze's Edge carries the same policy, so the MGD and the runtime graph agree.

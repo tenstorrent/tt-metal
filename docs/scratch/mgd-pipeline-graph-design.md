@@ -323,7 +323,9 @@ None of the comments above are enforced by protobuf. They are obligations on
 ### 1.4 Edge policy: STRICT or RELAXED, per edge
 
 Each edge says whether it must ride the fabric. The words match `channels { policy }`:
-STRICT is a requirement, RELAXED a preference.
+STRICT is a requirement, RELAXED a preference. **STRICT is the default:** it is enum value
+0, so an edge with no `policy` is STRICT, and a pipeline goes over host only where an edge
+opts in with `policy: RELAXED`.
 
 | Policy | Meaning | What the mapper requires |
 |---|---|---|
