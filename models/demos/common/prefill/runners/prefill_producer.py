@@ -114,12 +114,7 @@ def _load_env_config() -> None:
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
-    # One ack fires per layer the adapter's ack_layer_ids names, not necessarily per layer. Dense stacks
-    # ack every layer, but a hybrid one may not: Kimi-K3 at 93 layers with PREFILL_KDA_LAYER_ACK=0 acks
-    # only its 24 full-attention layers, so draining NUM_LAYERS * pushes waits for acks that are never
-    # sent and burns the full 600 s timeout twice, once after warmup and once after the measured request.
-    _ack_layer_ids = ADAPTER.ack_layer_ids(NUM_LAYERS)
-    NUM_ACK_LAYERS = NUM_LAYERS if _ack_layer_ids is None else len(_ack_layer_ids)
+    NUM_ACK_LAYERS = NUM_LAYERS
 
 
 _load_env_config()

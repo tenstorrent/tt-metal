@@ -171,11 +171,6 @@ class PrefillModelAdapter(ABC):
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 
-    def ack_layer_ids(self, num_layers: int) -> list[int] | None:
-        """Global layers that send a layer ack each chunk, in order; ``None`` when every layer does. A hybrid
-        stack whose non-KV layers send none returns its KV-writing layers here."""
-        return None
-
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
 

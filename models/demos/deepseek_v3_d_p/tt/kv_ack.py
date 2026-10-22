@@ -54,7 +54,7 @@ def zero_pad_and_ack(
     unconditionally from a block that may or may not be running under a migration engine.
 
     Only call this on a layer that actually wrote KV. A Kimi-K3 KDA layer writes none, so its block
-    skips it — there is no pad window to clean and no slot to ack.
+    calls `send_layer_ack` instead.
 
     ``alias_layer_ids`` ack right after ``global_layer_idx``, in order: table rows published at this
     layer's addresses (decode MTP levels sharing one KV cache), so they are done when it is.

@@ -640,7 +640,6 @@ def _print_config() -> None:
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
-        ("PREFILL_KDA_LAYER_ACK", os.environ.get("PREFILL_KDA_LAYER_ACK", "1")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
@@ -868,7 +867,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     layout = layer_completion_layout(
         layer_split,
         rank,
-        kv_slot_layer_ids=ADAPTER.ack_layer_ids(NUM_LAYERS),
         extra_layers=extra_layers,
     )
     router = LayerCompletionRouter(

@@ -24,7 +24,6 @@ from typing import Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import kda_layer_ack_enabled
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
@@ -74,7 +73,6 @@ class TtKimiK3Block(LightweightModule):
         self.local_idx = local_idx
         self.attention = attention
         self.kv_only = kv_only
-        self._kda_layer_ack = kda_layer_ack_enabled()
         self.num_links = num_links
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -227,7 +225,7 @@ class TtKimiK3Block(LightweightModule):
                 trace_controller=getattr(self, "_trace_controller", None),
                 tp_axis=self.attention.mla.tp_shard_kv_axis,
             )
-        elif self._kda_layer_ack and (d2h_service is not None or on_layer_complete is not None):
+        elif d2h_service is not None or on_layer_complete is not None:
             assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
             send_layer_ack(
                 mesh_device=self.mesh_device,
