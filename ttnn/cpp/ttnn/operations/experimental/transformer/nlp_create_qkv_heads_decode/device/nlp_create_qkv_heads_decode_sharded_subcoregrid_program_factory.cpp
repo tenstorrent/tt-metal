@@ -52,8 +52,6 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
     const TensorParamName V_OUT_TENSOR{"v_out_tensor"};
     const TensorParamName BATCH_OFFSET_TENSOR{"batch_offset_tensor"};
 
-    MeshDevice* device = input_tensor.device();
-
     tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     const uint32_t single_tile_size = tt::tile_size(data_format);
@@ -140,17 +138,6 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
 
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
-    auto in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
-
-    std::vector<uint32_t> noc_x_coords, noc_y_coords;
-    noc_x_coords.reserve(in_num_cores);
-    noc_y_coords.reserve(in_num_cores);
-
-    for (uint32_t i = 0; i < in_num_cores; ++i) {
-        auto worker_core = device->worker_core_from_logical_core(in_cores_vec[i]);
-        noc_x_coords.push_back(worker_core.x);
-        noc_y_coords.push_back(worker_core.y);
-    }
 
     // In case of overlapping qk coregrid, we create a single set of kernels for q which also process k and v heads
     // from the input and write to the respective output buffers while if q and k are not overlapped, we create two
@@ -254,10 +241,6 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"index_in_cores"}},
             .hw_config = std::move(hw_config),
-            // The per-input-core NoC coordinate tables are genuine varargs: CTA-bounded
-            // variable-count blocks the kernel indexes at runtime (noc_x table of in_num_cores
-            // entries, then noc_y table of in_num_cores entries).
-            .advanced_options = {.num_runtime_varargs = 2 * in_num_cores},
         };
     };
 
@@ -321,17 +304,10 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
         .work_units = std::move(work_units),
     };
 
-    // Every node reads the whole coordinate tables; the per-node distinction is index_in_cores.
-    std::vector<uint32_t> noc_coord_varargs;
-    noc_coord_varargs.reserve(2 * in_num_cores);
-    noc_coord_varargs.insert(noc_coord_varargs.end(), noc_x_coords.begin(), noc_x_coords.end());
-    noc_coord_varargs.insert(noc_coord_varargs.end(), noc_y_coords.begin(), noc_y_coords.end());
-
     auto fill_run_args = [&](KernelRunArgs& run_args_entry, const std::vector<CoreCoord>& cores, uint32_t num_cores) {
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = cores[i];
             AddRuntimeArgsForNode(run_args_entry.runtime_arg_values, core, {{"index_in_cores", i}});
-            run_args_entry.advanced_options.runtime_varargs[core] = noc_coord_varargs;
         }
     };
 

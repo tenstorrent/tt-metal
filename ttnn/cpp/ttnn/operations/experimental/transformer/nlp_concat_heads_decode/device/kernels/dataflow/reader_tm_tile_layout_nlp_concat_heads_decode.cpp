@@ -9,7 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
-#include "internal/tensor/transfer_noc_addr.h"
+#include "api/tensor/noc_traits.h"
 
 // #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
@@ -28,26 +28,23 @@ void kernel_main() {
 
     constexpr uint32_t num_x = get_arg(args::num_x);
     constexpr uint32_t num_y = get_arg(args::num_y);
-    // NoC coordinates of the input shard grid ride the runtime varargs:
-    // x coordinates at vararg indices [0, num_x), y coordinates at [num_x, num_x + num_y).
 
-    // Base address of the (sharded) input tensor; the remote NoC addresses are assembled by hand below.
-    auto in_tensor = TensorAccessor(tensor::input);
-    // Raw: same L1 address on the source cores (no handle form yet).
-    uint32_t q_start_addr = tensor_accessor::detail::TransferAccess::bank_base(in_tensor);
+    // The input is height sharded with one user per shard, one shard per core of its grid: the
+    // reads walk the shards in order, at an offset inside the current shard.
+    const auto in_tensor = TensorAccessor(tensor::input);
+    const ShardView in_shards(in_tensor);
 
     DataflowBuffer dfb_q_out(dfb::q_out);
-    UnicastEndpoint src_ep;
 
     // Q
-    uint32_t qkv_x = 0;
-    uint32_t qkv_y = 0;
+    uint32_t shard_id = 0;
     uint32_t total_input_cores = num_x * num_y;
     uint32_t num_tiles_per_core = (head_size_num_tiles * batch) / total_input_cores;
+    // Each shard's NoC address is looked up once, when the reads move onto it.
+    const uint8_t noc_id = noc.get_noc_id();
+    auto in_shard = in_shards.shard(shard_id, noc_id);
 
-    uint32_t qkv_noc_x = get_vararg(qkv_x);
-    uint32_t qkv_noc_y = get_vararg(num_x + qkv_y);
-    uint32_t qkv_read_addr = q_start_addr + in_tile_offset_by_head;
+    uint32_t qkv_read_offset = in_tile_offset_by_head;
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
     uint32_t tile_size = head_size / head_size_num_tiles;
@@ -60,43 +57,35 @@ void kernel_main() {
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
                 noc.async_read(
-                    src_ep,
+                    in_shard,
                     CoreLocalMem<uint32_t>(q_write_addr),
                     SUBTILE_LINE_BYTES,
-                    {.noc_x = qkv_noc_x, .noc_y = qkv_noc_y, .addr = qkv_read_addr},
+                    {.offset_bytes = qkv_read_offset},
                     {});
                 // noc.async_read_barrier();
             }
             // Read second phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
                 noc.async_read(
-                    src_ep,
+                    in_shard,
                     CoreLocalMem<uint32_t>(q_write_addr + 256 * ELEMENT_SIZE),
                     SUBTILE_LINE_BYTES,
-                    {.noc_x = qkv_noc_x, .noc_y = qkv_noc_y, .addr = qkv_read_addr + 256 * ELEMENT_SIZE},
+                    {.offset_bytes = qkv_read_offset + 256 * ELEMENT_SIZE},
                     {});
                 // noc.async_read_barrier();
             }
             // noc.async_read_barrier();
 
-            qkv_read_addr += tile_size;
+            qkv_read_offset += tile_size;
             q_write_addr += tile_size;
             num_tiles_read_cur_core++;
 
             if (num_tiles_read_cur_core == num_tiles_per_core) {
-                qkv_x++;
-                if (qkv_x == num_x) {
-                    qkv_x = 0;
-                    qkv_y++;
+                shard_id++;
+                if (shard_id < total_input_cores) {
+                    in_shard = in_shards.shard(shard_id, noc_id);
                 }
-                // After the last input core the cursor points one past the coordinate tables; the
-                // value would never be used, but the read itself is out of bounds (caught by the
-                // kernel runtime-arg assert / watcher), so only refetch while a core is left.
-                if (qkv_y < num_y) {
-                    qkv_noc_x = get_vararg(qkv_x);
-                    qkv_noc_y = get_vararg(num_x + qkv_y);
-                }
-                qkv_read_addr = q_start_addr + in_tile_offset_by_head;
+                qkv_read_offset = in_tile_offset_by_head;
                 num_tiles_read_cur_core = 0;
             }
         }

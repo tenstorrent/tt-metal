@@ -50,8 +50,6 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
     const TensorParamName V_OUT_TENSOR{"v_out_tensor"};
     const TensorParamName BATCH_OFFSET_TENSOR{"batch_offset_tensor"};
 
-    MeshDevice* device = input_tensor.device();
-
     tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt::tile_size(data_format);
@@ -134,17 +132,6 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
     // cores for input
     auto in_core_grid = in_cores.bounding_box();
     uint32_t in_num_cores_x = in_core_grid.end_coord.x + 1, in_num_cores_y = in_core_grid.end_coord.y + 1;
-
-    std::vector<uint32_t> noc_x_coords;
-    noc_x_coords.reserve(in_num_cores_x);
-    for (uint32_t x = 0; x < in_num_cores_x; ++x) {
-        noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
-    }
-    std::vector<uint32_t> noc_y_coords;
-    noc_y_coords.reserve(in_num_cores_y);
-    for (uint32_t y = 0; y < in_num_cores_y; ++y) {
-        noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
-    }
 
     // In case of overlapping qk coregrid, we create a single set of kernels for q which also process k and v heads
     // from the input and write to the respective output buffers while if q and k are not overlapped, we create two
@@ -245,10 +232,6 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"index_in_cores"}},
             .hw_config = std::move(hw_config),
-            // The per-input-core NoC coordinate tables are genuine varargs: CTA-bounded
-            // variable-count blocks the kernel indexes at runtime (noc_x table of num_x entries,
-            // then noc_y table of num_y entries).
-            .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
         };
     };
 
@@ -312,17 +295,10 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
         .work_units = std::move(work_units),
     };
 
-    // Every node reads the whole coordinate tables; the per-node distinction is index_in_cores.
-    std::vector<uint32_t> noc_coord_varargs;
-    noc_coord_varargs.reserve(noc_x_coords.size() + noc_y_coords.size());
-    noc_coord_varargs.insert(noc_coord_varargs.end(), noc_x_coords.begin(), noc_x_coords.end());
-    noc_coord_varargs.insert(noc_coord_varargs.end(), noc_y_coords.begin(), noc_y_coords.end());
-
     auto fill_run_args = [&](KernelRunArgs& run_args_entry, const std::vector<CoreCoord>& cores, uint32_t num_cores) {
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = cores[i];
             AddRuntimeArgsForNode(run_args_entry.runtime_arg_values, core, {{"index_in_cores", i}});
-            run_args_entry.advanced_options.runtime_varargs[core] = noc_coord_varargs;
         }
     };
 
