@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The MTP draft chained behind a verify on device (tt/spec_chain.py, tt/kernels/spec_chain.cpp): the host layouts and
-an exact integer mirror of the two kernel steps (no ttnn), shared by the vLLM adapter and the host tests.
+an exact integer mirror of the three kernel steps (no ttnn), shared by the vLLM adapter and the host tests.
 
 A lane that speculates runs one request in one verify pass (reference/spec_decode.py, ``draft_source``): its column c
 in slot ``slots[c]`` at position P[slots[c]]. Before stage B the host read the pass's acceptance, then planned the MTP
@@ -23,51 +23,74 @@ The host then reads the result page, one 320-byte read per pass: what the verify
 argmax ids) and the drafts the next propose returns. Every other lane's verify passes run the accept trace too, with
 an idle chain row (no draft): their result page carries the accept page and the argmax ids.
 
+Under async scheduling the plugin chains verifies (its section 4j): the next verify of such a lane is built and
+enqueued before the host has read this one. Its upload marks the pass's source as relayed, and the relay step (mode
+2), the first program of the verify trace, writes the source's tokens and positions from the result page the lane's
+last pass left (the last committed token at the bonus, then the drafts at the positions that follow) and the drafts
+into the accept step's control page (``relay_step``); SpecInputs.derive_verify and the decode step then run as on an
+upload the host built. The host never sees those tokens before it reads the next page, whose positions section says
+where the device put them.
+
 The chain row only holds what the host knows before the verify: whether a draft chains behind the pass, the source's
-columns and slots, and the position limit. The draft is declined on device when the bonus (the position after the
-last committed token) is at or past the limit, max_seq_len - K: the next verify writes positions bonus .. bonus + K,
-and the draft's RoPE indices must stay inside the device tables (they end at max_seq_len).
+columns and slots, the position limit, and whether the source's tokens and positions are relayed. The draft is
+declined on device when the bonus (the position after the last committed token) is at or past the limit,
+max_seq_len - K: the next verify writes positions bonus .. bonus + K, and the draft's RoPE indices must stay inside
+the device tables (they end at max_seq_len).
 
 Layouts:
 
 - chain row (row CHAIN_ROW of the verify upload, int32, B wide): source (1: a draft chains behind this pass), the
-  source's columns n + 1, limit, then the source's slots [SPEC_SLOTS] (-1 past its columns), zeros. The source's
-  request is the pass's only one: group 0 of the accept page.
+  source's columns n + 1, limit, then the source's slots [SPEC_SLOTS] (-1 past its columns), relay (1: the relay step
+  writes the source's tokens and positions), zeros. The source's request is the pass's only one: group 0 of the
+  accept page and of the control page.
 - result page (uint32 [RESULT_WORDS], sections on 64-byte boundaries, each written by one step):
   [ACCEPT_AT, +GROUPS * OUT_WORDS) the accept page (unpack_out); [ARGMAX_AT, +SPEC_SLOTS) the verify's argmax ids of
-  slots 0 .. SPEC_SLOTS - 1; [STATUS_AT, +4) the chain: drafting (0 / 1), anchor slot (NO_SLOT: none), bonus position,
+  slots 0 .. SPEC_SLOTS - 1 and [POSITIONS_AT, +SPEC_SLOTS) their positions, as the verify ran them (a relayed pass's
+  are the device's); [STATUS_AT, +4) the chain: drafting (0 / 1), anchor slot (NO_SLOT: none), bonus position,
   unused; [DRAFTS_AT, +1 + MAX_DRAFTS) the drafts step: the anchor slot it found (the slot with a step2 position;
   NO_SLOT: an idle draft) and that slot's greedy token of each MTP pass.
+
+The relay step reads the result page of the lane's last pass, which must be the pass whose draft chained (the
+adapter checks that on the host); it relays only a page whose chain drafted (drafting 1, the drafts step's anchor the
+chain's). Otherwise the relayed slots go idle (position -1: no K / V written) and the pass drafts nothing: the host
+finds position -1 in the positions section and raises.
 """
 
 from dataclasses import dataclass
 
-from .sample_verify import GROUPS, NO_TOKEN, OUT_WORDS, unpack_out
+from .sample_verify import GROUP_WORDS, GROUPS, NO_TOKEN, OUT_WORDS, unpack_out
 from .spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position
 from .spec_inputs import MTP_ROWS, VERIFY_ROWS
 
 CHAIN_ROW = 2  # the verify upload's row (reference.spec_inputs.pack_verify)
 CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS = 0, 1, 2, 3
-CHAIN_WORDS = CHAIN_SLOTS + SPEC_SLOTS
+CHAIN_RELAY = CHAIN_SLOTS + SPEC_SLOTS
+CHAIN_WORDS = CHAIN_RELAY + 1
 NO_SLOT = 0xFFFFFFFF
 ACCEPT_WORDS = GROUPS * OUT_WORDS
-ACCEPT_AT, ARGMAX_AT, STATUS_AT, DRAFTS_AT, RESULT_WORDS = 0, 32, 48, 64, 80
+ACCEPT_AT, ARGMAX_AT, POSITIONS_AT, STATUS_AT, DRAFTS_AT, RESULT_WORDS = 0, 32, 40, 48, 64, 80
 HEADER_WORDS = DRAFTS_AT  # the chain step's sections; the drafts step writes the rest
-assert ACCEPT_AT + ACCEPT_WORDS <= ARGMAX_AT and ARGMAX_AT + SPEC_SLOTS <= STATUS_AT and STATUS_AT + 4 <= DRAFTS_AT
+CTRL_DRAFTS = 4  # a control page group's first draft word (reference.sample_verify.group_words)
+assert ACCEPT_AT + ACCEPT_WORDS <= ARGMAX_AT and ARGMAX_AT + SPEC_SLOTS <= POSITIONS_AT
+assert POSITIONS_AT + SPEC_SLOTS <= STATUS_AT and STATUS_AT + 4 <= DRAFTS_AT
+assert CTRL_DRAFTS + MAX_DRAFTS <= GROUP_WORDS
 assert DRAFTS_AT + 1 + MAX_DRAFTS <= RESULT_WORDS and all(w % 16 == 0 for w in (ARGMAX_AT, STATUS_AT, DRAFTS_AT))
 assert CHAIN_ROW < VERIFY_ROWS
 
 
-def chain_row(max_batch, source=None, limit=0):
+def chain_row(max_batch, source=None, limit=0, relay=False):
     """The verify upload's chain row, int32 values [max_batch]: ``source`` the pass's DraftSource when a draft chains
-    behind it (None: an idle row), ``limit`` the first bonus position the draft is declined at."""
+    behind it (None: an idle row), ``limit`` the first bonus position the draft is declined at, ``relay`` the relay
+    step writes the source's tokens and positions from the lane's last result page (a chained verify)."""
     assert max_batch >= CHAIN_WORDS
+    assert source is not None or not relay, "the relay writes a source's columns"
     row = [0] * max_batch
     if source is not None:
         assert 1 <= len(source.slots) <= SPEC_SLOTS
         row[CHAIN_SOURCE], row[CHAIN_COLUMNS], row[CHAIN_LIMIT] = 1, len(source.slots), int(limit)
         for c in range(SPEC_SLOTS):
             row[CHAIN_SLOTS + c] = source.slots[c] if c < len(source.slots) else -1
+        row[CHAIN_RELAY] = int(bool(relay))
     return row
 
 
@@ -84,6 +107,7 @@ def chain_step(verify, accept, argmax):
     header = [0] * HEADER_WORDS
     header[ACCEPT_AT : ACCEPT_AT + ACCEPT_WORDS] = [int(w) & 0xFFFFFFFF for w in accept]
     header[ARGMAX_AT : ARGMAX_AT + SPEC_SLOTS] = [int(t) & 0xFFFFFFFF for t in argmax[:SPEC_SLOTS]]
+    header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] = [int(p) & 0xFFFFFFFF for p in pos[:SPEC_SLOTS]]
     status = [0, NO_SLOT, 0, 0]
     m, columns, limit = int(accept[0]), chain[CHAIN_COLUMNS], chain[CHAIN_LIMIT]
     if chain[CHAIN_SOURCE] != 0 and 1 <= m <= columns <= SPEC_SLOTS:
@@ -103,6 +127,38 @@ def chain_step(verify, accept, argmax):
     return mtp, header
 
 
+def relay_step(verify, result, ctrl):
+    """The relay step (mode 2, first in the verify trace): ``verify`` the verify upload's int32 values
+    [VERIFY_ROWS * B] as the host copied it, ``result`` the lane's last result page (uint32 words [RESULT_WORDS]),
+    ``ctrl`` the accept step's control page as the host staged it (uint32 words [GROUPS * GROUP_WORDS]). Returns the
+    upload and the control page the verify and accept steps then read. Without the chain row's relay both are
+    unchanged; with it the source's columns c = 0 .. n take, at slot slots[c], the last committed token (c = 0) or
+    draft c at position bonus + c, and group 0's drafts are the page's; a page whose chain did not draft idles them
+    instead (position -1, token 0, draft 0) and clears the source."""
+    b = len(verify) // VERIFY_ROWS
+    verify, ctrl = list(verify), [int(w) & 0xFFFFFFFF for w in ctrl]
+    chain = CHAIN_ROW * b
+    if verify[chain + CHAIN_RELAY] == 0:
+        return verify, ctrl
+    page = [int(w) & 0xFFFFFFFF for w in result]
+    columns, m = verify[chain + CHAIN_COLUMNS], page[ACCEPT_AT]
+    ok = page[STATUS_AT] == 1 and page[DRAFTS_AT] == page[STATUS_AT + 1]
+    ok = ok and 1 <= columns <= 1 + MAX_DRAFTS and 1 <= m <= 1 + MAX_DRAFTS
+    bonus = page[STATUS_AT + 2]
+    for c in range(min(max(columns, 0), SPEC_SLOTS)):
+        s = verify[chain + CHAIN_SLOTS + c]
+        if not 0 <= s < SPEC_SLOTS:
+            continue
+        token = (page[ACCEPT_AT + m] if c == 0 else page[DRAFTS_AT + c]) if ok else 0
+        verify[s] = token - (1 << 32) if token >= 1 << 31 else token
+        verify[b + s] = bonus + c if ok else -1
+        if c > 0:
+            ctrl[CTRL_DRAFTS + c - 1] = page[DRAFTS_AT + c] if ok else 0
+    if not ok:
+        verify[chain + CHAIN_SOURCE] = 0
+    return verify, ctrl
+
+
 def drafts_step(mtp, heads):
     """The drafts step (mode 1): ``mtp`` the draft's packed upload [MTP_ROWS * B] (int32 values), ``heads`` each MTP
     pass's greedy tokens [B]. Returns the result's drafts section, uint32 words [RESULT_WORDS - DRAFTS_AT]."""
@@ -119,11 +175,13 @@ def drafts_step(mtp, heads):
 @dataclass
 class ChainResult:
     """One verify pass's result page: ``accept`` per group (count, committed tokens, truncated) (unpack_out),
-    ``argmax`` the greedy tokens of slots 0 .. SPEC_SLOTS - 1, the chain's ``drafting`` / ``anchor`` / ``bonus``,
-    and the drafts step's ``draft_anchor`` and ``drafts`` [MAX_DRAFTS] (None when it found no anchor)."""
+    ``argmax`` the greedy tokens of slots 0 .. SPEC_SLOTS - 1 and ``positions`` their positions (-1: idle), the
+    chain's ``drafting`` / ``anchor`` / ``bonus``, and the drafts step's ``draft_anchor`` and ``drafts``
+    [MAX_DRAFTS] (None when it found no anchor)."""
 
     accept: list
     argmax: list
+    positions: list
     drafting: bool
     anchor: int
     bonus: int
@@ -141,6 +199,7 @@ def unpack_result(words):
     return ChainResult(
         accept=unpack_out(w[ACCEPT_AT : ACCEPT_AT + ACCEPT_WORDS]),
         argmax=w[ARGMAX_AT : ARGMAX_AT + SPEC_SLOTS],
+        positions=[p - (1 << 32) if p >= 1 << 31 else p for p in w[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS]],
         drafting=bool(w[STATUS_AT]),
         anchor=slot(w[STATUS_AT + 1]),
         bonus=w[STATUS_AT + 2],
@@ -168,9 +227,11 @@ class ChainedDraft:
         )
 
 
-def chained_draft(result, source, positions):
+def chained_draft(result, source, positions=None):
     """The ChainedDraft of a source pass's ChainResult, or None when the chain declined or its drafts are not the
-    anchor's. ``positions``: the pass's slot positions (VerifyPass.positions)."""
+    anchor's. ``positions``: the pass's slot positions (VerifyPass.positions; None: the page's, as the verify ran
+    them, which a relayed pass needs)."""
+    positions = result.positions if positions is None else positions
     if not result.drafting or result.draft_anchor != result.anchor:
         return None
     count, tokens, _ = result.accept[0]

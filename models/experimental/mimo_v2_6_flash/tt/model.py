@@ -1097,9 +1097,9 @@ class TtMiMoModel:
             # MTP drafter's input).
             self._release(warm)
         if self.spec_chain is not None:
-            # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces compile here too, on the
-            # persistent buffers their captures use.
-            self.spec_chain.warm()
+            # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces, and the verify trace's relay
+            # step, compile here too, on the persistent buffers their captures use.
+            self.spec_chain.warm(self.verify_sampler.ctrl)
         ttnn.synchronize_device(self.mesh_device)
         captured = []
         for sample in variants:
@@ -1153,8 +1153,10 @@ class TtMiMoModel:
         """Compile, then capture the verify step: the decode step with every layer's K / V written one slot at a time
         and no feed-back (a verify always reloads its inputs). Every slot idle while capturing: no K / V written.
 
-        The trace starts with SpecInputs.derive_verify, which writes every input but the cos / sin from the packed
-        upload (``verify_enqueue``); the decode step after it is the one captured before."""
+        The trace starts with the relay step (tt/spec_chain.py: a chained verify's tokens and positions from the
+        lane's last result page; a no-op on an upload the host built) and SpecInputs.derive_verify, which writes every
+        input but the cos / sin from the packed upload (``verify_enqueue``); the decode step after them is the one
+        captured before."""
         assert self.verify_trace is None and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
@@ -1162,12 +1164,14 @@ class TtMiMoModel:
         rope = self.rope_tables is not None
         # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
         self.spec_inputs.reset()
+        self._relay()
         self.spec_inputs.derive_verify(inputs, rope)
         self._release(self._decode_inputs(inputs, serial=SPEC_SLOTS))
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._relay()
         self.spec_inputs.derive_verify(inputs, rope)
         output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -1200,6 +1204,11 @@ class TtMiMoModel:
             ttnn.synchronize_device(self.mesh_device)
             self.verify_trace["accept"] = accept_id
 
+    def _relay(self):
+        """The verify trace's relay step (tt/spec_chain.py), when the replica accepts on device (VerifySampler)."""
+        if self.spec_chain is not None and self.verify_sampler is not None:
+            self.spec_chain.relay(self.verify_sampler.ctrl)
+
     def capture_spec_traces(self):
         """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""
         self.capture_verify_trace()
@@ -1214,13 +1223,16 @@ class TtMiMoModel:
         if self.mtp is not None:
             self.mtp.release_trace()
 
-    def verify_enqueue(self, tokens, positions, chain=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
         trace's output (its ``next_tokens`` are the slots' greedy tokens). Copies the packed tokens and positions
         (the trace derives its other inputs from them) with the chain row ``chain`` (reference.spec_chain.chain_row;
         None: no draft chains behind the pass), and the RoPE cos / sin unless the trace reads them from the device
-        tables."""
+        tables. ``accept``: the pass's (slots, groups) for the accept trace (``verify_accept_enqueue``), staged first:
+        the verify trace's relay step writes a chained pass's drafts into the control page."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
+        if accept is not None:
+            self.verify_sampler.stage(*accept)
         spec = self.spec_inputs
         ttnn.copy_host_to_device_tensor(spec.verify_host(tokens, positions, chain), spec.verify_packed)
         if self.rope_tables is None:
@@ -1233,12 +1245,14 @@ class TtMiMoModel:
         ttnn.execute_trace(self.mesh_device, self.verify_trace["id"], cq_id=0, blocking=False)
         return self.verify_trace["output"]
 
-    def verify_accept_enqueue(self, slots, groups):
+    def verify_accept_enqueue(self, slots=None, groups=None):
         """After ``verify_enqueue``: the pass's acceptance on device (VerifySampler) with its sampled slots' parameters
-        and its requests (reference.sample_verify.pass_inputs), then the chain step. Non-blocking; ``spec_chain.read``
-        returns the pass's result page (after ``mtp.enqueue_chained``, with the drafts chained behind it)."""
+        and its requests (reference.sample_verify.pass_inputs; staged here unless ``verify_enqueue`` staged them),
+        then the chain step. Non-blocking; ``spec_chain.read`` returns the pass's result page (after
+        ``mtp.enqueue_chained``, with the drafts chained behind it)."""
         assert self.verify_trace is not None and self.verify_trace["accept"] is not None, "no accept trace captured"
-        self.verify_sampler.stage(slots, groups)
+        if groups is not None:
+            self.verify_sampler.stage(slots, groups)
         ttnn.execute_trace(self.mesh_device, self.verify_trace["accept"], cq_id=0, blocking=False)
 
     def read_next_tokens(self, handle):

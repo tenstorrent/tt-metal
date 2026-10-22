@@ -266,20 +266,36 @@ vllm serve ... \
   chained draft again from the host plan and logs differences. `MIMO_VLLM_TIMING=1` splits the verify's wait at the
   accept trace's end (the verify's device share, then the chained draft's) and counts chained and host-planned drafts.
   Every buffer the chain reads or writes is persistent (accept page, `mtp_packed`, the MTP heads' token rows, the
-  result page), so a later chain program that derives the next verify's inputs on device, with the host reading one
-  step behind, can read them.
+  result page), so the relay step of a chained verify (below) reads them.
 - **Async scheduling** (`supports_async_spec_decode`; `MIMO_ASYNC_SPEC=0` declares none, and the launch then needs
   `--no-async-scheduling`). Ordinary steps of a speculating launch overlap the step in flight as without
   speculation (at concurrency 16 every step is one: every lane holds several requests, none drafts, and a propose
   touches no device). The plugin proposes for an ordinary step when it commits it, a step after its submission; when
   the lane's next step is already enqueued, the resident hidden the MTP would read is that step's, so the propose
   enqueues nothing and offers placeholder drafts, which make the plugin drain the newer step and propose for it (that
-  propose drafts on device). A verify answers host tensors, also when asked to defer its read, unless
-  `MIMO_SPEC_DEFER=1`: a fused_sample verify asked to defer then returns a handle (`VerifyHandle`, with a `tip_id`)
-  and its result pages travel to the host behind it without blocking; the plugin reads the handle a step later,
-  possibly on another thread (`read_decode_output(handle)`: the committed tokens, counts and p0), and its propose
-  returns the drafts the pages carry without enqueueing anything. Every verify now enqueues all its passes, each
-  followed by a non-blocking copy of its page, before the host waits.
+  propose drafts on device). A fused_sample verify asked to defer its read (`defer_read`, every fused verify of a
+  launch that chains; `MIMO_SPEC_DEFER=0` answers host tensors instead) returns a handle (`VerifyHandle`, with a
+  `tip_id`): each pass's result page travels to the host behind it without blocking (`SpecChain.read_async`), the
+  plugin reads the handle a step later, possibly on another thread (`read_decode_output(handle)`: the committed
+  tokens, counts and p0), and its propose returns the drafts the pages carry, enqueueing nothing. Every verify now
+  enqueues all its passes, each followed by its page copy, before the host waits.
+- **Chained verifies** (the plugin's section 4j: `chain_rows`, `chain_tip`). A verify built over the deferred one in
+  flight names the rows whose block only the device knows: the last committed token at the pending step's p0 plus
+  its count, then the drafts chained behind it. The host lays out the row's pass at the plugin's provisional
+  positions (an upper bound: they only pick the page tables, which vLLM indexes by absolute position) with
+  placeholder tokens and the chain row's relay word; the verify trace now starts with the relay step
+  (`kernels/spec_chain.cpp` mode 2, mirror `reference.spec_chain.relay_step`), which writes the row's tokens and
+  positions into `verify_packed` and its drafts into the accept step's control page (staged before the verify now)
+  from the result page the lane's last pass left; `derive_verify`, the decode step, the accept trace and the chained
+  draft then run as for a block the host built. The chain step writes the slots' positions into the page, and the
+  readout reports them as p0. So a speculating lane runs relay, verify, accept, draft, relay, ... with the host one
+  step behind, copying one packed upload and one 256-byte control page and reading one 320-byte page per step. The
+  adapter checks the contract (the tip, a chain row is a lane source whose draft chained, placeholder tokens, count
+  -1, 1..3 drafts, a provisional position at or above the highest the device can have reached, nothing else in its
+  lane); a chain onto a step whose draft the device declined (the context limit, which the plugin's 2 (1 + K) margin
+  keeps away) idles the pass and raises at the read. A chain row whose page tables hold vLLM's null block inside the
+  window of its lowest possible position is counted (`chain_stats["uncovered"]`) and logged: vLLM frees
+  sliding-window blocks by the scheduler's optimistic length.
 - **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
   equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
   `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
@@ -289,7 +305,8 @@ vllm serve ... \
   kernel's greedy mirror; `tests/test_spec_chain_adapter_host.py` (no device, needs vllm-tt-plugin): the adapter's
   verify / propose on fake lanes made of the mirrors (chained and host-planned drafts, the fallbacks);
   `tests/test_spec_async_adapter_host.py` (no device, needs vllm-tt-plugin): the same lanes driven through the
-  plugin's async calls.
+  plugin's async calls (overlapped ordinary steps and their proposes, deferred verifies read on another thread,
+  chained verifies equal to the synchronous path token for token, the contract's refusals).
   `tests/test_sample_verify_host.py` (no device): the accept kernel's integer mirror against the plugin's accept-walk
   semantics (accept boundaries, the residual without the draft, the bonus, greedy ties, top_k and top_p, truncation),
   and against `vllm_tt_plugin.spec_accept` itself when the plugin is installed.
@@ -299,8 +316,8 @@ vllm serve ... \
   logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
   kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
 - **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first
-  ~128 decode tokens draft from less context); async scheduling (a chain program writing the next verify's inputs
-  from the result on device, the host one step behind); the accept step's SampleScan on all-greedy passes (only
+  ~128 decode tokens draft from less context); the chained verifies on hardware (the relay kernel, the deferred
+  reads, the trace region); the accept step's SampleScan on all-greedy passes (only
   SampleVerify's argmax walk is needed there); more than one speculating request per lane (16 / 32
   verify rows exceed the 4-user kernels); the 3-layer MTP chain; the trace region size with both extra traces.
 

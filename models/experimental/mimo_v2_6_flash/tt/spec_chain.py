@@ -4,39 +4,48 @@
 """The MTP draft chained behind a verify pass on one TP=8 replica, and the pass's packed result page (the flow and
 the layouts are in reference/spec_chain.py, which mirrors kernels/spec_chain.cpp).
 
-Two one-core steps on persistent buffers only:
+Three one-core steps on persistent buffers only:
 
 * ``chain``, at the end of the accept trace (TtMiMoModel.capture_verify_trace), after SampleVerify: writes the MTP
   draft's packed upload (SpecInputs.mtp_packed) from the accept page and the verify upload's chain row, and the result
-  page's header (the accept page, the verify's argmax ids, the chain's status);
+  page's header (the accept page, the verify's argmax ids and positions, the chain's status);
 * ``drafts``, at the end of the MTP draft trace (TtMiMoMTP._body): writes the anchor slot's drafts into the result
-  page, whichever wrote ``mtp_packed`` (the chain step, or the host for a host-planned draft).
+  page, whichever wrote ``mtp_packed`` (the chain step, or the host for a host-planned draft);
+* ``relay``, first in the verify trace (TtMiMoModel.capture_verify_trace), before SpecInputs.derive_verify: for a
+  chained verify (the host has not read the lane's last pass) writes the source's tokens and positions into
+  ``verify_packed`` and its drafts into VerifySampler's control page from the result page that pass left; a no-op
+  for an upload the host built.
 
 The host reads the result page, one page from the row's first chip (``read``), or copies it to the host behind the
 pass without blocking (``read_async``, ``unpack``: every pass of a verify is enqueued before the host waits, and a
-deferred verify is read a step later). Every buffer either step reads or
-writes is persistent (made before any trace capture: TtMiMoMTP.setup_cache), so both steps compile in the decode
-trace's warm-up (``warm``) with the runtime arguments their captures use, and nothing compiles after a capture.
+deferred verify is read a step later). Every buffer a step reads or writes is persistent (made before any trace
+capture: TtMiMoMTP.setup_cache, VerifySampler's control page in TtMiMoModel.setup_vllm_kv_cache), so every step
+compiles in the decode trace's warm-up (``warm``) with the runtime arguments their captures use, and nothing compiles
+after a capture.
 
-For a later chain program (the next verify's inputs derived on device from this result, the host reading one step
-behind) everything it needs is resident: the accept page (VerifySampler.out), the drafts (the MTP heads' token rows)
-and the result page, all at fixed addresses.
+The relay reads the result page in place: everything the next verify needs (the accept page, the bonus, the drafts)
+is there, at a fixed address, until the next pass of the lane rewrites it. Steps on a pass the host built leave the
+relay nothing to do, so one verify trace serves both.
 """
 
 import torch
 
 import ttnn
 
-from ..reference.sample_verify import OUT_WORDS
+from ..reference.sample_verify import GROUP_WORDS, GROUPS, OUT_WORDS
 from ..reference.spec_chain import (
+    ACCEPT_AT,
     ACCEPT_WORDS,
     ARGMAX_AT,
     CHAIN_COLUMNS,
     CHAIN_LIMIT,
+    CHAIN_RELAY,
     CHAIN_ROW,
     CHAIN_SLOTS,
     CHAIN_SOURCE,
+    CTRL_DRAFTS,
     DRAFTS_AT,
+    POSITIONS_AT,
     RESULT_WORDS,
     STATUS_AT,
     unpack_result,
@@ -45,9 +54,10 @@ from ..reference.spec_decode import MAX_DRAFTS, MTP_RING_TOKENS, SPEC_SLOTS
 from ..reference.spec_inputs import MTP_ROWS, VERIFY_ROWS
 from .device_sampler import CB_SCRATCH, _cb, _is_dram, _kernel, _ranges
 
-# kernels/spec_chain.cpp addresses the chain row's words at these offsets.
-assert (CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS) == (0, 1, 2, 3)
-CHAIN, DRAFTS = 0, 1  # the kernel's modes
+# kernels/spec_chain.cpp addresses the chain row's words at these offsets, and the accept page at the result's start.
+assert (CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS) == (0, 1, 2, 3) and ACCEPT_AT == 0
+CHAIN, DRAFTS, RELAY = 0, 1, 2  # the kernel's modes
+CTRL_WORDS = GROUPS * GROUP_WORDS  # VerifySampler's control page
 
 
 def _align64(nbytes):
@@ -92,6 +102,10 @@ class SpecChain:
             DRAFTS_AT,
             RESULT_WORDS,
             CB_SCRATCH,
+            POSITIONS_AT,
+            CHAIN_RELAY,
+            CTRL_WORDS,
+            CTRL_DRAFTS,
         ]
         kernel = _kernel("spec_chain.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, _ranges(cores))])
@@ -119,9 +133,23 @@ class SpecChain:
         prog = self._program(DRAFTS, args, scratch)
         ttnn.generic_op([self.mtp, *self.heads, self.result], prog)
 
-    def warm(self):
-        """Compile both steps before any trace capture. They write ``mtp_packed`` and the result page only, which no
-        step reads before rewriting them (a capture idles ``mtp_packed`` first: SpecInputs.reset)."""
+    def relay(self, ctrl):
+        """The relay step (first in the verify trace): a relayed source's tokens and positions into ``verify_packed``
+        and its drafts into ``ctrl``, VerifySampler's control page, from the result page the lane's last pass left
+        (reference.spec_chain.relay_step). Writes nothing unless the upload's chain row says relay."""
+        b = self.max_batch
+        args = [self.verify.buffer_address(), self.result.buffer_address(), ctrl.buffer_address()]
+        scratch = _align64(VERIFY_ROWS * b * 4) + _align64(RESULT_WORDS * 4) + _align64(CTRL_WORDS * 4)
+        prog = self._program(RELAY, args, scratch)
+        ttnn.generic_op([self.result, ctrl, self.verify], prog)
+
+    def warm(self, ctrl=None):
+        """Compile the steps before any trace capture (the relay with ``ctrl``, VerifySampler's control page). The
+        chain and drafts steps write ``mtp_packed`` and the result page only, which no step reads before rewriting
+        them (a capture idles ``mtp_packed`` first: SpecInputs.reset); the relay writes nothing on an idle upload
+        (SpecInputs.reset: its chain row is zeros)."""
+        if ctrl is not None:
+            self.relay(ctrl)
         self.chain()
         self.drafts()
 

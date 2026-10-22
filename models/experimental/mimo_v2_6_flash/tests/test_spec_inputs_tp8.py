@@ -17,7 +17,14 @@ test_rope_table_rows_1m_tp8: the same rows of 1M-position tables (the MTP servin
 test_spec_chain_tp8: the chain and drafts steps (tt/spec_chain.py, kernels/spec_chain.cpp) against their host mirror
 (reference/spec_chain.py, itself checked against the host plan in test_spec_chain_host.py) bit for bit, eager and
 replayed from one capture: the draft's packed upload they write and the result page, for passes of one request with
-every accepted count, around the ring's wrap and at the context limit, an idle chain row, and a host-written upload."""
+every accepted count, around the ring's wrap and at the context limit, an idle chain row, and a host-written upload
+(the result page now carries the pass's positions).
+
+test_spec_relay_tp8: the relay step (a chained verify's tokens and positions into ``verify_packed`` and its drafts into
+the accept step's control page, from the lane's last result page) against its mirror (reference.spec_chain.relay_step)
+bit for bit, eager and traced: every count of the step chained onto and every number of drafts relayed, around the
+ring's wrap and at the context limit, a page that drafted nothing, host content beside the relayed slots, and an
+upload without the relay word (untouched)."""
 
 from types import SimpleNamespace
 
@@ -28,14 +35,23 @@ import torch
 
 import ttnn
 from models.experimental.mimo_v2_6_flash.reference.config import MiMoConfig
-from models.experimental.mimo_v2_6_flash.reference.sample_verify import NO_TOKEN, OUT_WORDS
+from models.experimental.mimo_v2_6_flash.reference.sample_verify import (
+    GROUP_WORDS,
+    GROUPS,
+    NO_TOKEN,
+    OUT_WORDS,
+    control_words,
+    pass_inputs,
+)
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     ACCEPT_WORDS,
     DRAFTS_AT,
     RESULT_WORDS,
+    STATUS_AT,
     chain_row,
     chain_step,
     drafts_step,
+    relay_step,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     MAX_DRAFTS,
@@ -340,3 +356,78 @@ def test_rope_table_rows_1m_tp8(mesh_device, compact):
             same(row, chips(uploaded)[0], f"case {k} traced table {j}")
             uploaded.deallocate(True)
     ttnn.release_trace(mesh, tid)
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_spec_relay_tp8(mesh_device):
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    spec = SpecInputs(plan, B, REP)
+
+    def u32(n):
+        return ttnn.from_torch(
+            torch.zeros(1, n, dtype=torch.int32),
+            device=mesh,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=plan.replicate(),
+        )
+
+    accept, argmax, heads = u32(ACCEPT_WORDS), u32(B), [u32(B) for _ in range(MAX_DRAFTS)]
+    ctrl = u32(GROUPS * GROUP_WORDS)
+    chain = SpecChain(plan, spec, accept, argmax, heads)
+    replay = replayed(mesh, lambda: chain.relay(ctrl))
+    rng = random.Random(1)
+    limit = MAX_SEQ_LEN - MAX_DRAFTS
+
+    def one_pass(tokens, first, n, relay=False):
+        """(tok, pos, chain row) tensors of a pass of one request at ``first`` with n drafts, and its control page."""
+        (vp,) = plan_verify_passes([(3, tokens, list(range(first, first + n + 1)), n)])
+        tok = torch.zeros(B, dtype=torch.int32)
+        pos = torch.full((B,), -1, dtype=torch.int32)
+        tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
+        pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
+        row = torch.tensor(chain_row(B, draft_source([vp]), limit, relay=relay), dtype=torch.int32)
+        return (tok, pos, row), control_words(pass_inputs(vp, None)[1])
+
+    def page_of(p, m, page_limit=limit):
+        """The result page of a pass at p with MAX_DRAFTS drafts that committed m tokens (the chain and drafts steps'
+        mirrors)."""
+        (tok, pos, row), _ = one_pass([rng.randrange(152576) for _ in range(1 + MAX_DRAFTS)], p, MAX_DRAFTS)
+        row[2] = page_limit
+        committed = [rng.randrange(152576) for _ in range(m)]
+        ids = [rng.randrange(152576) for _ in range(B)]
+        mtp, header = chain_step(pack_verify(tok, pos, row).tolist(), accept_page(m, committed), ids)
+        return header + drafts_step(mtp, [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)])
+
+    cases = []  # (verify upload tensors, page words, control words)
+    for bonus in (1, 255, 256, 257, 4000, MAX_SEQ_LEN - 1 - MAX_DRAFTS):
+        for m in range(1, MAX_DRAFTS + 2):
+            if bonus - m < 0:
+                continue
+            page = page_of(bonus - m, m)
+            for n in range(1, MAX_DRAFTS + 1):
+                upload, ctrl_words = one_pass([0] * (n + 1), bonus + 2 * MAX_DRAFTS, n, relay=True)
+                cases.append((upload, page, ctrl_words))
+    declined = page_of(limit - 2, 2)
+    assert declined[STATUS_AT] == 0
+    cases.append((one_pass([0] * (1 + MAX_DRAFTS), limit + 4, MAX_DRAFTS, relay=True)[0], declined, control_words([])))
+    # Host content beside the relayed slots (one draft relayed into slots 0 .. 1).
+    (tok, pos, row), ctrl_words = one_pass([0, 0], 600, 1, relay=True)
+    tok[2:4], pos[2:4], tok[20], pos[20] = torch.tensor([77, 78]), torch.tensor([900, 901]), 79, 902
+    cases.append(((tok, pos, row), page_of(590, 3), ctrl_words))
+    # No relay word: nothing written.
+    cases.append((one_pass([5, 6, 7], 700, 2)[0], page_of(690, 4), control_words([])))
+    for k, ((tok, pos, row), page, ctrl_words) in enumerate(cases):
+        want_verify, want_ctrl = relay_step(pack_verify(tok, pos, row).tolist(), page, ctrl_words)
+        for runner in (lambda: chain.relay(ctrl), replay):
+            ttnn.copy_host_to_device_tensor(spec.verify_host(tok, pos, row), spec.verify_packed)
+            upload_words(plan, page, chain.result)
+            upload_words(plan, ctrl_words, ctrl)
+            runner()
+            for c, got in enumerate(words_of(spec.verify_packed)):
+                assert got == [w & 0xFFFFFFFF for w in want_verify], f"case {k} chip {c}: verify upload"
+            for c, got in enumerate(words_of(ctrl)):
+                assert got == want_ctrl, f"case {k} chip {c}: control page"

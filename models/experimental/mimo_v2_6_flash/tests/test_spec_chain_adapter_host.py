@@ -23,6 +23,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     RESULT_WORDS,
     chain_step,
     drafts_step,
+    relay_step,
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
@@ -109,20 +110,31 @@ class FakeLane:
         self.verify_sampler = SimpleNamespace(tally=lambda out: None, groups=0, truncated=0)
         self.mtp_words = pack_mtp(B).tolist()
         self.verify_words = self.argmax = None
+        self.ctrl = control_words([])
         self.accepts = self.reads = 0
 
     def set_vllm_page_tables(self, rows):
         pass
 
-    def verify_enqueue(self, tokens, positions, chain=None):
-        self.verify_words = pack_verify(tokens, positions, chain).tolist()
-        self.argmax = [SEQ[int(p) + 1] if p >= 0 else 0 for p in positions.tolist()]
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+        """The verify trace: the relay step on the upload (and the control page, staged first), then the oracle."""
+        if accept is not None:
+            self.verify_accept_stage(*accept)
+        self.verify_words, self.ctrl = relay_step(
+            pack_verify(tokens, positions, chain).tolist(), self.chain.words, self.ctrl
+        )
+        self.argmax = [SEQ[int(p) + 1] if p >= 0 else 0 for p in self.verify_words[B : 2 * B]]
         return {"next_tokens": self.argmax}
 
-    def verify_accept_enqueue(self, slots, groups):
+    def verify_accept_stage(self, slots, groups):
         assert slots == {}, "greedy requests only"
+        self.ctrl = control_words(groups)
+
+    def verify_accept_enqueue(self, slots=None, groups=None):
+        if groups is not None:
+            self.verify_accept_stage(slots, groups)
         self.accepts += 1
-        accept = verify_pass(None, None, self.argmax, control_words(groups), VOCAB)
+        accept = verify_pass(None, None, self.argmax, self.ctrl, VOCAB)
         self.mtp_words, header = chain_step(self.verify_words, accept, self.argmax)
         self.chain.words[:64] = header
 

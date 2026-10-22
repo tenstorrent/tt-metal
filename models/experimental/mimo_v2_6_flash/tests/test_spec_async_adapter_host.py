@@ -246,18 +246,40 @@ def block(last, p, drafts):
     return tokens, positions, valid
 
 
-def deferred(model, tokens, positions, valid, **chain):
+# Every row's block table: real blocks (vLLM's null block 0 nowhere), so a chain row's window is covered.
+FULL_TABLE = 1 + torch.arange(ROWS * (MAX_SEQ_LEN // 64), dtype=torch.int32).reshape(ROWS, -1)
+
+
+def deferred(model, tokens, positions, valid, counts=None, table=FULL_TABLE, **chain):
     return model.decode_forward(
         tokens,
         positions,
-        TABLE,
+        table,
         None,
         spec_mode="fused_sample",
         num_valid_drafts=valid,
-        accepted_counts=torch.ones(ROWS, dtype=torch.int32),
+        accepted_counts=torch.ones(ROWS, dtype=torch.int32) if counts is None else counts,
         defer_read=True,
         **chain,
     )
+
+
+def chained(model, tip, bound, hint=MAX_DRAFTS, row=SPEC_ROW, table=FULL_TABLE, **overrides):
+    """A verify chained onto deferred verify ``tip``: row ``row``'s block is the device's (placeholder tokens,
+    accepted count -1, positions laid out from the provisional ``bound``); every other row a gap."""
+    width = 1 + MAX_DRAFTS
+    tokens = torch.full((ROWS, width), -1, dtype=torch.int32)
+    positions = torch.full((ROWS, width), -1, dtype=torch.int32)
+    positions[row, : 1 + hint] = torch.arange(bound, bound + 1 + hint, dtype=torch.int32)
+    valid = torch.zeros(ROWS, dtype=torch.int32)
+    valid[row] = hint
+    counts = torch.ones(ROWS, dtype=torch.int32)
+    counts[row] = -1
+    chain_rows = torch.zeros(ROWS, dtype=torch.bool)
+    chain_rows[row] = True
+    args = dict(tokens=tokens, positions=positions, valid=valid, counts=counts, chain_rows=chain_rows, chain_tip=tip)
+    args.update(overrides)
+    return deferred(model, args.pop("tokens"), args.pop("positions"), args.pop("valid"), table=table, **args)
 
 
 def read_on_thread(model, handle):
@@ -353,3 +375,176 @@ def test_without_the_chain_a_deferred_verify_answers_host_tensors(adapter, defer
     drafts = start(adapter, 1200)
     out = deferred(adapter, *block(SEQ[1200], 1200, drafts))
     assert out.handle is None and out.accepted_token_ids is not None
+
+
+# ---------------------------------------------------------------------- chained verifies (the relay step)
+def run_chained(model, p, steps_to=400):
+    """The plugin's chained lane loop for the request alone in lane 1: a host-built deferred verify, then each verify
+    chained onto the one in flight (provisional column 0: the applied length plus 1 + K for the verify in flight,
+    minus one), the older one read (on another thread), committed and proposed after the newer one's submission.
+    Returns the committed sequence and each step's count."""
+    drafts = start(model, p)
+    seq, counts = SEQ[: p + 1], []
+    pending = deferred(model, *block(seq[-1], len(seq) - 1, drafts)).handle
+    while len(seq) < steps_to:
+        bound = len(seq) - 1 + (1 + MAX_DRAFTS)
+        newer = chained(model, pending.tip_id, bound).handle
+        assert newer.tip_id > pending.tip_id
+        readout = read_on_thread(model, pending)
+        m = int(readout.accepted_counts[SPEC_ROW])
+        assert int(readout.p0[SPEC_ROW]) == len(seq) - 1, "the device's column 0: one past the applied history"
+        assert readout.accepted_token_ids[SPEC_ROW, :m].tolist() == SEQ[len(seq) : len(seq) + m]
+        seq += readout.accepted_token_ids[SPEC_ROW, :m].tolist()
+        counts.append(m)
+        # The chained verify consumed these drafts on device; the plugin proposes anyway and publishes nothing.
+        out = model.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=pending)
+        assert out.draft_token_ids[SPEC_ROW].tolist() == [draft_of(len(seq) - 1, k) for k in range(MAX_DRAFTS)]
+        pending = newer
+    readout = read_on_thread(model, pending)
+    m = int(readout.accepted_counts[SPEC_ROW])
+    seq += readout.accepted_token_ids[SPEC_ROW, :m].tolist()
+    counts.append(m)
+    model.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=pending)
+    return seq, counts
+
+
+def run_synchronous(model, p, steps):
+    """The same request on the synchronous path: each fused verify read before the next is built."""
+    drafts = start(model, p)
+    seq, counts = SEQ[: p + 1], []
+    for _ in range(steps):
+        committed, positions, c, _ = verify(model, seq[-1], len(seq) - 1, drafts, "fused_sample")
+        m = int(c[SPEC_ROW])
+        seq += committed[SPEC_ROW, :m].tolist()
+        counts.append(m)
+        drafts = propose(model, committed, positions, c)
+    return seq, counts
+
+
+def test_chained_greedy_equals_the_synchronous_path(adapter, defer):
+    lane = adapter.models[1]
+    seq, counts = run_chained(adapter, 200)
+    assert seq == SEQ[: len(seq)]
+    assert lane.mtp.planned == 1, "only the first draft is host-planned: every other one chained on device"
+    assert adapter.chain_stats["uncovered"] == 0
+    sync = MiMoV2ForCausalLM(adapter.gen, MAX_SEQ_LEN)
+    sync.layer_groups = [0]
+    sync_seq, sync_counts = run_synchronous(sync, 200, len(counts))
+    assert sync_seq == seq and sync_counts == counts, "token for token, step for step"
+    assert sum(counts) > len(counts), "some drafts accepted"
+
+
+def test_the_chain_survives_the_ring_and_reads_its_pages_late(adapter, defer):
+    """Across the MTP ring's wrap (256), with several chained verifies enqueued before the oldest is read: each
+    handle's page was copied behind its own pass."""
+    drafts = start(adapter, 240)
+    seq = SEQ[:241]
+    handles = [deferred(adapter, *block(seq[-1], 240, drafts)).handle]
+    for k in range(5):
+        # Unread steps in flight: the provisional position counts each at its full width.
+        handles.append(chained(adapter, handles[-1].tip_id, 240 + (k + 1) * (1 + MAX_DRAFTS)).handle)
+    for h in handles:
+        readout = read_on_thread(adapter, h)
+        m = int(readout.accepted_counts[SPEC_ROW])
+        assert int(readout.p0[SPEC_ROW]) == len(seq) - 1
+        assert readout.accepted_token_ids[SPEC_ROW, :m].tolist() == SEQ[len(seq) : len(seq) + m]
+        seq += readout.accepted_token_ids[SPEC_ROW, :m].tolist()
+        adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=h)
+    assert seq == SEQ[: len(seq)] and len(seq) > 256
+
+
+def test_fewer_drafts_than_the_device_made(adapter, defer):
+    """A chain row verifying fewer drafts than the device drafted (a plugin K below MAX_DRAFTS, or a draft cap)."""
+    drafts = start(adapter, 300)
+    pending = deferred(adapter, *block(SEQ[300], 300, drafts)).handle
+    newer = chained(adapter, pending.tip_id, 300 + 1 + MAX_DRAFTS, hint=1).handle
+    first = read_on_thread(adapter, pending)
+    m = int(first.accepted_counts[SPEC_ROW])
+    second = read_on_thread(adapter, newer)
+    m2 = int(second.accepted_counts[SPEC_ROW])
+    assert int(second.p0[SPEC_ROW]) == 300 + m and 1 <= m2 <= 2
+    assert second.accepted_token_ids[SPEC_ROW, :m2].tolist() == SEQ[301 + m : 301 + m + m2]
+
+
+def contract_case(adapter, case):
+    drafts = start(adapter, 400)
+    tip = deferred(adapter, *block(SEQ[400], 400, drafts)).handle.tip_id
+    bound = 400 + 1 + MAX_DRAFTS
+    if case == "tip":
+        chained(adapter, tip + 1, bound)
+    elif case == "after_plain":
+        read(adapter, submit(adapter, {0: 30}))
+        chained(adapter, tip, bound)
+    elif case == "no_source":
+        chained(adapter, tip, bound, row=0)
+    elif case == "host_tokens":
+        chained(adapter, tip, bound, tokens=block(SEQ[404], bound, [1, 2, 3])[0])
+    elif case == "count":
+        counts = torch.ones(ROWS, dtype=torch.int32)
+        chained(adapter, tip, bound, counts=counts)
+    elif case == "hint":
+        chained(adapter, tip, bound, hint=0)
+    elif case == "bound":
+        chained(adapter, tip, bound - 1)
+    elif case == "neighbour":
+        args = chained_inputs = None
+        del args, chained_inputs
+        positions = torch.full((ROWS, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
+        positions[SPEC_ROW] = torch.arange(bound, bound + 1 + MAX_DRAFTS)
+        positions[SPEC_ROW + 1, 0] = 50
+        chained(adapter, tip, bound, positions=positions)
+    elif case == "not_deferred":
+        rows = torch.zeros(ROWS, dtype=torch.bool)
+        adapter.decode_forward(
+            *block(SEQ[404], bound, [])[:2],
+            FULL_TABLE,
+            None,
+            spec_mode="fused_sample",
+            num_valid_drafts=torch.zeros(ROWS, dtype=torch.int32),
+            chain_rows=rows,
+            chain_tip=tip,
+        )
+
+
+@pytest.mark.parametrize(
+    "case, match",
+    [
+        ("tip", "chain_tip"),
+        ("after_plain", "chain_tip"),
+        ("no_source", "drafted nothing"),
+        ("host_tokens", "host tokens"),
+        ("count", "accepted_counts -1"),
+        ("hint", "asks to verify 0"),
+        ("bound", "below the device"),
+        ("neighbour", "beside chain row"),
+        ("not_deferred", "deferred"),
+    ],
+)
+def test_a_chained_verify_outside_the_contract_raises(adapter, defer, case, match):
+    with pytest.raises(ValueError, match=match):
+        contract_case(adapter, case)
+
+
+def test_a_chain_onto_a_declined_draft_raises_at_the_read(adapter, defer):
+    """The step chained onto declined its draft at the context limit (the plugin stops chaining 2 (1 + K) short of
+    max_model_len, so only a contract slip gets here): the relay idles the pass and the read raises."""
+    p = MAX_SEQ_LEN - 1 - MAX_DRAFTS - 2
+    drafts = [SEQ[p + 1 + k] for k in range(MAX_DRAFTS)]  # every draft accepted: the bonus reaches the limit
+    start(adapter, p)
+    pending = deferred(adapter, *block(SEQ[p], p, drafts)).handle
+    newer = chained(adapter, pending.tip_id, p + 1 + MAX_DRAFTS).handle
+    readout = read_on_thread(adapter, pending)
+    assert int(readout.accepted_counts[SPEC_ROW]) == 1 + MAX_DRAFTS
+    with pytest.raises(RuntimeError, match="drafted nothing on device"):
+        adapter.read_decode_output(newer)
+
+
+def test_a_hole_in_a_chain_row_s_page_tables_is_counted(adapter, defer):
+    """vLLM frees sliding-window blocks by the scheduler's optimistic length: a block the device's real window still
+    reads, freed (null block 0), is counted and logged."""
+    drafts = start(adapter, 1000)
+    tip = deferred(adapter, *block(SEQ[1000], 1000, drafts)).handle.tip_id
+    table = FULL_TABLE.clone()
+    table[SPEC_ROW, (1001 - 127) // 64] = 0
+    chained(adapter, tip, 1000 + 1 + MAX_DRAFTS, table=table)
+    assert adapter.chain_stats["uncovered"] == 1

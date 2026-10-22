@@ -2,24 +2,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The MTP draft chained behind a verify pass on device (tt/spec_chain.py; host mirror reference/spec_chain.py), one
-// core, two modes. Every buffer is a one-page interleaved DRAM tensor, read and written whole (the result page in
-// 64-byte sections, one per mode).
+// core, three modes. Every buffer is a one-page interleaved DRAM tensor, read and written whole (the result page in
+// 64-byte sections, one per writing mode).
 //
 // Mode 0, the chain step (end of the accept trace, after SampleVerify):
 // - verify: the verify's packed upload, int32 [verify_rows * B]: tokens, positions P, and row chain_row, the chain
-//   row: word 0 source, 1 columns, 2 limit, 3 .. 3 + S the source's slots.
+//   row: word 0 source, 1 columns, 2 limit, 3 .. 3 + S the source's slots, 3 + S relay (mode 2).
 // - accept: SampleVerify's output page, uint32 [accept_words]: group 0's committed count m and tokens.
 // - argmax: the verify's greedy tokens, uint32 [B].
 // Writes the draft's packed upload (mtp, int32 [mtp_rows * B], reference.spec_inputs.pack_mtp's rows: tokens; fill,
 // step2, step3 ring cache positions; fill, step2, step3 RoPE indices), idle unless the chain row names a source with
 // 1 <= m <= columns and the bonus P[slots[m - 1]] + 1 below the limit; then, as pack_mtp(plan_mtp(...)): slot
 // slots[c] (c < m) takes committed token c with its fill at P[slots[c]], and the anchor slots[m - 1] the steps at
-// the bonus and the bonus + 1. Writes the result header: the accept page, the argmax of slots 0 .. S - 1, and the
-// status (drafting, anchor, bonus).
+// the bonus and the bonus + 1. Writes the result header: the accept page, the argmax and the positions of slots
+// 0 .. S - 1, and the status (drafting, anchor, bonus).
 //
 // Mode 1, the drafts step (end of the MTP draft trace): reads mtp (written by mode 0 or copied by the host) and each
 // MTP pass's greedy tokens (heads, uint32 [B]); the anchor is the slot with a step2 position. Writes the result's
 // drafts section: the anchor (0xFFFFFFFF: none) and the anchor's token of each pass.
+//
+// Mode 2, the relay step (first in the verify trace, a chained verify): reads verify as the host copied it, the
+// result page the lane's last pass left, and the accept step's control page (ctrl, uint32 [ctrl_words], group 0 the
+// source's: drafts at word ctrl_drafts). Unless the chain row's relay word is set it writes nothing. Otherwise, when
+// the page's chain drafted (status drafting 1 and the drafts step's anchor the chain's) and its count m and the chain
+// row's columns n + 1 are in range, column c of the source (slot slots[c]) takes the last committed token (c = 0,
+// accept token m - 1) or draft c at position bonus + c, and ctrl group 0's draft c - 1 the same draft; else the
+// columns go idle (token 0, position -1, draft 0) and the chain row's source is cleared (no draft behind the pass).
+// Writes verify and ctrl back whole.
 
 #include <cstdint>
 
@@ -53,8 +62,14 @@ void kernel_main() {
     constexpr uint32_t drafts_at = get_compile_time_arg_val(11);
     constexpr uint32_t result_words = get_compile_time_arg_val(12);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(13);
+    constexpr uint32_t positions_at = get_compile_time_arg_val(14);
+    constexpr uint32_t chain_relay = get_compile_time_arg_val(15);  // the chain row's relay word
+    constexpr uint32_t ctrl_words = get_compile_time_arg_val(16);
+    constexpr uint32_t ctrl_drafts = get_compile_time_arg_val(17);  // group 0's first draft word
     static_assert(S <= B && B * 4 <= 1024 && 3 + S <= B && mtp_rows == 7 && chain_row < verify_rows);
-    static_assert(accept_words <= argmax_at && argmax_at + S <= status_at && status_at + 4 <= drafts_at);
+    static_assert(chain_relay == 3 + S && chain_relay < B && ctrl_drafts + D <= ctrl_words);
+    static_assert(accept_words <= argmax_at && argmax_at + S <= positions_at && positions_at + S <= status_at);
+    static_assert(status_at + 4 <= drafts_at && 1 + D <= accept_words);
     static_assert(drafts_at + 1 + D <= result_words && drafts_at % 16 == 0 && result_words % 16 == 0);
     constexpr uint32_t result_bytes = result_words * 4;
     constexpr uint32_t mtp_bytes = mtp_rows * B * 4;
@@ -101,6 +116,7 @@ void kernel_main() {
         }
         for (uint32_t s = 0; s < S; ++s) {
             header[argmax_at + s] = argmax[s];
+            header[positions_at + s] = static_cast<uint32_t>(pos[s]);
         }
         header[status_at + 1] = kNone;
 
@@ -130,6 +146,51 @@ void kernel_main() {
         noc_async_write(mtp_l1, dram_addr(mtp_addr, mtp_bytes), mtp_bytes);
         noc_async_write(header_l1, dram_addr(result_addr, result_bytes), header_bytes);
         noc_async_write_barrier();
+    } else if constexpr (mode == 2) {
+        const uint32_t verify_addr = get_arg_val<uint32_t>(0);
+        const uint32_t result_addr = get_arg_val<uint32_t>(1);
+        const uint32_t ctrl_addr = get_arg_val<uint32_t>(2);
+        constexpr uint32_t verify_bytes = verify_rows * B * 4;
+        constexpr uint32_t ctrl_bytes = ctrl_words * 4;
+        const uint32_t verify_l1 = base;
+        const uint32_t result_l1 = verify_l1 + align64(verify_bytes);
+        const uint32_t ctrl_l1 = result_l1 + align64(result_bytes);
+        noc_async_read(dram_addr(verify_addr, verify_bytes), verify_l1, verify_bytes);
+        noc_async_read(dram_addr(result_addr, result_bytes), result_l1, result_bytes);
+        noc_async_read(dram_addr(ctrl_addr, ctrl_bytes), ctrl_l1, ctrl_bytes);
+        noc_async_read_barrier();
+
+        volatile tt_l1_ptr int32_t* tok = reinterpret_cast<volatile tt_l1_ptr int32_t*>(verify_l1);
+        volatile tt_l1_ptr int32_t* pos = tok + B;
+        volatile tt_l1_ptr int32_t* chain = tok + chain_row * B;
+        const uint32_t* page = reinterpret_cast<const uint32_t*>(result_l1);
+        volatile tt_l1_ptr uint32_t* ctrl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_l1);
+        if (chain[chain_relay] != 0) {
+            const uint32_t columns = static_cast<uint32_t>(chain[1]);
+            const uint32_t m = page[0];  // group 0's committed count (the accept page starts the result page)
+            const bool ok = page[status_at] == 1 && page[drafts_at] == page[status_at + 1] && columns >= 1 &&
+                            columns <= 1 + D && m >= 1 && m <= 1 + D;
+            const int32_t bonus = static_cast<int32_t>(page[status_at + 2]);
+            const uint32_t n = columns < S ? columns : S;
+            for (uint32_t c = 0; c < n; ++c) {
+                const uint32_t s = static_cast<uint32_t>(chain[3 + c]);
+                if (s >= S) {
+                    continue;  // not a slot of the pass (the host lays the source's columns into slots 0 .. S - 1)
+                }
+                const uint32_t token = ok ? (c == 0 ? page[m] : page[drafts_at + c]) : 0;
+                tok[s] = static_cast<int32_t>(token);
+                pos[s] = ok ? bonus + static_cast<int32_t>(c) : -1;
+                if (c > 0) {
+                    ctrl[ctrl_drafts + c - 1] = ok ? page[drafts_at + c] : 0;
+                }
+            }
+            if (!ok) {
+                chain[0] = 0;
+            }
+            noc_async_write(verify_l1, dram_addr(verify_addr, verify_bytes), verify_bytes);
+            noc_async_write(ctrl_l1, dram_addr(ctrl_addr, ctrl_bytes), ctrl_bytes);
+            noc_async_write_barrier();
+        }
     } else {
         const uint32_t mtp_addr = get_arg_val<uint32_t>(0);
         const uint32_t result_addr = get_arg_val<uint32_t>(1);

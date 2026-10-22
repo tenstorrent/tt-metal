@@ -1,13 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The MTP draft chained behind a verify (reference/spec_chain.py, the integer mirror of kernels/spec_chain.cpp); no
-device. The chain step must write exactly the upload the host built after reading the verify (pack_mtp(plan_mtp(...))
+"""The MTP draft chained behind a verify, and the next verify chained onto it (reference/spec_chain.py, the integer
+mirror of kernels/spec_chain.cpp); no device. The chain step must write exactly the upload the host built after reading the verify (pack_mtp(plan_mtp(...))
 from the plugin's committed tokens and positions), for every accepted count, around the MTP ring's wrap and at the end
 of the context, and decline where propose_draft_tokens declines; the drafts step must pick the anchor's tokens; the
 result page must round-trip, and a ChainedDraft must match exactly the commit it was drafted from. End to end with the
 accept kernel's mirror (reference/sample_verify.py) on greedy requests: the committed tokens are the plugin's greedy
-walk over the argmax ids. test_spec_inputs_tp8.py runs the kernel against the same mirror on a Galaxy row."""
+walk over the argmax ids. The relay step must write exactly the verify upload and control page the host would have
+built after reading the page (the last committed token at the bonus and the drafts), for every count of the step it
+chains onto and every number of drafts verified, around the ring's wrap and at the context limit, from a provisional
+layout above the real position, leaving every other slot alone, and idle the pass when the page drafted nothing.
+test_spec_inputs_tp8.py runs the kernel against the same mirror on a Galaxy row."""
 
 import random
 
@@ -30,12 +34,14 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     DRAFTS_AT,
     HEADER_WORDS,
     NO_SLOT,
+    POSITIONS_AT,
     RESULT_WORDS,
     STATUS_AT,
     chain_row,
     chain_step,
     chained_draft,
     drafts_step,
+    relay_step,
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
@@ -108,7 +114,9 @@ def test_chain_row():
     assert chain_row(B) == [0] * B
     vp = one_row_pass(40, 2, random.Random(0))
     row = chain_row(B, draft_source([vp]), 1000)
-    assert row[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1] and row[CHAIN_WORDS:] == [0] * (B - CHAIN_WORDS)
+    assert row[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 0] and row[CHAIN_WORDS:] == [0] * (B - CHAIN_WORDS)
+    relayed = chain_row(B, draft_source([vp]), 1000, relay=True)
+    assert relayed[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 1]
 
 
 def test_the_chain_row_leaves_the_verify_inputs_alone():
@@ -293,3 +301,146 @@ def test_a_pass_of_two_requests_chains_nothing():
     result = unpack_result(chain_pass(vp, accept, argmax, [[0] * B] * MAX_DRAFTS, source=False))
     assert [g[0] for g in result.accept] == [1, 1, 0, 0] and result.argmax == argmax[:SPEC_SLOTS]
     assert not result.drafting
+
+
+# ---------------------------------------------------------------------- the relay step (a chained verify)
+def pending_page(p, m, rng, limit=MAX_SEQ_LEN - MAX_DRAFTS):
+    """The result page of a deferred verify of one request at p with MAX_DRAFTS drafts that committed m tokens, and
+    its committed tokens and drafts' head rows."""
+    vp = one_row_pass(p, MAX_DRAFTS, rng)
+    committed = [rng.randrange(VOCAB) for _ in range(m)]
+    heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+    page = chain_pass(vp, accept_page([(m, committed)]), list(range(B)), heads, limit=limit)
+    return page, committed, heads
+
+
+def host_block(last, bonus, drafts, limit=MAX_SEQ_LEN - MAX_DRAFTS):
+    """The upload and control page the host would build for the next verify, having read the page."""
+    n = len(drafts)
+    (vp,) = plan_verify_passes([(5, [last] + drafts, list(range(bonus, bonus + n + 1)), n)])
+    return upload(vp, chain_row(B, draft_source([vp]), limit)), control_words(pass_inputs(vp, None)[1]), vp
+
+
+def chained_block(bound, n, limit=MAX_SEQ_LEN - MAX_DRAFTS):
+    """What the adapter uploads for a chain row: placeholder tokens at the provisional positions, relayed."""
+    (vp,) = plan_verify_passes([(5, [0] * (n + 1), list(range(bound, bound + n + 1)), n)])
+    return upload(vp, chain_row(B, draft_source([vp]), limit, relay=True)), control_words(pass_inputs(vp, None)[1])
+
+
+@pytest.mark.parametrize("bonus", BONUS + [MAX_SEQ_LEN - 1 - MAX_DRAFTS])
+def test_the_relay_writes_the_block_the_host_would_build(bonus):
+    rng = random.Random(bonus)
+    for m in range(1, MAX_DRAFTS + 2):
+        p = bonus - m
+        if p < 0:
+            continue
+        page, committed, heads = pending_page(p, m, rng)
+        result = unpack_result(page)
+        assert result.drafting and result.bonus == bonus
+        anchor = result.anchor
+        for n in range(1, MAX_DRAFTS + 1):
+            drafts = [heads[k][anchor] for k in range(n)]
+            want_upload, want_ctrl, vp = host_block(committed[-1], bonus, drafts)
+            # The plugin's provisional column 0: every in-flight step counted at its full width, an upper bound.
+            for bound in (bonus, bonus + 1, p + 2 * (1 + MAX_DRAFTS)):
+                overlay, ctrl = chained_block(bound, n)
+                got, got_ctrl = relay_step(overlay, page, ctrl)
+                assert got[: 2 * B] == want_upload[: 2 * B], (bonus, m, n, bound)
+                chain = got[2 * B :]
+                assert chain[: CHAIN_WORDS - 1] == want_upload[2 * B : 2 * B + CHAIN_WORDS - 1]
+                assert got_ctrl == want_ctrl
+                # The verify then runs as the host-built one: the same derived inputs and chain step.
+                caps, own_cap, own_col = slot_caps(B), owned_slot_caps(B, 8, 2), owned_slot_columns(B, 8, 2)
+                a = derive_verify(torch.tensor(got, dtype=torch.int32), own_cap[3], own_col[3], caps, True)
+                b = derive_verify(torch.tensor(want_upload, dtype=torch.int32), own_cap[3], own_col[3], caps, True)
+                for name in a:
+                    pairs = zip(a[name], b[name]) if name == "serial" else [(a[name], b[name])]
+                    assert all(torch.equal(x, y) for x, y in pairs), name
+                argmax = [rng.randrange(VOCAB) for _ in range(B)]
+                accept = verify_pass(None, None, argmax, got_ctrl, VOCAB // 8)
+                assert accept == verify_pass(None, None, argmax, want_ctrl, VOCAB // 8)
+                assert chain_step(got, accept, argmax) == chain_step(want_upload, accept, argmax)
+                header = chain_step(got, accept, argmax)[1]
+                assert header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] == [
+                    (q if q >= 0 else q & 0xFFFFFFFF) for q in vp.positions
+                ]
+
+
+def test_the_relay_leaves_every_other_slot_and_unrelayed_uploads_alone():
+    rng = random.Random(11)
+    page, committed, heads = pending_page(500, 2, rng)
+    # One drafted column relayed into slots 0 .. 1; the host's own content in slots 2 .. 3 and past the pass.
+    overlay, ctrl = chained_block(510, 1)
+    overlay[2], overlay[3], overlay[B + 2], overlay[B + 3] = 77, 78, 900, 901
+    overlay[20], overlay[B + 20] = 79, 902
+    ctrl[16:20] = [1, 2, 3, 4]  # group 1's words
+    got, got_ctrl = relay_step(overlay, page, ctrl)
+    keep = [i for i in range(2 * B) if i not in (0, 1, B, B + 1)]
+    assert [got[i] for i in keep] == [overlay[i] for i in keep]
+    assert got_ctrl[16:] == ctrl[16:] and got_ctrl[:4] == ctrl[:4] and got_ctrl[5:16] == ctrl[5:16]
+    assert got[:2] == [committed[-1], heads[0][1]] and got[B : B + 2] == [502, 503]
+    # Without the relay word nothing changes, whatever the page holds.
+    plain, plain_ctrl = host_block(5, 502, [6, 7])[:2]
+    assert relay_step(plain, page, plain_ctrl) == (plain, plain_ctrl)
+
+
+def test_a_page_that_drafted_nothing_idles_the_relayed_pass():
+    """The step chained onto declined its draft at the context limit, or its drafts are not the chain's (a host-planned
+    draft ran after it): the relayed columns go idle (no K / V written), the pass drafts nothing, and its page reports
+    position -1, which the adapter raises on."""
+    rng = random.Random(12)
+    limit = 2000
+    declined, _, _ = pending_page(limit - 2, 2, rng, limit=limit)  # the bonus reaches the limit
+    assert not unpack_result(declined).drafting
+    other, _, _ = pending_page(700, 1, rng)
+    other[DRAFTS_AT] = 3  # the drafts step's anchor is not the chain's
+    for page in (declined, other):
+        overlay, ctrl = chained_block(limit + 4, MAX_DRAFTS, limit=MAX_SEQ_LEN - MAX_DRAFTS)
+        got, got_ctrl = relay_step(overlay, page, ctrl)
+        assert got[: 1 + MAX_DRAFTS] == [0] * (1 + MAX_DRAFTS) and got[B : B + 1 + MAX_DRAFTS] == [-1] * (
+            1 + MAX_DRAFTS
+        )
+        assert got_ctrl[4 : 4 + MAX_DRAFTS] == [0] * MAX_DRAFTS and got[2 * B] == 0, "the source is cleared"
+        mtp, header = chain_step(got, accept_page([(1, [5])]), [0] * B)
+        assert mtp == pack_mtp(B).tolist() and header[STATUS_AT] == 0
+        result = unpack_result(header + drafts_step(mtp, [[0] * B] * MAX_DRAFTS))
+        assert result.positions == [-1] * SPEC_SLOTS
+
+
+def test_a_chain_of_relays_follows_the_host_built_steps():
+    """Steps chained one onto the other on the mirrors (relay, the oracle's argmax, the accept walk, the chain and
+    drafts steps) commit exactly what host-built steps over the read pages commit."""
+    rng = random.Random(13)
+    seq = [rng.randrange(VOCAB) for _ in range(600)]
+
+    def run(upload_words, ctrl):
+        argmax = [seq[q + 1] if q >= 0 else 0 for q in upload_words[B : 2 * B]]
+        accept = verify_pass(None, None, argmax, ctrl, VOCAB // 8)
+        mtp, header = chain_step(upload_words, accept, argmax)
+        # A drafter wrong at every third bonus position on its second draft.
+        heads = [[0] * B for _ in range(MAX_DRAFTS)]
+        for s in range(SPEC_SLOTS):
+            if mtp[2 * B + s] >= 0:
+                bonus = mtp[5 * B + s]
+                for k in range(MAX_DRAFTS):
+                    heads[k][s] = seq[bonus + 1 + k] if bonus % 3 or k != 1 else (seq[bonus + 1 + k] + 1) % VOCAB
+        return header + drafts_step(mtp, heads)
+
+    first, ctrl, _ = host_block(seq[100], 100, seq[101:104])
+    page = run(first, ctrl)
+    chained_seq = seq[:101] + unpack_result(page).accept[0][1]
+    host_seq = list(chained_seq)
+    host_page = page
+    while len(chained_seq) < 400:
+        # Chained: the relay builds the block from the page; host-built: from the page read on the host.
+        overlay, ctrl = chained_block(len(chained_seq) + 2 * MAX_DRAFTS, MAX_DRAFTS)
+        page = run(*relay_step(overlay, page, ctrl))
+        r = unpack_result(page)
+        assert r.positions[0] == len(chained_seq) - 1
+        chained_seq += r.accept[0][1]
+        h = unpack_result(host_page)
+        upload_words, host_ctrl, _ = host_block(host_seq[-1], len(host_seq) - 1, h.drafts)
+        host_page = run(upload_words, host_ctrl)
+        host_seq += unpack_result(host_page).accept[0][1]
+        assert chained_seq == host_seq
+    assert chained_seq == seq[: len(chained_seq)]
