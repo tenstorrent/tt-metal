@@ -833,6 +833,75 @@ def test_scalar_side_is_in_hash(device, isolate_program_cache, op):
     assert_with_pcc(_torch_tensor_op(op)(torch_a, scalar), tensor_first, 0.999)
 
 
+@pytest.mark.parametrize("variant", ["add", "where_tts", "where_tst"])
+@pytest.mark.parametrize("pass_memory_config", [True, False])
+def test_ng_preallocated_output_memory_distinguishes_cache_entries(
+    device, isolate_program_cache, variant, pass_memory_config
+):
+    """Regression test for cache key containing the memory of the preallocated output.
+    A cache hit refreshes the addresses, not the kernel. The kernel is compiled already knowing
+    whether it writes to DRAM or to L1, because it works out addresses differently for each: a DRAM
+    write is spread across banks, an L1 write goes straight to an address on the core. Nothing on
+    the cache-hit path can change that afterwards.
+
+    What this test does: it runs the same call twice, and hands it a preallocated output tensor that
+    sits in DRAM the first time and in L1 the second time. Those two need different kernels, so the
+    cache has to end up with two entries rather than one.
+
+    What used to go wrong: the key described the memory_config argument instead of the memory the
+    preallocated output tensor is actually in. Both calls here pass the same memory_config, so both
+    keys came out the same and the second call hit the first one's entry. That ran the DRAM kernel
+    over an L1 output tensor, so it wrote to addresses that had nothing to do with that tensor.
+    Nothing raised, and the values that came back were garbage.
+
+    Why the output tensor is the one to believe: it is already allocated, so the op cannot move it.
+    The writing lands wherever that tensor already is, whatever memory_config says.
+
+    where_tts and where_tst are ttnn.where's scalar variants, and they are tested here rather than
+    with the ternary op because ternary.cpp implements them by calling this op. They are also the
+    worse case. The memory_config ternary.cpp passes down here is never empty: when the caller gives
+    none, ternary.cpp makes one up from the input tensor. So for these two the bug fired whether or
+    not the caller passed anything, while add only broke with pass_memory_config=True.
+
+    pass_memory_config=False for add is the case where no memory_config reaches the op at all. That
+    path already read the output tensor and was correct; it is kept here so it stays that way."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    lhs = torch.rand(shape, dtype=torch.bfloat16)
+    rhs = torch.rand(shape, dtype=torch.bfloat16)
+    scalar = 7.5
+
+    def to_dev(host, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    # Same call twice, differing ONLY in where the preallocated output lives.
+    for out_memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
+        out = to_dev(torch.zeros(shape, dtype=torch.bfloat16), out_memory_config)
+        kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if pass_memory_config else {}
+        kwargs["output_tensor"] = out
+
+        if variant == "add":
+            result = ttnn.add(to_dev(lhs), to_dev(rhs), **kwargs)
+            expected = lhs + rhs
+        elif variant == "where_tts":
+            result = ttnn.where(to_dev(pred.to(torch.bfloat16)), to_dev(lhs), scalar, **kwargs)
+            expected = torch.where(pred, lhs, torch.tensor(scalar, dtype=torch.bfloat16))
+        else:
+            result = ttnn.where(to_dev(pred.to(torch.bfloat16)), scalar, to_dev(rhs), **kwargs)
+            expected = torch.where(pred, torch.tensor(scalar, dtype=torch.bfloat16), rhs)
+
+        assert_with_pcc(expected, ttnn.to_torch(result), 0.999)
+
+    assert device.num_program_cache_entries() == 2, (
+        "outputs in different memories must get their own cache entries -- sharing one means the key "
+        "does not carry the preallocated output's memory, so the cached program addresses the wrong "
+        "address space"
+    )
+
+
 def _torch_scalar_op(op):
     return {
         ttnn.add: lambda s, t: s + t,
