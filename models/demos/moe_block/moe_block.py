@@ -392,17 +392,17 @@ class MoEBlock(LightweightModule):
         if self.shared is not None:
             se_part = self.shared(x_full)  # [S/SP, H] partial over I_s
             mark("shared")
-            se = ttnn.reduce_scatter(se_part, dim=3, cluster_axis=1)  # [S/SP, H/TP]
+            if self.latent is None:  # (to the owners, by rows: added to the routed sums before the tail's all-to-all)
+                se = self._tp_rs_rows(se_part)  # [S/N, H]
+            else:  # (K3: the latent up lands the width split, so the shared output does too)
+                se = ttnn.reduce_scatter(se_part, dim=3, cluster_axis=1)  # [S/SP, H/TP]
             ttnn.deallocate(se_part)
             mark("shared_rs")
         if self.latent is not None:
             lat_part = self.latent.down(x_full)  # [S/SP, Hr/TP]
             mark("latent_down")
-            # (all-to-all over TP to the owners, as an all-gather + this chip's block: bring-up substitute)
-            lat = ttnn.all_gather(lat_part, dim=3, cluster_axis=1)
+            own = self._tp_a2a(lat_part, cat_dim=3, split_dim=2)  # the owners' latent rows [S/N, Hr]
             ttnn.deallocate(lat_part)
-            own = ttnn.mesh_partition(lat, dim=2, cluster_axis=1)  # [S/N, Hr]
-            ttnn.deallocate(lat)
             mark("latent_a2a")
         else:
             own = ttnn.mesh_partition(x_full, dim=2, cluster_axis=1)  # [S/N, H]
@@ -415,25 +415,59 @@ class MoEBlock(LightweightModule):
         mark = self._mark if mark else (lambda _: None)
         g = self.geometry
         y_own = ttnn.reshape(y_own, [1, 1, g.tokens_per_chip, self.model.routed_width])
-        y_row = ttnn.all_gather(y_own, dim=2, cluster_axis=1)  # [S/SP, Hr]
-        ttnn.deallocate(y_own)
         if self.latent is not None:
+            y_row = self._tp_ag_rows(y_own)  # [S/SP, Hr]
+            ttnn.deallocate(y_own)
             mark("tail_ag")
             out = self.latent.up(y_row)  # norm, up projection split by columns: [S/SP, H/TP]
             ttnn.deallocate(y_row)
             mark("latent_up")
-        else:
-            # (all-to-all back to the width split, as an all-gather + this chip's columns: bring-up substitute)
-            out = ttnn.mesh_partition(y_row, dim=3, cluster_axis=1)  # [S/SP, H/TP]
-            ttnn.deallocate(y_row)
-            mark("tail_a2a")
-        if se is not None:
-            y = ttnn.add(out, se)
-            ttnn.deallocate(out)
+            if se is not None:
+                y = ttnn.add(out, se)
+                ttnn.deallocate(out)
+                ttnn.deallocate(se)
+                out = y
+                mark("add")
+            return out
+        if se is not None:  # (the shared expert's owner rows, added before the all-to-all carries both)
+            y = ttnn.add(y_own, se)
+            ttnn.deallocate(y_own)
             ttnn.deallocate(se)
-            out = y
+            y_own = y
             mark("add")
+        out = self._tp_a2a(y_own, cat_dim=2, split_dim=3)  # back to the width split [S/SP, H/TP]
+        ttnn.deallocate(y_own)
+        mark("tail_a2a")
         return out
+
+    # ---- TP collectives (cluster axis 1: a line, or a ring on a torus that wraps it) ----
+    def _tp_topology(self):
+        return ttnn.Topology.Ring if self.geometry.tp_wraps else ttnn.Topology.Linear
+
+    def _tp_a2a(self, t, cat_dim, split_dim):
+        """All-to-all over TP: t split into TP blocks along split_dim, block j to chip j; the received blocks
+        concatenated along cat_dim in source order. (all_to_all_async_generic: its in_dim is the concatenation dim.)"""
+        return ttnn.experimental.all_to_all_async_generic(
+            t,
+            in_dim=cat_dim,
+            out_dim=split_dim,
+            cluster_axis=1,
+            num_links=self.geometry.links,
+            topology=self._tp_topology(),
+        )
+
+    def _tp_ag_rows(self, t):
+        """All-gather by rows over TP (combine_rf's fabric all-gather: ~6% under ttnn's at these shapes)."""
+        from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
+
+        return fabric_all_gather(t, cluster_axis=1, topology=self._tp_topology(), num_links=self.geometry.links, dim=2)
+
+    def _tp_rs_rows(self, t):
+        """Reduce-scatter by rows over TP (fabric_reduce_scatter: ~17% under ttnn's on the shared expert's partials;
+        bf16 - not for the fp32 logits, where it rounds)."""
+        from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter import fabric_reduce_scatter
+
+        return fabric_reduce_scatter(t, cluster_axis=1, topology=self._tp_topology(), num_links=self.geometry.links)
 
     def taps(self) -> dict:
         """Debug: the last forward's routing rows (keep_taps = True)."""

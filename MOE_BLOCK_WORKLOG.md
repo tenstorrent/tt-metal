@@ -99,3 +99,34 @@ Changed: the reduce-scatter's output and the biased scores in L1 (the top-k's 64
 K3_L1=router): top-k GLM-Flash 57.0 -> 45.4 us, K3 100.0 -> 81.2 us; reduce-scatter unchanged (70 -> 75 / 111 -> 108,
 noise). Tried: the router matmul writing L1: 62 -> 120 us (kept DRAM). Totals GLM-Flash 4738 -> 4782 (run-to-run noise
 in the experts + combine, 2083 -> 2111), K3 8493 -> 8455. PCC unchanged.
+
+### Step 3: TP collectives
+Candidates measured per collective at the block's shapes (`models/demos/moe_block/tests/test_tp_collectives.py`, runs
+`moe_block_runs/tpc*.log`; us, slowest chip, the 4-chip TP line, 2 links):
+
+| collective | shard / chip | ttnn | alternative |
+|---|---|---|---|
+| x all-gather, width (dim 3) | 5.2 / 9.2 MB | 354 / 601 | none: high_bw / bring-up fabric_all_gather gather dim 0 / -2 only (the C++ ops also refused the preallocated output: "input and output tensors must be on the same mesh device") |
+| tail all-gather, rows (K3 latent, dim 2) | 5.2 / 4.6 MB | 354 / 313 | combine_rf fabric_all_gather 338 / 296 |
+| shared reduce-scatter, width (dim 3) | 21 / 37 MB | 417 / 713 | (num_links=2: same) |
+| shared reduce-scatter, rows (dim 2) | 21 / 37 MB | 418 / 714 | fabric_reduce_scatter 347 / 594 |
+| logits reduce-scatter, rows, fp32 | 1.5 / 2.3 MB | 70 / 97 | fabric_reduce_scatter 61 / 86, but max err 0.06 / 0.08 (rounds fp32): kept ttnn |
+| K3 latent to the owners (all-to-all) | 4.6 MB | AG + partition 337 | **all_to_all_async_generic 115**, exact |
+| GLM tail back to the width split (all-to-all) | 5.2 MB | AG + partition 381 | **all_to_all_async_generic 131**, exact |
+
+(all_to_all_async_generic works on the Linear TP axis; its `in_dim` is the dimension it CONCATENATES along and `out_dim`
+the one it splits, the reverse of what the docstring's names suggest.)
+
+Wired in: both all-to-alls; the K3 tail's latent all-gather on combine_rf's fabric all-gather; for the non-latent
+models the shared expert reduce-scattered BY ROWS to the owners (fabric_reduce_scatter) and added to the routed sums
+in the owner layout, so the tail's all-to-all carries both (the add stays one [S/N, H] add). K3 keeps the width
+reduce-scatter (its latent up lands the width split; rows + an all-to-all would cost ~594 + ~230). x all-gather stays
+ttnn.
+
+| stage, us | GLM-Flash before -> after | K3 before -> after |
+|---|---|---|
+| shared reduce-scatter | 419 -> 348 (rows, fabric) | 728 -> 728 |
+| latent all-to-all | - | 341 -> 119 |
+| tail | 383 (AG + partition) -> 130 (all-to-all) | 316 -> 301 (fabric AG) |
+| **sum** | **4782 -> 4424** | **8455 -> 8204** |
+PCC unchanged (0.98704 / 0.99637).
