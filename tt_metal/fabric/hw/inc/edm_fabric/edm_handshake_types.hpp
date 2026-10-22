@@ -6,9 +6,7 @@
 
 #include <cstdint>
 
-namespace erisc {
-namespace datamover {
-namespace handshake {
+namespace erisc::datamover::handshake {
 
 // Data-Structure used for EDM to EDM Handshaking.
 // The scratch buffer is sent to the peer and overwrites the first 16 bytes of their struct,
@@ -23,6 +21,4 @@ struct handshake_info_t {
 };
 static_assert(sizeof(handshake_info_t) == 32, "handshake_info_t size is not 32 bytes");
 
-}  // namespace handshake
-}  // namespace datamover
-}  // namespace erisc
+}  // namespace erisc::datamover::handshake
