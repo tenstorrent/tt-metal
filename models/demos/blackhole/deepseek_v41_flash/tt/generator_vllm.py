@@ -90,7 +90,23 @@ def _apc_on():
     """Automatic prefix caching (APC_CHUNKED_PREFILL_PLAN.md M3): ``DSV41_APC=1`` (code default OFF; every shipped 262,144 / 524,288 / 1M runtime spec and catalog entry sets it, together with ``enable-prefix-caching``) flips ``model_capabilities['supports_prefix_caching']`` (vLLM then keeps its block-level prefix cache and reports
     hits as ``start_pos`` of new requests) and builds the model's snapshot store (tt/prefix_cache.py); needs the interleaved prefill. Read at import time like ``_interleave_on``.
     """
-    return os.environ.get("DSV41_APC", "0") == "1" and _interleave_on() and not _cli_prefix_caching_off()
+    if os.environ.get("DSV41_APC", "0") != "1" or not _interleave_on() or _cli_prefix_caching_off():
+        return False
+    if _apc_needs_bf16_pool_but_fp8():
+        logger.warning(
+            "DSV41 prefix caching OFF: DSV41_PF_PAGED=read with DSV41_PF_PAGED_FP8=1 keeps an fp8 KV pool, APC on the paged prefill needs the bf16 pool (drop DSV41_PF_PAGED_FP8=1)"
+        )
+        return False
+    return True
+
+
+def _apc_needs_bf16_pool_but_fp8():
+    """read mode + fp8 pool (DSV41_PF_PAGED_FP8=1 with DSV41_POOL_DTYPE=fp8): ``read_pool_latents`` (tt/prefix_cache.py) asserts a bf16 pool at the first snapshot, so APC must be off."""
+    return (
+        os.environ.get("DSV41_PF_PAGED", "read") == "read"
+        and os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1"
+        and os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8"
+    )
 
 
 def _cli_prefix_caching_off():
@@ -557,12 +573,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         self.book = VS.TokenBook(self.B, self.max_seq_len + 1024)
         self.interleave = _interleave_on()
         if _apc_on() and hasattr(self.m, "enable_apc"):
-            self.m.enable_apc(
+            apc = self.m.enable_apc(
                 int(float(os.environ.get("DSV41_APC_GB", "6")) * 2**30), os.environ.get("DSV41_APC_POLICY", "pow2")
             )
-            logger.info(
-                f"DSV4.1 prefix caching ON: snapshot policy {self.m.apc.policy}, host budget {self.m.apc.store.budget / 2**30:.1f} GiB"
-            )
+            if apc is not None:  # (None: the model refused, e.g. read mode with an fp8 pool)
+                logger.info(
+                    f"DSV4.1 prefix caching ON: snapshot policy {apc.policy}, host budget {apc.store.budget / 2**30:.1f} GiB"
+                )
         self.inprog = VS.PrefillTracker()  # users prefilled in chunks and not decoding yet (interleave mode)
         self.s_pad_cur = 0
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")

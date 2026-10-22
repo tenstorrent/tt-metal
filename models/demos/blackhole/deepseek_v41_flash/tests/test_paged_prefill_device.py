@@ -89,7 +89,7 @@ def _run(mesh_device):
     )
     assert pool.scratch_rows > 0, "build with DSV41_PF_PAGED=write|read"
     assert (
-        pool.dtype == ttnn.bfloat16 or set(MODES) == {"0"} or os.environ.get("DSV41_PF_PAGED_FP8", "1") == "1"
+        pool.dtype == ttnn.bfloat16 or set(MODES) == {"0"} or os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1"
     ), "write / read need a bf16 pool (P1)"
     g = torch.Generator().manual_seed(4321)
     prompts = torch.randint(1000, 100000, (B, ISL), generator=g)

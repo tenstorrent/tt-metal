@@ -58,8 +58,7 @@
                 "DSV41_BUILD_SLOTS": "0",
                 "DSV41_VLLM_CHUNK": "512",
                 "DSV41_APC": "1",
-                "DSV41_PF_PAGED": "read",
-                "DSV41_PF_PAGED_FP8": "1"
+                "DSV41_PF_PAGED": "read"
             },
             "tensor_cache_timeout": 7200.0,
             "system_requirements": null,
@@ -91,8 +90,7 @@
             "DSV41_BUILD_SLOTS": "0",
             "DSV41_VLLM_CHUNK": "512",
             "DSV41_APC": "1",
-            "DSV41_PF_PAGED": "read",
-            "DSV41_PF_PAGED_FP8": "1"
+            "DSV41_PF_PAGED": "read"
         },
         "tt_metal_commit": null,
         "vllm_commit": null,

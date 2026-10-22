@@ -23,7 +23,7 @@ Serving features:
 - On-device sampling: temperature, top-k (clamped to 32), top-p, per-request seed.
 - Chunked prefill: token budget `max_num_batched_tokens` in the spec (67,584 in the default specs, 4,096 in the `*_apc.json` specs; the budget with APC on is to be decided after the device measurements).
 - Prefix caching (APC): on by default (`DSV41_APC=1` and `enable-prefix-caching` in the specs and the catalog); `--no-enable-prefix-caching` turns it off. Images bypass it.
-- Paged prefill: on by default (`DSV41_PF_PAGED=read`, fp8 KV pool kept via `DSV41_PF_PAGED_FP8=1`); `DSV41_PF_PAGED=0` restores the previous dense-table prefill.
+- Paged prefill: on by default (`DSV41_PF_PAGED=read`); read mode uses a bf16 KV pool instead of the fp8 pool, because APC on the paged prefill needs it (about +46 MiB per bank of DRAM). `DSV41_PF_PAGED_FP8=1` keeps the fp8 pool but turns APC off (one log line). `DSV41_PF_PAGED=0` restores the previous dense-table prefill with the fp8 pool.
 - Not supported with speculation (HTTP 400): `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, `min_p`.
 
 ## Performance change against the previous release
@@ -53,7 +53,7 @@ The previous-release numbers at the model maximum come from an earlier image wit
 - A prefill context of 16,384 tokens for short prompts on the 1M build (faster short-prompt TTFT).
 - Shared tt_transformers sampler by default (`DSV41_SHARED_SAMPLER=0` restores the previous one).
 - Index-key hand-off fixed for the column-sharded prefill key FIFO.
-- APC and paged prefill on by default in the runtime specs and the catalog. The B=4 / 1M specs raise `trace_region_size` to 780,000,000 (paged prefill with the fp8 pool needs at least about 766 MB; 650 MB does not boot). The B=16 / 262,144 trace region is unchanged and not yet measured with paged prefill. Throughput with APC on at budget 67,584 and at 4,096: to be measured (budget 4,096 made batched serving up to 2x slower in the previous measurement).
+- APC and paged prefill on by default in the runtime specs and the catalog. The B=4 / 1M specs raise `trace_region_size` to 780,000,000 (paged read with the fp8 pool needed at least about 766 MB and 650 MB does not boot; the minimum with the bf16 pool, which adds about 46 MiB per bank, is being re-measured and may be higher). The B=16 / 262,144 trace region is unchanged and not yet measured with paged prefill. Throughput with APC on at budget 67,584 and at 4,096: to be measured (budget 4,096 made batched serving up to 2x slower in the previous measurement).
 
 ## Known issues
 

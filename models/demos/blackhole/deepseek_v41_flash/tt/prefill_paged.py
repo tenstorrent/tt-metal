@@ -8,8 +8,8 @@ Mode (env ``DSV41_PF_PAGED``, default ``read``; ``0`` = the previous release pat
   * ``write`` (PF1, dual write): the owner layers scatter the chunk's latents into the paged pool BEFORE the indexer / attention (the hand-off sink no longer writes them after). The dense
     kv tables stay and are the ones the attention reads: behaviour is unchanged, the pool rows must equal the table rows.
   * ``read``  (PF2): the dense kv tables are NOT allocated. ``sparse_sdpa`` reads the paged pool [1,1,R,512]: the selected FIFO slots are translated to pool rows by a small dataflow kernel
-    (``paged_kernels/prefill_id_translate.cpp``), the window rows (halo + chunk) go to a scratch region of the pool (per prefill slot, after the rings). Default pool: the fp8 pool of the build
-    (``DSV41_PF_PAGED_FP8`` default ``1``, P2a: window rows and latents rounded to fp8); ``DSV41_PF_PAGED_FP8=0`` forces a bf16 pool (P1: the pool dtype is the prefill's KV precision).
+    (``paged_kernels/prefill_id_translate.cpp``), the window rows (halo + chunk) go to a scratch region of the pool (per prefill slot, after the rings). Default pool: bf16 (P1: the pool dtype is the
+    prefill's KV precision; APC needs it); ``DSV41_PF_PAGED_FP8=1`` keeps the fp8 pool of the build (P2a: window rows and latents rounded to fp8; APC is then off).
 
 The key FIFOs (indexer) and the halos are unchanged (PF3 / PF5).
 """

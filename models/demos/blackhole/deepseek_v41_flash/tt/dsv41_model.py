@@ -1281,6 +1281,14 @@ class Model:
         """Automatic prefix caching of the interleaved prefill (tt/prefix_cache.py): host snapshots of the carried prefill state at chunk boundaries, restored into any user."""
         from models.demos.blackhole.deepseek_v41_flash.tt.prefix_cache import PrefixCache
 
+        if (
+            PGM.read_on() and self.pool.dtype != ttnn.bfloat16
+        ):  # read_pool_latents (prefix_cache.py) needs a bf16 pool: refuse here instead of asserting at the first snapshot
+            self.log(
+                "prefix caching OFF: paged prefill read mode with a non-bf16 KV pool (DSV41_PF_PAGED_FP8=1); APC needs the bf16 pool"
+            )
+            self.apc = None
+            return None
         self.apc = PrefixCache(self, int(os.environ.get("DSV41_VLLM_CHUNK", "512")), budget_bytes, policy, log=self.log)
         self.apc.set_signature((tuple(self.layer_ids), self.pool.ring_rows, str(self.kv_dtype), self.Up, PGM.MODE))
         return self.apc

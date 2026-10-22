@@ -51,15 +51,15 @@ def test_mode_zero_restores_release_path():
     assert _py(MODE, DSV41_PF_PAGED="write") == "write False True"
 
 
-def test_default_keeps_fp8_pool():
-    assert "fp8_e4m3" in _py(POOL, DSV41_POOL_DTYPE="fp8")
+def test_default_read_mode_forces_bf16_pool():
+    assert "bfloat16" in _py(POOL, DSV41_POOL_DTYPE="fp8")
 
 
-def test_fp8_zero_selects_bf16_pool_in_read_mode():
-    assert "bfloat16" in _py(POOL, DSV41_POOL_DTYPE="fp8", DSV41_PF_PAGED_FP8="0")
+def test_fp8_one_keeps_fp8_pool_in_read_mode():
+    assert "fp8_e4m3" in _py(POOL, DSV41_POOL_DTYPE="fp8", DSV41_PF_PAGED_FP8="1")
 
 
-def test_mode_zero_keeps_fp8_pool():
+def test_mode_zero_keeps_fp8_pool():  # the published image: dense tables + fp8 pool
     assert "fp8_e4m3" in _py(POOL, DSV41_POOL_DTYPE="fp8", DSV41_PF_PAGED="0")
 
 
@@ -77,7 +77,7 @@ def test_shipped_spec_defaults(name):
     assert v.get("enable-prefix-caching") is True and "no-enable-prefix-caching" not in v
     for e in envs:
         assert e["DSV41_APC"] == "1"
-        assert e["DSV41_PF_PAGED"] == "read" and e["DSV41_PF_PAGED_FP8"] == "1"
+        assert e["DSV41_PF_PAGED"] == "read" and "DSV41_PF_PAGED_FP8" not in e  # bf16 pool: APC needs it
         assert e["DSV41_POOL_DTYPE"] == "fp8"
     if d["max_concurrency"] == 4:  # read mode + fp8 pool at B=4 / 1M needs >= ~766 MB of trace region (780 MB boots)
         tr = 780000000
@@ -100,3 +100,27 @@ def test_131072_specs_stay_on_the_old_path():
         assert v.get("no-enable-prefix-caching") is True
         for e in envs:
             assert e["DSV41_APC"] == "0" and e["DSV41_PF_PAGED"] == "0"
+
+
+APC = (
+    "import os; os.environ.setdefault('DSV41_VLLM_INTERLEAVE', '1'); "
+    "import sys; sys.path.insert(0, %r); "
+    "from models.demos.blackhole.deepseek_v41_flash.tt import generator_vllm as G; print(G._apc_on())"
+)
+
+
+def _apc(**env):
+    plugin = os.environ.get("DSV41_PLUGIN_SRC", "/mnt/tt-data/ssinghal/wt/plugin_apc2/src")
+    return _py(APC % plugin, **env)
+
+
+def test_apc_on_with_default_bf16_pool():
+    assert _apc(DSV41_APC="1", DSV41_POOL_DTYPE="fp8") == "True"
+
+
+def test_apc_refused_with_read_and_fp8_pool():
+    assert _apc(DSV41_APC="1", DSV41_POOL_DTYPE="fp8", DSV41_PF_PAGED_FP8="1") == "False"
+
+
+def test_apc_ok_when_paged_prefill_off_even_with_fp8_flag():
+    assert _apc(DSV41_APC="1", DSV41_POOL_DTYPE="fp8", DSV41_PF_PAGED="0", DSV41_PF_PAGED_FP8="1") == "True"
