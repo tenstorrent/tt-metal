@@ -139,6 +139,13 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 
 ## 4. Supervise the run
 
+**Watch the orchestrator itself first (owner).** Your first job is to watch the orchestrator for waste and wrong
+behaviour, not to relay or justify what it does. When the orchestrator, a gate or an agent is about to spend time for
+no reason (a re-run of unchanged or already-passed work, a full gate after an administrative failure, an agent attempt
+that cannot succeed, unrelated tasks running, a missing flag), stop it at once, do the cheap correct thing by hand if
+one exists (commit-only, reuse a recorded result), and fix the orchestrator (a framework change with a selftest) so it
+never happens again. "The orchestrator does X" is never a reason given to the owner for waiting.
+
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
 
@@ -153,6 +160,14 @@ will fail or is not needed (a false alarm, a check the framework gets wrong, a f
 If any part of the framework is not resumable this way (a restart loses work, repeats finished work or trusts a stale
 file), that is a framework bug: fix it with a selftest (`test_a_power_loss_mid_agent_resumes_at_the_interrupted_task`
 is the model) before relying on it.
+
+**Time is the owner's most important constraint (owner).** Before re-running anything that takes more than about 10
+minutes, check whether an existing result can be reused: `python -m models.demos.common.bringup gate <task> --spec
+<spec> --commit-only` for a gate whose commit git refused (F149); the stamped gate result (a gate unit that passed on
+the same code is reused by itself, F150; `--fresh` / `verify --force` only for a deliberate re-check); the A/B sides
+(`orchestrator measure`, F116); the profiles kept outside the repo. Never re-run for an administrative reason (a commit
+hook, a file size, a log, a missing commit). When a re-run cannot be avoided, tell the owner what re-runs, why and for
+how long, before starting it.
 
 ### Always be watching
 
