@@ -1350,3 +1350,35 @@ Existing unit tests with the new defaults: uneven split (V4.1 E12 / E24 / bf16 h
 (mimo, k2) and indexed shapes / determinism (mimo, k2) pass. Not runnable on bh-lb-09's 12 x 10 grid whatever the
 defaults: test_flat_routed_expert_op (the Python builder asserts an 11 x 10 grid) and the tp4 / tp2 cases (2-3
 subgrids, which the overlap-era factory no longer builds).
+
+### DRISC sender: posted writes, the tensor prefetcher's scheme (2026-10-22, bh-lb-09 12 x 10, flat alone, pure DRISC)
+Idea from John Bauman's tensor prefetcher (PR 59934, tensor_prefetcher.cpp): posted NoC writes, one flush per slot
+reuse instead of an ack check per unit. New probe levels of MIMO_FL_DRISC_LEAN (kernel only, se_drisc_gu.cpp):
+- **3** (on top of 1): the block writes POSTED (no transaction id, no acks); the receivers' semaphore increments on the
+  same static VC as the data (FWD_VC), issued once the NIU's posted-write-sent counter has passed the unit's last write
+  (same VC and route: they arrive behind the data - the noc_async_writes_flushed + semaphore_inc pattern). One counter
+  read a pass completes every unit that left, in order, and frees its slot. Without transaction ids the units in
+  flight are bound only by L1: MIMO_FL_DRISC_NS_MAX up to 16 (10 fit at one 9 KB block a unit). Safe; y bit-exact.
+- **4**: 3 without the ready poll before an increment - HANGS (the increments go out back to back, so the command
+  buffer is overwritten while busy). Measure-only, dropped.
+
+us per call (RT profiler, 10 iters; runs repeat within 0.1%), y bit-exact vs the default in every row:
+
+| GLM-5.3 E 32, M 80 / 128 / 160 | real x path | x off (no x reads / x data / y writes) | half-bytes x (fp8 x) |
+|---|---|---|---|
+| default | 1665 / 1822 / 1923 | 1608 / - / 1734 | 1615 / - / 1798 |
+| LEAN 1 | 1683 / 1816 / 1930 | 1551 / - / 1734 | - |
+| LEAN 3 | 1713 / 1813 / 1930 | 1482 / - / 1681 | - |
+| LEAN 3, NS 10 | 1682 / 1811 / 1927 | **1461** / - / **1677** (-9.1 / -3.3%) | 1590 / - / 1796 (-1.5 / -0.1%) |
+| UB 2 | 1680 / 1866 / 2116 | 1412 / - / 1744 | 1576 / - / 1848 |
+| LEAN 3 + UB 2 | 1678 / 1879 / 2094 | 1423 / - / 1680 | - |
+
+GLM-5.3-Flash (E 9, M 64 / 128): default 329 / 388, LEAN 1 328 / 385, LEAN 3 329 / 386, LEAN 3 NS 10 328 / 384,
+UB 2 335 / 406, LEAN 3 + UB 2 336 / 392. K3 (Hr 3584, I 3072, E 28, M 91 / 128): default 1230 / 1306, LEAN 1 1230 /
+1315, LEAN 3 1227 / 1307, LEAN 3 NS 10 1230 / 1308, UB 2 1299 / 1414, LEAN 3 + UB 2 1300 / 1408.
+
+- Where the DRISC binds (x off) posted writes are the biggest lever found for it: -8 / -9% at M 80 and -3% at M 160,
+  and they remove UB 2's loss at M 160 (1744 -> 1680). The per-unit ack check, not the DMA, was the DRISC's cost.
+- On the real x path nothing moves by 1%: x binds (GLM-5.3 M 80 +1.0%, M 128 / 160 -0.5 / -0.2% with NS 10;
+  GLM-Flash and K3 within 0.3%). UB 2 loses everywhere on the real path (K3 +6%).
+- Kept as a probe (LEAN 3, NS 10). Revisit with fp8 x: with half the x bytes it is already -1.5% at M 80.

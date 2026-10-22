@@ -30,6 +30,29 @@ constexpr uint8_t fwd_vc = SE_FWD_VC;
 constexpr uint8_t fwd_vc = 3;
 #endif
 
+// (perf probe SE_DRISC_LEAN: fewer register accesses a unit. 1: the DMA's source-high register (always 0: bank-local
+// sources) written once a call, not per DMA; the DMA completion count re-read only when the known completions are used
+// up. 2: also no ready poll before a semaphore increment (unsafe in general: measures what those reads cost). 3 (the
+// tensor prefetcher's scheme, on top of 1): POSTED block writes (no transaction id, no acks), the receivers' increments
+// on the same static VC (FWD_VC) as the data, sent once the NIU's posted-write-sent counter has passed the unit's last
+// write (same VC, same route: in order behind the data, the noc_async_writes_flushed + semaphore_inc pattern); one
+// counter read a pass completes every unit that left, in order, and frees their slots (units in flight up to
+// SE_DRISC_NS_MAX, at most 16 - no transaction ids bound it). 4: 3 without the ready poll before an increment
+// (measure-only, as 2))
+#ifndef SE_DRISC_LEAN
+#define SE_DRISC_LEAN 0
+#endif
+#if SE_DRISC_LEAN >= 3 && defined(SE_DRISC_FREE_SENT)
+#error "SE_DRISC_LEAN >= 3 frees slots once sent already: not with FREE_SENT"
+#endif
+#if SE_DRISC_LEAN >= 3
+constexpr uint8_t inc_vc = fwd_vc;
+constexpr uint32_t wr_resp = 0;  // (posted)
+#else
+constexpr uint8_t inc_vc = NOC_UNICAST_WRITE_VC;
+constexpr uint32_t wr_resp = NOC_CMD_RESP_MARKED;
+#endif
+
 // The hot loop's NoC commands with their constant registers set once per call (every register access costs tens of
 // cycles on a DRAM core: ~800 cycles per 9 KB block with the stock calls). Writes: the write command buffer keeps
 // NOC_CTRL (VC FWD_VC), the length and the high address; per write only the source, destination, coordinate, id.
@@ -40,20 +63,44 @@ inline void fast_write_state(uint8_t noc, uint32_t bytes) {
         noc,
         write_cmd_buf,
         NOC_CTRL,
-        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(fwd_vc) | NOC_CMD_RESP_MARKED);
+        NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(fwd_vc) | wr_resp);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, bytes);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, 0);
+#if SE_DRISC_LEAN >= 3
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_PACKET_TAG, 0);
+#endif
 }
 inline void fast_write(uint8_t noc, uint32_t src, uint32_t coord, uint32_t dst, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+#if SE_DRISC_LEAN < 3
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+#endif
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+#if SE_DRISC_LEAN >= 3
+    noc_posted_writes_num_issued[noc] += 1;
+#else
     noc_nonposted_writes_num_issued[noc] += 1;
     noc_nonposted_writes_acked[noc] += 1;
+#endif
 }
+#if SE_DRISC_LEAN >= 3
+// (blocks over one NoC packet: posted packets of at most NOC_MAX_BURST_SIZE, the length set per packet)
+inline void fast_write_long(uint8_t noc, uint32_t src, uint32_t coord, uint32_t dst, uint32_t bytes) {
+    for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
+        while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(
+            noc, write_cmd_buf, NOC_AT_LEN_BE, bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE);
+        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src + o);
+        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst + o);
+        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
+        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        noc_posted_writes_num_issued[noc] += 1;
+    }
+}
+#endif
 inline void fast_inc_state(uint8_t noc, uint32_t addr) {
     while (!noc_cmd_buf_ready(noc, write_at_cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_TARG_ADDR_LO, addr);
@@ -62,7 +109,7 @@ inline void fast_inc_state(uint8_t noc, uint32_t addr) {
         noc,
         write_at_cmd_buf,
         NOC_CTRL,
-        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_RESP_MARKED | NOC_CMD_AT);
+        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(inc_vc) | NOC_CMD_RESP_MARKED | NOC_CMD_AT);
     NOC_CMD_BUF_WRITE_REG(
         noc,
         write_at_cmd_buf,
@@ -77,12 +124,6 @@ inline void fast_inc(uint8_t noc, uint32_t coord) {
     noc_nonposted_atomics_acked[noc] += 1;
 }
 
-// (perf probe SE_DRISC_LEAN: fewer register accesses a unit. 1: the DMA's source-high register (always 0: bank-local
-// sources) written once a call, not per DMA; the DMA completion count re-read only when the known completions are used
-// up. 2: also no ready poll before a semaphore increment (unsafe in general: measures what those reads cost))
-#ifndef SE_DRISC_LEAN
-#define SE_DRISC_LEAN 0
-#endif
 inline void lean_dma_read(uint8_t stream, uint32_t src, uint32_t dst, uint32_t attrs) {
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_SOURCE_LOW_REG_OFFSET, src);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_DEST_REG_OFFSET, dst);
@@ -159,6 +200,9 @@ struct Job {
     uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub, dmax;
     uint32_t rd, wr, fl, sn;  // units DMA'd, written, flushed (acked), sent (left this L1: SE_DRISC_FREE_SENT)
     uint32_t dn, dattr;       // (SE_DRISC_LEAN) units known DMA'd (in-order stream), the DMA's attribute word
+#if SE_DRISC_LEAN >= 3
+    uint32_t pm[16];  // (posted writes) the NoC's posted-write issue count after each in-flight unit's last write
+#endif
     // (SE_DRISC_XEMU) DMAs issued on the job's stream (weights + extra), the extra reads' stream indices (ring of 8,
     // at most 2 in flight), extra reads completed, weight units since the last extra read, the scratch slot (0: off)
     uint32_t tot, xq[8], xh, xt, xdone, since, xslot, xpend, xi;
@@ -317,10 +361,14 @@ void kernel_main() {
             // (transaction ids 1-7 / 8-14 per job; probe SE_DRISC_NS_MAX up to 14: one real job takes ids 1-14, so
             // more units in flight when its L1 room holds more than 7)
             // (below 7 it lowers the cap: e.g. the x emulation's baseline with its slot count)
+#if SE_DRISC_LEAN >= 3  // (posted: no transaction ids, only pm[] bounds the units in flight)
+            const uint32_t ns_max = SE_DRISC_NS_MAX > 16 ? 16 : SE_DRISC_NS_MAX;
+#else
             const uint32_t ns_max =
                 SE_DRISC_NS_MAX < 7
                     ? SE_DRISC_NS_MAX
                     : (SE_DRISC_NS_MAX > 7 && n_real == 1 ? (SE_DRISC_NS_MAX > 14 ? 14 : SE_DRISC_NS_MAX) : 7);
+#endif
             J.ns = J.ns > ns_max ? ns_max : J.ns;
             J.trid0 = ns_max > 7 ? 1 : 1 + 7 * k;
             J.units = n_load * J.per_e * (J.rg / J.ub);
@@ -329,6 +377,9 @@ void kernel_main() {
 #ifdef SE_DRISC_XEMU
 #if defined(SE_DRISC_FREE_SENT) || defined(SE_DRISC_DRAIN)
 #error "SE_DRISC_XEMU: not with FREE_SENT / DRAIN"
+#endif
+#if SE_DRISC_LEAN >= 3
+#error "SE_DRISC_XEMU: not with LEAN >= 3"
 #endif
             // (perf probe: an extra SE_DRISC_XEMU_B-byte read from this bank every SE_DRISC_XEMU weight units, into a
             // scratch slot past the job's slots, never forwarded: x's DRAM reads moved into the DRISC's own queue)
@@ -417,10 +468,20 @@ void kernel_main() {
         }
 #endif
         for (uint32_t k = 0; k < nj; ++k) {  // (the fast path's constant registers, per NoC)
+#if SE_DRISC_LEAN >= 3
+            if (jobs[k].units) {  // (posted: every write and increment on the fast path; nothing posted is in flight
+                                  // between calls, so the issue count restarts from the NIU's sent count)
+                const uint8_t n = jobs[k].noc;
+                noc_posted_writes_num_issued[n] = NOC_STATUS_READ_REG(n, NIU_MST_POSTED_WR_REQ_SENT);
+                fast_write_state(n, jobs[k].blk <= NOC_MAX_BURST_SIZE ? jobs[k].blk : NOC_MAX_BURST_SIZE);
+                fast_inc_state(n, jobs[k].dsem);
+            }
+#else
             if (jobs[k].units && jobs[k].blk <= NOC_MAX_BURST_SIZE) {
                 fast_write_state(jobs[k].noc, jobs[k].blk);
                 fast_inc_state(jobs[k].noc, jobs[k].dsem);
             }
+#endif
         }
 #if SE_XEMU_SAME
         // (x reads on the job's in-order stream: completed DMAs less the x reads among them = weight units done)
@@ -695,6 +756,10 @@ void kernel_main() {
                             if (J.blk <= NOC_MAX_BURST_SIZE) {
                                 fast_write(noc, src, J.coord[j], dst, trid);
                             } else {
+#if SE_DRISC_LEAN >= 3
+                                fast_write_long(noc, src, J.coord[j], dst, J.blk);
+                                continue;
+#endif
                                 for (uint32_t o = 0; o < J.blk; o += NOC_MAX_BURST_SIZE) {
                                     const uint32_t n =
                                         J.blk - o < NOC_MAX_BURST_SIZE ? J.blk - o : NOC_MAX_BURST_SIZE;
@@ -703,6 +768,9 @@ void kernel_main() {
                                 }
                             }
                         }
+#endif
+#if SE_DRISC_LEAN >= 3
+                        J.pm[J.wr % 16] = noc_posted_writes_num_issued[noc];
 #endif
                         ++J.wr;
                         PF_END(2)
@@ -714,6 +782,23 @@ void kernel_main() {
 #endif
                 }
                 PF_BEGIN
+#if SE_DRISC_LEAN >= 3
+                if (J.fl < J.wr) {  // (one counter read: every unit whose writes all left, in order)
+                    const uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+                    while (J.fl < J.wr && static_cast<int32_t>(sent - J.pm[J.fl % 16]) >= 0) {
+                        const uint32_t upc = J.rg / J.ub, b = (J.fl % upc) * J.ub;
+                        for (uint32_t j = b * J.G; j < (b + J.ub) * J.G; ++j) {
+#if SE_DRISC_LEAN >= 4
+                            fast_inc_nopoll(noc, J.coord[j]);
+#else
+                            fast_inc(noc, J.coord[j]);
+#endif
+                        }
+                        ++J.fl;
+                        --left;
+                    }
+                }
+#else
 #ifdef SE_DRISC_FREE_SENT
                 const uint32_t fl_trid = J.trid0 + J.fl % 7;
                 if (J.sn < J.wr && ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, J.trid0 + J.sn % 7)) {
@@ -751,6 +836,7 @@ void kernel_main() {
                     J.sn = J.sn > J.fl ? J.sn : J.fl;  // (acked implies sent)
 #endif
                 }
+#endif
                 PF_END(3)
 #ifdef SE_DRISC_X
                 if (J.units && J.xon) {
