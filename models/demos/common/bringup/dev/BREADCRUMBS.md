@@ -1708,3 +1708,35 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   the gate. A pending commit without the map (older) records it at its next refusal.
 - core/gate.py (task_files_map, _hook_fixed, _refused, commit_only); selftest
   test_commit_only_takes_a_fix_to_the_files_the_hook_named.
+
+## F155: device time from the program real-time profiler, everywhere (owner 2026-10-22)
+- Owner: "best if the framework could use the realtime profiler everywhere". The profile (X.1, the perf gates, the A/B
+  profile, X.3) used the device profiler: an instrumented build, a sync and a profiler read at every section
+  signpost, and for the per-op breakdown a sync after every ttnn call (about a minute per layer, so only the
+  representative layers) plus a separate timeline run. The GLM-5.3 op report already had a real-time mode (rt, 10-09:
+  per-call device-operation id ranges joined with the real-time records).
+- Now testing/profiler.py ``backend()`` is "rt" by default (defaults.yaml perf.profiler; BRINGUP_PROFILER for one
+  run). rt mode records the device-operation id at every signpost and around every outermost ttnn call; finish_rt ->
+  charge_rt charges each record (per chip: end - start at dispatch, summed per runtime id) to its section (the same
+  kernel_ns / kernel_ns_dev / programs schema: per range the slowest chip), its call, the op rows (op_ns, "(other)" for
+  programs no wrapped call launched) and the timeline on the critical chip (gap / slot / host per call; unwrapped
+  programs move the clock). testing/profile.py makes one rt run: sections, and with op mode the op rows of every
+  layer (BRINGUP_PROFILE_LAYERS narrows) and the timeline, written in the old schema (profile.json "profiler": "rt",
+  metric profiler_rt, chunk_wall_ms_rt = the rt run's wall without op mode). Dropped records and an inactive real-time
+  profiler fail (no fallback). The device-profiler path stays behind perf.profiler: device for cross-checks
+  (require_device_profiler checks its environment).
+- Gates: ledger_gen puts no profiler environment on profile gates (DEVICE_PROFILE_ENV with BRINGUP_PROFILER=device
+  only on perf.profiler: device); core/gate.with_clean_wall now adds the clean wall run to any test_profile.py
+  segment and drops the device profiler's variables from the profiled run unless it carries BRINGUP_PROFILER=device,
+  so ledgers written before F155 measure with rt without being regenerated (their gate commands change, so their
+  F150 stamps change once). tests/test_op_report.py defaults to rt (BRINGUP_OPREP_RT kept as an override).
+- Semantics: rt's time is dispatch start to end, including waits inside a program (a CCL waiting on a neighbour); the
+  device profiler's is kernel time. Expect rt >= device per section, closest on compute-bound sections.
+- Selftests: test_realtime_profiler.py (sections as id ranges without syncs, op rows / "(other)" / timeline from one
+  run, inactive profiler fails, dropped records fail, backend switch, ledger env and clean-wall rewrite per switch);
+  test_clean_wall.py and test_plan.py updated.
+- Not changed: tests/test_all_gather_bench.py (a CCL bench that wants kernel time; it sets the device profiler
+  itself).
+- F155 device validation (2026-10-22, DS41 2x2, P.19 code, last chunk): real-time vs device profiler per section within
+  0.2 % in total (91.94 vs 91.74 ms), program counts identical (3776), every section within ±2 % except moe_add +9 %
+  (its reduce-scatter waits inside the program); per-op profile of all 8 layers in 6 min (device-profiler op mode ~13).
