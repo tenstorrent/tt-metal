@@ -66,12 +66,24 @@ const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 
 const std::string kHasGateDefKey = "HAS_GATE";
 
-// K/V tiles per step when k_chunk_size is 0: the largest of 4, 2, 1 that divides St. Four tiles
-// is what the math unit's register file (DST) holds in fp32, so one row's exp pass fits in one go.
-uint32_t pick_default_sk_chunk_t(uint32_t St) {
+// Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
+// iteration of the compute kernel.
+//
+// Constraints:
+//   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
+//      and so the reader never reads past the end of the sequence).
+//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
+//      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
+//   3. Larger chunks amortize softmax / correction overhead more, but consume L1
+//      proportionally for cb_key, cb_value, and cb_attention_weights.
+//
+// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
+// either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
+// DST cycles.
+uint32_t pick_sk_chunk_t(uint32_t Ht) {
     constexpr uint32_t kMaxSkChunkT = 4U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
-        if (St % c == 0U) {
+        if (Ht % c == 0U) {
             return c;
         }
     }
@@ -124,8 +136,15 @@ MatmulBlockDims pick_matmul_block_dims(uint32_t rows, uint32_t cols, uint32_t ds
 }
 
 /**
- * Pair Q chunk i with chunk (q_num_chunks-1-i) so every pair costs about the same.
- * @return (start_pair_idx, num_pairs) per core
+ * Calculate work-balanced pair distribution for causal SDPA.
+ *
+ * For causal attention, row i within a sequence processes (i+1) K/V tiles.
+ * By pairing row i with row (St-1-i), each pair has constant work = St+1.
+ * This enables perfect work balance across cores.
+ *
+ * @param total_pairs Total number of pairs = NC * St / 2
+ * @param num_cores Number of cores to distribute across
+ * @return Vector of (start_pair_idx, num_pairs) for each core
  */
 std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
     uint32_t total_pairs, uint32_t num_cores) {
@@ -163,10 +182,14 @@ struct SDPAForwardKernels {
 };
 
 /**
+ * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
+ *        for each core in the grid. (Standard row-based distribution)
+ */
+/**
  * Set up the runtime arguments for balanced parallelism mode.
- * In this mode, work is distributed by pairs of Q chunks rather than single Q chunks.
- * Each pair consists of a "light" chunk (early in sequence, less work) and
- * a "heavy" chunk (late in sequence, more work), providing balanced total work.
+ * In this mode, work is distributed by pairs rather than rows.
+ * Each pair consists of a "light" row (early in sequence, less work) and
+ * a "heavy" row (late in sequence, more work), providing balanced total work.
  */
 void assign_per_core_runtime_args_balanced(
     tt::tt_metal::Program& program,
@@ -262,7 +285,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // The two knobs in tiles (_t): Sq_chunk_t query tile-rows are processed together against one
     // pass over K/V, Sk_chunk_t K/V tiles are consumed per step. 0 = default (1 Q row, up to 4 K tiles).
     const uint32_t Sq_chunk_t = chunk_size_to_tiles(args.program_config.q_chunk_size, qS, /* fallback */ 1U, "q_chunk_size");
-    const uint32_t Sk_chunk_t = chunk_size_to_tiles(args.program_config.k_chunk_size, qS, pick_default_sk_chunk_t(St), "k_chunk_size");
+    const uint32_t Sk_chunk_t = chunk_size_to_tiles(args.program_config.k_chunk_size, qS, pick_sk_chunk_t(St), "k_chunk_size");
 
     const uint32_t q_num_chunks = St / Sq_chunk_t;
     const uint32_t total_q_chunks = NC * q_num_chunks;
