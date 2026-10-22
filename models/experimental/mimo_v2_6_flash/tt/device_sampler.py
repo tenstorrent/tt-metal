@@ -24,7 +24,8 @@ The data movement cores have no FPU: steps 2 and 3 run in fixed point (kernels/s
 likely, so the draw equals vLLM's whenever the nucleus has at most K tokens (99.7% of the decode rows of GPQA
 reasoning at temperature 1, top_p 0.95; 99.9% fit in the tp * K candidates) or lies inside the candidates;
 otherwise it is the nucleus's tokens among the candidates. top_k beyond tp * K is not supported
-(``max_device_top_k``). Seeded requests and requests for logprobs stay on host sampling (the plugin routes them).
+(``max_device_top_k``). A seeded row's stream is keyed by (seed, decode position) (``stream_states``). Requests for
+logprobs stay on host sampling (the plugin routes them).
 """
 
 import numpy as np
@@ -44,18 +45,34 @@ CB_X, CB_M, CB_A, CB_S, CB_SCRATCH, CB_OUT, CB_READY = 0, 1, 2, 3, 4, 5, 6
 
 
 MASK64 = (1 << 64) - 1
+GAMMA = 0x9E3779B97F4A7C15  # splitmix64's state increment
 # How close (in cumulative probability) a uniform may land to a bucket edge before a mismatch counts as rounding.
 EDGE = 2e-5
 
 
-def splitmix_next(state):
-    """(next state, uniform in [0, 1)) of the device's splitmix64 stream (kernels/sample_fixed.hpp)."""
-    state = (state + 0x9E3779B97F4A7C15) & MASK64
-    z = state
+def _mix64(z):
     z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK64
     z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK64
-    z ^= z >> 31
-    return state, (z >> 40) / float(1 << 24)
+    return z ^ (z >> 31)
+
+
+def splitmix_next(state):
+    """(next state, uniform in [0, 1)) of the device's splitmix64 stream (kernels/sample_fixed.hpp)."""
+    state = (state + GAMMA) & MASK64
+    return state, (_mix64(state) >> 40) / float(1 << 24)
+
+
+def stream_states(seeds, positions, generator=None):
+    """Per-row splitmix64 states (int64 [len(seeds)]) for draws starting at the rows' decode positions. A seeded row's
+    state at position p is mix(seed) + p * GAMMA, and each sampled step advances it by GAMMA, so its draw at every
+    position depends only on (seed, position), not on which steps reloaded it or what it was batched with. Unseeded
+    rows (seed None) get random states from ``generator`` (torch's default when None)."""
+    states = torch.randint(-(2**63), 2**63 - 1, (len(seeds),), dtype=torch.int64, generator=generator)
+    for r, (seed, pos) in enumerate(zip(seeds, positions)):
+        if seed is not None:
+            state = (_mix64((int(seed) + GAMMA) & MASK64) + max(int(pos), 0) * GAMMA) & MASK64
+            states[r] = state - (1 << 64) if state >= 1 << 63 else state
+    return states
 
 
 def reference_draw(logits, temperature, top_k, top_p, u):
@@ -180,10 +197,10 @@ class DeviceSampler:
         ]
         return torch.stack(words, dim=1).reshape(1, -1)
 
-    def host_params(self, temperature, top_k, top_p, seeds=None):
+    def host_params(self, temperature, top_k, top_p, states=None):
         """torch [rows] each (rows <= max_batch; the rest greedy) -> (host tensors for ``set_params``, whether any row
-        samples). top_k < 1 or at least the vocabulary means no top_k; top_k 1 or temperature 0 is greedy. ``seeds``:
-        int64 [max_batch] splitmix64 states for the rows' draws (default: from torch's generator)."""
+        samples). top_k < 1 or at least the vocabulary means no top_k; top_k 1 or temperature 0 is greedy. ``states``:
+        int64 [max_batch] splitmix64 states for the rows' draws (``stream_states``; default: random)."""
         rows = temperature.numel()
         temp, k, p = self._greedy()
         temp[:rows] = temperature.float()
@@ -191,10 +208,10 @@ class DeviceSampler:
         k[:rows] = torch.where((kk >= 1) & (kk < self.vocab_local * self.plan.tp), kk, torch.zeros_like(kk))
         p[:rows] = top_p.float()
         greedy = (temp == 0) | (k == 1)
-        if seeds is None:
-            seeds = torch.randint(-(2**63), 2**63 - 1, (self.max_batch,), dtype=torch.int64)
+        if states is None:
+            states = stream_states([None] * self.max_batch, [0] * self.max_batch)
         self.pending_rows = (temp.clone(), k.clone(), p.clone())
-        words = seeds.numpy().astype(np.int64).view(np.int32).reshape(1, -1)  # low word first
+        words = states.numpy().astype(np.int64).view(np.int32).reshape(1, -1)  # low word first
         rep = self.plan.replicate()
         hosts = [
             ttnn.from_torch(self._params(temp, k, p), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep),

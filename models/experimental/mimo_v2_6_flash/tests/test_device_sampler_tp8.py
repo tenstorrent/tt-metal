@@ -135,7 +135,7 @@ def test_device_sampler(mesh_device):
         for i, (temperature, top_k, top_p) in enumerate(PARAM_SETS):
             temperature, top_k, top_p = torch.tensor(temperature), torch.tensor(top_k), torch.tensor(top_p)
             streams = Streams(gen)
-            hosts, _ = sampler.host_params(temperature, top_k, top_p, seeds=streams.seeds)
+            hosts, _ = sampler.host_params(temperature, top_k, top_p, states=streams.seeds)
             sampler.set_params(hosts)
             sampled = [r < USERS and float(temperature[r]) != 0 and int(top_k[r]) != 1 for r in range(B)]
             for d in range(DRAWS):

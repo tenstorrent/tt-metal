@@ -28,11 +28,10 @@ Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample
 steps per replica (captured in ``warmup_model_decode``) that also computes each slot's token and writes it, with the
 slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back): the greedy step (GreedyHead), or,
 while a lane holds a row with temperature > 0, the sampled step (DeviceSampler: temperature, top_k up to
-``max_device_top_k``, top_p; its random stream is on device, seeded with the parameters). With
-``sample_on_device_mode`` the plugin
-samples on device unless a row asks for what the sampler lacks (a top_k past its candidates, pure temperature
-sampling without top_p or top_k, a seed, penalties, logprobs or structured output send the whole batch to host
-sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
+``max_device_top_k``, top_p; its random stream is on device, seeded with the parameters, a seeded row's by (seed,
+position)). With ``sample_on_device_mode`` the plugin samples on device unless a row asks for what the sampler lacks
+(a top_k past its candidates, pure temperature sampling without top_p or top_k, penalties, logprobs or structured
+output send the whole batch to host sampling, which reads the logit rows) and overlaps the steps (``decode_input_update_contract`` 1,
 ``supports_async_decode``): a steady step copies nothing (the trace reads its RoPE
 cos / sin from device tables at its own positions; past 128K context it copies those of the adapter's own position
 counter), and its tokens are read back without blocking. Prefill runs
@@ -54,7 +53,7 @@ import ttnn
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
 from .attention import page_table_width
-from .device_sampler import CANDIDATES_PER_CHIP
+from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
@@ -104,12 +103,11 @@ class MiMoV2ForCausalLM:
         "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
         # Device sampling: the decode trace's greedy token or DeviceSampler's draw (module docstring). Its candidates
         # are each chip's CANDIDATES_PER_CHIP largest logits, which bound top_k and stand in for the vocabulary when
-        # a top_p < 1 row sets no top_k; a row with neither (pure temperature sampling) or with a seed samples on host.
+        # a top_p < 1 row sets no top_k; a row with neither (pure temperature sampling) samples on host.
         "supports_sample_on_device": True,
         "supports_async_decode": True,
         "max_device_top_k": TP * CANDIDATES_PER_CHIP,
         "supports_device_top_p_without_top_k": True,
-        "supports_device_seeds": False,
         "supports_device_penalties": False,
         "supports_device_logprobs": False,
     }
@@ -500,7 +498,7 @@ class MiMoV2ForCausalLM:
                     raise RuntimeError(f"lane {lane}: a steady decode before any reloading decode")
             active = pos >= 0
             if on_device and (reload_inputs or reload_sampling_params):
-                self._set_sampling(lane, model, sampling_params, first, last, active)
+                self._set_sampling(lane, model, sampling_params, first, last, pos)
             sample = on_device and self.lane_sampled[lane]
             if not bool(active.any()):
                 self.decode_positions[lane] = pos
@@ -565,16 +563,19 @@ class MiMoV2ForCausalLM:
             )
         self._check_stats = stats
 
-    def _set_sampling(self, lane, model, sampling_params, first, last, active):
-        """Uploads the sampling parameters of the lane's rows [first, last) (idle rows greedy) and records whether
-        any row samples. A sampled row must be within what the plugin routes to the device (``model_capabilities``):
-        top_k up to ``max_device_top_k`` or none with top_p < 1, and no seed."""
+    def _set_sampling(self, lane, model, sampling_params, first, last, pos):
+        """Uploads the sampling parameters of the lane's rows [first, last) (idle rows, position -1, greedy) and their
+        random streams, and records whether any row samples. A seeded row's stream is keyed by (seed, position)
+        (device_sampler.stream_states), so its draws do not depend on which steps reload it. A sampled row must be
+        within what the plugin routes to the device (``model_capabilities``): top_k up to ``max_device_top_k``, or
+        none with top_p < 1."""
         n = last - first
+        active = pos[:n] >= 0
         temperature = torch.tensor([float(t) for t in sampling_params.temperature[first:last]])
         top_k = torch.tensor([int(k) for k in sampling_params.top_k[first:last]])
         top_p = torch.tensor([float(p) for p in sampling_params.top_p[first:last]])
         seeds = list(sampling_params.seed[first:last]) if sampling_params.seed is not None else [None] * n
-        temperature = torch.where(active[:n], temperature, torch.zeros_like(temperature))
+        temperature = torch.where(active, temperature, torch.zeros_like(temperature))
         vocab = self.gen.cfg.vocab_size
         max_k = self.model_capabilities["max_device_top_k"]
         for s in range(n):
@@ -582,12 +583,14 @@ class MiMoV2ForCausalLM:
                 continue
             k, p = int(top_k[s]), float(top_p[s])
             unbounded = k < 1 or k >= vocab
-            if (not unbounded and k > max_k) or (unbounded and p >= 1.0) or seeds[s] is not None:
+            if (not unbounded and k > max_k) or (unbounded and p >= 1.0):
                 raise ValueError(
-                    f"row {first + s}: device sampling takes top_k <= {max_k}, or none with top_p < 1, and no seed; "
-                    f"got temperature {float(temperature[s])}, top_k {k}, top_p {p}, seed {seeds[s]}"
+                    f"row {first + s}: device sampling takes top_k <= {max_k}, or none with top_p < 1; got "
+                    f"temperature {float(temperature[s])}, top_k {k}, top_p {p}"
                 )
-        hosts, sampled = model.sampler.host_params(temperature, top_k, top_p)
+        rows = model.max_batch
+        states = stream_states(seeds + [None] * (rows - n), pos.tolist())
+        hosts, sampled = model.sampler.host_params(temperature, top_k, top_p, states=states)
         model.sampler.set_params(hosts)
         self.lane_sampled[lane] = sampled
 

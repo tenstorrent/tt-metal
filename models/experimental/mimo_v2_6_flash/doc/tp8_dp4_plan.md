@@ -475,9 +475,10 @@ most 32 tokens, or more but inside the row's 256 candidates (the 32 largest of e
 at temperature 1 and top_p 0.95 (8848 decode rows, host sampler instrumented): the nucleus is 1 token at p50, 5 at p90,
 20 at p99; 99.7% of rows have at most 32, and 99.9% fit in 256.
 
-Routing (vllm-tt-plugin): the model declares `max_device_top_k` 256, `supports_device_top_p_without_top_k` (a row with
-no top_k and top_p < 1 stays on device) and `supports_device_seeds` False (seeded rows sample on host). Pure
-temperature sampling (no top_k, top_p 1), penalties, logprobs and structured output still sample on host.
+Routing (vllm-tt-plugin): the model declares `max_device_top_k` 256 and `supports_device_top_p_without_top_k` (a row
+with no top_k and top_p < 1 stays on device). Pure temperature sampling (no top_k, top_p 1), penalties, logprobs and
+structured output still sample on host. Seeded rows sample on device: a row's stream state at decode position p is
+mix(seed) + p * GAMMA (`stream_states`), so its draws depend only on (seed, position), whichever steps reload it.
 
 `tests/test_device_sampler_tp8.py`: 312 rows over 4 parameter sets, 3 logit shapes, eager and traced draws. All 168
 rows whose nucleus lies in the 32 most likely tokens match the exact full-vocabulary draw (same uniform, replayed
