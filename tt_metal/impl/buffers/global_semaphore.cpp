@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "global_semaphore_impl.hpp"
-#include "sram_address.hpp"
+#include "buffer_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
