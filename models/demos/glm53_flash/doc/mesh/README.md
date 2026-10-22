@@ -927,3 +927,11 @@ depth-chaos amplification of that. Test bars set to the measured floor (logits P
 model; per-prompt TTFT 123.1 then 109-111 s (2126-2400 tok/s), 1.63 GiB free after the 16 prefills per row, decode
 188.1 ms = 5.3 tok/s per user (128 slots, 680 aggregate); **needles 128/128, users agree** (rows differ at a
 near-tie as usual). README row added.
+
+**Envelope point 3: 32 users per row x 128 K (02:09, `long_8x4_N131072_B32_envelope.log`):** 8 slots per chip, 256-slot
+model; per-prompt TTFT 63.0 then 54.6-55.2 s (2078-2395 tok/s), 1.12 GiB free after the 32 prefills per row, decode
+199.0 ms = 5.0 tok/s per user (256 slots, 1287 aggregate); **needles 256/256, rows agree, users agree**. The planner's
+users x ISL envelope is now measured end to end at 32 x 1 M, 64 x 512 K, 128 x 256 K, 256 x 128 K (free DRAM 2.04 /
+1.95 / 1.63 / 1.12 GiB). Decode per user at the envelope: 6.6 / 5.6 / 5.3 / 5.0 tok/s: the step grows with the slot
+count (160.8 -> 178.2 -> 188.1 -> 199.0 ms) far less than the batch, i.e. the long-context decode is latency-bound
+(the ledger's per-op items), and the aggregate scales 210 -> 359 -> 681 -> 1287 tok/s.
