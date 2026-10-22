@@ -106,15 +106,17 @@ void activate_gate(uint32_t Vt, DFB& norm) {
     norm.push_back(Vt);
 }
 
-template <typename DFB>
+// out = tmp * the activated gate (norm after activate_gate, or the gate itself when its producer activated it).
+template <bool GateActivated, typename DFB>
 void multiply_output(uint32_t Vt, DFB& out) {
+    constexpr auto activated = GateActivated ? dfb::gate : dfb::norm;
     out.reserve_back(Vt);
     pack_reconfig_data_format(dfb::out);
-    reconfig_data_format(dfb::tmp, dfb::norm);
-    mul_init(dfb::tmp, dfb::norm);
+    reconfig_data_format(dfb::tmp, activated);
+    mul_init(dfb::tmp, activated);
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
-        mul_tiles(dfb::tmp, dfb::norm, i, i, 0);
+        mul_tiles(dfb::tmp, activated, i, i, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::out, i);
@@ -123,7 +125,7 @@ void multiply_output(uint32_t Vt, DFB& out) {
     out.push_back(Vt);
 }
 
-template <uint32_t Vt, uint32_t bf16_gate>
+template <uint32_t Vt, uint32_t bf16_gate, uint32_t gate_activated>
 TT_KERNEL void compute(uint32_t wi_count) {
     compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
     DataflowBuffer x(dfb::x);
@@ -157,11 +159,17 @@ TT_KERNEL void compute(uint32_t wi_count) {
         apply_weight(Vt, tmp);
         tmp.wait_front(Vt);
         norm.pop_front(Vt);
-        activate_gate<bf16_gate != 0>(Vt, norm);
-        norm.wait_front(Vt);
-        gate.pop_front(Vt);
-        multiply_output(Vt, out);
-        tmp.pop_front(Vt);
-        norm.pop_front(Vt);
+        if constexpr (gate_activated != 0) {
+            multiply_output<true>(Vt, out);
+            gate.pop_front(Vt);
+            tmp.pop_front(Vt);
+        } else {
+            activate_gate<bf16_gate != 0>(Vt, norm);
+            norm.wait_front(Vt);
+            gate.pop_front(Vt);
+            multiply_output<false>(Vt, out);
+            tmp.pop_front(Vt);
+            norm.pop_front(Vt);
+        }
     }
 }

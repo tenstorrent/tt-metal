@@ -28,6 +28,8 @@ struct RingRelayOutputGateParams {
     uint32_t output_column = 0;
     uint32_t copy_source_column = 0;
     std::vector<tt::tt_metal::CoreCoord> copy_cores;
+    // The output holds sigmoid(projection) and the sigmoid of the copied columns.
+    bool sigmoid = false;
 };
 
 struct RingRelayPrefixParams {

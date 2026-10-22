@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
+from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -32,7 +33,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.recurrence import CarryProjection, KDAR
 from models.demos.deepseek_v3_d_p.tt.kda.ring_relay_prefix import RelayOutputGate
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
 
 
 def _worker_block(columns: int, rows: int) -> ttnn.CoreRange:
@@ -300,7 +300,8 @@ class ttKDA:
             for tensor in (joined, leading, trailing, fused):
                 ttnn.deallocate(tensor)
             relay_cores = self.recurrence.ring_relay_cores
-            # The kept heads' gate columns are copied into the gate's output by the relay columns' spare cores.
+            # The kept heads' gate columns are copied (as their sigmoid) into the gate's output by the relay columns'
+            # spare cores and the worker columns between the gate's matmul and the relay.
             self._gate_copy_cores = [c for c in self._relay_column_cores if c not in relay_cores]
             # The relay's head cores multiply while the gate runs, so they share the gate's max_matmul_cores.
             gate_columns = min(
@@ -313,6 +314,11 @@ class ttKDA:
                     f"max_matmul_cores {program_config.max_matmul_cores}); disable overlap_output_gate"
                 )
             self._output_gate_matmul = (_worker_block(gate_columns, grid.y), program_config.output_gate_k_block)
+            self._gate_copy_cores += [
+                ttnn.CoreCoord(x, y)
+                for x in range(gate_columns, min(c.x for c in self._relay_column_cores))
+                for y in range(grid.y)
+            ]
             # The output projection on the worker columns left of the final carry's, within max_matmul_cores.
             carry_x = min(c.x for c in self.recurrence.final_carry_cores)
             self._output_projection_matmul = (
@@ -561,6 +567,8 @@ class ttKDA:
             gate_column_offset=output_gate_offset,
             # A BF16 output needs only a BF16-grade gate.
             bf16_gate=self.gated_rms_output_dtype == ttnn.bfloat16,
+            # The relay's output gate holds sigmoid(gate) already.
+            gate_activated=self.overlap_output_gate,
         )
 
     def _project_output(
@@ -669,6 +677,8 @@ class ttKDA:
                 copy_source_column=inputs.output_gate_offset // ttnn.TILE_SIZE,
                 copied_columns=self.input_projection_gate_columns // ttnn.TILE_SIZE,
                 copy_cores=self._gate_copy_cores,
+                # The gate's sigmoid is SFPU work the relay's idle cores and the matmul's pack thread absorb.
+                sigmoid=True,
             )
 
         result = self.recurrence(
@@ -718,7 +728,13 @@ class ttKDA:
                 ),
                 extra_tensors=[
                     t
-                    for t in (carry["rank_final"], carry["prefix_final"], carry["actual_start"], carry["actual_end"], final_state)
+                    for t in (
+                        carry["rank_final"],
+                        carry["prefix_final"],
+                        carry["actual_start"],
+                        carry["actual_end"],
+                        final_state,
+                    )
                     if t is not None
                 ],
             )

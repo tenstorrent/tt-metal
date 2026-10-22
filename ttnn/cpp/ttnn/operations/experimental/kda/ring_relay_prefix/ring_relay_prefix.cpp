@@ -31,7 +31,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> ring_relay_p
     const std::optional<ttnn::Tensor>& output_gate_copy_source,
     uint32_t output_gate_copy_source_column,
     uint32_t output_gate_copied_columns,
-    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores,
+    bool output_gate_sigmoid) {
     const auto arch = packed.device()->arch();
     std::optional<ttnn::experimental::prim::RingRelayOutputGateParams> output_gate;
     if (output_gate_cores) {
@@ -43,7 +44,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> ring_relay_p
             .output_mem_config = output_gate_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
             .output_column = output_gate_copied_columns,
             .copy_source_column = output_gate_copy_source_column,
-            .copy_cores = output_gate_copy_cores};
+            .copy_cores = output_gate_copy_cores,
+            .sigmoid = output_gate_sigmoid};
     }
     TT_FATAL(semaphores.size() == 2, "ring_relay_prefix: needs two global semaphores, got {}", semaphores.size());
     auto outputs = ttnn::device_operation::launch<ttnn::experimental::prim::RingRelayPrefixOperation>(

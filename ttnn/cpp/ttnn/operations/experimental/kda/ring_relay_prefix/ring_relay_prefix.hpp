@@ -39,6 +39,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> ring_relay_p
     const std::optional<ttnn::Tensor>& output_gate_copy_source = std::nullopt,
     uint32_t output_gate_copy_source_column = 0,
     uint32_t output_gate_copied_columns = 0,
-    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores = {});
+    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores = {},
+    bool output_gate_sigmoid = false);
 
 }  // namespace ttnn::experimental::kda

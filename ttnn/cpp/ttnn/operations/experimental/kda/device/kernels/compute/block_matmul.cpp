@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
@@ -9,7 +10,9 @@
 #include "api/compute/tile_move_copy.h"
 
 // Block matmul compute: K blocks accumulate in an FP32 buffer with packer L1 accumulation; the last K block reloads
-// that buffer into DST (unpacked straight to DST, exact) and packs the output dtype subblock by subblock.
+// that buffer into DST (unpacked straight to DST, exact) and packs the output dtype subblock by subblock. With
+// `sigmoid`, the pack thread first takes the BF16-grade sigmoid of each output subblock in DST, while the math thread
+// moves on to the next subblock.
 void kernel_main() {
     constexpr uint32_t cb_a = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -21,9 +24,13 @@ void kernel_main() {
     constexpr uint32_t k_blocks = get_compile_time_arg_val(7);
     constexpr uint32_t sub_w = get_compile_time_arg_val(8);  // output subblock: sub_h x sub_w tiles
     constexpr uint32_t sub_h = get_compile_time_arg_val(9);
+    constexpr bool sigmoid = get_compile_time_arg_val(10) != 0;
     constexpr uint32_t out_tiles = m_block * n_block;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_w, cb_acc);
+    if constexpr (sigmoid) {
+        sigmoid_tile_init_pack<false>();
+    }
     // Subblocks one tile high land in the output in order, so the writer can take them as they come.
     constexpr bool stream = sub_h == 1;
     cb_reserve_back(cb_acc, out_tiles);
@@ -66,7 +73,20 @@ void kernel_main() {
                     matmul_block(cb_a, cb_w, r0 * k_block + k, k * n_block + c0, 0, false, sub_w, sub_h, k_block);
                 }
                 tile_regs_commit();
-                tile_regs_wait();
+                if (sigmoid && last) {
+                    // Waits for the math thread like tile_regs_wait, on the DST half it just committed.
+                    PACK(TTI_SEMWAIT(
+                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                        semaphore::t6_sem(semaphore::MATH_PACK),
+                        p_stall::STALL_ON_ZERO));
+                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                    for (uint32_t t = 0; t < sub_h * sub_w; ++t) {
+                        sigmoid_tile_pack<VectorMode::RC, false, false>(t);
+                    }
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                } else {
+                    tile_regs_wait();
+                }
                 if (!last) {
                     for (uint32_t r = 0; r < sub_h; ++r) {
                         for (uint32_t t = 0; t < sub_w; ++t) {

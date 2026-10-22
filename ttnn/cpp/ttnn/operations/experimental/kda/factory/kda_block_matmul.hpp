@@ -20,7 +20,8 @@ namespace ttnn::experimental::prim::kda_factory_detail {
 // block of the output and streams K in k_block-tile blocks: the first core of each row reads that row's A blocks and
 // multicasts them along the row (NoC 1), the first core of each column multicasts W down the column (NoC 0). Compute
 // accumulates the K blocks in an FP32 buffer with packer L1 accumulation; the last K block reloads it into DST (exact)
-// and packs the output dtype subblock by subblock, each written as soon as it is packed.
+// and packs the output dtype subblock by subblock, each written as soon as it is packed. With `sigmoid`, the pack
+// thread takes each output subblock's BF16-grade sigmoid before packing it.
 tt::tt_metal::ProgramDescriptor block_matmul_program(
     const tt::tt_metal::distributed::MeshDevice& device,
     const Tensor& a,
@@ -29,18 +30,21 @@ tt::tt_metal::ProgramDescriptor block_matmul_program(
     const tt::tt_metal::CoreRange& cores,
     uint32_t k_block,
     uint32_t output_column,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool sigmoid = false);
 
 void check_block_matmul(
     const Tensor& a, const Tensor& w, const tt::tt_metal::CoreRange& cores, uint32_t k_block, std::string_view name);
 
 // Copy `columns` tile columns of `source` from source_column into destination's first columns, split by tile rows over
-// `cores`. Both are TILE tensors of one dtype.
+// `cores`. Both are TILE tensors of one dtype. With `sigmoid`, each tile's BF16-grade sigmoid is copied instead, the
+// tiles split evenly over `cores` (each runs a reader, a compute and a writer kernel).
 tt::tt_metal::ProgramDescriptor copy_tile_columns_program(
     const Tensor& source,
     uint32_t source_column,
     const Tensor& destination,
     uint32_t columns,
-    const std::vector<tt::tt_metal::CoreCoord>& cores);
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    bool sigmoid = false);
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

@@ -26,6 +26,8 @@ struct SigmoidGatedRmsNormParams {
     // The gate's sigmoid at BF16 grade (exp_21f, one Newton step) instead of FP32-accurate, for a gate that multiplies
     // into a BF16 output.
     bool bf16_gate = false;
+    // The gate tensor already holds sigmoid(gate) (the producer took it), so the kernel multiplies by it directly.
+    bool gate_activated = false;
 };
 
 struct SigmoidGatedRmsNormInputs {

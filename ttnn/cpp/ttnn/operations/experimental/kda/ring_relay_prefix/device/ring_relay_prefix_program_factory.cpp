@@ -224,7 +224,8 @@ tt::tt_metal::WorkloadDescriptor RingRelayPrefixProgramFactory::create_workload_
             config->cores.bounding_box(),
             config->k_block,
             config->output_column,
-            config->compute_kernel_config);
+            config->compute_kernel_config,
+            config->sigmoid);
         if (config->output_column > 0) {
             gate = tt::tt_metal::merge_program_descriptors(
                 {*gate,
@@ -233,7 +234,8 @@ tt::tt_metal::WorkloadDescriptor RingRelayPrefixProgramFactory::create_workload_
                      config->copy_source_column,
                      outputs[2],
                      config->output_column,
-                     config->copy_cores)});
+                     config->copy_cores,
+                     config->sigmoid)});
         }
     }
     for (const auto& coord : tensor_coords.coords()) {

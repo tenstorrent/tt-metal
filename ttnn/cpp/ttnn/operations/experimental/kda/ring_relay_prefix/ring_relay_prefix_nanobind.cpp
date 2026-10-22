@@ -26,7 +26,8 @@ void bind_ring_relay_prefix(nb::module_& mod) {
 
         With ``output_gate_cores``, ``output_gate_input @ output_gate_weight`` (``block_matmul``'s program)
         runs in the same dispatch on those cores, its first ``output_gate_copied_columns`` tile columns copied
-        from ``output_gate_copy_source`` by ``output_gate_copy_cores``.
+        from ``output_gate_copy_source`` by ``output_gate_copy_cores``. With ``output_gate_sigmoid`` the output
+        gate holds the BF16-grade sigmoid of the projection and of the copied columns.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor | None]: FP32 ``[B*H, K, K]`` entry states, the final
@@ -56,7 +57,8 @@ void bind_ring_relay_prefix(nb::module_& mod) {
         nb::arg("output_gate_copy_source") = nb::none(),
         nb::arg("output_gate_copy_source_column") = 0,
         nb::arg("output_gate_copied_columns") = 0,
-        nb::arg("output_gate_copy_cores") = std::vector<tt::tt_metal::CoreCoord>{});
+        nb::arg("output_gate_copy_cores") = std::vector<tt::tt_metal::CoreCoord>{},
+        nb::arg("output_gate_sigmoid") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::ring_relay_prefix::detail

@@ -47,7 +47,8 @@ def persistent_semaphores(mesh_device, count: int) -> list:
 class RelayOutputGate:
     """input @ weight run in the relay's dispatch on worker cores the relay leaves idle (matmul: rectangle, K block):
     the output's first ``copied_columns`` tile columns are copied from ``copy_source`` (from tile column
-    ``copy_source_column``) by ``copy_cores``, the projection's columns follow."""
+    ``copy_source_column``) by ``copy_cores``, the projection's columns follow. With ``sigmoid`` the output holds
+    the sigmoid of both, taken by the projection's pack thread and by the copy cores."""
 
     input: ttnn.Tensor
     weight: ttnn.Tensor
@@ -58,6 +59,7 @@ class RelayOutputGate:
     copy_source_column: int = 0
     copied_columns: int = 0
     copy_cores: list = field(default_factory=list)
+    sigmoid: bool = False
 
 
 class RingRelayPrefix:
@@ -142,6 +144,7 @@ class RingRelayPrefix:
                 output_gate_copy_source_column=output_gate.copy_source_column,
                 output_gate_copied_columns=output_gate.copied_columns,
                 output_gate_copy_cores=list(output_gate.copy_cores),
+                output_gate_sigmoid=output_gate.sigmoid,
             )
         return ttnn.experimental.kda.ring_relay_prefix(
             packed,

@@ -17,7 +17,8 @@ ttnn::Tensor sigmoid_gated_rms_norm(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     DataType output_dtype,
     uint32_t gate_column_offset,
-    bool bf16_gate) {
+    bool bf16_gate,
+    bool gate_activated) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
         "sigmoid_gated_rms_norm: input must be an allocated device tensor");
@@ -41,7 +42,8 @@ ttnn::Tensor sigmoid_gated_rms_norm(
         kernel_config,
         output_dtype,
         gate_column_offset,
-        bf16_gate);
+        bf16_gate,
+        gate_activated);
 }
 
 }  // namespace ttnn::experimental::kda

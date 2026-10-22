@@ -131,7 +131,8 @@ Tensor sigmoid_gated_rms_norm(
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
     uint32_t gate_column_offset,
-    bool bf16_gate) {
+    bool bf16_gate,
+    bool gate_activated) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
@@ -149,7 +150,8 @@ Tensor sigmoid_gated_rms_norm(
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
             .gate_column_offset = gate_column_offset,
-            .bf16_gate = bf16_gate},
+            .bf16_gate = bf16_gate,
+            .gate_activated = gate_activated},
         SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
     return results[0];
 }

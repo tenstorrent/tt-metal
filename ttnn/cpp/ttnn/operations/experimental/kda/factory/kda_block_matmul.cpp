@@ -26,6 +26,7 @@ constexpr uint32_t cb_w = 17;
 constexpr uint32_t cb_acc = 18;
 constexpr uint32_t cb_out = 19;
 constexpr uint32_t cb_copy = 20;
+constexpr uint32_t cb_activated = 21;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/";
 
 }  // namespace
@@ -47,7 +48,8 @@ tt::tt_metal::ProgramDescriptor block_matmul_program(
     const tt::tt_metal::CoreRange& rect,
     uint32_t k_block,
     uint32_t output_column,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool sigmoid) {
     using tt::tt_metal::CoreCoord;
     const uint32_t mt = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t kt = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
@@ -171,7 +173,8 @@ tt::tt_metal::ProgramDescriptor block_matmul_program(
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/block_matmul.cpp",
         .core_ranges = rect_set,
-        .compile_time_args = {cb_a, cb_w, cb_acc, cb_out, m_block, n_block, k_block, k_blocks, sub_w, sub_h},
+        .compile_time_args =
+            {cb_a, cb_w, cb_acc, cb_out, m_block, n_block, k_block, k_blocks, sub_w, sub_h, uint32_t{sigmoid}},
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
                 .math_fidelity = math_fidelity,
@@ -211,13 +214,87 @@ tt::tt_metal::ProgramDescriptor block_matmul_program(
     return desc;
 }
 
-tt::tt_metal::ProgramDescriptor copy_tile_columns_program(
+namespace {
+
+// copy_tile_columns_program's sigmoid form: tile t of the rows x columns block (row-major) goes to core
+// t * cores / tiles, so the SFPU work is even. Each core reads its tiles, the compute kernel activates them in place
+// of a copy, and the writer stores them.
+tt::tt_metal::ProgramDescriptor activate_tile_columns_program(
     const Tensor& source,
     uint32_t source_column,
     const Tensor& destination,
     uint32_t columns,
     const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const uint32_t rows = source.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t tiles = rows * columns;
+    const std::vector<tt::tt_metal::CoreCoord> used(
+        cores.begin(), cores.begin() + std::min<size_t>(tiles, cores.size()));
+    const uint32_t page = tile_bytes(source);
+    const auto format = tt::tt_metal::datatype_to_dataformat_converter(source.dtype());
+    const CoreRangeSet set = merged_core_set(used);
+    constexpr uint32_t group = 4;
+    tt::tt_metal::ProgramDescriptor desc;
+    desc.cbs = {
+        cb_descriptor(cb_copy, 2 * group, page, format, set),
+        cb_descriptor(cb_activated, 2 * group, page, format, set)};
+    std::vector<uint32_t> reader_ct = {cb_copy, columns, group};
+    tt::tt_metal::TensorAccessorArgs(source.buffer()).append_to(reader_ct);
+    std::vector<uint32_t> writer_ct = {cb_activated, columns, group};
+    tt::tt_metal::TensorAccessorArgs(destination.buffer()).append_to(writer_ct);
+    tt::tt_metal::KernelDescriptor reader{
+        .kernel_source = std::string(kernel_dir) + "dataflow/activate_tile_columns_reader.cpp",
+        .core_ranges = set,
+        .compile_time_args = std::move(reader_ct),
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    };
+    tt::tt_metal::KernelDescriptor writer{
+        .kernel_source = std::string(kernel_dir) + "dataflow/activate_tile_columns_writer.cpp",
+        .core_ranges = set,
+        .compile_time_args = std::move(writer_ct),
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    };
+    tt::tt_metal::KernelDescriptor compute{
+        .kernel_source = std::string(kernel_dir) + "compute/activate_tile_columns.cpp",
+        .core_ranges = set,
+        .compile_time_args = {cb_copy, cb_activated, group},
+        .config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4},
+    };
+    for (uint32_t index = 0; index < used.size(); ++index) {
+        const uint32_t begin = static_cast<uint32_t>(uint64_t{tiles} * index / used.size());
+        const uint32_t end = static_cast<uint32_t>(uint64_t{tiles} * (index + 1) / used.size());
+        tt::tt_metal::KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(source.buffer());
+        for (uint32_t value : {source.padded_shape()[-1] / tt::constants::TILE_WIDTH, source_column, begin, end}) {
+            reader_args.push_back(value);
+        }
+        reader.emplace_runtime_args(used[index], reader_args);
+        tt::tt_metal::KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(destination.buffer());
+        for (uint32_t value : {destination.padded_shape()[-1] / tt::constants::TILE_WIDTH, begin, end}) {
+            writer_args.push_back(value);
+        }
+        writer.emplace_runtime_args(used[index], writer_args);
+        compute.runtime_args.push_back({used[index], {end - begin}});
+    }
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor copy_tile_columns_program(
+    const Tensor& source,
+    uint32_t source_column,
+    const Tensor& destination,
+    uint32_t columns,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    bool sigmoid) {
     TT_FATAL(!cores.empty(), "copy_tile_columns_program needs at least one core");
+    if (sigmoid) {
+        return activate_tile_columns_program(source, source_column, destination, columns, cores);
+    }
     const uint32_t rows = source.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
     const std::vector<tt::tt_metal::CoreCoord> used(
         cores.begin(), cores.begin() + std::min<size_t>(rows, cores.size()));
