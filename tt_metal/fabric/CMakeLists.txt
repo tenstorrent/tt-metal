@@ -67,6 +67,20 @@ set_source_files_properties(
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
+# The fabric manifest records the commit tt-metal was built from, read from the version header that
+# tt_metal_version_header refreshes on every build. The one file that reads it stays out of the unity build, so a
+# new commit recompiles only that file.
+target_include_directories(fabric PRIVATE ${PROJECT_BINARY_DIR}/generated)
+if(TARGET tt_metal_version_header)
+    add_dependencies(fabric tt_metal_version_header)
+endif()
+set_source_files_properties(
+    debug/visualizer/manifest/fabric_manifest_build_identity.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+
 target_include_directories(fabric PRIVATE .)
 target_include_directories(
     fabric
