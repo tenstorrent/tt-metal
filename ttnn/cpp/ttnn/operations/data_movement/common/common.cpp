@@ -262,7 +262,8 @@ int noc_bw_table_index(tt::ARCH arch) {
     return arch == tt::ARCH::WORMHOLE_B0 ? WormholeIndex : BlackholeIndex;
 }
 
-// Busy AICLK OpPerformanceModelGeneral divides by: wormhole::AICLK_BUSY_VAL, blackhole::AICLK_BUSY_VAL.
+// The busy AICLK that OpPerformanceModelGeneral divides by:
+// tt::umd::wormhole::AICLK_BUSY_VAL (1000 MHz), tt::umd::blackhole::AICLK_BUSY_VAL (1350 MHz).
 float noc_bw_model_clock_hz(tt::ARCH arch) {
     validate_noc_bw_arch(arch);
     return arch == tt::ARCH::WORMHOLE_B0 ? 1.0e9f : 1.35e9f;
