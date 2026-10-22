@@ -234,3 +234,70 @@ def test_head_xchain(mesh_device, device_params):
         assert probe or min(ps) > 0.999, ps
         ttnn.deallocate(y)
         ttnn.deallocate(xt)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    indirect=True,
+)
+def test_se_engine(mesh_device, device_params):
+    """The shared expert engine alone (tt/se_engine.py: x in L1, every weight read once a call), x from DRAM."""
+    from models.demos.moe_block.tt.lin2c import glu_weight
+    from models.demos.moe_block.tt.se_engine import SeEngine
+
+    rows, GY = 2560, 10
+    for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
+        H, N, glu, _, _ = CHAIN[name]
+        I = N // 2
+        GX = int(os.environ.get("SE_GX", "11"))
+        if os.environ.get("SE_SHAPE"):  # (debug) rows,H,I,GX,GY
+            rows, H, I, GX, GY = map(int, os.environ["SE_SHAPE"].split(","))
+            N = 2 * I
+        eng = SeEngine(
+            mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, KB=int(os.environ.get("SE_KB", "0")) or None
+        )
+        logger.info(
+            f"SEE arena base {eng.base:#x} bytes {eng.arena_bytes:#x} end {eng.base + eng.arena_bytes:#x}; "
+            + ", ".join(f"{k} {eng.base + v:#x}" for k, v in eng.off.items())
+        )
+        g = torch.Generator().manual_seed(5)
+        x = torch.randn(rows, H, generator=g)
+        wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
+        wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
+        w = eng.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
+        xt = ttnn.from_torch(
+            x.view(1, 1, rows, H),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        us, y = _time(mesh_device, lambda: eng.run_alone(xt, w))
+        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
+        ps = []
+        for d in range(R * C):
+            hh = x @ wg[d]
+            ref = act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]
+            ps.append(pcc(ys[d], ref))
+            if os.environ.get("SE_DIAG") and ps[-1] < 0.999:  # (debug) per row tile: per 32-column block PCC (x100)
+                hd = act_host(act, hh[:, :I], hh[:, I:])
+                for r0 in range(0, rows, 32):
+                    row = [
+                        int(100 * pcc(ys[d][r0 : r0 + 32, c0 : c0 + 32], ref[r0 : r0 + 32, c0 : c0 + 32]))
+                        for c0 in range(0, H, 32)
+                    ]
+                    logger.info(f"SEE diag dev {d} row tile {r0 // 32}: {row}")
+        db = eng.dram_bytes()
+        flops = 2 * rows * H * N + 2 * rows * I * H
+        logger.info(
+            f"SEE {name} rows {rows} H {H} I {I} GX {eng.GX} KB {eng.KB} NPD {eng.NPD} arena {eng.arena_bytes // 1024} KB: "
+            f"{us if us is None else round(us, 1)} us"
+            + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
+            + f", PCC min {min(ps):.5f}; DRAM a call: W {db['w'] / 1e6:.1f} MB (lin2c chain: "
+            f"{(H * N + I * H) * 1088 / 1024 * 8 / 1e6:.1f}), x {db['x'] / 1e6:.1f}, y {db['y'] / 1e6:.1f}"
+        )
+        assert min(ps) > 0.999, ps
+        ttnn.deallocate(y)
