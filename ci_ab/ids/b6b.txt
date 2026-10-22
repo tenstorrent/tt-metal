@@ -1,0 +1,6 @@
+test_math_matmul.py::test_math_matmul[MathFidelity.HiFi2-matmul_config142000-0]
+test_math_matmul.py::test_math_matmul[MathFidelity.HiFi2-matmul_config142500-0]
+test_math_matmul.py::test_math_matmul[MathFidelity.HiFi2-matmul_config143000-0]
+test_math_matmul.py::test_math_matmul[MathFidelity.HiFi2-matmul_config143500-0]
+test_math_matmul.py::test_math_matmul[MathFidelity.HiFi2-matmul_config144000-0]
+test_math_matmul.py::test_math_matmul[MathFidelity.HiFi2-matmul_config144500-0]

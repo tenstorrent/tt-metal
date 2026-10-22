@@ -73,8 +73,15 @@ ALWI void matmul_block_math_dynamic_throttle(
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop, tile_mop, in1_order>(
+            // The tile MOP programs faster than the row forms, which matters when the throttle flips between calls.
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, false, true, in1_order>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            if constexpr (row_mop) {
+                MATH((matmul_row_mop_dims = 0));
+            }
+            if constexpr (!tile_mop) {
+                MATH((matmul_rows_dest_stride = 0));
+            }
             throttled_mop_status = 0;
         }
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop>(idst, ct_dim, rt_dim)));
