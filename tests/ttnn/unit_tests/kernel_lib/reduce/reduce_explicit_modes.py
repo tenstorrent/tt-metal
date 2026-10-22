@@ -23,12 +23,14 @@ TILE = 32
 CB_INPUT = 0
 CB_AUXILIARY = 1
 CB_ACCUMULATOR = 2
+CB_STREAM_SOURCE = 3
 CB_OUTPUT = 16
 CB_STREAM_DESTINATION = 17
 DEST_LIMIT = 4  # fp32 DEST + half synchronization, fixed by _compute_config().
 
 COMPUTE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_explicit.cpp"
 AUXILIARY_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_explicit_auxiliary.cpp"
+READER_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_explicit_reader.cpp"
 
 POLICIES = ("WaitAndPopPerTile", "BulkWaitBulkPop", "WaitUpfrontNoPop", "NoWaitNoPop")
 INDEXED_POLICIES = ("WaitUpfrontNoPop", "NoWaitNoPop")
@@ -65,6 +67,8 @@ class ReduceCase:
     batch_padding: int = 0
     no_auxiliary: bool = False
     stream_output: bool = False
+    # Nonzero: a reader streams the input through a compute input CB of this many tiles.
+    input_cb_tiles: int = 0
     post_exp: bool = False
     accumulator_to_dest: bool = False
 
@@ -599,6 +603,30 @@ def _regression_cases() -> list[ReduceCase]:
     return cases
 
 
+def _streamed_input_cases() -> list[ReduceCase]:
+    # TileSum streams pairs of tiles; an odd input CB puts a pair across every second ring wrap.
+    cases = []
+    for dim in ("REDUCE_ROW", "REDUCE_COL"):
+        rows, cols = (2, 8) if dim == "REDUCE_ROW" else (8, 2)
+        for input_cb_tiles in (2, 3, 4, 5):
+            for partial in (0, 5):
+                for calls in (1, 2):
+                    cases.append(
+                        _case(
+                            f"streamed-input-TileSum-{dim}-cb{input_cb_tiles}-partial{partial}-calls{calls}",
+                            dim=dim,
+                            rows=rows,
+                            cols=cols,
+                            algorithm="TileSum",
+                            policy="WaitAndPopPerTile",
+                            partial=partial,
+                            calls=calls,
+                            input_cb_tiles=input_cb_tiles,
+                        )
+                    )
+    return cases
+
+
 ALL_CASES = tuple(
     _algorithm_cases()
     + _partial_cases()
@@ -609,6 +637,7 @@ ALL_CASES = tuple(
     + _no_auxiliary_cases()
     + _stride_cases()
     + _regression_cases()
+    + _streamed_input_cases()
 )
 assert len({case.name for case in ALL_CASES}) == len(ALL_CASES)
 
@@ -827,9 +856,11 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
 
     auxiliary_tiles = case.auxiliary_tiles
     cbs = [
-        ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, device_input),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_STREAM_SOURCE if case.input_cb_tiles else CB_INPUT, device_input),
         ttnn.cb_descriptor_from_sharded_tensor(CB_STREAM_DESTINATION if case.stream_output else CB_OUTPUT, output),
     ]
+    if case.input_cb_tiles:
+        cbs.append(_scratch_cb(CB_INPUT, _ttnn_dtype(case.input_dtype), case.input_cb_tiles))
     if case.stream_output:
         cbs.append(_scratch_cb(CB_OUTPUT, output_dtype, 1))
     if case.calls > 1:
@@ -845,6 +876,14 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
             runtime_args=_runtime_args([case.rows, case.cols, case.batches, case.row_stride, case.batch_stride]),
             defines=defines,
             config=_compute_config(case),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=READER_KERNEL,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=_single_core(),
+            compile_time_args=[int(case.input_cb_tiles > 0)],
+            runtime_args=_runtime_args([len(tiles)]),
+            config=ttnn.ReaderConfigDescriptor(),
         ),
     ]
     if auxiliary_tiles:

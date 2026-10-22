@@ -448,7 +448,7 @@ ALWI void reduce_tile_sum(
         tile_regs_acquire();
 
         if constexpr (streaming) {
-            // Stream the tiles in pairs from the CB front. Align first when a pair would cross the CB wrap.
+            // Stream the tiles in pairs from the CB front, adding a single tile wherever a pair would cross the wrap.
             bool loaded_accumulator = false;
             if constexpr (has_accum) {
                 if (!accumulate.is_first()) {
@@ -462,35 +462,39 @@ ALWI void reduce_tile_sum(
                 }
             }
 
-            uint32_t consumed = 0;
-            bool align_front = false;
-            // Only UNPACK owns the read pointer. Share the one-time decision
-            // so every thread issues the same number of zero/pair adds.
+            // Only UNPACK owns the read pointer. It shares the pages until the wrap and the CB
+            // size, so every thread derives the same sequence of zero and pair adds.
+            uint32_t wrap_state = 0;
             UNPACK({
                 const auto& cb = get_local_cb_interface(input_dfb_id);
                 const uint32_t until_wrap = (cb.fifo_limit - cb.fifo_rd_ptr) / cb.fifo_page_size;
-                align_front = (until_wrap & 1u) != 0 && until_wrap < full_cnt;
-                mailbox_write(ckernel::ThreadId::MathThreadId, align_front);
-                mailbox_write(ckernel::ThreadId::PackThreadId, align_front);
+                wrap_state = (until_wrap << 16) | get_dfb_num_pages(input_dfb_id);
+                mailbox_write(ckernel::ThreadId::MathThreadId, wrap_state);
+                mailbox_write(ckernel::ThreadId::PackThreadId, wrap_state);
             });
-            MATH(align_front = mailbox_read(ckernel::ThreadId::UnpackThreadId));
-            PACK(align_front = mailbox_read(ckernel::ThreadId::UnpackThreadId));
-            if (align_front) {
-                input_dfb.wait_front(1);
-                add_input_with_zero(0);
-                input_dfb.pop_front(1);
-                consumed = 1;
-            }
-            add_tiles_init(input_dfb_id, input_dfb_id, true);
-            for (; consumed + 1 < full_cnt; consumed += 2) {
-                input_dfb.wait_front(2);
-                add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
-                input_dfb.pop_front(2);
-            }
-            if (consumed < full_cnt) {
-                input_dfb.wait_front(1);
-                add_input_with_zero(0);
-                input_dfb.pop_front(1);
+            MATH(wrap_state = mailbox_read(ckernel::ThreadId::UnpackThreadId));
+            PACK(wrap_state = mailbox_read(ckernel::ThreadId::UnpackThreadId));
+            const uint32_t num_pages = wrap_state & 0xFFFFu;
+            uint32_t until_wrap = wrap_state >> 16;
+
+            bool pair_init = false;
+            for (uint32_t consumed = 0; consumed < full_cnt;) {
+                // A pair must not straddle the wrap: tile 1 is read at rd_ptr + page_size, unwrapped.
+                const uint32_t step = (until_wrap == 1u || consumed + 1u == full_cnt) ? 1u : 2u;
+                input_dfb.wait_front(step);
+                if (step == 1u) {
+                    add_input_with_zero(0);
+                    pair_init = false;
+                } else {
+                    if (!pair_init) {
+                        add_tiles_init(input_dfb_id, input_dfb_id, true);
+                        pair_init = true;
+                    }
+                    add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
+                }
+                input_dfb.pop_front(step);
+                consumed += step;
+                until_wrap = until_wrap == step ? num_pages : until_wrap - step;
             }
             if constexpr (has_accum) {
                 if (loaded_accumulator) {

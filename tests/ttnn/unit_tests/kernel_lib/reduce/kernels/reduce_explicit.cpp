@@ -107,9 +107,6 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_input, cb_auxiliary, first_output_cb);
     }
 
-    cb_reserve_back(cb_input, input_tiles * num_calls);
-    cb_push_back(cb_input, input_tiles * num_calls);
-
     run_reduce_calls(shape, layout, input_tiles);
 
     if constexpr (auxiliary_tiles > 0) {
