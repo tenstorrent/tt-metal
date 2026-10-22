@@ -4,7 +4,7 @@
 """GLM-5.3 prefill adapter.
 
 A DSA (sparse-attention) MLA + MoE model, so
-it subclasses ``MLAPrefillAdapter``, allocates the packed scaled-FP8 (or bf16) MLA KVPE cache plus the
+it subclasses ``MLAPrefillAdapter``, allocates the scaled-FP8 (or bf16) MLA KVPE cache plus the
 block-cyclic lightning-indexer KEY cache, and inherits ``build_runtime`` / ``weight_cache_path``. GLM
 diverges from the dense family two ways — a DSA indexer (resolved from the
 config's ``index_*`` attrs at model-build time) and a hand-built config (``glm_moe_dsa`` isn't
@@ -64,9 +64,8 @@ class GLM53Adapter(MLAPrefillAdapter):
         hands the whole tuple to every runtime call; the runtime pulls index 0 as the primary KV cache
         and index 1 as the secondary index cache):
 
-          * index 0 — the MLA KVPE cache, read natively by sparse_sdpa. Its format comes from
-            ``resolve_sparse_kv_cache_format`` — packed scaled FP8 by default, bf16 ROW_MAJOR when the
-            caller asks for it — never the dense bf8/TILE cache the base MLA adapter allocates. All layers.
+          * index 0 — the MLA KVPE cache sparse_sdpa reads natively: scaled FP8 by default, or bf16
+            ROW_MAJOR on request; never the dense bf8/TILE cache. All layers.
           * index 1 — the lightning-indexer's per-user block-cyclic KEY cache (bfp8 TILE, ``index_head_dim``
             wide). GLM-5.3 cross-layer reuse: only ``full`` layers own an indexer and write this cache
             (``shared`` layers reuse a prior full layer's top-k and never write), so it is sized to the
@@ -119,8 +118,7 @@ class GLM53Adapter(MLAPrefillAdapter):
 
     @property
     def default_sparse_kv_cache_format(self):
-        """Packed scaled-FP8 KVPE cache unless the caller asks for another format (the runner asks for
-        bf16 ROW_MAJOR with ``PREFILL_SCALED_FP8_KV_CACHE=0``)."""
+        """Scaled-FP8 KVPE cache unless the caller asks for another format."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
         return MlaKvCacheFormat.SCALED_FP8

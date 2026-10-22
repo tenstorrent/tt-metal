@@ -197,27 +197,17 @@ LAYER_PCC_THRESHOLD = 0.88
 # ~0.86 (glm_5_3 @L75); indexer-K nope 0.980 (glm_5_3 captures layers 0-2 + every 4th).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
-# GLM rows run on the packed scaled-FP8 KVPE cache the runner serves with. Quantizing the latent half puts
-# its deep-layer KV PCC below the bf16 floor: 0.848075 at L78 on the padded mid15k row.
+# GLM rows run on the scaled-FP8 KVPE cache (L78 padded mid15k: 0.848, below the bf16 floor).
 GLM_KV_CACHE_FORMAT = MlaKvCacheFormat.SCALED_FP8
 KV_CACHE_PCC_THRESHOLD_SCALED_FP8 = 0.82
 
 
 def _sparse_cache_format(has_indexer, kv_cache_format):
-    """KVPE cache format: the requested one on the sparse path (bf16 when None), else dense bfp8 TILE."""
+    """Sparse path: the requested format (bf16 when None). Dense: bfp8 TILE."""
     if not has_indexer:
         assert kv_cache_format is None, f"dense variants take no KV cache format, got {kv_cache_format}"
         return MlaKvCacheFormat.BFP8_TILE
     return kv_cache_format or MlaKvCacheFormat.BF16_RM
-
-
-def _gather_kvpe_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv=False):
-    """gather_cache_natural for an MlaKvCache, decoded to logical float32 [latent || RoPE] rows. Scaled-FP8
-    rows mix FP8 latent, FP32 scales and BF16 RoPE, so they are gathered as raw bytes and unpacked."""
-    if tt_kvpe_cache.format != MlaKvCacheFormat.SCALED_FP8:
-        return gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
-    packed, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv, raw=True)
-    return tt_kvpe_cache.unpack_host(packed).to(torch.float32), stripes
 
 
 # Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
@@ -251,8 +241,7 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recalibrated on the scaled-FP8 KV cache, CI run 39456857459 / job 118751643362: ~4% less per chunk
-    # than the bf16 centre (CI run 38480868957 / job 115586663804), widening to ~6% by the last chunk.
+    # Scaled-FP8 KV cache, CI run 39456857459 / job 118751643362.
     (78, 11, 10): [0.416, 0.418, 0.428, 0.421, 0.429, 0.429, 0.426, 0.426, 0.438, 0.443, 0.448],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
@@ -415,7 +404,7 @@ def _record_kv_cache_pcc(
     drifts under bf8_b). Under tp_shard_kv the gather flattens the TP shards into linear chip order and
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
-    cache_full, stripes = _gather_kvpe_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
+    cache_full, stripes = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
@@ -525,9 +514,8 @@ def _cache_shard_dims(sp_axis, tp_axis, tp_shard_kv):
 
 
 def _write_scaled_fp8_cache_from_host(tt_kvpe_cache, cache_host, mesh_device, mesh_mapper):
-    """Pack a host bf16 [latent || RoPE] cache on device with MlaKvCache.pack (the model's own KV encoding)
-    and copy it into the scaled-FP8 cache. Not via host: ttnn.from_torch only takes float32 for fp8_e4m3,
-    and that detour corrupts scale/RoPE bytes that happen to be FP8 NaN patterns."""
+    """Pack a host [latent || RoPE] cache on device into the scaled-FP8 cache (packing on host via
+    ttnn.from_torch corrupts scale/RoPE bytes that look like FP8 NaNs)."""
     latent_dim = tt_kvpe_cache.geometry.latent_dim
     latent, rope = (
         ttnn.from_torch(
@@ -1358,7 +1346,7 @@ def test_glm_prefill_transformer_chunked_padded(
     num_links,
     mode,
 ):
-    """Padded/rotated chunked prefill for GLM-5.3 (scaled-FP8 KVPE cache), traced vs untraced (see _PADDED_MODES)."""
+    """Padded/rotated chunked prefill for GLM-5.3, traced vs untraced (see _PADDED_MODES)."""
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_padded_trace(
         variant,
@@ -1738,10 +1726,7 @@ def run_chunked_transformer_updated(
     SEQ_CACHE (55k), the golden-trace length. It is NOT a free knob: the length feeds max_seq_len (hence
     the RoPE cos/sin tables) and _record_kv_cache_pcc's blockcyclic un-rotate, and it changes the
     indexer's allocated key width -- so band/tile decomposition and accumulation order shift with it, and
-    PCCs are only comparable between runs that used the SAME value.
-
-    `kv_cache_format` picks the sparse path's KVPE cache encoding (None = bf16 ROW_MAJOR); dense variants
-    take none."""
+    PCCs are only comparable between runs that used the SAME value."""
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
@@ -2380,7 +2365,7 @@ def run_chunked_transformer_updated(
             # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
             # surface because it is what every later chunk attends to, so a write landing out of order
             # inside the replay shows up here even when the final hidden state looks fine.
-            cache_now, _ = _gather_kvpe_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)
+            cache_now, _ = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)
             if det_baseline is None:
                 det_baseline = cache_now
                 logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")

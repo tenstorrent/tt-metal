@@ -139,8 +139,7 @@ _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_si
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
-# Primary KV cache format, for the models that have a choice (GLM): packed scaled FP8 unless
-# PREFILL_SCALED_FP8_KV_CACHE=0 asks for bf16. Dense-MLA models reject any explicit format, so they get None.
+# GLM KVPE cache: scaled FP8 unless PREFILL_SCALED_FP8_KV_CACHE=0 (bf16). Dense-MLA models get None.
 SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "1") == "1"
 
 
@@ -692,7 +691,6 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
         "mtp_decode_levels": MTP_DECODE_LEVELS,
-        # Every rank sizes the KV chunk table from its own cache, so a format split misaddresses the others.
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),

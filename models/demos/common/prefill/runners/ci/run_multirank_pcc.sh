@@ -141,8 +141,7 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
-# The rank shells get a fixed export list and tt-run does not forward PREFILL_*, so a cache-format override
-# exported into this script has to be passed on explicitly, or the remote ranks keep the manifest's format.
+# tt-run does not forward PREFILL_*: pass a cache-format override to every rank.
 if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
