@@ -244,17 +244,82 @@ Dest accumulation picks its own width the same way: both-integer adds in
 integers exactly only to 2²⁴ and an `Int32` Dest reaches 2³¹ — and a float Dest
 in `float32`.
 
-### `units/fidelity.py` — one invariant worth repeating
+### One invariant worth repeating
 
 **Every phase reads the original srcA/srcB**, not the previous phase's sliced
 operands. Feeding a phase its predecessor's output zeroes every phase after the
 first, which turns fidelity into a silent no-op: the result still looks
 plausible, just more accurate than the device.
 
-The flush rule has a matching trap. The exponent belongs to the src **datum** —
-one field shared by all four phases, since a phase selects a mantissa window
-and not an exponent — so the pre-carry sum is identical on every phase. Using a
-split half's exponent instead flushes almost everything.
+## `units/fidelity.py` in full
+
+The multiplier's decomposition, applied by `Fpu` and shared by the element-wise
+multiply and the matmul because the two decompose identically.
+
+| Member | Notes |
+|---|---|
+| `split_mantissa(values, keep_bits)` | `(high, low)` where `low = value - high`. |
+| `operand_halves(srcA, srcB, split, phase)` | The slice of each operand a phase multiplies. |
+| `min_normal_exponent(dest_format)` | Lowest exponent Dest holds as a normal; `None` for integer. |
+| `ieee_exponent(values)` | `frexp`'s exponent minus one — the field an IEEE float stores. |
+| `flush_pre_carry_denormals(product, srcA, srcB, min_exponent)` | The flush rule. Element-wise only — a matmul's products never become lane results. |
+
+#### `split_mantissa` — why subtract rather than mask
+
+The low half is `value - high`, not a masked mantissa re-read as a float: the
+implicit leading 1 belongs to the high half, so masking in place does not give
+the remainder.
+
+**This is provably equivalent to the lightweight golden's mask-and-reassemble.**
+Its Quasar masks are
+
+```python
+(0b11111111000, 0b11111111000)    # phase 0 — top 8 of an 11-bit {implicit, mantissa}
+(0b00000000111, 0b11111111000)    # phase 1 — mant[2:0], implicit position cleared
+```
+
+and `reassemble_float_after_fidelity` runs the masked field through
+`calculate_fractional_part` on an 11-bit string, so the low half's implicit bit
+is *not* restored: `0b00000000111` → `0.0000000111 × 2^e` = `mant[2:0] × 2^(e-10)`,
+exactly this remainder. Verified bit-identical across 10,000 values at four
+widths.
+
+Two corollaries worth keeping, because both have been chased as leads and are
+dead:
+
+- The Quasar masks are **symmetric** — 7 explicit bits from each operand,
+  matching `QuasarArch.fpu.mantissa_split == (7, 7)`. The asymmetric 4/6 split in that module's
+  comment is its `else` branch, i.e. **Wormhole/Blackhole**, where SrcA also
+  drops its least significant bit.
+- Mask-and-reassemble versus subtract is **not** a source of divergence between
+  the two goldens.
+
+#### `flush_pre_carry_denormals` — the pre-carry rule
+
+The FP lane forms the exponent by adding the two *stored src* exponents and
+rebiasing into Dest's range, then flushes the whole term — mantissa included —
+when that lands below the lowest normal. The decision is taken **before** the
+mantissa product's carry into the next binade, so the rule is one binade coarser
+than testing the finished magnitude: when the mantissas multiply to ≥ 2.0 a
+product anywhere in `[tiny, 2·tiny)` is a legitimate Dest normal that hardware
+still returns as zero.
+
+```
+fp16 src, 16-bit Dest (bias 15):
+  0.025390625 (2^-6 × 1.625)  ×  0.0024414062 (2^-9 × 1.25)
+  exponents sum to -15  → lane flushes
+  product is 6.199e-05, above fp16 tiny 6.104e-05 → a magnitude rule keeps it
+```
+
+Only bites for a five-bit-exponent Dest (fp16 src into 16-bit Dest); every other
+combination accumulates with an eight-bit exponent and never reaches the
+threshold. Only *visible* through an MX output, where one zeroed element shifts
+the block scale enough to fail the block-aware compare.
+
+> Use the **datum's** exponent, not a split half's. One exponent field serves
+> every phase — a phase selects a mantissa window, not an exponent — so the sum
+> is identical on all four. Using a half's exponent flushes almost everything,
+> and scores worse than no flush at all.
 
 ## Where an architecture plugs in
 
