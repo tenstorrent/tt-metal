@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// on-device plan for the sparse KV push (see sparse_push_plan_device_operation.hpp for the table layout).
+// On-device plan for the sparse KV push (see sparse_push_plan_device_operation.hpp for the table layout).
 // One requester chip, `cores` cores, three phases separated by barriers:
 //   1. scatter: each core sets the bits of its index segments in its own L1 bitmap. Bits live in 16-word chunks
 //      (512 rows); a chunk is zeroed on first touch and marked in the core's dirty map, so untouched chunks are
-//      never zeroed or read. Each core also records the largest row it saw.
+//      never zeroed or read. Each core also records the largest row it saw. BRISC and NCRISC both walk every index
+//      and split the rows by 32-chunk group parity, so the bitmap and dirty-map words they write never overlap.
 //   2. reduce: every core reads all dirty maps and extents; the active blocks (up to the largest row) are split over
 //      the cores, and each core ORs the dirty chunks of its range from every core and fills that range's in-block
 //      word prefixes and block counts;
@@ -59,13 +60,15 @@ void kernel_main() {
     constexpr uint32_t or_done_sem_id = get_compile_time_arg_val(20);    // NCRISC -> BRISC: its half of the OR is done
     constexpr uint32_t owner_prefix_off = get_compile_time_arg_val(21);  // words; per-owner rows before the split
     constexpr bool has_split = get_compile_time_arg_val(22) != 0;
-    constexpr auto indices_args = TensorAccessorArgs<23>();
+    constexpr uint32_t scatter_done_sem_id = get_compile_time_arg_val(23);  // NCRISC -> BRISC: its scatter is done
+    constexpr auto indices_args = TensorAccessorArgs<24>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto split_args = TensorAccessorArgs<has_split ? compact_args.next_compile_time_args_offset() : 0>();
     constexpr uint32_t unit = pages_per_packet * banks;
     constexpr uint32_t row_bytes = topk * sizeof(uint32_t);
     constexpr uint32_t seg_bytes = seg_len * sizeof(uint32_t);
+    constexpr uint32_t seg_stride = (seg_bytes + 63) / 64 * 64;  // two segment buffers per RISC (double buffering)
     constexpr uint32_t segs_per_row = topk / seg_len;
     constexpr uint32_t dirty_slot_words = 16 + dirty_words;
 
@@ -114,8 +117,8 @@ void kernel_main() {
     auto* prefix = reinterpret_cast<uint8_t*>(image + prefix_off);
     uint32_t* counts = image + counts_off;
     auto* pre = reinterpret_cast<uint32_t*>(get_write_ptr(kPre));
-    uint32_t* base = pre + num_blocks;  // compact-buffer run base per owner, shared with NCRISC
-    auto* seg = reinterpret_cast<uint32_t*>(row_l1);
+    uint32_t* base = pre + num_blocks;                      // compact-buffer run base per owner, shared with NCRISC
+    auto* row_words = reinterpret_cast<uint32_t*>(row_l1);  // scratch word for the split block read
     auto* scratch = reinterpret_cast<uint32_t*>(scratch_l1);
     auto* dirty_slot = reinterpret_cast<uint32_t*>(dirty_l1);  // [0] = largest row + 1 (0 = none), dirty map at [16]
     uint32_t* dirty = dirty_slot + 16;
@@ -141,13 +144,21 @@ void kernel_main() {
     auto seg_noc = [&](const auto& accessor, uint32_t u) {
         return accessor.get_noc_addr(u / segs_per_row) + (u % segs_per_row) * seg_bytes;
     };
-    // Rewrite segments [u0, u1): slot = base[owner] + bank lane of the row's rank among this owner's rows.
+    auto seg_buf = [&](uint32_t i) { return reinterpret_cast<uint32_t*>(row_l1 + (i & 1) * seg_stride); };
+    // Rewrite segments [u0, u1): slot = base[owner] + bank lane of the row's rank among this owner's rows. The next
+    // segment is read while this one is rewritten.
     auto rewrite = [&](uint32_t u0, uint32_t u1) {
+        if (u0 < u1) {
+            noc_async_read(seg_noc(indices, u0), row_l1, seg_bytes);
+        }
         for (uint32_t u = u0; u < u1; ++u) {
-            noc_async_write_barrier();  // the previous segment's write has left the buffer
-            noc_async_read(seg_noc(indices, u), row_l1, seg_bytes);
             noc_async_read_barrier();
             invalidate_l1_cache();
+            uint32_t* seg = seg_buf(u - u0);
+            if (u + 1 < u1) {
+                noc_async_write_barrier();  // the other buffer's rewritten segment has left it
+                noc_async_read(seg_noc(indices, u + 1), reinterpret_cast<uint32_t>(seg_buf(u + 1 - u0)), seg_bytes);
+            }
             for (uint32_t k = 0; k < seg_len; ++k) {
                 const uint32_t v = seg[k];
                 if (v == kSentinel) {
@@ -159,9 +170,47 @@ void kernel_main() {
                 const uint32_t j = rank / pages_per_packet, i = rank % pages_per_packet;
                 seg[k] = base[blk % num_devices] + (j % banks) + (j / banks) * unit + i * banks;
             }
-            noc_async_write(row_l1, seg_noc(compact, u), seg_bytes);
+            noc_async_write(reinterpret_cast<uint32_t>(seg), seg_noc(compact, u), seg_bytes);
         }
         noc_async_write_barrier();
+    };
+    // Scatter this RISC's half of every index of [unit_start, unit_start + unit_count): rows whose 32-chunk group
+    // (16384 rows, one dirty-map word) has parity `parity`. Returns the largest such row + 1 (0 = none).
+    auto scatter = [&](uint32_t parity) {
+        for (uint32_t w = parity; w < dirty_words; w += 2) {
+            dirty[w] = 0;
+        }
+        uint32_t row_end = 0;
+        if (unit_count > 0) {
+            noc_async_read(seg_noc(indices, unit_start), row_l1, seg_bytes);
+        }
+        for (uint32_t i = 0; i < unit_count; ++i) {
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            const uint32_t* seg = seg_buf(i);
+            if (i + 1 < unit_count) {
+                noc_async_read(
+                    seg_noc(indices, unit_start + i + 1), reinterpret_cast<uint32_t>(seg_buf(i + 1)), seg_bytes);
+            }
+            for (uint32_t k = 0; k < seg_len; ++k) {
+                const uint32_t v = seg[k];
+                if (v == kSentinel || ((v >> (kChunkShift + 5)) & 1u) != parity) {
+                    continue;
+                }
+                const uint32_t c = v >> kChunkShift;
+                const uint32_t flag = 1u << (c & 31);
+                if (!(dirty[c >> 5] & flag)) {
+                    dirty[c >> 5] |= flag;
+                    uint32_t* chunk = bits + c * kChunkWords;
+                    for (uint32_t w = 0; w < kChunkWords; ++w) {
+                        chunk[w] = 0;
+                    }
+                }
+                bits[v >> 5] |= 1u << (v & 31);
+                row_end = v + 1 > row_end ? v + 1 : row_end;
+            }
+        }
+        return row_end;
     };
     // Copy image bytes [off, off + bytes) to the same offsets of the table, page by page.
     auto write_span = [&](uint32_t off, uint32_t bytes) {
@@ -206,7 +255,10 @@ void kernel_main() {
     auto* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id));
     auto* or_go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(or_go_sem_id));
     auto* or_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(or_done_sem_id));
+    auto* scatter_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_done_sem_id));
 #ifdef REWRITE_HELPER
+    sync[4] = scatter(1);
+    *scatter_done = 1;
     wait_flag(or_go);
     or_chunks(sync[0], sync[1], sync[2]);
     *or_done = 1;
@@ -215,34 +267,10 @@ void kernel_main() {
     return;
 #endif
 
-    // 1. Scatter.
-    for (uint32_t w = 0; w < dirty_words; ++w) {
-        dirty[w] = 0;
-    }
-    uint32_t row_end = 0;  // largest row seen + 1
-    for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        noc_async_read(seg_noc(indices, u), row_l1, seg_bytes);
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-        for (uint32_t k = 0; k < seg_len; ++k) {
-            const uint32_t v = seg[k];
-            if (v == kSentinel) {
-                continue;
-            }
-            const uint32_t c = v >> kChunkShift;
-            const uint32_t flag = 1u << (c & 31);
-            if (!(dirty[c >> 5] & flag)) {
-                dirty[c >> 5] |= flag;
-                uint32_t* chunk = bits + c * kChunkWords;
-                for (uint32_t i = 0; i < kChunkWords; ++i) {
-                    chunk[i] = 0;
-                }
-            }
-            bits[v >> 5] |= 1u << (v & 31);
-            row_end = v + 1 > row_end ? v + 1 : row_end;
-        }
-    }
-    dirty_slot[0] = row_end;
+    // 1. Scatter, shared with NCRISC (it takes the odd 32-chunk groups).
+    const uint32_t row_end = scatter(0);
+    wait_flag(scatter_done);
+    dirty_slot[0] = row_end > sync[4] ? row_end : sync[4];
     barrier();
 
     // 2. Reduce. Everyone reads every core's dirty map and extent.
@@ -365,7 +393,7 @@ void kernel_main() {
         noc_async_read(split.get_noc_addr(0), row_l1, sizeof(uint32_t));
         noc_async_read_barrier();
         invalidate_l1_cache();
-        split_block = seg[0] / stripe_chunk;
+        split_block = row_words[0] / stripe_chunk;
     }
     uint32_t owner_prefix[num_devices];
     for (uint32_t b = 0, o = 0; b < active_blocks; ++b) {

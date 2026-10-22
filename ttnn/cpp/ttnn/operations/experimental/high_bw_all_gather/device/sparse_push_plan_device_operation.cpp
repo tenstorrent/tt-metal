@@ -106,8 +106,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         });
     };
     add_cb(kImage, layout.pages * SparsePushPlanLayout::kPageWords * sizeof(uint32_t));
-    add_cb(kRow, round_up(seg_len * sizeof(uint32_t), 64));
-    add_cb(kRow2, round_up(seg_len * sizeof(uint32_t), 64));
+    // Two segment buffers each for BRISC (kRow) and NCRISC (kRow2): the next segment is read while one is processed.
+    add_cb(kRow, 2 * round_up(seg_len * sizeof(uint32_t), 64));
+    add_cb(kRow2, 2 * round_up(seg_len * sizeof(uint32_t), 64));
     add_cb(kPre, round_up((layout.num_blocks + attrs.num_devices) * sizeof(uint32_t), 64));  // + per-owner bases
     // Reduce scratch: every core's copy of each chunk of this core's widest possible block range.
     const uint32_t range_chunks = (blocks_per_core * (attrs.stripe_chunk / 32) + kChunkWords - 1) / kChunkWords;
@@ -128,6 +129,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     const uint32_t ready_sem = add_semaphore();
     const uint32_t or_go_sem = add_semaphore();
     const uint32_t or_done_sem = add_semaphore();
+    const uint32_t scatter_done_sem = add_semaphore();
 
     std::vector<uint32_t> ct = {
         attrs.num_devices,
@@ -153,6 +155,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         or_done_sem,
         SparsePushPlanLayout::kOwnerPrefixOff,
         args.chunk_start.has_value() ? 1u : 0u,
+        scatter_done_sem,
     };
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
