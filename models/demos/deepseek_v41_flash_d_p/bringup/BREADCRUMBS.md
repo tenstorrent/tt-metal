@@ -2887,3 +2887,74 @@ Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.20`
 `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 scripts/run_safe_pytest.sh --run-all --no-precompile
 models/demos/common/bringup/tests/test_profile.py`.
+
+## P.22 perf attempt 1 (2026-10-22): router through the fused moe_grouped_topk (ROUTER_IMPL=fused, owner comparison)
+
+What: setting ROUTER_IMPL (tt/settings.py, default fused; ops = the P.21 chain). fused = the gate matmul (unchanged:
+bf16 x, bf16 gate, HiFi2 + fp32 DEST, fp32 logits) then ONE ttnn.bringup.moe_grouped_topk(n_groups=1,
+score_func="sqrtsoftplus", top 6, route_scale 1.5, eps 1e-20, stable_sort, fp32_selection=True,
+fp32_activation=True) instead of softplus, sqrt, add, topk, gather, sum, add, multiply, div (tt/router.py:_fused).
+Outputs: weights bf16 TILE, ids uint16 TILE: what the weighted experts read (tt/weighted_combine.py:routing now skips
+the bf16 typecast when the weights are bf16; the uint32 -> uint16 typecast of the old topk ids is gone too). The
+recentred fp32 bias is a load-time [max_rows, E] tensor (the op takes a full-shape bias). The dense routing (hybrid /
+swap tests only) is the scatter of those weights typecast to fp32.
+Decisions:
+- The source commits are already in this tree (71062e76a38 / 570d95b6e7d = 5e47659815e / 27c5c2a16ae + the rebase fix
+  9780c18f0d0), not only on Marko's branch: stock ttnn.experimental.deepseek_prefill.moe_grouped_topk has
+  fp32_selection here. I forked it anyway (owner instruction, and it needed a change):
+- DS41-105: stock moe_grouped_topk builds its compute kernel without INP_FLOAT32, so sqrt(softplus) runs the bf16-grade
+  polynomial (degree 6, 0 below -5) even with fp32_selection: keys max error 8.2e-2 vs float64 on the same logits
+  (the chain: 2.5e-5), and 0-13 of 2048 rows a layer picked other experts than the chain (scaled golden s4096 chunk
+  1). Fork option fp32_activation (default off = the source program; define INP_FLOAT32 on the compute kernel only):
+  keys bit-identical to stock ttnn.sqrt(ttnn.softplus) on fp32. Setting ROUTER_SOFTPLUS {fp32 (default), bf16}.
+- Weights bf16 (the op has no fp32 output): the reference's own dtype (model.py Gate: weights.type_as(x)); the experts
+  read bf16 weights in both paths. Router step checks now sit at one bf16 rounding (DS41-106, waived).
+- No fork of the experts side and no uint32 ids from the gate (one typecast left per layer, 0.05 ms host).
+Measured (2x2, scaled model, chunk 53248-55296 unless noted):
+- Routing vs the old path on the golden (s4096 chunk 1, golden ffn_norm as bf16 input, 8 layers, 2048 rows each;
+  probes tests/ttnn/unit_tests/operations/ds41_router/probes/probe_005.py / probe_006.py): selected experts identical
+  on 2048 / 2048 rows of every layer; weights rel 1.53e-3..1.65e-3 vs the chain's fp32 weights (= one bf16 rounding);
+  on same-set rows vs float64 on the device's logits rel = one bf16 rounding, bias <= 2.5e-5; both paths 25-45 rows a
+  layer differ from float64 on the host's logits (the matmul's TF32 partials, waived); deterministic. Without
+  fp32_activation: 0-13 rows differ from the chain.
+- One router call (layer 0, 1024 rows a chip, 50 calls): host 0.583 -> 0.070 ms, async wall 0.598 -> 0.131 ms.
+- Real-time profile with op rows (BRINGUP_PROFILE_OPS=1, both sides by hand, same load; profiles
+  P.22_20261022T221748.json (fused) / P.22_20261022T222358.json (ops)): host calls per chunk 777 -> 697 (router 80 ->
+  16, experts 96 -> 80); router section host 7.21 -> 1.23 ms, device 1.50 -> 1.04 ms a chunk, programs (4 chips)
+  384 -> 64; device total 83.52 -> 82.97 ms; host dispatch (op mode) 459.5 -> 419.2 ms.
+- Quick A/B side on (`measure --task P.22`, rc 0): every err_* within its limit and equal to P.20 to 4 digits
+  (worst L03 0.08050 / 0.15875, min layer PCC 0.99676, pcc_chunk_out 0.99961), host_transfers_per_layer 0,
+  chunk_wall_ms 102.0 (spread 30.9; box loaded by a golden generation; the orchestrator's off side is the comparison).
+- Gate units passed with --check: swa (C experts), all 8 swap *_experts units (router step WAIVED as before: vs CPU rel
+  1.75e-3..2.44e-3, 0 unexplained flips, recall_tie 1.0). Not run by me: the 7 other C.*.experts units (golden
+  routing, the router is not in them), the ladder and the profile.
+Fork: ttnn/ttnn/bringup/moe_grouped_topk (CHANGELOG, README, INDEX entry); source tests: the op's 5 nightly files,
+203 / 203 pass on the original and the fork (tests/source_baseline.json); unit tests tests/unit/test_fp32_activation.py
+(7 pass). Build OK.
+Gotchas:
+- ttnn.topk on fp32 returns UINT32 ids (the experts typecast them to uint16 then back to uint32); the fused gate gives
+  uint16.
+- tt/experts.py: routing may hand its inputs through (bf16 weights, a one-row mesh); the frees skip them now.
+Stock calls added (F113):
+- stock ttnn.typecast instead of ttnn.bringup.mhc_post: the fused gate's bf16 weights -> fp32 for the dense routing
+  scatter (hybrid / swap tests only; no mHC step there).
+- stock ttnn.slice instead of ttnn.bringup.rms_norm: the load-time bias rows cut to a row count other than the chunk's
+  (once per count, kept; no norm there).
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.22`; fork tests
+`scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/moe_grouped_topk/tests/unit` and
+`python -m models.demos.common.bringup.testing.fork_source --fork moe_grouped_topk`; router section A/B
+`[DS41_ROUTER_IMPL=ops] BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/common/bringup/tests/test_profile.py`.
+
+## P.22 perf attempt 2 (2026-10-22): the F113 failure of attempt 1 fixed; no code path changed
+
+What: attempt 1 failed only on the F113 lint: the ROUTER_IMPL help text in tt/settings.py named the stock
+`ttnn.experimental.deepseek_prefill.moe_grouped_topk(...)`, though tt/router.py calls the fork
+`ttnn.bringup.moe_grouped_topk` (DS41-107: the lint matches `<op>(` inside strings too). The text now names the fork.
+Nothing else changed; `./build_metal.sh` re-run (no-op, the fork was built).
+Checked: `ops_lint.violations` and `settings_lint.violations` on every changed file: none. Gate units with --check: all
+16 component / swap units PASS on this code (ladder and profile left to the orchestrator, as the brief says).
+`measure --task P.22` (switch on, quick): rc 0, all 31 err_* within limits (worst err_layer_L01 0.0338 / 0.0720),
+min layer PCC 0.99676 (L03), pcc_chunk_out 0.99961, host_transfers_per_layer 0, chunk_wall_ms 99.2 (spread 14.2);
+the same accuracy digits as attempt 1 (deterministic). Before / after numbers: attempt 1's section above.
+Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.22`.

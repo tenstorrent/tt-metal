@@ -191,6 +191,31 @@ TABLE = {
         "SFPU math on the exact bf16 values), the router; every matmul keeps its fp32 accumulation (FP32_ACC). off = "
         "the P.21 path (fp32 streams, collapses, attn_norm, q_resid, latent; casts to bf16 at each consumer)",
     ),
+    # ---- router (tt/router.py)
+    "ROUTER_IMPL": Setting(
+        "fused",
+        ("fused", "ops"),
+        "P.22 (owner comparison 2026-10-22: Marko Staletovic's fused MoE routing, fewer host calls): everything after "
+        "the gate matmul (sqrt(softplus), the recentred bias added for the selection only, top 6, the gather of the "
+        "unbiased scores, (sum + 1e-20) normalization, route scale 1.5). fused = ONE "
+        "ttnn.bringup.moe_grouped_topk (the fork of Marko's fused gate; n_groups=1, score_func='sqrtsoftplus', "
+        "fp32_selection=True, fp32_activation per ROUTER_SOFTPLUS): the selection keys and the normalization in fp32 on the SFPU (K-23), weights written "
+        "bf16 (the reference's own dtype: model.py Gate returns weights.type_as(x); the experts read bf16 weights "
+        "either way), ids uint16; the bias as a load-time [max_rows, E] fp32 tensor (the op takes a full-shape bias). "
+        "ops = the P.21 chain (softplus, sqrt, add, topk, gather, sum, add, multiply, div: 9 calls after the matmul). "
+        "The gate matmul is the same in both. Not a precision switch beyond the weights' bf16 output",
+    ),
+    "ROUTER_SOFTPLUS": Setting(
+        "fp32",
+        ("fp32", "bf16"),
+        "ROUTER_IMPL=fused only (P.22): the fused gate's sqrt(softplus) polynomials (fork option "
+        "ttnn.bringup.moe_grouped_topk fp32_activation). fp32 = the fp32 SFPU softplus (degree 8 on [0, 5] + the exp "
+        "tail; what stock ttnn.softplus runs on fp32 and the reference's fp32 softplus): keys vs float64 on the device's "
+        "logits max 2.5e-5 like the ops path; bf16 = the source op's program (degree 6, softplus = 0 below -5): "
+        "sqrt(softplus) ~8e-4 relative off on [-3, 9], up to 0.08 absolute below, keys max error 8.2e-2, and 0-11 of "
+        "2048 rows per layer select other experts than the float64 selection on the same logits (golden s4096 chunk "
+        "1, 8 layers; ops path 0-2): below the reference's precision, kept for the owner's comparison only (DS41-105)",
+    ),
     # ---- routed experts (tt/experts.py)
     "INDEXER_GLUE": Setting(
         "on",
