@@ -636,9 +636,9 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
 
-    // Legacy set UnpackToDestFp32 on the input and temporary buffers under preserve_fp32_precision and
-    // left them at Default otherwise. Metal 2.0 additionally requires an explicit entry for a consumed
-    // Float32 buffer under a 32-bit Dest, where legacy silently defaulted; Default is UnpackToSrc.
+    // Preserve Float32 input precision and bitcasts whose input buffer is interpreted as Float32.
+    // The latter must keep all 32 bits even when the source tensor has an integer dtype.
+    // Other Float32 buffers under a 32-bit Dest retain the explicit UnpackToSrc mode required by Metal 2.0.
     //
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
     // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets
