@@ -197,6 +197,33 @@ def linear_residual(x, weight, precision: TtTimestralPrecision, residual, ones):
     return y
 
 
+def linear_concat(xs, weight, precision: TtTimestralPrecision, *, bias=None):
+    """``[x_0 | x_1] @ weight (+ bias)``, the concatenation over K read by ``minimal_matmul`` itself;
+    ``weight`` stacks the two inputs' row blocks (``upload_concat_linear``)."""
+    import ttnn
+
+    x_shape, (k, n) = tuple(xs[0].padded_shape), tuple(weight.padded_shape)[-2:]
+    grid = xs[0].device().compute_with_storage_grid_size()
+    config = program_configs.minimal_matmul_config(
+        (grid.x, grid.y), math.prod(x_shape[:-1]) // TILE, k // TILE, n // TILE, max_dest=_max_dest(precision)
+    )
+    return ttnn.experimental.minimal_matmul(
+        list(xs),
+        weight,
+        bias_tensor=bias,
+        config=config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=precision.compute_kernel_config(),
+    )
+
+
+def upload_concat_linear(device, weights: tuple[torch.Tensor, torch.Tensor], dtype):
+    """Two ``nn.Linear`` weights ``(out, in_i)`` -> device ``(in_0' + in_1', out)``, each input block padded
+    to whole tiles (``in_i'``), the layout ``linear_concat`` reads."""
+    blocks = [torch.nn.functional.pad(w.t(), (0, 0, 0, pad_to_tile(w.shape[1]) - w.shape[1])) for w in weights]
+    return upload(device, torch.cat(blocks), dtype=dtype)
+
+
 def linear_split(x, weight, precision: TtTimestralPrecision, chunks: int):
     """``x @ weight`` as ``chunks`` equal column blocks, each its own ``(1, 1, M, N / chunks)`` tensor."""
     import ttnn
@@ -261,13 +288,3 @@ def take_slots(x, rows: int, seq: int, start: int, count: int):
     d = x.shape[-1]
     picked = ttnn.slice(ttnn.reshape(x, (rows, seq, d)), (0, start, 0), (rows, start + count, d))
     return ttnn.reshape(picked, (1, 1, rows * count, d))
-
-
-def add_residual(x, out):
-    """``x + out``; consumes both."""
-    import ttnn
-
-    y = ttnn.add(x, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(x)
-    ttnn.deallocate(out)
-    return y
