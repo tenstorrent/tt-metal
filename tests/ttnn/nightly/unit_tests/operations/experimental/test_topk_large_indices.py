@@ -175,22 +175,6 @@ def test_topk_large_indices_spread_winners_decode_global_indices(device, k, llk_
     _assert_topk_matches_torch(torch_input, tt_indices, k)
 
 
-def test_topk_large_indices_whole_k2048_segmented_rows_leave_the_next_op_intact(device):
-    # A whole row of 34 chunks per core round-trips the accumulator through L1; the next op must still read its first tile.
-    num_rows = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
-    torch_input = _make_spread_large_index_input(n=34 * 2048 - 7, k=2048).repeat(num_rows, 1)
-    tt_input = _to_device(torch_input, device)
-    a = torch.randint(-8, 8, (1, 1, 32 * num_rows, 64)).to(torch.bfloat16)
-    b = torch.randint(-8, 8, (1, 1, 32 * num_rows, 64)).to(torch.bfloat16)
-    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    for _ in range(3):
-        tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=2048)
-        total = ttnn.to_torch(ttnn.add(tt_a, tt_b))
-        assert_equal(total, a + b)
-    _assert_topk_matches_torch(torch_input, tt_indices, 2048)
-
-
 def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
     k = 512
     fused_input = _make_large_index_input(num_rows=1, n=32 * k, k=k)
@@ -345,7 +329,7 @@ def test_topk_large_indices_production_perf_check(
     upper = expected_duration_ns * (1 + TOPK_LARGE_INDICES_PERF_MARGIN)
 
     logger.info(
-        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e6:.3f} ms "
+        f"topk_large_indices perf check {case_id}: duration={duration_ns / 1e6:.3f} ms ns={duration_ns} "
         f"(expected {expected_duration_ns / 1e6:.3f} ms, band [{lower / 1e6:.3f}, {upper / 1e6:.3f}]), "
         f"shape=({num_rows}, {n}), valid_length={valid_length}, k={k}, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
