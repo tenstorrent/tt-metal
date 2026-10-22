@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import contextmanager
+
 import torch
 from loguru import logger
 
@@ -11,6 +13,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.ops.quasar.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
 from models.experimental.ops.quasar.qwen3_vl.tt.model_config import VisionModelArgs
 from models.experimental.ops.quasar.qwen3_vl.tt.patch_merger import PatchMerger
+from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import vision_padded_seq_len
 from models.experimental.ops.quasar.qwen3_vl.tt.rope import RotarySetup
 from models.experimental.ops.quasar.qwen3_vl.tt.vision_block import VisionBlock
 from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
@@ -205,7 +208,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self,
         reference_model,
         model_args: VisionModelArgs,
-        dtype=ttnn.bfloat8_b,
+        dtype=None,
         debug=False,
     ):
         """
@@ -218,6 +221,7 @@ class DropInVisionTransformer(torch.nn.Module):
             mesh_device (ttnn.MeshDevice): The mesh device used by the TT model.
         """
         super().__init__()
+        dtype = dtype if dtype is not None else model_args.vision_weight_dtype
         self.reference_model = reference_model
         self.model_args = model_args
         self.debug = debug
@@ -276,8 +280,8 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+            # Pad to what vision_attention accepts (see vision_padded_seq_len)
+            seq_len = vision_padded_seq_len(unpadded_seq_len)
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
             cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
@@ -403,8 +407,8 @@ class DropInVisionTransformer(torch.nn.Module):
         # For single user, we process all their images together
         # Calculate total unpadded sequence length across all images for this user
         unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-        # Calculate padded sequence length (divisible by 2048)
-        seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+        # Pad to what vision_attention accepts (see vision_padded_seq_len)
+        seq_len = vision_padded_seq_len(unpadded_seq_len)
 
         # Use preprocessing function from reference/functional to get indices and embeddings
         cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
@@ -492,6 +496,50 @@ class DropInVisionTransformer(torch.nn.Module):
         return final_output_sharded, deepstack_visual_embeds_sharded
 
 
+class HostEmbedding(LightweightModule):
+    """Token embedding whose table stays in host memory; looks up the rows on the host and uploads only them.
+
+    On Quasar the bf16 [151936, 2560] table (~778 MB) does not fit in DRAM next to the bf16 LM head (QUASAR_GAPS Q14).
+    Returns what ttnn.embedding + unsqueeze_to_4D would: [1, 1, num_tokens, dim], bf16, TILE.
+    """
+
+    def __init__(self, mesh_device, args, weight_cache_path, state_dict, dtype, embed_scale=None):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.table = state_dict[args.get_state_dict_prefix("", None) + "tok_embeddings.weight"].to(torch.bfloat16)
+        self.embed_scale = embed_scale
+
+    def forward(self, x, memory_config=None):
+        ids = ttnn.to_torch(ttnn.get_device_tensors(x)[0]) if isinstance(x, ttnn.Tensor) else x
+        rows = self.table[ids.to(torch.long).flatten()]
+        if self.embed_scale is not None:
+            rows = (rows.float() * self.embed_scale).to(torch.bfloat16)
+        return ttnn.from_torch(
+            rows.reshape(1, 1, rows.shape[0], rows.shape[1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+
+@contextmanager
+def _embedding_class(host):
+    """Make the base Transformer build HostEmbedding instead of the device table (it has no embedding-class hook)."""
+    import models.tt_transformers.tt.model as tt_model
+
+    if not host:
+        yield
+        return
+    saved = tt_model.Embedding, tt_model.ScaledEmbedding
+    tt_model.Embedding = tt_model.ScaledEmbedding = HostEmbedding
+    try:
+        yield
+    finally:
+        tt_model.Embedding, tt_model.ScaledEmbedding = saved
+
+
 class Transformer(TTTransformer):
     # --- On-device greedy decode correctness on batch-32 (#48037) ---
     # Symptom: on-device sampling produced gibberish at batch-32 (BERTScore F1 ~0.34)
@@ -529,16 +577,17 @@ class Transformer(TTTransformer):
         args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
 
         # Call parent constructor with vision-specific classes
-        super().__init__(
-            args=args,
-            dtype=dtype,
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-            rope_setup_class=RotarySetup,
-        )
+        with _embedding_class(getattr(args, "host_embedding", False)):
+            super().__init__(
+                args=args,
+                dtype=dtype,
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                rope_setup_class=RotarySetup,
+            )
 
     def _prepare_cos_sin(self, rot_mats):
         cos_matrix = rot_mats[0]
