@@ -13,6 +13,16 @@
 // (mailbox) and writes its summed output tiles out[r, col0 ..]. The pass rows come from the table the gate|up op wrote
 // (uint16 rows [n, e, t_0 ..]).
 //
+// Output row placement (compile-time OUT_TPR / RT_OUT, op.py `out_chunk`): dispatched row i (its token id in the
+// pass table) lands in output tile row i / OUT_TPR at row i % OUT_TPR, and RT_OUT tile rows are written. OUT_TPR = 32,
+// RT_OUT = T / 32 is the plain layout (row i at tile i / 32, row i % 32: `out` is [T, H] row for row). The EP
+// reduce-scatter combine at T_users < 32 per mesh row (OUT_TPR = T_users, RT_OUT = mesh rows, `out` [rows * 32, H])
+// puts mesh row r's T_users rows (dispatched rows r * T_users .. r * T_users + T_users - 1, the all_to_all_dispatch
+// order) at rows 0 .. T_users - 1 of tile-row chunk r, so a reduce-scatter over the mesh rows on the tile-row dim
+// hands row r the sum of its own users' rows. Rows T_users .. 31 of every chunk are pad rows: no token id maps to
+// them, so their gather-slot rows are never written and keep the zero fill, and the compute's identity-matmul sum
+// of zero slot rows packs exact zeros (the same mechanism that zeroes the rows of tokens with no local expert).
+//
 // runtime args: [counts_addr (EP: idx_addr), table_addr, act_addr, out_addr, col0, (EP) base_addr, (EP = 2) t_valid,
 //                idx_page]
 
@@ -48,7 +58,10 @@ void kernel_main() {
     constexpr uint32_t P_MAX = get_compile_time_arg_val(12);
     constexpr uint32_t h_tiles = get_compile_time_arg_val(13);  // output tile columns of the whole row (H / 32)
     constexpr uint32_t table_bytes = get_compile_time_arg_val(14);
-    constexpr auto counts_args = TensorAccessorArgs<18>();  // EP: the index tiles
+    constexpr uint32_t OUT_TPR = get_compile_time_arg_val(18);  // tokens per output tile row (32 = plain layout)
+    constexpr uint32_t RT_OUT = get_compile_time_arg_val(19);   // output tile rows written (T / 32 when plain)
+    static_assert(OUT_TPR >= 1 && OUT_TPR <= 32, "a tile row holds at most 32 tokens");
+    constexpr auto counts_args = TensorAccessorArgs<20>();  // EP: the index tiles
     constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     constexpr auto act_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<act_args.next_compile_time_args_offset()>();
@@ -164,7 +177,7 @@ void kernel_main() {
     uint16_t written[2][J * 32];
     uint32_t n_written[2] = {0, 0};
     bool fresh[2] = {true, true};
-    for (uint32_t r = 0; r < RT; ++r) {
+    for (uint32_t r = 0; r < RT_OUT; ++r) {  // output tile row r holds the tokens [r * OUT_TPR, (r + 1) * OUT_TPR)
         cb_reserve_back(cb_g, slot_tiles);
         const uint32_t g_l1 = get_write_ptr(cb_g);
         const uint32_t slot = r & 1;
@@ -193,14 +206,14 @@ void kernel_main() {
         for (uint32_t t = 0; t < 32; ++t) {
             cnt[t] = 0;
         }
-        const uint32_t t_end = (r + 1) * 32;
+        const uint32_t t_end = (r + 1) * OUT_TPR;
         uint32_t j_max = 0;
         for (uint32_t k = 0; k < n_pass; ++k) {
             const volatile tt_l1_ptr uint16_t* row = tab + k * table_elems;
             const uint32_t nr = row[0];
             uint32_t i = cursor[k];
             while (i < nr && row[2 + i] < t_end) {
-                const uint32_t tl = row[2 + i] - r * 32;
+                const uint32_t tl = row[2 + i] - r * OUT_TPR;  // < OUT_TPR: rows OUT_TPR .. 31 stay zero
                 const uint32_t j = cnt[tl]++;
                 if (j < J) {
                     if (j + 1 > j_max) {

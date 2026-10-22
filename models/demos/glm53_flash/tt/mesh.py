@@ -10,7 +10,9 @@ collective to the identity so the single-chip stage-1 modules keep running uncha
 Placement helpers return ``ttnn`` mesh mappers for ``ttnn.from_torch``; ``upload`` wraps the
 common case. Collectives wrap the generic ``ttnn.all_reduce`` / ``all_gather`` /
 ``reduce_scatter`` composites with ``cluster_axis`` (the ones gpt_oss uses on the Blackhole
-Galaxy); every collective must run once eagerly before a trace is captured.
+Galaxy); every collective must run once eagerly before a trace is captured. The TP all-reduce has a
+second form (``GLM53_TP_ALLREDUCE=gather``): one all-gather of the column partials + a local
+``fast_reduce_nc`` sum (decode ledger B7, ``all_reduce_cols``).
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import ttnn
 
 TP_AXIS = 1  # columns
 DP_AXIS = 0  # rows (and expert-TP)
+TP_ALLREDUCE_GATHER_ROWS = 32  # gather-mode all-reduce (GLM53_TP_ALLREDUCE=gather): decode activations only
 
 
 def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
@@ -70,6 +73,7 @@ class GLMMesh:
     cols: int
     topology: ttnn.Topology | None = None  # None = ttnn default for the fabric
     _ccl: object = field(default=None, repr=False, compare=False)  # lazy TT_CCL (async collectives)
+    _reduce_ckc: object = field(default=None, repr=False, compare=False)  # lazy fp32 config (all-reduce gather mode)
     # device constants shared by every module of the model (``const``): one tensor per key instead of one per layer
     _consts: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -241,6 +245,35 @@ class GLMMesh:
         composites expand to all_broadcast + 8 untilizes + concat + tilize / 8 fill_pads + concat + rs)."""
         return os.environ.get("GLM53_CCL", "async") == "async"
 
+    @property
+    def tp_allreduce_gather(self) -> bool:
+        """``GLM53_TP_ALLREDUCE=ccl`` (default): ``all_reduce_cols`` is the generic ``ttnn.all_reduce`` composite
+        (reduce-scatter + all-gather over the row's columns: 51 / 30 us per call on the 8x4 at 32 users, the
+        decode ledger). ``gather``: one ``all_gather_cols`` of the partials on a singleton outer dim + one
+        ``fast_reduce_nc`` over it (B7, ~23 us): the sum is taken locally in fp32 DST and rounded to bf16 once,
+        and every column chip sums the same gathered tensor in the same order, so the row's replicas are
+        bit-identical. Read per call like ``async_ccl``; the choice is a function of the env and the (static)
+        shape, so a captured trace replays the mode it was captured in. Decode shapes only (<= 32 rows: at
+        prefill widths the gather moves 3 partials per chip where the composite moves 1.5)."""
+        return os.environ.get("GLM53_TP_ALLREDUCE", "ccl") == "gather"
+
+    @property
+    def reduce_ckc(self):
+        """Compute config of the gather-mode all-reduce's ``fast_reduce_nc``: fp32 DST accumulation (the bf16
+        partials are added exactly, one rounding on pack; HiFi4 is the op's own default and irrelevant to adds)."""
+        if self._reduce_ckc is None:
+            object.__setattr__(  # frozen dataclass
+                self,
+                "_reduce_ckc",
+                ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                ),
+            )
+        return self._reduce_ckc
+
     def _async_topology(self):
         return self.topology if self.topology is not None else ttnn.Topology.Linear
 
@@ -340,12 +373,55 @@ class GLMMesh:
         )
 
     def all_reduce_cols(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
-        """Sum the TP partials of a row; result replicated over the row's columns."""
+        """Sum the TP partials of a row; result replicated over the row's columns (same shape, dtype and memory
+        config as ``x`` unless ``memory_config`` is given). ``GLM53_TP_ALLREDUCE=gather`` (``tp_allreduce_gather``)
+        takes ``_all_reduce_cols_gather`` for the inputs it covers (``_gather_reduce_dim``); ``num_links`` then is
+        the gather's own link count (``TT_CCL``)."""
         if self.cols == 1:
             return x
-        return ttnn.all_reduce(
-            x, cluster_axis=TP_AXIS, memory_config=memory_config or x.memory_config(), **self._ccl_kwargs(num_links)
+        memory_config = memory_config or x.memory_config()
+        if self.tp_allreduce_gather:
+            dim = self._gather_reduce_dim(x)
+            if dim is not None:
+                return self._all_reduce_cols_gather(x, dim, memory_config)
+        return ttnn.all_reduce(x, cluster_axis=TP_AXIS, memory_config=memory_config, **self._ccl_kwargs(num_links))
+
+    @staticmethod
+    def _gather_reduce_dim(x: ttnn.Tensor) -> int | None:
+        """The singleton outer dim the gather-mode all-reduce stacks the column partials on: dim 1 of a 4-D
+        interleaved TILE tensor of at most ``TP_ALLREDUCE_GATHER_ROWS`` rows (``[1, 1, T, H]``, the decode
+        activations), dim 0 when only that one is singleton; ``None`` for everything else (other ranks, sharded
+        or ROW_MAJOR inputs, prefill widths): the caller keeps the composite. A pure function of the static shape
+        and layout: trace-safe."""
+        shape = x.shape
+        if len(shape) != 4 or x.layout != ttnn.TILE_LAYOUT or x.is_sharded():
+            return None
+        if shape[2] > TP_ALLREDUCE_GATHER_ROWS:
+            return None
+        if shape[1] == 1:
+            return 1
+        if shape[0] == 1:
+            return 0
+        return None
+
+    def _all_reduce_cols_gather(self, x: ttnn.Tensor, dim: int, memory_config) -> ttnn.Tensor:
+        """``all_reduce_cols`` as gather + local sum: the ``cols`` partials stacked on the singleton ``dim`` by one
+        all-gather (DRAM: ``[1, cols, T, H]`` for dim 1, chunk c = column c's partial), summed over ``dim`` by
+        ``fast_reduce_nc`` (fp32 DST, ``reduce_ckc``) into a tensor of ``x``'s shape / dtype in ``memory_config``.
+        ``fast_reduce_nc`` reports the tile-padded row count of a short batch (4 users/row -> 32 rows), so below a
+        tile the sum is written into a preallocated output of the logical shape (a device-side allocation, no
+        slice op, trace-safe: the op keeps a preallocated output's spec). Two device ops, no host ops."""
+        g = self.all_gather_cols(x, dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output = None
+        if x.shape[2] % ttnn.TILE_SIZE:
+            output = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(list(x.shape)), x.dtype, ttnn.TILE_LAYOUT, self.device, memory_config
+            )
+        y = ttnn.experimental.fast_reduce_nc(
+            g, dims=[dim], output=output, memory_config=memory_config, compute_kernel_config=self.reduce_ckc
         )
+        ttnn.deallocate(g)
+        return y
 
     def all_gather_cols(self, x: ttnn.Tensor, dim: int, *, memory_config=None) -> ttnn.Tensor:
         if self.cols == 1:
