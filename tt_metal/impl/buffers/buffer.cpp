@@ -591,8 +591,7 @@ std::shared_ptr<Buffer> BufferImpl::create(
     buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
 
     // Explicit-address (non-owning) buffers skip allocate_impl(), so register their
-    // extent here (removed in deallocate()): per-core for L1,
-    // full size for DRAM — mirroring the allocate_impl() registration.
+    // per-bank extent here (removed in deallocate()), mirroring the allocate_impl() registration.
     if (is_emule_device(device) && buffer->impl().size_ != 0) {
         if (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL) {
             tt::tt_metal::emule::LiveL1Ranges::add(
@@ -604,7 +603,7 @@ std::shared_ptr<Buffer> BufferImpl::create(
             tt::tt_metal::emule::LiveDramRanges::add(
                 device->id(),
                 static_cast<uint32_t>(address),
-                static_cast<uint32_t>(address + size),
+                static_cast<uint32_t>(address + buffer->aligned_size_per_bank()),
                 buffer->impl().unique_id_);
         }
     }
@@ -687,7 +686,7 @@ void BufferImpl::allocate_impl(Buffer& self) {
                 tt::tt_metal::emule::LiveDramRanges::add(
                     device_->id(),
                     static_cast<uint32_t>(address_),
-                    static_cast<uint32_t>(address_ + size_),
+                    static_cast<uint32_t>(address_ + self.aligned_size_per_bank()),
                     unique_id_);
             }
         }
