@@ -35,7 +35,7 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}.weight"),
         )
 
         # Create bias tensors
@@ -46,7 +46,7 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}.bias"),  # distinct from the weight: both are bf16 on Quasar
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
