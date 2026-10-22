@@ -78,11 +78,14 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_reinit_unfused_rebuild_after_cop
 }
 
 // Runtime-chunk-id stamp (fused end-to-end rows: one instantiation, id per chunk).
-template <std::uint32_t K>
+template <std::uint32_t K, bool row_major = false, std::uint32_t index_stride = 2048>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt(std::uint32_t dst_index, std::uint32_t chunk_id) {
     SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::_topk_xl_add_lsb_indices_rt_<K>, dst_index, VectorMode::RC_custom, chunk_id);
+        ckernel::sfpu::_topk_xl_add_lsb_indices_rt_<K, row_major, index_stride>,
+        dst_index,
+        VectorMode::RC_custom,
+        chunk_id);
 }
 
 inline void llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init() {

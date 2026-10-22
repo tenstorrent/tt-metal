@@ -292,13 +292,20 @@ ALWI void topk_xl_reinit_unfused_rebuild_after_copy() {
 }
 
 /**
- * Runtime-chunk-id variant of topk_xl_add_lsb_indices: the 5-bit id in index
- * bits [15:11] is a runtime argument, so one instantiation stamps every chunk
- * of a fused end-to-end row (chunk_id in 0..31). Same init.
+ * Runtime-chunk-id variant of topk_xl_add_lsb_indices. Defaults preserve the
+ * column-major tile coordinates and 2048-position stride (chunk_id in 0..31).
+ *
+ * With row_major=true, indices are chunk_id * index_stride + position within
+ * the chunk. index_stride is 512, 1024, or 2048 and must be at least K. The
+ * caller must keep chunk_id * index_stride + K <= 65536. Use topk_xl_copy_tile
+ * with the valid element count to pad the invalid suffix before stamping.
+ * Scores must be BF16 expanded into FP32 DEST with zero low 16 bits. Stamping
+ * ORs the index into those low bits. Same init as the compile-time stamp;
+ * run topk_xl_init again before sorting/merging.
  */
-template <std::uint32_t K>
+template <std::uint32_t K, bool row_major = false, std::uint32_t index_stride = 2048>
 ALWI void topk_xl_add_lsb_indices_rt(std::uint32_t idst, std::uint32_t chunk_id) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt<K>(idst, chunk_id)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt<K, row_major, index_stride>(idst, chunk_id)));
 }
 
 /**

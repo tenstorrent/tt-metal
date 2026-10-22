@@ -224,6 +224,7 @@ def _variant(
     seg_base=0,
     sort_mode=TopKXLSortMode.Dispatch,
     lsb_row_major=False,
+    lsb_index_stride=0,
     reinit_after_copy=False,
     blaze_compat=False,
     dest_sync=DestSync.Full,
@@ -270,6 +271,7 @@ def _variant(
                 seg_base=seg_base,
                 sort_mode=sort_mode,
                 lsb_row_major=lsb_row_major,
+                lsb_index_stride=lsb_index_stride,
                 reinit_after_copy=reinit_after_copy,
                 blaze_compat=blaze_compat,
             ),
@@ -1017,3 +1019,29 @@ def test_topk_xl_blaze_compat_pack_remove_msb(K, core_id):
         blaze_compat=True,
     )
     _check_remove_msb(result, K, rows, core_id=core_id)
+
+
+@parametrize(
+    K=[512, 1024, 2048], last_chunk=[False, True], tail_elements=[1, 257, None]
+)
+def test_topk_xl_runtime_row_major_stride(K, last_chunk, tail_elements):
+    """K-sized strides preserve exact value/ID pairs up to the u16 index boundary."""
+    count = K if tail_elements is None else tail_elements
+    chunk_id = 65536 // K - 1 if last_chunk else 1
+    result, rows = _run(
+        K,
+        index_op=TopKXLIndexOp.Separate,
+        core_id=chunk_id,
+        tail_elements=count,
+        lsb_row_major=True,
+        lsb_index_stride=K,
+    )
+    for r, (indices, values) in enumerate(_extract_hw_topk(result, K, rows.shape[0])):
+        finite = torch.isfinite(values)
+        assert int(finite.sum()) == count
+        assert torch.isneginf(values[~finite]).all()
+        positions = indices[finite].to(torch.int64) - chunk_id * K
+        torch.testing.assert_close(
+            positions.sort().values, torch.arange(count), rtol=0, atol=0
+        )
+        torch.testing.assert_close(values[finite], rows[r, positions], rtol=0, atol=0)

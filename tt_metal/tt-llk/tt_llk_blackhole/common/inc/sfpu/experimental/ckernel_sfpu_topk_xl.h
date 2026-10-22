@@ -2765,10 +2765,13 @@ inline void _topk_xl_add_lsb_indices_init_()
 // default numbers the two [32, 32] tiles as a 64-row x 32-col grid in
 // COLUMN-MAJOR order: index(tile, row, col) = col*64 + tile*32 + row. Set
 // `row_major = true` for a plain ROW-MAJOR order: index = tile*1024 + row*32 + col.
-template <std::uint32_t K, std::uint32_t core_id, bool row_major = false>
-inline void _topk_xl_add_lsb_indices_()
+template <std::uint32_t K, std::uint32_t core_id, bool row_major, bool runtime_id = false, std::uint32_t index_stride = 2048>
+inline void _topk_xl_add_lsb_indices_impl_(const std::uint32_t chunk_id)
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    static_assert(index_stride == 512 || index_stride == 1024 || index_stride == 2048, "unsupported index stride");
+    static_assert(index_stride >= K, "index stride must cover the chunk");
+    constexpr std::uint32_t index_shift = index_stride == 512 ? 9 : index_stride == 1024 ? 10 : 11;
 
     if constexpr (row_major)
     {
@@ -2777,9 +2780,16 @@ inline void _topk_xl_add_lsb_indices_()
         // Tile ID into LREG0 (across the 32 lanes: 0, 2, 4, ..., 60, 62).
         TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
 
-        // Load core_id and place it in bits [15:11] of every lane.
-        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id);
-        TTI_SFPSHFT(11, 0, p_sfpu::LREG1, 1);
+        // Load the chunk ID and scale it by the configured index stride.
+        if constexpr (runtime_id)
+        {
+            TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id);
+        }
+        else
+        {
+            TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id);
+        }
+        TTI_SFPSHFT(index_shift, 0, p_sfpu::LREG1, 1);
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
 
         // LREG1 = LREG0 + 1, LREG2 = LREG0 + 256, LREG3 = LREG0 + 257 — give the
@@ -2855,9 +2865,16 @@ inline void _topk_xl_add_lsb_indices_()
     // arg is the documented workaround.
     TTI_SFPSHFT(6, 0, p_sfpu::LREG0, 1);
 
-    // Load core_id and place it in bits [15:11] of every lane.
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id);
-    TTI_SFPSHFT(11, 0, p_sfpu::LREG1, 1);
+    // Load the chunk ID and scale it by the configured index stride.
+    if constexpr (runtime_id)
+    {
+        TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id);
+    }
+    else
+    {
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id);
+    }
+    TTI_SFPSHFT(index_shift, 0, p_sfpu::LREG1, 1);
 
     // Merge core_id into LREG0, then propagate to LREG1..3 with the same
     // +1 / +16 / +17 offsets so all four LREGs hold their final 16-bit
@@ -2925,15 +2942,26 @@ inline void _topk_xl_add_lsb_indices_()
     }
 }
 
-// Runtime-chunk-id variant of `_topk_xl_add_lsb_indices_`: identical body,
-// but the 5-bit id in bits [15:11] comes from a RUNTIME argument (composed
-// via TT_SFPLOADI) instead of the template parameter — one stamp
-// instantiation serves every chunk of a fused end-to-end row. KEEP IN SYNC
-// with the template variant above; the ONLY difference is the id load.
-template <std::uint32_t K>
+// Preserve the compile-time API and its legacy 2048-position index stride.
+template <std::uint32_t K, std::uint32_t core_id, bool row_major = false>
+inline void _topk_xl_add_lsb_indices_()
+{
+    _topk_xl_add_lsb_indices_impl_<K, core_id, row_major>(0);
+}
+
+// Runtime chunk-id variant. Defaults preserve the column-major coordinate
+// layout and 2048-position stride. Row-major mode reuses the same stamp
+// sequence with a configurable stride; callers pad invalid scores during copy.
+template <std::uint32_t K, bool row_major = false, std::uint32_t index_stride = 2048>
 inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    static_assert(row_major || index_stride == 2048, "column-major indices require the legacy 2048 stride");
+    if constexpr (row_major)
+    {
+        _topk_xl_add_lsb_indices_impl_<K, 0, true, true, index_stride>(chunk_id & (65536 / index_stride - 1));
+        return;
+    }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);

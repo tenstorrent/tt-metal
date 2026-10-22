@@ -1203,6 +1203,9 @@ class TOPK_XL(TemplateParameter):
     seg_base: int = 0
     sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
     lsb_row_major: bool = False
+    lsb_index_stride: int = (
+        0  # 0 uses the compile-time legacy stamp; nonzero tests the runtime row-major stamp
+    )
     reinit_after_copy: bool = False
     blaze_compat: bool = False
 
@@ -1224,6 +1227,7 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_SEG_BASE = {self.seg_base};",
             f"constexpr std::uint32_t TOPK_XL_SORT_MODE = {self.sort_mode.value};",
             f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
+            f"constexpr std::uint32_t TOPK_XL_LSB_INDEX_STRIDE = {self.lsb_index_stride};",
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
         if self.blaze_compat:

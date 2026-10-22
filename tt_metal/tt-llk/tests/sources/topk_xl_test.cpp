@@ -70,6 +70,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //                            to decode, true the element's chunk offset directly. Only
 //                            the raw-coordinate index ops (1, 2) read it back;
 //                            separate_indices_row_major decodes the coordinate one.
+//   TOPK_XL_LSB_INDEX_STRIDE: 0 uses the legacy compile-time stamp; nonzero selects
+//                            the runtime row-major stamp with this chunk stride.
 //   TOPK_XL_REINIT_AFTER_COPY: reach each merge stage through the post-copy reinit
 //                            entry points instead of a full topk_xl_init
 
@@ -345,7 +347,16 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
     }
 
     topk_xl_add_lsb_indices_init();
-    topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID, TOPK_XL_LSB_ROW_MAJOR>(slot);
+    if constexpr (TOPK_XL_LSB_INDEX_STRIDE != 0)
+    {
+        static_assert(TOPK_XL_LSB_ROW_MAJOR && INDEX_OP_SEPARATE, "runtime stride test requires row-major raw indices");
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_topk_xl_add_lsb_indices_rt_<K, true, TOPK_XL_LSB_INDEX_STRIDE>, slot, VectorMode::RC_custom, TOPK_XL_CORE_ID);
+    }
+    else
+    {
+        topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID, TOPK_XL_LSB_ROW_MAJOR>(slot);
+    }
 
     topk_xl_init<K, true>();
     if constexpr (SORT_MODE_EARLY_EXIT)
