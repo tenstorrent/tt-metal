@@ -45,7 +45,8 @@ class LayerAckDecoder {
 public:
     explicit LayerAckDecoder(LayerAckLayout layout) : layout_(std::move(layout)) {}
 
-    // Every record of one chunk carries the same identity, so a change must land on slice 0.
+    // Assumes a chunk's records arrive back to back, so an identity change must land on slice 0. Records of
+    // several chunks interleaved within one forward (batched prefill) are reported as lost.
     std::variant<DecodedAck, LostAckRecord> decode(const AckIdentity& identity) {
         const uint64_t k = count_++;
         const uint32_t slice_idx = static_cast<uint32_t>(k % layout_.record_count);

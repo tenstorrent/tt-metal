@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the layer-completion sinks (host-only, fake producer)."""
 
+import pytest
+
 from models.demos.common.prefill.runners import layer_completion_ring_writer as writer_mod
 
 
@@ -56,3 +58,12 @@ def test_sink_shutdown_drops_the_message_and_returns():
     producer = FakeProducer(fail_first=10**9)
     make(producer, is_shutdown=lambda: len(producer.attempts) >= 3).layers_completed(**EVENT)
     assert len(producer.attempts) == 3
+
+
+@pytest.mark.parametrize(
+    "make_sink", [lambda: make(FakeProducer()), writer_mod.NullLayerCompletionSink], ids=["ring", "null"]
+)
+def test_sink_rejects_positional_fields(make_sink):
+    sink = make_sink()
+    with pytest.raises(TypeError):  # allow-pytest.raises: host-only, no device error
+        sink.layers_completed(14, 15, 5, 5120, 10213)
