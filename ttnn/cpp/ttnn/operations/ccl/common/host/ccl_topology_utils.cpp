@@ -683,14 +683,11 @@ tt::tt_metal::TensorTopology union_topology(
     const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords) {
     TT_FATAL(!operands.empty(), "Cannot compute the union label of no operands");
-    const auto fully_replicated = [](const tt::tt_metal::TensorTopology& label) {
-        const auto& placements = label.placements();
-        return std::all_of(placements.begin(), placements.end(), [](const auto& placement) {
-            return std::holds_alternative<Replicate>(placement);
-        });
-    };
     const tt::tt_metal::TensorTopology& primary = operands.front().get();
-    if (fully_replicated(primary)) {
+    const auto& primary_placements = primary.placements();
+    if (std::all_of(primary_placements.begin(), primary_placements.end(), [](const auto& placement) {
+            return std::holds_alternative<Replicate>(placement);
+        })) {
         auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
         return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
     }
@@ -701,7 +698,11 @@ tt::tt_metal::TensorTopology union_topology(
     std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>> same_rank;
     same_rank.reserve(operands.size());
     for (const auto& operand : operands) {
-        if (fully_replicated(operand.get()) || operand.get().distribution_shape().dims() == rank) {
+        const auto& placements = operand.get().placements();
+        if (operand.get().distribution_shape().dims() == rank ||
+            std::all_of(placements.begin(), placements.end(), [](const auto& placement) {
+                return std::holds_alternative<Replicate>(placement);
+            })) {
             same_rank.push_back(operand);
         }
     }
