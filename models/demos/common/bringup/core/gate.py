@@ -30,6 +30,7 @@ from pathlib import Path
 
 from models.demos.common.bringup.core import freeze
 from models.demos.common.bringup.core import metrics as M
+from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.ledger import Ledger, fixed_accuracy, satisfied
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
@@ -49,6 +50,7 @@ class GateResult:
     log: Path | None = None
     commit: str | None = None
     duration_s: float = 0.0
+    reused: list[str] = field(default_factory=list)  # F150: units restored from a PASS on the same stamp
 
     @property
     def exit_code(self) -> int:
@@ -203,13 +205,40 @@ def gate_env(spec: Spec, ledger: Ledger, tid: str) -> dict:
 FULL_MODEL_STEPS = ("integrate", "assemble", "contract", "perf")
 
 
-def gate_command(task: dict) -> str:
-    """The gate's shell command as run. Full-model steps skip run_safe_pytest's precompile pass: it runs the whole
-    test once more with stubbed checks, which doubles a model-sized gate for kernels that are almost all cached."""
-    cmd = task["gate"]["cmd"]
-    if task.get("step") in FULL_MODEL_STEPS and "precompile" not in cmd:
+def step_command(step: str | None, cmd: str) -> str:
+    """A gate command as run. Full-model steps skip run_safe_pytest's precompile pass: it runs the whole test once
+    more with stubbed checks, which doubles a model-sized gate for kernels that are almost all cached."""
+    if step in FULL_MODEL_STEPS and "precompile" not in cmd:
         cmd = re.sub(r"(run_safe_pytest\.sh)(?=\s)", r"\1 --no-precompile", cmd)
     return with_clean_wall(cmd)
+
+
+UNIT_TASK = re.compile(r"^BRINGUP_TASK=(\S+)\s+(.*)$", re.S)
+
+
+def gate_units(task: dict, tasks: dict | None = None) -> list[tuple[str, str]]:
+    """F150: the gate as units (unit task, command): a fix job's segments of one source task each (F79's
+    BRINGUP_TASK=<id> prefix, which the runner sets as the unit's BRINGUP_TASK instead), else the whole command."""
+    tid, cmd = task.get("id"), task["gate"]["cmd"]
+    units: list[tuple[str, list[str]]] = []
+    for seg in (x.strip() for x in cmd.split("&&")):
+        m = UNIT_TASK.match(seg)
+        src, body = (m.group(1), m.group(2).strip()) if m else (tid, seg)
+        if units and units[-1][0] == src:
+            units[-1][1].append(body)
+        else:
+            units.append((src, [body]))
+    if [u for u, _ in units] == [tid]:
+        return [(tid, step_command(task.get("step"), cmd))]
+    return [(u, step_command(task.get("step"), " && ".join(b))) for u, b in units]
+
+
+def gate_command(task: dict, tasks: dict | None = None) -> str:
+    """The gate's shell command as run (a fix job's units with their BRINGUP_TASK prefix on every segment)."""
+    units = gate_units(task, tasks)
+    if [u for u, _ in units] == [task.get("id")]:
+        return units[0][1]
+    return " && ".join(f"BRINGUP_TASK={u} {seg.strip()}" for u, c in units for seg in c.split("&&"))
 
 
 PROFILER_VARS = re.compile(
@@ -236,13 +265,17 @@ def gate_outputs(ledger: Ledger, task: dict) -> list[Path]:
     test task, results/fork_calls.json. One list, used three ways: the gate deletes them before it runs (so nothing an
     agent left there survives), the gate commits them, and the agent may change them (orchestrator.allowed_paths), since
     an agent that runs its own gate command rewrites them."""
+    return outputs_in(ledger.results_dir, task)
+
+
+def outputs_in(results: Path, task: dict) -> list[Path]:
     tid = task["id"]
-    out = [ledger.results_dir / f"{tid}.json", *sorted(ledger.results_dir.glob(f"{tid}_*.json"))]
-    out += sorted(ledger.results_dir.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
+    out = [results / f"{tid}.json", *sorted(results.glob(f"{tid}_*.json"))]
+    out += sorted(results.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
     if task.get("step") == "optests":
-        out.append(ledger.results_dir / "fork_calls.json")
+        out.append(results / "fork_calls.json")
         if "fork_calls_scaled.json" in (task.get("gate") or {}).get("cmd", ""):  # F64: the scaled run's calls
-            out.append(ledger.results_dir / "fork_calls_scaled.json")
+            out.append(results / "fork_calls_scaled.json")
     return out
 
 
@@ -386,6 +419,92 @@ def task_commit(spec: Spec, tid: str) -> str:
     ).stdout.strip()
 
 
+def _merge_metrics(results: Path, tid: str, metrics: dict) -> None:
+    p = M._path(tid, results)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(p.read_text()) if p.exists() else {"task": tid, "metrics": {}}
+    data["metrics"].update(metrics)
+    p.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+
+
+def unit_stamps(spec: Spec, task: dict, env: dict, tasks: dict | None = None, keys: tuple | None = None) -> list:
+    """F150: (unit, command, stamp, stamp id) for every unit of the gate, on the tree as it is now (keys: the
+    (code_key, goldens_key) pair when the caller already has it)."""
+    tasks = tasks or {}
+    code, goldens = keys or (stamps.code_key(spec.repo), stamps.goldens_key(spec))
+    out = []
+    for u, cmd in gate_units(task, tasks):
+        st = stamps.stamp(cmd, (tasks.get(u) or task).get("frozen"), dict(env, **{M.TASK_ENV: u}), code, goldens)
+        out.append((u, cmd, st, stamps.stamp_id(st)))
+    return out
+
+
+def unit_ok(limits: dict, got: dict, whole: bool) -> bool:
+    """A unit's metrics within the gate's limits: all of them for a one-unit gate, else the ones it recorded."""
+    return check_metrics(limits if whole else measured_only(limits, got), got)[0]
+
+
+def reusable(rec: dict | None, limits: dict, whole: bool) -> bool:
+    """F150: a kept unit run counts as this gate's only when it passed and its metrics are within today's limits."""
+    return bool(rec) and rec.get("verdict") == "PASS" and unit_ok(limits, rec["metrics"], whole)
+
+
+def run_units(
+    spec: Spec,
+    task: dict,
+    env: dict,
+    log: Path,
+    results: Path,
+    store: stamps.Store | None,
+    fresh: bool = False,
+    tasks: dict | None = None,
+) -> tuple[int, list[str], dict[str, str]]:
+    """F150: the gate's units in order (&&: the first failure stops), each with its own BRINGUP_TASK. With a store,
+    every run unit is kept under its stamp, and a unit whose stamp has a PASS (its metrics still within the gate's
+    limits) is restored instead of run. Returns (rc, reused units, {unit: stamp id})."""
+    tid, tasks = task["id"], tasks or {}
+    limits = task["gate"].get("metrics") or {}
+    plan = (
+        unit_stamps(spec, task, env, tasks)
+        if store is not None
+        else [(u, c, None, None) for u, c in gate_units(task, tasks)]
+    )
+    rc, reused = 0, []
+    with open(log, "w") as f:
+        f.write(f"$ {gate_command(task, tasks)}\n")
+        for u, cmd, st, sid in plan:
+            rec = None if store is None or fresh else store.get(u, sid)
+            if reusable(rec, limits, len(plan) == 1):
+                _merge_metrics(results, tid, rec["metrics"])
+                store.restore(u, sid, rec, results, tid)
+                f.write(f"# {u}: reused: same code (PASS at {rec.get('t')} in the {rec.get('by')} gate), not run\n")
+                reused.append(u)
+                continue
+            if len(plan) > 1:
+                f.write(f"# {u}\n$ {cmd}\n")
+            f.flush()
+            before = M.load(tid, results)
+            seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
+            t0 = time.time()
+            uenv = dict(env, **{M.TASK_ENV: u})
+            rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT).returncode
+            if store is not None:
+                got = {k: v for k, v in M.load(tid, results).items() if before.get(k) != v}
+                ok = unit_ok(limits, got, len(plan) == 1)
+                hang = rc == SAFE_HANG_RC and _uses_safe_runner(cmd)
+                outs = [
+                    p
+                    for p in outputs_in(results, task)
+                    if p.exists() and p.name != f"{tid}.json" and seen.get(p) != p.stat().st_mtime_ns
+                ]
+                verdict = "PASS" if rc == 0 and ok else ("HANG" if hang else "FAIL")
+                rec = {"stamp": st, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "metrics": got}
+                store.put(u, sid, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S")), outs, tid)
+            if rc != 0:
+                break
+    return rc, reused, {u: sid for u, _, _, sid in plan if sid}
+
+
 def run_gate(
     spec: Spec,
     ledger: Ledger,
@@ -395,11 +514,16 @@ def run_gate(
     extra_env: dict | None = None,
     record: bool = True,
     reuse: dict | None = None,
+    fresh: bool = False,
 ) -> GateResult:
     """Run the gate. record=False runs it without touching state.json (used by freeze's stub check).
     reuse (F105): {"metrics": {...}, "source": text} measured by the same commands on the same code (a perf pick's A/B
-    'on' side): recorded, checked and committed like a run of the command, without running it again."""
-    task = ledger.task(tid)
+    'on' side): recorded, checked and committed like a run of the command, without running it again.
+    F150: a unit whose stamp has a recorded PASS is restored, not run (fresh=True runs every unit)."""
+    tasks = ledger.tasks()
+    if tid not in tasks:
+        ledger.task(tid)  # raises
+    task = tasks[tid]
     state = ledger.state()
     if record and reuse is None and (state.get(tid) or {}).get("status") == "COMMIT_PENDING":  # F149: never re-run
         if commit:
@@ -433,8 +557,9 @@ def run_gate(
     log = log_dir(spec, ledger) / (f"{tid}.log" if record else f"{tid}.check.log")
     env = gate_env(spec, ledger, tid)
     env.update(extra_env or {})
-    cmd = gate_command(task)
+    cmd = gate_command(task, tasks)
     t0 = time.time()
+    reused, sids = [], {}
     if reuse is not None:
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
         out = M._path(tid, ledger.results_dir)
@@ -444,10 +569,9 @@ def run_gate(
         log.write_text(f"$ {cmd}\nnot run again (F105): {reuse.get('source', '')}\n")
         rc = 0
     else:
-        with open(log, "w") as f:
-            f.write(f"$ {cmd}\n")
-            f.flush()
-            rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=env, stdout=f, stderr=subprocess.STDOUT).returncode
+        store = stamps.Store(spec.run_dir(run_name(ledger))) if record else None
+        fresh = fresh or any(not (spec.repo / a).exists() for a in task.get("artifacts", []))  # made only by a run
+        rc, reused, sids = run_units(spec, task, env, log, ledger.results_dir, store, fresh, tasks)
     dur = time.time() - t0
 
     got = M.load(tid, ledger.results_dir)
@@ -459,10 +583,13 @@ def run_gate(
     hang = rc == SAFE_HANG_RC and _uses_safe_runner(task["gate"]["cmd"])
     verdict = "PASS" if (rc == 0 and m_ok and not missing) else ("HANG" if hang else "FAIL")
     head = [f"  cmd rc={rc} ({dur:.0f}s), log: {log}"]
+    if reused:
+        head.append(f"  reused: same code, not run (F150): {', '.join(reused)}")
     if hang and (spec.repo / TRIAGE).exists():
         shutil.copy(spec.repo / TRIAGE, log.with_suffix(".triage.txt"))
         head.append(f"  triage: {log.with_suffix('.triage.txt')}")
     res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)
+    res.reused = reused
     if not record:
         return res
 
@@ -477,7 +604,8 @@ def run_gate(
         metrics=state_metrics(task["gate"].get("metrics", {}), got),
         log=str(log),
         reason=[] if verdict == "PASS" else res.lines,
-        history_add={"t": now(), "status": verdict, "s": round(dur, 1)},  # every gate run's time (F70)
+        stamp={"units": sids, "reused": reused} if sids else None,  # F150
+        history_add={"t": now(), "status": verdict, "s": round(dur, 1), **({"reused": reused} if reused else {})},
     )
     if verdict == "PASS" and task.get("step") == "goldens":  # F134: a drift changes only through its G task
         from models.demos.common.bringup.reference.drift import pin

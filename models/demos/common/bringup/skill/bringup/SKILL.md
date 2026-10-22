@@ -288,7 +288,8 @@ gated metrics are errors (rel L2 for float outputs, the missed fraction for inte
 recorded as a diagnostic only, being blind to a scale or an offset. After a change of limits, rerun every passed step's
 gates once without touching the run (`python -m models.demos.common.bringup.core.verify --spec <spec> --tasks M.1
 'L.*' K.1 'C.*' 'S.*' --batch`: the end-to-end tasks first, the per-step tests one process per block type, F142) and
-queue a fix job for each failure.
+queue a fix job for each failure. A task whose gate passed on the same stamp (code, command, goldens: F150) is reused,
+not run; `--force` runs it anyway, for a deliberate re-check only.
 
 **Numerics that cannot be fixed: leave them, with a note (owner's general guidance).** When a step misses its noise
 floor and no bug or lower-precision choice explains it at the device's normal settings, do not chase it with

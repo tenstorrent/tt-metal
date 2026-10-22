@@ -7,6 +7,7 @@
     python -m models.demos.common.bringup next --spec S         tasks whose deps are all PASS
     python -m models.demos.common.bringup gate P2.3 --spec S [--commit] [--force]
     python -m models.demos.common.bringup gate P2.3 --spec S --commit-only   F149: commit a passed gate git refused
+A gate unit kept as PASS on the same stamp (core/stamps.py, F150) is not run again; --fresh runs it anyway.
     python -m models.demos.common.bringup sweep [prefix] --spec S [--commit]
     python -m models.demos.common.bringup validate --spec S     spec + ledger schema
 
@@ -77,7 +78,7 @@ def cmd_gate(a):
     if a.commit_only:
         res = commit_only(spec, led, a.task)
     else:
-        res = run_gate(spec, led, a.task, commit=a.commit, force=a.force)
+        res = run_gate(spec, led, a.task, commit=a.commit, force=a.force, fresh=a.fresh)
     print(led.task(a.task)["title"])
     print(res.summary())
     if res.commit:
@@ -94,7 +95,7 @@ def cmd_sweep(a):
         if led.status(tid) == "DEFERRED":
             print(f"DEFERRED {tid} (skipped: on the CPU bridge until op-gen delivers its op)")
             continue
-        res = run_gate(spec, led, tid, commit=a.commit)
+        res = run_gate(spec, led, tid, commit=a.commit, fresh=a.fresh)
         print(res.summary())
         out.append((tid, res.verdict))
         if res.verdict != "PASS":
@@ -157,7 +158,7 @@ def cmd_rerun(a):
     if a.no_run:
         return 0
     for tid in tids:
-        res = run_gate(spec, led, tid, commit=a.commit)
+        res = run_gate(spec, led, tid, commit=a.commit, fresh=a.fresh)
         print(res.summary())
         if res.verdict != "PASS":
             return res.exit_code
@@ -424,6 +425,7 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--force", action="store_true", help="run even if deps are not PASS")
     ap.add_argument("--commit-only", action="store_true", help="gate: commit a passed gate git refused (F149)")
+    ap.add_argument("--fresh", action="store_true", help="gate/sweep/rerun: run even a unit kept PASS on the same code")
     ap.add_argument("--ledger-only", action="store_true", help="validate: skip the model-spec schema")
     ap.add_argument("--files", nargs="*", help="freeze: files to freeze (default: the task's 'tests')")
     ap.add_argument("--no-commit", action="store_true", help="freeze: do not commit")
