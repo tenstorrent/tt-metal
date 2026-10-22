@@ -69,12 +69,12 @@
 #include <map>
 #include <set>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -707,6 +707,101 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
         .at(device_id);
 }
 
+namespace {
+
+// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
+// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
+class TransitContextGuard {
+public:
+    // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
+    // (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
+    // close, preserving the legacy create-only behavior.
+    explicit TransitContextGuard(MetalEnv& env) {
+        auto& env_impl = MetalEnvAccessor(env).impl();
+        const bool env_owns_context = env_impl.has_registered_context();
+        context_id_ =
+            env_owns_context ? ContextId{env_impl.ensure_context_registered(env)} : MetalContext::create_instance(env);
+        destroy_on_exit_ = !env_owns_context;
+    }
+    TransitContextGuard(const TransitContextGuard&) = delete;
+    TransitContextGuard& operator=(const TransitContextGuard&) = delete;
+    ~TransitContextGuard() {
+        if (destroy_on_exit_) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, context_id_);
+        }
+    }
+    ContextId context_id() const { return context_id_; }
+    bool holds_context() const { return destroy_on_exit_; }
+    void release() { destroy_on_exit_ = false; }
+
+private:
+    ContextId context_id_;
+    bool destroy_on_exit_ = false;
+};
+
+}  // namespace
+
+std::shared_ptr<MeshDevice> MeshDevice::open_mesh_device(
+    MetalEnv& env, const MeshDeviceConfig& config, const OpenMeshDeviceOptions& options) {
+    // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
+    // TODO: Remove this and directly pass in the MetalEnv reference
+    TransitContextGuard context_guard(env);
+    auto mesh_device = MeshDeviceImpl::create(
+        context_guard.context_id(),
+        config,
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
+    if (context_guard.holds_context()) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
+    }
+    return mesh_device;
+}
+
+std::shared_ptr<MeshDevice> MeshDevice::open_unit_mesh(
+    MetalEnv& env, ChipId device_id, const OpenMeshDeviceOptions& options) {
+    TransitContextGuard context_guard(env);
+    auto mesh_device = MeshDeviceImpl::create_unit_mesh(
+        context_guard.context_id(),
+        device_id,
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
+    if (context_guard.holds_context()) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
+    }
+    return mesh_device;
+}
+
+std::map<ChipId, std::shared_ptr<MeshDevice>> MeshDevice::open_unit_meshes(
+    MetalEnv& env, ttsl::Span<const ChipId> device_ids, const OpenMeshDeviceOptions& options) {
+    TransitContextGuard context_guard(env);
+    auto result = MeshDeviceImpl::create_unit_meshes(
+        context_guard.context_id(),
+        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
+    if (context_guard.holds_context() && !result.empty()) {
+        const auto& parent = result.begin()->second->get_parent_mesh();
+        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
+        parent->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
+    }
+    return result;
+}
+
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     const std::shared_ptr<MeshDevice>& parent_mesh,
     const MeshShape& submesh_shape,
@@ -942,7 +1037,6 @@ void MeshDeviceImpl::establish_device_property_caches() {
     properties.l1_size_per_core = l1_size_per_core();
     properties.dram_size_per_channel = dram_size_per_channel();
     properties.ethernet_cores = ethernet_cores();
-    properties.storage_only_cores = storage_only_cores();
     mesh_properties_ = std::move(properties);
 }
 
@@ -1565,13 +1659,6 @@ const std::set<CoreCoord>& MeshDeviceImpl::ethernet_cores() const {
     return validate_and_get_reference_value(
         local_devices_, [](const auto* device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
 }
-const std::set<CoreCoord>& MeshDeviceImpl::storage_only_cores() const {
-    if (mesh_properties_.has_value()) {
-        return mesh_properties_->storage_only_cores;
-    }
-    return validate_and_get_reference_value(
-        local_devices_, [](const auto* device) -> const std::set<CoreCoord>& { return device->storage_only_cores(); });
-}
 uint32_t MeshDeviceImpl::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     return validate_and_get_reference_value(local_devices_, [noc_index, core](const auto* device) {
         return device->get_noc_unicast_encoding(noc_index, core);
@@ -2189,7 +2276,6 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return pimpl_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const { return pimpl_->ethernet_cores(); }
-const std::set<CoreCoord>& MeshDevice::storage_only_cores() const { return pimpl_->storage_only_cores(); }
 uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     return pimpl_->get_noc_unicast_encoding(noc_index, core);
 }
