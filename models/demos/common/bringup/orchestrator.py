@@ -31,6 +31,8 @@ Per task:
                                                            request is a failed attempt. After the debugger's attempts,
                                                            one last implement attempt may still defer instead of STOPPED
   approval needed (plan) or opportunity list written       the run stops for a person (exit 3)
+  gate passed, commit refused (F149)                       COMMIT_PENDING: the run stops (exit 1), no agent starts;
+                                                           on resume the commit alone is retried, nothing re-runs
   perf pick (step perf with a role, F57)                   no gate before or after the agent. The agent makes the
                                                            change behind its switch and runs the frozen tests once
                                                            (accuracy first, roles.yaml). Then the orchestrator runs
@@ -85,6 +87,7 @@ from models.demos.common.bringup.core.gate import (
     _is_direct_pytest,
     _program,
     _segments,
+    commit_only,
     format_paths,
     gate_command,
     gate_env,
@@ -452,6 +455,14 @@ class InfraStop(Exception):
     def __init__(self, tid: str, sig: str):
         super().__init__(sig)
         self.tid, self.sig = tid, sig
+
+
+class CommitPending(Exception):
+    """F149: a gate passed and git refused its commit: the run stops, no agent starts, nothing re-runs."""
+
+    def __init__(self, tid: str, text: str):
+        super().__init__(text)
+        self.tid, self.text = tid, text
 
 
 class Orchestrator:
@@ -915,6 +926,8 @@ class Orchestrator:
     # ---- steps
     def gate(self, tid: str, reuse: dict | None = None):
         res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse)
+        if res.verdict == "COMMIT_PENDING":
+            raise CommitPending(tid, res.summary())
         if res.verdict in ("FAIL", "HANG"):
             sig = self.infra_failure(res)
             if sig:
@@ -1703,6 +1716,12 @@ class Orchestrator:
         self.echo(f"[{tid}] {task['title']} (step {task.get('step')}, role {role or 'script'})")
         if self.led.state().get(tid, {}).get("waiting"):
             self.led.update(tid, waiting=None)  # a person answered (approval, reset, resume): the task runs again
+        if self.led.status(tid) == "COMMIT_PENDING":  # F149: its gate passed; only the commit is retried
+            res = commit_only(self.spec, self.led, tid)
+            if res.verdict != "PASS":
+                raise CommitPending(tid, res.summary())
+            self.echo(f"  [{tid}] committed without a re-run -> {res.commit}")
+            return self._human(task, self.needs_human(task)) if self.needs_human(task) else self._after(task)
         if task.get("tests") and not task.get("frozen"):
             reason = self.freeze_tests(task)
             if reason:
@@ -1823,6 +1842,9 @@ class Orchestrator:
                 rc = self.step(tid)
             except InfraStop as e:
                 rc = self.stop_for_infra(e.tid, e.sig)
+            except CommitPending as e:
+                self.echo(f"  [{e.tid}] COMMIT PENDING (the run stops; nothing re-runs):\n{e.text}")
+                rc = STOPPED
             if rc == HUMAN and not only:
                 state = self.led.state()
                 rest = [t for t in self.led.runnable() if t != tid and state.get(t, {}).get("status") != "STOPPED"]

@@ -30,6 +30,7 @@ PATTERN = re.compile(
     r"|KNOWLEDGE CONTRADICTED|Traceback|nothing left to run|complete with|ORCHESTRATOR_EXIT|attempt [2-9]\d*:"
     r"|fix attempt \d+:"  # a scripted step (golden, box, ladder) failed its gate: never routine
     r"|ABORTED by the overseer|OVERSEER NOTE"  # F69
+    r"|COMMIT PENDING"  # F149
 )
 GATES = re.compile(r"gate PASS|gate FAIL")
 PID_FILE = "ORCHESTRATOR.pid"

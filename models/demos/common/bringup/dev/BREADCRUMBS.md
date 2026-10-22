@@ -1646,3 +1646,16 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F148 (overseer, 2026-10-22): a profile's per-op rows go gzipped beside it (`<task>_ops.json.gz`, `ops_file` in the
   profile; gate_outputs commits it; the dashboard reads it). DeepSeek-V4.1 FIX.5's gate passed every metric, then git
   refused results/FIX.5_profile.json (613 KB, 498 KB of op rows) under the 500 KB hook. Selftest: test_dashboard.py.
+- F149 (owner, 2026-10-22): a refused commit never means a re-run. A gate whose checks pass but whose commit git refuses
+  (a pre-commit hook) is COMMIT_PENDING (core/ledger.py; was F110's FAIL): state.json keeps the gate's metrics, its
+  lines and `commit_pending` {hook output, too_large files, the task files' key}; results/ and the other gate outputs
+  stay on disk. COMMIT_PENDING is not a done status (dependents wait for the commit; a downstream gate never builds on
+  an uncommitted pass), and `ledger.reset` (rerun) drops it. `gate <id> --commit-only` (core/gate.commit_only) re-stages
+  and commits, running nothing; a gate run on a pending task does the same instead of running. Refused again, it stays
+  pending and names the files too large (the overseer fixes the framework, then commit-only). It refuses when the
+  task's own files (paths, frozen block) changed since the gate ran. The orchestrator stops the run on a pending commit
+  (no further agent attempt; the watch wakes on "COMMIT PENDING") and, on the next run, commits it before anything
+  else. Dashboards show COMMIT_PENDING. DeepSeek-V4.1 FIX.6 (35 min, state.json 502 KB) and FIX.5 (70 min, a 613 KB
+  profile) were recorded FAIL and re-run in full only to commit. Selftests: test_core.py
+  (test_a_refused_commit_is_pending_and_commits_without_a_rerun, replacing F110's; too large; changed files),
+  test_orchestrator.py::test_a_refused_commit_stops_the_run_and_resume_commits_without_a_rerun.
