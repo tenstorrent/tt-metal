@@ -19,6 +19,7 @@ Where it runs in the head:
   own chip       on the Y sender if there is one, else on a same-row port: a local write + increment.
 """
 
+import torch
 from ttnn.bringup.combine_rf.routing_a2a import _PLAN, PLAN_WORDS, _al16, header_bytes, routing_a2a_sizes, slot_bytes
 
 import ttnn
@@ -295,9 +296,30 @@ void kernel_main() {
     size_t a = RASend::len(0);
     const uint32_t remote = get_arg_val<uint32_t>(a++);
     if (remote) {
+        const uint32_t hello = get_arg_val<uint32_t>(a++), pc = get_arg_val<uint32_t>(a++), pm = get_arg_val<uint32_t>(a++);
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
         conn.open();
+        // measurement only: "started" to the Y neighbour's watcher; the neighbour's landing here is stamped when seen
+        // (between the sends' polls, never waited on before they are done) - the rows' launch skew
+        (void)fabric_set_unicast_route(hdr, static_cast<uint16_t>(pc), static_cast<uint16_t>(pm));
+        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(my_x[0], my_y[0], hello), 1, true});
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+        volatile tt_l1_ptr uint32_t* hw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hello);
+        bool seen = false;
+        while (!rs.done) {
+            invalidate_l1_cache();
+            if (!seen && *hw) {
+                DeviceTimestampedData("SE-YHELLO", 1);
+                seen = true;
+            }
+            rs.poll(conn, hdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
+        }
+        noc_semaphore_wait_min(hw, 1);
+        if (!seen) DeviceTimestampedData("SE-YHELLO", 0);  // (late: after the sends)
+        noc_semaphore_inc(get_noc_addr(hello), 0u - 1u);  // (re-arm)
+        noc_async_atomic_barrier();
         rs.poll(conn, hdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
         conn.close();
     } else {
@@ -336,6 +358,19 @@ class RoutingStream:
         self.PCAP = slot_bytes(S, K, EPC, M)
         self.MAXP = int(ttnn.get_tt_fabric_max_payload_size_bytes()) // 64 * 64
         self.ycores = ycores
+        ycrs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ycores])
+        self.yhello = ttnn.from_torch(  # (the Y neighbour's "started" lands here: a zero word, re-armed each call)
+            torch.zeros(len(ycores), 16, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(ycrs, (1, 16), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         self.wrap_x = bool(xg.ring)
         self.wrap_y = False  # (the LoudBox's SP axis: a line of 2; the Galaxy's SP ring: torus Y)
         cfg = ttnn.get_fabric_config()
@@ -363,7 +398,6 @@ class RoutingStream:
         assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, "ports: no L1 for the routing buffers"
         assert 2 * ny * self.PCAP <= abytes, "the watcher core: no L1 for the Y senders' buffers"
         self.ny = ny
-        import torch
 
         sh = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
 
@@ -655,6 +689,7 @@ class RoutingStream:
         if nr:
             dy = 1 if key[1] == 2 else -1
             peer = ((coord[0] + dy) % self.R, coord[1])
+            args += [int(self.yhello.buffer_address()), int(node(peer).chip_id), int(node(peer).mesh_id)]
             link = ttnn.get_forwarding_link_indices(node(coord), node(peer))[0]
             args += list(ttnn.setup_fabric_connection(node(coord), node(peer), link, prog, core))
         return args

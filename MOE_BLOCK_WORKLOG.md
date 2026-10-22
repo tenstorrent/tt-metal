@@ -744,3 +744,17 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - The eager metric (each chip's own end - own start, the slowest) carries that: here 281-292 us; from the row's
   last launch to its last end 266-269; the logits arrival skew and the exchange waits seen before are mostly it.
   In a traced / back-to-back forward the chips start when their previous op ends - this skew is the eager harness's.
+
+### The rows' launch skew too (SE-YHELLO): numbers from the mesh's last launch
+- The watcher's Y sender sends one header-only "started" to the other row's watcher at its start and stamps (a
+  timestamp, no wait before its sends are done) when the other row's lands; with the in-row offsets
+  (SE-RDYWAIT) that aligns the rows: galaxy_projection.py's first line is now "from the mesh's last launch".
+- GLM run: launch offsets from the last launch: devs 0-3 (row 1) -100 / -83 / -69 / -54 us, row 0 (4-7) -28 / -42 /
+  -15 / 0; K3 run -154 / -120 / -103 / -85, -39 / -61 / -20 / 0 - the eager harness launches the 8 chips over
+  100-150 us.
+| (us) | LoudBox from the last launch | Galaxy-projected | / Galaxy floor | eager LoudBox / Galaxy |
+|---|---|---|---|---|
+| GLM (router on the engine) | 268 | 168 (SE 168, chain 168) | 1.84x of 91 | 287 / 260 |
+| K3 (router cores, x first) | 488 | 381 (SE 380, chain 381) | 2.24x of 170 | 520 / 501 |
+- With the launch skew out, the routing chain no longer stands above the SE path: the two meet (GLM 168 / 168, K3
+  380 / 381 Galaxy-projected).

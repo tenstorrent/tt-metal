@@ -102,6 +102,43 @@ def project(path, model, logits_first=None, offsets=None):
     return res
 
 
+def yhello(path):
+    """{dev: when the other row's watcher's "started" landed here, us from this chip's start (SE-YHELLO)}."""
+    rows_ = list(csv.reader(open(path)))[2:]
+    out = {}
+    for dev in sorted({r[0].strip() for r in rows_}, key=int):
+        rr = [r for r in rows_ if r[0].strip() == dev]
+        last = max(int(r[7]) for r in rr if r[10].strip().startswith("SE-"))
+        rr = [r for r in rr if int(r[7]) == last]
+        t0 = min(int(r[5]) for r in rr if r[10].strip().endswith("-KERNEL") and r[11].strip() == "ZONE_START")
+        for r in rr:
+            if r[10].strip() == "SE-YHELLO":
+                out[int(dev)] = (int(r[5]) - t0) / FREQ
+    return out
+
+
+def global_offsets(path, rows):
+    """{dev: its launch offset from the mesh's last launch (<= 0)}: rows aligned to each other by the watchers' Y
+    "started" (per column: the chip that sees the other row's later waited for it; the earliest sighting ~ the
+    send + a hop when the other row launched first), averaged over the columns; None without the stamps."""
+    hy = yhello(path)
+    if len(rows) < 2 or any(d not in hy for row in rows for d in row):
+        return None
+    within = launch_skew(path, rows)
+    c = min(hy.values())
+    rel = [0.0]  # (row k's start - row 0's start, its earliest chip's)
+    for k in range(1, len(rows)):
+        ds = []
+        for a, b, oa, ob in zip(rows[0], rows[k], within[0], within[k]):
+            ta, tb = hy[a] - c, hy[b] - c
+            dba = ta if ta > tb else -tb  # (b's start - a's start)
+            ds.append(dba - ob + oa)
+        rel.append(sum(ds) / len(ds))
+    st = {d: rel[k] + o for k, row in enumerate(rows) for d, o in zip(row, within[k])}
+    m = max(st.values())
+    return {d: v - m for d, v in st.items()}
+
+
 def offsets_of(path, rows):
     """{dev: its launch offset from its row's last launch (<= 0)}."""
     out = {}
@@ -153,8 +190,13 @@ if __name__ == "__main__":
     mp = os.path.join(os.path.dirname(sys.argv[1]), "head_map.json")  # (test_head_se3: [[dev by TP position] a row])
     rows = json.load(open(mp)) if os.path.exists(mp) else None
     f = floors(sys.argv[2])
-    for name, off in [("skew-corrected", offsets_of(sys.argv[1], rows) if rows else None), ("eager", None)]:
-        if name == "skew-corrected" and off is None:
+    cases = [
+        ("from the mesh's last launch", global_offsets(sys.argv[1], rows) if rows else None),
+        ("from each row's last launch", offsets_of(sys.argv[1], rows) if rows else None),
+        ("eager", None),
+    ]
+    for name, off in cases:
+        if name != "eager" and off is None:
             continue
         res = project(sys.argv[1], sys.argv[2], lf, off)
         lb = max(end for _, end, *_ in res)

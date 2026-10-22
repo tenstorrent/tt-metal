@@ -572,6 +572,7 @@ void kernel_main() {
         rs.init(W_RA0);
         size_t a2 = W_RA0 + RASend::len(W_RA0);
         if (get_arg_val<uint32_t>(a2++)) {
+            a2 += 3;  // (the Y hello's args: the BRISC's direction only)
             auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a2);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
             conn.open();
