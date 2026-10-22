@@ -25,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 31;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 32;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -69,6 +69,8 @@ struct ReaderCtArgs {
     uint32_t expert_threshold;
     // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
     uint32_t expert_table_page_base;
+    // Pages in the dispatched buffer. Runs are clamped to it, as dispatch dropped every token past it.
+    uint32_t dispatch_capacity;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -113,7 +115,8 @@ struct ReaderCtArgs {
         unt_freed_slot(untilizers.my_freed_slot),
         final_sem_addr(plan.final_arrived_addr),
         expert_threshold(args.hybrid_token_threshold),
-        expert_table_page_base(plan.expert_table_page_base) {
+        expert_table_page_base(plan.expert_table_page_base),
+        dispatch_capacity(op::dispatch_capacity(tensor_args)) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -181,7 +184,8 @@ struct ReaderCtArgs {
             unt_freed_slot,
             final_sem_addr,
             expert_threshold,
-            expert_table_page_base};
+            expert_table_page_base,
+            dispatch_capacity};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -217,7 +221,8 @@ struct ReaderCtArgs {
         unt_freed_slot(get_compile_time_arg_val(27)),
         final_sem_addr(get_compile_time_arg_val(28)),
         expert_threshold(get_compile_time_arg_val(29)),
-        expert_table_page_base(get_compile_time_arg_val(30)) {}
+        expert_table_page_base(get_compile_time_arg_val(30)),
+        dispatch_capacity(get_compile_time_arg_val(31)) {}
 
     // The overlapped build gets program semaphores, because the routed expert's arena occupies the L1 the
     // standalone op places its ring counters in. The framework re-initialises those every launch; the

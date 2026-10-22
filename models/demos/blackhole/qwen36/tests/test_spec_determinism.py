@@ -40,7 +40,7 @@ MAX_NEW = 48
 _N_LAYERS = int(os.environ.get("QWEN36_SPEC_TEST_N_LAYERS", "0")) or None
 
 # (prompt_len, traced) -> (tokens, accept_rate, counters) from the first run of that mode. The traced
-# draft chain (QWEN36_TRACED_DRAFT) and the traced reseed (QWEN36_TRACED_RESEED) replay exactly the
+# drafter trace (anchor + reseed + K drafts; QWEN36_SPEC_EAGER_DRAFTER=1 disables it) replays exactly the
 # device ops the eager dispatch issues, so the two modes must agree token for token and counter for
 # counter. Whichever parametrization runs first records; the other compares (selecting one mode alone
 # still runs its own determinism checks, it just has nothing to compare against).
@@ -72,12 +72,11 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len, traced, monkeypat
 
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
-    # Both flags are read ONCE, in SpeculativeDecoder.__init__, so they have to be set before the
-    # decoder is built. traced=True replays the drafter chain and the reseed from captured traces
-    # instead of dispatching their programs from python: same device work, so the trajectory must not
-    # move — within the mode (determinism) or against the eager mode (the comparison at the end).
-    monkeypatch.setenv("QWEN36_TRACED_DRAFT", "1" if traced else "0")
-    monkeypatch.setenv("QWEN36_TRACED_RESEED", "1" if traced else "0")
+    # The flag is read ONCE, when the engine is built (in SpeculativeDecoder.__init__), so it has to be
+    # set before the decoder is built. traced=True replays the drafter from its recorded trace instead
+    # of dispatching its programs from python: same device work, so the trajectory must not move —
+    # within the mode (determinism) or against the eager mode (the comparison at the end).
+    monkeypatch.setenv("QWEN36_SPEC_EAGER_DRAFTER", "0" if traced else "1")
 
     device = mesh_device
     device.enable_program_cache()

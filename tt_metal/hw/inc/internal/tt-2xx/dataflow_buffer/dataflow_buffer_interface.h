@@ -15,9 +15,10 @@
 struct LocalDFBInterface;
 struct TxnDFBDescriptor;
 
-// Global DFB interface array
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-extern thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK];
+// Global DFB interface array. Compute TRISCs keep only the active DFBs, in a compact array reached
+// through g_dfb_logical_to_compact; DM harts index by logical id.
+#if defined(COMPILE_FOR_TRISC)
+extern thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC];
 extern thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS];
 #else
 extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
@@ -31,35 +32,47 @@ extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-
-// ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1 (~4 MB).
-// Cursor byte-offset is not stored: it is derived from wr_entry_idx (advances in lockstep
-// with stride_size / stride_size_tiles).
+#if defined(COMPILE_FOR_TRISC)
+// Compute-thread slot (pack and unpack). ring_size is uint32 L1-aligned units so a DFB can span
+// full Quasar L1 (~4 MB). cursor_entry_idx is the write cursor on pack and the read cursor on
+// unpack; its byte offset is not stored but derived (advances in lockstep with stride_size /
+// stride_size_tiles).
 struct DFBTCSlot {
     uint32_t base_addr;
     uint32_t ring_size;
-    uint16_t wr_entry_idx;
+    uint16_t cursor_entry_idx;
     uint16_t base_entry_idx;
     dfb::PackedTileCounter packed_tile_counter;
 } __attribute__((packed));
+#else
+struct DFBTCSlot {
+    uint32_t ptr;
+    uint32_t base_addr;
+    uint32_t limit;
+    dfb::PackedTileCounter packed_tile_counter;
+    uint8_t _align[3];  // pad 13 → 16B so every slot in tc_slots[] is 4B-aligned
+};
 
-extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS];
+#endif
 
-// Preserve the iface.tc_slots[i] API while allocating only the slots each active Pack DFB needs.
-// slot_base indexes that DFB's contiguous slice of g_dfb_tc_slots.
+#if defined(COMPILE_FOR_TRISC)
+static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (TRISC) size is incorrect");
+// Compute TRISCs draw their tile-counter slots from one shared pool per thread, so an interface entry
+// holds only the index of its contiguous slice (slot_base) and keeps the iface.tc_slots[i] API.
+extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS];
 struct DFBTCSlotSpan {
     uint8_t slot_base;
-
     inline __attribute__((always_inline)) DFBTCSlot& operator[](uint32_t index) {
         return g_dfb_tc_slots[slot_base + index];
     }
-
     inline __attribute__((always_inline)) const DFBTCSlot& operator[](uint32_t index) const {
         return g_dfb_tc_slots[slot_base + index];
     }
 } __attribute__((packed));
+static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan size is incorrect");
+#endif
 
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
@@ -73,22 +86,8 @@ struct LocalDFBInterface {
     uint16_t jump;        // cursor jump in entries, taken on each TC rotation
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-
-static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan (pack TRISC) size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
-
 #elif defined(COMPILE_FOR_TRISC)
-
-// Same compact layout as pack: uint32 ring_size, cursor offset derived from rd_entry_idx.
-struct DFBTCSlot {
-    uint32_t base_addr;
-    uint32_t ring_size;
-    uint16_t rd_entry_idx;
-    uint16_t base_entry_idx;
-    dfb::PackedTileCounter packed_tile_counter;
-} __attribute__((packed));
-
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
@@ -100,24 +99,10 @@ struct LocalDFBInterface {
     uint16_t block_size;
     uint16_t split_tc;
     uint16_t jump;
-    DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-
-static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 94, "LocalDFBInterface (unpack TRISC) size is incorrect");
-
+static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC) size is incorrect");
 #else
-
-// Per–tile-counter slot (DM). A DM hart is either producer or consumer of a DFB, never both, so
-// one cursor (`ptr`) serves as its write or read pointer.
-struct DFBTCSlot {
-    uint32_t ptr;
-    uint32_t base_addr;
-    uint32_t limit;
-    dfb::PackedTileCounter packed_tile_counter;
-    uint8_t _align[3];  // pad 13 → 16B so every slot in tc_slots[] is 4B-aligned
-};
-
 struct LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
@@ -150,9 +135,9 @@ static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incor
 
 #if defined(COMPILE_FOR_TRISC)
 // Byte-offset (L1 units) of the current FIFO cursor from slot.base_addr.
-// wr/rd_entry_idx and the former wr/rd_offset advance in lockstep:
+// cursor_entry_idx and the former byte offset advance in lockstep:
 //   entry += n * stride_size_tiles;  offset += n * stride_size;
-// so offset is recoverable without storing it (saves 4B/slot on pack TLS).
+// so offset is recoverable without storing it (saves 4B/slot in compute-TRISC TLS).
 inline __attribute__((always_inline)) uint32_t
 dfb_slot_cursor_offset_units(const LocalDFBInterface& intf, const DFBTCSlot& slot, uint32_t entry_idx) {
     const uint32_t delta_entries = entry_idx - static_cast<uint32_t>(slot.base_entry_idx);
@@ -161,7 +146,7 @@ dfb_slot_cursor_offset_units(const LocalDFBInterface& intf, const DFBTCSlot& slo
 #endif
 
 inline LocalDFBInterface& get_local_dfb_interface(uint32_t logical_dfb_id) {
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)
     return g_dfb_interface[g_dfb_logical_to_compact[logical_dfb_id]];
 #else
     return g_dfb_interface[logical_dfb_id];
