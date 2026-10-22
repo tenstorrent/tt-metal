@@ -90,8 +90,8 @@ python3 .github/llk_sfpu_report/report.py /tmp/llk-sfpu-report/summary-*.json   
 `--base <ref>` sets the baseline (default: the merge-base with `origin/main`), `--work`
 the scratch directory (default `/tmp/llk-sfpu-report`), `--formats Float16_b,Float32`
 narrows perf and accuracy to those input formats, and `--check` makes the run a
-pass/fail test: it exits 1 when the report lists a regression, and 2 when nothing could
-be measured (see below). Every PR comment ends
+pass/fail test: it exits 1 when the report has a ⚠️ (a regression, or an op that did
+not run on the PR side), and 2 when nothing could be measured (see below). Every PR comment ends
 with these commands, pinned to the SHAs it measured, so anyone can reproduce a row.
 
 ## Reading the report
@@ -112,6 +112,18 @@ show only rows that changed, regressions first, and fold everything else into
   unpacker and the Dest: for NaN, -0 and subnormal inputs it is not an IEEE answer, so
   there any change of kind counts.
 
+Above the regressions, an op that **did not run on the PR side** gets its own ⚠️ line,
+and its numbers are left out: they are not the PR's kernel. On the PR side it hands
+back an input unchanged on every lane, where the base side computed something. The perf
+variants accuracy does not run, and an op without accuracy results, go by their cycles
+instead: under a cycle per row there, and at least 10 times fewer than before. Either
+main's harness asks for the op in a way the PR's
+device code no longer runs (#54080 moved logsigmoid from the binary to the unary
+harness, in its Python and in `sfpu_operations.h`), or the PR's kernel stopped
+computing. The line says which is likely: when the PR also changes the op in the
+harness's Python, it names the files. For an op that ran, those files are listed under
+the measured ops, since its numbers use main's tests and reference, not the PR's.
+
 ## How it works
 
 **Two sides, one harness.** `overlay.py` builds two sparse worktrees. By default
@@ -123,7 +135,10 @@ the harness at a side's tree. A PR can change what runs on the Tensix, never wha
 on the runner. If the merge-base is too old for the current harness, the run falls
 back to rebase mode and the report says so. Rebase mode needs the PR's device diff to
 apply to main (`git apply --3way`); when main has changed the same lines since, nothing
-is measured, and the report names the conflicting files and asks for a rebase.
+is measured, and the report names the conflicting files and asks for a rebase. The
+PR's harness Python never runs, so `overlay.harness_changes()` finds where the PR
+changes a measured op in it: a changed line naming the op (`MathOperation.Tanh`, its
+`OpSpec` entry), or a change inside the golden method the op dispatches to.
 
 **Which chips.** With no `--arch`, the plan job runs only the chips whose device code
 the PR changes (`overlay.archs_built()`): a device file in one architecture's tree
@@ -157,6 +172,11 @@ it, so each gets its own row: the binary float test's unpack broadcast
 (`SfpuElwadd (Dest bcast Row)`), fast mode (`Exp (fast_mode Yes)`) and the TopK sort
 switches.
 
+Logsigmoid's second operand, exp(-x), is an input to the test, but ttnn computes it on
+the device before the kernel runs (a negative and a fast exp). Main's cycles leave that
+work out, so a kernel that does it itself (#54080) measures slower here than it runs in
+ttnn; the report says so beside its rows and its regressions.
+
 **Accuracy.** `test_sfpu_report_accuracy.py` runs each op over every
 finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special
 values (NaN, ±inf, ±0, subnormals, the format's extremes), and saves the raw results.
@@ -181,8 +201,10 @@ variants accuracy does not cover.
 Binary ops use the functional driver `sfpu_binary()` of `test_eltwise_binary_sfpu.py`, so
 operand layout, domains and golden are the functional test's, and so are the crafted
 operand pairs of the comparisons (`Eq`/`Ne`, `Lt`/`Gt`/`Le`/`Ge`, `Isclose`), which hold
-the ties a random draw never produces. Not covered: `Mask`, `AddTopRow`, `CopyDest`
-(not elementwise functions of their inputs).
+the ties a random draw never produces. Logsigmoid is measured on x in [-60, 60], both
+branches, with its second operand exp(-x) computed on the host (the functional test
+stops at 3.9, below the branch that reads it). Not covered: `Mask`, `AddTopRow`,
+`CopyDest` (not elementwise functions of their inputs).
 
 Later: ternary and structural SFPU kernels (reduce, topk, cumsum, welford), plots,
 ttnn-level timing, Quasar (needs the emulator). A changed kernel the report cannot
