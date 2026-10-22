@@ -74,8 +74,9 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
         // UNP_DEST writes the tile into DEST with transpose forced off. Math then does the full 32x32
-        // transpose, within each face and across faces. UnpackToDestEn must be set for this kernel: the
-        // section handshake in tile_regs_acquire / tile_regs_commit is gated on it, same as copy_tile.
+        // transpose, within each face and across faces. The section handshake in tile_regs_acquire /
+        // tile_regs_commit is gated on UnpackToDestEn, same as copy_tile.
+        LLK_ASSERT(UnpackToDestEn, "32-bit transpose on Quasar requires unpack-to-dest to be enabled");
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
@@ -141,6 +142,7 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
     if (enable_unpack_to_dest) {
         // The unpacker places the tile at idst. Math starts only after tile_regs_commit posts the section,
         // then transposes that DEST tile in place. SrcB dvalid is dummy: MOVD2B stalls on it.
+        LLK_ASSERT(UnpackToDestEn, "32-bit transpose on Quasar requires unpack-to-dest to be enabled");
         UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             icb, itile, idst)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
