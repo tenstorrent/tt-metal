@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ttnn
 
+from .ccl import dealloc
 from .common import DRAM
 from .layout import HC
 from .settings import settings
@@ -54,10 +55,10 @@ class TtHcCollapse:
                 y = ttnn.multiply(s, c, dtype=ttnn.float32, memory_config=DRAM)
             else:
                 nxt = ttnn.addcmul(y, s, c, memory_config=DRAM)
-                ttnn.deallocate(y)
+                dealloc(y)
                 y = nxt
-            ttnn.deallocate(s)
-            ttnn.deallocate(c)
+            dealloc(s)
+            dealloc(c)
         return y
 
 

@@ -27,7 +27,9 @@ Tensor mhc_post(
     const Tensor& post,
     const Tensor& comb,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
-    bool comb_transposed = true);
+    bool comb_transposed = true,
+    int64_t post_col = 0,
+    int64_t comb_col = 0);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn
 
@@ -43,7 +45,9 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     const Tensor& comb,
     const Tensor& stats_weight,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
-    bool comb_transposed = true);
+    bool comb_transposed = true,
+    int64_t post_col = 0,
+    int64_t comb_col = 0);
 
 // The Python entry: X' without stats_weight (the op as it was), (X', stats) with it.
 std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
@@ -53,6 +57,8 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
     const Tensor& comb,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     bool comb_transposed,
-    const std::optional<Tensor>& stats_weight);
+    const std::optional<Tensor>& stats_weight,
+    int64_t post_col = 0,
+    int64_t comb_col = 0);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

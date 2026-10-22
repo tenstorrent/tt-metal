@@ -60,6 +60,7 @@ import torch
 import ttnn
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, cast, dense_dtype, sum_cols
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads, rope_stock
 from .served import CacheSlab, DeviceScalars, alloc_served
@@ -150,12 +151,33 @@ class WindowTables:
         )
         self.zero_carry = _upload(mesh, torch.zeros(1, 1, WINDOW, 512), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self._scalars = {}
+        # GLUE_FOLD=on (P.19): the server-order index row of the latest start, sliced once for every cache write of
+        # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
+        self.fold = settings.get("GLUE_FOLD") == "on"
+        self._srv_row = None  # (k, [1, 1, 1, W] uint32)
 
     def scalars(self, step: int, n: int) -> DeviceScalars:
         """Load-time device values 0, step, .., (n - 1) step (tt/served.DeviceScalars), shared by every cache."""
         if (step, n) not in self._scalars:
-            self._scalars[(step, n)] = DeviceScalars(self.mesh, [step * k for k in range(n)])
+            self._scalars[(step, n)] = DeviceScalars(self.mesh, [step * k for k in range(n)], memo=self.fold)
         return self._scalars[(step, n)]
+
+    def srv_row(self, k: int) -> ttnn.Tensor:
+        """Row k of the server-order index table, [1, 1, 1, W] uint32 ROW_MAJOR (positions (32 k) mod S on). The
+        caller releases it with ``release_srv`` (GLUE_FOLD=on keeps the latest row for the chunk's other writes)."""
+        hit = self._srv_row
+        if hit is not None and hit[0] == k:
+            return hit[1]
+        idx = ttnn.slice(self.srv, [0, 0, k, 0], [1, 1, k + 1, self.geo.w], memory_config=DRAM)
+        if self.fold:
+            if hit is not None:
+                dealloc(hit[1])
+            self._srv_row = (k, idx)
+        return idx
+
+    def release_srv(self, idx: ttnn.Tensor) -> None:
+        if self._srv_row is None or idx is not self._srv_row[1]:
+            dealloc(idx)
 
 
 class TtWindowCache:
@@ -177,6 +199,25 @@ class TtWindowCache:
             slab = CacheSlab(alloc_served(mesh, self.WIDTH, self.rows, 32, 1, dedup=True), owned=True)
         assert (slab.rows, slab.width) == (self.rows, self.WIDTH), (slab.rows, slab.width, self.rows)
         self.slab = slab
+        # GLUE_FOLD=on (P.19): the previous chunk's kv rows (next start, [1, 1, S, 512] bf16 ROW_MAJOR) when it was
+        # whole: the next chunk's carry is their last 128 rows (one slice instead of the cache read). Dropped by any
+        # other write (another start, a host load) and by free().
+        self._tail = None
+
+    def keep_rows(self, kv_rm: ttnn.Tensor, start: int, end: int) -> None:
+        """Takes ``kv_rm`` (the chunk's rows just written, natural order): kept as the next chunk's carry source
+        when the chunk is whole, else freed."""
+        self._drop_tail()
+        if end == start + self.geo.chunk:
+            self._tail = (end, kv_rm)
+        else:
+            dealloc(kv_rm)
+
+    def _drop_tail(self) -> None:
+        if self._tail is not None:
+            if self._tail[1].is_allocated():
+                dealloc(self._tail[1])
+            self._tail = None
 
     # ------------------------------------------------------------------ per chunk (device)
     def write(self, kv_rm: ttnn.Tensor, start: int, end: int) -> None:
@@ -185,7 +226,9 @@ class TtWindowCache:
         g = self.geo
         assert start % 32 == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end, self.max_seq)
         k = (start % g.chunk) // 32
-        idx = ttnn.slice(self.tables.srv, [0, 0, k, 0], [1, 1, k + 1, g.w], memory_config=DRAM)
+        if self._tail is not None and self._tail[0] != start:  # another start may overwrite the kept rows' positions
+            self._drop_tail()
+        idx = self.tables.srv_row(k)
         rows = ttnn.embedding(
             ttnn.reshape(idx, [1, g.w]),
             ttnn.reshape(kv_rm, [g.chunk, self.WIDTH]),
@@ -193,7 +236,7 @@ class TtWindowCache:
             dtype=ttnn.bfloat16,
             memory_config=DRAM,
         )
-        ttnn.deallocate(idx)
+        self.tables.release_srv(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w, self.WIDTH])
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             self.slab.tensor,
@@ -206,7 +249,7 @@ class TtWindowCache:
             valid_global=end,
             tp_axis=self.tp_axis,
         )
-        ttnn.deallocate(rows)
+        dealloc(rows)
 
     def _gather_all(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, n, 512] TILE per chip -> [1, 1, N n, 512] on every chip, chip-linear order r TP + c."""
@@ -216,7 +259,7 @@ class TtWindowCache:
         if self.geo.sp > 1:
             nxt = ccl.all_gather(out, 2, SP_AXIS)
             if out is not t:
-                ttnn.deallocate(out)
+                dealloc(out)
             out = nxt
         return out
 
@@ -229,6 +272,10 @@ class TtWindowCache:
         n = min(WINDOW, start)
         if n == 0:
             return self.tables.zero_carry
+        tail = self._tail
+        if tail is not None and tail[0] == start and n == WINDOW:  # GLUE_FOLD=on: the previous chunk's last rows
+            s = tail[1].shape[-2]
+            return ttnn.slice(tail[1], [0, 0, s - WINDOW, 0], [1, 1, s, self.WIDTH], memory_config=DRAM)
         pieces = [] if n == WINDOW else [ttnn.slice(self.tables.zero_carry, [0, 0, 0, 0], [1, 1, WINDOW - n, 512])]
         p = start - n
         while p < start:
@@ -238,21 +285,21 @@ class TtWindowCache:
             loc = b * g.stripe + u
             sl = self.slab.slice_rows(loc, loc + take)
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
-            ttnn.deallocate(sl)
+            dealloc(sl)
             gat = self._gather_all(tl)
             if gat is not tl:
-                ttnn.deallocate(tl)
+                dealloc(tl)
             mine = ttnn.slice(gat, [0, 0, q * take, 0], [1, 1, (q + 1) * take, self.WIDTH], memory_config=DRAM)
-            ttnn.deallocate(gat)
+            dealloc(gat)
             pieces.append(ttnn.to_layout(mine, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM))
-            ttnn.deallocate(mine)
+            dealloc(mine)
             p += take
         if len(pieces) == 1:
             return pieces[0]
         out = ttnn.concat(pieces, dim=2, memory_config=DRAM)
         for t in pieces:
             if t is not self.tables.zero_carry:
-                ttnn.deallocate(t)
+                dealloc(t)
         return out
 
     # ------------------------------------------------------------------ harness / serving boundary (host)
@@ -260,6 +307,7 @@ class TtWindowCache:
         """Write host rows [n, 512] at positions [p0, p0 + n) (p0 % 32 == 0) through the device write path."""
         g = self.geo
         assert p0 % 32 == 0, p0
+        self._drop_tail()
         n = rows.shape[0]
         for a in range(0, n, g.chunk):
             m = min(g.chunk, n - a)
@@ -278,7 +326,7 @@ class TtWindowCache:
                 valid_global=p0 + a + m,
                 tp_axis=self.tp_axis,
             )
-            ttnn.deallocate(slab)
+            dealloc(slab)
 
     def to_host(self, length: int) -> torch.Tensor:
         """Natural-order rows of positions [0, ceil32(length)) as host bf16 [ceil32(length), 512]."""
@@ -311,6 +359,7 @@ class TtWindowCache:
 
     def free(self) -> None:
         """Frees the tensor only when it is the cache's own (never the engine's)."""
+        self._drop_tail()
         self.slab.free()
 
 
@@ -335,6 +384,7 @@ class TtWindowAttention:
         self.scale = self.d**-0.5
         assert self.heads % 32 == 0, f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
         self.o_sum = settings.get("ATTN_O_SUM")
+        self.fold = settings.get("GLUE_FOLD") == "on"  # P.19: window-path glue (_table)
         # ATTN_GLUE=on (P.15): q through nlp_create_q_heads_split, its tail interleaved by a PairPerm matmul after the
         # bf16 cast, so the window layers too read the table in its stored (interleaved) order; the output
         # de-interleaved by PairPerm on the bf16 sdpa output, kept bf16 (the inverse rope writes bf16, wo_a's input
@@ -390,31 +440,38 @@ class TtWindowAttention:
         full = kv
         if g.sp > 1:
             full = ccl.all_gather(kv, 2, SP_AXIS)  # [1, 1, S, 512] bf16
-        keep = ttnn.lt(self.tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM)
-        masked = ttnn.multiply(full, keep, dtype=ttnn.bfloat16, memory_config=DRAM)  # pad rows -> 0 (exact)
-        ttnn.deallocate(keep)
-        if full is not kv:
-            ttnn.deallocate(full)
+        if self.fold and end - start == g.chunk:  # GLUE_FOLD=on (P.19): no pad rows, the mask would multiply by 1
+            masked = full
+        else:
+            keep = ttnn.lt(self.tables.iota, float(end - start), dtype=ttnn.bfloat16, memory_config=DRAM)
+            masked = ttnn.multiply(full, keep, dtype=ttnn.bfloat16, memory_config=DRAM)  # pad rows -> 0 (exact)
+            dealloc(keep)
+            if full is not kv:
+                dealloc(full)
         kv_rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(masked)
+        if masked is not kv:
+            dealloc(masked)
         cache.write(kv_rm, start, end)
         carry = cache.carry(start)
         table = ttnn.concat([carry, kv_rm], dim=2, memory_config=DRAM)
         if carry is not self.tables.zero_carry:
-            ttnn.deallocate(carry)
-        ttnn.deallocate(kv_rm)
+            dealloc(carry)
+        if self.fold:  # GLUE_FOLD=on (P.19): the rows stay as the next chunk's carry source
+            cache.keep_rows(kv_rm, start, end)
+        else:
+            dealloc(kv_rm)
         if self.INTERLEAVED:
             return table
         # the rope tail [interleaved pairs] -> [even | odd] (q's order): ROW_MAJOR transpose, exact
         rows, half, r0 = table.shape[2], self.rd // 2, self.d - self.rd
         tail = ttnn.slice(table, [0, 0, 0, r0], [1, 1, rows, self.d], memory_config=DRAM)
         tt = ttnn.transpose(ttnn.reshape(tail, [1, rows, half, 2]), -2, -1, memory_config=DRAM)
-        ttnn.deallocate(tail)
+        dealloc(tail)
         nope = ttnn.slice(table, [0, 0, 0, 0], [1, 1, rows, r0], memory_config=DRAM)
-        ttnn.deallocate(table)
+        dealloc(table)
         out = ttnn.concat([nope, ttnn.reshape(tt, [1, 1, rows, self.rd])], dim=-1, memory_config=DRAM)
-        ttnn.deallocate(nope)
-        ttnn.deallocate(tt)
+        dealloc(nope)
+        dealloc(tt)
         return out
 
     def _q_heads(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -423,13 +480,13 @@ class TtWindowAttention:
         xq = cast(q_resid, ttnn.bfloat16)
         qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         if xq is not q_resid:
-            ttnn.deallocate(xq)
+            dealloc(xq)
         q4 = ttnn.transpose(ttnn.reshape(qf, [1, rows, self.h_l, self.d]), 1, 2, memory_config=DRAM)
-        ttnn.deallocate(qf)
+        dealloc(qf)
         qr = rope_heads(q4, cos, sin, interleave=self.INTERLEAVED)  # the table's order
-        ttnn.deallocate(q4)
+        dealloc(q4)
         qs = ttnn.multiply(qr, self.scale, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(qr)
+        dealloc(qr)
         return qs
 
     def _q_glue(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -440,22 +497,22 @@ class TtWindowAttention:
         xq = cast(q_resid, ttnn.bfloat16)
         qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         if xq is not q_resid:
-            ttnn.deallocate(xq)
+            dealloc(xq)
         qn, qr = ttnn.experimental.nlp_create_q_heads_split(
             qf, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM
         )
-        ttnn.deallocate(qf)
+        dealloc(qf)
         rot = rope_heads(qr, cos, sin)  # [re | ro] fp32
-        ttnn.deallocate(qr)
+        dealloc(qr)
         tb = ttnn.multiply(rot, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
-        ttnn.deallocate(rot)
+        dealloc(rot)
         nb = ttnn.multiply(qn, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
-        ttnn.deallocate(qn)
+        dealloc(qn)
         ti = self.pairs(tb, self.pairs.to_inter)
-        ttnn.deallocate(tb)
+        dealloc(tb)
         q = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM)
-        ttnn.deallocate(nb)
-        ttnn.deallocate(ti)
+        dealloc(nb)
+        dealloc(ti)
         return q
 
     def _q_stock(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -465,14 +522,14 @@ class TtWindowAttention:
         tails with the nope prepended (tt/rope.rope_stock)."""
         xq = ttnn.multiply(q_resid, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
         qb = ttnn.linear(xq, self.wq_b, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=DRAM)
-        ttnn.deallocate(xq)
+        dealloc(xq)
         qn, qr = ttnn.experimental.nlp_create_q_heads_split(
             qb, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM
         )
-        ttnn.deallocate(qb)
+        dealloc(qb)
         q = rope_stock(qr, cos, sin, self.rope.trans, prefix=qn)
-        ttnn.deallocate(qr)
-        ttnn.deallocate(qn)
+        dealloc(qr)
+        dealloc(qn)
         return q
 
     def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -481,18 +538,18 @@ class TtWindowAttention:
             qb = self._q_stock(q_resid, cos, sin) if self.stock else self._q_glue(q_resid, cos, sin)
             qa = self._reshard(qb, in_dim=1, out_dim=2)
             if qa is not qb:
-                ttnn.deallocate(qb)
+                dealloc(qb)
             q_rm = ttnn.to_layout(qa, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-            ttnn.deallocate(qa)
+            dealloc(qa)
             return q_rm
         qs = self._q_heads(q_resid, cos, sin)
         qb = ttnn.typecast(qs, ttnn.bfloat16, memory_config=DRAM)
-        ttnn.deallocate(qs)
+        dealloc(qs)
         qa = self._reshard(qb, in_dim=1, out_dim=2)
         if qa is not qb:
-            ttnn.deallocate(qb)
+            dealloc(qb)
         q_rm = ttnn.to_layout(qa, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(qa)
+        dealloc(qa)
         return q_rm
 
     def _sdpa(self, q_rm, table, index):
@@ -514,15 +571,15 @@ class TtWindowAttention:
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
         if oh is not ot:
-            ttnn.deallocate(ot)
+            dealloc(ot)
         if self.stock:  # ROPE_IMPL=on (P.17): the inverse rope on the bf16 tail in place, one stock op
             oq = rope_stock(oh, cos, sin, self.rope.trans_inv)
-            ttnn.deallocate(oh)
+            dealloc(oh)
             return self._out_proj(oq, oq.shape[2])
         if self.glue:
             return self._out_glue(oh, cos, sin)
         of = ttnn.typecast(oh, ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(oh)
+        dealloc(oh)
         return self._out_heads(of, cos, sin)
 
     def _out_glue(self, oh: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -533,17 +590,17 @@ class TtWindowAttention:
         r0 = width - self.rd
         nope = ttnn.slice(oh, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
         tail = ttnn.slice(oh, [0, 0, 0, r0], [b, h, rows, width], memory_config=DRAM)
-        ttnn.deallocate(oh)
+        dealloc(oh)
         if self.INTERLEAVED:
             tf = self.pairs(tail, self.pairs.to_de, dtype=ttnn.float32)
         else:
             tf = ttnn.typecast(tail, ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(tail)
+        dealloc(tail)
         tr = rope_heads(tf, cos, sin, inverse=True, dtype=ttnn.bfloat16)
-        ttnn.deallocate(tf)
+        dealloc(tf)
         oq = ttnn.concat([nope, tr], dim=-1, memory_config=DRAM)
-        ttnn.deallocate(nope)
-        ttnn.deallocate(tr)
+        dealloc(nope)
+        dealloc(tr)
         return self._out_proj(oq, rows)
 
     def _out_heads(self, of: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -552,12 +609,12 @@ class TtWindowAttention:
         rows = of.shape[2]
         if self.INTERLEAVED:  # the table's (and so the output's) tail is interleaved: [even | odd] for the rope
             od = deinterleave_tail(of, self.rd // 2)
-            ttnn.deallocate(of)
+            dealloc(of)
             of = od
         ou = rope_heads(of, cos, sin, inverse=True, interleave=True)  # the reference's order again
-        ttnn.deallocate(of)
+        dealloc(of)
         oq = cast(ou, ttnn.bfloat16)
-        ttnn.deallocate(ou)
+        dealloc(ou)
         return self._out_proj(oq, rows)
 
     def _out_proj(self, oq: ttnn.Tensor, rows: int) -> ttnn.Tensor:
@@ -567,33 +624,33 @@ class TtWindowAttention:
         og = ttnn.experimental.nlp_concat_heads(
             ttnn.reshape(oq, [self.g_l, self.hpg, rows, self.d]), memory_config=DRAM
         )
-        ttnn.deallocate(oq)
+        dealloc(oq)
         og = ttnn.reshape(og, [1, self.g_l, rows, self.hpg * self.d])
         y = ttnn.matmul(og, self.wo_a, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
-        ttnn.deallocate(og)
+        dealloc(og)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:
             # ATTN_GLUE=on: nlp_concat_heads (a data move) in place of G/TP slices + concat, on the bf16 cast
             yb = cast(y, ttnn.bfloat16)
             if yb is not y:
-                ttnn.deallocate(y)
+                dealloc(y)
             yq = ttnn.experimental.nlp_concat_heads(yb, memory_config=DRAM)
-            ttnn.deallocate(yb)
+            dealloc(yb)
         else:
             parts = [
                 ttnn.slice(y, [0, k, 0, 0], [1, k + 1, rows, self.rank], memory_config=DRAM) for k in range(self.g_l)
             ]
-            ttnn.deallocate(y)
+            dealloc(y)
             yt = ttnn.concat(parts, dim=-1, memory_config=DRAM) if len(parts) > 1 else parts[0]
             if len(parts) > 1:
                 for t in parts:
-                    ttnn.deallocate(t)
+                    dealloc(t)
             yq = cast(yt, ttnn.bfloat16)
-            ttnn.deallocate(yt)
+            dealloc(yt)
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
         z = ttnn.linear(yq, self.wo_b, dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)
-        ttnn.deallocate(yq)
+        dealloc(yq)
         if self.geo.tp == 1:
             return z
         if self.o_sum == "reduce_scatter":
@@ -601,7 +658,7 @@ class TtWindowAttention:
         else:
             # ATTN_GLUE=on: the bf16 reduce-scatter's result as is (tt/residual.py casts only where it needs fp32)
             out = sum_cols(self.mesh, z, fp32=not self.glue)
-        ttnn.deallocate(z)
+        dealloc(z)
         return out
 
     def __call__(self, q_resid, kv, start: int, end: int | None, cache: TtWindowCache) -> ttnn.Tensor:
@@ -613,10 +670,10 @@ class TtWindowAttention:
         table = self._table(kv, start, end, cache)
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])
-        ttnn.deallocate(q_rm)
-        ttnn.deallocate(table)
+        dealloc(q_rm)
+        dealloc(table)
         out = self._out(o, cos, sin)
-        ttnn.deallocate(o)
+        dealloc(o)
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return out
 

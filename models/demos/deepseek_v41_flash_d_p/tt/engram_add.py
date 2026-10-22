@@ -40,6 +40,7 @@ import torch
 
 import ttnn
 
+from .ccl import dealloc
 from .common import DRAM, TP_AXIS, compute_config, tp_sum
 from .layout import HC, row_split_to_device, streams_cols_to_chip_major
 from .settings import settings
@@ -106,7 +107,7 @@ class TtEngramAdd:
         ttnn.bringup.mhc_pre_xing_pack engram pass over h and the keys -> [1, 1, R, 32], summed exactly over TP."""
         part = ttnn.bringup.mhc_pre_xing_pack(None, h, n=HC, engram_keys=kv, engram_weight=self.weight32)
         full = tp_sum(self.mesh, part, exact=True)
-        ttnn.deallocate(part)
+        dealloc(part)
         return full
 
     def gates(self, h: ttnn.Tensor, kv: ttnn.Tensor) -> ttnn.Tensor:
@@ -122,24 +123,24 @@ class TtEngramAdd:
             kn = ttnn.slice(kv, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
             hwn = ttnn.slice(hw, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
             p = ttnn.multiply(hwn, kn, dtype=ttnn.float32, memory_config=DRAM)
-            ttnn.deallocate(hwn)
+            dealloc(hwn)
             cols.append(self._rowsum(p))
-            ttnn.deallocate(p)
+            dealloc(p)
             p = ttnn.multiply(hn, hn, dtype=ttnn.float32, memory_config=DRAM)
             sq_h.append(self._rowsum(p))
-            ttnn.deallocate(p)
+            dealloc(p)
             p = ttnn.multiply(kn, kn, dtype=ttnn.float32, memory_config=DRAM)
             sq_k.append(self._rowsum(p))
-            ttnn.deallocate(p)
-            ttnn.deallocate(hn)
-            ttnn.deallocate(kn)
-        ttnn.deallocate(hw)
+            dealloc(p)
+            dealloc(hn)
+            dealloc(kn)
+        dealloc(hw)
         parts = cols + sq_h + sq_k
         part = ttnn.concat(parts, dim=-1, memory_config=DRAM)  # [1, 1, R, 12]
         for t in parts:
-            ttnn.deallocate(t)
+            dealloc(t)
         full = tp_sum(self.mesh, part)
-        ttnn.deallocate(part)
+        dealloc(part)
         return self._gate_math(full, rows)
 
     def _gate_math(self, full: ttnn.Tensor, rows: int) -> ttnn.Tensor:
@@ -147,36 +148,36 @@ class TtEngramAdd:
         dot = ttnn.slice(full, [0, 0, 0, 0], [1, 1, rows, HC], memory_config=DRAM)
         ssh = ttnn.slice(full, [0, 0, 0, HC], [1, 1, rows, 2 * HC], memory_config=DRAM)
         ssk = ttnn.slice(full, [0, 0, 0, 2 * HC], [1, 1, rows, 3 * HC], memory_config=DRAM)
-        ttnn.deallocate(full)
+        dealloc(full)
         rs = []
         for ss in (ssh, ssk):
             ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM)
-            ttnn.deallocate(ss)
+            dealloc(ss)
             t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM)
-            ttnn.deallocate(ms)
+            dealloc(ms)
             rs.append(ttnn.rsqrt(t, memory_config=DRAM))
-            ttnn.deallocate(t)
+            dealloc(t)
         r2 = ttnn.multiply(rs[0], rs[1], dtype=ttnn.float32, memory_config=DRAM)  # rsqrt(h) * rsqrt(key)
         for t in rs:
-            ttnn.deallocate(t)
+            dealloc(t)
         d0 = ttnn.multiply(dot, r2, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(dot)
-        ttnn.deallocate(r2)
+        dealloc(dot)
+        dealloc(r2)
         d = ttnn.multiply(d0, self.inv_sqrt_h, dtype=ttnn.float32, memory_config=DRAM)
-        ttnn.deallocate(d0)
+        dealloc(d0)
         a = ttnn.abs(d, memory_config=DRAM)
         am = ttnn.maximum(a, GATE_FLOOR, memory_config=DRAM)
-        ttnn.deallocate(a)
+        dealloc(a)
         s = ttnn.sqrt(am, memory_config=DRAM)
-        ttnn.deallocate(am)
+        dealloc(am)
         neg = ttnn.neg(s, memory_config=DRAM)
         isneg = ttnn.ltz(d, memory_config=DRAM)
-        ttnn.deallocate(d)
+        dealloc(d)
         sg = ttnn.where(isneg, neg, s, memory_config=DRAM)  # copysign(s, d)
         for t in (neg, isneg, s):
-            ttnn.deallocate(t)
+            dealloc(t)
         gate = ttnn.sigmoid(sg, memory_config=DRAM)
-        ttnn.deallocate(sg)
+        dealloc(sg)
         return gate
 
     def __call__(self, h: ttnn.Tensor, kv: ttnn.Tensor, pre: ttnn.Tensor | None = None):
@@ -193,7 +194,7 @@ class TtEngramAdd:
         gate = self.gates(h, kv32)
         value = ttnn.slice(kv32, [0, 0, 0, HC * w], [1, 1, rows, (HC + 1) * w], memory_config=DRAM)
         if kv32 is not kv:
-            ttnn.deallocate(kv32)
+            dealloc(kv32)
         if self.fused:
             row = None
             if hc is not None:  # X'_n = gate_n value + h_n, and attn_hc's partial row of X'
@@ -202,21 +203,21 @@ class TtEngramAdd:
                 )
             else:
                 out = ttnn.bringup.mhc_post(value, h, gate, self.eye(rows))  # X'_n = gate_n value + h_n
-            ttnn.deallocate(value)
-            ttnn.deallocate(gate)
+            dealloc(value)
+            dealloc(gate)
             return out, pre, row
         outs = []
         for n in range(HC):
             hn = ttnn.slice(h, [0, 0, 0, n * w], [1, 1, rows, (n + 1) * w], memory_config=DRAM)
             g = ttnn.slice(gate, [0, 0, 0, n], [1, 1, rows, n + 1], memory_config=DRAM)
             outs.append(ttnn.addcmul(hn, value, g, memory_config=DRAM))
-            ttnn.deallocate(hn)
-            ttnn.deallocate(g)
-        ttnn.deallocate(value)
-        ttnn.deallocate(gate)
+            dealloc(hn)
+            dealloc(g)
+        dealloc(value)
+        dealloc(gate)
         out = ttnn.concat(outs, dim=-1, memory_config=DRAM)
         for t in outs:
-            ttnn.deallocate(t)
+            dealloc(t)
         return out, pre, None
 
 

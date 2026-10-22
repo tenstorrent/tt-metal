@@ -51,3 +51,22 @@
 - Needed by: deepseek_v41_flash_d_p P.5 (tt/ccl.py, CCL_IMPL=fabric: sum_cols = dim 3 + exact; tp_sum = dim 2 +
   exact + fabric_all_gather; prepare at load; cache_descriptors=True)
 - Files: fabric_reduce_scatter.py, __init__.py (exports prepare), tests/unit/test_fabric_rs_exact_fp32.py
+
+### program_hash: a custom program hash on the cached descriptors (deepseek_v41_flash_d_p P.19, 2026-10-22)
+- What: opt-in `program_hash=False` (needs `cache_descriptors=True`). True: `_fast()` = the same checks, scratch,
+  descriptor (create_mesh_program_descriptor, new keyword `hash_key=None`) and generic_op call, but each chip's
+  ProgramDescriptor carries `custom_program_hash = hash(salt, key, chip)`, key = everything the program depends on
+  except the buffer addresses (group configuration, dim, exact_fp32_add, counters, dtype, page size, padded shapes;
+  addresses are runtime arguments, which generic_op patches on a program-cache hit either way), so generic_op skips
+  hashing the inline kernel sources, CBs and semaphores of 4 programs on every call; the plan lookup is one dict hit
+  (`_FAST_PREP`), and its descriptors are cache entries of their own (dkey + "hashed"). Default False: unchanged.
+- Why: host cost per call. 2x2 p150, [1024, 10240] bf16 dim 3 (300 calls, host only, steady state): 0.179 -> 0.134
+  ms; generic_op alone on the cached descriptor 0.106 -> 0.083 ms. In the DeepSeek-V4.1 model (33 calls a chunk under
+  GLUE_FOLD): 0.305 -> 0.271 ms a call (the model's own host profile, generated/ds41_p19/test_hostsec.py).
+- Tests: `tests/unit/test_fabric_rs_program_hash.py` (2x2: both axes x rows / columns x bf16 / exact fp32:
+  bit-identical to the default and cache_descriptors paths, deterministic, every hashed program has a custom hash, an
+  input in fresh buffers gives 2x the output exactly on the reused program; program_hash without cache_descriptors
+  refused). Regression, option off (2026-10-22, 2x2): tests/unit 19 passed / 13 skipped (the 2x4-only files; 9 of the
+  passes new), model cases 2 passed (no earlier full-suite count recorded).
+- Needed by: deepseek_v41_flash_d_p P.19 (tt/ccl.py, setting GLUE_FOLD).
+- Files: fabric_reduce_scatter.py, tests/unit/test_fabric_rs_program_hash.py

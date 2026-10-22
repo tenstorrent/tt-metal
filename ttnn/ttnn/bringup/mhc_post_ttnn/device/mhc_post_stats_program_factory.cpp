@@ -48,6 +48,7 @@ constexpr uint8_t CB_RAW = 3;      // raw post / comb row tiles, writer scratch
 constexpr uint8_t CB_SOA = 4;      // the unit's sum-of-squares tile, lane = token row writer -> compute
 constexpr uint8_t CB_SOA_OUT = 5;  // its row totals (slot 0)                          compute -> writer
 constexpr uint8_t CB_PART = 6;     // a row's partials from the scratch (root)         reader -> compute
+constexpr uint8_t CB_F = 7;        // bf16 F: the unit's B F tiles (MHC_POST_STATS_F16)  reader -> compute
 constexpr uint8_t CB_OUT = 16;     // X' tiles of a unit (n B)                          compute -> writer
 constexpr uint8_t CB_XS = 17;      // X' tiles of the unit (matmul in0)                compute -> compute
 constexpr uint8_t CB_SSC = 18;     // per-column sum of squares tiles                 compute -> compute
@@ -58,13 +59,18 @@ constexpr uint32_t SEM_ROOT = 0;
 
 constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1;
 
-CBDescriptor make_cb(uint8_t index, uint32_t page_bytes, uint32_t num_pages, const CoreRangeSet& cores) {
+CBDescriptor make_cb(
+    uint8_t index,
+    uint32_t page_bytes,
+    uint32_t num_pages,
+    const CoreRangeSet& cores,
+    DataType dt = DataType::FLOAT32) {
     CBDescriptor cb;
     cb.total_size = num_pages * page_bytes;
     cb.core_ranges = cores;
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = index,
-        .data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::FLOAT32),
+        .data_format = tt::tt_metal::datatype_to_dataformat_converter(dt),
         .page_size = page_bytes});
     return cb;
 }
@@ -107,8 +113,12 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     const uint32_t terms = n * (n + 1);
     const uint32_t coef_tiles = (terms * 4 + TILE_HW - 1) / TILE_HW;  // per half (4 row blocks a half)
     const uint32_t page = TILE_HW * TILE_HW * 4;
-    for (const Tensor* t : {&f, &x, &in.post, &in.comb, &in.weight, &out, &stats, &scratch}) {
-        TT_FATAL(t->buffer()->page_size() == page, "mhc_post stats: every operand must be fp32 tiles");
+    // P.19: a bf16 F goes through its own CB (unpacked to the fp32 DEST exactly); fp32 F: the program it always was
+    const bool f16 = f.dtype() == DataType::BFLOAT16;
+    const uint32_t f_page = f.buffer()->page_size();
+    TT_FATAL(f_page == (f16 ? page / 2 : page), "mhc_post stats: F must be fp32 or bf16 tiles");
+    for (const Tensor* t : {&x, &in.post, &in.comb, &in.weight, &out, &stats, &scratch}) {
+        TT_FATAL(t->buffer()->page_size() == page, "mhc_post stats: every operand but F must be fp32 tiles");
     }
     TT_FATAL(coef_tiles + n + 1 <= 8, "mhc_post stats: n={} does not fit the 8 fp32 DEST tiles", n);
 
@@ -157,12 +167,18 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     desc.cbs.push_back(make_cb(CB_MFIN, page, 2, all_cores));
     desc.cbs.push_back(make_cb(CB_SFIN, page, 2, all_cores));
     desc.cbs.push_back(make_cb(CB_FIN, page, 2, all_cores));
+    if (f16) {
+        desc.cbs.push_back(make_cb(CB_F, f_page, 2 * B, all_cores, DataType::BFLOAT16));
+    }
 
     std::vector<uint32_t> common_ct = {n, p.col_tiles, RT, B, NB, page, coef_tiles};
     std::vector<uint32_t> reader_ct = common_ct;
     reader_ct.insert(reader_ct.end(), {CB_IN, CB_W, CB_PART, SEM_ROOT});
     for (const Tensor* t : {&f, &x, &in.weight, &scratch}) {
         append_accessor(reader_ct, *t);
+    }
+    if (f16) {  // appended only when on: the fp32-F program keeps its CT args
+        reader_ct.insert(reader_ct.end(), {CB_F, f_page});
     }
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.insert(
@@ -185,6 +201,9 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     compute_ct.insert(
         compute_ct.end(),
         {CB_IN, CB_W, CB_CF, CB_OUT, CB_XS, CB_SSC, CB_MFIN, CB_SFIN, CB_SOA, CB_SOA_OUT, CB_PART, CB_FIN});
+    if (f16) {
+        compute_ct.push_back(CB_F);
+    }
 
     KernelDescriptor::RuntimeArgs reader_rt, writer_rt, compute_rt;
     for (size_t i = 0; i < cores.size(); ++i) {
@@ -213,6 +232,9 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     for (uint8_t cb : {CB_IN, CB_CF, CB_SSC, CB_SOA, CB_PART}) {
         cc.unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // exact copies
     }
+    if (f16) {
+        cc.unpack_to_dest_mode[CB_F] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // bf16 -> fp32 DEST, exact
+    }
     // CB_XS / CB_W stay Default: the matmul's operands go through srcB / srcA like ttnn.matmul's fp32 inputs.
 
     desc.kernels.push_back(make_kernel(
@@ -220,6 +242,18 @@ tt::tt_metal::ProgramDescriptor MhcPostStatsProgramFactory::create_descriptor(
     desc.kernels.push_back(make_kernel(
         "mhc_post_stats_writer.cpp", all_cores, writer_ct, writer_rt, tt::tt_metal::WriterConfigDescriptor{}));
     desc.kernels.push_back(make_kernel("mhc_post_stats_compute.cpp", all_cores, compute_ct, compute_rt, cc));
+    if (f16) {  // absent for fp32 F: the reader / compute unchanged
+        for (size_t k : {size_t{0}, size_t{2}}) {
+            desc.kernels[k].defines.emplace_back("MHC_POST_STATS_F16", "1");
+        }
+    }
+    if (params.post_col != 0 || params.comb_col != 0) {  // absent when 0 / 0: the writer unchanged
+        TT_FATAL(
+            params.post_col + n <= TILE_HW && params.comb_col + n * n <= TILE_HW,
+            "mhc_post stats: post / comb beyond one tile row");
+        desc.kernels[WRITER_KERNEL].defines.emplace_back("MHC_POST_POST_COL", std::to_string(params.post_col));
+        desc.kernels[WRITER_KERNEL].defines.emplace_back("MHC_POST_COMB_COL", std::to_string(params.comb_col));
+    }
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = SEM_ROOT, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     return desc;

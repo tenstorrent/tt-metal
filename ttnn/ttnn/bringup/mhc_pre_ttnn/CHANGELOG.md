@@ -190,3 +190,24 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
    - Files: `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`, `sources.cmake`,
      `device/mhc_engram_pack_device_operation.{hpp,cpp}`, `device/mhc_engram_pack_program_factory.cpp`,
      `kernels/mhc_engram_pack_{common.hpp,reader.cpp,writer.cpp,compute.cpp}`, `tests/unit/test_engram_pack.py`.
+
+10. `mhc_pre_xing(..., partials=P)`: the TP group's partial rows stacked on dim 1, summed in the op
+    (deepseek_v41_flash_d_p P.19).
+   - What: keyword option `partials=1` (1..16; coefficient mode only). P > 1: the input is (1, P, T, 32), the chips'
+     partial mix rows gathered on dim 1 (one all_gather); the reader reads row tile r of each partial (page
+     p RT + r), the writer re-lays each coefficient-major, the compute copies them to DEST 0 / 1 and adds in dim-1 order
+     on the SFPU (((p0 + p1) + p2) + ..., one IEEE fp32 rounding per add: the sum all_gather + ttnn.add gives) before
+     the coefficient math; hc / y are (1, 1, T, ...). Defines MHC_XING_PARTIALS / MHC_XING_ROW_TILES on the three
+     kernels, CB_ROW / CB_SOA 2 P pages, a hash branch of its own; P = 1: every program and hash unchanged.
+   - Why: deepseek_v41_flash_d_p's hc row exchange was typecast to bf16 + bf16 fabric reduce-scatter + all_gather +
+     typecast back (4 calls, the reduce-scatter 0.3 ms of host) for a [1024, 32] row; now one fabric all_gather of the
+     fp32 rows, and the sum is the exact fp32 one (the hc mixes the reference computes in fp32). Model (GLUE_FOLD=on):
+     attn_hc + ffn_hc host 10.8 -> 3.7 ms a chunk, device 4.02 -> 4.21 ms.
+   - Tests: `tests/unit/test_xing_partials.py` (P = 2 / 4, DS41 2x2 / 4x4 shapes and a small one, deepseek and Xing math,
+     with / without streams and collapse_pre: hc and y bit-identical to the call on the ttnn.add-summed row; negative
+     control (a dropped partial); refusals). Regression, option off (2026-10-22, 2x2): unit 139 passed / 1 skipped +
+     golden 206 = 345 / 1 (= the recorded 332 / 1 + 13 new), model cases 103 passed (= recorded).
+   - Needed by: deepseek_v41_flash_d_p P.19 (tt/mhc.py:TtHcMixes.fused, setting GLUE_FOLD).
+   - Files: `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
+     `device/mhc_pre_xing_program_factory.cpp`, `kernels/mhc_pre_xing_{reader,writer,compute}.cpp`,
+     `tests/unit/test_xing_partials.py`.

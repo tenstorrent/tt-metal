@@ -47,6 +47,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, TP_AXIS, cast, sum_cols
 from .settings import settings
 
@@ -291,7 +292,7 @@ class TtExperts:
         qx = cast(x, ttnn.bfloat16)  # (x itself when ffn_norm wrote bf16)
         xg = wc.gather_x(qx)
         if qx is not x:
-            ttnn.deallocate(qx)
+            dealloc(qx)
         given = wts is not None and idx is not None  # INDEXER_GLUE=on (P.16): the router's own weights, as they are
         if given:
             ids = idx
@@ -307,21 +308,21 @@ class TtExperts:
                 ids = idx
                 wts = ttnn.gather(dk, dim=-1, index=idx)  # = the router's wts (dense is their scatter)
             if dk is not dense:
-                ttnn.deallocate(dk)
+                dealloc(dk)
         ids16 = ids if ids.dtype == ttnn.uint16 else ttnn.typecast(ids, ttnn.uint16, memory_config=DRAM)
         ids_g, wts_g = wc.routing(ids16, wts)
         for t in {id(t): t for t in (ids16, wts) + ((ids,) if idx is None else ())}.values():
             if t is not idx and not (given and t is wts):  # (the router's outputs: the block frees them)
-                ttnn.deallocate(t)
+                dealloc(t)
         out = wc(self.fe, xg, ids_g, wts_g, int(self.fidelity.value))
         for t in (ids_g, wts_g):
-            ttnn.deallocate(t)
+            dealloc(t)
         if self.keep_rows:  # (the shared expert's x: take_rows hands it over, the shared expert frees it)
             if self._rows is not None:
-                ttnn.deallocate(self._rows)
+                dealloc(self._rows)
             self._rows = xg
         else:
-            ttnn.deallocate(xg)
+            dealloc(xg)
         return out
 
     def take_rows(self) -> ttnn.Tensor | None:
@@ -330,14 +331,15 @@ class TtExperts:
         rows, self._rows = self._rows, None
         return rows
 
-    def reduce(self, part: ttnn.Tensor) -> ttnn.Tensor:
+    def reduce(self, part: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:
         """Sum the column groups' partials [1, 1, s, H] fp32 over axis 1 and keep the chip's hidden columns
-        [1, 1, s, H/TP] (gather_add: exact fp32 on the SFPU, K-30; reduce_scatter: one CCL, FPU)."""
+        [1, 1, s, H/TP] (gather_add: exact fp32 on the SFPU, K-30; reduce_scatter: one CCL, FPU). ``fp32`` False
+        (GLUE_FOLD=on, P.19: the residual's mhc_post takes bf16): the bf16 reduce-scatter's result as is."""
         if self.ngroups == 1:
             return ttnn.clone(part, memory_config=DRAM)
         if self.sum_mode == "reduce_scatter":
             return ttnn.reduce_scatter(part, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
-        return sum_cols(self.mesh, part)
+        return sum_cols(self.mesh, part, fp32=fp32)
 
     def free(self):
         """Release the device weights (tests that build several layers' or impls' experts in one process)."""
@@ -345,14 +347,14 @@ class TtExperts:
         if fe is not None:  # the flat op's bank-layout weights, expert ids and done words
             for t in (fe.w_gu, fe.w_d, fe.w_rd, fe.gidx, fe.done):
                 if t is not None:
-                    ttnn.deallocate(t)
+                    dealloc(t)
             self.fe = None
 
     def __call__(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """experts_out [1, 1, s, H/TP] fp32 (rows over axis 0, hidden columns over axis 1)."""
         part = self.partial(x, dense, idx)
         out = self.reduce(part)
-        ttnn.deallocate(part)
+        dealloc(part)
         return out
 
 

@@ -1,0 +1,153 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "DS41-66",
+   "how": "built program_hash on fabric_reduce_scatter's cache_descriptors path (custom_program_hash per cached descriptor, tt/ccl.py passes it under GLUE_FOLD)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-67",
+   "how": "kept the bf16 sums bf16 end to end: sum_cols(fp32=False) for the MoE sum and a bf16 F into mhc_post's stats pass instead of typecasts",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-82",
+   "how": "moved the hc row exchange off tp_sum's bf16 reduce-scatter to one fp32 all_gather + the exact SFPU sum in mhc_pre_xing(partials=)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "the partial rows are summed on the SFPU (fp32 RNE adds), never on the FPU, so the exchange equals all_gather + ttnn.add bit for bit",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-81",
+   "how": "relied on the unpack-to-DEST copy waiting for the SFPU: copy partial p to DEST 1 right after the add of partial p-1 (mhc_pre_xing_compute.cpp)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-52",
+   "how": "every memoized / new slice (server-order row, DeviceScalars, the carry from the kept rows) is a proper sub-range, never a full-range wrapper the caller could free",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "the mask skip frees the gathered kv only when it is not the caller's kv (sp == 1 keeps the input)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-87",
+   "how": "no per-op profile: host time per section measured with a FastOperation + signpost hook in the wall runs instead",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run ladder / profile metrics from generated/bringup_adhoc",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "left only probes/probe_NNN.py under tests/ttnn/unit_tests/operations/ds41_p19_*",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-66",
+   "evidence": "says fabric_reduce_scatter with cache_descriptors costs 0.17-0.23 ms host a call; in the model (P.18 code, 2x2, chunk 53248-55296, FastOperation timing of the 10 warm wall runs) it is 0.305 ms a call (0.18 in an isolated probe); with program_hash 0.271 / 0.134 (DS41-98)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "how to measure host ms and calls per section of the all-device model (the framework's timeline host_ms needs the device profiler on, ~1.3x inflated; no clean-wall host breakdown tool)",
+  "generic_op hashes every inline kernel source of every program per call even when the caller caches the descriptor (now DS41-98)",
+  "where the post-P.18 host time goes outside the layers: begin_chunk's engram table lookup ~12-25 ms a layer (now DS41-99)"
+ ],
+ "cited_only": [
+  "DS41-98",
+  "DS41-99"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.19",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T12:02:35",
+  "head": "e31e2d3c4cf",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.19.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/router.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/README.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/fabric_reduce_scatter.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_program_hash.py",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_ttnn_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_ttnn_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_ttnn_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_ttnn_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_ttnn_program_factory.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_coef_expand.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_mixes.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_partials.py"
+  ]
+ }
+}

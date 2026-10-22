@@ -48,6 +48,7 @@ from loguru import logger
 import ttnn
 
 from . import ccl
+from .ccl import dealloc
 from .common import DRAM, SP_AXIS
 
 TILE = 32
@@ -405,7 +406,7 @@ class WeightedCombine:
             out.append(ttnn.all_gather(t, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM) if self.R > 1 else t)
         for t, o in zip((i32, w16), out):
             if t is not o and t is not idx:
-                ttnn.deallocate(t)
+                dealloc(t)
         return out[0], out[1]
 
     def run_planners(self, ids: ttnn.Tensor, wts: ttnn.Tensor) -> list[dict]:
@@ -430,7 +431,7 @@ class WeightedCombine:
         xr = ttnn.to_layout(qx, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         g = ccl.all_gather(xr, 2, SP_AXIS) if self.R > 1 else xr
         if g is not xr:
-            ttnn.deallocate(xr)
+            dealloc(xr)
         return ttnn.reshape(g, [g.shape[-2], self.H])
 
     def __call__(self, fe, xg: ttnn.Tensor, ids: ttnn.Tensor, wts: ttnn.Tensor, fidelity: int) -> ttnn.Tensor:
@@ -513,13 +514,13 @@ class WeightedCombine:
                 weights_nk=fe.weights_nk,
             )
         for t in (arena, relay_words, words):
-            ttnn.deallocate(t)
+            dealloc(t)
         o = self.out
         if o.shape[-2] != self.S:
             o = ttnn.slice(o, [0, 0], [self.S, self.H], memory_config=DRAM)
         ot = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=DRAM)
         if o is not self.out:
-            ttnn.deallocate(o)
+            dealloc(o)
         return ttnn.reshape(ot, [1, 1, self.S, self.H])
 
 

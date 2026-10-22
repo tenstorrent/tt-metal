@@ -31,6 +31,7 @@ import torch
 
 import ttnn
 
+from .ccl import dealloc
 from .common import DRAM, SP_AXIS, compute_config
 
 TILE = 32
@@ -86,33 +87,33 @@ class TtRouter:
         assert x.shape[-1] == self.hidden, (tuple(x.shape), self.hidden)
         logits = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=DRAM)
         sp = ttnn.softplus(logits, beta=1.0, threshold=20.0, memory_config=DRAM)
-        ttnn.deallocate(logits)
+        dealloc(logits)
         scores = ttnn.sqrt(sp, memory_config=DRAM)
-        ttnn.deallocate(sp)
+        dealloc(sp)
         choice = ttnn.add(scores, self.bias, dtype=ttnn.float32, memory_config=DRAM)
         _, idx = ttnn.topk(choice, k=self.top_k, dim=-1, largest=True, sorted=True)
-        ttnn.deallocate(choice)
+        dealloc(choice)
         top = ttnn.gather(scores, dim=-1, index=idx)
-        ttnn.deallocate(scores)
+        dealloc(scores)
         tsum = ttnn.sum(top, dim=-1, keepdim=True)
         # (sum + 1e-20) / route_scale: the reference's eps, then the routed scale folded into the divisor
         t1 = ttnn.add(tsum, 1e-20, memory_config=DRAM)
-        ttnn.deallocate(tsum)
+        dealloc(tsum)
         tsum_s = ttnn.multiply(t1, 1.0 / self.route_scale, memory_config=DRAM)
-        ttnn.deallocate(t1)
+        dealloc(t1)
         wts = ttnn.div(top, tsum_s, memory_config=DRAM)
-        ttnn.deallocate(top)
-        ttnn.deallocate(tsum_s)
+        dealloc(top)
+        dealloc(tsum_s)
         if not self.dense:  # INDEXER_GLUE=on + weighted experts (P.16): they take wts itself; no dense scatter
             return None, idx, wts
         zeros = self._rows(self.zeros, s)
         idx_rm = ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         wts_rm = ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         dense = ttnn.scatter(zeros, dim=-1, index=idx_rm, src=wts_rm)
-        ttnn.deallocate(idx_rm)
-        ttnn.deallocate(wts_rm)
+        dealloc(idx_rm)
+        dealloc(wts_rm)
         if zeros is not self.zeros:
-            ttnn.deallocate(zeros)
+            dealloc(zeros)
         return dense, idx, wts
 
 

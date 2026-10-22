@@ -56,7 +56,16 @@ void check_supported(const Tensor& f, const Tensor& x, const tt::tt_metal::Compu
     }
 }
 
-void check_shapes(const Tensor& f, const Tensor& x, const Tensor& post, const Tensor& comb) {
+// post_col / comb_col (fork option, deepseek_v41_flash_d_p P.19): post_k is post's column post_col + k, comb[i*n + j]
+// comb's column comb_col + i*n + j (both may be the packed [pre | post | comb] mixes); n is then the residual's
+// stream count (residual last dim / C). Both 0 (default): n = post's last dim, the checks as they always were.
+void check_shapes(
+    const Tensor& f,
+    const Tensor& x,
+    const Tensor& post,
+    const Tensor& comb,
+    int64_t post_col = 0,
+    int64_t comb_col = 0) {
     const std::vector<std::pair<const char*, const Tensor*>> named = {
         {"input_tensor", &f}, {"residual", &x}, {"post", &post}, {"comb", &comb}};
     for (const auto& [name, t] : named) {
@@ -75,9 +84,27 @@ void check_shapes(const Tensor& f, const Tensor& x, const Tensor& post, const Te
         }
     }
     const int64_t C = dims(f).back();
-    const int64_t n = dims(post).back();
+    const bool offsets = post_col != 0 || comb_col != 0;
     if (C % TILE_HW != 0) {
         throw ValueErrorCpp(fmt::format("mhc_post: C={} must be a multiple of {}", C, TILE_HW));
+    }
+    const int64_t n = offsets ? dims(x).back() / C : dims(post).back();
+    if (offsets) {
+        if (post_col < 0 || comb_col < 0 || post_col + n > TILE_HW || comb_col + n * n > TILE_HW) {
+            throw ValueErrorCpp(fmt::format(
+                "mhc_post: post_col={} / comb_col={} with n={} must keep post and comb in one tile row",
+                post_col,
+                comb_col,
+                n));
+        }
+        if (dims(post).back() < post_col + n || dims(comb).back() < comb_col + n * n) {
+            throw ValueErrorCpp(fmt::format(
+                "mhc_post: post last dim {} < post_col + n = {} or comb last dim {} < comb_col + n*n = {}",
+                dims(post).back(),
+                post_col + n,
+                dims(comb).back(),
+                comb_col + n * n));
+        }
     }
     if (n < 1 || n > MAX_STREAMS) {
         throw ValueErrorCpp(fmt::format("mhc_post: n={} must be in [1, {}]", n, MAX_STREAMS));
@@ -85,7 +112,7 @@ void check_shapes(const Tensor& f, const Tensor& x, const Tensor& post, const Te
     if (dims(x).back() != n * C) {
         throw ValueErrorCpp(fmt::format("mhc_post: residual last dim {} != n*C = {}", dims(x).back(), n * C));
     }
-    if (dims(comb).back() != n * n) {
+    if (!offsets && dims(comb).back() != n * n) {
         throw ValueErrorCpp(fmt::format("mhc_post: comb last dim {} != n*n = {}", dims(comb).back(), n * n));
     }
     for (const auto& [name, t] : {std::pair{"post", &post}, std::pair{"comb", &comb}}) {
@@ -120,11 +147,21 @@ Tensor mhc_post(
     const Tensor& post,
     const Tensor& comb,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
-    bool comb_transposed) {
+    bool comb_transposed,
+    int64_t post_col,
+    int64_t comb_col) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
-    check_shapes(input_tensor, residual, post, comb);
-    return ttnn::prim::bringup::mhc_post_ttnn(input_tensor, residual, post, comb, cfg, comb_transposed);
+    check_shapes(input_tensor, residual, post, comb, post_col, comb_col);
+    return ttnn::prim::bringup::mhc_post_ttnn(
+        input_tensor,
+        residual,
+        post,
+        comb,
+        cfg,
+        comb_transposed,
+        static_cast<uint32_t>(post_col),
+        static_cast<uint32_t>(comb_col));
 }
 
 std::tuple<Tensor, Tensor> mhc_post_with_stats(
@@ -134,15 +171,19 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
     const Tensor& comb,
     const Tensor& stats_weight,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
-    bool comb_transposed) {
+    bool comb_transposed,
+    int64_t post_col,
+    int64_t comb_col) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
-    check_shapes(input_tensor, residual, post, comb);
-    if (input_tensor.dtype() != DataType::FLOAT32 || residual.dtype() != DataType::FLOAT32) {
-        throw ValueErrorCpp("mhc_post: stats_weight needs float32 input_tensor and residual");
+    check_shapes(input_tensor, residual, post, comb, post_col, comb_col);
+    // F float32, or bfloat16 (fork option, deepseek_v41_flash_d_p P.19: unpacked to the fp32 DEST exactly)
+    if ((input_tensor.dtype() != DataType::FLOAT32 && input_tensor.dtype() != DataType::BFLOAT16) ||
+        residual.dtype() != DataType::FLOAT32) {
+        throw ValueErrorCpp("mhc_post: stats_weight needs a float32 residual and a float32 or bfloat16 input_tensor");
     }
-    const int64_t n = dims(post).back();
     const int64_t C = dims(input_tensor).back();
+    const int64_t n = dims(residual).back() / C;
     if (n > 4) {
         throw ValueErrorCpp(fmt::format("mhc_post: stats_weight needs n <= 4 (column n (n + 2) < 32), got {}", n));
     }
@@ -160,8 +201,16 @@ std::tuple<Tensor, Tensor> mhc_post_with_stats(
         mc.memory_layout() != TensorMemoryLayout::INTERLEAVED || mc.buffer_type() != BufferType::DRAM) {
         throw ValueErrorCpp("mhc_post: stats_weight must be float32 TILE, DRAM interleaved");
     }
-    auto out =
-        ttnn::prim::bringup::mhc_post_stats(input_tensor, residual, post, comb, stats_weight, cfg, comb_transposed);
+    auto out = ttnn::prim::bringup::mhc_post_stats(
+        input_tensor,
+        residual,
+        post,
+        comb,
+        stats_weight,
+        cfg,
+        comb_transposed,
+        static_cast<uint32_t>(post_col),
+        static_cast<uint32_t>(comb_col));
     return {out.at(0), out.at(1)};  // out[2] is the partials scratch, freed with the vector
 }
 
@@ -172,12 +221,22 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
     const Tensor& comb,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     bool comb_transposed,
-    const std::optional<Tensor>& stats_weight) {
+    const std::optional<Tensor>& stats_weight,
+    int64_t post_col,
+    int64_t comb_col) {
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(
-            input_tensor, residual, post, comb, *stats_weight, compute_kernel_config, comb_transposed);
+            input_tensor,
+            residual,
+            post,
+            comb,
+            *stats_weight,
+            compute_kernel_config,
+            comb_transposed,
+            post_col,
+            comb_col);
     }
-    return mhc_post(input_tensor, residual, post, comb, compute_kernel_config, comb_transposed);
+    return mhc_post(input_tensor, residual, post, comb, compute_kernel_config, comb_transposed, post_col, comb_col);
 }
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn
