@@ -40,6 +40,13 @@ Contract mapping (the plugin's names on the left):
 * ``get_kv_cache_spec`` / ``allocate_kv_cache`` / ``get_max_tokens_all_users``: vLLM's block pool is logical
   (``LogicalBlockTable``); the latent cache is device-owned per slot.
 
+Per-row prefill ownership (``GLM53_VLLM_ROWS_INDEPENDENT=1``, design ``_agents/vllm_glm53/ROW_OWNERSHIP.md``):
+``max_num_seqs = rows x users_per_row``; the prefill rows of a step become waves (one chunk of a different
+prompt per mesh row, ``vllm_config.WavePlanner``) and, while exact, sequence-parallel single-prompt steps;
+needs ``GLM53MeshModel.prefill_wave`` / ``prefill_traced_wave`` (the device side of that design; refused at
+construction until it exists). Knobs: ``GLM53_VLLM_WAVE_ROWS`` (rows per mesh row per wave, 2048),
+``GLM53_VLLM_SP_FALLBACK`` (1).
+
 Not supported in this draft (declared off): async decode overlap, prefix caching, stochastic device
 sampling (greedy argmax only: ``max_device_top_k = 1``; other rows sample on host from the logits),
 speculative decoding, multimodal inputs, lane-DP / standard DP (one engine = one mesh).
@@ -61,12 +68,18 @@ from loguru import logger
 from models.demos.glm53_flash.tt.vllm_config import (
     DEFAULT_BLOCK_SIZE,
     DEFAULT_DEVICE_PREFILL_CHUNK,
+    DEFAULT_WAVE_ROWS,
     TILE,
     DecodeRowMap,
     LogicalBlockTable,
     PrefillPlanner,
     ServingGeometry,
     SlotTable,
+    SPStep,
+    WaveCall,
+    WaveMember,
+    WavePlanner,
+    WaveStep,
     greedy_rows,
     max_tokens_all_users,
 )
@@ -178,6 +191,16 @@ class GLM53FlashForCausalLM:
         self.slots = SlotTable(geometry)
         self.blocks = LogicalBlockTable(geometry)
         self.prefill_planner = PrefillPlanner(geometry, traced_available=self._has_prefill_trace)
+        # per-row prefill ownership (GLM53_VLLM_ROWS_INDEPENDENT): the step's prefill rows become waves (one chunk per
+        # mesh row, different prompts) and, while exact, sequence-parallel single-prompt steps (ROW_OWNERSHIP.md)
+        self.waves = WavePlanner(geometry, self.slots, self.prefill_planner)
+        if geometry.rows_independent and not callable(getattr(model, "prefill_wave", None)):
+            raise NotImplementedError(
+                "GLM53_VLLM_ROWS_INDEPENDENT=1 needs a mesh model with the row-local wave prefill "
+                "(GLM53MeshModel.prefill_wave / prefill_traced_wave; _agents/vllm_glm53/ROW_OWNERSHIP.md section 3): "
+                "the sequence-parallel prefill replicates a prompt into slot `user` of every row, so with it the "
+                "engine serves users_per_row distinct requests only"
+            )
         self.pad_token_id = int(pad_token_id if pad_token_id is not None else geometry.pad_token_id)
         self.vocab_size = int(getattr(getattr(model, "cfg", None), "vocab_size", 0))
         self.trace_id = None
@@ -222,7 +245,14 @@ class GLM53FlashForCausalLM:
         os.environ.setdefault("GLM53_PREFILL_PARTITION", "heads2users")
         partitioned = _env_flag("GLM53_PARTITION_USERS", "1") and cols > 1
         scratch = os.environ.get("GLM53_PREFILL_PARTITION", "heads2users") != "heads2users"
-        rows_independent = _env_flag("GLM53_VLLM_ROWS_INDEPENDENT", "0")  # per-row prefill ownership (not wired)
+        # per-row prefill ownership: max_num_seqs = rows x users_per_row, prefills as row-local waves (the mesh model
+        # must provide prefill_wave; phase 1 shares the slot index across a wave: wave_affinity "user")
+        rows_independent = _env_flag("GLM53_VLLM_ROWS_INDEPENDENT", "0")
+        if rows_independent and int(max_batch_size) % rows:
+            raise ValueError(
+                f"max_num_seqs {max_batch_size} must be a multiple of the {rows} mesh rows under "
+                "GLM53_VLLM_ROWS_INDEPENDENT (users_per_row = max_num_seqs / rows)"
+            )
         users_per_row = int(max_batch_size) // rows if rows_independent else int(max_batch_size)
         unit = TILE * rows
         chunk = int(os.environ.get("GLM53_VLLM_PREFILL_CHUNK", str(DEFAULT_DEVICE_PREFILL_CHUNK)))
@@ -237,6 +267,9 @@ class GLM53FlashForCausalLM:
             block_size=int(os.environ.get("GLM53_VLLM_BLOCK_SIZE", str(DEFAULT_BLOCK_SIZE))),
             device_prefill_chunk=chunk,
             pad_token_id=cfg.pad_token_id,
+            wave_rows=int(os.environ.get("GLM53_VLLM_WAVE_ROWS", str(DEFAULT_WAVE_ROWS))),
+            wave_affinity="row" if getattr(GLM53MeshModel, "wave_per_row_users", False) else "user",
+            sp_fallback=_env_flag("GLM53_VLLM_SP_FALLBACK", "1"),
         )
         geometry.check_max_num_seqs(max_batch_size)
         dt = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b, "bf16": ttnn.bfloat16}
@@ -363,6 +396,18 @@ class GLM53FlashForCausalLM:
                 self._free(logits)
                 self._sync()
                 logger.info(f"GLM53 vLLM: eager prefill warm-up ({n} tokens) in {time.perf_counter() - t0:.1f} s")
+                if self.geometry.rows_independent:  # the wave path compiles its own programs: one wave on every row
+                    g = self.geometry
+                    members = tuple(WaveMember(logical=r, row=r, user=0, start=0, end=n) for r in range(g.rows))
+                    call = WaveCall(rows=g.rows, t_pad=-(-n // TILE) * TILE, members=members, user=0)
+                    for m in members:
+                        call.ids[m.row] = dummy.clone()
+                    t0 = time.perf_counter()
+                    self.model.prefill_wave(call)
+                    self._sync()
+                    logger.info(
+                        f"GLM53 vLLM: eager wave warm-up ({n} tokens x {g.rows} rows) in {time.perf_counter() - t0:.1f} s"
+                    )
                 self.already_warmed_up_prefill = True
             return
         if self.trace_id is not None:
@@ -447,12 +492,15 @@ class GLM53FlashForCausalLM:
         wants_tokens = sampling_params is not None
         out_tokens = torch.zeros(B, 1, dtype=torch.int32)
         out_logits = None if wants_tokens else torch.zeros(B, 1, self.vocab_size, dtype=torch.float32)
+        # placement / contiguity of every row first (a refused row leaves no half-run step behind)
+        rows_of: dict[int, int] = {}  # logical slot -> row of the call
+        items = []  # (i, logical, state, start, end, ids)
         for i in range(B):
             logical = int(empty_slots[i])
             start, end = starts[i], ends[i]
             if page_table is not None:
                 self.blocks.check_row(page_table[i], end)
-            plan = self.prefill_planner.plan(start, end, enable_trace=enable_trace)
+            self.prefill_planner.check_range(start, end)
             if start == 0:
                 state = self.slots.allocate(logical)
             else:
@@ -465,8 +513,10 @@ class GLM53FlashForCausalLM:
             ids = tokens[i, start:end].reshape(-1).to(torch.long)
             if int(ids.numel()) != end - start:
                 raise ValueError(f"row {i}: tokens hold {ids.numel()} of the {end - start} chunk tokens")
-            t0 = time.perf_counter()
-            first, last_logits = self._prefill_one(ids, state.user, plan, want_logits=not wants_tokens)
+            rows_of[logical] = i
+            items.append((i, logical, state, start, end, ids))
+
+        def record(i, state, end, first, last_logits):
             state.prefilled_to = end
             state.position = end
             state.phase = "prefill"
@@ -474,14 +524,75 @@ class GLM53FlashForCausalLM:
                 out_tokens[i, 0] = int(first)
             else:
                 out_logits[i, 0] = last_logits
-            logger.info(
-                f"GLM53 vLLM: prefill slot {logical} -> user {state.user} (row {state.row}) [{start}, {end}) via "
-                f"{plan.kind} ({len(plan.chunks)} chunk(s)) in {(time.perf_counter() - t0) * 1000:.0f} ms, "
-                f"chunk-end token {first}"
+
+        if not self.geometry.rows_independent:
+            for i, logical, state, start, end, ids in items:
+                plan = self.prefill_planner.plan(start, end, enable_trace=enable_trace)
+                t0 = time.perf_counter()
+                first, last_logits = self._prefill_one(ids, state.user, plan, want_logits=not wants_tokens)
+                record(i, state, end, first, last_logits)
+                logger.info(
+                    f"GLM53 vLLM: prefill slot {logical} -> user {state.user} (row {state.row}) [{start}, {end}) via "
+                    f"{plan.kind} ({len(plan.chunks)} chunk(s)) in {(time.perf_counter() - t0) * 1000:.0f} ms, "
+                    f"chunk-end token {first}"
+                )
+        else:
+            by_logical = {logical: (i, state, start, end, ids) for i, logical, state, start, end, ids in items}
+            steps = self.waves.plan(
+                [(logical, start, end) for _, logical, _, start, end, _ in items], enable_trace=enable_trace
             )
+            for step in steps:
+                t0 = time.perf_counter()
+                if isinstance(step, SPStep):
+                    i, state, start, end, ids = by_logical[step.logical]
+                    first, last_logits = self._prefill_one(ids, state.user, step.plan, want_logits=not wants_tokens)
+                    record(i, state, end, first, last_logits)
+                    logger.info(
+                        f"GLM53 vLLM: SP prefill slot {step.logical} -> user {state.user} (row {state.row}) [{start}, "
+                        f"{end}) via {step.plan.kind} ({len(step.plan.chunks)} chunk(s)) in "
+                        f"{(time.perf_counter() - t0) * 1000:.0f} ms, chunk-end token {first}"
+                    )
+                    continue
+                assert isinstance(step, WaveStep), step
+                call = step.call
+                for m in call.members:
+                    _, _, start, _, ids = by_logical[m.logical]
+                    call.ids[m.row] = ids[m.start - start : m.end - start]
+                results = self._prefill_wave(call, want_logits=not wants_tokens)
+                for m in call.members:
+                    i, state, _, end, _ = by_logical[m.logical]
+                    state.sp_only = False  # the prefix of this request now exists on its own row only
+                    first, last_logits = results[m.row]
+                    if m.end == end:  # the member's last chunk of this step
+                        record(i, state, m.end, first, last_logits)
+                    else:
+                        state.prefilled_to = m.end
+                        state.position = m.end
+                logger.info(
+                    f"GLM53 vLLM: wave of {len(call.members)} ({'traced' if call.traced_length else 'eager'}, "
+                    f"t_pad {call.t_pad}, slot index {call.user}) rows "
+                    f"{[(m.row, m.start, m.end) for m in call.members]} in {(time.perf_counter() - t0) * 1000:.0f} ms"
+                )
         if wants_tokens:
             return out_tokens, None
         return out_logits
+
+    def _prefill_wave(self, call: WaveCall, *, want_logits: bool) -> dict:
+        """One wave through the mesh model: the traced per-row replay when the planner found a captured length for
+        it (every member at start 0), else the eager row-local wave. Returns ``{row: (first token, logits [vocab]
+        fp32 or None)}``; a model that hands back host tensors or ints is accepted as is (the mesh model does its
+        own per-row tile read). TODO(device): the first wave on the 8x4 confirms the per-row read."""
+        if call.traced_length is not None and callable(getattr(self.model, "prefill_traced_wave", None)):
+            res = self.model.prefill_traced_wave(call)
+        else:
+            res = self.model.prefill_wave(call)
+        out = {}
+        for m in call.members:
+            first, logits = res[m.row]
+            if logits is not None and not isinstance(logits, torch.Tensor):
+                logits = self._to_torch(logits).float().reshape(-1)
+            out[m.row] = (int(first), logits if want_logits else None)
+        return out
 
     def _prefill_one(self, ids: torch.Tensor, user: int, plan, *, want_logits: bool):
         """Run ``plan`` for one prompt chunk into physical user ``user``; returns ``(first greedy token, last-token
