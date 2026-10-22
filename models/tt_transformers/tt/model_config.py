@@ -253,6 +253,7 @@ class ModelOptimizations:
         else:
             if (
                 base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Llama-Krikri")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
@@ -773,7 +774,16 @@ class ModelArgs:
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4", "Qwen2.5-3B"]
+            in [
+                "Llama-3.1-8B",
+                "Llama-Krikri-8B",
+                "Llama-3.2-11B",
+                "Mistral-7B",
+                "gemma-3-27b",
+                "gemma-3-4b",
+                "Phi-4",
+                "Qwen2.5-3B",
+            ]
             and self.device_name == "N150"
         ) or (
             self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B", "Phi-4"]
@@ -1461,8 +1471,10 @@ class ModelArgs:
                 # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
-                    if self.device_name in ("N150", "P100")
-                    and self.base_model_name == "Llama-3.1-8B"
+                    if (
+                        (self.device_name == "N150" and self.base_model_name in ("Llama-3.1-8B", "Llama-Krikri-8B"))
+                        or (self.device_name == "P100" and self.base_model_name == "Llama-3.1-8B")
+                    )
                     and seq_len >= self.prefill_len_cutoff
                     else None
                 ),
