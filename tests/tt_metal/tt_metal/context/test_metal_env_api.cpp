@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -48,6 +49,7 @@ TEST(MetalEnv, OnePhysicalMultipleMock) {
 TEST(MetalEnv, EnvQueries) {
     MetalEnv env;
     EXPECT_NO_THROW(env.get_num_pcie_devices());
+    EXPECT_NE(env.get_cluster_type(), ClusterType::INVALID);
     const auto props = env.get_device_properties();
     EXPECT_NO_THROW(props.arch());
     EXPECT_NO_THROW(props.arch_name());
@@ -64,6 +66,8 @@ TEST(MetalEnv, EnvQueries) {
 TEST(MetalEnv, EnvQueriesMock) {
     MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
     EXPECT_EQ(env.get_num_pcie_devices(), 2);
+    EXPECT_EQ(env.get_cluster_type(), MetalEnvAccessor(env).impl().get_cluster().get_cluster_type());
+    EXPECT_TRUE(std::filesystem::exists(env.serialize_cluster_descriptor()));
     const auto props = env.get_device_properties();
     EXPECT_EQ(props.arch(), tt::ARCH::BLACKHOLE);
     EXPECT_NO_THROW(props.node_local_mem_size());
@@ -344,8 +348,9 @@ TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         // Fatals inside MeshDeviceImpl::create, after the context exists and before ownership transfers.
         EXPECT_THROW(
-            env.create_mesh_device(distributed::MeshDeviceConfig(
-                /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
+            env.create_mesh_device(
+                distributed::MeshDeviceConfig(
+                    /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
             std::runtime_error);
     }
 

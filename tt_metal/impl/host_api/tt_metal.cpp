@@ -506,8 +506,9 @@ CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logic
 
     std::vector<uint8_t> launch_kernel_config(kc.size());
     std::memcpy(launch_kernel_config.data(), kc.data(), kc.size());
-    return CapturedKernelConfig(std::make_shared<CapturedKernelConfig::Impl>(
-        kc.kernel_config_base()[0], kernel_config_size, std::move(launch_kernel_config)));
+    return CapturedKernelConfig(
+        std::make_shared<CapturedKernelConfig::Impl>(
+            kc.kernel_config_base()[0], kernel_config_size, std::move(launch_kernel_config)));
 }
 
 }  // namespace experimental
@@ -586,17 +587,9 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
     return MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
-ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
+ClusterType GetClusterType() { return MetalContext::instance().get_env().get_cluster_type(); }
 
-std::string SerializeClusterDescriptor() {
-    // Serialize the descriptor the cluster already holds. The cluster makes the
-    // mock-vs-real (emule) decision once when it builds the descriptor at init
-    // (see tt_cluster.cpp, gated on rtoptions.get_mock_enabled()), so this layer
-    // must not re-create it: a fresh real-UMD create here would open the physical
-    // card and bypass the emulator. Assumes the cluster is initialized (this API's
-    // only caller, ttnn serialize_cluster_descriptor, runs in an active session).
-    return MetalContext::instance().get_cluster().get_cluster_desc()->serialize_to_file().string();
-}
+std::string SerializeClusterDescriptor() { return MetalContext::instance().get_env().serialize_cluster_descriptor(); }
 
 // This function is used to set a default root directory for the tt_metal library.
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
@@ -1138,13 +1131,14 @@ PrecompiledKernelNotFoundError::PrecompiledKernelNotFoundError(
     size_t compile_hash,
     std::string precompiled_dir,
     PrecompiledKernelConfig::FallbackPolicy fallback_policy) :
-    std::runtime_error(fmt::format(
-        "Precompiled kernel binary not found. Kernel: \"{}\", compile_hash: {:#x}, searched in: \"{}\". "
-        "Either build/install the offline binaries there, set PrecompiledKernelConfig::fallback_policy to "
-        "JitCompile, or catch PrecompiledKernelNotFoundError for details.",
-        kernel_name,
-        compile_hash,
-        precompiled_dir)),
+    std::runtime_error(
+        fmt::format(
+            "Precompiled kernel binary not found. Kernel: \"{}\", compile_hash: {:#x}, searched in: \"{}\". "
+            "Either build/install the offline binaries there, set PrecompiledKernelConfig::fallback_policy to "
+            "JitCompile, or catch PrecompiledKernelNotFoundError for details.",
+            kernel_name,
+            compile_hash,
+            precompiled_dir)),
     kernel_name_(std::move(kernel_name)),
     compile_hash_(compile_hash),
     precompiled_dir_(std::move(precompiled_dir)),

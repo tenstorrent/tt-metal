@@ -737,6 +737,13 @@ const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
 
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
+ClusterType MetalEnv::get_cluster_type() const { return impl_->get_cluster().get_cluster_type(); }
+std::string MetalEnv::serialize_cluster_descriptor() const {
+    // Serialize the descriptor the cluster already holds. The cluster makes the mock-vs-real (emule) decision once
+    // when it builds the descriptor at init (see tt_cluster.cpp, gated on rtoptions.get_mock_enabled()), so this
+    // must not re-create it: a fresh real-UMD create here would open the physical card and bypass the emulator.
+    return impl_->get_cluster().get_cluster_desc()->serialize_to_file().string();
+}
 
 MetalDeviceProperties MetalEnv::get_device_properties() const { return MetalDeviceProperties(*impl_); }
 
