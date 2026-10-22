@@ -52,7 +52,6 @@ namespace reduce_host = ttnn::kernel_lib::host;
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
-constexpr NodeCoord kNode{0, 0};
 const ComputeHardwareConfig kComputeHardware{.fpu_math_fidelity = MathFidelity::HiFi4};
 
 DataflowBufferSpec tile_dfb(const char* name, tt::DataFormat format, uint32_t tiles) {
@@ -163,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts column_mean_factory(const ttnn::Tensor&
     spec.work_units = {WorkUnitSpec{
         .name = "core",
         .kernels = {KernelSpecName{"reader"}, KernelSpecName{"writer"}, KernelSpecName{"compute"}},
-        .target_nodes = kNode,
+        .target_nodes = NodeCoord{0, 0},
     }};
 
     ProgramRunArgs run_args;
@@ -261,7 +260,7 @@ ttnn::device_operation::ProgramArtifacts row_mean_of_two_inputs_factory(
     spec.work_units = {WorkUnitSpec{
         .name = "core",
         .kernels = {KernelSpecName{"reader"}, KernelSpecName{"writer"}, KernelSpecName{"compute"}},
-        .target_nodes = kNode,
+        .target_nodes = NodeCoord{0, 0},
     }};
 
     ProgramRunArgs run_args;
