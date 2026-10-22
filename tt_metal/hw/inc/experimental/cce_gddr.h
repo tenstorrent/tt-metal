@@ -45,6 +45,10 @@ inline __attribute__((always_inline)) void cce_gddr_write(
     }
 }
 
+// One formula serves a CCE on this Mimir and one on another: the DMRISC remap set at bring-up on each CCE rebases
+// this Mimir's 8 MiB SRAM window onto the chiplet-local SRAM base 0x4000_0000, so a store to the sibling CCE stays on
+// the die. A hart cannot use that local address itself: on the Mimir emulator, hart stores to 0x4040_0000 never
+// reached the sibling CCE (2026-10-14).
 inline __attribute__((always_inline)) uint64_t cce_sram_address(uint32_t cce_index, uint64_t offset) {
     volatile tt_l1_ptr CceSpaRoutes* routes = cce_spa_routes();
     return routes->sram_spa_base + static_cast<uint64_t>(cce_index) * routes->sram_tile_stride + offset;

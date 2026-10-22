@@ -195,8 +195,9 @@ public:
     // Stops the senders and releases this session. If waiting for the senders throws, it logs their
     // statuses, releases everything but the DRISC L1 ranges a DRAIN was reading, and rethrows. If the
     // worker gave up on a sender whose request ring took no page, it logs the statuses, keeps those ranges
-    // too, and throws once everything else is released. If a sender ended Failed but Stop otherwise
-    // succeeds, it logs the statuses and returns.
+    // too, and throws once everything else is released. If a Quasar CCE sender ended Failed, or its status
+    // cannot be read, it logs the statuses and throws once everything is released, naming each such sender
+    // and how many request pages the worker dropped after it exited.
     void stop();
 
     // stop() for the destructor and device close: a failure is logged, not thrown, and the worker thread is
@@ -329,8 +330,9 @@ private:
     void zero_cce_sender_control_blocks() const;
     void build_cce_sender_programs(uint64_t wait_budget_cycles);
     void log_cce_sender_statuses() const;
-    // log_cce_sender_statuses when a sender ended Failed or its status cannot be read. Never throws.
-    void log_cce_sender_statuses_if_any_failed() const;
+    // One line per sender that ended Failed or whose status cannot be read, after log_cce_sender_statuses when
+    // there is any. Empty off Quasar. Never throws.
+    std::vector<std::string> failed_cce_senders() const;
     // Tells the worker to finish and joins it, if it is still running.
     void join_worker();
     // Serialize a Queue call's tensors into one or more request pages, deduplicating
@@ -472,6 +474,8 @@ private:
     bool request_ring_stop_bounded_ = false;
     // Set by the worker when it gives up on a sender, so stop() reports the requests it dropped.
     std::atomic<bool> worker_gave_up_on_sender_{false};
+    // Request pages the worker dropped because their sender had exited, so stop() can report them.
+    std::atomic<uint32_t> dropped_request_pages_{0};
 
     // Host worker thread + queue
     std::thread host_worker_;

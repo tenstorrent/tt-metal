@@ -155,7 +155,8 @@ struct TensorPrefetcherInput {
 };
 
 // Start the prefetcher's device kernels where they are not already running (on
-// Blackhole, two per DRAM bank), open the per-device request transport, and spawn
+// Blackhole, two per DRAM bank; on Quasar CCE senders, one per DRAM bank, fed through
+// a TL1 request ring), open the per-device request transport, and spawn
 // the host worker thread that drains the request queue. Returns immediately. No
 // prefetch work is scheduled yet; the kernels wait for requests.
 //
@@ -278,6 +279,11 @@ void QueueTensorPrefetcherWaitForSignal(
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no
 // prefetcher is active.
+//
+// Throws, after releasing the resources, if a sender kernel did not finish cleanly. On Quasar that
+// includes a CCE sender that ended Failed (a credit, drain or CQ wait timed out, or a request it
+// cannot deliver): the message names each such sender, its status, and how many request pages the
+// host dropped because that sender had already exited.
 void StopTensorPrefetcher(distributed::MeshDevice& mesh_device);
 
 }  // namespace experimental

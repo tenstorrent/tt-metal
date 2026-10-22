@@ -82,7 +82,7 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 20 | `MimirPrefetcher.MM7GcbSmokePreconditionsWithReceiverRunning` | Preconditions stay ok while a receiver Program runs on a sender CCE | all |
 | 21 | `MimirPrefetcher.MM7GcbLayoutLocalReceiver` | DRAM-receiver GCB state block, config page and credit lines; same-Mimir receiver | all |
 | 22 | `MimirPrefetcher.MM7GcbLayoutRemoteReceiver` | The same with a receiver on the other Mimir, receiver order kept | 2x only |
-| 23 | `MimirPrefetcher.MM7GcbLayoutTwoSenders` | Two senders, one receiver each, disjoint arena ranges | 2x only |
+| 23 | `MimirPrefetcher.MM7GcbLayoutTwoSenders` | Two senders, one receiver each; a second such GCB takes disjoint ranges | 2x only |
 | 24 | `MimirPrefetcher.MM7GcbLayoutRejectsConflictingReceivers` | Rejects aliased, sender-as-receiver and duplicate receivers | all |
 | 25 | `MimirPrefetcher.MM7GcbSmokeDiscardDrain` | Test sender into a discarding receiver, without the manager; both ends' counters agree | all |
 | 26 | `MimirPrefetcher.MM7GcbSmokeValidatorLocal` | Test sender into a validating receiver on the same Mimir | all |
@@ -95,11 +95,11 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 33 | `MimirPrefetcher.MM7GcbSmokeReceiverWaitTimeout` | No sender: the receiver drains host-credited pages, then its wait gives CREDIT_TIMEOUT | all |
 | 34 | `MimirPrefetcher.MM7GcbSmokeRelaunchResumes` | A second sender and validator pair resumes from the pointers the first left in TL1 | all |
 | 35 | `MimirPrefetcher.MM7LifecycleStartStop` | Prefetcher Start and Stop; the sender reports Stopped | all |
-| 36 | `MimirPrefetcher.MM7LifecycleStartStopTwice` | A second Start zeroes the control block the first session left | all |
+| 36 | `MimirPrefetcher.MM7LifecycleStartStopTwice` | A second Start zeroes the control block the first session left; an unknown command left in ring slot 0 is never read | all |
 | 37 | `MimirPrefetcher.MM7LifecycleBusySenderFailsStart` | Start fails on a sender CCE that runs a receiver Program, before it launches or zeroes anything | all |
 | 38 | `MimirPrefetcher.MM7LifecycleQueueRejectsReceiverOnSender` | Queue rejects a GCB whose receiver is a sender CCE | all |
-| 39 | `MimirPrefetcher.MM7LifecycleWaitCq` | A WAIT_CQ for a value written through the command queue | all |
-| 40 | `MimirPrefetcher.MM7LifecycleDrainAtStop` | Stop sends DRAIN to a live receiver, then STOP | all |
+| 39 | `MimirPrefetcher.MM7LifecycleWaitCq` | A WAIT_CQ holds the sender until the command queue writes its slot | all |
+| 40 | `MimirPrefetcher.MM7LifecycleDrainAtStop` | Stop's DRAIN holds the sender until an unacked credit is acked, then STOP | all |
 | 41 | `MimirPrefetcher.MM7T1Local0To1` | One prefetch, CCE 0 to CCE 1, then Start, Queue and Stop again | all |
 | 42 | `MimirPrefetcher.MM7T1Local3To2` | One prefetch, CCE 3 to CCE 2, on the second Mimir | 2x only |
 | 43 | `MimirPrefetcher.MM7T1D2d0To2` | One prefetch, CCE 0 to CCE 2, one D2D hop | 2x only |
@@ -122,19 +122,21 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 60 | `MimirPrefetcher.MM7T3WrapAndResizeD2d0To2` | The same across D2D | 2x only |
 | 61 | `MimirPrefetcher.MM7T3GcbSwitchLocal0To1` | GCB 1, then 2, then 1, resuming mid-FIFO | all |
 | 62 | `MimirPrefetcher.MM7T3GcbSwitchD2d0To2` | The same across D2D | 2x only |
+| 62a | `MimirPrefetcher.MM7T3ReceiverSwitch0To1Then2` | GCB 1 to CCE 1, then GCB 2 to CCE 2 across D2D, then GCB 1 again | 2x only |
 | 63 | `MimirPrefetcher.MM7T3FenceLocal0To1` | A WAIT_CQ fence holds delivery until the slot is written | all |
 | 64 | `MimirPrefetcher.MM7T5TraceCaptureReplay` | Skipped: trace capture needs fast dispatch | all |
 | 65 | `MimirPrefetcher.MM7RejectKRowMajorTensor` | Queue rejects a K-row-major tensor | all |
 | 66 | `MimirPrefetcher.MM7RejectStreamingTensor` | Queue rejects a streaming tensor | all |
 | 67 | `MimirPrefetcher.MM7RejectRangePastTensor` | Queue rejects a request past the tensor | all |
 | 68 | `MimirPrefetcher.MM7RejectRangePastView` | Queue rejects a request past the DRAM view | all |
-| 69 | `MimirPrefetcher.MM7T4MismatchD2d2To0` | Wrong-seed validator reports MISMATCH; the sender stops OK | 2x only |
-| 70 | `MimirPrefetcher.MM7T4CreditTimeoutD2d1To3` | A request larger than the FIFO gives CREDIT_TIMEOUT; the host drops the requests after it | 2x only |
-| 71 | `MimirPrefetcher.MM7T4DrainTimeoutD2d1To3` | A receiver holds a request, so Stop's DRAIN gives DRAIN_TIMEOUT | 2x only |
+| 69 | `MimirPrefetcher.MM7T4MismatchD2d2To0` | Wrong-seed validator reports MISMATCH on every word of the tensor's page; the sender stops OK | 2x only |
+| 70 | `MimirPrefetcher.MM7T4CreditTimeoutD2d1To3` | A request larger than the FIFO gives CREDIT_TIMEOUT; the host drops the requests after it and Stop throws, naming the sender | 2x only |
+| 71 | `MimirPrefetcher.MM7T4DrainTimeoutD2d1To3` | A receiver holds a request, so Stop's DRAIN gives DRAIN_TIMEOUT and Stop throws | 2x only |
 
 Notes on the rows:
 - Rows that need a second Mimir skip at runtime on `mimir_1x1`.
 - Row 64 always skips: trace capture needs fast dispatch.
+- Every row that checks a receiver's FIFO state also checks the 256 B after the FIFO end against a pattern written before the run, so a write past the FIFO end fails the row.
 - The T4 rows run last: each ends with a sender or receiver timeout.
 - For a JUnit report, add `--gtest_output=xml:<file>` to each command.
 
