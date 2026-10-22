@@ -146,6 +146,9 @@ void kernel_main() {
     // the reader used to do on NoC 0, overlapping the reader's next DRAM read.
     constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(26);
     constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(27) != 0;
+    // The multicast and its mcast_done signal live in the UP_SPLIT branch; without it the
+    // reader would wait for mcast_done forever.
+    static_assert(!writer_mcasts_in1 || writer_split_up != 0, "IN1_WRITER_MCAST requires UP_SPLIT (writer_split_up)");
     // Active-token band, appended after the DOWN_SPLIT block above rather than at 20/21:
     // those slots carry the down-weight args this branch added, so the band moved instead.
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(28);
