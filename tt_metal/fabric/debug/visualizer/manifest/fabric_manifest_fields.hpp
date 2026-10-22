@@ -362,6 +362,43 @@ inline constexpr auto k_erisc_fields = [] {
             .description = "Whether this ERISC hands control back to base firmware.",
         },
         RouterField{
+            .key = "services_sender_channels",
+            .source = "RISC_SERVICES_SENDER_CHANNELS",
+            .category = LIFECYCLE,
+            .content = content::Flag{},
+            .description = "Whether this ERISC has the sender role, so it sets up the sender channels' worker "
+                           "interfaces at startup, and its sender-side TXQ1 state in multi-TXQ mode. On Blackhole with "
+                           "two ERISCs only ERISC0 has it, and otherwise every ERISC does. Channel trimming doesn't "
+                           "change it.",
+        },
+        RouterField{
+            .key = "services_receiver_channels",
+            .source = "RISC_SERVICES_RECEIVER_CHANNELS",
+            .category = LIFECYCLE,
+            .content = content::Flag{},
+            .description = "Whether this ERISC has the receiver role, so it sets up its TXQ1 state at startup in "
+                           "multi-TXQ mode. On Blackhole with two ERISCs only ERISC1 has it, and otherwise every ERISC "
+                           "does. Channel trimming doesn't change it.",
+        },
+        RouterField{
+            .key = "opens_vc0_downstream_connections",
+            .source = "OPEN_DOWNSTREAM_VC0_CONNECTIONS",
+            .category = LIFECYCLE,
+            .content = content::Flag{},
+            .description = "Whether this ERISC opens the router's VC0 connections to its downstream routers at "
+                           "startup: set when it runs receiver 0's step.",
+        },
+        RouterField{
+            .key = "opens_vc1_downstream_connections",
+            .source = "OPEN_DOWNSTREAM_VC1_CONNECTIONS",
+            .category = LIFECYCLE,
+            .content = content::Flag{},
+            .description = "Whether this ERISC opens the router's VC1 connections to its downstream routers at "
+                           "startup: set when it runs receiver 0's step on a router that crosses VC0 traffic over to "
+                           "VC1, or receiver 1's step on a router that services VC1. The kernel reads it only with "
+                           "FABRIC_2D_VC1_ACTIVE.",
+        },
+        RouterField{
             .key = "interrupts_enabled",
             .source = "ENABLE_INTERRUPTS",
             .category = KERNEL_PARAMS,
