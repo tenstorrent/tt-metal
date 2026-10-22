@@ -48,7 +48,8 @@ template <
     bool FUSED = false,
     bool RANK_STAMPED = false,
     ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset,
-    bool CT_STEPS = false>
+    bool CT_STEPS = false,
+    bool BOTTOM_DEAD = false>
 inline void calculate_bitonic_topk_local_sort(
     std::uint32_t idir,
     std::uint32_t i_end_phase,
@@ -64,7 +65,8 @@ inline void calculate_bitonic_topk_local_sort(
             FUSED,
             RANK_STAMPED,
             TIE_ORDER,
-            CT_STEPS>(idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
+            CT_STEPS,
+            BOTTOM_DEAD>(idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
     } else {
         _bitonic_topk_phases_steps<
             APPROXIMATION_MODE,
@@ -74,7 +76,8 @@ inline void calculate_bitonic_topk_local_sort(
             RANK_STAMPED,
             TIE_ORDER,
             false,
-            CT_STEPS>(idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
+            CT_STEPS,
+            BOTTOM_DEAD>(idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
     }
 }
 
