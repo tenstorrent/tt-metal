@@ -66,6 +66,15 @@ def _float_entry(official: torch.Tensor, target: torch.Tensor, region=None) -> d
     t = narrow(target.float(), region)
     o = narrow(official.reshape(target.shape), region)
     r = round_to(t, stored(o))
+    if not t.abs().max().item():  # F159: an all-zero target (a state still empty): exact or not, no rounding margin
+        return {
+            "rel": 0.0 if not o.abs().max().item() else 1.0,
+            "rel_res": 0.0,
+            "pcc": 1.0,
+            "pcc_res": 1.0,
+            "region": region,
+            "zero_target": True,
+        }
     return {
         "rel": rel(o, t),
         "rel_res": rel(r, t),

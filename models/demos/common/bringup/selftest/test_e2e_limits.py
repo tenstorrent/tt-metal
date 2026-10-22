@@ -175,3 +175,20 @@ def test_goldens_and_per_step_references_default_to_full_precision():
     assert G.TARGET_NUMERICS == "native"  # F132: a constant, not a switch
     assert defaults.get("golden.numerics", None) is None and defaults.get("tests.step_numerics", None) is None
     assert defaults.get("thresholds", None) is None  # F138: no fixed accuracy number at all
+
+
+def test_an_all_zero_state_gets_a_zero_limit_not_an_absurd_one():
+    """F159: DeepSeek-V4.1 err_state_compress_partial: the target state was exactly zero, one rounding's rel came out
+    9e255 (a 1e-300 clamp) and the limit 1.8e256 let anything pass. Now an all-zero target needs an exact zero."""
+    import torch
+
+    from models.demos.common.bringup.reference import drift as D
+
+    z = torch.zeros(4, 64)
+    e = D._float_entry(z, z)
+    assert e["zero_target"] and e["rel"] == 0.0 and E.err_limit({"k": e}, "k") == 0.0
+    assert D._float_entry(z + 1e-3, z)["rel"] == 1.0
+    old = {"rel": 0.0, "rel_res": 9.14e255, "pcc": 1.0, "pcc_res": 0.0, "region": None}  # a drift file from before
+    assert E.err_limit({"k": old}, "k") == 0.0
+    t = torch.randn(4, 64)
+    assert 0 < E.err_limit({"k": D._float_entry(t.to(torch.bfloat16).float(), t)}, "k") < 0.02

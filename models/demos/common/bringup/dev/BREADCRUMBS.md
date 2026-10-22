@@ -1755,3 +1755,11 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - testing/component.py run_swap_test: when err_swap_out misses its noise floor and a swapped step has an owner waiver,
   the block out goes through NF.waive under that step (printed, err_swap_out_waived recorded; the structural bound
   still fails a wrong module). Selftest test_a_waived_step_covers_the_block_out_of_its_swap_test.
+- reference/drift.py marks an all-zero target (zero_target, rel_res 0); testing/e2e_limits.py treats rel_res > 1 (impossible
+  for a rounding of a nonzero value) as such a target in drift files written before, for the rel and the PCC limits.
+  Selftest test_an_all_zero_state_gets_a_zero_limit_not_an_absurd_one.
+
+## F161: a layer without step dumps stores only its out (2026-10-22)
+- DS41 full model short rung: a non-step layer's file held in and out, fp32 [5120, 20484] each (839 MB); its in is the
+  previous layer's out bit for bit (checked at L5, L15, L30) and no check reads it (the ladder, drift and profile read
+  in only at a run start, the step tests only on step layers). Now 420 MB; a run start keeps its in.
