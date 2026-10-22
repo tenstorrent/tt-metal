@@ -15,6 +15,10 @@ those of vLLM's GLM-4.5 MTP / ``deepseek_v3_d_p/reference/glm_5_3/mtp.py`` and t
     logits = lm_head(shared_head.norm(x))       # the main model's LM head; row i predicts t_{i+2}
     level k >= 2: H <- shared_head.norm(x) of level k-1, t <- draft_{k-1}, MTP position + 1
 
+MTP positions: the level-1 row of main position ``p`` (hidden ``H_p``, token ``t_{p+1}`` = the greedy id of the
+step at ``p``) sits at MTP position ``p``; level ``k`` of the chain sits at ``p + k - 1``. The MTP cache therefore
+holds exactly one row per main position (the prompt rows from ``prefill_forward``, then one per decode step).
+
 Layer 45 has no ``hc_*`` tensors: the block is a plain pre-norm residual block (no mHC wrap) and its residual is
 one ``[1, 1, T, 4096]`` bf16 tensor, HF's own dtype for the block (the norms accumulate in fp32 inside the op).
 
@@ -25,9 +29,12 @@ shared ``TtModelHead`` (``logits`` + ``greedy`` on the MTP's own ``shared_head.n
 replicated ``DecodeLinear`` (v1 of the plan: 34 MB per chip, no collective).
 
 Geometry: ``prefill_forward`` runs rows ``[start, start + T_pad)`` of one user (level 1 on a prompt or on every
-verified row, the cache rows written at the MTP positions); ``decode_forward`` runs one row per user slot at the
-persistent ``DecodePositions`` (the draft step: MTP position = the main model's position + level). Everything in
+verified row, the cache rows written at the MTP positions; on a multi-row mesh the rows hold slabs of the chunk,
+the ``TtDecoderLayer`` v1 sequence-parallel form); ``decode_forward`` runs one row per user slot at the persistent
+``DecodePositions`` (the draft step: MTP position = the main model's position + level - 1). Everything in
 ``decode_forward`` is a device op on persistent inputs, the trace contract of ``TtDSA.decode_forward``.
+``block_rows`` runs the residual block with a caller-supplied attention (the speculative verify / chain rows of
+``tt/spec_decode.py``, which address the cache with their own page tables and skip the index maintenance).
 """
 
 from __future__ import annotations
@@ -332,15 +339,25 @@ class TtMTPBlock(LightweightModule):
         ttnn.deallocate(x1)
         return out
 
+    def block_rows(self, x: ttnn.Tensor, attention) -> ttnn.Tensor:
+        """The residual block on decode-shaped rows ``x`` ``[1, 1, R, H]`` bf16 (the glue output; consumed) with a
+        caller-supplied ``attention(h)`` (``h`` = ``input_layernorm(x)`` bf16, returns ``[1, 1, R, H]``). No batch
+        or position bookkeeping: the speculative verify (``B (K+1)`` candidate rows) and the draft chain of
+        ``tt/spec_decode.py`` bring their own page tables / positions."""
+        return self._residual_block(x, attention, prefill=False)
+
     def prefill_rows(self, x: ttnn.Tensor, *, user: int, seq_len: int, start: int = 0) -> ttnn.Tensor:
-        """The block on prefill-shaped rows ``x`` ``[1, 1, T_pad, H]`` bf16 (the glue output; consumed): row i is
-        MTP position ``start + i`` of ``user``; the latent rows / index of ``[start, start + seq_len)`` are written
-        into the block's own cache (``TtDSA.prefill_forward`` contract: ``T_pad % 32 == 0``, ``start % 32 == 0``,
-        chunks of a user in order). Rows past ``seq_len`` come back unspecified. Single mesh row only (the
-        sequence-parallel slab prefill of ``TtDecoderLayer`` is not wired for the MTP yet)."""
-        T = int(x.shape[-2])
-        if self.mesh.rows > 1:
-            raise NotImplementedError("MTP prefill on a multi-row mesh is not wired (decode is per row and works)")
+        """The block on prefill-shaped rows ``x`` bf16 (the glue output; consumed): row i is MTP position
+        ``start + i`` of ``user``; the latent rows / index of ``[start, start + seq_len)`` are written into the
+        block's own cache (``TtDSA.prefill_forward`` contract: ``T_pad % 32 == 0``, ``start % 32 == 0``, chunks of a
+        user in order). Rows past ``seq_len`` come back unspecified. On a multi-row mesh ``x`` is THIS row's slab
+        ``[1, 1, T_pad / rows, H]`` of the chunk (row r holds rows ``[r T/rows, (r+1) T/rows)``, the layout the
+        main model's prefill leaves its streams in): the attention gathers the slabs over the rows, every row
+        fills the replicated cache / index identically and keeps its own slab of the output through the
+        reduce-scatter of ``rows`` equal copies (``TtDecoderLayer.prefill_forward`` v1, exact: a power-of-two sum
+        of equal bf16 values scaled back by ``1 / rows``); the glue and the MoE run on the slab."""
+        rows = self.mesh.rows
+        T = int(x.shape[-2]) * rows
         if T % TILE or seq_len > T or seq_len <= 0:
             raise ValueError(f"T_pad={T} must be a multiple of {TILE} and 0 < seq_len={seq_len} <= T_pad")
         if user >= self.max_batch:
@@ -351,11 +368,39 @@ class TtMTPBlock(LightweightModule):
             raise ValueError(f"start {start} + seq_len {seq_len} > max_seq_len {self.max_seq_len}")
         if start and start != self.next_start[user]:
             raise ValueError(f"user {user}: chunk start {start} is not contiguous (expected {self.next_start[user]})")
-        out = self._residual_block(
-            x, lambda h: self.attn.prefill_forward(h, self.cache, user, seq_len, start=start), prefill=True
-        )
+        if rows == 1:
+            attention = lambda h: self.attn.prefill_forward(h, self.cache, user, seq_len, start=start)
+        else:
+
+            def attention(h):  # h: this row's slab [1,1,T/rows,H] bf16 (input_layernorm applied)
+                h_full = self.mesh.all_gather_rows(h, dim=2)  # [1,1,T,H], rows in mesh-row order
+                y_full = self.attn.prefill_forward(h_full, self.cache, user, seq_len, start=start)
+                ttnn.deallocate(h_full)
+                y = self.mesh.reduce_scatter_rows(y_full, dim=2)  # rows x this row's slab
+                ttnn.deallocate(y_full)
+                return ttnn.multiply(y, 1.0 / rows, output_tensor=y)
+
+        out = self._residual_block(x, attention, prefill=True)
         self.next_start[user] = start + seq_len
         return out
+
+    def prefill_cache(
+        self, ids: ttnn.Tensor, hidden: ttnn.Tensor, *, user: int, seq_len: int, start: int = 0
+    ) -> ttnn.Tensor:
+        """``prefill_forward`` without the head: fills the MTP cache / index of ``user`` for the prompt rows (the
+        speculative decoder's prefill; the drafts of the prompt rows are not needed). ``ids`` / ``hidden`` are this
+        mesh row's slab (``[1, 1, 1, T_loc]`` / ``[1, 1, T_loc, H]``) on a multi-row mesh. Returns the block output
+        (the caller deallocates it)."""
+        x = self.project(ids, hidden)
+        return self.prefill_rows(x, user=user, seq_len=seq_len, start=start)
+
+    @staticmethod
+    def ids_row(ids: ttnn.Tensor) -> ttnn.Tensor:
+        """Greedy ids ``[1, 1, T, 1]`` uint32 ROW_MAJOR (``TtModelHead.greedy``) -> the ``[1, 1, 1, T]`` id row
+        ``embed`` consumes (same element order; a device reshape, trace-safe). The result may alias ``ids``: never
+        deallocate it, deallocate ``ids`` after the embedding consumed the row."""
+        T = int(ids.shape[-2])
+        return ttnn.reshape(ids, [1, 1, 1, T])
 
     def decode_rows(self, x: ttnn.Tensor, positions: DecodePositions) -> ttnn.Tensor:
         """The block on one row per user slot ``x`` ``[1, 1, B, H]`` bf16 (the glue output; consumed) at the MTP
@@ -407,8 +452,8 @@ class TtMTPBlock(LightweightModule):
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """One draft level for ``B`` user slots: ``ids`` ``[1, 1, 1, B]`` uint32 (level 1: the main model's new
         greedy token; level k: the level-(k-1) draft), ``hidden`` ``[1, 1, B, H]`` (level 1: the head's normed
-        hidden; level k: the previous level's ``normed``), ``positions``: the MTP positions (main position + level).
-        Returns ``(block out, normed, logits, draft ids)``; ``normed`` and the ids feed the next level."""
+        hidden; level k: the previous level's ``normed``), ``positions``: the MTP positions (main position +
+        level - 1). Returns ``(block out, normed, logits, draft ids)``; ``normed`` and the ids feed the next level."""
         x = self.project(ids, hidden)
         out = self.decode_rows(x, positions)
         return (out,) + self.head_forward(out)
