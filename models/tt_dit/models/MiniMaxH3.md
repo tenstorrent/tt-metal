@@ -396,6 +396,28 @@ of those falls in, then the usual VAE / audio / prompt-encoder warms. The measur
 `test_pipeline_minimax_h3.py::test_t2va_dynamic_length_zero_misses` (`MINIMAX_H3_DYNAMIC_GATE=1`): warm
 at 5 s, measure at 10 s, zero denoising cache misses.
 
+#### Rules for a length-dependent op on the dynamic path
+
+- The row count reaches the op only through an input tensor's logical shape (or a `[1, 1, 1, 1]` device
+  scalar such as the ring SDPA's `logical_n`), never as a Python int: a trace bakes Python values in.
+- `compute_program_hash` drops the rows (`hash_spec_without_rows`) and hashes everything else that changes
+  the program (dtype, layout, sharding, grid, which optional tensors are present); blockings and core grids
+  come from a config object pinned at construction (`length_classes.py`), never from the shape.
+- One common runtime word per kernel carries the per-device row count, and every per-core range is derived
+  from it on device with `ttnn/operations/common/shared_with_host/runtime_length.hpp`, so a reader and its
+  writer can never disagree on the split; `validate_on_program_cache_hit` checks the capacity and the
+  alignment on every call.
+- Eager only. Runtime arguments are frozen in a captured trace, so a replay serves the captured length
+  whatever the buffers hold. Three guards: the pipeline refuses `dynamic_length` with `trace_denoise`, the
+  transformer's `forward` raises while a trace capture is active, and the `Tracer` rejects a replay input
+  whose shape differs from the captured one.
+- Device state. Sized once and written in place, true rows leading: the assembly source table, the ring
+  attention's K/V gather pair and the prompt arena (at the arena caps / `max_sequence_length`); the fused
+  norms' worker split is likewise fixed at `max_sequence_length / SP` rows. Per request: the hidden stream,
+  the rope and adaLN tables, the timestep / one-hot state tensors and, on the 4x8, the CCL ping-pong pairs
+  (allocated for the step loop and freed after it). No op reads a capacity-sized buffer past the rows the
+  current request wrote.
+
 ## Fully-warm latency
 
 Measured by `pipelines/ltx`'s method so the two are comparable: warmup pass first, prepares and

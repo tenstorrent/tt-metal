@@ -469,6 +469,11 @@ class MiniMaxH3Transformer3DModel(Module):
         alignment = self.sp_factor * tile
         if pad_to % alignment:
             raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
+        if self.dynamic_length and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
+            raise RuntimeError(
+                "dynamic_length is eager-only: the row count is a runtime argument, so a trace captured now would "
+                "replay this length whatever the buffers hold; use the bucketed preset for a traced denoise"
+            )
         # Indices already sharded on SP only need to gather the local rows, so the full-sequence
         # intermediate doesn't need to be materialised
         local_rows = pad_to // self.sp_factor

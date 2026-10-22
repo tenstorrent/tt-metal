@@ -546,6 +546,47 @@ def test_minimax_h3_transformer(
     assert_quality(torch_audio_out, tt_audio_out, pcc=MIN_PCC)
 
 
+@GALAXY_RING
+def test_minimax_h3_transformer_dynamic_length_rejects_trace(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+    expect_error,
+) -> None:
+    """A dynamic-length forward refuses to run under a trace: its row count is a runtime argument."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    per_modality = _modality_metadata(512, 256, 1280, (8, 8), ())
+    inputs = _prepare_tt_inputs(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        num_links,
+        topology,
+        per_modality,
+        text_dim=TEXT_DIM,
+        video_patch_dim=VIDEO_PATCH_DIM,
+        audio_channels=AUDIO_IN_CHANNELS,
+        head_dim=ATTENTION_HEAD_DIM,
+        rope_freq_dim=ROPE_FREQ_DIM,
+        rope_theta=ROPE_THETA,
+    )
+    tt_model = MiniMaxH3Transformer3DModel(
+        **TRANSFORMER_CONFIG,
+        mesh_device=mesh_device,
+        ccl_manager=inputs.ccl_manager,
+        parallel_config=inputs.parallel_config,
+        is_fsdp=is_fsdp,
+        dynamic_length=True,
+        kv_gather_capacity=inputs.padded_len,
+    )
+    with expect_error(RuntimeError, "eager-only"):
+        tt_model(**inputs.tt, traced=True)
+
+
 # ---- full-depth run with the real checkpoint ----
 
 _CALLER_OWNED_CONFIG_KEYS = ("rope_freq_dim", "rope_theta")
