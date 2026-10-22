@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-slim
     if: |
       !github.event.pull_request.draft &&
+      github.event.pull_request.user.type != 'Bot' &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Request Copilot review if author is not an org member
@@ -41,8 +42,9 @@ jobs:
           REPO: ${{ github.repository }}
           ORG: ${{ github.repository_owner }}
         run: |
-          # 204 = member; 404 (or 302 for concealed/unauth lookups) = not a member.
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          # 204 = member; 404 = not a member. 302 means the PAT owner itself is not an
+          # org member, which makes the lookup unreliable for every author — fail loudly.
+          STATUS=$(curl -s -g -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -52,7 +54,7 @@ jobs:
             echo "Author is an org member — Copilot auto-review applies, nothing to do."
             exit 0
           fi
-          if [ "$STATUS" != "404" ] && [ "$STATUS" != "302" ]; then
+          if [ "$STATUS" != "404" ]; then
             echo "::error::Unexpected membership response ${STATUS}; not requesting review."
             exit 1
           fi
