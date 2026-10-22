@@ -17,6 +17,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -37,18 +38,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "batch_seq_len, hidden_dim, activation",
+    "batch_seq_len, emb_dim, hidden_dim, activation",
     [
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_SILU),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_SILU),
         # Kimi-K3's layer-0 dense FFN: 33792 wide, on the checkpoint's SiTU-GLU (#53625). Both the
         # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
         # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
         # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
         # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
+        # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
     ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped"],
+    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, tp_axis",
@@ -113,6 +116,7 @@ def test_ffn_pcc(
     mesh_device,
     device_params,
     batch_seq_len: int,
+    emb_dim: int,
     hidden_dim: int,
     activation: str,
     num_links: int,
@@ -150,7 +154,7 @@ def test_ffn_pcc(
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={EMB_DIM}, hidden_dim={hidden_dim}, {activation=}")
+    logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}, {activation=}")
 
     signpost(f"FFN PCC test - {mesh_shape=} {batch_seq_len=} {hidden_dim=} {activation=} {num_links=} {topology=}")
 
@@ -160,7 +164,7 @@ def test_ffn_pcc(
 
     # Create PyTorch reference model with FFN dimensions
     logger.debug("Creating TorchExpert reference with FFN dimensions")
-    torch_model = TorchExpert(EMB_DIM, hidden_dim, activation=activation, **situ_betas)
+    torch_model = TorchExpert(emb_dim, hidden_dim, activation=activation, **situ_betas)
 
     # In place, so both sides are graded on one set of weights. down_proj only rescales the
     # output, so it is left alone.
@@ -180,6 +184,7 @@ def test_ffn_pcc(
     tt_model = TtFfn(
         mesh_device=mesh_device,
         torch_weights=torch_weights,
+        emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         num_links=num_links,
         topology=topology,
@@ -192,7 +197,7 @@ def test_ffn_pcc(
     )
 
     # Create input tensor (replicated across all devices)
-    torch_input = torch.randn(batch_seq_len, EMB_DIM, dtype=torch.float32)
+    torch_input = torch.randn(batch_seq_len, emb_dim, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
 
     tt_input = ttnn.from_torch(
