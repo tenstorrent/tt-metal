@@ -972,3 +972,11 @@ slots bit-equal. Steps 1-2 of `_agents/mtp_head/PLAN.md` are done; next: the lev
 graph of the mesh model (step 3), then the batched verify step (4) and the KDA state commit (5). Code pushed
 (upstream 380b1b7da30) together with the rs combine default, the core-range helper, the auto prefill mode and the
 logits-level accuracy tooling.
+
+**Envelope point 1 rerun with gen 160 (04:40, `long_8x4_N524288_B8_envelope_g160.log`):** needles **64/64**; TTFT
+240.1 / 224.9 / 224.7 / 224.8 / 225.1 / 224.9 / 222.8 / 222.8 s, decode 184.6 ms = 5.4 tok/s per user (64 slots,
+347 aggregate). The openers split 'We' (users 0-3) / 'The' (users 4-7) this time against 'The' (0, 1, 7) / 'We' (2-6)
+in the first run: the first token at this prompt is a near-tie that flips across runs and slots while every chain
+reaches the passphrase; within a run the prefill is bit-deterministic (the repeat-user-0 check), so the cross-run
+flip is the near-tie plus whatever differs between processes at the last ulp (allocation order, stale padding).
+README row updated. The users x ISL envelope is now needle-verified at all four points.
