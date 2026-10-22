@@ -51,6 +51,8 @@ constexpr bool supported_split = K == 512 || K >= 1024;
 
 // Chunks alternate DEST banks (bank 1 starts at tile 4): the chunk MATH transposes and the chunk PACK sorts sit in
 // different tiles, and the next row's first chunk can be copied into bank 1 while this row finishes.
+// Stage 6's merge reads the previous survivor in the other bank; the rows are disjoint, and no RTL argument rules out
+// the timing hazard, only the bit exact tests.
 template <std::uint32_t K>
 constexpr std::uint32_t slot_tile(const std::uint32_t from_last) {
     return ((from_last & 1) ? 4 : 0) + ((from_last >> 1) & 1) * (K == 2048 ? 2 : 1);
