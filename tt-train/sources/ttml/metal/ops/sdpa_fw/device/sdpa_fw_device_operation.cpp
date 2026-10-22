@@ -288,8 +288,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
         .mask_type = mask_type,
         .dropout_probability = dropout_probability,
         .has_gate = gate.has_value(),
-        .q_chunk_size = program_config.q_chunk_size,
-        .k_chunk_size = program_config.k_chunk_size};
+        .program_config = program_config};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,
