@@ -31,8 +31,6 @@ class Problem(Enum):
     NOT_A_MEMBER = auto()
     BAD_NUMBER = auto()
     WRONG_SHAPE = auto()
-    UNREADABLE = auto()
-    MISSING_FIELD = auto()
     NO_ROWS = auto()
     DUPLICATE_YAML_KEY = auto()
     REPEATED_KEY = auto()

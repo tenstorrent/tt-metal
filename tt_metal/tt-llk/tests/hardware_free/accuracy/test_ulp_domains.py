@@ -8,7 +8,7 @@ test_ulp_sweep.py."""
 import math
 
 import pytest
-from conftest import problem_id, refused
+from conftest import TANH_DOMAINS, problem_id, refused
 from helpers.format_config import DataFormat
 from helpers.ulp import ULP_FORMATS
 from helpers.ulp_domains import (
