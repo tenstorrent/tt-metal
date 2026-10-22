@@ -40,10 +40,10 @@ struct Problem {
     std::array<xt::xarray<float>, 4> taps;
 };
 
-Problem random_problem(const Shape& s, uint32_t seed) {
+Problem random_problem(const Shape& s, uint32_t seed, float x_scale = 1.0F) {
     Problem p;
-    p.x = random_tensor({1, s.T, s.C()}, seed);
-    p.h = random_tensor({1, 3, s.C()}, seed + 1);
+    p.x = x_scale * random_tensor({1, s.T, s.C()}, seed);
+    p.h = x_scale * random_tensor({1, 3, s.C()}, seed + 1);
     p.grad_y = random_tensor({1, s.T, s.C()}, seed + 2);
     for (size_t j = 0; j < 4; ++j) {
         p.taps[j] = random_tensor({1, 1, s.C()}, seed + 3 + j);
@@ -99,10 +99,11 @@ protected:
 };
 
 // Runs the fused backward directly and checks every gradient against the xtensor reference.
-void check_metal_bw(const Shape& s, uint32_t chunk, uint32_t splits, uint32_t seed, const std::string& tag) {
+void check_metal_bw(
+    const Shape& s, uint32_t chunk, uint32_t splits, uint32_t seed, const std::string& tag, float x_scale = 1.0F) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
-    const auto p = random_problem(s, seed);
+    const auto p = random_problem(s, seed, x_scale);
     const auto ref = reference(s, p);
 
     auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
@@ -158,6 +159,12 @@ TEST_F(QkvCausalConv1dSiluTest, RepeatedRunsAreStable) {
     for (uint32_t i = 0; i < 10; ++i) {
         check_metal_bw({128, 64, 64, 64}, 64, 2 + (i % 3), 100 + i, "repeat" + std::to_string(i));
     }
+}
+
+// Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
+TEST_F(QkvCausalConv1dSiluTest, LargePreactivations) {
+    check_metal_bw({256, 128, 64, 64}, 256, 4, 7, "large preact", /*x_scale=*/4.0F);
+    check_metal_bw({256, 128, 64, 64}, 64, 3, 8, "large preact chunk 64", /*x_scale=*/4.0F);
 }
 
 TEST_F(QkvCausalConv1dSiluTest, RandomShapes) {

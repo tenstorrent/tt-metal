@@ -159,12 +159,15 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     };
     // The conv accumulates its taps in fp32 DST (the kernel static_asserts DST_ACCUM_MODE) and the partial is
     // accumulated by the packer explicitly, so the config is fixed rather than a hashed attribute.
-    const m2::ComputeHardwareConfig compute_hw{
+    m2::ComputeHardwareConfig compute_hw{
         .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .sfpu_precision_mode = tt::tt_metal::Precision::Precise,
         .enable_32_bit_dest = true,
         .double_buffer_dest = true,
     };
+    // The fp32 sigmoid is an FPU operand (mul / reuse-dest), so it unpacks to SrcA/B: 19-bit, still far better
+    // than bf16 for 1 - s near s = 1. An fp32 consumer must name its mode when the dest is 32-bit.
+    compute_hw.unpack_modes.emplace(SIGMOID, tt::tt_metal::UnpackMode::UnpackToSrc);
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::string(kernel_dir) + "compute/qkv_causal_conv1d_silu_bw.cpp",

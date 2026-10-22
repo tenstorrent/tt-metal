@@ -37,7 +37,8 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
         {"weights", 4 * channel_tiles_per_block, bf16},       // taps [4][channel_tiles_per_block]
         {"grad_out", 2 * channel_tiles_per_block, bf16},
         {"preact", channel_tiles_per_block, bf16},
-        {"sigmoid", qkv_conv_bw_dst_tiles, bf16},
+        // fp32: silu_bw needs preact * (1 - s), and a bf16 s near 1 leaves (1 - s) with few bits
+        {"sigmoid", qkv_conv_bw_dst_tiles, fp32},
         {"dc_tile", channel_tiles_per_block, bf16},
         {"dc_rm", 2 * channel_tiles_per_block, bf16},
         {"partial", 4 * channel_tiles_per_block, fp32},  // grad_w partial [4][channel_tiles], packer adds in place

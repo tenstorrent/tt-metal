@@ -122,6 +122,7 @@ template <uint32_t channel_tiles_per_block>
         for (uint32_t i = 0; i < n; ++i) {
             mul_reuse_dest_tiles<DEST_TO_SRCB>(dfb::sigmoid, i, i);
         }
+        reconfig_data_format_srca(dfb::grad_out);  // back from the fp32 sigmoid to bf16
         mul_reuse_dest_init<DEST_TO_SRCB>(dfb::grad_out);
         for (uint32_t i = 0; i < n; ++i) {
             mul_reuse_dest_tiles<DEST_TO_SRCB>(dfb::grad_out, base + i, i);
