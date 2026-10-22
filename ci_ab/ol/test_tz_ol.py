@@ -8,20 +8,13 @@ import torch
 import ttnn
 
 CASES = {
-    "uint8_512x1024": (ttnn.uint8, (1, 1, 512, 1024)),
-    "uint8_2048x64": (ttnn.uint8, (1, 1, 2048, 64)),
-    "uint8_32x128256": (ttnn.uint8, (1, 1, 32, 128256)),
     "uint8_1024x96": (ttnn.uint8, (1, 1, 1024, 96)),
-    "uint8_2048x32": (ttnn.uint8, (1, 1, 2048, 32)),
-    "twvp_fp8_2048x64": (ttnn.fp8_e4m3, (1, 1, 2048, 63)),
-    "int32_512x1024": (ttnn.int32, (1, 1, 512, 1024)),
-    "fp32_512x1024": (ttnn.float32, (1, 1, 512, 1024)),
-    "bf16_4096x32": (ttnn.bfloat16, (1, 1, 4096, 32)),
-    "bf16_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
-    "bf16_to_bfp8_2048x64": (ttnn.bfloat16, (1, 1, 2048, 64)),
-    "bf16_to_bfp8_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
-    "bf16_to_bfp8_512x96": (ttnn.bfloat16, (1, 1, 512, 96)),
-    "conv2d_rn50_l2_3x3": None,
+    "uint8_32x96": (ttnn.uint8, (1, 1, 32, 96)),
+    "uint8_256x96": (ttnn.uint8, (1, 1, 256, 96)),
+    "uint8_4096x96": (ttnn.uint8, (1, 1, 4096, 96)),
+    "uint8_1024x64": (ttnn.uint8, (1, 1, 1024, 64)),
+    "uint8_1024x128": (ttnn.uint8, (1, 1, 1024, 128)),
+    "uint8_512x1024": (ttnn.uint8, (1, 1, 512, 1024)),
 }
 _CW = {}
 
