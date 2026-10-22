@@ -18,6 +18,9 @@ DEFAULT_MODEL_DIR = Path("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek
 CACHE_DIR = os.path.join(os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache"), DEFAULT_MODEL_DIR.name)
 # One 1x4 stage per Galaxy row. At 8 stages V4.1's 40 layers are five per stage.
 DEFAULT_NUM_STAGES = 8
+# The stage whose 1x4 submesh runs the image encoder. A KV-only prefill leaves stages 5-7 idle, so
+# an encode there does not compete with prefill compute.
+VISION_STAGE = int(os.environ.get("DEEPSEEK_V41_VISION_STAGE", "5"))
 
 
 def pipeline_stage_count() -> int:
@@ -89,6 +92,19 @@ def load_config(model_dir=DEFAULT_MODEL_DIR) -> SimpleNamespace:
     return SimpleNamespace(**cfg)
 
 
+def load_vision_config(model_dir=DEFAULT_MODEL_DIR) -> SimpleNamespace:
+    """The checkpoint's ``vision_config`` (``num_hidden_layers``, ``hidden_size``, ``patch_size``,
+    ``downsample_ratio``, ...), plus ``image_token_id`` and the LLM's ``hidden_size`` as
+    ``text_hidden_size`` (the width of the aligner's output rows)."""
+    with open(resolve_snapshot_dir(Path(model_dir)) / "config.json") as f:
+        cfg = json.load(f)
+    return SimpleNamespace(
+        **cfg["vision_config"],
+        image_token_id=cfg["image_token_id"],
+        text_hidden_size=cfg["text_config"]["hidden_size"],
+    )
+
+
 def dequantized(loader: DeepseekV4WeightLoader, name: str, translate: bool = False):
     """Thunk returning checkpoint tensor ``name`` in fp32: fp8 blocks and MXFP4 (int8-packed, the
     routed experts) dequantized."""
@@ -120,8 +136,11 @@ def attention_weights(loader: DeepseekV4WeightLoader, layer_idx: int) -> dict:
 
 def moe_weights(loader: DeepseekV4WeightLoader, layer_idx: int) -> dict:
     """Lazy fp32 router and shared-expert weights of layer ``layer_idx``'s MoE, as thunks under
-    the V4 block's HF names. The routed experts come from :func:`expert_provider`."""
-    return {k: dequantized(loader, f"layers.{layer_idx}.mlp.{k}", True) for k in _V4_MOE_KEYS}
+    the V4 block's HF names, plus the router's image-token bias ``gate.bias_vl`` (its checkpoint name).
+    The routed experts come from :func:`expert_provider`."""
+    weights = {k: dequantized(loader, f"layers.{layer_idx}.mlp.{k}", True) for k in _V4_MOE_KEYS}
+    weights["gate.bias_vl"] = dequantized(loader, f"layers.{layer_idx}.ffn.gate.bias_vl")
+    return weights
 
 
 def expert_provider(loader: DeepseekV4WeightLoader, layer_idx: int):

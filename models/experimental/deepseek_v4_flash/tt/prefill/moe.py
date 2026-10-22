@@ -158,12 +158,14 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.tp_size > 1 else None,
         )
 
-    def route(self, x_tile: ttnn.Tensor, token_ids=None) -> SparseRouting:
+    def route(self, x_tile: ttnn.Tensor, token_ids=None, image_mask: Optional[ttnn.Tensor] = None) -> SparseRouting:
         """``x_tile`` ``[1, 1, T, D]`` TILE -> the routing decision for all ``T`` tokens.
 
         ``scores`` are the unbiased ``sqrtsoftplus`` scores (they become the routing weights);
         learned layers add the bias-corrected ``ranking`` row (the op takes the top-k on device),
-        hash layers the ``indices`` looked up from ``tid2eid[token_ids]``.
+        hash layers the ``indices`` looked up from ``tid2eid[token_ids]``. ``image_mask`` (``[1, T]``
+        uint32 ROW_MAJOR, 1 for an image token) has the router pick each token's bias
+        (:meth:`~..decode.moe.DeepSeekV4TopKRouter.ranking_bias`).
         """
         t = x_tile.shape[2]
         logits = self.gate.gate(x_tile)  # [1, 1, T, E]
@@ -174,7 +176,12 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
                 raise ValueError("a hash-routed layer needs the token ids")
             ids = ttnn.embedding(self._token_ids(token_ids, t), self.gate.eid_table, layout=ttnn.TILE_LAYOUT)
             return SparseRouting(scores=scores, indices=ttnn.reshape(ids, [1, 1, t, self.top_k]))
-        return SparseRouting(scores=scores, ranking=ttnn.add(scores, self._bias_tile))
+        if image_mask is None:
+            return SparseRouting(scores=scores, ranking=ttnn.add(scores, self._bias_tile))
+        bias = self.gate.ranking_bias(image_mask, layout=ttnn.TILE_LAYOUT)
+        ranking = ttnn.add(scores, bias)
+        ttnn.deallocate(bias)
+        return SparseRouting(scores=scores, ranking=ranking)
 
     # ------------------------------------------------------------------ routed experts
     def _routed(self, x_rm: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
@@ -210,12 +217,12 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
         return combined
 
     # ------------------------------------------------------------------ block
-    def forward(self, hidden: ttnn.Tensor, token_ids=None) -> ttnn.Tensor:
+    def forward(self, hidden: ttnn.Tensor, token_ids=None, image_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         """``hidden`` ``[1, 1, T, D]`` (TILE or ROW_MAJOR, bf16) -> ``[1, 1, T, D]`` TILE.
 
         ``token_ids`` (``[T]`` / ``[1, T]`` torch ints, or a ``[1, T]`` uint32 ROW_MAJOR device
-        tensor) is required for hash layers and ignored otherwise. Under TP the result is the
-        all-reduced, replicated residual.
+        tensor) is required for hash layers and ignored otherwise. ``image_mask`` see :meth:`route`.
+        Under TP the result is the all-reduced, replicated residual.
         """
         shape = tuple(hidden.shape)
         if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[3] != self.hidden:
@@ -228,7 +235,7 @@ class DeepSeekV4PrefillMoE(DeepSeekV4Module):
         x_rm = hidden if hidden.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.to_memory_config(x_rm, ttnn.DRAM_MEMORY_CONFIG)  # the op gathers rows from DRAM
 
-        routing = self.route(x_tile, token_ids)
+        routing = self.route(x_tile, token_ids, image_mask)
         routed = self._routed(x_rm, routing)
         shared = self.shared_experts(x_tile)
         combined = ttnn.add(routed, shared)

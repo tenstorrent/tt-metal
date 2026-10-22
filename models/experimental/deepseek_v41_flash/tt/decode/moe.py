@@ -29,7 +29,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.moe import (
     _fused_hidden,
 )
 from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
-from models.experimental.deepseek_v4_flash.tt.weight_cache import _memo
+from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache, _load_weight, _materialize, _memo
 
 from .decode_prefetch import prefetch_rings
 
@@ -65,11 +65,38 @@ class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
         gate = _memo(weights["gate.weight"])
         bias = _memo(weights["gate.e_score_correction_bias"])
         temp = getattr(config, "gate_temp", 1.0)
-        weights = {
+        shifted = {
             "gate.weight": lambda: gate() / temp,
             "gate.e_score_correction_bias": lambda: bias() - bias().max(),
         }
-        super().__init__(config, weights, device, cache=cache, weight_dtype=ttnn.bfloat8_b, **kwargs)
+        super().__init__(config, shifted, device, cache=cache, weight_dtype=ttnn.bfloat8_b, **kwargs)
+        # Image tokens rank with ``bias_vl`` (the reference ``Gate``'s ``image_mask``). Row 0 of the table is the text
+        # bias, row 1 ``bias_vl``, each shifted by its own max; ``ranking_bias`` gathers a row per token, so a text
+        # token ranks on the very bf16 values ``e_score_correction_bias`` holds.
+        self.bias_table = None
+        if "gate.bias_vl" in weights:
+            bias_vl = _memo(weights["gate.bias_vl"])
+            cache = _as_cache(cache)
+            table = _materialize(
+                lambda: torch.stack([bias() - bias().max(), bias_vl() - bias_vl().max()]),
+                cache.file("gate.bias_table"),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.bias_table = _load_weight(
+                table, device, cache_file_name=cache.file("gate.bias_table"), layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+
+    def ranking_bias(self, image_mask=None, layout=ttnn.ROW_MAJOR_LAYOUT) -> ttnn.Tensor:
+        """V4's bias, or with ``image_mask`` (``[1, T]`` uint32 ROW_MAJOR, 1 for an image token) each token's own row
+        of :attr:`bias_table` as ``[1, 1, T, E]`` in ``layout``."""
+        if image_mask is None:
+            return super().ranking_bias()
+        if self.bias_table is None:
+            raise ValueError("the checkpoint has no gate.bias_vl for image tokens")
+        t = image_mask.shape[-1]
+        rows = ttnn.embedding(image_mask, self.bias_table, layout=layout)  # [1, T, E]
+        return ttnn.reshape(rows, [1, 1, t, self.num_experts])
 
 
 class DeepSeekV41MLP(DeepSeekV4MLP):

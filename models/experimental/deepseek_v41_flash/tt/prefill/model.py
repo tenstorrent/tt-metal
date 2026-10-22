@@ -59,6 +59,7 @@ from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
     ratio_layer_type,
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
+from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, _trace_capture_guard
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import (
@@ -92,6 +93,9 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
     shared experts, ``expert_dtype`` for the routed experts this class uploads, ``head_dtype`` for ``lm_head``.
     ``experts``, ``embedding_weight`` and ``lm_head`` reuse tensors another model (decode) already holds.
 
+    ``image_rows`` appends that many rows to the embedding table for image spans (ids ``vocab_size ..``, written with
+    :func:`..vision.write_embedding_rows`); a passed ``embedding_weight`` must already have them.
+
     ``engram_lookup`` is required when the built layers include an Engram layer.
 
     ``kv_only`` builds only layers ``0 .. max(kv_source_layer_ids)`` (``num_layers`` defaults to that and may not be
@@ -124,8 +128,10 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         lm_head: Optional[Linear] = None,
         kv_only: bool = False,
         bounded_replay: bool = False,
+        image_rows: int = 0,
     ):
         self._progress = progress or (lambda message, important=False: None)
+        self.image_rows = image_rows
         self.bounded_replay = bounded_replay
         self._tag = "build"
         note = self._note
@@ -162,6 +168,11 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         cache = _as_cache(cache)
 
         if embedding_weight is not None:
+            if embedding_weight.shape[-2] != self.embedding_rows:
+                raise ValueError(
+                    f"embedding_weight has {embedding_weight.shape[-2]} rows, expected {self.embedding_rows} "
+                    f"({config.vocab_size} + image_rows {image_rows})"
+                )
             self.embedding_weight = embedding_weight
         else:
             note(f"embedding table [{config.vocab_size} x {config.hidden_size}] -> device", important=True)
@@ -175,6 +186,8 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                 cache_file_name=embed_file,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
+            if image_rows:
+                self.embedding_weight = extend_embedding(self.embedding_weight, image_rows, config.vocab_size)
 
         self.layers: list[DeepSeekV41PrefillDecoderLayer] = []
         for i in range(num_layers):
@@ -224,6 +237,11 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                     dtype=head_dtype,
                 )
             )
+
+    @property
+    def embedding_rows(self) -> int:
+        """The vocabulary plus the ``image_rows`` of image spans (ids ``>= vocab_size``, see :mod:`..vision`)."""
+        return self.vocab_size + self.image_rows
 
     # ------------------------------------------------------------------ pieces
     def _carry(
@@ -337,6 +355,12 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         num_tokens = ids.shape[1]
         start = states[0].seq_len
         engram_rows = self._engram_rows(ids, start, dict(enumerate(self.layer_devices)))
+        # Image-span tokens carry ids past the vocabulary; their router ranks with ``bias_vl``.
+        in_image = ids >= self.vocab_size
+        stage_devices = {id(dev): dev for dev in self.layer_devices}
+        image_masks = (
+            {key: self._upload_ids(in_image, dev) for key, dev in stage_devices.items()} if bool(in_image.any()) else {}
+        )
 
         self._note(f"{self._tag}: embedding")
         ids_dev = self._upload_ids(ids, self.device)
@@ -363,13 +387,15 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                 self._note(f"{self._tag}: stage hand-off done")
             kind = self.config.layer_types[i].replace("_attention", "")
             self._note(f"{self._tag}: layer {i + 1}/{len(self.layers)} ({kind}, stage {stage}) enqueue")
-            out, out_pre_mix = layer(streams, pre_mix, state, shared, engram_rows=engram_rows.get(i))
+            out, out_pre_mix = layer(
+                streams, pre_mix, state, shared, engram_rows=engram_rows.get(i), image_mask=image_masks.get(id(dev))
+            )
             ttnn.deallocate(streams)
             ttnn.deallocate(pre_mix)
             streams, pre_mix = out, out_pre_mix
             if on_layer is not None:
                 on_layer(i, streams, pre_mix, dev)
-        for rows in engram_rows.values():
+        for rows in (*engram_rows.values(), *image_masks.values()):
             ttnn.deallocate(rows)
         for tensor in (shared.entry_idx, shared.candidates):
             if tensor is not None:
@@ -959,6 +985,8 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
 
         start = keep(ttnn.slice(pkt, [0, 0, 0, c], [1, 1, 1, c + 1]))  # int32 ROW_MAJOR [1, 1, 1, 1]
         step = V41PrefillStaticStep(rope=rope, entry_rope=entry_rope, start=start, fresh=fresh, entry_rows=entry_rows)
+        if self.model.image_rows:
+            step.image_mask = keep(image_mask(ids, self.model.vocab_size))
         return ids, step, made
 
     def _stage_forward(self, stage: _V41Stage, fresh: bool = False) -> None:

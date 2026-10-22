@@ -110,7 +110,7 @@ class V41PrefillStaticStep:
 
     ``start`` is the chunk's start position, int32 ROW_MAJOR ``[1, 1, 1, 1]``, which the indexer and attention ops
     read on device. ``fresh`` marks a bounded replay's first chunk: its window starts at the chunk (the tail holds
-    no token).
+    no token). ``image_mask`` (uint32 ``[1, T]``, 1 inside an image span) is for the MoE router, not attention.
     """
 
     rope: dict
@@ -118,6 +118,7 @@ class V41PrefillStaticStep:
     start: ttnn.Tensor
     fresh: bool = False
     entry_rows: Optional[dict] = None
+    image_mask: Optional[ttnn.Tensor] = None
 
 
 def ratio_layer_type(rate: int) -> str:
