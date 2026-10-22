@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .llk_params import MathOperation
-from .ulp_domains import Domain, usable_budget_ceiling
+from .ulp_domains import Domain, largest_figure, usable_budget_ceiling
 from .ulp_table import (
     MEASURED_ARCH,
     BudgetKey,
@@ -270,7 +270,7 @@ def _spans(held: Held, query: BudgetKey) -> list[Span]:
         return [Span(-_INF, _INF, State.NONE)]
     if row.domains:
         binds, ceiling = steps_bind(row.key, query), usable_budget_ceiling(row.output)
-        largest = max(d.ulp for d in row.domains if d.ulp is not None)
+        largest = largest_figure(row.domains)
         spans = []
         for d in row.domains:
             figure, strays = (largest, True) if d.ulp is None else (d.ulp, False)
@@ -344,8 +344,10 @@ def _segment_changes(
     was: Held, now: Held, query: BudgetKey
 ) -> list[tuple[Kind, tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` per run of the input over which the
-    two rows' gates differ, over the union of both lists' edges. On a segment gated on
-    both sides a widened floor ranks after a raise and before a tightening."""
+    two rows' gates differ, over the union of both lists' edges. On a segment held to a
+    figure on both sides (gated or past the ceiling, either way round) a widened floor
+    ranks after a raise or a lost gate and before a tightening or a new gate: both
+    figures are measured outside the floor, so a wider one forgives lanes."""
     before, after = _spans(was, query), _spans(now, query)
     edges = sorted(
         {e for spans in (before, after) for s in spans for e in (s.low, s.high)}
@@ -495,12 +497,13 @@ def render_budget_diff(changes: list[Change]) -> str:
 @dataclass
 class CellReading:
     """Every record of one cell folded together: the worst of each figure, whether any
-    lane was ranked, and per entry of its list the worst lane and the most ranked
-    lanes."""
+    lane was ranked, whether the sweep made it (a profile or entry readings), and per
+    entry of its list the worst lane and the most ranked lanes."""
 
     worst: int = 0
     nonfinite: int = 0
     ranked: bool = False
+    swept: bool = False
     entries: dict[tuple[float, float], tuple[int | None, int]] = field(
         default_factory=dict
     )
@@ -509,6 +512,7 @@ class CellReading:
         self.worst = max(self.worst, m.worst)
         self.nonfinite = max(self.nonfinite, m.nonfinite)
         self.ranked = self.ranked or m.lanes > 0
+        self.swept = self.swept or bool(m.bins or m.readings)
         for r in m.readings:
             worst, lanes = self.entries.get((r.low, r.high), (None, 0))
             if r.worst is not None:
@@ -530,6 +534,7 @@ class Verdict(Enum):
     REGRESSED = "regressed"
     NONFINITE = "non-finite lanes"
     NO_LANE = "no lane measurable"
+    NOT_READ = "no reading over this entry: the record is of another list"
     TIGHTENS = "re-emit tightens"
 
     @property
@@ -564,8 +569,9 @@ def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
     """Every recorded cell against the row it resolves to: a gated cell over its figure
     or a tolerance cell over its recorded one has regressed, and a better reading is a
     re-emit's to tighten. A list is judged entry by entry, a null entry's ranked strays
-    held to the row's largest figure. A cell that ranked no lane against a figure has
-    regressed too."""
+    held to the row's largest figure; a sweep record with no reading over an entry was
+    measured against another list and fails. A cell that ranked no lane against a
+    figure has regressed too."""
     cells = read_cells(measurements)
     out = Headroom(measured=len(cells))
     for cell, reading in sorted(
@@ -587,17 +593,17 @@ def judge(table: Table, measurements: Iterable[Measurement]) -> Headroom:
                 found(Finding(cell, Verdict.NO_LANE, None, largest))
                 continue
             for entry in row.domains:
+                figure = largest if entry.ulp is None else entry.ulp
                 got = reading.entries.get((entry.low, entry.high))
                 if got is None:
-                    if reading.bins or reading.entries:
-                        # A sweep record: drawn over another partition (the table
-                        # changed after the run), so this entry was never read.
-                        found(Finding(cell, Verdict.NOT_READ, None, entry.ulp, entry))
+                    if reading.swept:
+                        # A sweep record drawn over another partition (the table
+                        # changed after the run): this entry was never read.
+                        found(Finding(cell, Verdict.NOT_READ, None, figure, entry))
                     else:
                         out.unjudged += 1  # a functional driver's: no readings at all
                     continue
                 seen, lanes = got
-                figure = largest if entry.ulp is None else entry.ulp
                 if entry.ulp is not None and lanes == 0:
                     found(Finding(cell, Verdict.NO_LANE, None, entry.ulp, entry))
                 elif seen is not None and seen > figure:

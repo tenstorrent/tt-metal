@@ -290,3 +290,10 @@ def check_domains(domains: tuple[Domain, ...]) -> None:
             raise TableError(Problem.EDGE_NOT_POWER_OF_TWO, before)
     if all(d.ulp is None for d in domains):
         raise TableError(Problem.NO_FIGURE, domains)
+
+
+def largest_figure(domains: tuple[Domain, ...]) -> int:
+    """The largest figure of a checked list (:func:`check_domains` guarantees one): what
+    its null entries' ranked lanes are held to, by the sweep, ``diff`` and ``headroom``
+    alike, and the whole row's figure."""
+    return max(d.ulp for d in domains if d.ulp is not None)

@@ -24,7 +24,7 @@ from helpers.sfpu_accuracy_budget import accuracy_contract, domains_of, enrolled
 from helpers.sfpu_domains import swept_unary_ops
 from helpers.stimuli_generator import generate_stimuli
 from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance, ulp_stats
-from helpers.ulp_domains import partition, usable_budget_ceiling
+from helpers.ulp_domains import largest_figure, partition, usable_budget_ceiling
 from helpers.ulp_table import MEASURED_ARCH, Metric
 from helpers.utils import _record_ulp_measurement, passed_test
 from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
@@ -176,7 +176,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         verdict = None
     if verdict is not None:
         if ulp_sweep.EMIT or not gated:
-            _record_ulp_measurement(distance, mask=mask, nonfinite=verdict.nonfinite)
+            _record_ulp_measurement(
+                distance, mask=mask, nonfinite=verdict.nonfinite, required=True
+            )
         if ulp_sweep.EMIT:
             ulp_sweep.record_unmeasurable(mathop, key, verdict)
             return
@@ -188,20 +190,11 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     x = ulp_sweep.received_inputs(src, in_fmt, out_fmt, dest_acc).to(torch.float64)
     present = ~ulp_sweep.padding_lanes(src, in_fmt)
 
-    def profile(covered):
-        # A lane the floor covers counts as ranked at 0 steps: held, so no edge of its own.
-        held = torch.where(
-            covered.reshape(distance.shape), torch.zeros_like(distance), distance
-        )
-        return ulp_sweep.binade_maxima(x, held, mask, present)
-
     if ulp_sweep.EMIT:
         floor = ulp_sweep.near_zero_floor(golden, result, distance, mask, out_fmt)
-        covered = ulp_sweep.floor_covered(
-            golden, result, mask, floor[1] if floor else None
+        judged, bins = ulp_sweep.floored_profile(
+            golden, result, x, distance, mask, present, floor[1] if floor else None
         )
-        judged = mask & ~covered
-        bins = profile(covered)
         drawn = ulp_sweep.domain_figures(
             partition(bins, ceiling), x, distance, mask, judged
         )
@@ -210,13 +203,15 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             mask=mask,
             bins=bins,
             readings=ulp_sweep.entry_readings(drawn, x, distance, mask, judged),
+            required=True,
         )
         ulp_sweep.record(mathop, key, int(stats["max"]), floor=floor, domains=drawn)
         return
 
     if not domains:
         if not gated:
-            _record_ulp_measurement(distance, mask=mask)
+            # The headroom report judges only the cells it reads: required.
+            _record_ulp_measurement(distance, mask=mask, required=True)
             _skip_measured(
                 cell,
                 f"on the tolerance metric; measured max {int(stats['max'])} ULP over "
@@ -240,11 +235,12 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # A list row: record the cell once with its reading over every entry (consuming the
     # one lookup above), then hold each gateable entry to its figure over the lanes
     # outside the floor, and a null entry's ranked strays to the row's largest.
-    covered = ulp_sweep.floor_covered(golden, result, mask, floor_atol)
-    judged = mask & ~covered
+    judged, bins = ulp_sweep.floored_profile(
+        golden, result, x, distance, mask, present, floor_atol
+    )
     readings = ulp_sweep.entry_readings(domains, x, distance, mask, judged)
     _record_ulp_measurement(
-        distance, mask=mask, bins=profile(covered), readings=readings
+        distance, mask=mask, bins=bins, readings=readings, required=True
     )
     if not gated:
         _skip_measured(
@@ -252,7 +248,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             f"every entry is past the ceiling; measured max {int(stats['max'])} ULP "
             f"over {lanes} lanes. The headroom report holds each entry to its figure.",
         )
-    largest = max(d.ulp for d in domains if d.ulp is not None)
+    largest = largest_figure(domains)
     gate = dict(mask=None, max_ulp=None, flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
     failed = []
     inside = torch.zeros_like(mask)
@@ -261,8 +257,17 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             continue
         band = ulp_sweep.band_mask(entry.low, entry.high, x, judged)
         inside |= band
-        if entry.ulp > ceiling or not bool(band.any()):
-            continue  # measured, not gated; or every lane of it held by the floor
+        if entry.ulp > ceiling:
+            continue  # measured, not gated: the headroom report holds it
+        if not bool(band.any()):
+            # Every ranked lane held by the floor passes; an entry that ranks no lane
+            # at all any more judged nothing, so it fails.
+            if not bool(ulp_sweep.band_mask(entry.low, entry.high, x, mask).any()):
+                failed.append(
+                    f"x in [{entry.low:g}, {entry.high:g}): no lane ranked against "
+                    f"its figure {entry.ulp}"
+                )
+            continue
         gate.update(mask=band, max_ulp=entry.ulp)
         if not passed_test(golden, result, out_fmt, **gate):
             failed.append(

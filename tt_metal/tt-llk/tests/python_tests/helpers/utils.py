@@ -596,6 +596,8 @@ def _record_ulp_measurement(
     TestConfig did not run (:func:`_promoted`): a lost datapoint is recoverable, a budget
     folded back under the wrong variant is not. *nonfinite* counts the lanes disagreeing
     with the golden about being finite; *bins* and *readings* are the sweep's profile.
+    A failed write warns once -- unless *required*: the headroom report judges only the
+    cells it reads, so a sweep record that is not written raises :class:`RecordDropped`.
     """
     if not _ULP_MEASURE_PATH:
         return
@@ -638,6 +640,7 @@ def _record_ulp_measurement(
                 _ULP_MEASURE_PATH,
                 exc,
             )
+        dropped(f"cannot write {_ULP_MEASURE_PATH}: {exc}")
 
 
 # Per-format params for _mxfp_block_aware_compare:

@@ -19,7 +19,7 @@ from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.ulp import ulp_distance
 from helpers.ulp_budget_diff import read_cells
 from helpers.ulp_table import MEASURED_ARCH, TABLE_PATH, BudgetKey, read_measurements
-from helpers.utils import _record_ulp_measurement, passed_test
+from helpers.utils import RecordDropped, _record_ulp_measurement, passed_test
 
 BF16 = DataFormat.Float16_b
 
@@ -34,6 +34,23 @@ def rows(tmp_path, monkeypatch):
 
 def _lookup(**query):
     accuracy_contract(MathOperation.Abs, arch=MEASURED_ARCH, **query)
+
+
+def test_a_record_the_sweep_requires_fails_rather_than_being_dropped(rows):
+    """The headroom report judges only the cells it reads, so a sweep record that would
+    be dropped fails its cell; a functional driver's is only lost."""
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    reading = dict(
+        distance=ulp_distance(golden, golden.clone()),
+        mask=torch.ones(32, dtype=torch.bool),
+    )
+    _record_ulp_measurement(**reading)  # no query pending: dropped
+    with pytest.raises(RecordDropped):  # allow-pytest.raises: host-only test
+        _record_ulp_measurement(**reading, required=True)
+    assert rows() == []
+    _lookup(output_format=BF16)
+    _record_ulp_measurement(**reading, required=True)
+    assert len(rows()) == 1
 
 
 def test_the_recorder_files_one_row_under_the_variant_just_resolved(rows):

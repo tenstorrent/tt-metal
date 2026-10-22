@@ -608,7 +608,8 @@ class Floored:
 Recorded = int | Floored | Unmeasurable
 
 # The cells measured this session, by op and by the variant's key, and the list each
-# was recorded with (the reading that wins a cell keeps its list; see `record`).
+# was recorded with (a cell read twice keeps one only while both readings agree; see
+# `record`).
 MEASURED: dict[MathOperation, dict[BudgetKey, Recorded]] = {}
 DOMAINS: dict[MathOperation, dict[BudgetKey, tuple[Domain, ...]]] = {}
 
@@ -664,10 +665,24 @@ def floor_covered(
     leave out the same lanes."""
     if atol is None:
         return torch.zeros_like(mask)
-    covered = ulp_elementwise_valid(
-        golden, result, 0, near_zero_atol=atol, selected=mask
+    # The covered mask does not depend on the budget.
+    _, _, covered = ulp_elementwise_valid(
+        golden, result, max_ulp=0, near_zero_atol=atol, selected=mask
     )
     return covered.reshape(mask.shape) & mask
+
+
+def floored_profile(golden, result, x, distance, mask, present, atol):
+    """``(judged, bins)`` for a cell held with a floor of *atol*, or none: the ranked
+    lanes outside the floor, which a list's entries are figured and gated on, and the
+    binade profile with the covered lanes ranked at 0 steps (held, so no edge of their
+    own). The emitter passes the floor it measured, the gate the row's, so the gate
+    judges exactly the lanes the emitter figured."""
+    covered = floor_covered(golden, result, mask, atol)
+    held = torch.where(
+        covered.reshape(distance.shape), torch.zeros_like(distance), distance
+    )
+    return mask & ~covered, binade_maxima(x, held, mask, present)
 
 
 def _binade_index(x: torch.Tensor) -> torch.Tensor:
@@ -750,8 +765,9 @@ def record(
 ) -> None:
     """Fold one measurement into the cell *key* names, keeping the worst lane; a repeat
     comes from :func:`merge_measured`. A cell already unmeasurable stays so (its worst
-    lane still counts); two readings with differing floors keep the worst lane and no
-    floor; the reading that wins keeps its list."""
+    lane still counts). Two readings that differ in figure, floor or list keep the worst
+    lane with no floor and no list (either list holds only its own reading's worst lane
+    per entry), and a cell that lost its list never gets one back."""
     cells = MEASURED.setdefault(op, {})
     lists = DOMAINS.setdefault(op, {})
     current = cells.get(key)
@@ -1006,7 +1022,8 @@ def _kept(row: Row, measured: set[tuple[DataFormat, DataFormat]]) -> bool:
 def write_table(path: Path) -> dict[MathOperation, tuple[Row, ...]]:
     """Replace, in the table at *path*, every row of each measured ``(input, output)``
     pair with what the sweep measured, write it back, and return the written ops'
-    rows."""
+    rows. A kept row with the key of an emitted row is refused (:class:`EmitRefused`),
+    so an emitted row always outranks a kept row pinning its pair."""
     table = load_table(path)
     written: dict[MathOperation, tuple[Row, ...]] = {}
     for op, cells in MEASURED.items():
@@ -1017,8 +1034,13 @@ def write_table(path: Path) -> dict[MathOperation, tuple[Row, ...]]:
             decision.row(key)
             for key, decision in _collapse(_decide(cells, DOMAINS.get(op))).items()
         )
-        written[op] = table[op] = kept + tuple(
-            row for row in emitted if row.key not in taken
-        )
+        for row in emitted:
+            if row.key in taken:
+                # A kept row never displaces a measurement, nor is silently displaced.
+                raise EmitRefused(
+                    f"{op.name} {row.key.describe()}: a kept row has the key this emit "
+                    "writes; give it a key no measured cell collapses to"
+                )
+        written[op] = table[op] = kept + emitted
     write_table_file(table, Path(path))
     return written

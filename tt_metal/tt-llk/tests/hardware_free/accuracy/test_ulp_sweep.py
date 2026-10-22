@@ -57,6 +57,7 @@ from helpers.ulp_sweep import (
     export_measured,
     finish_emit,
     floor_covered,
+    floored_profile,
     golden_input,
     measurable_mask,
     merge_measured,
@@ -225,6 +226,20 @@ def test_an_anti_diagonal_grid_is_refused_rather_than_collapsed(table):
     with pytest.raises(EmitRefused):  # allow-pytest.raises: host-only test
         write_table(table)
     assert table.read_text() == before
+
+
+def test_a_kept_row_with_the_key_an_emit_writes_is_refused(tmp_path):
+    """The pair's cells all agree and collapse onto the pinned `atol` row's own key: one
+    row would silently replace the other, and only whether the cells happened to agree
+    decided which. Nothing is written."""
+    path = tmp_path / "budget.yaml"
+    pinned = Row(input=F16, output=F16, metric=Metric.TOLERANCE, atol=0.2)
+    write_table_file({GELU: (pinned,)}, path)
+    _record_grid(GELU, F16, F16, 3)
+    before = path.read_text()
+    with pytest.raises(EmitRefused):  # allow-pytest.raises: host-only test
+        write_table(path)
+    assert path.read_text() == before
 
 
 def test_the_emitted_figure_is_the_measurement():
@@ -662,7 +677,7 @@ def test_the_sweeps_own_zero_padding_is_not_data():
     """The last 511 bf16 lanes are zeros the sweep never chose to feed; by position,
     since one legitimate 0.0 is swept too."""
     swept = swept_value_count(F16B)
-    pad_lanes = 2**16 - 65025
+    pad_lanes = 2**16 - _BFLOAT16_SWEPT_VALUES
     src = torch.zeros(swept + pad_lanes, dtype=torch.bfloat16)
     pad = padding_lanes(src, F16B)
     assert int(pad.sum()) == pad_lanes
@@ -1172,10 +1187,14 @@ def test_the_tensor_side_draws_the_rule_on_the_lanes_and_measures_each_entry(
     distance = torch.tensor([1, 2, 1, 1, 0, 0, 9, 8, 1, 1])
     ranked = torch.ones(10, dtype=torch.bool)
     present = torch.ones(10, dtype=torch.bool)
-    covered = torch.zeros(10, dtype=torch.bool)
-    covered[3] = True  # -1.25 is ranked, and a floor covers it: held at 0 steps
-    judged = ranked & ~covered
-    bins = binade_maxima(x, torch.where(covered, 0, distance), ranked, present)
+    # -1.25 is ranked, and a floor covers it -- a tiny answer off by less than the
+    # floor -- so it is held at 0 steps.
+    golden = x.to(torch.float32)
+    golden[3] = 1e-7
+    result = golden.clone()
+    result[3] = 0.0
+    judged, bins = floored_profile(golden, result, x, distance, ranked, present, 1e-6)
+    assert judged.tolist() == [i != 3 for i in range(10)]
     assert bins[rule.binade(-3.0)] == (2, 2, 2) and bins[rule.binade(1.5)] == (1, 1, 9)
     assert bins[rule.binade(-1.25)] == (2, 2, 1)  # -1.5 shares the binade
     spans = rule.partition(bins, rule.usable_budget_ceiling(F16B))
