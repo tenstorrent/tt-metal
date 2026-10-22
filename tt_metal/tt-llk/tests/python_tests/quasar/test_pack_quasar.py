@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import List
 
 import pytest
 import torch
 from helpers.constraints import is_valid_data_format_conversion
 from helpers.data_format_inference import infer_data_formats
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
@@ -49,6 +50,7 @@ from helpers.test_variant_parameters import (
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TemplateParameter,
     generate_input_dim,
 )
 from helpers.tile_constants import (
@@ -201,6 +203,12 @@ ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
 PERF_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS, is_perf=True)
 
 
+@dataclass
+class PackBlockTest(TemplateParameter):
+    def convert_to_cpp(self):
+        return "#define TEST_PACK_BLOCK 1"
+
+
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_dims_relu=ALL_PACK_COMBINATIONS,
@@ -215,6 +223,7 @@ def test_pack_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    pack_block=False,
 ):
     (
         formats,
@@ -245,7 +254,6 @@ def test_pack_quasar(
         tile_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
-
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -326,6 +334,7 @@ def test_pack_quasar(
         "formats": formats,
         "templates": [
             DEST_SYNC(dest_sync_mode),
+            *([PackBlockTest()] if pack_block else []),
         ],
         "runtimes": [
             TEST_FACE_DIMS(tile_shape.face_r_dim),
@@ -424,3 +433,38 @@ def test_pack_quasar(
         test_passed = True
 
     assert test_passed, "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    output_format=[DataFormat.Float16_b, DataFormat.Float32, DataFormat.MxFp8R],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half, DestSync.Full],
+    tile_dimensions=runtime([(32, 32), (16, 32), (4, 32), (1, 32)]),
+)
+def test_pack_block_quasar(output_format, dest_acc, dest_sync, tile_dimensions):
+    if output_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("FP32 output requires FP32 DEST")
+    if output_format.is_mx_format() and tile_dimensions not in MX_SUPPORTED_TILE_SIZES:
+        pytest.skip("Unsupported MX tile shape")
+
+    # Two DEST sections exercise back-to-back blocks without reinitialization.
+    shape = construct_tile_shape(tile_dimensions)
+    dest_rows = (512 if dest_sync == DestSync.Half else 1024) >> (
+        dest_acc == DestAccumulation.Yes
+    )
+    rows_per_tile = shape.total_num_faces() * max(8, shape.face_r_dim)
+    tile_count = 2 * (dest_rows // rows_per_tile)
+    test_pack_quasar(
+        (
+            InputOutputFormat(DataFormat.Float16_b, output_format),
+            dest_acc,
+            dest_sync,
+            [tile_count * tile_dimensions[0], tile_dimensions[1]],
+            PackerReluType.NoRelu,
+            tile_dimensions,
+        ),
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
+        pack_block=True,
+    )
