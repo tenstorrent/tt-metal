@@ -210,6 +210,16 @@ class RouterSpec:
     logits_first: bool = True
 
 
+@dataclass(frozen=True)
+class RoutingSpec:
+    """The fused head's routing exchange + combine planner: A combine accumulators, L links of the combine's ports
+    (its port tables), rows_cap the plan's row capacity (default 2 S K + 32 EPC)."""
+
+    A: int
+    L: int = 2
+    rows_cap: int = 0
+
+
 class HeadSE3:
     """The fused head's x chain, v3 (row-chunk-major, weights resident): x [rows, H / TP] a chip -> the x all-gather a
     row chunk at a time straight into the engine's x-own L1 (tt/x_gather3.py) -> per chunk gate / up -> h -> down ->
@@ -233,6 +243,7 @@ class HeadSE3:
         rs_mode="fused",
         router=None,
         latent=None,
+        routing=None,
     ):
         """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
@@ -241,7 +252,9 @@ class HeadSE3:
         router (RouterSpec): the router chain on the mover column's free cores (tt/router_stream.py) - run() then
         leaves the owners' joint routing rows in self.outputs["rows"]. latent (K3, the latent width Hr): the latent
         down on the gathered x (column split, extra engine passes) and its all-to-all to the owners, the owners'
-        [rows / TP, Hr] in self.outputs["latent"]."""
+        [rows / TP, Hr] in self.outputs["latent"]. routing (RoutingSpec, with router): the routing exchange + combine
+        planner (tt/routing_stream.py) on the router cores, the gather's ports and the watcher's RISCs - combine_plan's
+        per-chip tables in self.routing.outs."""
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
@@ -344,7 +357,9 @@ class HeadSE3:
             assert not {(c.x, c.y) for c in free} & used, "the router cores' rectangle overlaps the movers"
             assert self.rs_mode == "fused"
             ttnn.deallocate(self.eng.arena)  # (again, also over the router cores and the ports: lockstep L1)
-            self.eng.alloc_arena(extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)])
+            self.eng.alloc_arena(
+                extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)] + [watcher]
+            )
             self.router = RouterStream(
                 mesh_device,
                 self.xg,
@@ -358,6 +373,35 @@ class HeadSE3:
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 16 * GX * GY,
             )
+        self.routing = None
+        if routing is not None:
+            from ttnn.bringup.combine_rf.combine_plan import port_luts
+
+            from models.demos.moe_block.tt.routing_stream import RoutingStream
+
+            R_, C_ = tuple(mesh_device.shape)
+            luts, nps = port_luts(mesh_device, routing.L)
+            S_ = rows // G
+            EPC = router.E // (R_ * C_)
+            rows_cap = routing.rows_cap or (2 * S_ * router.K + 32 * EPC + 31) // 32 * 32
+            off0 = (max(self.router.bytes, self.router.pbuf_sub) + 63) // 64 * 64
+            self.routing = RoutingStream(
+                mesh_device,
+                self.xg,
+                self.router,
+                S=S_,
+                K=router.K,
+                EPC=EPC,
+                A=routing.A,
+                L=routing.L,
+                luts=luts,
+                nps=nps,
+                rows_cap=rows_cap,
+                ycores=[watcher],
+                arena=(self.eng.base, self.eng.arena_bytes, off0),
+            )
+            self.router.ra = self.routing
+            ttnn.synchronize_device(mesh_device)
         self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
         self.latent = latent
         self.outputs = {}
@@ -435,6 +479,8 @@ class HeadSE3:
             self.outputs = {}
             if self.router is not None:
                 self.rout = self.outputs["rows"] = self.router.out_tensor()
+                if self.routing is not None:
+                    self.routing.router_out = self.rout
             if self.latent:
                 self.lout = self.outputs["latent"] = ttnn.allocate_tensor_on_device(
                     ttnn.Shape([1, 1, self.rows // G, self.latent]),
@@ -501,10 +547,15 @@ class HeadSE3:
                         rs_arr=arr[:2],
                         la=la,
                     )
-                c0, k0 = self.xg.pieces(coord, prog, x, XREADY, rs=rsx, router=self.router, la=rse.get("la"))
-                if self.router is not None:
+                if self.router is not None:  # (first: the routing's serve plan is made by the router's planner args)
                     c2, k2 = self.router.pieces(coord, x, *self.rw, self.rout)
+                c0, k0 = self.xg.pieces(
+                    coord, prog, x, XREADY, rs=rsx, router=self.router, la=rse.get("la"), routing=self.routing
+                )
+                if self.router is not None:
                     c0, k0 = c0 + c2, k0 + k2
+                if self.routing is not None:
+                    k0 = k0 + self.routing.y_kernels(coord, prog)
                 c1, k1, sems = e.pieces(
                     x,
                     w,
@@ -527,5 +578,7 @@ class HeadSE3:
             self.state["key"], self.state["desc"] = key, md
         io = [x, w, y, self.eng.arena]
         io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
+        if self.routing is not None:
+            io += [self.routing.slots] + list(self.routing.outs.values())
         ttnn.generic_op(io, self.state["desc"])
         return y

@@ -36,7 +36,7 @@ constexpr auto x_args = TensorAccessorArgs<5>();
 constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 constexpr auto i_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-constexpr uint32_t XR = 0, WR = 1, ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11;
+constexpr uint32_t XR = 0, WR = 1, ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(4);
 // args: x, W_r^T, bias^T, expert index tiles; my rows [G]; arrivals fwd: n, thresholds; bwd: n, thresholds; the
 // counters (fwd, bwd)
 void kernel_main() {
@@ -46,8 +46,9 @@ void kernel_main() {
     const uint32_t nab = get_arg_val<uint32_t>(af0 + naf), ab0 = af0 + naf + 1;
     volatile tt_l1_ptr uint32_t* arrf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab));
     volatile tt_l1_ptr uint32_t* arrb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 1));
-    {  // (the top-K's done word: zero before the compute can write it - it is written after the scores)
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ab0 + nab + 2)) = 0;
+    {  // (the top-K's done words: zero before anyone can write them - they are written after the scores)
+        const uint32_t w0 = get_arg_val<uint32_t>(ab0 + nab + 2);
+        for (uint32_t i = 0; i < 5; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
     }
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const auto wg = TensorAccessor(w_args, w_addr, 2048);
@@ -105,6 +106,15 @@ void kernel_main() {
     if (naf) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrf)), 0u - naf);  // (re-arm)
     if (nab) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrb)), 0u - nab);
     noc_async_atomic_barrier();
+    {  // (my share of the joint rows: tokens 11 .. 21, once the top-K is done)
+        const uint32_t t2 = ab0 + nab + 2, words = get_arg_val<uint32_t>(t2);
+        volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 64);
+        while (*done == 0) invalidate_l1_cache();
+        *done = 0;
+        rows_::make<K>(get_arg_val<uint32_t>(t2 + 1), get_arg_val<uint32_t>(t2 + 2), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 3),
+                       get_arg_val<uint32_t>(t2 + 4), 11, 22);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
+    }
 }
 """
 
@@ -244,25 +254,68 @@ void kernel_main() {
             cb_push_back(BEST, 1);
             cb_push_back(BESTI, 1);
         }
-        PACK(({  // (the last best pair packed: the BRISC's rows can go)
-            *reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(et0 + 3 * G)) = 1;
+        const uint32_t t1 = et0 + 3 * G, words = get_arg_val<uint32_t>(t1);
+        PACK(({  // (the last best pair packed: the joint rows can go - BRISC and NCRISC told)
+            *reinterpret_cast<volatile uint32_t*>(words) = 1;
+            *reinterpret_cast<volatile uint32_t*>(words + 64) = 1;
+        }));
+        UNPACK(({  // (tokens 22 .. 31; the PACK thread does none - it would read what its packer may still write)
+            cb_wait_front(BEST, ET - 1);  // (the last best page is in)
+            cb_wait_front(BESTI, ET - 1);
+            rows_::make<K>(get_arg_val<uint32_t>(t1 + 1), get_arg_val<uint32_t>(t1 + 2), get_arg_val<uint32_t>(t1 + 5),
+                           get_arg_val<uint32_t>(t1 + 3), get_arg_val<uint32_t>(t1 + 4), 22, 32);
+            *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
+            *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
         }));
     }
 }
 """
 
-_BRISC = r"""
+# the joint rows of owner tokens [c0, c1) of the row tile from the top-K's last best pair (any RISC: soft float, so
+# the 32 tokens are split over four): ids = rows 0 .. K - 1 of the token's column, weights = (biased - bias[id]) /
+# their sum x scale, bf16 (round to nearest even)
+_ROWS = r"""
+namespace rows_ {
+FORCE_INLINE float f32(uint32_t u) { union { uint32_t u; float f; } v{u}; return v.f; }
+FORCE_INLINE uint32_t u32(float f) { union { float f; uint32_t u; } v{f}; return v.u; }
+FORCE_INLINE uint32_t bf16_rne(float f) { const uint32_t u = u32(f); return (u + 0x7FFFu + ((u >> 16) & 1u)) >> 16; }
+// (r, c) of a tile: face (r / 16) * 2 + c / 16, then row-major within the face
+FORCE_INLINE uint32_t fo(uint32_t r, uint32_t c) { return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15); }
+template <uint32_t K>
+inline void make(uint32_t bv, uint32_t bi, uint32_t bias, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
+    const float scale = f32(scale_bits);
+    for (uint32_t c = c0; c < c1; ++c) {
+        uint32_t ids[K];
+        float w[K], sum = 0.0f;
+        for (uint32_t q = 0; q < K; ++q) {
+            const uint32_t eid = reinterpret_cast<volatile uint16_t*>(bi)[fo(q, c)];
+            ids[q] = eid;
+            const float b = f32(reinterpret_cast<volatile uint32_t*>(bv)[fo(q, c)]);
+            w[q] = b - f32(reinterpret_cast<volatile uint32_t*>(bias + (eid >> 5) * 4096)[fo(eid & 31, 0)]);
+            sum += w[q];
+        }
+        const float inv = scale / (sum + 1e-20f);
+        volatile uint16_t* o = reinterpret_cast<volatile uint16_t*>(o_l1 + c * 4 * K);
+        for (uint32_t q = 0; q < K; ++q) {
+            o[q] = static_cast<uint16_t>(ids[q]);
+            o[K + q] = static_cast<uint16_t>(bf16_rne(w[q] * inv));
+        }
+    }
+}
+}  // namespace rows_
+"""
+
+_BRISC = (
+    r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 constexpr uint32_t ET = get_compile_time_arg_val(1), K = get_compile_time_arg_val(4);
 constexpr auto o_args = TensorAccessorArgs<5>();
 constexpr uint32_t HOLD = 2, BIAS = 5, FINC = 7, BEST = 9, BESTI = 10;
-FORCE_INLINE float f32(uint32_t u) { union { uint32_t u; float f; } v{u}; return v.f; }
-FORCE_INLINE uint32_t u32(float f) { union { float f; uint32_t u; } v{f}; return v.u; }
-FORCE_INLINE uint32_t bf16_rne(float f) { const uint32_t u = u32(f); return (u + 0x7FFFu + ((u >> 16) & 1u)) >> 16; }
-// (r, c) of a tile: face (r / 16) * 2 + c / 16, then row-major within the face
-FORCE_INLINE uint32_t fo(uint32_t r, uint32_t c) { return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15); }
+"""
+    + _ROWS
+    + r"""
 // args: nh, per hand-off (entry, port x, port y, port L1 offset of the sub-block, port word address); the out address,
 // my owner page, route scale bits, the joint rows' L1 scratch, the done word, BEST / BESTI addresses
 void kernel_main() {
@@ -279,37 +332,41 @@ void kernel_main() {
     }
     const uint32_t t0 = h0 + 5 * nh;
     const uint32_t o_addr = get_arg_val<uint32_t>(t0), page = get_arg_val<uint32_t>(t0 + 1);
-    const float scale = f32(get_arg_val<uint32_t>(t0 + 2));
     const uint32_t o_l1 = get_arg_val<uint32_t>(t0 + 3);
-    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(t0 + 4));
-    // the best 32 of every token column, sorted descending: rows 0 .. K - 1 are its top K (the last best page)
+    const uint32_t words = get_arg_val<uint32_t>(t0 + 4);
+    // the best 32 of every token column, sorted descending: rows 0 .. K - 1 are its top K (the last best page);
+    // tokens 0 .. 10 here, 11 .. 21 the NCRISC, 22 .. 31 the compute's UNPACK thread (done words 16 / 32 / 48)
     const uint32_t bv = get_arg_val<uint32_t>(t0 + 5) + (ET - 2) * 4096, bi = get_arg_val<uint32_t>(t0 + 6) + (ET - 2) * 2048;
     cb_wait_front(BIAS, ET);
-    const uint32_t bias = get_read_ptr(BIAS);
+    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
     while (*done == 0) invalidate_l1_cache();
     *done = 0;  // (re-arm)
-    for (uint32_t c = 0; c < 32; ++c) {  // token c of my owner row tile
-        uint32_t ids[K];
-        float w[K], sum = 0.0f;
-        for (uint32_t q = 0; q < K; ++q) {
-            const uint32_t eid = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(bi)[fo(q, c)];
-            ids[q] = eid;
-            const float b = f32(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bv)[fo(q, c)]);
-            w[q] = b - f32(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bias + (eid >> 5) * 4096)[fo(eid & 31, 0)]);
-            sum += w[q];
-        }
-        const float inv = scale / (sum + 1e-20f);
-        volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + c * 4 * K);
-        for (uint32_t q = 0; q < K; ++q) {
-            o[q] = static_cast<uint16_t>(ids[q]);
-            o[K + q] = static_cast<uint16_t>(bf16_rne(w[q] * inv));
+    {
+        DeviceZoneScopedN("SE-RROWS");
+        rows_::make<K>(bv, bi, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 11);
+        for (uint32_t i = 1; i < 4; ++i) {
+            volatile tt_l1_ptr uint32_t* wd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16 * i);
+            while (*wd == 0) invalidate_l1_cache();
+            *wd = 0;  // (re-arm)
         }
     }
     const auto og = TensorAccessor(o_args, o_addr, 32 * 4 * K);
     noc_async_write(o_l1, og.get_noc_addr(page), 32 * 4 * K);
     noc_async_write_barrier();
+#ifdef RA_PLAN
+    {  // the routing exchange + planner (routing_stream): every router core's rows written, then routing_a2a's planner
+        DeviceZoneScopedN("SE-RPLAN");
+        const uint32_t r0 = t0 + 7, rows = get_arg_val<uint32_t>(r0), B = get_arg_val<uint32_t>(r0 + 1);
+        for (uint32_t i = 0; i < RA_M_; ++i)
+            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(r0 + 2 + 2 * i), get_arg_val<uint32_t>(r0 + 3 + 2 * i), rows), 1);
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_M_);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all M increments landed)
+        ra::plan(r0 + 2 + 2 * RA_M_, B);
+    }
+#endif
 }
 """
+)
 
 # the port sender's poll (x_gather3 includes it): the router cores' hand-offs landed in this port's L1, sent in the
 # plan's walk (unit, core) as each core's word shows it; fp32 packets of RPL tiles, a sub-block's last one with the
@@ -484,6 +541,31 @@ class RouterStream:
         zone = self.base + self.off["arrf" if d == "fwd" else "arrb"]
         return out + [self.pbase, self.words, zone, self.arr[DIRS.index(d)], self.ET, rpl]
 
+    def _ra_src(self, coord, ct0):
+        if self.ra is None:
+            return ""
+        from models.demos.moe_block.tt.routing_stream import _plan_fn
+
+        ra = self.ra
+        self._ra_pargs = ra.planner_args(coord)
+        return (
+            '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#define RA_PLAN\n'
+            + ra.defines(coord)
+            + _plan_fn(ra.kernel_subs(coord, ct0))
+        )
+
+    def _ra_ct(self):
+        return list(ttnn.TensorAccessorArgs(self.ra.router_out).get_compile_time_args()) + list(
+            ttnn.TensorAccessorArgs(self.ra.slots).get_compile_time_args()
+        )
+
+    def _ra_args(self, coord, j):
+        virt = self.mesh.worker_core_from_logical_core
+        if not hasattr(self, "_ra_pargs") or self._ra_coord != coord:
+            self._ra_pargs, self._ra_coord = self.ra.planner_args(coord), coord
+        pxy = [w for c in self.cores for v in [virt(c)] for w in (v.x, v.y)]
+        return [self.ra.addr["rows"], self.ra.pbase] + pxy + self._ra_pargs(j)
+
     def attach_mcast(self, prog):
         """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
         lo, hi = self.cores[0], self.cores[-1]
@@ -497,6 +579,8 @@ class RouterStream:
             ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0),
         )
         mc.attach(prog, "rw", [self.ncrisc])
+
+    ra = None  # (the routing exchange + planner riding the router BRISC: routing_stream.RoutingStream)
 
     def pieces(self, coord, x, w, b, ix, out):
         """(CBs, kernels) of the router cores on chip coord. x: the own shard [rows, H / TP] (DRAM)."""
@@ -539,6 +623,12 @@ class RouterStream:
                 + [t for _, _, t in arr["bwd"]]
                 + self.arr
                 + [b0 + off["words"]]
+                + [
+                    b0 + off["best"] + (ET - 2) * 4096,
+                    b0 + off["besti"] + (ET - 2) * 2048,
+                    b0 + off["out"],
+                    self.scale_bits,
+                ]
             )
             ops = [(k, e) for k, e in plan.ops(p, j, 0) if k != "pass"]
             ce = []
@@ -548,7 +638,17 @@ class RouterStream:
                 mode = (1 if sl["fwd"] else 0) | (2 if sl["bwd"] else 0) | (4 if dd == "fin" else 0)
                 ce += [mode, sl["fwd"][0] if sl["fwd"] else 0, sl["bwd"][0] if sl["bwd"] else 0]
             c_rt[core.x][core.y] = (
-                [len(ops)] + [(1 if k == "hand" else 2) | e << 8 for k, e in ops] + ce + [b0 + off["words"]]
+                [len(ops)]
+                + [(1 if k == "hand" else 2) | e << 8 for k, e in ops]
+                + ce
+                + [b0 + off["words"]]
+                + [
+                    b0 + off["best"] + (ET - 2) * 4096,
+                    b0 + off["besti"] + (ET - 2) * 2048,
+                    b0 + off["out"],
+                    self.scale_bits,
+                ]
+                + [b0 + off["bias"]]
             )
             hs = []
             for e, d in plan.handoffs(p, j, 0):
@@ -564,6 +664,7 @@ class RouterStream:
                 + hs
                 + [int(out.buffer_address()), j, self.scale_bits, b0 + off["out"], b0 + off["words"]]
                 + [b0 + off["best"], b0 + off["besti"]]
+                + (self._ra_args(coord, j) if self.ra is not None else [])
             )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         ct = [self.KT, ET, G, self.KBR, K]
@@ -580,7 +681,7 @@ class RouterStream:
         )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         self.ncrisc = ttnn.KernelDescriptor(
-            kernel_source=_NCRISC,
+            kernel_source=_NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
             source_type=st,
             core_ranges=self.crs,
             compile_time_args=ct + acc(x) + acc(w) + acc(b) + acc(ix),
@@ -590,7 +691,7 @@ class RouterStream:
         kernels = [
             self.ncrisc,
             ttnn.KernelDescriptor(
-                kernel_source=_COMPUTE,
+                kernel_source=_COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
                 source_type=st,
                 core_ranges=self.crs,
                 compile_time_args=ct,
@@ -598,10 +699,10 @@ class RouterStream:
                 config=comp,
             ),
             ttnn.KernelDescriptor(
-                kernel_source=_BRISC,
+                kernel_source=self._ra_src(coord, len(ct + acc(out))) + _BRISC,
                 source_type=st,
                 core_ranges=self.crs,
-                compile_time_args=ct + acc(out),
+                compile_time_args=ct + acc(out) + (self._ra_ct() if self.ra is not None else []),
                 runtime_args=b_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_1),
             ),

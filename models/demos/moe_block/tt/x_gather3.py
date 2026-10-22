@@ -18,6 +18,7 @@ from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
 
 import ttnn
 from models.demos.moe_block.tt.router_stream import LSTREAM
+from models.demos.moe_block.tt.routing_stream import RA_SEND
 
 INC_EVERY = 8
 CB = 0
@@ -195,6 +196,7 @@ FORCE_INLINE void la_send(uint32_t a0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
             const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
             const uint32_t dst0 = latz + (slot * MT + r0) * LW * 2048;
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                lpoll();
                 while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();
                 cb_wait_front(0, RP * (u + 1));
                 const uint32_t src = get_read_ptr(0) + u * RP * 2048;
@@ -247,7 +249,8 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
             const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
-                while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();  // (the logits go while I wait)
+                lpoll();  // (the logits / routing go between my packets)
+                while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();
                 cb_wait_front(0, RP * (u + 1));
                 const uint32_t src = get_read_ptr(0) + u * RP * 2048;
                 const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
@@ -342,6 +345,7 @@ _SENDER = (
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 using namespace tt::tt_fabric;
 """
     + _CT
@@ -349,6 +353,7 @@ using namespace tt::tt_fabric;
     + _LA_SENDER
     + _RS_SENDER
     + LSTREAM
+    + RA_SEND
     + r"""
 void kernel_main() {
     size_t a = 0;
@@ -367,14 +372,18 @@ void kernel_main() {
     LStream ls;
     ls.init(ls0);
     const uint32_t la0 = ls0 + LStream::len(ls0), lnu = get_arg_val<uint32_t>(la0);
-    a = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0) {
+    const uint32_t ra0 = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
+    RASend ra;
+    ra.init(ra0);
+    a = ra0 + RASend::len(ra0);
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || !ra.done) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
             hdrs[h] = PacketHeaderPool::allocate_header();
             (void)fabric_set_unicast_route(hdrs[h], chip, mesh);
         }
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* rahdr = PacketHeaderPool::allocate_header();  // (routing: routed a packet)
         for (uint32_t un = 0; un < lnu && un < 3; ++un) {  // (the latent's destinations: routed a unit)
             const uint32_t w0 = get_arg_val<uint32_t>(la0 + 1 + 2 * un);
             hdrs[GROUP + 1 + un] = PacketHeaderPool::allocate_header();
@@ -394,7 +403,20 @@ void kernel_main() {
         }
         const uint64_t arr_noc = get_noc_addr(px, py, arrival);
         uint32_t h = 0, unflushed = 0;
-        auto lpoll = [&]() { ls.poll(conn, hdrs[GROUP], false); };
+#ifndef RA_N_
+#define RA_N_ 1
+#define RA_M_ 1
+#define RA_EPC_ 1
+#define RA_ME_ 0
+#define RA_HBP_ 64
+#define RA_BB_ 16
+#define RA_BBP_ 16
+#define RA_MAXP_ 64
+#endif
+        auto lpoll = [&]() {
+            ls.poll(conn, hdrs[GROUP], false);
+            ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
+        };
         for (uint32_t m = 0; m < NCH && n > 0; ++m) {
             for (uint32_t k = 0; k < n; ++k) {
                 const uint32_t q = get_arg_val<uint32_t>(ent + 3 * k), part = get_arg_val<uint32_t>(ent + 3 * k + 1);
@@ -435,6 +457,7 @@ void kernel_main() {
         la_send(la0, conn, hdrs, lpoll, rpos);
         rs_send(rs0, conn, hdrs, lpoll, rpos);
         ls.poll(conn, hdrs[GROUP], true);  // (whatever is left of the logits)
+        ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
         noc_async_writes_flushed();
         ls.rearm();
         conn.close();
@@ -449,9 +472,21 @@ void kernel_main() {
 """
 )
 
-_WATCHER = r"""
+_WATCHER = (
+    r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#ifdef W_RA0
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+using namespace tt::tt_fabric;
+#include "tools/profiler/kernel_profiler.hpp"
+"""
+    + RA_SEND
+    + r"""
+#endif
 // chunk m's shard of rank k (k = 1 .. G - 1 in the engine's order) is in once each stream carrying it counted it
 // (a stream counts every shard it sends: m entries + its index + 1): then XREADY + 1 on every engine core
 // (XREADY = m (G - 1) + k). args: chunks, the XREADY id, ranks G - 1, engine cores nc, counters ncnt; (counter address,
@@ -475,8 +510,24 @@ void kernel_main() {
     for (uint32_t i = 0; i < ncnt; ++i)  // (re-arm)
         noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(cnt0 + 2 * i)), 0u - get_arg_val<uint32_t>(cnt0 + 2 * i + 1));
     noc_async_atomic_barrier();
+#ifdef W_RA0
+    {  // (the routing exchange's second Y direction: after the watch)
+        RASend rs;
+        rs.init(W_RA0);
+        size_t a2 = W_RA0 + RASend::len(W_RA0);
+        if (get_arg_val<uint32_t>(a2++)) {
+            auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a2);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
+            conn.open();
+            rs.poll(conn, hdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
+            conn.close();
+        }
+        noc_async_atomic_barrier();
+    }
+#endif
 }
 """
+)
 
 
 def _incs(n):
@@ -680,7 +731,7 @@ class XGather3:
                 return self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))
         raise KeyError(pos)
 
-    def pieces(self, coord, prog, x, xready_sem, rs=None, router=None, la=None):
+    def pieces(self, coord, prog, x, xready_sem, rs=None, router=None, la=None, routing=None):
         """(CBs, kernels) of chip `coord` (fabric connections set up on prog); x: this chip's [rows, kl] in DRAM.
         rs: the down + reduce-scatter phase's (rs_block)."""
         mesh, chips, e = self.mesh, self.chips, self.eng
@@ -724,7 +775,9 @@ class XGather3:
             rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 6)
             lab = self.la_block(rs, la, d, v)
             assert lab[0] == 0 or mine, "the latent needs the gather's fence"
-            rsb = rsb + lab
+            rab = routing.send_block(coord, ("x", d, v)) if routing is not None else [0]
+            assert rab[0] == 0 or mine or not rab[1], "the routing's fabric packets need the gather's fence"
+            rsb = rsb + lab + rab
             assert rsb[0] == 0 or mine, "a port sending reduce-scatter units must have the gather's fence"
             assert not (router and router.port_block(coord, d, v)[0]) or mine, "the logits need the gather's fence"
             args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
@@ -783,7 +836,9 @@ class XGather3:
                 config=dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n" + _SENDER,
+                kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n"
+                + (routing.defines(coord) if routing is not None else "")
+                + _SENDER,
                 source_type=st,
                 core_ranges=cs(list(ports.values())),
                 compile_time_args=ct,
@@ -803,15 +858,22 @@ class XGather3:
             if up is not None and chips[up]["rings"][0][d]:
                 for v in range(self.nv):
                     finals[self.watch[(d, v)]] = e.NCH * len(chips[up]["rings"][0][d])
-        wt[wc.x][wc.y] = (
+        wl = (
             [e.NCH, xready_sem, len(shards) - 1, len(ecores), len(finals)]
             + [x_ for k_, f in finals.items() for x_ in (k_, f)]
             + [v_ for c in ecores for v_ in (c.x, c.y)]
             + wargs
         )
+        wsrc = _WATCHER
+        if routing is not None:
+            wdef, wra = routing.watcher_tail(coord, prog)
+            if wra:
+                wsrc = wdef + f"#define W_RA0 {len(wl)}\n" + _WATCHER
+                wl = wl + wra
+        wt[wc.x][wc.y] = wl
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=_WATCHER,
+                kernel_source=wsrc,
                 source_type=st,
                 core_ranges=cs([wc]),
                 compile_time_args=[],

@@ -15,7 +15,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.moe_block.tests.test_fused_head_parts import CHAIN, LATENT, ROUTER, RS_DIM
+from models.demos.moe_block.tests.test_fused_head_parts import CHAIN, LATENT, ROUTER, ROUTING, RS_DIM
 
 pytestmark = pytest.mark.skipif(
     "blackhole_galaxy" not in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", ""), reason="mock Galaxy only"
@@ -44,6 +44,7 @@ def test_head_mock_galaxy(rs):
                 rs_dim=RS_DIM[name] if rs else None,
                 router=ROUTER[name] if rs else None,
                 latent=LATENT.get(name) if rs else None,
+                routing=ROUTING[name] if rs else None,
             )
             assert head.xg.ring
             if rs:  # (the reduce-scatter's ring-balanced schedule: the opposite block split by core halves)

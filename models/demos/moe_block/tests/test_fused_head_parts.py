@@ -106,6 +106,67 @@ RS_DIM = {"glm": -2, "k3": -1}
 LATENT = {"k3": 3584}  # (K3's latent width Hr)
 
 
+def _routing_specs():
+    from models.demos.moe_block.tt.fused_head import RoutingSpec
+
+    return {"glm": RoutingSpec(A=12), "k3": RoutingSpec(A=16)}  # (the combine's accumulators: the close-out's)
+
+
+class _LazyR(dict):
+    def __missing__(self, k):
+        self.update(_routing_specs())
+        return dict.__getitem__(self, k)
+
+
+ROUTING = _LazyR()
+
+
+def _check_plan(head, rows, name):
+    """combine_plan's per-chip tables from the head's routing exchange + planner vs its host model (plan_reference) on
+    the device's own routing (every chip's joint rows), bit for bit."""
+    from ttnn.bringup.combine_rf.combine_plan import plan_reference
+
+    rt, spec = head.routing, ROUTER[name]
+    K, S, N = spec.K, rows // C, R * C
+    rows_t = [
+        ttnn.to_torch(t).to(torch.int64).reshape(S, 2 * K) & 0xFFFF
+        for t in ttnn.get_device_tensors(head.outputs["rows"])
+    ]
+    ids = torch.stack([r_[:, :K] for r_ in rows_t])
+    wb = torch.stack([r_[:, K:] for r_ in rows_t])
+    words = {
+        k: [ttnn.to_torch(t).to(torch.int64).reshape(-1) & 0xFFFFFFFF for t in ttnn.get_device_tensors(v)]
+        for k, v in rt.outs.items()
+    }
+    for ci in range(N):
+        ch = (ci // C, ci % C)
+        ref = plan_reference(
+            ids,
+            wb,
+            ci,
+            R,
+            C,
+            S,
+            K,
+            rt.EPC,
+            N * rt.EPC,
+            rt.A,
+            rt.L,
+            rt.nps[ch],
+            rt.luts[ch],
+            rt.rows_cap,
+            token_major=True,
+        )
+        for k in ("counts", "regions", "token_index", "table", "plan"):
+            got, exp = words[k][ci], torch.tensor(ref[k], dtype=torch.int64)
+            if k in ("token_index", "table"):
+                nw = min(ref["plan"][600], rt.rows_cap) * (2 if k == "table" else 1)
+                got, exp = got[:nw], exp[:nw]
+            bad = (got[: exp.numel()] != exp).nonzero().flatten()
+            assert bad.numel() == 0, f"{name} chip {ci} {k}: {bad.numel()} words differ, first {bad[:8].tolist()}"
+    logger.info(f"HSE3 {name} routing exchange + planner: all {N} chips bit-exact vs the host model")
+
+
 def _check_latent(head, xs, w_l, rows, name):
     """The owners' latent rows [rows / TP, Hr] vs x_full @ W_latent_down^T on the host."""
     G = C
@@ -504,6 +565,7 @@ def test_head_se3(mesh_device, device_params):
             rs_mode=os.environ.get("SE_RS") or "fused",  # (fused: in this program; mrs: the ported op on h, the bar)
             router=ROUTER[name] if os.environ.get("SE_ROUTER") else None,  # (+ the router chain on its own cores)
             latent=LATENT.get(name) if os.environ.get("SE_LATENT") else None,  # (+ K3's latent down + all-to-all)
+            routing=ROUTING[name] if os.environ.get("SE_ROUTING") else None,  # (+ the routing exchange + planner)
         )
         g = torch.Generator().manual_seed(7)
         xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
@@ -532,6 +594,8 @@ def test_head_se3(mesh_device, device_params):
             _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
         if head.latent:
             _check_latent(head, xs, w_l, rows, name)
+        if head.routing is not None:
+            _check_plan(head, rows, name)
         ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
         act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
         ps, refs = [], []
