@@ -27,7 +27,8 @@ from models.demos.pplx_decider_v1_27b.tt.weight_mapping import load_readout
 from models.tt_transformers.tt.ccl import tt_all_gather
 from models.tt_transformers.tt.common import Mode, get_block_size
 
-# 4096 is the largest bucket: longer prompts use the 2048-chunk trace path.
+# 4096 is the largest bucket: on a 1xN mesh longer prompts take the 2048-chunk trace path; a 2D mesh has none, so
+# PplxDecider caps its max_seq_len at the largest bucket (max_seq_len_for).
 BUCKETS = (256, 512, 768, 1024, 1536, 2048, 3072, 4096)
 # The readout matmul output is padded to a multiple of the tile width.
 READOUT_PAD = 256
@@ -65,10 +66,16 @@ def bucket_sizes():
 
 def bucket_sizes_for(max_seq_len, capacity):
     """The bucket_sizes() a model with this max_seq_len and KV capacity (tokens) can use: every bucket below
-    max_seq_len plus the first one at or above it (so every prompt up to max_seq_len fits), none beyond capacity."""
+    max_seq_len plus the first one at or above it, none beyond capacity. A max_seq_len past the largest bucket
+    leaves the longer prompts to the 1xN chunk trace (max_seq_len_for caps it on a 2D mesh)."""
     sizes = [s for s in bucket_sizes() if s <= capacity]
     above = [s for s in sizes if s >= max_seq_len]
     return tuple(s for s in sizes if s < max_seq_len) + tuple(above[:1])
+
+
+def max_seq_len_for(max_seq_len, two_d):
+    """The longest prompt a mesh can serve: a 2D mesh has no chunked prefill, so its largest bucket is the limit."""
+    return min(max_seq_len, bucket_sizes()[-1]) if two_d else max_seq_len
 
 
 @dataclass

@@ -32,6 +32,7 @@ pytest models/demos/pplx_decider_v1_27b/tests/test_model.py
 pytest models/demos/pplx_decider_v1_27b/tests/test_perf.py
 ```
 
+- Prompts on 4x8 are limited to 4096 tokens, the largest prefill bucket: a 2D mesh has no chunked prefill, so `max_seq_len` is capped there and longer prompts raise `ValueError`.
 - The tests open the full 4x8 mesh: a bare 1x8 or 1x4 open fails the fabric handshake on a Galaxy, and `TT_VISIBLE_DEVICES` breaks the fabric.
 - For TP8 or TP4 on a Galaxy submesh, set one of these instead and run the same commands:
 

@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-from models.demos.pplx_decider_v1_27b.tt.bucket_trace import BucketPrefillTraces, bucket_sizes_for
+from models.demos.pplx_decider_v1_27b.tt.bucket_trace import BucketPrefillTraces, bucket_sizes_for, max_seq_len_for
 from models.demos.pplx_decider_v1_27b.tt.decision import answer, decision_probabilities, options, render_input_ids
 from models.demos.pplx_decider_v1_27b.tt.model_config import PplxDeciderModelArgs
 
@@ -26,11 +26,16 @@ class PplxDecider:
         self.model = model
         self.tokenizer = args.tokenizer
         self.decision_config = args.decision_config
-        self.max_seq_len = max_seq_len
+        self._two_d = tpc.is_2d_mesh(mesh_device)
+        self.max_seq_len = max_seq_len_for(max_seq_len, self._two_d)
+        if self.max_seq_len < max_seq_len:
+            logger.info(
+                f"2D mesh: max_seq_len capped at {self.max_seq_len}, the largest prefill bucket (no chunked prefill)"
+            )
         self.bucket_traces = None
 
         # 32-aligned block count is required by the flexible SDPA.
-        num_blocks = math.ceil(((max_seq_len // KV_BLOCK_SIZE) + 8) / 32) * 32
+        num_blocks = math.ceil(((self.max_seq_len // KV_BLOCK_SIZE) + 8) / 32) * 32
         kv_shape = (num_blocks, args.n_local_kv_heads, KV_BLOCK_SIZE, args.head_dim)
         model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
         self._page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, -1)
@@ -51,6 +56,8 @@ class PplxDecider:
         Unless PPLX_BUCKET_TRACE=0, also one fused prefill + readout trace per length bucket (bucket_trace.py), which
         serves every prompt up to the largest bucket; the chunk trace then only serves longer ones."""
         if os.environ.get("PPLX_BUCKET_TRACE", "1") == "0":
+            if self._two_d:
+                raise NotImplementedError("PPLX_BUCKET_TRACE=0 leaves only the chunk trace, which is 1xN-only")
             self.model.capture_prefill_trace_chunked(self.mesh_device, self._page_table)
             return
         # Nothing may be allocated or compiled once a trace is parked: prepare everything, then capture.
@@ -58,7 +65,7 @@ class PplxDecider:
         capacity = self._page_table.shape[-1] * KV_BLOCK_SIZE
         self.bucket_traces = BucketPrefillTraces(bucket_sizes_for(self.max_seq_len, capacity))
         self.bucket_traces.prepare(self.model, self.mesh_device, self._page_table)
-        if tpc.is_2d_mesh(self.mesh_device):
+        if self._two_d:
             # The chunk path's LM head and norms are not 2D-ready: bucket traces only.
             logger.info("2D mesh: capturing only the bucket prefill traces (the chunk trace path is 1xN-only)")
         else:
@@ -73,13 +80,17 @@ class PplxDecider:
         """Readout logits for the last prompt token, fp32 [len(token_ids)]."""
         length = len(input_ids)
         if length == 0 or length > self.max_seq_len:
-            raise ValueError(f"Prompt has {length} tokens; supported range is 1..{self.max_seq_len}.")
+            where = " on a 2D mesh (no chunked prefill)" if self._two_d else ""
+            raise ValueError(f"Prompt has {length} tokens; supported range is 1..{self.max_seq_len}{where}.")
         if use_bucket_trace and self.bucket_traces is not None:
             logits = self.bucket_traces.run(self.model, input_ids)
             if logits is not None:
                 return logits
-        if tpc.is_2d_mesh(self.mesh_device):
-            raise NotImplementedError("prompts above the largest bucket need the chunk path, which is 1xN-only")
+        if self._two_d:
+            raise NotImplementedError(
+                "a 2D mesh prefills only through the bucket traces (the chunk path is 1xN-only): "
+                "call capture_prefill_trace() first, with PPLX_BUCKET_TRACE unset"
+            )
         tokens = torch.tensor([input_ids], dtype=torch.long)
         logits_dev = self.model.prefill_traced_chunked(tokens, self._page_table, actual_len=length)
         vocab = self.args.vocab_size
