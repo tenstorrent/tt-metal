@@ -2571,7 +2571,7 @@ __attribute__((optimize("Os"))) void teardown(
             notify_subordinate_routers(
                 edm_channels_mask,
                 local_handshake_master_eth_chan,
-                (uint32_t)termination_signal_ptr,
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(termination_signal_ptr)),
                 *termination_signal_ptr);
         }
     }
@@ -3273,16 +3273,16 @@ void kernel_main() {
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
-                    (uint32_t)edm_local_sync_ptr, num_local_edms - 1, termination_signal_ptr);
+                    edm_local_sync_ptr_addr, num_local_edms - 1, termination_signal_ptr);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
                 notify_subordinate_routers(
-                    edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+                    edm_channels_mask, exclude_eth_chan, edm_local_sync_ptr_addr, num_local_edms);
             } else {
-                notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+                notify_master_router(local_handshake_master_eth_chan, edm_local_sync_ptr_addr);
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
-                    (uint32_t)edm_local_sync_ptr, num_local_edms, termination_signal_ptr);
+                    edm_local_sync_ptr_addr, num_local_edms, termination_signal_ptr);
             }
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
@@ -3292,7 +3292,7 @@ void kernel_main() {
             //    Other subordinate risc cores wait for this signal
             // 4. The other subordinate risc cores receive the READY_FOR_TRAFFIC signal and exit from this wait
             wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
-                (uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination_signal_ptr);
+                edm_status_ptr_addr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination_signal_ptr);
 
             if constexpr (is_local_handshake_master) {
                 // 3. Only master risc core notifies all subordinate risc cores (except subordinate riscs in master eth
@@ -3300,7 +3300,7 @@ void kernel_main() {
                 notify_subordinate_routers(
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
-                    (uint32_t)edm_status_ptr,
+                    edm_status_ptr_addr,
                     tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
         }
