@@ -208,9 +208,13 @@ inline void _init_sfpu_config_reg_()
 {
     TTI_SFPCONFIG(0, 0xF, 1);
     // LUT tables (approximate GELU, sigmoid) overwrite LREG9/10, the 0.0 that SFPMUL adds and the 1.0 that SFPADD
-    // multiplies by. Load explicit values: the reset default of config dest 0xA is 0.0, not 1.0.
-    _sfpu_load_config32_(p_sfpconfig::LUT_CONST_LREG9, 0x0000 /* upper16 */, 0x0000 /* lower16 */);
-    _sfpu_load_config32_(p_sfpconfig::LUT_CONST_LREG10, 0x3F80 /* upper16 */, 0x0000 /* lower16 */);
+    // multiplies by. Load explicit values rather than SFPCONFIG instr_mod1[0]=1, which the ISA describes only as
+    // "imm16 or the constant LREG default", so it does not pin down 0.0 / 1.0 for config dests 0x9 / 0xA.
+    // Both values are exact in FP16B, so one SFPLOADI each is enough.
+    TTI_SFPLOADI(p_sfpu::LREG0, 0 /*FP16B*/, 0x0000 /*imm16*/);
+    TTI_SFPCONFIG(0, p_sfpconfig::LUT_CONST_LREG9, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, 0 /*FP16B*/, p_sfpu::kCONST_1_FP16B);
+    TTI_SFPCONFIG(0, p_sfpconfig::LUT_CONST_LREG10, 0);
     // Quasar simulator doesn't apply the SFPU const-lreg reset default at boot.
     // Reload programmable constant LREG11 = -1.0 (its RTL reset default) each launch: config_dest=0xB,
     // instr_mod1[0]=1 loads the default. sfpi materializes -1.0 and subtract-based float compares via LREG11.

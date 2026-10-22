@@ -274,14 +274,17 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
     _run(device, "divide", mem_config, dtype_tt, shape, pcc=0.99)
 
 
+_GELU_LUT_SHAPE = (32, 256)
+
+
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
 def test_no_bcast_sfpu_unchanged_after_gelu_program(device, dtype_tt):
     # A GELU program leaves its LUT table in the SFPU constants. The SFPU multiply, SQUARE and divide programs
     # that run after it on the same device must give the same bits as before it.
     torch.manual_seed(0)
     cfg = dict(dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    a = ttnn.from_torch(torch.randn(32, 256) * torch.logspace(-3, 1, 256), **cfg)
-    b = ttnn.from_torch(torch.randn(32, 256), **cfg)
+    a = ttnn.from_torch(torch.randn(_GELU_LUT_SHAPE) * torch.logspace(-3, 1, _GELU_LUT_SHAPE[-1]), **cfg)
+    b = ttnn.from_torch(torch.randn(_GELU_LUT_SHAPE), **cfg)
     programs = {
         "multiply": lambda: ttnn.experimental.quasar.multiply(a, b),
         "square": lambda: ttnn.experimental.quasar.multiply(a, b, activations=_act(ttnn.UnaryOpType.SQUARE)),
@@ -293,7 +296,8 @@ def test_no_bcast_sfpu_unchanged_after_gelu_program(device, dtype_tt):
         return t.view({2: torch.int16, 4: torch.int32}[t.element_size()])
 
     before = {name: bits(ttnn.to_torch(program())) for name, program in programs.items()}
-    ttnn.experimental.quasar.multiply(a, b, activations=_act(ttnn.UnaryOpType.GELU))
+    # GELU param 1.0 = fast_and_approximate, the mode that loads the LUT table.
+    ttnn.experimental.quasar.multiply(a, b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0)])
     for name, program in programs.items():
         after = bits(ttnn.to_torch(program()))
         changed = int((after != before[name]).sum())
