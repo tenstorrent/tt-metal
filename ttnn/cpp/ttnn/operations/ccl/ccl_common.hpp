@@ -171,31 +171,6 @@ private:
     size_t _line_index;
 };
 
-// Eventual home: ccl_topology_descriptors
-struct RingTopology {
-    RingTopology(
-        const tt::tt_metal::IDevice* device,
-        Topology topology,
-        std::optional<uint32_t> sender_device_id,
-        std::optional<uint32_t> receiver_device_id,
-        uint32_t num_links,
-        uint32_t ring_size,
-        uint32_t ring_index);
-
-    bool is_first_device_in_line(bool in_clockwise_direction) const;
-    bool is_last_device_in_line(bool in_clockwise_direction) const;
-
-    const tt::tt_metal::IDevice* device;
-
-    std::vector<CoreCoord> eth_sender_cores;
-    std::vector<CoreCoord> eth_receiver_cores;
-
-    uint32_t num_links;
-    uint32_t ring_size;
-    uint32_t ring_index;
-    bool is_linear;
-};
-
 class CclOpTensorConfig {
 public:
     static std::unique_ptr<CclOpTensorConfig> build_all_gather_tensor_config(const Tensor& tensor);
@@ -654,15 +629,6 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id);
-
-void generate_edm_kernels_for_ring_or_linear_topology(
-    tt::tt_metal::Program& program,
-    const IDevice* device,
-    const RingTopology& topology_config,
-    const std::vector<ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
-    const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
-    std::optional<uint32_t> receiver_device_id,
-    std::optional<uint32_t> sender_device_id);
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
