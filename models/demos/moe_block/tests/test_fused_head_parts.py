@@ -103,6 +103,22 @@ CHAIN = {
     "k3": (7168, 3072, "situ", 8, 4),
 }
 RS_DIM = {"glm": -2, "k3": -1}
+LATENT = {"k3": 3584}  # (K3's latent width Hr)
+
+
+def _check_latent(head, xs, w_l, rows, name):
+    """The owners' latent rows [rows / TP, Hr] vs x_full @ W_latent_down^T on the host."""
+    G = C
+    outs = [ttnn.to_torch(t).float().reshape(rows // G, -1) for t in ttnn.get_device_tensors(head.outputs["latent"])]
+    ps = []
+    for d in range(R * C):
+        r, c = divmod(d, C)
+        p = head.xg.chips[(r, c)]["rings"][0]["p"]
+        xf = torch.cat([xs[r * C + cc] for cc in range(C)], dim=1)
+        ref = xf[p * rows // G : (p + 1) * rows // G] @ w_l.T
+        ps.append(pcc(outs[d], ref))
+    logger.info(f"HSE3 {name} latent: PCC min {min(ps):.5f}")
+    assert min(ps) > 0.999, ps
 
 
 def _router_specs():
@@ -487,12 +503,18 @@ def test_head_se3(mesh_device, device_params):
             rs_dim=RS_DIM[name] if os.environ.get("SE_RS") else None,  # (+ down + SE reduce-scatter:)
             rs_mode=os.environ.get("SE_RS") or "fused",  # (fused: in this program; mrs: the ported op on h, the bar)
             router=ROUTER[name] if os.environ.get("SE_ROUTER") else None,  # (+ the router chain on its own cores)
+            latent=LATENT.get(name) if os.environ.get("SE_LATENT") else None,  # (+ K3's latent down + all-to-all)
         )
         g = torch.Generator().manual_seed(7)
         xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
-        w = head.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
+        w_l = None
+        if head.latent:
+            w_l = torch.randn(head.latent, H, generator=g) * 0.02  # (the layer's latent down [Hr, H])
+        w = head.upload(
+            [glu_weight(t[:, :I], t[:, I:]) for t in wg], wd, w_latent=[w_l] * (R * C) if w_l is not None else None
+        )
         if head.router is not None:
             spec = ROUTER[name]
             w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
@@ -507,8 +529,9 @@ def test_head_se3(mesh_device, device_params):
         )
         us, y = _time(mesh_device, lambda: head.run(xt, w))
         if head.router is not None:
-            y, rows_t = y
-            _check_routing(head, xs, w_r, b_r, rows_t, rows, name)
+            _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
+        if head.latent:
+            _check_latent(head, xs, w_l, rows, name)
         ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
         act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
         ps, refs = [], []

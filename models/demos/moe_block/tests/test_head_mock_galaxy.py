@@ -15,7 +15,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.moe_block.tests.test_fused_head_parts import CHAIN, ROUTER, RS_DIM
+from models.demos.moe_block.tests.test_fused_head_parts import CHAIN, LATENT, ROUTER, RS_DIM
 
 pytestmark = pytest.mark.skipif(
     "blackhole_galaxy" not in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", ""), reason="mock Galaxy only"
@@ -43,6 +43,7 @@ def test_head_mock_galaxy(rs):
                 glu=glu,
                 rs_dim=RS_DIM[name] if rs else None,
                 router=ROUTER[name] if rs else None,
+                latent=LATENT.get(name) if rs else None,
             )
             assert head.xg.ring
             if rs:  # (the reduce-scatter's ring-balanced schedule: the opposite block split by core halves)
@@ -59,11 +60,13 @@ def test_head_mock_galaxy(rs):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, 1), mesh_shape=(R, C)),
             )
-            w = head.upload([torch.zeros(H, N)] * (R * C), [torch.zeros(I, H)] * (R * C))
+            wl = [torch.zeros(LATENT[name], H)] * (R * C) if rs and name in LATENT else None
+            w = head.upload([torch.zeros(H, N)] * (R * C), [torch.zeros(I, H)] * (R * C), wl)
             if rs:
                 head.upload_router(torch.zeros(ROUTER[name].E, H), torch.zeros(ROUTER[name].E))
-                y, rows_t = head.run(x, w)
-                ttnn.deallocate(rows_t)
+                y = head.run(x, w)
+                for t_ in head.outputs.values():
+                    ttnn.deallocate(t_)
             else:
                 y = head.run(x, w)
             for t in (y, x, w, head.eng.arena):

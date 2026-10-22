@@ -33,6 +33,7 @@ NSEM_OWN = 2 + 2 * NWS
 XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
 RS_CB = dict(hold=6, finb=7, arrf=8, arrb=9, finc=10, outf=11, psync=12)  # (down + reduce-scatter CBs)
+LAT_CB = 13  # (the latent block [MT][LWMAX], bf16)
 ARENA_MAX = 1400 * 1024  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less some slack)
 
 _BRISC = r"""
@@ -136,6 +137,17 @@ void kernel_main() {
                 cb_push_back(CB_XIN, MT * KB);
             }
         }
+#ifdef SE_LAT
+        {  // (the latent's all-to-all: once it is packed, +1 on each destination's port word of mine)
+            DeviceZoneScopedN("SE-LHAND");
+            const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), r0 = np0 + 4 + 2 * nports;
+            const uint32_t l0 = r0 + 2 + 2 * get_arg_val<uint32_t>(r0), nl = get_arg_val<uint32_t>(l0);
+            const uint32_t lw = get_arg_val<uint32_t>(l0 + 1);
+            cb_wait_front(SE_LAT, MT * SE_LWMAX);
+            for (uint32_t j = 0; j < nl; ++j)
+                noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(l0 + 2 + 2 * j), get_arg_val<uint32_t>(l0 + 3 + 2 * j), lw), 1);
+        }
+#endif
 #ifdef SE_NODOWN
         {  // (no down here: my h block [MT][po] to DRAM h [rows, HT] - the down + reduce-scatter reads it)
         DeviceZoneScopedN("SE-HOUT");
@@ -196,6 +208,9 @@ constexpr uint32_t NTH = get_compile_time_arg_val(12), CR = get_compile_time_arg
 constexpr uint32_t WV = get_compile_time_arg_val(15), WFREE = get_compile_time_arg_val(16), NOUT = get_compile_time_arg_val(17);
 constexpr auto w_args = TensorAccessorArgs<18>();
 constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+#ifdef SE_LAT
+constexpr auto l_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+#endif
 constexpr uint32_t CB_WIN = 1, CB_OUT = 4, NB = NPG * NSG + NPD * NSD;  // (W blocks a chunk)
 constexpr uint32_t NPD1 = NPD ? NPD : 1, NSD1 = NSD ? NSD : 1;  // (no down: 0, never divided by)
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i)); }
@@ -270,8 +285,35 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* arrb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(f0 + 5));
     uint32_t af = 0, ab = 0, fo = 0;
     const uint32_t NPY = 0;  // (no plain y writes: the fin sub-block is the output)
-    while (ws < NR || wr < NR || wc < NR || af < naf || ab < nab || fo < fcount) {
+#ifdef SE_LAT
+    // (the latent: my rows of my own block - mine and every other chip's slice of them - to the owner's latent [RB, G LT])
+    const uint32_t L0 = f0 + 6, lnr = get_arg_val<uint32_t>(L0), lr0 = get_arg_val<uint32_t>(L0 + 1);
+    const uint32_t lnsrc = get_arg_val<uint32_t>(L0 + 2), lzone = get_arg_val<uint32_t>(L0 + 4);
+    volatile tt_l1_ptr uint32_t* lctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(L0 + 3));
+    const uint32_t LT = get_arg_val<uint32_t>(L0 + 5), lc0 = get_arg_val<uint32_t>(L0 + 6), llw = get_arg_val<uint32_t>(L0 + 7);
+    const uint32_t lp = get_arg_val<uint32_t>(L0 + 8), lorow = get_arg_val<uint32_t>(L0 + 9);
+    const auto lg = TensorAccessor(l_args, get_arg_val<uint32_t>(L0 + 10), 2048);
+    bool lown = lnr == 0, lin = lnr == 0 || lnsrc == 0;
+    auto lwrite = [&](uint32_t src, uint32_t q) {  // (rows lr0 .. of a [MT][LWMAX] block, chip q's columns)
+        for (uint32_t i = 0; i < lnr; ++i)
+            for (uint32_t t = 0; t < llw; ++t)
+                noc_async_write(src + ((lr0 + i) * SE_LWMAX + t) * 2048, lg.get_noc_addr((lorow + i) * G_LT + q * LT + lc0 + t), 2048);
+    };
+#else
+    bool lown = true, lin = true;
+#endif
+    while (ws < NR || wr < NR || wc < NR || af < naf || ab < nab || fo < fcount || !lown || !lin) {
         invalidate_l1_cache();
+#ifdef SE_LAT
+        if (!lown && cb_pages_available_at_front(SE_LAT, MT * SE_LWMAX)) {
+            lwrite(get_read_ptr(SE_LAT), lp);
+            lown = true;
+        }
+        if (!lin && *lctr >= lnsrc) {
+            for (uint32_t sl = 0; sl < lnsrc; ++sl) lwrite(lzone + sl * MT * SE_LWMAX * 2048, sl < lp ? sl : sl + 1);
+            lin = true;
+        }
+#endif
         if (af < naf) {
             const uint32_t thr = get_arg_val<uint32_t>(af0 + af);
             if (thr == 0 || *arrf >= thr) {
@@ -357,6 +399,9 @@ void kernel_main() {
         if (nb) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(arrb)), 0u - nb);
     }
 #endif
+#ifdef SE_LAT
+    if (lnr && lnsrc) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(lctr)), 0u - lnsrc);  // (re-arm)
+#endif
     noc_async_atomic_barrier();
 }
 """
@@ -405,7 +450,7 @@ void kernel_main() {
         // shards so far goes to ACC (FIFO: pushed per (shard, pass), popped by the next shard's same pass) and comes
         // back into DEST; the last shard applies the GLU and packs h
         for (uint32_t k = 0; k < G; ++k) {
-            uint32_t hoff = 0;
+            uint32_t hoff = 0, loff = 0;
             for (uint32_t pg = 0; pg < NPG; ++pg) {
                 const uint32_t pw = get_arg_val<uint32_t>(pg), n = MT * pw;
                 tile_regs_acquire();
@@ -438,6 +483,16 @@ void kernel_main() {
                     continue;
                 }
                 tile_regs_wait();
+#ifdef SE_LAT
+                if (pg >= SE_NGU) {  // (a latent-down pass: no GLU, the chip's latent columns packed bf16 to LAT)
+                    pack_reconfig_data_format(SE_LAT);
+                    for (uint32_t r = 0; r < MT; ++r)
+                        for (uint32_t t = 0; t < pw; ++t) pack_tile<true>(r * pw + t, SE_LAT, r * SE_LWMAX + loff + t);
+                    tile_regs_release();
+                    loff += pw;
+                    continue;
+                }
+#endif
                 pack_reconfig_data_format(HOWN);
 #if defined(SE_GLU)
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
@@ -458,6 +513,10 @@ void kernel_main() {
             }
         }
         cb_push_back(HOWN, MT * POMAX);
+#ifdef SE_LAT
+        cb_reserve_back(SE_LAT, MT * SE_LWMAX);  // (the latent: the BRISC hands it to the ports, the NCRISC writes mine)
+        cb_push_back(SE_LAT, MT * SE_LWMAX);
+#endif
         }
 #ifdef SE_RS
         {
@@ -629,8 +688,11 @@ class SeEngine3:
         shards=1,
         down=True,
         rs=None,
+        latent=None,
     ):
-        """rs (se_rs.RsPlan): down + the SE reduce-scatter in this program (tiling, schedule; the ports are the
+        """latent (tiles): K3's latent down on the gathered x - the chip's column slice [H, latent tiles], extra plain
+        passes after gate / up (fp32 partials between shards, bf16 out) - and its all-to-all to the owners (with rs).
+        rs (se_rs.RsPlan): down + the SE reduce-scatter in this program (tiling, schedule; the ports are the
         gather's movers) - y is then this chip's reduced block. down False: no down here - h [rows, I] goes to DRAM (y) for the down + reduce-scatter stage.
         shards: the K shards gate / up walks shard-major (the TP size in the fused head: the gather's shards)."""
         self.mesh = mesh_device
@@ -660,6 +722,15 @@ class SeEngine3:
         pwmax = (8 // MT) // 2 * 2
         self.NPG = max(-(-2 * p // pwmax) for p in pairs)
         self.wg = [_split(2 * p, self.NPG, 2) for p in pairs]
+        self.NGU, self.LT = self.NPG, latent  # (gate / up passes; then the latent's)
+        if latent:
+            lw = column_split(latent, GX, 1)
+            assert min(lw) >= 1
+            self.lw, self.l0 = lw, [sum(lw[:c]) for c in range(GX)]
+            self.LWMAX = max(lw)
+            npl = -(-self.LWMAX // (8 // MT))
+            self.wg = [wg + _split(lw[c], npl, 1) for c, wg in enumerate(self.wg)]
+            self.NPG += npl
         # down: the column's output tiles, NPD passes of widths <= 8 / MT, K steps of KBD
         pnd = column_split(self.NTH, GX, 1)
         self.n0d = [sum(pnd[:c]) for c in range(GX)]
@@ -697,21 +768,45 @@ class SeEngine3:
         self.xown_t = self.NCH * nown * MT * self.KB
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
         off, o = {}, 0
-        for k, v in [
-            ("xown", self.xown_t * 2048),
-            ("wown", self.wown_t * self.wtb),
-            ("xin", 2 * MT * self.KB * 2048),
-            ("win", NWS * self.WSLOT * self.wtb),
-            ("hown", MT * self.POMAX * 2048),
-            ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
-            ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
-            ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
-            ("words", 256),
-        ] + (self._rs_regions() if rs is not None else []):
+        rsr = self._rs_regions() if rs is not None else []
+        # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
+        # them - overlay XIN + ACC, which are dead once this core's gate / up is done: no row peer multicasts into XIN
+        # after the last round it consumed; only its own compute touches ACC)
+        ovl = dict(rsr[:2]) if rsr else {}
+        rsr = rsr[2:]
+        for k, v in (
+            [
+                ("xown", self.xown_t * 2048),
+                ("wown", self.wown_t * self.wtb),
+                ("win", NWS * self.WSLOT * self.wtb),
+                ("hown", MT * self.POMAX * 2048),
+                ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
+                ("xin", 2 * MT * self.KB * 2048),
+                ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
+                ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
+                ("words", 256),
+            ]
+            + rsr
+            + ([("lat", MT * self.LWMAX * 2048), ("latz", (shards - 1) * MT * self.LWMAX * 2048)] if latent else [])
+        ):
             off[k], o = o, al(o + v)
+        if ovl:
+            room = off["out"] - off["xin"]
+            if al(ovl["hold"]) + ovl["finb"] <= room:
+                off["hold"], off["finb"] = off["xin"], off["xin"] + al(ovl["hold"])
+            else:  # (no room: their own regions)
+                for k, v in ovl.items():
+                    off[k], o = o, al(o + v)
         self.off, self.arena_bytes = off, o
         if o > ARENA_MAX:
-            raise ValueError(f"se_engine3: arena {o // 1024} KB > {ARENA_MAX // 1024} KB of L1 (KB {self.KB})")
+            sizes = {
+                k: (off[k2] if i + 1 < len(off) else o) - off[k]
+                for i, (k, k2) in enumerate(zip(off, list(off)[1:] + [None]))
+            }
+            raise ValueError(
+                f"se_engine3: arena {o // 1024} KB > {ARENA_MAX // 1024} KB of L1 (KB {self.KB}): "
+                + ", ".join(f"{k} {v // 1024}" for k, v in sizes.items())
+            )
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
         self.crs = cores
         self.alloc_arena()
@@ -760,7 +855,7 @@ class SeEngine3:
         w = (self.KT * 2 * self.HT + self.HT * self.NTH) * self.wtb
         return dict(w=w, x=self.rows * self.H * 2, y=self.rows * self.H * 2)
 
-    def upload(self, w_gu, w_down, pos=None):
+    def upload(self, w_gu, w_down, pos=None, w_lat=None):
         """Per device (row-major mesh order): w_gu [H, 2 I] (glu_weight tile pairs), w_down [I, H] -> one bf8 tensor
         a chip, per-bank: core (c, cy)'s W-own (its column's blocks b = cy, cy + GY, .. of a chunk's stream order:
         gate / up [KB x pass width] pass-major, then down [KBD x pass width]) one contiguous region, region c GY + cy in
@@ -776,8 +871,11 @@ class SeEngine3:
                 g0 = 2 * self.h0[c]
                 for pg, pw in enumerate(self.wg[c]):
                     c0 = g0 + sum(self.wg[c][:pg])
+                    src = wgt
+                    if pg >= self.NGU:  # (latent passes: this column's slice of the chip's latent columns)
+                        src, c0 = w_lat[dev], self.l0[c] + sum(self.wg[c][self.NGU : pg])
                     for j in range(NSG):
-                        blk = wgt[j * KB * 32 : (j + 1) * KB * 32, c0 * 32 : (c0 + pw) * 32]
+                        blk = src[j * KB * 32 : (j + 1) * KB * 32, c0 * 32 : (c0 + pw) * 32]
                         blocks.append(blk.reshape(KB, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
                 for pd, pw in enumerate(self.wd[c]):
                     c0 = self.n0d[c] + sum(self.wd[c][:pd])
@@ -816,6 +914,7 @@ class SeEngine3:
         rs_port=None,
         rs_mbox=0,
         rs_arr=(0, 0),
+        la=None,
     ):
         """(CBs, kernels, semaphores) of the engine on one chip (the kernel_lib families attached by the caller via
         attach_mcast). x: DRAM [rows, x_ct tiles] (columns x_k0 .. of the full x; None: all; 0: none). shard_order: this
@@ -856,6 +955,8 @@ class SeEngine3:
                 cb(RS_CB[k], k, z[k], ttnn.bfloat16, 2048)
             for k in ("finc", "psync"):
                 cb(RS_CB[k], k, z[k], ttnn.bfloat16, 16)
+        if self.LT:
+            cb(LAT_CB, "lat", MT * self.LWMAX * 2048, ttnn.bfloat16, 2048)
         cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
@@ -889,6 +990,7 @@ class SeEngine3:
                     + tail
                     + [int(y.buffer_address())]
                     + self._rs_brisc(rs_pos, rs_port, rs_mbox, c, cy)
+                    + self._la_brisc(rs_pos, rs_port, la, c, cy)
                 )
                 n_rt[cx0 + c][cy] = (
                     [
@@ -911,6 +1013,7 @@ class SeEngine3:
                     + sor
                     + tail
                     + self._rs_ncrisc(rs_pos, rs_arr, c, cy)
+                    + self._la_ncrisc(rs_pos, la, c, cy)
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
@@ -957,6 +1060,10 @@ class SeEngine3:
         if self.rs is not None:
             nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
             nd += f"#define SE_P {self.rs.P}\n"
+        if self.LT:
+            assert self.rs is not None, "the latent's all-to-all rides the reduce-scatter's ports and args"
+            nd += f"#define SE_LAT {LAT_CB}\n#define SE_NGU {self.NGU}\n#define SE_LWMAX {self.LWMAX}\n"
+            nd += f"#define G_LT {len(so) * self.LT}\n"
         self.brisc = ttnn.KernelDescriptor(
             kernel_source=nd + _probes() + _BRISC,
             source_type=st,
@@ -971,7 +1078,10 @@ class SeEngine3:
                 kernel_source=nd + _probes() + _NCRISC,
                 source_type=st,
                 core_ranges=allc,
-                compile_time_args=nct + w_ct + y_ct,
+                compile_time_args=nct
+                + w_ct
+                + y_ct
+                + (list(ttnn.TensorAccessorArgs(la["out"]).get_compile_time_args()) if self.LT else []),
                 runtime_args=n_rt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_1),
             ),
@@ -1041,6 +1151,49 @@ class SeEngine3:
         k = rs.k(cx, cy)
         hs = rs.handoffs(p, cx, cy)
         return [len(hs), mbox + 16 * k] + [v for _, d in hs for v in port(d, rs.link(k))]
+
+    def la_rows(self, cy, b):
+        """(first local row, rows) of core row cy's MT row tiles in owner block b (RB = CR / G row tiles a block)."""
+        RB = self.CR // self.shards
+        rs = [r for r in range(self.MT) if (cy * self.MT + r) // RB == b]
+        return (rs[0], len(rs)) if rs else (0, 0)
+
+    def la_dir(self, p, b):
+        """The direction chip p sends block b's latent (shortest; ring ties by p's parity)."""
+        G = self.shards
+        if not self.rs.kind.startswith("ring"):
+            return "fwd" if b > p else "bwd"
+        df = (b - p) % G
+        return "fwd" if df < G - df or (df == G - df and p % 2 == 0) else "bwd"
+
+    def _la_brisc(self, p, port, la, cx, cy):
+        """The latent hand-offs: [count, my port word] + per destination block with rows of mine its port's NoC."""
+        if not self.LT:
+            return []
+        k = cy * self.GX + cx
+        dst = [b for b in range(self.shards) if b != p and self.la_rows(cy, b)[1]]
+        if "NOA2A" in _probes():  # (timing / hang probe: no all-to-all)
+            dst = []
+        return [len(dst), la["word"] + 16 * k] + [v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)]
+
+    def _la_ncrisc(self, p, la, cx, cy):
+        if not self.LT:
+            return []
+        r0, nr = self.la_rows(cy, p)
+        RB = self.CR // self.shards
+        return [
+            nr,
+            r0,
+            self.shards - 1 if nr and "NOA2A" not in _probes() else 0,
+            la["ctr"],
+            self.base + self.off["latz"],
+            self.LT,
+            self.l0[cx],
+            self.lw[cx],
+            p,
+            cy * self.MT + r0 - p * RB if nr else 0,
+            int(la["out"].buffer_address()),
+        ]
 
     def _rs_ncrisc(self, p, arr, cx, cy):
         """The NCRISC's arrival credits (per direction, slot order: thresholds) and the fin sub-block's y map."""

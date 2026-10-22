@@ -232,13 +232,16 @@ class HeadSE3:
         rs_dim=None,
         rs_mode="fused",
         router=None,
+        latent=None,
     ):
         """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
         adds there, y the chip's reduced block - the only DRAM write); "mrs": (the bar) the engine stops at h in DRAM
         and the ported matmul_reduce_scatter op runs on it. None: the engine's own down, y the chip's partial.
         router (RouterSpec): the router chain on the mover column's free cores (tt/router_stream.py) - run() then
-        returns (y, the owners' joint routing rows)."""
+        leaves the owners' joint routing rows in self.outputs["rows"]. latent (K3, the latent width Hr): the latent
+        down on the gathered x (column split, extra engine passes) and its all-to-all to the owners, the owners'
+        [rows / TP, Hr] in self.outputs["latent"]."""
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
@@ -287,12 +290,14 @@ class HeadSE3:
                     shards=G,
                     down=self.rs_mode != "mrs",
                     rs=self.plan,
+                    latent=latent // 32 // G if latent else None,
                 )
                 break
-            except ValueError:
+            except ValueError as err:
+                last_err = err
                 continue
         else:
-            raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows")
+            raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows ({last_err})")
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         if self.rs_mode == "mrs":
             ttnn.deallocate(self.eng.arena)
@@ -308,7 +313,7 @@ class HeadSE3:
         if self.rs_mode == "fused":  # the ports' mailboxes (a word per engine core, zero) and the arrival counters
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-            words = GX * GY * 4 + 4 * 8  # (+ the router cores' words)
+            words = 2 * GX * GY * 4 + 4 * 8  # (SE hand-offs, the router cores', the latent hand-offs)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -321,7 +326,7 @@ class HeadSE3:
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-            self.arr_sems = [ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(2)]
+            self.arr_sems = [ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(3)]
             ttnn.synchronize_device(mesh_device)
         self.router = None
         if router is not None:
@@ -348,16 +353,25 @@ class HeadSE3:
                 words=int(self.mbox.buffer_address()) + 16 * GX * GY,
             )
         self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
+        self.latent = latent
+        self.outputs = {}
         self.state = dict(key=None)
 
-    def upload(self, w_gu, w_down):
+    def upload(self, w_gu, w_down, w_latent=None):
         """w_gu / w_down per device (row-major mesh order). With rs_dim: (engine weights, W_down [I, H] bf8 a chip)."""
         if self.rs_mode != "mrs":
             pos = None
             if self.rs_mode == "fused":
                 R, C = tuple(self.mesh.shape)
                 pos = [self.xg.chips[(d // C, d % C)]["rings"][0]["p"] for d in range(R * C)]
-            return self.eng.upload(w_gu, w_down, pos=pos)
+            w_lat = None
+            if self.latent:  # (the latent down [Hr, H]: chip p's columns of it, [H, Hr / TP])
+                G = self.plan.G
+                w_lat = [
+                    w_latent[d][pos[d] * self.latent // G : (pos[d] + 1) * self.latent // G].T.contiguous()
+                    for d in range(len(pos))
+                ]
+            return self.eng.upload(w_gu, w_down, pos=pos, w_lat=w_lat)
         R, C = tuple(self.mesh.shape)
         glob = torch.cat([torch.cat(list(w_down[r * C : (r + 1) * C]), dim=1) for r in range(R)], dim=0)
         wd = ttnn.from_torch(
@@ -410,17 +424,19 @@ class HeadSE3:
         self.rw = self.router.upload(w_router, bias)
 
     def run(self, x, w):
-        if self.router is not None:
-            self.rout = self.router.out_tensor()
-            y = self._run(
-                x,
-                w,
-                self.H // self.plan.G if self.rs_dim == -1 else self.H,
-                self.rows // self.plan.G if self.rs_dim == -2 else self.rows,
-            )
-            return y, self.rout
         if self.rs_mode == "fused":
             G = self.plan.G
+            self.outputs = {}
+            if self.router is not None:
+                self.rout = self.outputs["rows"] = self.router.out_tensor()
+            if self.latent:
+                self.lout = self.outputs["latent"] = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, self.rows // G, self.latent]),
+                    ttnn.bfloat16,
+                    ttnn.TILE_LAYOUT,
+                    self.mesh,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
             return self._run(
                 x, w, self.H // G if self.rs_dim == -1 else self.H, self.rows // G if self.rs_dim == -2 else self.rows
             )
@@ -447,8 +463,7 @@ class HeadSE3:
             ttnn.DRAM_MEMORY_CONFIG,
         )
         key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), id(self.eng.arena))
-        if self.router is not None:
-            key += (int(self.rout.buffer_address()),)
+        key += tuple(int(t.buffer_address()) for t in self.outputs.values())
         if self.state["key"] != key:
             md = ttnn.MeshProgramDescriptor()
             e = self.eng
@@ -469,10 +484,18 @@ class HeadSE3:
                         zone=(e.base + e.off["arrf"], e.base + e.off["arrb"]),
                         arr=arr,
                     )
+                    rsx["coord"] = coord
+                    la = None
+                    if self.latent:
+                        la = dict(word=mbox + 16 * e.GX * e.GY + 128, ctr=arr[2], out=self.lout)
                     rse = dict(
-                        rs_pos=p, rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y), rs_mbox=mbox, rs_arr=arr
+                        rs_pos=p,
+                        rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y),
+                        rs_mbox=mbox,
+                        rs_arr=arr[:2],
+                        la=la,
                     )
-                c0, k0 = self.xg.pieces(coord, prog, x, XREADY, rs=rsx, router=self.router)
+                c0, k0 = self.xg.pieces(coord, prog, x, XREADY, rs=rsx, router=self.router, la=rse.get("la"))
                 if self.router is not None:
                     c2, k2 = self.router.pieces(coord, x, *self.rw, self.rout)
                     c0, k0 = c0 + c2, k0 + k2
@@ -495,7 +518,6 @@ class HeadSE3:
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
             self.state["key"], self.state["desc"] = key, md
         io = [x, w, y, self.eng.arena]
-        if self.router is not None:
-            io += [self.rout, *self.rw]
+        io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
         ttnn.generic_op(io, self.state["desc"])
         return y

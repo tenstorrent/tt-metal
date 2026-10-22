@@ -73,14 +73,14 @@ _RS_READER = r"""
 // of a unit and before a blocking wait (matmul_reduce_scatter's port reader). At the end my mailbox words re-armed.
 // args at r0: nu, (e | b << 8 | mask << 16, slot0 | slot1 << 16) x nu, nc, (x | y << 8 | half << 16 | k << 20,
 // counts (8 bits a block)) x nc, the chip's entry order [G], FINB address, mailbox address
-FORCE_INLINE void rs_gather(uint32_t r0) {
+FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
     const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
     const uint32_t finb = get_arg_val<uint32_t>(en0 + G), mbox = get_arg_val<uint32_t>(en0 + G + 1);
     uint32_t seen[128];
     for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
-    uint32_t pos = 0, c = 0, need = 0, wptr = 0;
+    uint32_t c = 0, need = 0, wptr = 0;  // (pos: chunks pushed since the phases began - the CB's batch alignment)
     auto flush = [&]() {
         noc_async_read_barrier();
         cb_push_back(0, c * RP);
@@ -119,19 +119,116 @@ FORCE_INLINE void rs_gather(uint32_t r0) {
 }
 """
 
+_LA_READER = r"""
+// (K3's latent all-to-all) per destination block b of my direction, per core of my link holding rows of b: wait its
+// hand-off on my latent word of it, NoC-read its rows [r0, r0 + nr) of its latent block [MT][LWMAX] in RP-tile chunks
+// (the batch rules of rs_gather). args at a0: nu, (b | slot << 8 | chip << 16, mesh) x nu, nc, (x | y << 8 | k << 16,
+// rows: 4 bits a block - r0 | nr << 2) x nc, LAT address, word address, LATZ address, counter address, LWMAX
+FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos) {
+    const uint32_t nu = get_arg_val<uint32_t>(a0), u0 = a0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
+    if (nu == 0) return;
+    const uint32_t c0 = u0 + 2 * nu + 1, t0a = c0 + 2 * nc;
+    const uint32_t lat = get_arg_val<uint32_t>(t0a), word = get_arg_val<uint32_t>(t0a + 1), LW = get_arg_val<uint32_t>(t0a + 4);
+    uint32_t seen[128];
+    for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
+    uint32_t c = 0, need = 0, wptr = 0;  // (pos: chunks pushed since the phases began - the CB's batch alignment)
+    auto flush = [&]() {
+        noc_async_read_barrier();
+        cb_push_back(0, c * RP);
+        pos += c;
+        c = 0;
+    };
+    for (uint32_t un = 0; un < nu; ++un) {
+        const uint32_t b = get_arg_val<uint32_t>(u0 + 2 * un) & 0xFF;
+        for (uint32_t i = 0; i < nc; ++i) {
+            const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), rw = (get_arg_val<uint32_t>(c0 + 2 * i + 1) >> (4 * b)) & 0xF;
+            const uint32_t r0 = rw & 3, nr = rw >> 2, cnt = nr * LW;
+            if (cnt == 0) continue;
+            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (cw >> 16));
+            const uint32_t target = ++seen[i];
+            invalidate_l1_cache();
+            if (*mb < target && c > 0) flush();
+            noc_semaphore_wait_min(mb, target);
+            const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, lat + r0 * LW * 2048);
+            for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                if (c == 0) {
+                    need = GROUP - pos % GROUP;
+                    cb_reserve_back(0, need * RP);
+                    wptr = get_write_ptr(0);
+                }
+                const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
+                noc_async_read(src + t0 * 2048, wptr + c * RP * 2048, n * 2048);
+                if (++c == need) flush();
+            }
+        }
+        if (c > 0) flush();
+    }
+    for (uint32_t i = 0; i < nc; ++i)
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 16)) = 0;
+}
+"""
+
+_LA_SENDER = r"""
+// (K3's latent all-to-all) the reader's walk: chunks into chip b's same core (multi-hop fabric unicast: a header
+// routed to b a unit), LATZ slot of my chip, its rows; a core's last chunk with the fused increment of its counter
+template <typename C, typename H, typename L>
+FORCE_INLINE void la_send(uint32_t a0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos) {
+    const uint32_t nu = get_arg_val<uint32_t>(a0), u0 = a0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
+    if (nu == 0) return;
+    const uint32_t c0 = u0 + 2 * nu + 1, t0a = c0 + 2 * nc;
+    const uint32_t latz = get_arg_val<uint32_t>(t0a + 2), lctr = get_arg_val<uint32_t>(t0a + 3), LW = get_arg_val<uint32_t>(t0a + 4);
+    uint32_t u = 0, lim = GROUP - rpos % GROUP;
+    auto pop_batch = [&]() {
+        noc_async_writes_flushed();
+        cb_pop_front(0, u * RP);
+        rpos += u;
+        u = 0;
+        lim = GROUP - rpos % GROUP;
+    };
+    for (uint32_t un = 0; un < nu; ++un) {
+        const uint32_t w0 = get_arg_val<uint32_t>(u0 + 2 * un), b = w0 & 0xFF, slot = (w0 >> 8) & 0xFF;
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[GROUP + 1 + un];
+        for (uint32_t i = 0; i < nc; ++i) {
+            const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), rw = (get_arg_val<uint32_t>(c0 + 2 * i + 1) >> (4 * b)) & 0xF;
+            const uint32_t r0 = rw & 3, cnt = (rw >> 2) * LW;
+            if (cnt == 0) continue;
+            const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
+            const uint32_t dst0 = latz + (slot * MT + r0) * LW * 2048;
+            for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
+                while (!cb_pages_available_at_front(0, RP * (u + 1))) lpoll();
+                cb_wait_front(0, RP * (u + 1));
+                const uint32_t src = get_read_ptr(0) + u * RP * 2048;
+                const uint32_t n = cnt - t0 < RP ? cnt - t0 : RP;
+                const uint64_t dst = get_noc_addr(x, y, dst0 + t0 * 2048);
+                noc_async_writes_flushed();  // (this unit's one header: its previous packet has left)
+                if (t0 + RP >= cnt) {
+                    hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(x, y, lctr), 1, true}, n * 2048);
+                } else {
+                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 2048);
+                }
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(src, n * 2048, reinterpret_cast<uint32_t>(hdr));
+                if (++u == lim) pop_batch();
+            }
+        }
+        if (u > 0) pop_batch();
+    }
+}
+"""
+
 _RS_SENDER = r"""
 // (down + reduce-scatter) my units' chunks, the reader's walk: one fabric packet each into the downstream chip's same
 // core, its zone slot of this direction (slot by the core's half); a core's last chunk carries the fused increment of
 // its arrival counter. Pops at the reader's batch boundaries. args at r0: as the reader's, then the zone base, the
 // arrival counter's address, P (zone slot tiles)
 template <typename C, typename H, typename L>
-FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll) {
+FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos) {
     const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
     const uint32_t zb = get_arg_val<uint32_t>(en0 + G + 2), actr = get_arg_val<uint32_t>(en0 + G + 3);
     const uint32_t P = get_arg_val<uint32_t>(en0 + G + 4);
-    uint32_t rpos = 0, u = 0, lim = GROUP, h = 0;
+    uint32_t u = 0, lim = GROUP - rpos % GROUP, h = 0;
     auto pop_batch = [&]() {
         noc_async_writes_flushed();
         cb_pop_front(0, u * RP);
@@ -177,6 +274,7 @@ _READER = (
     + _CT
     + "constexpr auto x_args = TensorAccessorArgs<15>();\n"
     + _WALK
+    + _LA_READER
     + _RS_READER
     + r"""
 void kernel_main() {
@@ -228,7 +326,10 @@ void kernel_main() {
     noc_semaphore_wait_min(xloaded, xl_need);  // (re-arm: every engine core counted itself on every port)
     noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(xloaded)), 0u - xl_need);
     noc_async_atomic_barrier();
-    rs_gather(xl0 + 2);
+    const uint32_t rsa = xl0 + 2, rnu = get_arg_val<uint32_t>(rsa), rnc = get_arg_val<uint32_t>(rsa + 1 + 2 * rnu);
+    uint32_t pos = 0;  // (the gather left the CB batch-aligned; the phases after it share one chunk count)
+    la_gather(rsa + 2 + 2 * rnu + 2 * rnc + G + 5, pos);
+    rs_gather(rsa, pos);
 }
 """
 )
@@ -245,6 +346,7 @@ using namespace tt::tt_fabric;
 """
     + _CT
     + _WALK
+    + _LA_SENDER
     + _RS_SENDER
     + LSTREAM
     + r"""
@@ -264,13 +366,20 @@ void kernel_main() {
     const uint32_t ls0 = rs0 + 2 + 2 * rnu + 2 * rnc + G + 5;
     LStream ls;
     ls.init(ls0);
-    a = ls0 + LStream::len(ls0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0) {
+    const uint32_t la0 = ls0 + LStream::len(ls0), lnu = get_arg_val<uint32_t>(la0);
+    a = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1];
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
             hdrs[h] = PacketHeaderPool::allocate_header();
             (void)fabric_set_unicast_route(hdrs[h], chip, mesh);
+        }
+        for (uint32_t un = 0; un < lnu && un < 3; ++un) {  // (the latent's destinations: routed a unit)
+            const uint32_t w0 = get_arg_val<uint32_t>(la0 + 1 + 2 * un);
+            hdrs[GROUP + 1 + un] = PacketHeaderPool::allocate_header();
+            (void)fabric_set_unicast_route(hdrs[GROUP + 1 + un], static_cast<uint16_t>(w0 >> 16),
+                                           static_cast<uint16_t>(get_arg_val<uint32_t>(la0 + 2 + 2 * un)));
         }
         conn.open();
         if (send_ready) {  // fence: I started this call - the neighbour's port facing me may write into my L1
@@ -322,7 +431,9 @@ void kernel_main() {
             }
         }
         lpoll();
-        rs_send(rs0, conn, hdrs, lpoll);
+        uint32_t rpos = 0;  // (as the reader's pos)
+        la_send(la0, conn, hdrs, lpoll, rpos);
+        rs_send(rs0, conn, hdrs, lpoll, rpos);
         ls.poll(conn, hdrs[GROUP], true);  // (whatever is left of the logits)
         noc_async_writes_flushed();
         ls.rearm();
@@ -512,7 +623,48 @@ class XGather3:
         i = DIRS_I[d]
         return out + plan.entries(p) + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], plan.P]
 
-    def pieces(self, coord, prog, x, xready_sem, rs=None, router=None):
+    def la_block(self, rs, la, d, v):
+        """A port's latent all-to-all args (la_gather / la_send): its destination blocks, its link's cores with their
+        rows a block, the engine's LAT / words / LATZ / counter, LWMAX. la: dict(word, ctr) (None: no latent)."""
+        e = self.eng
+        import os
+
+        if not la or not getattr(e, "LT", None) or "NOA2A" in os.environ.get("SE_PROBE", ""):
+            return [0, 0] + [0] * 5
+        plan, p = rs["plan"], rs["p"]
+        node = lambda pos: self._node_of_pos(rs["coord"], pos)  # noqa: E731
+        dst = [b for b in range(self.G) if b != p and e.la_dir(p, b) == d]
+        units = []
+        for b in dst:
+            n = node(b)
+            units += [b | (p if p < b else p - 1) << 8 | int(n.chip_id) << 16, int(n.mesh_id)]
+        assert len(dst) <= 3 and self.group + 1 + len(dst) <= 12, "packet headers: 12 a RISC"
+        virt = lambda cx, cy: self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(e.cx0 + cx, cy))  # noqa: E731
+        cores = [(cx, cy) for cy in range(e.GY) for cx in range(e.GX) if (cy * e.GX + cx) % self.nv == v]
+        cw = []
+        for cx, cy in cores:
+            c = virt(cx, cy)
+            rows = 0
+            for b in range(self.G):
+                r0, nr = e.la_rows(cy, b)
+                rows |= (r0 | nr << 2) << (4 * b)
+            cw += [c.x | c.y << 8 | (cy * e.GX + cx) << 16, rows]
+        return (
+            [len(dst)]
+            + units
+            + [len(cores)]
+            + cw
+            + [e.base + e.off["lat"], la["word"], e.base + e.off["latz"], la["ctr"], e.LWMAX]
+        )
+
+    def _node_of_pos(self, coord, pos):
+        """The fabric node of the chip at TP position pos in coord's row."""
+        for c, ch in self.chips.items():
+            if c[0] == coord[0] and ch["rings"][0]["p"] == pos:
+                return self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))
+        raise KeyError(pos)
+
+    def pieces(self, coord, prog, x, xready_sem, rs=None, router=None, la=None):
         """(CBs, kernels) of chip `coord` (fabric connections set up on prog); x: this chip's [rows, kl] in DRAM.
         rs: the down + reduce-scatter phase's (rs_block)."""
         mesh, chips, e = self.mesh, self.chips, self.eng
@@ -550,9 +702,13 @@ class XGather3:
                 + T
                 + [self.xloaded, e.GX * e.GY]
                 + (self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5))
+                + self.la_block(rs, la, d, v)
             )
             rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5)
             rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 6)
+            lab = self.la_block(rs, la, d, v)
+            assert lab[0] == 0 or mine, "the latent needs the gather's fence"
+            rsb = rsb + lab
             assert rsb[0] == 0 or mine, "a port sending reduce-scatter units must have the gather's fence"
             assert not (router and router.port_block(coord, d, v)[0]) or mine, "the logits need the gather's fence"
             args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
