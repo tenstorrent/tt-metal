@@ -95,6 +95,14 @@ def upload_bias(device, bias: torch.Tensor | None):
     return None if bias is None else upload(device, bias.reshape(1, -1))
 
 
+def upload_swiglu(device, w_silu: torch.Tensor, w_mul: torch.Tensor, dtype):
+    """Two ``nn.Linear`` weights ``(n, in)`` -> device ``(in, 2n)`` whose column tiles alternate
+    ``[silu_t0, mul_t0, silu_t1, ...]``, the pairing ``minimal_matmul(fuse_swiglu=True)`` reads."""
+    n, k = w_silu.shape
+    pairs = torch.stack([w_silu.t().reshape(k, n // TILE, TILE), w_mul.t().reshape(k, n // TILE, TILE)], dim=2)
+    return upload(device, pairs.reshape(k, 2 * n), dtype=dtype)
+
+
 def linear(x, weight, precision: TtTimestralPrecision, *, bias=None, activation=None):
     """``x @ weight (+ bias)``, then ``activation`` ("silu" / "sigmoid"), with an explicit config
     from ``program_configs`` (DRAM-interleaved, tile-aligned K), else the auto config."""
@@ -135,6 +143,29 @@ def linear(x, weight, precision: TtTimestralPrecision, *, bias=None, activation=
     )
     return ttnn.linear(
         x, weight, bias=bias, program_config=config, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=kernel
+    )
+
+
+def swiglu(x, weight, precision: TtTimestralPrecision):
+    """``(x @ W_mul) * silu(x @ W_silu)`` in one matmul on an ``upload_swiglu`` weight."""
+    import ttnn
+
+    x_shape, (k, n) = tuple(x.padded_shape), tuple(weight.padded_shape)[-2:]
+    grid = x.device().compute_with_storage_grid_size()
+    config = program_configs.swiglu_config(
+        (grid.x, grid.y),
+        math.prod(x_shape[:-1]) // TILE,
+        k // TILE,
+        n // (2 * TILE),
+        max_dest=4 if precision.fp32_dest_acc_en else 8,
+    )
+    return ttnn.experimental.minimal_matmul(
+        x,
+        weight,
+        config=config,
+        fuse_swiglu=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=precision.compute_kernel_config(),
     )
 
 

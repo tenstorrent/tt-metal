@@ -97,6 +97,22 @@ def minimal_matmul_config(grid, m_tiles: int, k_tiles: int, n_tiles: int, *, max
     )
 
 
+def swiglu_config(grid, m_tiles: int, k_tiles: int, n_out_tiles: int, *, max_dest: int = 8):
+    """``minimal_matmul(fuse_swiglu=True)`` blocks: one gate/up tile pair per N block, K blocks up to 12
+    (MLP front half 3.85 ms vs 7.96 ms split; ``tests/perf/sweep_swiglu.py``, ``doc/optimize/iter_02``)."""
+    import ttnn
+
+    m_block = min(_MINIMAL_BLOCK, m_tiles)
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=m_block,
+        K_block_size=_largest_divisor_at_most(k_tiles, _MAX_IN0_BLOCK_W),
+        N_block_size=2,
+        subblock_h=_largest_divisor_at_most(m_block, max_dest // 2),
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+    )
+
+
 def fused_activation(name: str | None):
     import ttnn
 
