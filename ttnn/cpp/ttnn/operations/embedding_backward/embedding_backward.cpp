@@ -30,8 +30,18 @@ Tensor embedding_bw(
     const auto output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config());
     const auto out_dtype = dtype.value_or(output_gradient_tensor_arg.dtype());
 
-    return ttnn::prim::embedding_backward(
+    auto weight_grad = ttnn::prim::embedding_backward(
         input_tensor, output_gradient_tensor_arg, output_mem_config, out_dtype, num_embeddings, optional_output_tensor);
+    const auto& weight_shape = weight_tensor_arg.logical_shape();
+    if (optional_output_tensor.has_value() || weight_shape.rank() == weight_grad.logical_shape().rank()) {
+        return weight_grad;
+    }
+    TT_FATAL(
+        weight_shape.volume() == weight_grad.logical_volume(),
+        "embedding_bw: weight shape {} does not match the gradient shape {}",
+        weight_shape,
+        weight_grad.logical_shape());
+    return ttnn::reshape(weight_grad, weight_shape);
 }
 
 }  // namespace ttnn
