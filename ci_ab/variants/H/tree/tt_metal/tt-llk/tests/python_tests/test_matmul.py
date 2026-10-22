@@ -169,7 +169,8 @@ def test_matmul(
             *([MATMUL_ROW_MOP()] if row_mop else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim
+                formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
+                math_fidelity=math_fidelity,
             ),
             *MATMUL_FORM_KEYS.for_block(
                 formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim
@@ -364,6 +365,7 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
                 DestSync.Full,
                 matmul_dims.ct_dim,
                 matmul_dims.rt_dim,
+                math_fidelity=math_fidelity,
             ),
             *MATMUL_FORM_KEYS.for_block(
                 formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim

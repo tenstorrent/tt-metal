@@ -259,6 +259,7 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
             ),
             *MATMUL_FORM_KEYS.for_block(
                 formats,

@@ -116,8 +116,8 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         return "#define MATMUL_STREAM_NARROW"
 
     @staticmethod
-    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32) -> list:
-        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST, not an 8-row in0 tile, nor a 4-row or shorter one with ct_dim below 8), else []."""
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32, math_fidelity=None) -> list:
+        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST, not an 8-row in0 tile, nor a 4-row or shorter one with ct_dim below 8, nor a 1x1 block at HiFi4), else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
         if dest_sync != DestSync.Full:
@@ -125,6 +125,8 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
             return []
         if in0_r_dim == 8 or (in0_r_dim <= 4 and ct_dim < 8):
+            return []
+        if math_fidelity == MathFidelity.HiFi4 and ct_dim == 1 and rt_dim == 1:
             return []
         streamed = formats.input_format if ct_dim >= rt_dim else formats.input_format_B
         return (

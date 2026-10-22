@@ -183,6 +183,7 @@ def test_unpack_matmul(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.tile_dimensions.in0_tile_r_dim,
+                math_fidelity=math_fidelity,
             ),
         ],
         runtimes=[
