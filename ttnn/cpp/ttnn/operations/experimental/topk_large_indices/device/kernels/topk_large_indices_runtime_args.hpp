@@ -37,7 +37,6 @@ enum Compute {
     compute_num_recv_rounds = 3,
     compute_sends_survivor = 4,
     compute_has_split = 5,
-    compute_num_args = 6,
 };
 enum Writer {
     writer_start_row = 0,
