@@ -289,9 +289,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef DYN_MODE
 #define DYN_MODE 0
 #endif
+#if defined(DYN_PK)
 [[maybe_unused]] static std::uint32_t dyn_pk_calls = 0;
 [[maybe_unused]] volatile std::uint32_t* dyn_tp_pk = reinterpret_cast<volatile std::uint32_t*>(16);
 #define DYN_THR() ((DYN_MODE == 1) ? true : (DYN_MODE == 3) ? false : (DYN_MODE == 2) ? ((dyn_pk_calls++ & 1) != 0) : ((*dyn_tp_pk & 1) != 0))
+#endif
 #ifndef MATMUL_PACK_FORM
 #define MATMUL_PACK_FORM 0
 #endif

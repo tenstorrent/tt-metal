@@ -86,7 +86,8 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
  *                        a full-sync 16-bit DEST (16 tiles) takes the 8-bit body, since at half sync it costs about two
  *                        cycles per DEST section wherever the math thread bounds the matmul.
  * @param unpB_face_r_dim: Face rows of in0; a tile of 4 rows or fewer with fewer than 8 tiles in a row runs the math thread
- *                         at its floor on the default body, which the 8-bit body only delays.
+ *                         at its floor on the default body, which the 8-bit body only delays, and a tile of 8 rows keeps the
+ *                         default body, which streams it faster.
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t ct_dim,
@@ -96,7 +97,7 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t dest_max_tiles,
     const std::uint32_t unpB_face_r_dim = 16)
 {
-    return dest_max_tiles > 8 && (unpB_face_r_dim > 4 || ct_dim >= 8) &&
+    return dest_max_tiles > 8 && (unpB_face_r_dim > 8 || (unpB_face_r_dim <= 4 && ct_dim >= 8)) &&
            ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 
