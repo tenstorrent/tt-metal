@@ -48,6 +48,16 @@
       "type": "string",
       "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*|enum:[A-Za-z_][A-Za-z0-9_]*|packed:[a-z0-9_]+)$"
     },
+    "stream_register": {
+      "description": "A register's byte offset in a stream's block, and how many of the word's low bits hold its value.",
+      "type": "object",
+      "properties": {
+        "offset": { "$ref": "#/$defs/count" },
+        "bits": { "type": "integer", "minimum": 1, "maximum": 32 }
+      },
+      "required": ["offset", "bits"],
+      "additionalProperties": false
+    },
 
     "run": {
       "type": "object",
@@ -60,11 +70,20 @@
         "host_rank": { "$ref": "#/$defs/count" },
         "mpi_rank": { "$ref": "#/$defs/count" },
         "world_size": { "type": "integer", "minimum": 1 },
-        "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+        "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "git_sha": {
+          "description": "The commit tt-metal was built from. Empty when the source tree is neither a git checkout nor a git archive export.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{40})?$"
+        },
+        "git_dirty": {
+          "description": "Whether the build had uncommitted changes to tracked files.",
+          "type": "boolean"
+        }
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "host_rank", "mpi_rank",
-        "world_size", "written_at"
+        "world_size", "written_at", "git_sha", "git_dirty"
       ],
       "additionalProperties": false
     },
@@ -183,23 +202,23 @@
           "additionalProperties": false
         },
         "stream_registers": {
-          "description": "Where a stream register is: stream N's register R is at base + N * stride + register_offsets[R].",
+          "description": "Where a stream register is: stream N's register R is at base + N * stride + registers[R].offset, and its value is the word's low registers[R].bits bits.",
           "type": "object",
           "properties": {
             "base": { "$ref": "#/$defs/count" },
             "stride": { "$ref": "#/$defs/count" },
             "count": { "$ref": "#/$defs/count" },
-            "register_offsets": {
+            "registers": {
               "type": "object",
               "properties": {
-                "buf_space_available": { "$ref": "#/$defs/count" },
-                "remote_src": { "$ref": "#/$defs/count" }
+                "buf_space_available": { "$ref": "#/$defs/stream_register" },
+                "remote_src": { "$ref": "#/$defs/stream_register" }
               },
               "required": ["buf_space_available", "remote_src"],
               "additionalProperties": false
             }
           },
-          "required": ["base", "stride", "count", "register_offsets"],
+          "required": ["base", "stride", "count", "registers"],
           "additionalProperties": false
         },
         "core_registers": {
