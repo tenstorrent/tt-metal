@@ -1,19 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""QKV projection with split outputs vs the fused 2D linear, at the paper shape (one chip).
+"""Attention projections with split outputs, at the paper shape (one chip).
 
     python models/experimental/timestral/tests/perf/sweep_qkv_split.py <out_dir> [--precision accuracy|performance]
-        [--rows 98304]
+        [--rows 98304] [--chunks 3|4|2]
 
-Computes ``x (rows, 768) @ Wqkv (768, 2304)``:
+Computes ``x (rows, 768) @ W (768, chunks * 768)`` with
+``ttnn.experimental.minimal_matmul_split(chunks)``, one (rows, 768) output per chunk, against a baseline:
 
-    2d linear  the model's current path: one fused (rows, 2304) output
-    split      ttnn.experimental.minimal_matmul_split(chunks=3): three (rows, 768) outputs, the layout
-               the fused head-split + RoPE post op reads
+    chunks 3  [Wq | Wk | Wv]       vs the fused 2D linear (one (rows, 2304) output)
+    chunks 4  [Wq | Wk | Wv | Wg]  vs the 3-chunk split plus the separate wg + sigmoid linear
+    chunks 2  [Wv | Wg]            vs the separate wv and wg + sigmoid linears (univariate V-path)
 
-Time per call is the median wall time of synchronized calls. Writes ``qkv_split_sweep_<precision>.json``
-and ``.md`` to ``out_dir``.
+Time per call is the median wall time of synchronized calls. Writes ``<name>_sweep_<precision>.json``
+and ``.md`` to ``out_dir`` (name: qkv_split, qkvg_split, vg_split).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import torch
 TILE = 32
 TIMED_RUNS = 5
 D = 768
+NAMES = {3: "qkv_split", 4: "qkvg_split", 2: "vg_split"}
 
 
 def _subblocks(block_h: int, block_w: int, max_tiles: int = 8) -> list[tuple[int, int]]:
@@ -60,15 +62,31 @@ def _time(fn, device) -> float:
     return 1e3 * statistics.median(times)
 
 
-def sweep(device, rows: int, precision) -> list[dict]:
+def _baseline(x_tt, w: torch.Tensor, chunks: int, precision, device):
+    """``(name, fn, sigmoid_last)``: the path the model ran before packing these chunks."""
+    from models.experimental.timestral.tt.common import linear, linear_split, upload
+
+    dtype = precision.weight_dtype()
+    if chunks == 3:
+        w_tt = upload(device, w, dtype=dtype)
+        return "2d linear", lambda: linear(x_tt, w_tt, precision), False
+    head, wg = upload(device, w[:, :-D], dtype=dtype), upload(device, w[:, -D:], dtype=dtype)
+    if chunks == 4:
+        fn = lambda: [*linear_split(x_tt, head, precision, 3), linear(x_tt, wg, precision, activation="sigmoid")]
+        return "split 3 + wg/sigmoid (current)", fn, True
+    fn = lambda: [linear(x_tt, head, precision), linear(x_tt, wg, precision, activation="sigmoid")]
+    return "wv + wg/sigmoid (current)", fn, True
+
+
+def sweep(device, rows: int, precision, chunks: int) -> list[dict]:
     import ttnn
 
-    from models.experimental.timestral.tt.common import linear, upload
+    from models.experimental.timestral.tt.common import upload
     from tests.ttnn.utils_for_testing import comp_pcc
 
     torch.manual_seed(0)
     x = torch.randn(rows, D).to(torch.bfloat16).float()
-    w = (torch.randn(D, 3 * D) / math.sqrt(D)).to(torch.bfloat16).float()
+    w = (torch.randn(D, chunks * D) / math.sqrt(D)).to(torch.bfloat16).float()
     expected = x @ w
 
     x_tt = upload(device, x.reshape(1, 1, rows, D))
@@ -76,10 +94,12 @@ def sweep(device, rows: int, precision) -> list[dict]:
     kernel = precision.compute_kernel_config()
     grid = device.compute_with_storage_grid_size()
 
-    candidates = [("2d linear (current)", lambda: linear(x_tt, w_tt, precision))]
+    name, fn, sigmoid_last = _baseline(x_tt, w, chunks, precision, device)
+    baseline_expected = torch.cat([expected[:, :-D], expected[:, -D:].sigmoid()], -1) if sigmoid_last else expected
+    candidates = [(name, fn, baseline_expected)]
     for mb in (4, 8, 16):
         for kb in (4, 6, 8, 12):
-            for nb in (3, 4, 6, 8, 9, 12):
+            for nb in (2, 3, 4, 6, 8, 12):
                 if 2 * mb * kb + 2 * kb * nb + 2 * mb * nb > 720:
                     continue
                 for sh, sw in _subblocks(mb, nb):
@@ -96,16 +116,16 @@ def sweep(device, rows: int, precision) -> list[dict]:
                         return ttnn.experimental.minimal_matmul_split(
                             x_tt,
                             w_tt,
-                            chunks=3,
+                            chunks=chunks,
                             config=cfg,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
                             compute_kernel_config=kernel,
                         )
 
-                    candidates.append((f"split[{mb},{kb},{nb},sb={sh}x{sw}]", split))
+                    candidates.append((f"split[{mb},{kb},{nb},sb={sh}x{sw}]", split, expected))
 
     results = []
-    for name, fn in candidates:
+    for name, fn, expected in candidates:
         entry = {"candidate": name}
         try:
             outs = fn()
@@ -133,25 +153,27 @@ def main() -> None:
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--precision", choices=["accuracy", "performance"], default="accuracy")
     parser.add_argument("--rows", type=int, default=1024 * 96)
+    parser.add_argument("--chunks", type=int, choices=sorted(NAMES), default=3)
     args = parser.parse_args()
     precision = TtTimestralPrecision.performance() if args.precision == "performance" else TtTimestralPrecision()
     device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     try:
-        results = sweep(device, args.rows, precision)
+        results = sweep(device, args.rows, precision, args.chunks)
     finally:
         ttnn.close_mesh_device(device)
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    (args.out_dir / f"qkv_split_sweep_{args.precision}.json").write_text(json.dumps(results, indent=2) + "\n")
+    name = NAMES[args.chunks]
+    (args.out_dir / f"{name}_sweep_{args.precision}.json").write_text(json.dumps(results, indent=2) + "\n")
     ok = sorted((r for r in results if "ms" in r), key=lambda r: r["ms"])
     lines = [
-        f"# QKV split-output sweep ({args.precision}, rows {args.rows})",
+        f"# {name} sweep: {args.chunks} chunks ({args.precision}, rows {args.rows})",
         "",
         "| candidate | ms | PCC / error |",
         "|---|---|---|",
     ]
     lines += [f"| `{r['candidate']}` | {r['ms']:.3f} | {r['pcc']:.5f} |" for r in ok]
     lines += [f"| `{r['candidate']}` | — | FAILED: {r['error']} |" for r in results if "error" in r]
-    (args.out_dir / f"qkv_split_sweep_{args.precision}.md").write_text("\n".join(lines) + "\n")
+    (args.out_dir / f"{name}_sweep_{args.precision}.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines[:14]))
 
 
