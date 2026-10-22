@@ -132,6 +132,9 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        args.push_stripe_chunk,
+        args.push_max_rows,
+        args.push_part,
         tensor_args);
 }
 
@@ -245,6 +248,23 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     validate_batch_index_metadata(args, tensor_args);
     validate_gathered_prefix_metadata(args, tensor_args);
     validate_slot_extent_control_mix(args, tensor_args);
+    if (tensor_args.has_push_table()) {
+        const auto& table = *tensor_args.push_table;
+        TT_FATAL(args.linearized_mesh_ring, "the sparse KV push is full-mesh only (cluster_axis=None)");
+        TT_FATAL(
+            args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+            "the sparse KV push needs a 2D torus fabric (FABRIC_2D_TORUS_XY), got {}",
+            args.fabric_config);
+        TT_FATAL(
+            table.dtype() == DataType::UINT32 && table.layout() == Layout::ROW_MAJOR &&
+                table.memory_config().buffer_type() == BufferType::DRAM,
+            "push_table must be a UINT32 ROW_MAJOR DRAM tensor");
+        TT_FATAL(
+            args.push_stripe_chunk > 0 && args.push_max_rows > 0,
+            "the sparse KV push needs push_stripe_chunk and push_max_rows");
+        TT_FATAL(args.push_part == 0 || args.push_part == 2, "push_part must be 0 (all rows) or 2 (remainder)");
+        TT_FATAL(!tensor_args.has_gathered_prefix_metadata(), "push_table replaces the gathered extent controls");
+    }
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
@@ -375,6 +395,11 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             }
             expected_output_shape[0] = 1;
         }
+        // The sparse push's compact buffer pads each owner's stream to whole bank-lane units, so it may be taller.
+        if (tensor_args.has_push_table() && output_shape.rank() == expected_output_shape.rank() &&
+            output_shape[args.dim] >= expected_output_shape[args.dim]) {
+            expected_output_shape[args.dim] = output_shape[args.dim];
+        }
         TT_FATAL(
             output_shape == expected_output_shape,
             "Output tensor shape must be the worst-case gathered shape {}, got {}",
@@ -472,7 +497,10 @@ HighBwAllGatherDeviceOperation::tensor_return_value_t HighBwAllGatherDeviceOpera
 }
 
 HighBwAllGatherDeviceOperation::program_factory_t HighBwAllGatherDeviceOperation::select_program_factory(
-    const HighBwAllGatherParams&, const HighBwAllGatherInputs&) {
+    const HighBwAllGatherParams&, const HighBwAllGatherInputs& tensor_args) {
+    if (tensor_args.has_push_table()) {
+        return program_factory_t{HighBwSparsePushFactory{}};
+    }
     return program_factory_t{HighBwAllGatherFabricFactory{}};
 }
 
@@ -492,7 +520,11 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& push_table,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows,
+    uint32_t push_part) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -591,12 +623,16 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .push_stripe_chunk = push_stripe_chunk,
+            .push_max_rows = push_max_rows,
+            .push_part = push_part},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
             .input_batch_index_tensor = input_batch_index_tensor,
-            .gathered_prefix_tensor = gathered_prefix_tensor}};
+            .gathered_prefix_tensor = gathered_prefix_tensor,
+            .push_table = push_table}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -619,7 +655,11 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& push_table,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows,
+    uint32_t push_part) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -636,7 +676,11 @@ Tensor high_bw_all_gather(
         gathered_prefix_tensor,
         gathered_slab_global,
         ready_semaphore,
-        data_valid_semaphore);
+        data_valid_semaphore,
+        push_table,
+        push_stripe_chunk,
+        push_max_rows,
+        push_part);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

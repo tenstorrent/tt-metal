@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "high_bw_all_gather.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -101,6 +102,15 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                push_table: Sparse KV push instead of the dense gather. The all-gathered
+                    ``sparse_push_plan`` tables of every chip (uint32 [1, 1, pages * devices, 1024]); each owner
+                    pushes only the rows of the selected cache slot that a requester's top-k references, into
+                    that requester's compact ``output_tensor``. Full mesh (``cluster_axis=None``) on a 2D torus,
+                    with caller-owned semaphores.
+                push_stripe_chunk: Rows per block-cyclic block of the cache the plan was built for.
+                push_max_rows: Row capacity the plan tables were built for.
+                push_part: 0 pushes every needed row; 2 only the rows from the plan's chunk start on (the
+                    prefix rows were pushed earlier by a ``sparse_sdpa`` with a fused push).
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -119,7 +129,29 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("push_table") = nb::none(),
+        nb::arg("push_stripe_chunk") = 0,
+        nb::arg("push_max_rows") = 0,
+        nb::arg("push_part") = 0);
+
+    ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            On-device plan for the sparse KV push, from one requester's top-k indices (per device uint32
+            row-major [1, 1, rows, topk], 0xFFFFFFFF = masked). Returns ``[table, compact_indices]``: the plan table
+            (uint32 [1, 1, pages, 1024]) to all-gather for the owners, and the indices rewritten to slots in the
+            requester's compact buffer.
+        )doc",
+        &sparse_push_plan,
+        nb::arg("indices").noconvert(),
+        nb::kw_only(),
+        nb::arg("num_devices"),
+        nb::arg("stripe_chunk"),
+        nb::arg("max_rows"),
+        nb::arg("pages_per_packet"),
+        nb::arg("banks"),
+        nb::arg("chunk_start") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

@@ -79,6 +79,11 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+
+    // Sparse KV push (HighBwSparsePushFactory): the plan table's geometry and which rows to push. Structural.
+    uint32_t push_stripe_chunk = 0;
+    uint32_t push_max_rows = 0;
+    uint32_t push_part = 0;  // 0 every needed row, 2 only the rows from the chunk start on
 };
 
 struct HighBwAllGatherInputs {
@@ -93,6 +98,10 @@ struct HighBwAllGatherInputs {
     // start position in the gathered dim.
     std::optional<Tensor> gathered_prefix_tensor{std::nullopt};
     bool has_gathered_prefix_metadata() const { return gathered_prefix_tensor.has_value(); }
+    // Sparse KV push: the all-gathered sparse_push_plan tables (uint32 [1, 1, pages * devices, 1024]).
+    // Selects HighBwSparsePushFactory.
+    std::optional<Tensor> push_table{std::nullopt};
+    bool has_push_table() const { return push_table.has_value(); }
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

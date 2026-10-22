@@ -22,7 +22,21 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
     bool block_cyclic_cache_tp_sharded,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<ttnn::Tensor>& push_input,
+    const std::optional<ttnn::Tensor>& push_table,
+    const std::optional<ttnn::Tensor>& push_output,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows,
+    uint32_t push_batch_index,
+    uint32_t push_num_links,
+    const std::optional<GlobalSemaphore>& push_ready_semaphore,
+    const std::optional<GlobalSemaphore>& push_data_valid_semaphore,
+    const std::optional<tt::tt_metal::CoreRangeSet>& push_core_grid,
+    const std::optional<ttnn::Tensor>& push_batch_index_tensor,
+    uint32_t push_batch_slot_num_layers,
+    uint32_t push_batch_slot_layer_idx) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -82,6 +96,22 @@ ttnn::Tensor sparse_sdpa(
         /*default_fp32_acc=*/any_fp8,
         /*default_l1_acc=*/false);
 
+    std::optional<ttnn::prim::SparseSDPAFusedPush> fused_push = std::nullopt;
+    if (push_table.has_value()) {
+        TT_FATAL(
+            push_ready_semaphore.has_value() && push_data_valid_semaphore.has_value() && push_core_grid.has_value(),
+            "sparse_sdpa fused push needs push_ready_semaphore, push_data_valid_semaphore and push_core_grid");
+        fused_push = ttnn::prim::SparseSDPAFusedPush{
+            .stripe_chunk = push_stripe_chunk,
+            .max_rows = push_max_rows,
+            .num_links = push_num_links,
+            .input_batch_index = push_batch_index,
+            .batch_slot_num_layers = push_batch_slot_num_layers,
+            .batch_slot_layer_idx = push_batch_slot_layer_idx,
+            .ready_semaphore = push_ready_semaphore,
+            .data_valid_semaphore = push_data_valid_semaphore,
+            .push_core_grid = *push_core_grid};
+    }
     return ttnn::prim::sparse_sdpa(
         q,
         kv,
@@ -93,7 +123,13 @@ ttnn::Tensor sparse_sdpa(
         kernel_config,
         cache_batch_idx,
         block_cyclic,
-        attention_sink);
+        attention_sink,
+        sub_core_grids,
+        fused_push,
+        push_input,
+        push_table,
+        push_output,
+        push_batch_index_tensor);
 }
 
 }  // namespace ttnn::transformer

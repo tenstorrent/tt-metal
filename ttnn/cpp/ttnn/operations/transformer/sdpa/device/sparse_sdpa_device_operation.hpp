@@ -37,7 +37,24 @@ struct SparseSDPAOperation {
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
-    using program_factory_t = std::variant<SparseSDPAProgramFactory>;
+    // Sparse SDPA with a fused next-layer KV push: per-device programs (the push depends on the chip's fabric links).
+    struct SparseSDPAPushFusedFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& t,
+            tensor_return_value_t& output,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    };
+
+    using program_factory_t = std::variant<SparseSDPAProgramFactory, SparseSDPAPushFusedFactory>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // Re-validates only the inputs the program hash does not key on (so they can vary on a cache hit): the kv
@@ -60,6 +77,12 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
-    const std::optional<Tensor>& attention_sink = std::nullopt);
+    const std::optional<Tensor>& attention_sink = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<SparseSDPAFusedPush>& fused_push = std::nullopt,
+    const std::optional<Tensor>& push_input = std::nullopt,
+    const std::optional<Tensor>& push_table = std::nullopt,
+    const std::optional<Tensor>& push_output = std::nullopt,
+    const std::optional<Tensor>& push_batch_index_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

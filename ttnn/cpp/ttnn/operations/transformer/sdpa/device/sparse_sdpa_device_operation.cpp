@@ -9,6 +9,7 @@
 #include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <bit>
 
 namespace ttnn::prim {
@@ -27,6 +28,15 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const auto& idx = t.indices;
     TT_FATAL(
         q.device() == kv.device() && q.device() == idx.device(), "sparse_sdpa: all inputs must be on the same device");
+    // The hashed worker grid must still fit the first subdevice of whatever manager is active now.
+    auto* device = q.device();
+    const auto subdevice_cores =
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+    TT_FATAL(
+        subdevice_cores.contains(attrs.worker_core_grid),
+        "sparse_sdpa worker grid {} must be contained in the TENSIX cores {}",
+        attrs.worker_core_grid,
+        subdevice_cores);
     if (t.attention_sink.has_value()) {
         const auto& sink = t.attention_sink.value();
         TT_FATAL(
@@ -267,7 +277,26 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        t.attention_sink);
+        t.attention_sink,
+        attrs.worker_core_grid,
+        // Fused push: structure only; the pushed slot and semaphore addresses are runtime args.
+        attrs.fused_push.has_value(),
+        attrs.fused_push.has_value() ? attrs.fused_push->stripe_chunk : 0u,
+        attrs.fused_push.has_value() ? attrs.fused_push->max_rows : 0u,
+        attrs.fused_push.has_value() ? attrs.fused_push->num_links : 0u,
+        attrs.fused_push.has_value() ? attrs.fused_push->push_core_grid : tt::tt_metal::CoreRangeSet{},
+        t.push_input.has_value() ? t.push_input->tensor_spec() : t.q.tensor_spec(),
+        t.push_table.has_value() ? t.push_table->logical_shape() : ttnn::Shape{},
+        t.push_output.has_value() ? t.push_output->tensor_spec() : t.q.tensor_spec(),
+        t.push_batch_index_tensor.has_value());
+}
+
+SparseSDPAOperation::program_factory_t SparseSDPAOperation::select_program_factory(
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    if (attrs.fused_push.has_value()) {
+        return SparseSDPAPushFusedFactory{};
+    }
+    return SparseSDPAProgramFactory{};
 }
 
 Tensor sparse_sdpa(
@@ -281,8 +310,35 @@ Tensor sparse_sdpa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
-    const std::optional<Tensor>& attention_sink) {
+    const std::optional<Tensor>& attention_sink,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<SparseSDPAFusedPush>& fused_push,
+    const std::optional<Tensor>& push_input,
+    const std::optional<Tensor>& push_table,
+    const std::optional<Tensor>& push_output,
+    const std::optional<Tensor>& push_batch_index_tensor) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
+    if (fused_push.has_value()) {
+        TT_FATAL(
+            push_input.has_value() && push_table.has_value() && push_output.has_value(),
+            "sparse_sdpa fused push needs push_input, push_table and push_output");
+        TT_FATAL(
+            sub_core_grids.has_value() && !sub_core_grids->intersects(fused_push->push_core_grid),
+            "sparse_sdpa fused push needs sub_core_grids disjoint from the push core grid");
+        TT_FATAL(
+            tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+            "sparse_sdpa fused push needs a 2D torus fabric (FABRIC_2D_TORUS_XY)");
+    }
+    auto* device = q.device();
+    const auto subdevice_cores =
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+    TT_FATAL(
+        !sub_core_grids.has_value() || subdevice_cores.contains(*sub_core_grids),
+        "sparse_sdpa sub_core_grids {} must be contained in the TENSIX cores {}",
+        sub_core_grids.value_or(tt::tt_metal::CoreRangeSet{}),
+        subdevice_cores);
+    const auto worker_core_grid = sub_core_grids.value_or(subdevice_cores);
+    TT_FATAL(worker_core_grid.num_cores() > 0, "sparse_sdpa requires at least one TENSIX worker core");
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,
@@ -292,12 +348,18 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .worker_core_grid = worker_core_grid,
+            .fused_push = fused_push,
         },
         OperationType::tensor_args_t{
             .q = q,
             .kv = kv,
             .indices = indices,
             .attention_sink = attention_sink,
+            .push_input = push_input,
+            .push_table = push_table,
+            .push_output = push_output,
+            .push_batch_index_tensor = push_batch_index_tensor,
         });
 }
 
