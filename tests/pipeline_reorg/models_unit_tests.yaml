@@ -2404,12 +2404,12 @@
 
 # MoE-LLaVA (#61885): the CLIP, SigLIP and LanguageBind/MoE-LLaVA-Qwen-1.8B-4e weights are not in the
 # shared WH cache, so they are downloaded into a job-local hub cache. Tests parametrized for the
-# other chip count skip.
+# other chip count skip. The MoE file runs last: its CPU reference load can exhaust host memory.
 - name: MoE-LLaVA unit tests (N150)
   cmd: |
     set -e
     export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub MESH_DEVICE=N150
-    pytest --timeout 1800 models/experimental/llava/tests
+    pytest --timeout 1800 models/experimental/llava/tests/test_projectors.py models/experimental/llava/tests/test_token_handlers.py models/experimental/llava/tests/test_vision_encoders.py models/experimental/llava/tests/test_vision_pipeline.py models/experimental/llava/tests/test_llava_end_to_end.py models/experimental/llava/tests/test_moe_llava.py
   model: moe-llava
   model_family: LLaVA
   skus:
@@ -2424,7 +2424,7 @@
   cmd: |
     set -e
     export HF_HUB_OFFLINE=0 HF_HUB_CACHE=/work/generated/hf_hub MESH_DEVICE=N300
-    pytest --timeout 1800 models/experimental/llava/tests
+    pytest --timeout 1800 models/experimental/llava/tests/test_projectors.py models/experimental/llava/tests/test_token_handlers.py models/experimental/llava/tests/test_vision_encoders.py models/experimental/llava/tests/test_vision_pipeline.py models/experimental/llava/tests/test_llava_end_to_end.py models/experimental/llava/tests/test_moe_llava.py
   model: moe-llava
   model_family: LLaVA
   skus:
