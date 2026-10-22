@@ -10074,7 +10074,7 @@ tasks:
       /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s55296_c2048/drift-last.json: 46b3f9888b1690eadb12900e9da29e9418eb5350dd84c6c175f1aaa1db129303
       /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s55296_c2048/drift-s55296.json: 6c21125a4bf919869c27e3a7e782d456e687bd73837c1db2a69d7d5b0007b92e
 - id: P.17
-  title: 'Glue fold: RoPE as one op, RMS norms as one op, mhc_post options, host-path fixes (fusion report): owner comparison'
+  title: 'RoPE through a stock fused rotary op at all 34 sites (precision-debt J3): owner comparison'
   step: perf
   role: perf
   deps:
@@ -10086,25 +10086,20 @@ tasks:
   - ttnn/ttnn/bringup
   ab:
     change:
-      GLUE_FOLD: 'on'
+      ROPE_IMPL: 'on'
     env:
-      GLUE_FOLD: 'off'
+      ROPE_IMPL: 'off'
   brief:
-    details: 'Owner (2026-10-21): the chunk is host-bound (~1,786 device-op calls, ~0.08 ms of wall each). Fold the items
-      of /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md. Judged ONLY by speed and the end-to-end
-      metrics against the full-precision reference within the reference''s own margin (F128); bit-identity with the old path
-      is NOT a criterion (owner), so the K-30 rejection of the stock fused rotary ops (bf16 vs fp32 SFPU products) does not
-      stand. (1) RoPE: one fused op per site for all 34 sites per chunk (q, attention output, indexer q, kv, compressor):
-      a stock fused rotary op (rotary_embedding_llama, deepseek_prefill.rotary_embedding_indexed) or a bring-up fork of one
-      where it fits (pair layout, inverse, scale, heads read from the projection output, bf16 inputs where the device stores
-      bf16), a new op only for what nothing existing covers; (2) each RMS norm as one call of ttnn.bringup.rms_norm with new
-      options (exact fp32 statistics, gathered partial sums in, a column window of a wider input, bf16 in / out); (6) mhc_post
-      reading post / comb from the packed mixes and taking a bf16 sublayer output; (4) the Python generic_op path: custom_program_hash
-      on the reduce-scatter''s cached descriptors (no per-call kernel-source hashing), the deallocate and wrapper overhead.
-      Bring-up ops extended behind options (default unchanged, README / INDEX / CHANGELOG current, fork tests). ONE setting
-      GLUE_FOLD {off, on}. Report calls per chunk, host and device ms per section before / after (note: generated/ds41_hostprof/test_opclock.py
-      over-counts per-chunk totals ~1.8x; per-call figures are right). Items 7 (exact mHC exchange, moe_add fold) are allowed
-      too if they pay off end to end. Final check: `python -m models.demos.common.bringup.orchestrator measure --task P.17`.'
+    details: 'Judged ONLY by speed and the end-to-end metrics against the full-precision reference within the reference''s
+      own margin (F128-F135, err_* <= limit); the device runs the shipped settings (F137); bit-identity with the old path
+      is never a criterion (agents'' rule 14); bring-up ops before stock (F113). Replace the hand-built RoPE chains (/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md
+      J3, /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md item 1): a stock fused rotary
+      op (ttnn.experimental.rotary_embedding_llama, deepseek_prefill.rotary_embedding_indexed) or a bring-up fork of one at
+      the 34 sites per chunk (q, attention output inverse, indexer q, kv, compressor) on bf16 heads; a new op only for what
+      nothing existing covers. Delete PairPerm and its HiFi4 pin, the interleave helpers and the fp32 rope chains (the K-30
+      / DS41-15 / DS41-83 rejections were bit-exactness, which no longer counts). Report calls per chunk, device ms of attention
+      / indexer / kv / compressor, clean wall. Final check: `python -m models.demos.common.bringup.orchestrator measure --task
+      P.17`.'
   gate:
     cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
@@ -10114,17 +10109,12 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      err_layer_L*: <= limit
-      err_state_*_L*: <= limit
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
-  frozen:
-    files:
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s55296_c2048/drift-last.json: 46b3f9888b1690eadb12900e9da29e9418eb5350dd84c6c175f1aaa1db129303
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s55296_c2048/drift-s55296.json: 6c21125a4bf919869c27e3a7e782d456e687bd73837c1db2a69d7d5b0007b92e
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
 - id: P.18
-  title: 'Static tables: one persistent attention table per KV source, window glue (fusion report item 3): owner comparison'
+  title: 'RMS norms through ttnn.bringup.rms_norm, one call each (J4): owner comparison'
   step: perf
   role: perf
   deps:
@@ -10136,19 +10126,18 @@ tasks:
   - ttnn/ttnn/bringup
   ab:
     change:
-      STATIC_TABLES: 'on'
+      NORM_IMPL: 'on'
     env:
-      STATIC_TABLES: 'off'
+      NORM_IMPL: 'off'
   brief:
-    details: 'Owner (2026-10-21): from /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md:
-      (3) one persistent attention table per KV source, history kept in natural order and appended with one slice_write per
-      chunk (no history re-gathers, no 56 MiB concats, no 27-op index remap); shapes constant between chunks; plus the window-path
-      glue (skip the no-op mask, carry the last 128 kv rows, memoize the cache-write index slices). Judged by speed and the
-      F128 end-to-end metrics, not bit-identity with the old path (owner). ONE setting STATIC_TABLES {off, on}. Also measure
-      the trace ceiling once (owner): capture one warm chunk with ttnn trace (begin_trace_capture / execute_trace) as a standalone
-      measurement (not the default path) and report its wall time per chunk next to the untraced one, and what still blocks
-      trace in the forward (dynamic shapes, host-side chunk start). Final check: `python -m models.demos.common.bringup.orchestrator
-      measure --task P.18`.'
+    details: 'Judged ONLY by speed and the end-to-end metrics against the full-precision reference within the reference''s
+      own margin (F128-F135, err_* <= limit); the device runs the shipped settings (F137); bit-identity with the old path
+      is never a criterion (agents'' rule 14); bring-up ops before stock (F113). Replace the hand-built fp32 norm compositions
+      (~330 calls per chunk, /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md J4) by
+      one call per norm of ttnn.bringup.rms_norm (much faster than stock ttnn.rms_norm; owner) on bf16 rows where the reference
+      keeps bf16; extend the fork behind options if a site needs it (gathered partial sums in, a column window of a wider
+      input), default unchanged. No ''exact statistics'' option. Report calls, norm device ms, wall. Final check: `python
+      -m models.demos.common.bringup.orchestrator measure --task P.18`.'
   gate:
     cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
@@ -10158,15 +10147,125 @@ tasks:
       && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
-      err_layer_L*: <= limit
-      err_state_*_L*: <= limit
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
-  frozen:
-    files:
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/drift-s4096.json: 4fc1598119300509ec2395e066ddfe9fccd5298cf60542df7e00399d386eb7e1
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s55296_c2048/drift-last.json: 46b3f9888b1690eadb12900e9da29e9418eb5350dd84c6c175f1aaa1db129303
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s55296_c2048/drift-s55296.json: 6c21125a4bf919869c27e3a7e782d456e687bd73837c1db2a69d7d5b0007b92e
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+- id: P.19
+  title: 'Glue fold: mhc_post options, host-path fixes, mHC exchange (rest of the fusion report): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.18
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      GLUE_FOLD: 'on'
+    env:
+      GLUE_FOLD: 'off'
+  brief:
+    details: 'Judged ONLY by speed and the end-to-end metrics against the full-precision reference within the reference''s
+      own margin (F128-F135, err_* <= limit); the device runs the shipped settings (F137); bit-identity with the old path
+      is never a criterion (agents'' rule 14); bring-up ops before stock (F113). From /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md:
+      mhc_post reading post / comb from the packed mixes and taking a bf16 sublayer output; the Python generic_op host path
+      (custom_program_hash on the reduce-scatter''s cached descriptors, no per-call kernel-source hashing), the deallocate
+      and wrapper overhead; the mHC exchange as one all_gather and the moe_add fold into the reduce-scatter if they pay off
+      end to end; window-path glue (no-op mask, carried kv rows, memoized cache-write slices). Report calls, host and device
+      ms per section (test_opclock over-counts per-chunk totals ~1.8x). Final check: `python -m models.demos.common.bringup.orchestrator
+      measure --task P.19`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
+      for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13 dec_reuse_12;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+- id: P.20
+  title: 'Activations in bf16 wherever DeepSeek''s GPU code keeps bf16 (J5): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.19
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      BF16_ACTIVATIONS: 'on'
+    env:
+      BF16_ACTIVATIONS: 'off'
+  brief:
+    details: 'Judged ONLY by speed and the end-to-end metrics against the full-precision reference within the reference''s
+      own margin (F128-F135, err_* <= limit); the device runs the shipped settings (F137); bit-identity with the old path
+      is never a criterion (agents'' rule 14); bring-up ops before stock (F113). /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md
+      J5: the four residual streams, attn_norm, q_resid, the projection outputs and the compressor latent in bf16 where bringup/official_taps.yaml
+      (the GPU code''s dtypes) says bf16; fp32 stays where the reference is fp32; fp32 accumulation stays in every matmul
+      (the reference accumulates fp32). Report device ms of the mHC / residual / norm / engram sections, memory per chip,
+      the end-to-end errors vs their limits. Final check: `python -m models.demos.common.bringup.orchestrator measure --task
+      P.20`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
+      for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13 dec_reuse_12;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+- id: P.21
+  title: 'Static tables: one persistent attention table per KV source, window glue, trace-ceiling measurement: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.20
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      STATIC_TABLES: 'on'
+    env:
+      STATIC_TABLES: 'off'
+  brief:
+    details: 'Judged ONLY by speed and the end-to-end metrics against the full-precision reference within the reference''s
+      own margin (F128-F135, err_* <= limit); the device runs the shipped settings (F137); bit-identity with the old path
+      is never a criterion (agents'' rule 14); bring-up ops before stock (F113). From /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/fusion_ops_report.md
+      item 3: one persistent attention table per KV source, history in natural order appended with one slice_write per chunk
+      (no re-gathers, no 56 MiB concats, no 27-op index remap), constant shapes between chunks. Also measure the trace ceiling
+      once (owner): capture one warm chunk with ttnn trace as a standalone measurement (not the default path), report traced
+      vs untraced wall per chunk and what still blocks trace in the forward. Final check: `python -m models.demos.common.bringup.orchestrator
+      measure --task P.21`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done &&
+      for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13 dec_reuse_12;
+      do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -10187,6 +10286,9 @@ tasks:
   - FIX.5
   - P.17
   - P.18
+  - P.19
+  - P.20
+  - P.21
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
