@@ -474,11 +474,41 @@ Accuracy at HiFi2 against HiFi4 (decode SDPA stays HiFi4):
 
 TTFT (one user, one row, chunks of 4096): 4K 0.58 -> 0.56 s, 32K 5.12 -> 4.78 s, **128K 29.06 -> 24.35 s**.
 
-What the profile points at next:
+### The next three costs, 2026-10-22
 
-- **Global SDPA on both chips of the pair** (plan step 3): the non-owner chip runs the same 47 ms per layer on its
-  scratch block. Splitting the 16 heads 8 / 8 across the pair would halve it again.
-- **MoE plan** (`DevicePlan`, 1.56 ms per layer, 14% of a 4K chunk) is latency, not bandwidth: overlap it with the
-  router or spread it over more cores.
-- **All-reduces** (2 per layer, ~80 ms per chunk): the fabric packet is 4352 B for 2048 B pages (`ccl_common.cpp`
-  warns); 8192 B packets would carry 4 pages instead of 2.
+**Global SDPA on both chips of the pair.** A later chunk of a global layer ran the group's 16 heads on both chips of
+the pair and kept one result (`_prefill_owner_chunk`). When both chips keep the user's K / V, it now runs 8 heads per
+chip like a first chunk does, over the whole cached context, and the row all-reduce adds the two o projections
+(`_prefill_pair_chunk`, `TtMiMoAttention.keep_kv_on_both_chips`). vLLM's caches always keep both copies, so serving
+takes this path; the standalone model takes it with `TtMiMoModel(replicate_global_kv=True)` (twice the global KV:
+0.8 -> 1.6 GB per chip for 4 users at 128K). `test_chunked_prefill_tp8_dp4.py` has `kvboth` cases for layers 0 and 5
+(short and 32k, and the program-cache test): all pass, every PCC within 0.0002 of the split-user layout.
+
+**MoE plan in two programs.** `plan.cpp` had every one of its 16 cores read and count all T x 8 pairs, then scan them
+again for its experts (latency-bound, 1.2 GB/s). `DevicePlanSplit` (`plan_slice.cpp`, `plan_gather.cpp`): each core
+counts and sorts one slice of the tokens by expert, then each core gathers its experts' records from every slice in
+slice order. The outputs are bit-identical (`tests/perf/moe_plan_bench.py` checks all four on skewed routing).
+Device time per call on one row:
+
+| Tokens | `DevicePlan` | `DevicePlanSplit` |
+|---|---|---|
+| 32 | 0.135 ms | 0.180 ms |
+| 1056 | 0.551 ms | 0.339 ms |
+| 4096 | 1.553 ms | 0.601 ms |
+
+`PrefillExperts` uses the split plan from 256 tokens (`SPLIT_PLAN_MIN_TOKENS`). A 4K chunk of all 48 layers:
+530.1 -> 482.0 ms (the plan 74.6 -> 29.8 ms).
+
+**Fabric packet size.** 8192-byte packets (`--fabric-packet 8192` in `profile_prefill.py`) take 0.03-0.14 ms off each
+all-reduce: 29.5 -> 29.1 ms for layers 0, 1, 5 at 4K, about 7 ms of a 48-layer chunk. The packet size is set where the
+mesh is opened (test fixtures, the vLLM plugin) and changes decode's collectives too, so it is left at the default
+until decode is measured with it.
+
+TTFT, one user on one row, chunks of 4096, profiler off:
+
+| | 4K | 32K | 128K |
+|---|---|---|---|
+| Before (HiFi4) | 0.58 s | 5.12 s | 29.06 s |
+| Prefill SDPA at HiFi2 | 0.56 s | 4.78 s | 24.35 s |
+| + global heads split over the pair (`replicate_global_kv`) | 0.57 s | 4.53 s | 20.62 s |
+| + MoE plan in two programs | **0.54 s** | **4.18 s** | **19.20 s** |

@@ -118,9 +118,12 @@ class TtMiMoModel:
         kv_dtype=ttnn.bfloat8_b,
         logits_dtype=None,
         num_links=2,
+        replicate_global_kv=False,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
         ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
+        ``replicate_global_kv``: ``setup_kv_cache`` keeps every user's global-layer K / V on both chips of a pair, as
+        vLLM's caches do (twice the global KV memory), so a later prefill chunk splits its heads over the pair.
         ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
         16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16)."""
         assert max_prefill_chunk % block_size == 0
@@ -221,6 +224,8 @@ class TtMiMoModel:
         self.swa_qkv = None
         # vLLM-owned KV (setup_vllm_kv_cache): each layer's KV cache group, and the host copy of every group's table.
         self.layer_groups = None
+        self.replicate_global_kv = replicate_global_kv
+        self.global_kv_both = False  # both chips of a global layer's pair keep every slot's K / V
         self.vllm_tables = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
@@ -277,19 +282,30 @@ class TtMiMoModel:
                 table, num_blocks = self.swa_table.host_table(self.plan.tp), self.swa_table.num_blocks
                 scratch = 0
             else:
-                table, num_blocks = kv_lib.page_tables(
-                    num_users, self.max_batch, max_blocks, self.plan.tp, layer.attn.rep
-                )
+                rep = 1 if self.replicate_global_kv else layer.attn.rep
+                table, num_blocks = kv_lib.page_tables(num_users, self.max_batch, max_blocks, self.plan.tp, rep)
                 # kv.page_tables adds one scratch block (the last) when a chip pair splits the users; with rep 1 every
                 # block is a user's, so nothing may land past the table.
-                scratch = num_blocks - 1 if layer.attn.rep > 1 else None
+                scratch = num_blocks - 1 if rep > 1 else None
+                if self.replicate_global_kv:  # a scratch block for a later chunk's context table past the width
+                    scratch, num_blocks = num_blocks, num_blocks + 1
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
             self.table_scratch.setdefault(layer.is_swa, scratch)
         self.set_page_tables(tables)
         if self.swa_table is not None:
             self.swa_table.dirty = False
+        if self.replicate_global_kv:
+            self._keep_global_kv_on_both_chips()
         self._setup_fused_norms()
+
+    def _keep_global_kv_on_both_chips(self):
+        """Both chips of a global layer's pair keep every slot's K / V: decode writes it on both, and a later prefill
+        chunk splits the group's heads over the pair (TtMiMoAttention.keep_kv_on_both_chips)."""
+        self.global_kv_both = True
+        for layer in self.layers:
+            if layer.attn.split_users:
+                layer.attn.keep_kv_on_both_chips()
 
     def setup_vllm_kv_cache(self, num_users, kv_caches, layer_groups, table_width):
         """Adopt KV caches and page tables that vLLM owns, for ``num_users`` users in decode slots [0, num_users).
@@ -312,6 +328,7 @@ class TtMiMoModel:
                 layer.mlp.set_decode_users(num_users)
         self.kv_caches = kv_caches
         self.layer_groups = list(layer_groups)
+        self._keep_global_kv_on_both_chips()
         empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
         self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
         # Decode's device-sampled greedy token (decode_forward_device); persistent buffers, made before any capture.
@@ -889,8 +906,8 @@ class TtMiMoModel:
             False: self.rope_setups["full"].decode_rot_mats(cos_full, sin_full),
         }
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
-        if self.layer_groups is not None:
-            positions["pos_update"] = cur_pos_tt  # vLLM's blocks: both chips of a pair keep every slot's K / V
+        if self.global_kv_both:
+            positions["pos_update"] = cur_pos_tt  # both chips of a pair keep every slot's K / V
         h = None
         for i, layer in enumerate(self.layers):
             y, h = layer.forward_decode(

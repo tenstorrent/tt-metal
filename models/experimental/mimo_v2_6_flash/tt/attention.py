@@ -440,6 +440,8 @@ class TtMiMoAttention:
         self.is_swa = dims.is_swa
         self.rep = kv_replication(tp, dims.num_kv_heads)
         self.split_users = self.rep > 1  # global layers on TP=8: the chip pair splits the users
+        self.kv_both_chips = False  # keep_kv_on_both_chips
+        self.wo_v = None
         self.v_head_dim = dims.v_head_dim
         self.rope = rope_setup
         prefix = f"layer{layer_idx}_attn_tp{tp}"
@@ -568,6 +570,16 @@ class TtMiMoAttention:
         real = ttnn.slice(cols, (0, 0, 0, 0), (1, 1, k, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         flat.deallocate(True)
         return ttnn.reshape(real, (k, width))
+
+    def keep_kv_on_both_chips(self):
+        """Both chips of the pair keep every slot's K / V (vLLM's caches, or TtMiMoModel(replicate_global_kv=True)), so a
+        later prefill chunk runs 8 of the group's 16 heads on each chip (_prefill_pair_chunk) instead of all 16 on both
+        and discarding one. Its o projection reads the prefill o_proj without the V padding rows, made here: before
+        any trace is captured."""
+        assert self.split_users
+        self.kv_both_chips = True
+        if self.wo_v is None:
+            self.wo_v = self._unpadded_o()
 
     def _unpadded_o(self):
         """Per-chip padded o_proj [nh_local * head_dim, hidden] -> [nh_local * v_head_dim, hidden], on device.
@@ -726,6 +738,8 @@ class TtMiMoAttention:
         assert users == 1 or (start_pos == 0 and isinstance(tables, BatchFillTables)), "a batch is first chunks"
         with steps() as step:  # profiling zones (profiling.py)
             if start_pos > 0 and self.split_users:
+                if self.kv_both_chips:
+                    return self._prefill_pair_chunk(x, user_id, kv_cache, start_pos, tables, step)
                 return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables, step)
             return self._prefill_chunk(x, user_id, page_table, kv_cache, start_pos, tables, users, step)
 
@@ -799,6 +813,59 @@ class TtMiMoAttention:
         out = ttnn.linear(
             attn_cat,
             self.wo,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.mm_config,
+        )
+        attn_cat.deallocate(True)
+        step("all_reduce")
+        return self.plan.all_reduce(out)
+
+    def _prefill_pair_chunk(self, x, user_id, kv_cache, start_pos, tables, step):
+        """A global layer's chunk after the first when both chips of the pair hold the user's K / V: each chip runs its
+        8 prefill heads (``wqkv``, as a first chunk does) over the whole cached context, and the row all-reduce adds
+        the chips' o projections."""
+        assert self.sinks is None and self.sliding_window is None
+        seq_len = x.shape[-2]
+        step("qkv")
+        xqkv = self._prefill_qkv(x)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.nh_local,
+            num_kv_heads=self.nkv_local,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        xqkv.deallocate(True)
+        step("rope")
+        q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
+        step("kv_cache")
+        self._fill(kv_cache, k_rot, v, None, user_id, tables)
+        k_rot.deallocate(True)
+        v.deallocate(True)
+
+        step("sdpa")
+        k_cache, v_cache = kv_cache
+        assert tables.context.shape[-1] * k_cache.shape[-2] >= start_pos + seq_len, "chunk runs past its context table"
+        start = dict(chunk_start_idx_tensor=tables.start) if MLA_RUNTIME_START else dict(chunk_start_idx=start_pos)
+        attn = ttnn.transformer.chunked_flash_mla_prefill(
+            q_rot,
+            k_cache,
+            self.v_head_dim,
+            tables.context,
+            **start,
+            scale=self.scale,
+            program_config=self._prefill_sdpa_program(seq_len, start_pos),
+            compute_kernel_config=self.sdpa_config,
+            input_tensor_v=v_cache,
+        )  # [1, 8, S, 128]
+        q_rot.deallocate(True)
+        step("o_proj")
+        attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn.deallocate(True)
+        out = ttnn.linear(
+            attn_cat,
+            self.wo_v,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.mm_config,

@@ -36,7 +36,16 @@ from models.experimental.mimo_v2_6_flash.tt.model import prefill_padded_len
 READ_EVERY = 3  # layers between device profiler reads (a 3-layer chunk read is known good)
 
 
-def build(mesh, max_seq_len):
+def fabric_router_config(packet_bytes):
+    """A FabricRouterConfig with this packet payload size, or None for the default (4352 B on this Galaxy)."""
+    if not packet_bytes:
+        return None
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = packet_bytes
+    return config
+
+
+def build(mesh, max_seq_len, replicate_global_kv=False):
     cfg = MiMoConfig.from_model_path(common.MODEL_PATH)
     gen = MiMoGalaxyGenerator(
         mesh,
@@ -46,6 +55,7 @@ def build(mesh, max_seq_len):
         dp=4,
         users_per_replica=4,
         max_seq_len=max_seq_len,
+        replicate_global_kv=replicate_global_kv,
     )
     tokens = torch.randint(0, cfg.vocab_size, (max_seq_len,), generator=torch.Generator().manual_seed(0))
     return gen.models, tokens
@@ -128,6 +138,12 @@ def main():
     parser.add_argument("--layers", default=None, help="zones: comma-separated layer indices (default all)")
     parser.add_argument("--fill", choices=("real", "skip"), default="real", help="zones: the earlier chunks (profile)")
     parser.add_argument("--rows", type=int, default=1, help="zones: Galaxy rows to profile (1-4)")
+    parser.add_argument("--fabric-packet", type=int, default=0, help="fabric packet payload bytes (0: default)")
+    parser.add_argument(
+        "--replicate-global-kv",
+        action="store_true",
+        help="both chips of a global layer's pair keep the K / V (vLLM's layout): later chunks split the heads",
+    )
     parser.add_argument(
         "--graph-report",
         default=None,
@@ -149,10 +165,11 @@ def main():
         ttnn.FabricTensixConfig.DISABLED,
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
+        *([router] if (router := fabric_router_config(args.fabric_packet)) else []),
     )
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=65536)
     try:
-        models, tokens = build(mesh, max(contexts) if args.ttft else args.context)
+        models, tokens = build(mesh, max(contexts) if args.ttft else args.context, args.replicate_global_kv)
         if args.ttft:
             ttft(models[0], tokens, contexts, args.chunk)
         else:
