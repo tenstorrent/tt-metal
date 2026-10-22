@@ -4,11 +4,11 @@
 """TTNN port of the BEV half of BEVFormer's ``PerceptionTransformer``
 (``reference/perception_transformer.py``): FPN levels and BEV queries in, the frame's BEV out.
 
-What changes from frame to frame and comes from the host, the CAN bus, the ego shift, the
-previous BEV's rotation and the cameras' projections, is prepared by
-:meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
-buffers are allocated once and refilled in place, so the forward runs on device only and a trace
-captured with a frame replays on the next one.
+What changes from frame to frame and comes from the host, the CAN bus, the ego shift and the
+previous BEV's rotation, is prepared by :meth:`TTPerceptionTransformer.prepare_frame` into a
+:class:`PerceptionFrame` whose device buffers are allocated once and refilled in place. The
+encoder projects the cameras from the frame's ``img_metas`` in its forward and reads its
+visibility mask on the host there, so the transformer runs live, not under a trace.
 
 The previous BEV's rotation is nearest-neighbour, so it moves whole cells: the host rotates an
 image of cell indices with the reference's own ``rotate``, and the device gathers the previous
@@ -26,7 +26,6 @@ from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
 from models.experimental.bevformer.tt.model_preprocessing import bev_grid_length, ego_shift
 from models.experimental.bevformer.tt.tt_common import layer_norm
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
-from models.experimental.bevformer.tt.tt_spatial_cross_attention import SCARebatchPlan
 
 
 @dataclass
@@ -35,7 +34,7 @@ class PerceptionFrame:
     address.
 
     Attributes:
-        plan: The encoder's spatial cross-attention rebatch plan.
+        img_metas: The frame's per-sample metas, which the encoder projects the cameras from.
         can_bus: ``(bs, 1, CAN_BUS_DIMS)`` bfloat16, the relative CAN bus.
         shift: ``(bs, 1, 1, 2)`` float32 ROW_MAJOR, the ego translation in BEV-grid fractions.
         rotation_index: ``(1, 1, 1, bs * num_query)`` uint32 ROW_MAJOR, the stacked previous-BEV row each
@@ -44,7 +43,7 @@ class PerceptionFrame:
             outside the grid.
     """
 
-    plan: SCARebatchPlan
+    img_metas: list
     can_bus: ttnn.Tensor
     shift: ttnn.Tensor
     rotation_index: ttnn.Tensor
@@ -79,7 +78,12 @@ class TTPerceptionTransformer:
         self.rotate_center = params.config.rotate_center
         self.spatial_shapes = [tuple(int(v) for v in shape) for shape in spatial_shapes]
         self.encoder = TTBEVFormerEncoder(
-            params.encoder, device, bev_h=bev_h, bev_w=bev_w, spatial_shapes=self.spatial_shapes
+            device,
+            params.encoder,
+            **vars(params.encoder.config),
+            bev_h=bev_h,
+            bev_w=bev_w,
+            spatial_shapes=self.spatial_shapes,
         )
 
     def _host_frame(self, img_metas):
@@ -95,21 +99,20 @@ class TTPerceptionTransformer:
             rotation_mask=(rotation_mask, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         )
 
-    def prepare_frame(self, img_metas, frame=None, capacity=None):
+    def prepare_frame(self, img_metas, frame=None):
         """This frame's :class:`PerceptionFrame` from ``img_metas`` (per sample ``lidar2img``,
-        ``img_shape`` and the relative ``can_bus``). Without ``frame``, a new one, whose rebatch
-        plan holds ``capacity`` rows per camera (see ``TTBEVFormerEncoder.prepare_frame``); with
-        ``frame``, refilled in place for a frame of the same batch size."""
+        ``img_shape`` and the relative ``can_bus``). Without ``frame``, a new one; with ``frame``,
+        refilled in place for a frame of the same batch size."""
         host = self._host_frame(img_metas)
         if frame is None:
             return PerceptionFrame(
-                plan=self.encoder.prepare_frame(img_metas, capacity=capacity),
+                img_metas=img_metas,
                 **{
                     name: ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=self.device)
                     for name, (tensor, dtype, layout) in host.items()
                 },
             )
-        self.encoder.prepare_frame(img_metas, plan=frame.plan)
+        frame.img_metas = img_metas
         for name, (tensor, dtype, layout) in host.items():
             buffer = getattr(frame, name)
             assert tuple(buffer.shape) == tuple(
@@ -147,13 +150,24 @@ class TTPerceptionTransformer:
         ``(1, num_query, C)``, shared by the batch; ``bev_pos`` ``(bs, num_query, C)``; ``frame`` from
         :meth:`prepare_frame`; ``prev_bev`` the previous frame's ``(bs, num_query, C)`` BEV or None.
         Returns this frame's BEV, ``(bs, num_query, C)``."""
-        bs = frame.plan.batch_size
+        bs = len(frame.img_metas)
         mlp = self.params.can_bus_mlp
         can_bus = ttnn.linear(frame.can_bus, mlp.linear1.weight, bias=mlp.linear1.bias, activation="relu")
         can_bus = ttnn.linear(can_bus, mlp.linear2.weight, bias=mlp.linear2.bias, activation="relu")
         can_bus = layer_norm(can_bus, mlp.norm)
         bev_queries = ttnn.add(bev_queries, can_bus)
+        # The encoder takes the cameras' features as (num_cams, num_keys, bs, C).
         value = self.camera_features(mlvl_feats, bs)
+        num_keys = value.shape[1]
+        value = ttnn.permute(ttnn.reshape(value, (bs, self.num_cams, num_keys, self.embed_dims)), (1, 2, 0, 3))
+        shift = None
         if prev_bev is not None:
+            # As upstream's encoder: the rotated previous BEV paired with the encoder's input
+            # queries, which every layer's self-attention samples, and its points ego-shifted.
             prev_bev = self.rotate_prev_bev(prev_bev, frame)
-        return self.encoder(bev_queries, value, bev_pos, frame.plan, prev_bev=prev_bev, shift=frame.shift)
+            prev_bev = ttnn.concat([ttnn.unsqueeze(prev_bev, 1), ttnn.unsqueeze(bev_queries, 1)], dim=1)
+            prev_bev = ttnn.reshape(prev_bev, (bs * 2, -1, self.embed_dims))
+            shift = frame.shift
+        return self.encoder(
+            bev_queries, value=value, bev_pos=bev_pos, prev_bev=prev_bev, shift=shift, img_metas=frame.img_metas
+        )

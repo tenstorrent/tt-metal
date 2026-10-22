@@ -1,75 +1,187 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN port of BEVFormer's temporal self-attention (``reference/temporal_self_attention.py``):
-deformable attention of the BEV queries over the previous BEV and themselves, on the fused MSDA op.
+"""
+TTNN Temporal Self Attention (TSA) module for BEVFormer.
 
-The value stacks two BEV maps per sample, the previous BEV and the current queries, as upstream's
-encoder builds it. The offsets and attention weights read both maps concatenated and give one set
-of points per map; the two sampled results are averaged. The parameters must come from
-``model_preprocessing.create_temporal_self_attention_parameters``, which orders the Linears' output
-channels queue-major, so each map's channels are a contiguous half of the row.
+This module implements the temporal self-attention mechanism using TTNN operations
+to enable BEV features to model temporal dependencies across different timesteps.
+It uses deformable attention to aggregate information from current and
+historical BEV features.
+
+Based on the reference PyTorch implementation but optimized for TTNN.
 """
 
-import torch
-
 import ttnn
-from models.experimental.bevformer.model_config import EMBED_DIMS, NUM_HEADS, TSA_NUM_POINTS
-from models.experimental.bevformer.tt.tt_common import signpost
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import multi_scale_deformable_attn_fused
+import warnings
 
-# BEV maps the value stacks per sample: the previous BEV and the current queries.
-NUM_BEV_QUEUE = 2
+# Enable/disable logging output
+ENABLE_LOGGING = False
+
+from .tt_ms_deformable_attention import TTMSDeformableAttention, multi_scale_deformable_attn_fused
+from ..model_config import DeformableAttentionConfig
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 
 class TTTemporalSelfAttention:
-    """Batch-first temporal self-attention over one BEV level. It calls the fused op directly
-    rather than through TTMSDeformableAttention: its Linears read both maps concatenated, and the op
-    samples each map with its own half of their channels."""
+    """
+    TTNN Temporal Self Attention module for BEVFormer.
+
+    This attention mechanism models temporal dependencies by allowing BEV queries
+    to attend to both current and historical BEV features using deformable attention.
+    It's designed to handle temporal relationships for object tracking and motion
+    understanding in autonomous driving scenarios.
+
+    Args:
+        device: TTNN device for computation
+        params: Parameter dict containing weights and biases
+        embed_dims (int): The embedding dimension.
+        num_heads (int): Number of attention heads.
+        num_levels (int): Number of feature levels.
+        num_points (int): Number of sampling points in deformable attention.
+        num_bev_queue (int): Number of BEV timesteps (typically 2: current + history).
+        batch_first (bool): Whether the first dimension of input is batch_size.
+        spatial_shapes: BEV grid shape [1, 2] for deformable attention.
+        temporal_num_points (int): Sampling points per head and BEV map, overriding ``num_points``,
+            which the encoder layer sets to the spatial cross-attention's (BEVFormer-base: 4 and 8).
+        **kwargs: Additional arguments.
+
+    The parameters must order the offset and attention Linears' output channels queue-major
+    (``model_preprocessing.create_temporal_self_attention_parameters``), so each BEV map's channels
+    are one contiguous half of the row.
+    """
 
     def __init__(
-        self, params, *, spatial_shapes, embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_points=TSA_NUM_POINTS
+        self,
+        device,
+        params,
+        embed_dims: int = 256,
+        num_heads: int = 8,
+        num_levels: int = 1,
+        num_points: int = 4,
+        num_bev_queue: int = 2,
+        batch_first: bool = True,
+        *,
+        spatial_shapes,
+        temporal_num_points=None,
+        **kwargs,
     ):
-        """``params`` from ``model_preprocessing.create_temporal_self_attention_parameters``;
-        ``spatial_shapes`` the BEV grid as one ``(h, w)`` level; ``num_points`` sampling points per
-        head and map."""
-        if embed_dims % num_heads != 0:
-            raise ValueError(f"embed_dims ({embed_dims}) must be divisible by num_heads ({num_heads})")
-        if len(spatial_shapes) != 1:
-            raise ValueError(f"the self-attention samples one BEV level, got {len(spatial_shapes)}")
+        self.device = device
         self.params = params
+        if temporal_num_points is not None:
+            num_points = temporal_num_points
+
+        if embed_dims % num_heads != 0:
+            raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
+
+        dim_per_head = embed_dims // num_heads
         self.embed_dims = embed_dims
         self.num_heads = num_heads
+        self.num_levels = num_levels
         self.num_points = num_points
-        self.spatial_shapes = torch.as_tensor(spatial_shapes)
+        self.num_bev_queue = num_bev_queue
+        self.batch_first = batch_first
 
-    def __call__(self, query, value=None, query_pos=None, reference_points=None):
-        """``query`` the BEV queries ``(bs, num_queries, C)``; ``value`` the previous BEV and the
-        encoder's input query stacked per sample, ``(bs * NUM_BEV_QUEUE, num_queries, C)``, or None
-        on the first frame for the query stacked with itself; ``query_pos`` their positional
-        encoding or None; ``reference_points`` ``(bs * NUM_BEV_QUEUE, num_queries, 1, 2)`` in [0, 1],
-        float32 ROW_MAJOR, the previous BEV's ego-shifted, the current query's as they are.
-        Returns ``(bs, num_queries, C)``, the residual included."""
-        signpost(header="TTNN TSA Forward Start")
-        bs, num_queries, embed_dims = query.shape
-        queue = NUM_BEV_QUEUE
-        if value is None:
-            value = ttnn.reshape(
-                ttnn.concat([ttnn.unsqueeze(query, 1), ttnn.unsqueeze(query, 1)], dim=1),
-                (bs * queue, num_queries, embed_dims),
+        # Check if dim_per_head is power of 2 for efficiency
+        if not self._is_power_of_2(dim_per_head):
+            warnings.warn(
+                "For optimal performance with TTNN, embed_dims should be set "
+                "so that dimension of each attention head is a power of 2"
             )
 
-        identity = query
+        # Initialize TTNN MSDeformableAttention using existing implementation
+        deform_config = DeformableAttentionConfig(
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            num_levels=num_levels,
+            num_points=num_points,
+            batch_first=batch_first,
+        )
+
+        # Initialize TTNN MSDeformableAttention using existing implementation
+        # Pass params directly since TSA doesn't have its own parameters beyond deformable attention
+        self.deformable_attention = TTMSDeformableAttention(
+            deform_config, device, self.params, spatial_shapes=spatial_shapes
+        )
+
+    def forward(
+        self,
+        query,
+        value=None,
+        identity=None,
+        query_pos=None,
+        key_padding_mask=None,
+        reference_points=None,
+        prev_bev=None,
+        shift=None,
+        **kwargs,
+    ):
+        """
+        Forward pass of TTNN Temporal Self Attention.
+
+        Args:
+            query: Current BEV queries [B, num_queries, embed_dims].
+            value: The previous BEV and the encoder's input queries stacked per sample,
+                [B*num_bev_queue, num_queries, embed_dims], as upstream's encoder builds it.
+                If None (no previous BEV), the queries stacked with themselves.
+            identity: Identity connection input.
+            query_pos: Query positional encoding.
+            key_padding_mask: Unused; upstream's self-attention never masks the BEV.
+            reference_points: BEV cell centres [B, num_queries, 1, 2] in [0, 1].
+            prev_bev: Unused; the previous BEV comes in ``value``.
+            shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2], applied to the
+                previous BEV's reference points; None leaves them unshifted.
+            **kwargs: Additional arguments.
+
+        Returns:
+            Output features [B, num_queries, embed_dims].
+        """
+        if use_signpost:
+            signpost(header="TTNN TSA Forward Start")
+
+        bs, num_queries, embed_dims = query.shape
+        queue = self.num_bev_queue
+        # Upstream shifts the reference points only toward a previous BEV.
+        if value is None:
+            shift = None
+            value = ttnn.reshape(
+                ttnn.concat([ttnn.unsqueeze(query, 1)] * queue, dim=1), (bs * queue, num_queries, embed_dims)
+            )
+
+        if identity is None:
+            identity = query
+
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
-        # value[:bs], as upstream: the first bs stacked maps, which is each sample's previous BEV
-        # only at bs=1 (BEVFormer's inference batch).
+        # Upstream's hybrid reference points, per sample the previous BEV's shifted by the ego
+        # motion, then the current queries' as they are: [B*num_bev_queue, num_queries, 1, 2].
+        # float32 and ROW_MAJOR, where the trailing (1, 2) is not padded to a tile.
+        ref = ttnn.reshape(ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT), (bs, num_queries, 2))
+        if ref.dtype != ttnn.float32:
+            ref = ttnn.typecast(ref, ttnn.float32)
+        if shift is not None:
+            assert (shift.dtype, shift.layout, tuple(shift.shape)) == (
+                ttnn.float32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                (bs, 1, 1, 2),
+            ), f"shift must be float32 ROW_MAJOR (bs, 1, 1, 2), got {shift.dtype} {shift.layout} {tuple(shift.shape)}"
+        shifted = ref if shift is None else ttnn.add(ref, ttnn.reshape(shift, (bs, 1, 2)))
+        ref = ttnn.reshape(ttnn.concat([shifted, ref], dim=1), (bs * queue, num_queries, 1, 2))
+
+        # The offsets and attention weights read the previous BEV and the queries concatenated,
+        # value[:bs] as upstream: each sample's previous BEV only at B=1, BEVFormer's inference batch.
         query = ttnn.concat([value[:bs], query], dim=-1)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
 
         # Queue-major channels to the batch, in ROW_MAJOR, where the queue axis never lands in a
-        # tiled dimension: (bs, nq, queue * heads * width) -> (bs * queue, nq, heads, width).
+        # tiled dimension: (B, nq, queue * heads * width) -> (B*queue, nq, heads, width).
         def split_queue(tensor):
             width = tensor.shape[-1] // (queue * self.num_heads)
             tensor = ttnn.reshape(ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), (bs, num_queries, queue, -1))
@@ -81,21 +193,51 @@ class TTTemporalSelfAttention:
         attention_weights = ttnn.linear(
             query, self.params.attention_weights.weight, bias=self.params.attention_weights.bias
         )
+        # Softmax over each head's (level, point) samples, per BEV map.
         attention_weights = ttnn.softmax(
-            ttnn.reshape(attention_weights, (bs, num_queries, queue * self.num_heads, self.num_points)), dim=-1
+            ttnn.reshape(
+                attention_weights, (bs, num_queries, queue * self.num_heads, self.num_levels * self.num_points)
+            ),
+            dim=-1,
         )
-        attention_weights = ttnn.reshape(attention_weights, (bs, num_queries, queue * self.num_heads * self.num_points))
+        attention_weights = ttnn.reshape(
+            attention_weights, (bs, num_queries, queue * self.num_heads * self.num_levels * self.num_points)
+        )
 
         output = multi_scale_deformable_attn_fused(
-            value,
-            reference_points,
-            split_queue(sampling_offsets),
-            split_queue(attention_weights),
-            self.spatial_shapes,
+            value=value,
+            reference_points=ref,
+            sampling_offsets=split_queue(sampling_offsets),
+            attention_weights=split_queue(attention_weights),
+            spatial_shapes=self.deformable_attention.spatial_shapes,
         )
+
+        # The mean over the two BEV maps' samples, then the output projection and the residual.
+        # In DRAM: the fused op leaves its output in L1 when it fits, and the mean's transpose
+        # of the base grid's two maps does not.
         output = ttnn.reshape(output, (bs, queue, num_queries, embed_dims))
-        output = ttnn.mean(ttnn.to_layout(output, ttnn.TILE_LAYOUT), dim=1)
+        output = ttnn.mean(ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG), dim=1)
         output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
         output = ttnn.add(output, identity)
-        signpost(header="TTNN TSA Forward End")
+
+        if use_signpost:
+            signpost(header="TTNN TSA Forward End")
+
         return output
+
+    @staticmethod
+    def _is_power_of_2(n: int) -> bool:
+        """Check if a number is a power of 2."""
+        return (n != 0) and (n & (n - 1) == 0)
+
+    def __call__(self, *args, **kwargs):
+        """Make the class callable"""
+        return self.forward(*args, **kwargs)
+
+    def extra_repr(self) -> str:
+        """String representation for debugging"""
+        return (
+            f"embed_dims={self.embed_dims}, num_heads={self.num_heads}, "
+            f"num_levels={self.num_levels}, num_points={self.num_points}, "
+            f"num_bev_queue={self.num_bev_queue}, batch_first={self.batch_first}"
+        )

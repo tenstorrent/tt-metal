@@ -9,7 +9,7 @@ BEVFormer detects 3D objects from multi-camera images through a Bird's-Eye-View 
 3. **Decoder and head**: 900 object queries go through six decoder layers of self-attention and deformable cross-attention into the BEV, each layer refining the queries' 3D reference points. Per layer, a classification branch emits class logits and a regression branch the box codes.
 4. **Box coder**: the last layer's top 300 (query, class) pairs by score become 3D boxes `(cx, cy, cz, w, l, h, yaw, vx, vy)`, without NMS.
 
-Every stage runs on device; per frame the host only prepares the camera geometry and the ego motion, into buffers a trace replays, and drops the boxes the coder marks invalid.
+Every stage runs on device. The host projects the BEV pillars into the cameras and reads which cameras see each cell, inside the encoder's forward, so the detector runs live, not under a trace; it also prepares the ego motion per frame and drops the boxes the coder marks invalid.
 
 ## Model Architecture
 
@@ -36,29 +36,21 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
   the two. On the first frame it samples the queries twice.
 - The spatial cross-attention gathers each query into the cameras its pillar projects into and
   attends to the four FPN levels there with 8 points split over the pillar's 4 heights.
-- `prepare_frame(img_metas)` projects the pillars into the cameras and builds the
-  cross-attention's rebatch plan once per frame, on the host in float32 as upstream does: the
-  geometry depends on the cameras only, and in bfloat16 the projection's homogeneous divide loses
-  the points' precision. The forward then runs on device only and can be traced.
-- The plan's device buffers have a fixed capacity per camera. `prepare_frame(img_metas, plan=plan)`
-  refills them in place for the next frame, so a trace captured with the plan replays on every
-  later frame. By default the first `prepare_frame` sizes the plan for its own frame only; a plan
-  that later frames refill needs a `capacity` covering every rig it will see: a bound for the rig
-  (with nuScenes' rig the busiest camera sees about a quarter of the base grid), or
-  `full_capacity(bev_h * bev_w)` on smaller grids. `full_capacity` runs the deformable attention on
-  every query per camera and does not fit in DRAM on the 200x200 base grid.
-  `tests/perf/test_encoder_perf.py` captures the forward as a trace, which fails on any host read
-  or write, and replays it on the next frame.
+- Every forward projects the pillars into the cameras on the host in float32, as upstream does:
+  in bfloat16 the projection's matmul and homogeneous divide move the points by several pixels and
+  flip some of the visibility mask. `build_rebatch_plan` then reads the mask to the host to size the
+  cross-attention's per-camera gather, so the encoder cannot be traced.
 - As upstream, with batch size above 1 every sample gathers the queries the first sample's cameras
-  see, and the temporal self-attention reads `value[:bs]`; both are exact at batch size 1, which
-  BEVFormer runs.
+  see, and divides by the cameras its own mask counts; the temporal self-attention reads
+  `value[:bs]`. Both are exact at batch size 1, which BEVFormer runs.
 - The temporal self-attention, the spatial cross-attention and the decoder's cross-attention all
-  run on the fused MSDA op (`ttnn.experimental.fused_msda_from_offsets`) with float32 reference
-  points: in bfloat16 a point moves in steps of up to 0.8 px on the 200x200 grid. The
-  cross-attentions go through `TTMSDeformableAttention` (`tt/tt_ms_deformable_attention.py`); the
-  self-attention calls the op directly, as its Linears read both stacked maps.
-- The camera features are `(bs * num_cams, num_keys, 256)`: each sample's cameras in turn, the
-  FPN's order, with the levels concatenated, as the perception transformer builds them.
+  run on the fused MSDA op (`ttnn.experimental.fused_msda_from_offsets`). The temporal
+  self-attention's BEV reference points are float32: in bfloat16 a 100-cell grid's centres round by
+  up to 0.4 cells, and the six layers compound it. The cross-attentions go through
+  `TTMSDeformableAttention` (`tt/tt_ms_deformable_attention.py`); the self-attention calls the op
+  directly, as its Linears read both stacked maps.
+- The camera features are `(num_cams, num_keys, bs, 256)`, the levels concatenated, as upstream's;
+  the encoder permutes them batch-first once per forward for every layer.
 - Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`).
 
 ### Perception Transformer
@@ -72,11 +64,11 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
   default for every grid size, as torchvision's nearest-neighbour `rotate` does, and the encoder
   shifts its reference points by the ego translation in BEV-grid fractions: metres over the cell
   size (the point-cloud range over the grid, as upstream's head passes it), over the grid size.
-- `prepare_frame(img_metas)` turns the frame's CAN bus, ego shift, rotation and cameras into device
-  buffers, refilled in place for later frames, so the forward runs on device only and can be
-  traced. The rotation moves whole cells: the host rotates an image of cell indices with the
-  reference's own `rotate`, and the device gathers the previous BEV's rows by them, which picks
-  exactly the cells the reference picks.
+- `prepare_frame(img_metas)` turns the frame's CAN bus, ego shift and rotation into device buffers,
+  refilled in place for later frames, and keeps `img_metas` for the encoder's camera projection.
+  The rotation moves whole cells: the host rotates an image of cell indices with the reference's
+  own `rotate`, and the device gathers the previous BEV's rows by them, which picks exactly the
+  cells the reference picks.
 - `img_metas[b]["can_bus"]` is relative to the previous frame, as upstream's `forward_test` makes
   it (`reference/bevformer.py`'s `relative_can_bus`).
 
@@ -86,8 +78,7 @@ so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged.
 and the head, for one image shape and batch size (the backbone's convs are pinned to it). Its
 output ends, as upstream's `simple_test` does, in 3D boxes from the last decoder layer.
 
-- `detect(cls_scores, bbox_preds)` runs upstream's `BEVFormerHead.get_bboxes` on device, in the
-  forward's trace: the NMS-free coder's top-k and box decoding, the post-center range test as a
+- `detect(cls_scores, bbox_preds)` runs upstream's `BEVFormerHead.get_bboxes` on device: the NMS-free coder's top-k and box decoding, the post-center range test as a
   validity mask, and each box's z moved to its bottom face, on fixed `(bs, 300)` tensors.
   `get_bboxes(scores, labels, boxes, valid)` only drops the invalid boxes on the host: the count
   that remains depends on the data, which no fixed-shape device tensor can hold. For BEVFormer-base
@@ -445,21 +436,9 @@ pytest models/experimental/bevformer/tests/pcc/test_nms_free_coder.py
 ```
 
 #### test_encoder.py
-Tests the six-layer encoder over two consecutive frames.
-
-**What it tests:**
-- The base (200x200) BEV grid with six layers and with one, the tiny (50x50) grid with batch sizes
-  1 and 2 (per-sample shifts, the second sample's rig turned), and a non-square 50x100 grid
-- Two frames: the first without a previous BEV, the second with each side's own first-frame output
-  as its previous BEV and an ego shift, so the device's error is carried forward as in the
-  detector; PCC 0.997 on both frames' outputs
-
-It uses seeded random weights (`tests/common.py`): upstream's offset-grid init with random
-weights on top, scaled to the offset spread and attention-logit spread the BEVFormer-base
-checkpoint's encoder shows, except the self-attention offsets: at the checkpoint's spread, random
-offset weights make the six layers amplify a bfloat16-sized input perturbation on their own,
-which the trained encoder does not. The camera features are random but spatially smooth, as the FPN's
-are, at the FPN's four level sizes for 928x1600 images; the camera geometry is nuScenes' rig
+Tests the encoder without a previous BEV on a 100x100 grid: the base preset with six layers and
+with one, the tiny preset with three layers at batch size 2, and the CARLA tiny preset with three
+layers. PCC 0.997, 0.997, 0.996 and 0.995. The camera geometry is the dataset's fixed rig
 (`tests/common.py`).
 
 **Usage:**
@@ -470,9 +449,8 @@ pytest models/experimental/bevformer/tests/pcc/test_encoder.py
 #### test_perception_transformer.py
 Tests the perception transformer over two consecutive frames: the first without a previous BEV, the
 second with each side's own first-frame BEV, rotated and shifted by the ego motion. The base grid
-at batch size 1 and the tiny grid at batch size 2, each sample with its own CAN bus, rotation, shift
-and turned rig, which also runs a third frame and checks it compiles no new programs. PCC 0.999 on
-every frame.
+over two frames and the tiny grid over three, which refills the frame's buffers once more, at batch
+size 1. PCC 0.999 on every frame.
 
 **Usage:**
 ```bash
@@ -487,7 +465,7 @@ runs on them. The yaw sine and the velocities gate at 0.94: they are read off sm
 between frames, so they carry the backbone's and the encoder's bfloat16 error the most.
 
 It uses dummy weights (the backbone's, encoder's and head's tests' weights). The reference runs
-the backbone on the CPU three times, so the test takes several minutes.
+the backbone on the CPU once per frame, so the test takes several minutes.
 
 **Usage:**
 ```bash
@@ -495,10 +473,9 @@ pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
 
 #### test_temporal_self_attention.py
-Tests the temporal self-attention alone: the first frame (the queries stacked with themselves) and
-a later one (a smooth previous BEV stacked with the queries, shifted reference points), on the
-tiny, base and non-square grids and with batch size 2. PCC 0.999 on the output and on the attended
-part alone, without the residual.
+Tests the temporal self-attention alone without a previous BEV (the queries stacked with
+themselves), on 30x30 to 200x200 grids and at batch size 2, with float32 reference points as the
+encoder gives them. PCC 0.999.
 
 **Usage:**
 ```bash
@@ -506,12 +483,9 @@ pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
 ```
 
 #### test_spatial_cross_attention.py
-Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the tiny,
-base and non-square grids, the CARLA preset (a synthetic ring at CARLA's image size and range),
-batch size 2 with the second sample's rig turned, a frame no camera sees (an empty plan) and a frame
-that fills the plan exactly. PCC 0.999 on the output and on the attended part alone, except for the
-empty plan, whose attended part is the output projection's bias alone. `test_rebatch_plan_update`
-refills a plan in place for another rig.
+Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the tiny
+30x30, base 100x100 and 200x200 and CARLA grids, batch size 2 with a camera blind in one sample, a
+frame no camera sees and a frame that fills the gather exactly. PCC 0.997 to 0.999.
 
 **Usage:**
 ```bash
@@ -519,9 +493,9 @@ pytest models/experimental/bevformer/tests/pcc/test_spatial_cross_attention.py
 ```
 
 #### test_ms_deformable_attention.py and test_fused_msda.py
-Test `TTMSDeformableAttention` against the reference module: on the tiny, base and CARLA presets
-with bfloat16 and float32 reference points, and over several seeds, at PCC 0.999; and that two
-identical calls agree exactly.
+Test `TTMSDeformableAttention` against the reference module on the tiny, base and CARLA presets,
+over several seeds, at PCC 0.999; that two identical calls agree exactly; and the fused op's L1 and
+DRAM placements of the value, and its fallback to DRAM.
 
 **Usage:**
 ```bash
@@ -532,8 +506,7 @@ pytest models/experimental/bevformer/tests/pcc/test_fused_msda.py
 #### test_point_sampling_3d_2d.py
 Tests the bfloat16 TTNN port of the pillar-point projection, which the encoder does not use (it
 projects on the host in float32): the BEV grid's 3D reference points exactly, and the projection
-into nuScenes' and a synthetic rig's cameras at PCC 0.999 on the points both sides find valid,
-the validity masks at PCC 0.994.
+into the tiny, base and CARLA rigs' cameras at PCC 0.999.
 
 **Usage:**
 ```bash
@@ -542,31 +515,29 @@ pytest models/experimental/bevformer/tests/pcc/test_point_sampling_3d_2d.py
 
 ### Perf harnesses
 
-Located in `models/experimental/bevformer/tests/perf/`. Each runs a stage, on the base 200x200 grid
-unless noted, behind a PCC gate that doubles as the warmup, then one signposted run.
-`test_encoder_layer_perf.py` and `test_bevformer_perf.py` take `-k live` or `-k trace`. `live` calls
-the forward between Tracy's `start` and `stop`, so stage signposts and host dispatch are in the
-report, and the report takes no `--tracing-mode`. `trace` captures the forward, which fails on any
-host read or write, and replays it once in that window; the replay carries only `start` and `stop`.
-The other harnesses are trace, except `test_fused_msda_perf.py`, which is live only:
+Located in `models/experimental/bevformer/tests/perf/`. Each runs a stage behind a PCC gate that
+doubles as the warmup, then one signposted run between Tracy's `start` and `stop`. The encoder
+reads the camera visibility on the host inside its forward, so the encoder, the encoder layer and
+the detector run live: their region carries host dispatch and the stage signposts. The others
+capture the forward as a trace and replay it once in that window, except
+`test_fused_msda_perf.py`, which is live:
 
 - `test_backbone_fpn_perf.py`: the backbone and the FPN on six 928x1600 images.
 - `test_fused_msda_perf.py`: the fused MSDA module and the fused op alone, on the nuScenes tiny
   and base attention shapes.
 - `test_encoder_layer_perf.py`: one encoder layer on a 100x100 or 200x200 grid (`-k bev_100x100`
-  or `-k bev_200x200`), without the per-frame setup.
-- `test_encoder_perf.py`: the six-layer encoder, and one layer alone, on a second frame; it then
-  replays the trace on the next frame, with the plan refilled in place.
+  or `-k bev_200x200`), with the camera projection and the rebatch plan built before the region.
+- `test_encoder_perf.py`: the six-layer encoder on a 100x100 grid.
 - `test_decoder_perf.py`: the six-layer decoder.
 - `test_head_perf.py`: the head and the coder's top-k.
-- `test_bevformer_perf.py`: the detector end to end on a 100x100 grid, images to the 3D detections.
-  `trace` then replays on a third frame as a deployment would run it.
+- `test_bevformer_perf.py`: the detector end to end on a 100x100 grid, images to the 3D detections,
+  then a third frame with the frame's inputs refilled.
 
 **Usage:**
 ```bash
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py -k live"
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py -k trace"
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_decoder_perf.py"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
 ```
 

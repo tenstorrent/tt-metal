@@ -170,8 +170,7 @@ def camera_geometry(
     """One frame's pillar points in every camera, in float32 as upstream's ``point_sampling``:
     ``reference_points_cam`` ``[num_cams, bs, bev_h * bev_w, num_points_in_pillar, 2]`` in normalized
     image coordinates, and ``bev_mask`` ``[num_cams, bs, bev_h * bev_w, num_points_in_pillar]``, whether
-    each point lands in front of the camera and inside its image. The reference encoder's;
-    ``tt/model_preprocessing.camera_geometry`` computes the same for the TTNN one."""
+    each point lands in front of the camera and inside its image. The reference encoder's."""
     lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
     z_cfg = dict(num_points=num_points_in_pillar, start=pc_range[2], end=pc_range[5])
     reference_points_3d = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=len(img_metas))
