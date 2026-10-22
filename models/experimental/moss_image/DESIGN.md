@@ -18,6 +18,13 @@ Biases are applied after reductions where needed, avoiding double-counting.
 The VAE replicates its weights and output on a two-chip mesh; it is not a
 channel-parallel decoder. Generation saves the first replica for the image.
 
+On a two-chip caller-owned mesh, encoding uses a one-chip child view. Before
+denoising, generation quiesces the parent hierarchy to hand shared physical
+command queues and event counters back from the child to the parent. Deleting
+the local child variable is insufficient because the Python binding retains it.
+The caller's parent mesh remains open. This follows the upstream distributed
+child/parent workload pattern and is exercised by the two-card integrated test.
+
 Module boundary transfers serialize TT-produced conditioning, with no captured
 CUDA input. This path is CUDA independent; it is not a claim of eliminating host
 participation. Host code handles tokenization, initial noise, position/time
@@ -39,12 +46,20 @@ from zero. It also avoids prematurely quantizing constants such as 1/25. Split-h
 RoPE uses two separately rounded BF16 products followed by a separately rounded
 sum, rather than the native fused rotary operation. Biased linear projections
 retain FP32 matmul output through bias addition and round once afterwards.
-SDPA explicitly disables approximate exponentiation and uses 128-token query/key
-chunks. Matched late-step SFT tests selected that configuration over 32-, 256-
-and 512-key-token alternatives; this is a measured accuracy choice, not a claim
-that it is universally optimal. These are model-local
-helpers; no process-wide TTNN monkeypatch is installed. The precision corrections
-reduce measured step error but do not establish final independent image parity.
+Attention uses the model-local `AccurateAttention` helper in both the DiT and
+prompt encoder. It retains score, scaling, additive mask and stable-softmax
+arithmetic in FP32, rounds probabilities to BF16, and accumulates PV into FP32
+before the reference BF16 output boundary. Groups of at most six query heads
+bound temporary score memory. Encoder GQA groups stay within each KV head and
+repeat that KV only within its query subgroup; causal masks contain position
+metadata. DiT masks retain padded-key exclusion on each TP device. These helpers
+do not install a process-wide TTNN monkeypatch or move activations to the host.
+
+The preceding native-SDPA implementation selected 128-token query/key chunks in
+matched-input tests. Its remaining drift motivated this explicit attention path.
+The earlier manual-attention experiments were slower, so the replacement favors
+accuracy and must retain separate runtime evidence. Neither isolated component
+improvement nor precision settings establish final independent image parity.
 
 The prompt encoder retains full normalized token output and the official thinking
 chat template. Its GDN path uses FP32 L2 normalization, decay, explicit SFPU recurrence and
@@ -73,6 +88,12 @@ architecture. Replay checks the selected files against the capture manifest.
 All Torch artifact loads use `weights_only=True`.
 
 Component tests report PCC, relative RMS error and maximum absolute error.
+The detailed accuracy review also reports RMSE normalized by the reference's
+standard deviation, explicitly distinguishing it from relative RMS normalized
+by the reference RMS. The attention tests include an independent FP64 arithmetic
+reference, the BF16 probability-rounding policy, causal/GQA grouping and padded
+key invariance. Two-card attention replica checks do not replace full DiT TP
+collective or independent-generation qualification.
 Independent integration uses the same seed and CPU RNG algorithm on both
 backends, ensuring equal initial noise without injecting a saved activation.
 It compares conditioning, initial predictions, every updated latent and final
