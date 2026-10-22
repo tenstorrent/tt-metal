@@ -76,27 +76,20 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     sfpi::vFloat t = q * s;
     r = t * a + a;
 
-    // Special cases (the fp32 Newton path compares |y| and |x| directly so that min need not stay live):
-    auto min_or_y_abs = [&] {
-        if constexpr (is_bf16) {
-            return min;
-        } else {
-            return y_abs;
-        }
-    };
-    auto min_or_x_abs = [&] {
-        if constexpr (is_bf16) {
-            return min;
-        } else {
-            return x_abs;
-        }
-    };
+    // Special cases:
+    sfpi::vFloat y_side;
+    sfpi::vFloat x_side;
+    if constexpr (is_bf16) {
+        y_side = min;
+        x_side = min;
+    } else {
+        y_side = y_abs;
+        x_side = x_abs;
+    }
 
-    v_if(sfpi::as<sfpi::vInt>(min_or_y_abs()) >= sfpi::as<sfpi::vInt>(x_abs)) {
-        // if |y| ≥ |x| then r = π/2 - r
+    v_if(sfpi::as<sfpi::vInt>(y_side) >= sfpi::as<sfpi::vInt>(x_abs)) {
         r = neg_half_pi - r;
-        v_if(sfpi::as<sfpi::vInt>(min_or_x_abs()) >= sfpi::as<sfpi::vInt>(max)) {
-            // if |x| = |y| (including both infinite), then r = π/4
+        v_if(sfpi::as<sfpi::vInt>(x_side) >= sfpi::as<sfpi::vInt>(max)) {
             r = sfpi::addexp(neg_half_pi, -1);
             v_if(max == 0.0f) {
                 // if both zero, then r = ±0
@@ -110,7 +103,6 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     }
     v_endif;
 
-    // if sign of x is negative (including x=-0), then r = π - r
     v_if(x < 0.0f) {
         sfpi::vFloat neg_pi;
         if constexpr (!is_fp32_dest_acc_en) {

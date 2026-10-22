@@ -75,10 +75,8 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     // Special cases:
 
     v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(x_abs)) {
-        // if |y| ≥ |x| then r = π/2 - r
         r = neg_half_pi - r;
         v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(max)) {
-            // if |x| = |y| (including both infinite), then r = π/4
             r = sfpi::addexp(neg_half_pi, -1);
             v_if(max == 0.0f) {
                 // if both zero, then r = ±0
@@ -92,7 +90,6 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     }
     v_endif;
 
-    // if sign of x is negative (including x=-0), then r = π - r
     v_if(x < 0.0f) {
         sfpi::vFloat neg_pi = sfpi::addexp(neg_half_pi, 1);
         r = neg_pi - r;
