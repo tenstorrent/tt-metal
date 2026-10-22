@@ -90,11 +90,11 @@ def test_llama_scenario_separates_producer_slots_from_allocated_slots(
     "allocated_slots, active_slots, message",
     [("2", "3", "exceeds PREFILL_NUM_USERS=2"), ("0", "1", "PREFILL_NUM_USERS"), ("four", "1", "PREFILL_NUM_USERS")],
 )
-def test_llama_scenario_rejects_unusable_slot_counts(monkeypatch, allocated_slots, active_slots, message):
+def test_llama_scenario_rejects_unusable_slot_counts(monkeypatch, expect_error, allocated_slots, active_slots, message):
     from models.demos.llama_3p1_8b_d_p.tests.utils import prefill_runner_scenario
 
     monkeypatch.setenv("PREFILL_NUM_USERS", allocated_slots)
     monkeypatch.setenv("PREFILL_PRODUCER_NUM_USERS", active_slots)
     monkeypatch.setenv("PREFILL_MAX_SEQ_LEN", "2048")
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, message):
         prefill_runner_scenario()

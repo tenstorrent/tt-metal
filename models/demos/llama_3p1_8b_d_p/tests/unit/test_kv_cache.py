@@ -553,13 +553,14 @@ def test_max_user_slots_tracks_free_dram_and_allocates_what_it_promises(mesh_dev
     reserve = usable - wanted * slot_bytes
     free_slots = max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=0)
     assert max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=reserve) == wanted
-    before = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank * banks
+
+    def free_bytes():
+        return ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank * banks
+
     cache = allocate_kv_cache(mesh_device, mesh_config, num_users="max", reserve_bytes=reserve)
     try:
         assert cache.num_users == wanted
         assert tuple(cache.k.shape) == (wanted * NUM_LAYERS, 1, LOCAL_CACHE_SEQUENCE, HEAD_DIM)
-        taken = before - ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank * banks
-        assert taken == wanted * slot_bytes, f"took {taken} B for {wanted} slots, predicted {wanted * slot_bytes} B"
 
         # The count is a live reading rather than a constant: with this cache resident the device
         # has exactly these slots fewer to offer than it did before allocating it. One slot of
@@ -579,14 +580,21 @@ def test_max_user_slots_tracks_free_dram_and_allocates_what_it_promises(mesh_dev
         for device_idx, shard in enumerate(ttnn.get_device_tensors(cache.k)):
             rows = ttnn.to_torch(shard).float()[top_plane, 0, :LOCAL_CHUNK]
             assert torch.equal(rows, torch.full_like(rows, 3.0)), f"top slot unwritten on chip {device_idx}"
-        logger.info(
-            f"auto-sized cache: {wanted} slots took {taken / 2**20:.1f} MiB/chip, "
-            f"top slot (batch {top_plane}) writable; a full-DRAM ask at max_seq_len={MAX_SEQ_LEN} "
-            f"would have given {max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN)} slots"
-        )
+        full_ask = max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN)
     finally:
+        resident = free_bytes()
         cache.k.deallocate(True)
         cache.v.deallocate(True)
+
+    # Measured on release rather than across allocation: the zero fill's first run leaves its kernel
+    # binaries in a program-cache DRAM buffer that outlives the cache and is not a slot cost.
+    taken = free_bytes() - resident
+    assert taken == wanted * slot_bytes, f"took {taken} B for {wanted} slots, predicted {wanted * slot_bytes} B"
+    logger.info(
+        f"auto-sized cache: {wanted} slots took {taken / 2**20:.1f} MiB/chip, "
+        f"top slot (batch {top_plane}) writable; a full-DRAM ask at max_seq_len={MAX_SEQ_LEN} "
+        f"would have given {full_ask} slots"
+    )
 
 
 # A count taken from all of DRAM is exactly the count a migrating deployment cannot use: the shared
