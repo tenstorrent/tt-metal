@@ -288,6 +288,13 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     if (device->sysmem_manager().is_dram_backed()) {
         const uint32_t dram_channel =
             device->allocator_impl()->get_dram_channel_from_bank_id(device->sysmem_manager().get_dram_region_bank_id());
+        // DEBUG ONLY - REMOVE BEFORE MERGE. Confirm whether the direct DRAM CQ clear completes before dispatch.
+        log_info(
+            tt::LogTest,
+            "DEBUG clearing DRAM-backed CQ: {} B at 0x{:08x}",
+            cq_size - cq_start,
+            device->sysmem_manager().get_dram_region_base_addr() + get_absolute_cq_offset(channel, 0, cq_size) +
+                cq_start);
         tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
             cq_zeros.data(),
             (cq_size - cq_start),
@@ -295,6 +302,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             dram_channel,
             device->sysmem_manager().get_dram_region_base_addr() + get_absolute_cq_offset(channel, 0, cq_size) +
                 cq_start);
+        log_info(tt::LogTest, "DEBUG cleared DRAM-backed CQ");
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
             cq_zeros.data(),
@@ -1067,6 +1075,45 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNon32BAlignedPageSizeForDram
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNon32BAlignedPageSizeForDram2) {
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
+
+    for (const auto& mesh_device : devices_) {
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
+
+// DEBUG ONLY - REMOVE BEFORE MERGE. Bisects TestNon32BAlignedPageSizeForDram2 (8192 pages of 80B), which stalls on the
+// Quasar emulator while TestNon32BAlignedPageSizeForDram (1250 pages of 200B) passes in seconds. Varies page count and
+// page size independently to find which one the stall tracks.
+TEST_F(UnitMeshCQSingleCardSharedBufferFixture, DebugNon32BAlignedDram_1250x80) {
+    TestBufferConfig config = {.num_pages = 1250, .page_size = 80, .buftype = BufferType::DRAM};
+
+    for (const auto& mesh_device : devices_) {
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
+
+TEST_F(UnitMeshCQSingleCardSharedBufferFixture, DebugNon32BAlignedDram_8192x200) {
+    TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 200, .buftype = BufferType::DRAM};
+
+    for (const auto& mesh_device : devices_) {
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
+
+TEST_F(UnitMeshCQSingleCardSharedBufferFixture, DebugNon32BAlignedDram_2048x80) {
+    TestBufferConfig config = {.num_pages = 2048, .page_size = 80, .buftype = BufferType::DRAM};
+
+    for (const auto& mesh_device : devices_) {
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            mesh_device, mesh_device->mesh_command_queue(), config);
+    }
+}
+
+TEST_F(UnitMeshCQSingleCardSharedBufferFixture, DebugNon32BAlignedDram_4096x80) {
+    TestBufferConfig config = {.num_pages = 4096, .page_size = 80, .buftype = BufferType::DRAM};
 
     for (const auto& mesh_device : devices_) {
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(

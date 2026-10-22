@@ -576,6 +576,18 @@ FORCE_INLINE uint32_t read_from_pcie(
         dst_addr,
         size);
 #endif
+    // DEBUG ONLY - REMOVE BEFORE MERGE. Where this fetch sources from and where it lands.
+    DPRINT(
+        "fetch read: src_hi=0x{:08x} src_lo=0x{:08x} pcie_rd_ptr=0x{:08x} pcie_base=0x{:08x} pcie_size={} dst=0x{:08x} "
+        "size={} trid={}\n",
+        (uint32_t)(host_src_addr >> 32),
+        (uint32_t)host_src_addr,
+        pcie_read_ptr,
+        pcie_base,
+        pcie_size,
+        dst_addr,
+        size,
+        trid);
     noc_async_read_set_trid(trid);
 #ifdef ARCH_BLACKHOLE
     // PCIe routing stays programmed on read_cmd_buf for the whole run of reads, so only the address and
@@ -773,6 +785,22 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 if (fetch_size == 0U) {
                     break;
                 }
+#if defined(PREFETCH_Q_CACHED)
+                // DEBUG ONLY - REMOVE BEFORE MERGE. The slot above was read through the cached alias with no
+                // invalidate. Host writes arrive over the NoC and do not snoop L2, so compare the raw words.
+                {
+                    const uint32_t cached_entry = *prefetch_q_rd_ptr;
+                    volatile prefetch_q_entry_type tt_l1_ptr* uncached_slot =
+                        uncached_l1_ptr<prefetch_q_entry_type>(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+                    const uint32_t uncached_entry = *uncached_slot;
+                    DPRINT(
+                        "fetch slot: ptr=0x{:08x} cached=0x{:08x} uncached=0x{:08x} decoded={}\n",
+                        (uint32_t)reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr),
+                        cached_entry,
+                        uncached_entry,
+                        fetch_size);
+                }
+#endif
                 const bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
 
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
@@ -2674,10 +2702,27 @@ bool process_cmd(
             break;
 
         default:
-            // DPRINT("prefetch invalid_command:{} {} {}\n", (uint32_t)cmd->base.cmd_id, cmd_ptr, cmddat_q_base);
-            // DPRINT("0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n", *(uint32_t*)cmd_ptr,
-            // *((uint32_t*)cmd_ptr + 1), *((uint32_t*)cmd_ptr + 2), *((uint32_t*)cmd_ptr + 3), *((uint32_t*)cmd_ptr +
-            // 4));
+            // DEBUG ONLY - REMOVE BEFORE MERGE. Dump the unrecognized command the prefetcher tripped on.
+            DPRINT("prefetch invalid_command:{} {} {}\n", (uint32_t)cmd->base.cmd_id, cmd_ptr, cmddat_q_base);
+            DPRINT(
+                "cached:   0x{:08x} 0x{:08x} 0x{:08x} 0x{:08x} 0x{:08x}\n",
+                *(uint32_t*)cmd_ptr,
+                *((uint32_t*)cmd_ptr + 1),
+                *((uint32_t*)cmd_ptr + 2),
+                *((uint32_t*)cmd_ptr + 3),
+                *((uint32_t*)cmd_ptr + 4));
+            // Same words through the uncached alias. If these differ from the cached read above, the NoC
+            // payload did land and the stale line survived the invalidate in process_cmd.
+            {
+                volatile uint32_t tt_l1_ptr* uncached_cmd = uncached_l1_ptr<uint32_t>(cmd_ptr);
+                DPRINT(
+                    "uncached: 0x{:08x} 0x{:08x} 0x{:08x} 0x{:08x} 0x{:08x}\n",
+                    uncached_cmd[0],
+                    uncached_cmd[1],
+                    uncached_cmd[2],
+                    uncached_cmd[3],
+                    uncached_cmd[4]);
+            }
             WAYPOINT("!CMD");
             ASSERT(0);
             return done;

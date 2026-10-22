@@ -983,6 +983,19 @@ void issue_buffer_dispatch_command_sequence(
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
+    // DEBUG ONLY - REMOVE BEFORE MERGE. Log each write command's size against the issue queue and the prefetch limit.
+    log_info(
+        tt::LogDispatch,
+        "DEBUG write txn: cmd_size={} B issue_q_wr_ptr={} issue_q_limit={} max_prefetch_cmd={} pages={} "
+        "page_size={} data_size={}",
+        cmd_sequence_sizeB,
+        sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
+        sysmem_manager.get_issue_queue_limit(dispatch_params.cq_id),
+        metal_ctx.dispatch_mem_map().max_prefetch_command_size(),
+        num_pages_to_write,
+        dispatch_params.page_size_to_write,
+        data_size_bytes);
+
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     if (dispatch_params.issue_wait) {

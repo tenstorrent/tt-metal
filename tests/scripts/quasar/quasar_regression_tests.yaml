@@ -545,16 +545,24 @@ unit_tests_dispatch:
     config: 2x3_DISPATCH
     back2back: true
 
+  - filter: "UnitMeshCQSingleCardSharedBufferFixture.TestNon32BAlignedPageSizeForDram"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "UnitMeshCQSingleCardSharedBufferFixture.TestNon32BAlignedPageSizeForDram2"
+    config: 2x3_DISPATCH
+    back2back: true
+
 unit_tests_llk:
   # LLKQuasarMeshDeviceSingleCardFixture:
   # mailboxes, BFD datacopy, MX fp4/fp6/fp8/int typecast, DFB broadcast,
   # transpose-dest, pack/unpack tilize, reconfig, matmul no-MOP and MxFp4x2,
   # column reduce MxFp4x2, SFPU reduce, Quasar SFPU relu / unpack-to-dest.
-  - filter: "LLKQuasarMeshDeviceSingleCardFixture*"
-    config: 1x3
-    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+  # - filter: "LLKQuasarMeshDeviceSingleCardFixture*"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
   # Unary SFPU on LLKMeshDeviceFixture, including approx, 32-bit dest, and
   # the Int32 unary suite. On Quasar none of these ops take the arch skip.

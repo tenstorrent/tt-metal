@@ -902,12 +902,24 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
     }
 
+    const uint32_t slot = this->prefetch_q_dev_ptrs[cq_id];
+    uint32_t readback = 0;
     if (entry_bytes == 2) {
-        this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], static_cast<uint16_t>(entry_val));
+        this->prefetch_q_windows[cq_id]->write16(slot, static_cast<uint16_t>(entry_val));
+        readback = this->prefetch_q_windows[cq_id]->read16(slot);
     } else {
         TT_ASSERT(entry_bytes == 4);
-        this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
+        this->prefetch_q_windows[cq_id]->write32(slot, entry_val);
+        readback = this->prefetch_q_windows[cq_id]->read32(slot);
     }
+    // DEBUG ONLY - REMOVE BEFORE MERGE. Compare the encoded entry with what the L1 window stored.
+    log_info(
+        tt::LogDispatch,
+        "DEBUG fetchq write: cmd_size={} B entry=0x{:08x} slot=0x{:08x} readback=0x{:08x}",
+        command_size_B,
+        entry_val,
+        slot,
+        readback);
     this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
 }
 
