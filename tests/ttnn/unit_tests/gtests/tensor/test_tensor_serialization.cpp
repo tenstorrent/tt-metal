@@ -729,6 +729,36 @@ TEST(TensorSerializationFlatbufferGuardTest, AliasedShardsDeduplicatedByPointer)
     }
 }
 
+// With the byte compare off, the first replica stands for its group, and a shard folded into that copy must not lend
+// it to another group through the address lookup: (0,1) and (1,0) share one HostBuffer but sit in different groups
+// (the rows), so row 1 has to be written from its own bytes.
+TEST(TensorSerializationFlatbufferGuardTest, AliasAcrossGroupsKeepsItsOwnBytesWhenOptedOut) {
+    auto restore_config = scoped_replica_check(false);
+    TemporaryFile test_file("alias_across_groups_opt_out.tensorbin");
+    const MeshShape buffer_shape(2, 2);
+    const std::vector<float> x{1.0f, 2.0f};
+    const std::vector<float> y{3.0f, 4.0f};
+    const std::vector<float> z{5.0f, 6.0f};
+    const TensorTopology label(buffer_shape, Placements{shard_on(0), kReplicate}, all_coords(buffer_shape));
+
+    auto buffer = DistributedHostBuffer::create(
+        buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
+    HostBuffer shared_y{std::vector<float>(y)};
+    buffer.emplace_shard(MeshCoordinate(0, 0), [&x]() { return HostBuffer(std::vector<float>(x)); });
+    buffer.emplace_shard(MeshCoordinate(0, 1), [&shared_y]() { return shared_y; });
+    buffer.emplace_shard(MeshCoordinate(1, 0), [&shared_y]() { return shared_y; });
+    buffer.emplace_shard(MeshCoordinate(1, 1), [&z]() { return HostBuffer(std::vector<float>(z)); });
+    Tensor tensor = wrap_host_buffer(std::move(buffer), x.size(), label);
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_THAT(shard_values(loaded_tensor, MeshCoordinate(0, 0)), Pointwise(FloatEq(), x));
+    EXPECT_THAT(shard_values(loaded_tensor, MeshCoordinate(0, 1)), Pointwise(FloatEq(), x));
+    EXPECT_THAT(shard_values(loaded_tensor, MeshCoordinate(1, 0)), Pointwise(FloatEq(), y));
+    EXPECT_THAT(shard_values(loaded_tensor, MeshCoordinate(1, 1)), Pointwise(FloatEq(), y));
+}
+
 // Two borrowed-span HostBuffers over one allocation of three floats: they start at the same address, so the
 // address lookup in `to_flatbuffer` sees them, but one views two floats and the other all three. The pins keep the
 // allocation alive.

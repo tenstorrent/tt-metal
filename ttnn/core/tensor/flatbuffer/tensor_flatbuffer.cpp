@@ -230,7 +230,8 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
         }
 
         // Same address and same length: the same bytes, so the same copy. Otherwise the group's copy stands for this
-        // shard, or this shard starts its group.
+        // shard, or this shard starts its group. An address is recorded only for the buffer written from it, so a
+        // shard folded into its group's copy never lends that copy to another group that aliases its buffer.
         std::optional<size_t> buffer_index;
         if (auto it = buffer_to_index.find(buffer_address);
             it != buffer_to_index.end() && buffers[it->second].buffer.view_bytes().size() == buffer_size) {
@@ -246,10 +247,10 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 next_buffer_offset = aligned_offset + buffer_size;
                 buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = aligned_offset});
                 buffer_index = buffers.size() - 1;
+                buffer_to_index.emplace(buffer_address, *buffer_index);
             }
             group = buffer_index;
         }
-        buffer_to_index.emplace(buffer_address, *buffer_index);
         const uint64_t shard_buffer_offset = buffers[*buffer_index].offset;
 
         auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
