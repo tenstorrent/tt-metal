@@ -42,11 +42,11 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | Key | Contents |
 | --- | --- |
 | `manifest_version`, `kind` | `1` and `"fabric_manifest"` |
-| `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at` |
+| `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at`, and the commit the build came from (`git_sha`, `git_dirty`) |
 | `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox, base firmware link status |
-| `archs.<arch>.stream_registers` | Where the stream registers are: `base`, `stride`, `count` and `register_offsets`, from the HAL |
+| `archs.<arch>.stream_registers` | Where the stream registers are and how wide their values are: `base`, `stride`, `count`, and each register's `offset` and `bits`, from the HAL |
 | `archs.<arch>.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
 | `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
 | `enums` | Every enum a schema names, with its values |
@@ -83,8 +83,9 @@ path:
   it before launch.
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
   increment-on-write count) or `remote_src` (a plain read-write register). Its address is
-  `base + stream_id * stride + register_offsets[register]`, from `archs.<arch>.stream_registers`, and `stream_id` is
-  below its `count`.
+  `base + stream_id * stride + registers[register].offset`, from `archs.<arch>.stream_registers`, and `stream_id` is
+  below its `count`. Its value is the word's low `registers[register].bits` bits: the bits above
+  `buf_space_available`'s count can hold other state.
 - A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
   `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:` and `enum:` schema resolves: the
   writer throws otherwise.
@@ -158,6 +159,22 @@ entries.
   which indexes `reset_masks`. It is the processor's index, except in Blackhole single-ERISC mode, where base
   firmware keeps ERISC0 and the one processor runs on ERISC1. The HAL compiles the same value into Blackhole kernels
   as `PHYSICAL_AERISC_ID`.
+- **Build identity** (`run.git_sha`, `run.git_dirty`): the commit tt-metal was built from, and whether tracked files
+  had uncommitted changes, from the version header CMake refreshes on every build (`cmake/version.cmake`). With
+  uncommitted changes, the SHA doesn't say exactly what code ran. `git_sha` is empty when the source tree is neither a
+  git checkout nor a `git archive` export.
+
+## What the manifest doesn't cover
+
+**UDM.** A UDM run (`run.udm_mode`) writes a manifest, but its UDM-specific parts aren't described:
+
+- the tensix mux and relay cores, and their L1;
+- a receiver's path into its relay: the connection, the relay's free slots stream (id 30), the relay's buffer count and
+  the router's L1 word for it;
+- which routers have a relay.
+
+The VC0 worker channel's `producer` may also read `"worker"` where a tensix mux feeds it. No test writes a UDM
+manifest.
 
 ## Arguments the manifest leaves out
 
@@ -202,3 +219,31 @@ To check other manifests against the schema, pass their files or directories to 
 ```bash
 python3 tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py generated/fabric
 ```
+
+## Future work
+
+### UDM
+
+What it would take to cover the parts "What the manifest doesn't cover" lists:
+
+- **A UDM mock fixture** in `run_fabric_manifest_tests.sh`, so that every run writes a UDM manifest and checks it
+  against the schema, and a writer that can't describe a UDM run fails CI.
+- **The relay path.** The receiver's connection to its tensix relay, written as one more of the receiver's outputs,
+  with the relay's free slots stream, its buffer count and the router's L1 word for it. The three UDM arguments
+  [FIELDS.md](FIELDS.md) lists as not yet described would become fields. This changes the builder code that
+  records connections, so it needs a fabric owner's review.
+- **Which routers have a relay.** A per-router flag, since a UDM run's dispatch-link routers don't have one.
+- **The worker channel's producer**, written as `"tensix_mux"` where a tensix mux feeds it in a UDM run.
+- **The tensix mux and relay cores**, with their L1.
+
+### In-depth docs
+
+This README covers the manifest's shape and how it is built at a high level. Manifest generation needs in-depth docs,
+one per part, like decode's `docs/`:
+
+- the collector and its field tables: how each argument is read, and the unrecorded lists;
+- the chip pass: router keys, peers, cores, links and sibling producers;
+- the struct layouts: how a `StructLayout` describes a struct, and how the layout checks catch a struct that changed;
+- the writer: how the model becomes JSON.
+
+Each would name the fabric code it reads, so that a fabric change can update the doc with it.

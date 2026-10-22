@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
@@ -77,6 +78,9 @@ json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster
     run["mpi_rank"] = *distributed_context->rank();
     run["world_size"] = *distributed_context->size();
     run["written_at"] = utc_now_iso8601();
+    const auto build = manifest::get_build_identity();
+    run["git_sha"] = std::string(build.git_sha);
+    run["git_dirty"] = build.git_dirty;
     return run;
 }
 
@@ -171,15 +175,18 @@ json heartbeat_json(const manifest::Heartbeat& heartbeat) {
 }
 
 json stream_registers_json(const manifest::StreamRegisters& registers) {
-    json offsets = json::object();
-    for (const auto& [reg, offset] : registers.register_offsets) {
-        offsets[lower_enum_name(reg)] = offset;
+    json by_name = json::object();
+    for (const auto& [reg, layout] : registers.registers) {
+        json entry;
+        entry["offset"] = layout.offset;
+        entry["bits"] = layout.bits;
+        by_name[lower_enum_name(reg)] = std::move(entry);
     }
     json out;
     out["base"] = registers.base;
     out["stride"] = registers.stride;
     out["count"] = registers.count;
-    out["register_offsets"] = std::move(offsets);
+    out["registers"] = std::move(by_name);
     return out;
 }
 
