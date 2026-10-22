@@ -773,6 +773,7 @@ def save_checkpoint(
     grpo_config: Optional[GRPOConfig] = None,
     optimizer: Any = None,
     model_source: Optional[str] = None,
+    learning_rate: Optional[float] = None,
 ) -> None:
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -804,13 +805,13 @@ def save_checkpoint(
             json.dump(gen_config, f, indent=2)
 
     trainer_state = {"global_step": step}
-    if optimizer is not None:
-        trainer_state["learning_rate"] = optimizer.get_lr()
+    if learning_rate is not None:
+        trainer_state["learning_rate"] = learning_rate
     with open(os.path.join(ckpt_dir, "trainer_state.json"), "w") as f:
         json.dump(trainer_state, f, indent=2)
 
     scheduler_state = {
-        "base_lr": optimizer.get_lr() if optimizer else None,
+        "base_lr": optimizer.get_initial_lr() if optimizer else None,
         "warmup_steps": grpo_config.warmup_steps if grpo_config else 0,
         "last_step": step,
     }
@@ -1435,6 +1436,7 @@ class GRPOTrainer:
             grpo_config=cfg,
             optimizer=self._optimizer,
             model_source=self.model_source,
+            learning_rate=self.metrics["lr"],
         )
         ckpt_dir = os.path.join(cfg.output_dir, "checkpoints", f"grpo_step_{step}")
         for cb in self.callbacks:
