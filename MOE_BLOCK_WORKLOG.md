@@ -528,3 +528,33 @@ GLM's under the RS. K3's gather end moved 220-257 -> 252-277 us (the router's DR
 cores). Next: the SFPU top-K (ttnn topk's LLK) if the routing gather + planner behind it land on the critical path;
 W_r multicast instead of 5 reads.
 Mock Galaxy (8 x 4, TP ring): the head with the in-program reduce-scatter and the router chain builds and enqueues.
+
+### K3's latent down + all-to-all in the program
+- Latent down = extra plain engine passes after gate / up on the gathered x (x from L1; W_ld's chip columns
+  [H, Hr / TP] in the column's W stream; fp32 between-shard partials like gate / up; bf16 out into LAT [MT][LWMAX]).
+- All-to-all to the owners through the ports: per destination block, per core of the port's link with rows in it, one
+  sub-block (its rows x its latent columns) by multi-hop fabric unicast (no multicast, nothing replicated) into the
+  destination chip's same core, zone slot = the source chip, fused increment; the owner core's NCRISC writes its own
+  and the G - 1 arrived slices to the owners' latent [rows / TP, Hr] (DRAM: the stage's output).
+- L1: K3 + latent did not fit (1481 KB at KB 7, 1583 at 14). HOLD / FINB now overlay XIN + ACC (only this core's
+  compute touches ACC; no row peer writes XIN after the last round it consumed): K3 fits at KB 7 (1289 KB).
+- Hang (stopped at the first, narrowed: router alone pass / latent alone hang / latent without the all-to-all pass):
+  each port phase after the gather restarted its CB chunk count at 0, but the latent phase leaves the CB unaligned -
+  the next phase's reservation ran past the CB's end (triage: the ports' low L1 / firmware text overwritten). Fixed:
+  one chunk count over the phases. Latent PCC 0.99987-0.99994.
+
+## Where the head stands (2x4, 640 rows a mesh row; eager device times)
+| us | GLM-Flash | K3 |
+|---|---|---|
+| fused program: x chain + SE (down + reduce-scatter) | 248.2 | 449.9 |
+| + router chain (router, logits RS fp32, top-K) | 260.0 | 474.1 |
+| + latent down + all-to-all (K3) | - | 497.8 |
+| routing gather + planner + dispatch prep (block's programs, chunk 1280, not fused yet) | 50.9 + 34.0 + 11.0 | 45.6 + 46.0 + 11.4 |
+| **whole head** | **355.9** | **600.8** |
+| floor (TP-link bytes) / 2x target | 180 / 360 - **1.98x** | 330 / 660 - **1.82x** |
+Correctness, all in one program: SE PCC 0.99988 / 0.99985, routing picks 99.53 / 99.45% and weights PCC 0.9955 /
+0.9919 vs the host's fp32 routing (= the block's ttnn router chain), K3 latent PCC 0.99987. Mock Galaxy (TP ring)
+builds the whole program for both models.
+Next: the routing gather (needs SP-axis ports) + planner + prep in the program (GLM's margin is 4 us); the SFPU top-K
+(the scalar scan is L1-load bound, ~16 us a K3 token); W_r multicast (5 DRAM reads of it slow K3's gather end by
+~25 us); KB 14 for K3 back (the latent pushed it to 7).
