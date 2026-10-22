@@ -192,7 +192,11 @@ public:
      * The two halves of receive(), for a receiver that wants the upstream write of the NEXT chunk to overlap its
      * own forward of the current one: signal_ready() as soon as the next CB page is free (the upstream may then
      * write it at any time), wait_data() when the chunk is needed. Exactly one chunk may be outstanding per
-     * link (one valid flag), so signal_ready() must not be called again before the matching wait_data().
+     * link (one ready count, one valid flag), so signal_ready() must not be called again before the matching
+     * wait_data() -- and "link" means the ChainLink object: when K and V travel over the same object (MHA's
+     * head chain), their handshakes form one sequence, K(p), V(p), K(p+1), ..., and only the next one in that
+     * sequence may be signalled early. Signalling K(p+1) before V(p)'s wait_data() hands the upstream's V(p)
+     * forward a second ready count, and its equality wait never returns (M8's first run hung that way).
      */
     void signal_ready(Noc noc) const {
         Semaphore<>(receiver_sem_id_).set(INVALID);

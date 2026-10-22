@@ -1577,19 +1577,21 @@ void kernel_main() {
                 logical_nt > source_start_tile ? std::min(logical_nt - source_start_tile, kv_local_padded_Nt) : 0;
             const uint32_t end_seq_tile =
                 source_is_local ? source_valid_kv_tiles : source_start_tile + source_valid_kv_tiles;
-            // Chain overlap (M8). The chain protocol allows one outstanding chunk per link: a member signals
-            // "ready" and the upstream writes. Signalling at the start of a piece (after forwarding the previous
-            // one) made the chain a bucket brigade, every hop idle while its neighbours moved, and the M6 profile
-            // measured its pace at 25-28 us per piece against ~13 us for a core fetching from DRAM on its own. Now
-            // a member pushes piece p, then, if the page for p+1 is already free, reserves it and signals ready
-            // for p+1 BEFORE forwarding p, so the upstream's write of p+1 overlaps this core's forward of p. The
-            // armed page and signal carry to the next stream_piece call; nothing is armed after the iteration's
-            // last piece (the pooled fetches and the dummy pushes reserve pages themselves). Fetchers (injectors
-            // and the standalone two-head cores) only gain the early reserve.
+            // Chain overlap (M8). The chain protocol allows one outstanding transfer per LINK: a member signals
+            // "ready", the upstream writes and flags valid. In MHA the K and V transfers of a piece go over the
+            // same link (k_chain and v_chain are the same head_chain, one semaphore set), so the link's handshakes
+            // form one sequence: K(p), V(p), K(p+1), ... Signalling each only when the previous forward was done
+            // made the chain a bucket brigade, every hop idle while its neighbours moved: the M6 profile measured
+            // 25-28 us per piece against ~13 us for a core fetching from DRAM on its own. Now a member signals the
+            // link's NEXT handshake before forwarding the current chunk, whenever that chunk's page is already
+            // free: V(p)'s ready before forwarding K(p), K(p+1)'s ready before forwarding V(p). The upstream's
+            // write then overlaps this core's forward, and the link never has more than one transfer outstanding
+            // (the next signal always follows the wait for the previous data). An armed K page carries to the
+            // next stream_piece call; nothing is armed after the iteration's last piece (the pooled fetches and
+            // the dummy pushes reserve pages themselves). Fetchers (injectors, standalone two-head cores) signal
+            // nothing and only gain the early reserve.
             bool k_armed = false;
-            bool v_armed = false;
             uint32_t k_armed_addr = 0;
-            uint32_t v_armed_addr = 0;
             const auto stream_piece = [&](uint32_t nb, uint32_t nq, uint32_t k, bool has_next) {
                 const uint32_t nk = nq / q_heads_per_k;
                 const uint32_t nv = nq / q_heads_per_v;
@@ -1629,26 +1631,25 @@ void kernel_main() {
                     fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 }
                 // Push before the forward: the forward only reads the page, its NoC write is flushed inside
-                // forward(), and the page is not reused before piece p+2's reserve. Then arm p+1 if its page is free.
+                // forward(), and the page is not reused before piece p+2's reserve.
                 cb_k.push_back(k_chunk_tiles);
-                if (k_rx && has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
-                    cb_k.reserve_back(k_chunk_tiles);
-                    k_armed_addr = cb_k.get_write_ptr();
-                    k_armed = true;
-                    k_chain.signal_ready(noc);
+                // The link's next handshake is V(p)'s: arm it (reserve V's page, signal ready) before forwarding
+                // K(p) when the page is free now; otherwise reserve it after the forward, as before.
+                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                CircularBuffer cb_v(cb_v_in);
+                uint32_t v_addr = 0;
+                bool v_reserved = false;
+                if (v_rx && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
+                    cb_v.reserve_back(v_cb_entry_tiles);
+                    v_addr = cb_v.get_write_ptr();
+                    v_reserved = true;
+                    v_chain.signal_ready(noc);
                 }
                 if (k_chain.should_forward(k_head, 0)) {
                     SOL_ZONE("RD_CHAIN_TX");  // the wait for the downstream ready signal, then the write
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
-                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
-                CircularBuffer cb_v(cb_v_in);
-                uint32_t v_addr;
-                if (v_armed) {
-                    ASSERT(v_rx);
-                    v_addr = v_armed_addr;
-                    v_armed = false;
-                } else {
+                if (!v_reserved) {
                     cb_v.reserve_back(v_cb_entry_tiles);
                     v_addr = cb_v.get_write_ptr();
                     if (v_rx) {
@@ -1663,11 +1664,13 @@ void kernel_main() {
                     fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
                 }
                 cb_v.push_back(v_cb_entry_tiles);
-                if (v_rx && has_next && cb_v.pages_reservable_at_back(v_cb_entry_tiles)) {
-                    cb_v.reserve_back(v_cb_entry_tiles);
-                    v_armed_addr = cb_v.get_write_ptr();
-                    v_armed = true;
-                    v_chain.signal_ready(noc);
+                // The link's next handshake is K(p+1)'s: arm it before forwarding V(p) when there is a next piece
+                // and K's page is free now. The armed page is consumed by the next stream_piece call.
+                if (k_rx && has_next && cb_k.pages_reservable_at_back(k_chunk_tiles)) {
+                    cb_k.reserve_back(k_chunk_tiles);
+                    k_armed_addr = cb_k.get_write_ptr();
+                    k_armed = true;
+                    k_chain.signal_ready(noc);
                 }
                 if (v_chain.should_forward(nv, 0)) {
                     v_chain.forward(noc, v_addr);
