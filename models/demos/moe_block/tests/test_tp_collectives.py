@@ -149,3 +149,114 @@ def test_tp_collectives(mesh_device, device_params):
             + "; ".join(f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err {v[1]})" for k, v in res.items())
         )
         ttnn.deallocate(x)
+
+
+AGMM_CASES = {
+    # name: (rows, H / TP per chip, gate / up columns per chip (2 I_s / TP))
+    "glm_x_gu": (2560, 1024, 1024),
+    "k3_x_gu": (2560, 1792, 3072),
+}
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
+    indirect=True,
+)
+def test_agmm_bar(mesh_device, device_params):
+    """The bar for the fused head's x all-gather -> shared expert gate / up: ttnn.all_gather + the block's mm2d linear
+    (HiFi2, bf8 weights) vs the fused gather-over-K matmul ops (all_gather_minimal_matmul_async)."""
+    import models.demos.glm53_flash_d_p.tt.mm_configs as mmc
+    from models.common.modules.tt_ccl import get_tt_ccl
+
+    ccl = get_tt_ccl(mesh_device)
+    cfg = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    for name, (rows, kl, n) in AGMM_CASES.items():
+        K = kl * C
+        _, x = _dev(mesh_device, (rows, kl), 1)
+        wt = torch.randn(K, n * C, generator=torch.Generator().manual_seed(2)) * 0.02
+        res = {}
+        for wdt in (ttnn.bfloat8_b,):
+            w = ttnn.from_torch(
+                wt.view(1, 1, K, n * C),
+                dtype=wdt,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(None, 3)),
+            )
+
+            def sep():
+                xf = ttnn.all_gather(x, dim=3, cluster_axis=1)
+                y = ttnn.linear(
+                    xf,
+                    w,
+                    compute_kernel_config=cfg,
+                    dtype=ttnn.bfloat16,
+                    program_config=mmc.linear_config(xf, w, ttnn.bfloat16),
+                )
+                ttnn.deallocate(xf)
+                return y
+
+            x8 = ttnn.typecast(x, ttnn.bfloat8_b)
+            gbuf = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows, K]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+
+            def fused(grid_y=10, links=2, workers=4, kb=8):
+                gx = links * workers
+                mc = ttnn.MinimalMatmulConfig(
+                    M_block_size=4,
+                    K_block_size=kb,
+                    N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=4,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(gx, grid_y),
+                )
+                return ttnn.experimental.all_gather_minimal_matmul_async(
+                    input_tensor=x8,
+                    weight_tensor=w,
+                    config=mc,
+                    compute_kernel_config=cfg,
+                    multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(1),
+                    num_links=links,
+                    topology=ttnn.Topology.Linear,
+                    cluster_axis=1,
+                    dtype=ttnn.bfloat16,
+                    force_transpose=True,
+                    num_workers_per_link=workers,
+                    num_buffers_per_channel=8,
+                    persistent_output_buffer=gbuf,
+                )[0]
+
+            variants = {
+                "ag+mm2d": sep,
+                "agmm_8x9": lambda: fused(9, 2, 4),
+                "agmm_12x9": lambda: fused(9, 2, 6),
+                "agmm_8x8": lambda: fused(8, 2, 4),
+                "agmm_4x9_1l": lambda: fused(9, 1, 4),
+            }
+            ref = None
+            for vn, f in variants.items():
+                try:
+                    us, out = _time(mesh_device, f)
+                    y = _host(mesh_device, out, (2, 3))
+                    ttnn.deallocate(out)
+                    if ref is None:
+                        ref = y
+                    p = torch.corrcoef(torch.stack([y.flatten(), ref.flatten()]))[0, 1].item()
+                    res[vn] = (us, round(p, 5))
+                except Exception as e:
+                    res[vn] = (None, f"{type(e).__name__}: {str(e).splitlines()[0][:200]}")
+            ttnn.deallocate(w)
+            ttnn.deallocate(x8)
+            ttnn.deallocate(gbuf)
+        logger.info(
+            f"AGMM {name} rows {rows} K {K} N/chip {n}: "
+            + "; ".join(
+                f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (PCC vs first {v[1]})" for k, v in res.items()
+            )
+        )
+        ttnn.deallocate(x)
