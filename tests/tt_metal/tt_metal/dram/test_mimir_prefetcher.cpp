@@ -433,9 +433,19 @@ TEST(MimirPrefetcher, MM7GcbLayoutTwoSenders) {
             receiver_cces.push_back(cce_index);
         }
     }
-    expect_dram_receiver_gcb_layout(
-        *mesh,
-        {{.bank = 0, .receiver_cces = {receiver_cces[0]}}, {.bank = second_bank, .receiver_cces = {receiver_cces[1]}}});
+    // Equal receiver counts: four CCEs leave two receivers, and a receiver can serve only one sender of a GCB.
+    const std::vector<GcbLayoutSender> senders = {
+        {.bank = 0, .receiver_cces = {receiver_cces[0]}}, {.bank = second_bank, .receiver_cces = {receiver_cces[1]}}};
+    const experimental::GlobalCircularBuffer first_gcb = expect_dram_receiver_gcb_layout(*mesh, senders);
+
+    BankToDramReceivers bank_to_dram_receivers;
+    for (const GcbLayoutSender& sender : senders) {
+        bank_to_dram_receivers.emplace_back(
+            sender.bank, std::vector<CoreCoord>{logical_cce_core(soc_desc_of(device), sender.receiver_cces.front())});
+    }
+    const experimental::GlobalCircularBuffer second_gcb =
+        experimental::CreateGlobalCircularBufferForTensorPrefetcher(*mesh, bank_to_dram_receivers, kGcbLayoutFifoBytes);
+    expect_gcb_layout_ranges_disjoint(first_gcb, second_gcb);
 }
 
 TEST(MimirPrefetcher, MM7GcbLayoutRejectsConflictingReceivers) {
@@ -506,6 +516,10 @@ const char* const kGcbValidatorReceiverKernel =
     "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_validator_receiver.cpp";
 
 inline constexpr uint32_t kGcbSmokeFifoBytes = 4 * kKiB;
+// The bytes right after every receiver's FIFO, filled with a pattern before a run and checked with the FIFO state, so
+// a sender that writes past the FIFO end fails the test instead of landing in whatever the receiver zone holds next.
+inline constexpr uint32_t kGcbSmokeGuardBytes = 4 * gcb_abi::kLineBytes;
+inline constexpr uint32_t kGcbSmokeGuardPattern = 0x6A4D'0000;
 // rdcycle budgets per wait. S5 measured the emulated chip clock at ~85,000 cycles/s while the host polls it and
 // ~90 cycles/s while the host is idle, so these count host activity rather than wall time. The wait budget bounds
 // waits that should succeed (~200 s of polling, under TT_METAL_OPERATION_TIMEOUT_SECONDS=600); the stall budget is
@@ -599,16 +613,27 @@ public:
         receiver_cces_(std::move(receiver_cces)),
         fifo_bytes_(fifo_bytes),
         gcb_(create_gcb(mesh)),
+        guard_(mesh.impl().drisc_l1_arena().allocate_receiver(kGcbSmokeGuardBytes, gcb_abi::kLineBytes)),
         block_(mesh.impl().drisc_l1_arena().allocate_receiver(gcb_abi::kBlockBytes, gcb_abi::kLineBytes)) {
+        TT_FATAL(
+            guard_->addr() == gcb_.buffer_address() + fifo_bytes_,
+            "The FIFO guard landed at 0x{:x}, not at the FIFO end 0x{:x}",
+            guard_->addr(),
+            gcb_.buffer_address() + fifo_bytes_);
+        for (const uint32_t receiver_cce : receiver_cces_) {
+            write_cce_tl1(device_, receiver_cce, guard_->addr(), guard_pattern());
+        }
         reset_kernel_blocks();
         log_info(
             tt::LogTest,
-            "MM7GcbSmoke sender CCE {} receivers {}: config page 0x{:x}, FIFO 0x{:x} +{} B, kernel block 0x{:x}",
+            "MM7GcbSmoke sender CCE {} receivers {}: config page 0x{:x}, FIFO 0x{:x} +{} B, guard 0x{:x}, kernel block "
+            "0x{:x}",
             sender_cce_,
             fmt::join(receiver_cces_, ","),
             gcb_.config_address(),
             gcb_.buffer_address(),
             fifo_bytes_,
+            guard_->addr(),
             block_->addr());
     }
 
@@ -719,6 +744,17 @@ public:
         write_cce_tl1(device_, receiver_cces_.at(slot), gcb_.config_address() + kDramReceiverCreditLineOffset, {units});
     }
 
+    // Acks `units` on the sender's pages_acked slot for receiver `slot`, as the receiver's remote ack store would.
+    void ack_from_host(uint32_t slot, uint32_t units) const {
+        const uint32_t num_receivers = static_cast<uint32_t>(receiver_cces_.size());
+        write_cce_tl1(
+            device_,
+            sender_cce_,
+            experimental::pages_sent_drisc_l1_base(gcb_) + dram_receiver_sender_pages_acked_offset(num_receivers) +
+                (slot * kDramReceiverCreditStrideBytes),
+            {units});
+    }
+
     // Both ends' counters and pointers once every page of `schedule` is credited, and `acked_units` of them acked.
     void expect_fifo_state(uint32_t slot, const GcbFifoEndState& sent, uint32_t acked_units, uint32_t rd_offset) const {
         const uint32_t receiver_cce = receiver_cces_.at(slot);
@@ -746,6 +782,8 @@ public:
             << "receiver CCE " << receiver_cce << " pages_acked";
         EXPECT_EQ(read_tl1_word(receiver_cce, config_address + kDramReceiverFifoRdPtrOffset), fifo_start + rd_offset)
             << "receiver CCE " << receiver_cce << " fifo_rd_ptr";
+        EXPECT_EQ(read_cce_tl1(device_, receiver_cce, guard_->addr(), kGcbSmokeGuardBytes), guard_pattern())
+            << "receiver CCE " << receiver_cce << ": a write landed past the FIFO end";
     }
 
 private:
@@ -788,12 +826,21 @@ private:
         return read_cce_tl1(device_, cce_index, tl1_offset, sizeof(uint32_t)).front();
     }
 
+    static std::vector<uint32_t> guard_pattern() {
+        std::vector<uint32_t> pattern(kGcbSmokeGuardBytes / sizeof(uint32_t));
+        for (uint32_t word = 0; word < pattern.size(); ++word) {
+            pattern[word] = kGcbSmokeGuardPattern | word;
+        }
+        return pattern;
+    }
+
     IDevice* device_;
     uint32_t sender_bank_;
     uint32_t sender_cce_;
     std::vector<uint32_t> receiver_cces_;
     uint32_t fifo_bytes_;
     experimental::GlobalCircularBuffer gcb_;
+    std::shared_ptr<DriscL1Allocation> guard_;
     std::shared_ptr<DriscL1Allocation> block_;
 };
 
@@ -1231,6 +1278,11 @@ void expect_lifecycle_sender_stopped(distributed::MeshDevice& mesh, uint32_t cce
     EXPECT_EQ(lifecycle_bytes_acked(mesh, cce_index), requests * kRequestPageBytes) << "sender CCE " << cce_index;
 }
 
+// The page the DRAIN-at-Stop case credits without data.
+inline constexpr uint32_t kLifecycleDrainPageBytes = 256;
+// A request-page word whose command byte names no command.
+inline constexpr uint32_t kLifecycleBadCommandWord = 0xFFFF'FFFF;
+
 // Writes a non-zero pattern over the part of `cce_index`'s control block Start zeroes, and returns it.
 std::vector<uint32_t> fill_lifecycle_control_block(distributed::MeshDevice& mesh, uint32_t cce_index) {
     std::vector<uint32_t> pattern(kCceSenderZeroedBytes / sizeof(uint32_t));
@@ -1262,6 +1314,34 @@ std::string lifecycle_error(Action action) {
         return error.what();
     }
     return "did not throw";
+}
+
+// How long a test watches a sender held in WAIT_CQ or DRAIN. The status reads in that time advance the emulated chip
+// clock by about 400,000 cycles (S5), far more than a wait already satisfied takes to pass.
+inline constexpr std::chrono::seconds kSenderHoldTime{5};
+
+// Reads the sender's status back to back, which is what advances the emulated chip clock, until `reached` holds for it
+// or `limit` passes. Returns the last status read.
+CceSenderStatus poll_sender_status(
+    distributed::MeshDevice& mesh,
+    uint32_t cce_index,
+    const std::function<bool(const CceSenderStatus&)>& reached,
+    std::chrono::steady_clock::duration limit) {
+    IDevice* device = mesh.get_devices().front();
+    const uint64_t status_address = distributed::cce_sender_control_base(mesh) + kCceSenderStatusOffset;
+    const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + limit;
+    CceSenderStatus status{};
+    do {
+        const std::vector<uint32_t> words = read_cce_tl1(device, cce_index, status_address, sizeof(CceSenderStatus));
+        std::memcpy(&status, words.data(), sizeof(status));
+    } while (!reached(status) && std::chrono::steady_clock::now() < deadline);
+    log_info(tt::LogTest, "MM7 sender CCE {}: {}", cce_index, distributed::format_cce_sender_status(status));
+    return status;
+}
+
+bool sender_exited(const CceSenderStatus& status) {
+    return status.state == static_cast<uint32_t>(CceSenderState::Stopped) ||
+           status.state == static_cast<uint32_t>(CceSenderState::Failed);
 }
 
 // Deferred from MM7Gate: IsTensorPrefetcherSupported reports the port supported, and Start and Stop work.
@@ -1299,8 +1379,11 @@ TEST(MimirPrefetcher, MM7LifecycleStartStop) {
     expect_lifecycle_sender_stopped(*mesh, sender_cce, 1);
 }
 
-// Two sessions in one mesh. Between them the CQ slots, ring meta and status get a non-zero pattern; the second Start
-// zeroes them again, so its sender reads like a fresh one: one request, CQ slots still zero, bytes_sent one page.
+// Two sessions in one mesh. Between them the CQ slots, ring meta and status get a non-zero pattern and ring slot 0,
+// which still holds the first session's STOP, gets an unknown command. The second Start zeroes the control block, so
+// its sender waits for the host's STOP in slot 0 and reads like a fresh one: one request, CQ slots still zero. A Start
+// that skipped the zeroing would leave bytes_sent non-zero, so the sender would read slot 0 before the host's STOP and
+// fail with BadCmd.
 TEST(MimirPrefetcher, MM7LifecycleStartStopTwice) {
     MIMIR_SKIP_UNLESS_EMU();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
@@ -1317,6 +1400,11 @@ TEST(MimirPrefetcher, MM7LifecycleStartStopTwice) {
     expect_lifecycle_sender_stopped(*mesh, sender_cce, 1);
 
     fill_lifecycle_control_block(*mesh, sender_cce);
+    write_cce_tl1(
+        device,
+        sender_cce,
+        control_base + kCceRequestRingOffset,
+        std::vector<uint32_t>(kRequestPageBytes / sizeof(uint32_t), kLifecycleBadCommandWord));
     PrefetcherSession second_session(*mesh, {0});
     second_session.stop();
     expect_lifecycle_sender_stopped(*mesh, sender_cce, 1);
@@ -1407,9 +1495,10 @@ TEST(MimirPrefetcher, MM7LifecycleQueueRejectsReceiverOnSender) {
     expect_lifecycle_sender_stopped(*mesh, other_sender_cce, 1);
 }
 
-// WaitForCqOnTensorPrefetcher writes the CQ signal slot through the command queue, then queues a WAIT_CQ for that
-// value. The sender passes it only if host and kernel agree on the slot's address, and reports the STOP after it as its
-// second request.
+// A WAIT_CQ for CQ 0's next value, queued without its write, holds the sender. WaitForCqOnTensorPrefetcher then writes
+// the value after it through the command queue's own path and queues a WAIT_CQ for that one, which releases both: the
+// sender reports the STOP as its third request, and CQ 0's slot holds 2. A WAIT_CQ that did not wait would leave the
+// sender Running during the hold; host and kernel disagreeing on the slot would end it in CQ_TIMEOUT.
 TEST(MimirPrefetcher, MM7LifecycleWaitCq) {
     MIMIR_SKIP_UNLESS_EMU();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
@@ -1420,10 +1509,32 @@ TEST(MimirPrefetcher, MM7LifecycleWaitCq) {
     const uint32_t sender_cce = gcb_layout_sender_cce(mesh->get_devices().front(), *mesh, 0);
     distributed::MeshCommandQueue& command_queue = mesh->mesh_command_queue(0);
 
+    // queue_cq_wait_without_signal waits on CQ 0.
+    ASSERT_EQ(command_queue.id(), 0u);
     PrefetcherSession session(*mesh, {0});
+    const distributed::TensorPrefetcherManager::UnsignaledCqWait held_wait =
+        mesh->impl().tensor_prefetcher(mesh.get()).queue_cq_wait_without_signal();
+    const CceSenderStatus waiting = poll_sender_status(
+        *mesh,
+        sender_cce,
+        [](const CceSenderStatus& status) {
+            return status.state != static_cast<uint32_t>(CceSenderState::NotStarted) &&
+                   status.state != static_cast<uint32_t>(CceSenderState::Running);
+        },
+        kGcbSmokeHostWaitLimit);
+    ASSERT_EQ(waiting.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
+    const CceSenderStatus held = poll_sender_status(
+        *mesh,
+        sender_cce,
+        [](const CceSenderStatus& status) { return status.state != static_cast<uint32_t>(CceSenderState::WaitingCq); },
+        kSenderHoldTime);
+    EXPECT_EQ(held.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
+
+    log_info(
+        tt::LogTest, "MM7Lifecycle WAIT_CQ held for value {}; signalling through the command queue", held_wait.value);
     experimental::WaitForCqOnTensorPrefetcher(command_queue, std::nullopt);
     session.stop();
-    expect_lifecycle_sender_stopped(*mesh, sender_cce, 2);
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, 3);
     EXPECT_EQ(
         read_cce_tl1(
             mesh->get_devices().front(),
@@ -1432,11 +1543,12 @@ TEST(MimirPrefetcher, MM7LifecycleWaitCq) {
                 (command_queue.id() * kCceCqSignalSlotStrideBytes),
             sizeof(uint32_t))
             .front(),
-        1u);
+        held_wait.value + 1);
 }
 
-// A live GCB whose receiver is draining: Stop sends DRAIN, which nothing outstanding lets finish at once, then STOP.
-// The sender reports the STOP as its second request.
+// Stop's DRAIN waits for the receivers to ack everything the sender credited. The host credits one page with no
+// receiver running, so nothing acks it: the sender holds in Draining while Stop blocks on another thread. The host then
+// acks the page as a receiver would, and the sender passes DRAIN and reports the STOP as its second request.
 TEST(MimirPrefetcher, MM7LifecycleDrainAtStop) {
     MIMIR_SKIP_UNLESS_EMU();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
@@ -1445,25 +1557,43 @@ TEST(MimirPrefetcher, MM7LifecycleDrainAtStop) {
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
-    CceReceiverProgram receivers(
-        smoke.device(),
-        {smoke.receiver_launch(
-            0,
-            kGcbDiscardReceiverKernel,
-            0,
-            gcb_abi::kModeDrainUntilStopped,
-            0,
-            kGcbSmokeWaitBudgetCycles,
-            {{.tensor_id = 16, .slab = 0, .page_bytes = 256, .num_pages = 0}})});
+    const uint32_t sender_cce = gcb_layout_sender_cce(smoke.device(), *mesh, 0);
+    const uint32_t page_units = kLifecycleDrainPageBytes / kDramReceiverCreditUnitBytes;
     PrefetcherSession session(*mesh, {0});
     mesh->impl().tensor_prefetcher(mesh.get()).register_drain_target(smoke.gcb());
+    smoke.credit_from_host(0, page_units);
 
-    session.stop();
-    expect_lifecycle_sender_stopped(*mesh, gcb_layout_sender_cce(smoke.device(), *mesh, 0), 2);
-    receivers.stop_and_wait();
-    const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
-    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 0u);
+    std::string stop_error;
+    std::thread stopper([&session, &stop_error]() { stop_error = lifecycle_error([&session]() { session.stop(); }); });
+    // Joins on every exit path: destroying a joinable thread terminates.
+    struct StopperJoiner {
+        std::thread& thread;
+        ~StopperJoiner() {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    } stopper_joiner{stopper};
+    const CceSenderStatus draining = poll_sender_status(
+        *mesh,
+        sender_cce,
+        [](const CceSenderStatus& status) {
+            return status.state != static_cast<uint32_t>(CceSenderState::NotStarted) &&
+                   status.state != static_cast<uint32_t>(CceSenderState::Running);
+        },
+        kGcbSmokeHostWaitLimit);
+    EXPECT_EQ(draining.state, static_cast<uint32_t>(CceSenderState::Draining));
+    const CceSenderStatus held = poll_sender_status(
+        *mesh,
+        sender_cce,
+        [](const CceSenderStatus& status) { return status.state != static_cast<uint32_t>(CceSenderState::Draining); },
+        kSenderHoldTime);
+    EXPECT_EQ(held.state, static_cast<uint32_t>(CceSenderState::Draining));
+
+    smoke.ack_from_host(0, page_units);
+    stopper.join();
+    EXPECT_EQ(stop_error, "did not throw");
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, 2);
 }
 
 // T1: one PREFETCH route per test. A sender CCE streams one 4 KiB page of a tensor on its own DRAM view into a
@@ -1649,30 +1779,6 @@ TEST(MimirPrefetcher, MM7T1D2d3To1) {
         GTEST_SKIP() << skip_reason;
     }
     run_t1_route(3, 1);
-}
-
-// Reads the sender's status back to back, which is what advances the emulated chip clock, until `reached` holds for it
-// or `limit` passes. Returns the last status read.
-CceSenderStatus poll_sender_status(
-    distributed::MeshDevice& mesh,
-    uint32_t cce_index,
-    const std::function<bool(const CceSenderStatus&)>& reached,
-    std::chrono::steady_clock::duration limit) {
-    IDevice* device = mesh.get_devices().front();
-    const uint64_t status_address = distributed::cce_sender_control_base(mesh) + kCceSenderStatusOffset;
-    const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + limit;
-    CceSenderStatus status{};
-    do {
-        const std::vector<uint32_t> words = read_cce_tl1(device, cce_index, status_address, sizeof(CceSenderStatus));
-        std::memcpy(&status, words.data(), sizeof(status));
-    } while (!reached(status) && std::chrono::steady_clock::now() < deadline);
-    log_info(tt::LogTest, "MM7 sender CCE {}: {}", cce_index, distributed::format_cce_sender_status(status));
-    return status;
-}
-
-bool sender_exited(const CceSenderStatus& status) {
-    return status.state == static_cast<uint32_t>(CceSenderState::Stopped) ||
-           status.state == static_cast<uint32_t>(CceSenderState::Failed);
 }
 
 // The validator Program of `smoke`'s receiver table slot `slot` for `schedule`.
@@ -2070,18 +2176,19 @@ inline constexpr uint32_t kT3SwitchThirdTensorId = 65;
 // Two pages of one tile, so GCB1's first request leaves wr_ptr mid-FIFO for its second to resume from.
 inline constexpr uint32_t kT3SwitchFifoBytes = 8 * kKiB;
 inline constexpr uint32_t kT3FenceTensorId = 61;
-// How long the fence case watches a sender held in WAIT_CQ. The status reads in that time advance the emulated chip
-// clock by about 400,000 cycles (S5), far more than a WAIT_CQ the slot already satisfied takes to pass.
-inline constexpr std::chrono::seconds kT3FenceHoldTime{5};
 
-// GCB1, then GCB2, then GCB1 again, each with its own tensor, from kT3SenderCce to `receiver_cce`, whose validators run
-// on two of its harts. GCB1's first request leaves wr_ptr halfway through its FIFO, and the second resumes there from
-// GCB1's state block. Stop's one DRAIN page names both GCBs: three PREFETCH pages, the DRAIN and STOP.
-void run_t3_gcb_switch(uint32_t receiver_cce) {
+// GCB1, then GCB2, then GCB1 again, each with its own tensor, from kT3SenderCce. GCB1 delivers to `receiver_cce` and
+// GCB2 to `second_receiver_cce`; on one CCE the two validators run on two of its harts. GCB1's first request leaves
+// wr_ptr halfway through its FIFO, and the second resumes there from GCB1's state block. Stop's one DRAIN page names
+// both GCBs: three PREFETCH pages, the DRAIN and STOP.
+void run_t3_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     const std::optional<uint32_t> sender_bank = t3_sender_bank(*mesh, receiver_cce);
     ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << kT3SenderCce;
+    if (mimir_index_for_cce(second_receiver_cce) != mimir_index_for_cce(receiver_cce)) {
+        EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    }
     const SlabTensorGeometry geometry{};
     const MeshTensor first_tensor = write_single_bank_tensor(*mesh, *sender_bank, kT3SwitchFirstTensorId, geometry);
     const MeshTensor second_tensor = write_single_bank_tensor(*mesh, *sender_bank, kT3SwitchSecondTensorId, geometry);
@@ -2090,10 +2197,12 @@ void run_t3_gcb_switch(uint32_t receiver_cce) {
         slab_tensor_request(kT3SwitchFirstTensorId, geometry), slab_tensor_request(kT3SwitchThirdTensorId, geometry)};
     const std::vector<GcbSmokeRequest> second_schedule = {slab_tensor_request(kT3SwitchSecondTensorId, geometry)};
     GcbSmoke first_smoke(*mesh, *sender_bank, {receiver_cce}, kT3SwitchFifoBytes);
-    GcbSmoke second_smoke(*mesh, *sender_bank, {receiver_cce}, kT3SwitchFifoBytes);
+    GcbSmoke second_smoke(*mesh, *sender_bank, {second_receiver_cce}, kT3SwitchFifoBytes);
     expect_gcb_layout_ranges_disjoint(first_smoke.gcb(), second_smoke.gcb());
     CceKernelLaunch second_launch = validator_launch(second_smoke, 0, second_schedule);
-    second_launch.hart = kSecondGcbReceiverHart;
+    if (second_receiver_cce == receiver_cce) {
+        second_launch.hart = kSecondGcbReceiverHart;
+    }
     CceReceiverProgram receivers(
         first_smoke.device(), {validator_launch(first_smoke, 0, first_schedule), second_launch});
     PrefetcherSession session(*mesh, {*sender_bank});
@@ -2113,7 +2222,7 @@ TEST(MimirPrefetcher, MM7T3GcbSwitchLocal0To1) {
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    run_t3_gcb_switch(kT3LocalReceiverCce);
+    run_t3_gcb_switch(kT3LocalReceiverCce, kT3LocalReceiverCce);
 }
 
 TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
@@ -2121,7 +2230,17 @@ TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    run_t3_gcb_switch(kT3D2dReceiverCce);
+    run_t3_gcb_switch(kT3D2dReceiverCce, kT3D2dReceiverCce);
+}
+
+// The same switch, with GCB2 on another receiver CCE across D2D: CCE 1, then CCE 2, then back to CCE 1.
+TEST(MimirPrefetcher, MM7T3ReceiverSwitch0To1Then2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce, kT3D2dReceiverCce});
+        !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t3_gcb_switch(kT3LocalReceiverCce, kT3D2dReceiverCce);
 }
 
 // The fence: a WAIT_CQ for a value the CQ signal slot does not hold yet, queued through the manager's test hook, then a
@@ -2160,7 +2279,7 @@ TEST(MimirPrefetcher, MM7T3FenceLocal0To1) {
         *mesh,
         kT3SenderCce,
         [](const CceSenderStatus& status) { return status.state != static_cast<uint32_t>(CceSenderState::WaitingCq); },
-        kT3FenceHoldTime);
+        kSenderHoldTime);
     EXPECT_EQ(held.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
     EXPECT_EQ(lifecycle_bytes_acked(*mesh, kT3SenderCce), 0u);
     EXPECT_EQ(smoke.read_status(smoke.receiver_cce(0))[gcb_abi::kStatusMagic], gcb_abi::kStatusPoison);
@@ -2232,6 +2351,8 @@ void expect_t4_recovery(
 TEST(MimirPrefetcher, MM7T5TraceCaptureReplay) { GTEST_SKIP(); }
 
 // The validator recomputes the page with a wrong seed: it reports MISMATCH and keeps acking, so the sender stops OK.
+// The hash is a bijection, so every word of the page differs, and the first word it read must be the tensor's: a sender
+// that delivered other bytes fails these checks too, not just the recovery's.
 TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
     MIMIR_SKIP_UNLESS_EMU();
     if (const std::string skip_reason = route_skip_reason({2, 0}); !skip_reason.empty()) {
@@ -2270,13 +2391,17 @@ TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
         const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
         EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeMismatch);
         EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
+        EXPECT_EQ(receiver_status[gcb_abi::kStatusMismatchedWords], kUint32TileWords);
+        EXPECT_EQ(receiver_status[gcb_abi::kStatusFirstMismatchWord], 0u);
+        EXPECT_EQ(receiver_status[gcb_abi::kStatusObserved], gcb_abi::gcb_page_word(seed, kT4FailureTensorId, 0, 0, 0));
     }
     expect_t4_recovery(*mesh, sender_bank, 2, 0, recovery_tensor);
 }
 
 // A request one page larger than the FIFO into a receiver that holds the first page: the sender's free-space wait
 // expires with CREDIT_TIMEOUT and the sender exits. The worker then fills its ring with one ring of further requests
-// and drops the rest, Stop's DRAIN and STOP among them, because the sender has exited; Stop still returns.
+// and drops the rest, Stop's DRAIN and STOP among them, because the sender has exited; Stop releases the session and
+// throws, naming the failed sender and those dropped pages.
 TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
     MIMIR_SKIP_UNLESS_EMU();
     if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
@@ -2317,7 +2442,10 @@ TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
                 std::nullopt,
                 {experimental::TensorPrefetcherInput{.tensor = recovery_tensor, .block_count = 1}});
         }
-        session.stop();
+        const std::string stop_error = lifecycle_error([&session]() { session.stop(); });
+        EXPECT_NE(stop_error.find("ended Failed"), std::string::npos) << stop_error;
+        // The last further request, the DRAIN and the STOP.
+        EXPECT_NE(stop_error.find("(3 request pages dropped"), std::string::npos) << stop_error;
         const uint64_t ring_meta_address = distributed::cce_sender_control_base(*mesh) + kCceRingMetaOffset;
         const uint32_t bytes_sent =
             read_cce_tl1(device, 1, ring_meta_address + offsetof(RingMeta, bytes_sent), sizeof(uint32_t)).front();
@@ -2328,7 +2456,8 @@ TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
     expect_t4_recovery(*mesh, sender_bank, 1, 3, recovery_tensor);
 }
 
-// A request that fits into a receiver that holds it: Stop's DRAIN barrier expires with DRAIN_TIMEOUT.
+// A request that fits into a receiver that holds it: Stop's DRAIN barrier expires with DRAIN_TIMEOUT, and Stop throws
+// once the session is released.
 TEST(MimirPrefetcher, MM7T4DrainTimeoutD2d1To3) {
     MIMIR_SKIP_UNLESS_EMU();
     if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
@@ -2351,7 +2480,8 @@ TEST(MimirPrefetcher, MM7T4DrainTimeoutD2d1To3) {
             smoke.gcb(),
             std::nullopt,
             {experimental::TensorPrefetcherInput{.tensor = failure_tensor, .block_count = 1}});
-        session.stop();
+        const std::string stop_error = lifecycle_error([&session]() { session.stop(); });
+        EXPECT_NE(stop_error.find("ended Failed"), std::string::npos) << stop_error;
         ASSERT_TRUE(smoke.wait_for_holding(0, 1));
         const CceSenderStatus failure = lifecycle_sender_status(*mesh, 1);
         EXPECT_EQ(failure.state, static_cast<uint32_t>(CceSenderState::Failed));
