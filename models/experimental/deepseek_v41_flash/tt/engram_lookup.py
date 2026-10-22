@@ -119,6 +119,7 @@ class EngramHostLookup:
         )
         self.layout = engram.EngramLayout.from_args(args)
         self.hash = engram.NgramHashState(args, self.layout, tokenizer)
+        self.vocab_size = config.vocab_size
         for layer_id, (weight, scale) in tables.items():
             rows = self.layout.num_embeddings[self.layout.layer_ids.index(layer_id)]
             assert tuple(weight.shape) == (rows, self.layout.head_dim), (layer_id, tuple(weight.shape))
@@ -143,25 +144,39 @@ class EngramHostLookup:
         with self._lock:
             self._histories[slot][:, : history.shape[1]] = history
 
+    def _hash(self, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
+        """``self.hash`` with image-span tokens (ids past the vocabulary, see :mod:`.vision`) cached as dead, so no
+        n-gram spans them -- the reference's ``token_mask``. Call with ``_lock`` held."""
+        text = input_ids < self.vocab_size
+        if bool(text.all()):
+            return self.hash(input_ids, start_pos)
+        return self.hash(torch.where(text, input_ids, 0), start_pos, token_mask=text)
+
     @torch.no_grad()
     def hash_session(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
-        """``self.hash`` against session slot ``slot``'s history, leaving the :meth:`use_session` choice as it was."""
+        """``self.hash`` against session slot ``slot``'s history, leaving the :meth:`use_session` choice as it was.
+        An image-span token's hashes are of an empty n-gram: zero its rows (:meth:`__call__` does)."""
         with self._lock:
             picked, self.hash.cache = self.hash.cache, self._histories[slot]
             try:
-                return self.hash(input_ids, start_pos)
+                return self._hash(input_ids, start_pos)
             finally:
                 self.hash.cache = picked
 
     @torch.no_grad()
     def __call__(self, input_ids: torch.Tensor, start_pos: int) -> dict:
-        """``input_ids`` ``[B, L]`` at positions ``start_pos ..`` -> each table layer's rows ``[B, L, n_hash_cols * head_dim]``."""
+        """``input_ids`` ``[B, L]`` at positions ``start_pos ..`` -> each table layer's rows ``[B, L, n_hash_cols * head_dim]``.
+
+        An image-span token's rows are zero: the reference gates its Engram output to 0, and zero rows give the
+        device half exactly that."""
         with self._lock:
-            hashes = self.hash(input_ids, start_pos)  # [B, L, n_engram_layers, n_hash_cols]
-        return {
-            layer_id: self.gather(layer_id, hashes[:, :, self.layout.layer_ids.index(layer_id)]).flatten(-2)
-            for layer_id in self.tables
-        }
+            hashes = self._hash(input_ids, start_pos)  # [B, L, n_engram_layers, n_hash_cols]
+        image = (input_ids >= self.vocab_size).unsqueeze(-1)
+        rows = {}
+        for layer_id in self.tables:
+            found = self.gather(layer_id, hashes[:, :, self.layout.layer_ids.index(layer_id)]).flatten(-2)
+            rows[layer_id] = found.masked_fill(image, 0) if bool(image.any()) else found
+        return rows
 
     def gather(self, layer_id: int, ids: torch.Tensor) -> torch.Tensor:
         """Rows ``ids`` of ``layer_id``'s table, dequantized to bf16: ``[..., head_dim]``."""

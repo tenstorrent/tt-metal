@@ -412,11 +412,19 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         x = _router_gate_activation(self.gate, x_flat)
         return ttnn.sqrt(ttnn.softplus(self.gate(x)))
 
-    def forward(self, x_flat: ttnn.Tensor) -> SparseRouting:
+    def ranking_bias(self, image_mask: Optional[ttnn.Tensor] = None, layout=ttnn.ROW_MAJOR_LAYOUT) -> ttnn.Tensor:
+        """The bias added to the scores for ranking: ``e_score_correction_bias`` ``[1,1,1,E]``. A checkpoint
+        that routes image tokens with their own bias overrides this to pick it per token from ``image_mask``
+        (``[1, T]`` uint32 ROW_MAJOR, 1 for an image token); V4 has none. ``layout`` is that per-token row's."""
+        if image_mask is not None:
+            raise ValueError("this router has no image-token bias")
+        return self.e_score_correction_bias
+
+    def forward(self, x_flat: ttnn.Tensor, image_mask: Optional[ttnn.Tensor] = None) -> SparseRouting:
         """``x_flat`` ``[1,1,T,D]`` ROW_MAJOR -> the ``[1,1,T,E]`` score and ranking rows.
 
         Trace-safe as it stands, so prefill and the captured decode share this one path: every op
-        allocates its own output and nothing is host-initialised.
+        allocates its own output and nothing is host-initialised. ``image_mask`` see :meth:`ranking_bias`.
         """
         assert x_flat.layout == ttnn.ROW_MAJOR_LAYOUT, "x_flat must be in row-major layout"
         scores = self._scores(x_flat)  # [1, 1, T, E]
@@ -425,7 +433,10 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         # both rows travel to the expert op instead of just the winners' values. The op top-k's
         # `biased` on device and gathers `scores` at the winners, so there is no ttnn.topk here
         # and no id tensor to round-trip through DRAM.
-        biased = ttnn.add(scores, self.e_score_correction_bias)
+        bias = self.ranking_bias(image_mask)
+        biased = ttnn.add(scores, bias)
+        if bias is not self.e_score_correction_bias:
+            ttnn.deallocate(bias)
         _profile(self.device)
         return SparseRouting(scores=scores, ranking=biased)
 
@@ -1061,7 +1072,9 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         self.gate.prefetch_weights()
         self.shared_experts.prefetch_weights()
 
-    def decode_static(self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    def decode_static(
+        self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None, image_mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """Trace-safe MoE. ``hidden`` ``[B, 1, 1, D]`` -> the same shape.
 
         The one entry point for this block (decode *and* prefill): the model prefill replays the
@@ -1081,6 +1094,9 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         ``[1,B]`` device token ids (see :meth:`DeepSeekV4HashRouter.forward_static`). The routed
         FFN runs through the no-host-readback fused-experts path, and under TP the row-parallel
         down partials are all-reduced back to a replicated ``[1,1,B,D]`` before the reshape back.
+
+        ``image_mask`` (``[1, B]`` uint32, 1 for an image token) goes to the learned router's
+        :meth:`DeepSeekV4TopKRouter.ranking_bias`.
         """
         b, h = hidden.shape[0], hidden.shape[-1]
         x_flat = ttnn.reshape(hidden, [1, 1, b, h])
@@ -1106,7 +1122,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         if self.is_hash:
             routing = self.gate.forward_static(x_flat, hash_token)
         else:
-            routing = self.gate(x_flat)
+            routing = self.gate(x_flat, image_mask)
         routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
         shared = self.shared_experts(x_flat)  # [1, 1, B, D]
         combined = ttnn.add(routed, shared)

@@ -69,6 +69,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import (
     _HIFI4,
     _MASK_NEG,
@@ -199,8 +200,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         submeshes: Optional[Sequence[ttnn.MeshDevice]] = None,
         use_prefetcher: Optional[bool] = None,
         layer_submesh_ids: Optional[Sequence[int]] = None,
+        image_rows: int = 0,
     ):
         self.config = config
+        self.image_rows = image_rows
         self.loader = loader
         self.device = full_device
         if tp_size < 1:
@@ -314,6 +317,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if li < n
         }
         self.embed_tokens = DeepSeekV4Embedding(loader, self.first_device, cache=cache)
+        if image_rows:
+            # Image spans embed as ids past the vocabulary (see :mod:`.vision`), rows filled by
+            # :func:`.vision.write_embedding_rows`. Prefill and decode read the one table.
+            self.embed_tokens.embedding_weight = extend_embedding(
+                self.embed_tokens.embedding_weight, image_rows, config.vocab_size
+            )
         self.layers: list[DeepSeekV41DecoderLayer] = []
         self.layer_devices: list[ttnn.MeshDevice] = []
         for li in range(n):
@@ -855,9 +864,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ids = torch.tensor(self._step_tokens(token_id), dtype=torch.long).reshape(-1, 1)
             lookup = self._engram_lookup
             hashes = lookup.hash_session(slot, ids, pos)  # [B, 1, n_engram_layers, n_hash_cols]
+            image = (ids >= self.config.vocab_size).unsqueeze(-1)  # an image-span token: no Engram contribution
             for layer_idx, engram in self._engram_layers:
                 ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
-                engram.write_rows(lookup.gather(layer_idx, ids_of_layer).flatten(-2))
+                rows = lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+                engram.write_rows(rows.masked_fill(image, 0) if bool(image.any()) else rows)
         else:
             for _, engram in self._engram_layers:
                 engram.write_rows(torch.zeros(engram.batch, engram.kin, dtype=torch.bfloat16))
@@ -1195,6 +1206,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "page_row": field(3),
             "ring_offset": None,
             "win_offset": None,
+            # Image-span tokens (ids past the vocabulary) rank their experts with ``bias_vl``.
+            "image_mask": image_mask(token, self.config.vocab_size) if self.image_rows else None,
         }
         win_base_f = None
         if self._slotted:
@@ -1398,6 +1411,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 streams,
                 pre_mix,
                 sm["scaches"][li],
+                image_mask=ctx["image_mask"],
                 **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level),
             )
             if is_last:
@@ -1425,7 +1439,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return out if out is not None else streams
 
     # -- prefill: the decode stages, experts and Engram lookup; the decode caches as its state -- #
-    def build_prefill(self, rope: dict, lm_head=None, **kwargs) -> DeepSeekV41PrefillModel:
+    def build_prefill(self, rope: dict, lm_head=None, kv_only: bool = False, **kwargs) -> DeepSeekV41PrefillModel:
         """Build the :class:`DeepSeekV41PrefillModel` on this model's stages.
 
         Every prefill layer lives on its decode layer's submesh and reads that layer's routed experts in
@@ -1433,23 +1447,34 @@ class DeepSeekV41Model(DeepSeekV4Model):
         lookup are shared too, so a prefill and the decode steps after it hash one token history.
         ``kwargs`` go to the prefill constructor.
 
+        ``kv_only`` builds only the layers up to the last kv source (the prefill model's ``kv_only`` mode), on
+        the stages that hold them, and no head (``lm_head`` is ignored). :meth:`commit_prefill_state` then fills
+        the shared compressed KV and the rings of those layers; the caller replays the last ``sliding_window``
+        prompt tokens through decode to fill the other layers' rings and get the logits.
+
         Call it after :meth:`prepare_static_decode` (which builds the Engram lookup) and before the decode
         traces are captured.
         """
         if self._decode_max_seq is None:
             raise RuntimeError("call prepare_static_decode() before build_prefill()")
+        n = self.num_layers
+        if kv_only:
+            n = max(i for i in self.config.kv_source_layer_ids if i < self.num_layers) + 1
+            lm_head = None
         self.prefill_model = DeepSeekV41PrefillModel(
             self.config,
             self.loader,
             self.first_device,
             rope,
-            num_layers=self.num_layers,
+            num_layers=n,
             tp_size=self.tp_size,
-            layer_devices=self.layer_devices,
+            layer_devices=self.layer_devices[:n],
             engram_lookup=self._engram_lookup,
-            experts=[layer.mlp.experts for layer in self.layers],
+            experts=[layer.mlp.experts for layer in self.layers[:n]],
             embedding_weight=self.embed_tokens.embedding_weight,
             lm_head=lm_head,
+            kv_only=kv_only,
+            image_rows=self.image_rows,
             **kwargs,
         )
         # Each receiver FIFO is permanent L1 on its stage, so a second set would cost prefill's ops that room.
@@ -1492,6 +1517,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         ``win_kv`` / ``win_gate``, ``sel_kv`` / ``sel_tile`` and the carried rows need nothing: the next step
         writes them before it reads them. The caches are written in place, so captured traces stay valid.
+
+        A KV-only prefill (``build_prefill(kv_only=True)``) has states for the layers up to the last kv source
+        only. The rings of the layers after them are zeroed: once the ring is full, decode reads every row, so the
+        rows must not hold another session's keys. The caller replays the last ``sliding_window`` prompt tokens
+        through decode, which writes those rings again.
         """
         note = progress or (lambda message: None)
         if bias_slots:
@@ -1500,9 +1530,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call prepare_static_decode() first")
         if session_id not in self._slot_of:
             raise KeyError(f"no such session {session_id}")
-        if len(states) < self.num_layers:
-            raise ValueError(f"need {self.num_layers} layer states, got {len(states)}")
-        lengths = {state.seq_len for state in states[: self.num_layers]}
+        kv_sources = [i for i in self.config.kv_source_layer_ids if i < self.num_layers]
+        if len(states) <= max(kv_sources, default=-1) or len(states) > self.num_layers:
+            raise ValueError(
+                f"need the states of layers 0..{max(kv_sources, default=0)} (the last kv source) up to all "
+                f"{self.num_layers}, got {len(states)}"
+            )
+        lengths = {state.seq_len for state in states}
         if len(lengths) != 1:
             raise ValueError(f"layer states disagree on the prompt length: {sorted(lengths)}")
         total = lengths.pop()
@@ -1521,15 +1555,30 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for sm in self.submeshes_io:
             device = sm["device"]
             committed = set()
+            zero_rings = {}  # head dim -> a zero [1, 1, W, Dh] ring for the layers without a state
             for li in sm["layers"]:
-                state = states[li]
-                if list(state.kv_tail.device().get_device_ids()) != list(device.get_device_ids()):
-                    raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
                 scache = sm["scaches"][li]
-                note(f"commit layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
-                ring = ttnn.to_layout(state.kv_tail, ttnn.TILE_LAYOUT)
-                ttnn.fill_cache(scache.kv, ring, 0, update_idx=ring_row)
-                ttnn.deallocate(ring)
+                if li < len(states):
+                    state = states[li]
+                    if list(state.kv_tail.device().get_device_ids()) != list(device.get_device_ids()):
+                        raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
+                    note(f"commit layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
+                    ring = ttnn.to_layout(state.kv_tail, ttnn.TILE_LAYOUT)
+                    ttnn.fill_cache(scache.kv, ring, 0, update_idx=ring_row)
+                    ttnn.deallocate(ring)
+                else:
+                    note(f"zero the ring of layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
+                    dh = scache.kv.shape[3]
+                    if dh not in zero_rings:
+                        zero_rings[dh] = ttnn.from_torch(
+                            torch.zeros(1, 1, self.sliding_window, dh),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                        )
+                    ttnn.fill_cache(scache.kv, zero_rings[dh], 0, update_idx=ring_row)
                 src = self._kv_source_of.get(li)
                 if src is None or src in committed or scache.comp_kv is None:
                     continue
@@ -1546,6 +1595,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 for copy, original in ((entries, source.compressed_kv), (keys, source.idx_keys)):
                     if copy is not original:
                         ttnn.deallocate(copy)
+            for zeros in zero_rings.values():
+                ttnn.deallocate(zeros)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         self._session_pos[session_id] = total
@@ -1698,6 +1749,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         sources = {}  # kv source -> its (entries, keys) on its own stage
         for sm in self.submeshes_io:
             for li in sm["layers"]:
+                if li not in traced.buffers:  # past a kv-only prefill model's last layer
+                    continue
                 if tails:
                     kv = sm["scaches"][li].kv
                     ring = ttnn.slice(kv, [0, 0, ring_row, 0], [1, 1, ring_row + w, kv.shape[3]])
@@ -1758,6 +1811,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
         if self._slotted:
             raise NotImplementedError("speculative decode restores one session's rings: prepare with num_sessions=1")
+        if self.image_rows:
+            raise NotImplementedError("the drafter embeds token ids on the host vocabulary: build without image_rows")
         cfg = self.config
         window, head_dim = self.sliding_window, cfg.head_dim
         self._spec_hist = hist
