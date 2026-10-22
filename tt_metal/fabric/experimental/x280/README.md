@@ -164,12 +164,16 @@ front port, and three outbound NOC paths.
 
 **L2CPU NOC coordinates on Blackhole:**
 
-| Index | (NOC X, Y) |
-|---|---|
-| 0 | (8, 3) |
-| 1 | (8, 9) |
-| 2 | (8, 5) |
-| 3 | (8, 7) |
+| Index | (NOC X, Y) | Local DRAM bank |
+|---|---|---|
+| 0 | (8, 3) | 5 |
+| 1 | (8, 9) | 6 |
+| 2 | (8, 5) | 7 |
+| 3 | (8, 7) | 7 |
+
+The bank is tt-metal's DRAM bank number; the tile's DDR offset is the bank
+address. Tiles 2 and 3 share bank 7 at the same offsets, so their DDR regions
+must not overlap.
 
 **Memory map (X280 view):**
 
@@ -239,6 +243,12 @@ WayEnable is increase-only: a request that would expand LIM returns
 `Failed` without touching hardware. Live repartitioning after reset release is
 unsupported because the runtime does not own caller LIM allocations and
 resident idle has no protocol to quiesce every hart and cache master.
+
+Increase-only binds every firmware in the reset epoch, not only the runtime. A
+firmware that writes `WayEnable=15` (2 MiB of cache, no LIM) leaves no LIM until
+the next ASIC reset, so no LIM-resident image, resident idle included, can run
+before it. The reverse also holds: at 10 to 15 LIM ways a DRAM-resident image
+runs with 768 KiB to 128 KiB of cache.
 
 ### Prepared pipeline inputs (X280 only)
 
@@ -432,14 +442,21 @@ the separately gated `x280_active_failure_test` uses it.
 | Run a new image on a running L2CPU | `X280Runtime::enqueue` through resident idle; never touches reset |
 | Full board recovery (clears PLL, NOC TLBs, etc.) | Reset the selected ASIC before reopening Metal |
 
-Harts leave reset once per ASIC reset. Clearing a tile's bit in `L2CPU_RESET`
-does not put its harts back — only an ASIC reset does — and a second `0 → 1`
-transition does not restart them. So `assert_l2cpu_reset → load → release` on a
-tile that is already running writes a new image underneath code that never
-stopped, and neither call reports a problem. The C++ runtime therefore admits
-reset release only through its cold-boot path and refuses state that cannot
-safely support it. Source: tt-isa-documentation
-`BlackholeA0/L2CPUTile/README.md`, § Reset.
+Harts leave reset once per ASIC reset (tt-isa-documentation
+`BlackholeA0/L2CPUTile/README.md`, § Reset). Asserting a tile's bit in
+`L2CPU_RESET` stops its harts, but a second release does not bring them back,
+and a NOC access to the tile afterwards hangs the chip. So
+`assert_l2cpu_reset → load → release` on a tile that is already running leaves
+it without most of its harts, and neither call reports a problem. The C++
+runtime therefore admits reset release only through its cold-boot path and
+refuses state that cannot safely support it; any restart within a reset
+lifetime is a software matter (today the resident idle's STOP path).
+
+The L2CPU clock runs only while some process holds the chip open (a plain
+`open()` of `/dev/tenstorrent/N`, a UMD device or a Metal device). With no
+holder PLL4 stops and the harts freeze with their state intact. A NOC access to
+the tile while its clock is off never completes: every later NOC read, ARC
+included, times out until an ASIC reset.
 
 ---
 
@@ -504,8 +521,9 @@ obligations are left to the image, and `X280ActiveContract` in
    `X280ActiveContract` checks it on hardware.
 2. **Every hart reaches `return`.** One hart that never returns blocks every
    aggregate wait.
-3. **No WFI.** Host NOC writes raise no interrupt on this part, so a
-   WFI-parked hart never wakes.
+3. **No WFI.** The harness enables no interrupt, so a WFI-parked hart
+   never wakes. A NOC write to the tile's MSI catcher does raise one (§ 4,
+   inbound paths), but only for an image that enables it itself.
 4. **No `.bss`.** The harness zeroes none, and the link asserts it. Mutable
    globals need `__attribute__((section(".data")))` and a non-zero
    initialiser.
@@ -559,6 +577,7 @@ in the wrong state:
 |---|---|---|---|
 | Front Port write | Tensix or external | **10.24 GB/s** | Posted writes, dest-bound |
 | MemPort cached read | DDR | 7.92 GB/s | 128 KB cache-miss |
+| MSI catcher write | Tensix or host | — | `0x2006_0000` at the tile's (X, Y); PLIC source 6 of hart 0; wake-up ≤ 2 us |
 
 ### TLB programming (System Port outbound)
 
@@ -611,14 +630,23 @@ A host NOC access to an L2CPU takes the L2CPU-local address (for example, `X280_
 `0x08000000` and `X280_LOCAL_DDR_TILE_BASE` = `0x400030000000`, from
 `x280_address_map.h`).
 
+Through the L2CPU tile, `X280_LOCAL_DDR_TILE_BASE + offset` is coherent with the
+X280 caches in both directions, with no flush. The System Port alias
+`0x30000000 + offset` and the DRAM tile itself (bank address `offset`) are not:
+through them the NOC and the X280 see each other's data stale. The coherent
+address is 47 bits wide, beyond the 36-bit local address `get_noc_addr` builds,
+so a Tensix kernel writes the upper bits to the command buffer's
+`NOC_TARG_ADDR_MID` register itself.
+
 ---
 
 ## 5. Common pitfalls
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Memory Port write reaches L3 but not physical DDR | Memory Port is a cache-fill path, not a store-through path | Use System Port for outbound NOC writes; only use MemPort for cached DDR reads |
+| Memory Port write reaches L3 but not physical DDR | Memory Port is a cache-fill path, not a store-through path | Read it through the L2CPU tile at `X280_LOCAL_DDR_TILE_BASE + offset`, which is coherent (§ 4); not through the DRAM tile or the System Port alias |
 | 16 KB `noc_async_write` from Tensix hangs | NIU outstanding-write queue overflow | Either keep barriers, batch them, or use `<posted=true>` template parameter |
+| `cflush.d.l1` traps as an illegal instruction | Not implemented on this core | Write the line's address to `CCACHE0_FLUSH64` (`0x0201_0200`) |
 ---
 
 ## 6. Reference: tests, fixtures, scripts
