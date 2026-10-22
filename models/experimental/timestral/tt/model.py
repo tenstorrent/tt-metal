@@ -40,7 +40,7 @@ from models.experimental.timestral.tt.preprocessing import (
 )
 from models.experimental.timestral.tt.residual_block import TtResidualBlock
 from models.experimental.timestral.tt.transformer import TtTransformerBlock
-from models.experimental.timestral.tt.weights import TimestralWeights
+from models.experimental.timestral.tt.weights import TimestralWeights, rope_pair_order
 
 require_timestral()
 
@@ -151,8 +151,8 @@ class TtTimestral:
         if prepared.variate_mask is not None:
             variate_mask = self._upload_small_mask(_additive(_pad_variate_mask(prepared.variate_mask, seq, padded_seq)))
         attention = TtAttentionInputs(
-            cos=upload(self.device, _pad_rope(prepared.cos, padded_seq, 1.0)),
-            sin=upload(self.device, _pad_rope(prepared.sin, padded_seq, 0.0)),
+            cos=upload(self.device, _pad_rope(rope_pair_order(prepared.cos), padded_seq, 1.0)),
+            sin=upload(self.device, _pad_rope(rope_pair_order(prepared.sin), padded_seq, 0.0)),
             time_mask=time_mask,
             variate_mask=variate_mask,
             rows=rows,

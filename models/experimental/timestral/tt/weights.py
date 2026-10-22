@@ -6,6 +6,8 @@
 reference : models/experimental/timestral/reference/src/timestral/layers.py
     - ``wQKV`` rows are laid out ``(qkv, head_dim, n_heads)``; they are reordered to
       ``(qkv, n_heads, head_dim)``, the layout ``split_query_key_value_and_split_heads`` reads.
+    - Time attention Q and K rows are further reordered within each head from rotate-half order
+      to RoPE pair order (``rope_pair_order``); q . k is unchanged because both move together.
     - Every RMSNorm gain is folded into the input columns of the linears that read the norm
       (``(x_hat * g) @ W.T == x_hat @ (W * g).T``), so the device norms carry no weight.
     - The fused SwiGLU ``w12`` is split into its ``gate`` and ``up`` halves.
@@ -33,6 +35,19 @@ def permute_qkv_rows(wqkv: Tensor, num_heads: int, head_dim: int) -> Tensor:
     """Reorder fused QKV output rows from ``(qkv, head_dim, heads)`` to ``(qkv, heads, head_dim)``."""
     d_in = wqkv.shape[-1]
     return wqkv.reshape(3, head_dim, num_heads, d_in).permute(0, 2, 1, 3).reshape(3 * num_heads * head_dim, d_in)
+
+
+def rope_pair_order(t: Tensor, dim: int = -1) -> Tensor:
+    """Reorder a rotate-half ``head_dim`` axis ``[a_0 .. a_{n/2-1}, b_0 .. b_{n/2-1}]`` into adjacent
+    pairs ``[a_0, b_0, a_1, b_1, ...]``, the layout ``rotary_embedding_llama`` rotates."""
+    n = t.shape[dim]
+    return t.index_select(dim, torch.arange(n).reshape(2, n // 2).t().flatten())
+
+
+def pair_qk_rows(wqkv: Tensor, num_heads: int, head_dim: int) -> Tensor:
+    """``(qkv, heads, head_dim)`` rows -> Q and K heads in ``rope_pair_order``; V unchanged."""
+    w = wqkv.reshape(3, num_heads, head_dim, -1)
+    return torch.cat([rope_pair_order(w[:2], dim=2), w[2:]]).reshape(wqkv.shape)
 
 
 def fold_norm_gain(weight: Tensor, gain: Tensor) -> Tensor:
@@ -76,7 +91,7 @@ class ResidualBlockWeights:
 class AttentionWeights:
     """One gated attention sublayer; the pre-norm gain is folded into ``wqkv`` and ``wg``."""
 
-    wqkv: Tensor  # (3 * D, D), rows (qkv, heads, head_dim)
+    wqkv: Tensor  # (3 * D, D), rows (qkv, heads, head_dim); time Q / K head_dim in rope_pair_order
     wg: Tensor  # (D, D) sigmoid gate
     wo: Tensor  # (D, D)
     num_heads: int
@@ -97,6 +112,8 @@ class AttentionWeights:
             raise NotImplementedError("only the sdpa_sigmoid attention gate is supported")
         gain = _f32(norm.scale)
         wqkv = permute_qkv_rows(_f32(attn.wQKV.weight), attn.num_heads, attn.head_dim)
+        if attn.is_time:
+            wqkv = pair_qk_rows(wqkv, attn.num_heads, attn.head_dim)
         return cls(
             wqkv=fold_norm_gain(wqkv, gain),
             wg=fold_norm_gain(_f32(attn._gate.weight), gain),

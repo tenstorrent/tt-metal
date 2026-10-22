@@ -19,6 +19,7 @@ from models.experimental.timestral.tt.weights import (
     MlpWeights,
     ResidualBlockWeights,
     TimestralWeights,
+    rope_pair_order,
 )
 
 
@@ -33,9 +34,9 @@ def residual_block(w: ResidualBlockWeights, x: Tensor) -> Tensor:
     return F.linear(hidden, w.output_w, w.output_b) + F.linear(x, w.residual_w, w.residual_b)
 
 
-def rotate_half(x: Tensor) -> Tensor:
-    half = x.shape[-1] // 2
-    return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
+def rotate_pairs(x: Tensor) -> Tensor:
+    """``rotate_half`` in ``rope_pair_order``: ``(a_i, b_i) -> (-b_i, a_i)``."""
+    return torch.stack((-x[..., 1::2], x[..., 0::2]), dim=-1).flatten(-2)
 
 
 def split_heads(qkv: Tensor, num_heads: int) -> tuple[Tensor, Tensor, Tensor]:
@@ -56,9 +57,9 @@ def attention(w: AttentionWeights, x: Tensor, prepared: TimestralHostInputs) -> 
     rows, seq, d = x.shape
     if w.is_time:
         q, k, v = split_heads(F.linear(xn, w.wqkv), w.num_heads)
-        cos, sin = prepared.cos[:, None], prepared.sin[:, None]
-        q = q * cos + rotate_half(q) * sin
-        k = k * cos + rotate_half(k) * sin
+        cos, sin = rope_pair_order(prepared.cos[:, None]), rope_pair_order(prepared.sin[:, None])
+        q = q * cos + rotate_pairs(q) * sin
+        k = k * cos + rotate_pairs(k) * sin
         mask = prepared.time_mask
         merged = merge_heads(F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=mask is None))
     elif prepared.group_size == 1:

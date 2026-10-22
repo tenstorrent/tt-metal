@@ -22,7 +22,7 @@ from models.experimental.timestral.tt.preprocessing import (
     prepare_inputs,
     uniform_group_size,
 )
-from models.experimental.timestral.tt.weights import AttentionWeights, MlpWeights, TimestralWeights
+from models.experimental.timestral.tt.weights import AttentionWeights, MlpWeights, TimestralWeights, rope_pair_order
 
 from timestral.layers import TwoStreamMask  # noqa: E402
 from timestral.masks import (  # noqa: E402
@@ -66,7 +66,7 @@ def test_qkv_row_permutation_is_exact():
         ref_q, ref_k, ref_v = attn._qkv(norm(x))  # (B, S, H, Dh)
     w = AttentionWeights.from_reference(attn, norm)
     q, k, v = flow.split_heads(torch.nn.functional.linear(flow.rms_unit(x, w.eps), w.wqkv), w.num_heads)
-    for ref, got in ((ref_q, q), (ref_k, k), (ref_v, v)):
+    for ref, got in ((rope_pair_order(ref_q), q), (rope_pair_order(ref_k), k), (ref_v, v)):
         torch.testing.assert_close(got, ref.transpose(1, 2), **TOL)
 
 
