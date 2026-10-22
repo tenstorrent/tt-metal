@@ -450,6 +450,7 @@ void kernel_main() {
             conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
         }
         if (wait_ready) {
+            DeviceZoneScopedN("SE-RDYWAIT");  // (its end: the neighbour's port started - launch skew + a hop)
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready), 1);
             noc_semaphore_inc(get_noc_addr(ready), 0u - 1u);
             noc_async_atomic_barrier();

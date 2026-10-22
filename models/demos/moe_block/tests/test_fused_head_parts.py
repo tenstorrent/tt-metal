@@ -653,6 +653,12 @@ def test_head_se3(mesh_device, device_params):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
         )
         us, y = _time(mesh_device, lambda: head.run(xt, w))
+        if os.environ.get("SKEW_MAP"):  # (the launch-skew estimate's map: device id, TP position, ports' NoC)
+            for coord, ch in head.xg.chips.items():
+                did = mesh_device.get_device_id(ttnn.MeshCoordinate(*coord))
+                virt = mesh_device.worker_core_from_logical_core
+                pm = {f"{d}{l}": (virt(c).x, virt(c).y) for (_, d, l), c in ch["ports"].items()}
+                logger.info(f"SKEW_MAP dev {did} coord {coord} p {ch['rings'][0]['p']} ports {pm}")
         if head.router is not None:
             _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
         if head.latent and "xbuf" not in head.outputs:

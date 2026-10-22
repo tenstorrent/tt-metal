@@ -734,3 +734,13 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   every call - why polling every RS packet cost ~2 GB/s of the end links). rs_send polls before every packet again.
 - GLM 287.8 us LoudBox, Galaxy-projected 260 (2.86x); K3 508.8, Galaxy 496 (2.92x) - within noise of before: the
   routing packets' wait at the ports is not what binds (the slowest chip's chain end is).
+
+### Launch skew inside the eager numbers (SE-RDYWAIT: the ports' ready handshake, timed)
+- Each port facing a neighbour waits for that port's "started" increment; the wait's end, from the chip's own start,
+  is ~3 us when the neighbour launched first, else the start difference + ~3 us. galaxy_projection.py skew <rows>
+  turns that into start offsets: GLM run, row 0 (devs 7,6,4,5 by TP position) 52 / 37 / 21 / 0 us, row 1 (3,2,0,1)
+  48 / 32 / 0 / 17 - the eager dispatch launches the chips ~16 us apart (dev 0, 1, 2, 3 ... in id order within a
+  row; the rows' offset to each other not measured: no X-free port pair).
+- The eager metric (each chip's own end - own start, the slowest) carries that: here 281-292 us; from the row's
+  last launch to its last end 266-269; the logits arrival skew and the exchange waits seen before are mostly it.
+  In a traced / back-to-back forward the chips start when their previous op ends - this skew is the eager harness's.

@@ -4,6 +4,8 @@
 """Galaxy-projected whole-head time from a LoudBox (2x4, TP line of 4) fused-head profile.
 
 usage: python galaxy_projection.py <profile_log_device.csv> glm|k3 [logits_first 0|1 - default: the model's current]
+       python galaxy_projection.py <profile_log_device.csv> skew 7,6,4,5/3,2,0,1  (each mesh row's devices by TP
+       position, test_head_se3's SKEW_MAP log): the launch skew from the ports' ready handshake (SE-RDYWAIT)
 
 The LoudBox's TP axis is a line: the x all-gather and the SE reduce-scatter each bind on an end link carrying 3 units
 (u: one shard / one owner block - 640 rows a mesh row; GLM 1.31 MB, K3 2.29 MB at 2 links x 23.6 GB/s). The Galaxy's
@@ -95,7 +97,41 @@ def project(path, model, logits_first=None):
     return res
 
 
+def launch_skew(path, rows):
+    """Each mesh row's chips' start offsets (us, from the row's earliest): the ports' ready handshake - a port facing
+    chip q waits for q's ready (SE-RDYWAIT); its wait ends ~C (reaching the wait) after its own start if q started
+    first, else (q's start - its start) + C. Ports 2 / 3 face the next position (fwd), 4 / 5 the previous (bwd)."""
+    rows_ = list(csv.reader(open(path)))[2:]
+    ends = collections.defaultdict(dict)
+    for dev in sorted({r[0].strip() for r in rows_}, key=int):
+        rr = [r for r in rows_ if r[0].strip() == dev]
+        last = max(int(r[7]) for r in rr if r[10].strip().startswith("SE-"))
+        rr = [r for r in rr if int(r[7]) == last]
+        t0 = min(int(r[5]) for r in rr if r[10].strip().endswith("-KERNEL") and r[11].strip() == "ZONE_START")
+        for r in rr:
+            if r[10].strip() == "SE-RDYWAIT" and r[11].strip() == "ZONE_END":
+                ends[int(dev)][int(r[2])] = (int(r[5]) - t0) / FREQ
+    out = []
+    for devs in rows:
+        c = min(min(e.values()) for d, e in ends.items() if d in devs)  # (the shortest wait: no skew, a hop)
+        st = [0.0]
+        for a, b in zip(devs, devs[1:]):
+            fa = min(ends[a].get(2, 1e9), ends[a].get(3, 1e9)) - c  # (a waits on b: b's start - a's start, if > 0)
+            fb = min(ends[b].get(4, 1e9), ends[b].get(5, 1e9)) - c  # (b waits on a)
+            st.append(st[-1] + (fa if fa > fb else -fb))
+        m = min(st)
+        out.append([round(x - m, 1) for x in st])
+    return out
+
+
 if __name__ == "__main__":
+    if sys.argv[2] == "skew":
+        for devs, st in zip(
+            [list(map(int, g.split(","))) for g in sys.argv[3].split("/")],
+            launch_skew(sys.argv[1], [list(map(int, g.split(","))) for g in sys.argv[3].split("/")]),
+        ):
+            print(f"row {devs}: start offsets {st} us (spread {max(st):.1f})")
+        sys.exit(0)
     res = project(sys.argv[1], sys.argv[2], bool(int(sys.argv[3])) if len(sys.argv) > 3 else None)
     for dev, ds, rp, se, ch in res:
         print(f"dev {dev}: LoudBox SE end {ds:6.1f} planner end {rp:6.1f} | Galaxy SE {se:6.1f} chain {ch:6.1f}")
