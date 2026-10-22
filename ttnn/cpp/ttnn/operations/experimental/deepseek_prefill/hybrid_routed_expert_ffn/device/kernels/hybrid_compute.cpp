@@ -22,6 +22,13 @@
 // the program factory computed, applied by the shims its wrapper pulls in. Neither body is
 // renumbered; see hybrid_arg_shims.hpp for why that works.
 
+// The union binary only just fits the kernel-config ring. Size-optimise the pack thread: it
+// frees ~2.6 KB for ~0.2% device time. Unpack and math keep the kernel's O3 -- the unpacker
+// feeds the matmul, and Os there measured up to 2.5x slower.
+#if defined(TRISC_PACK)
+#pragma GCC optimize("Os")
+#endif
+
 #define HYB_MERGED 1
 #include "hybrid_merged_prologue.hpp"
 // Ahead of the LLK pack lib too: it renames the pack source-format table that lib reads.
