@@ -630,11 +630,24 @@ def run_gate(
 TOO_LARGE = re.compile(r"(\S+) \((\d+) KB\) exceeds")  # scripts/check_file_size.py, the repo's large-file hook
 
 
+def task_files_map(repo: Path, task: dict) -> dict:
+    """{file: sha256} of the task's own files (its paths)."""
+    return {f: freeze.sha256_file(repo / f) for f in sorted(set(_files_under(repo, list(task.get("paths") or []))))}
+
+
 def task_files_key(repo: Path, task: dict) -> str:
     """The content of the task's own files (its paths and frozen files): what a pending commit must still match."""
-    files = sorted(set(_files_under(repo, list(task.get("paths") or []))))
-    text = "\n".join(f"{f}\0{freeze.sha256_file(repo / f)}" for f in files)
+    text = "\n".join(f"{f}\0{h}" for f, h in task_files_map(repo, task).items())
     return hashlib.sha256((text + json.dumps(task.get("frozen"), sort_keys=True)).encode()).hexdigest()[:16]
+
+
+def _hook_fixed(pend: dict, now: dict) -> tuple[list, list]:
+    """F154: the files changed since the gate passed, split into those the refusing hook named (a hook fix: commit
+    without a re-run) and the rest (need the gate)."""
+    was = pend.get("files") or {}
+    changed = sorted(f for f in set(was) | set(now) if was.get(f) != now.get(f))
+    named = [f for f in changed if any(f in ln for ln in pend.get("hook") or [])]
+    return named, [f for f in changed if f not in named]
 
 
 def _refused(spec: Spec, ledger: Ledger, task: dict, res: GateResult, err: Exception, pend: dict | None = None):
@@ -650,6 +663,7 @@ def _refused(spec: Spec, ledger: Ledger, task: dict, res: GateResult, err: Excep
         why.append(f"  too large for the repo: {', '.join(big)} (a framework fix keeps it out of the commit)")
     why += [f"    {ln}" for ln in hook]
     pend = dict(pend or {"lines": res.lines, "task_files": task_files_key(spec.repo, task)})
+    pend.setdefault("files", task_files_map(spec.repo, task))  # F154: per file, so a hook fix can be told apart
     pend.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), hook=hook, too_large=big)
     ledger.update(
         tid,
@@ -670,10 +684,17 @@ def commit_only(spec: Spec, ledger: Ledger, tid: str) -> GateResult:
     if entry.get("status") != "COMMIT_PENDING" or not pend:
         return GateResult(tid, "FAIL", lines=[f"  no pending commit (status {entry.get('status', 'TODO')})"])
     res = GateResult(tid, "PASS", 0, list(pend.get("lines") or []))
+    fixed = []
     if pend.get("task_files") and pend["task_files"] != task_files_key(spec.repo, task):
-        res.verdict = "COMMIT_PENDING"
-        res.lines.append(f"  the task's files changed since its gate passed: not committed (`rerun --from {tid}`)")
-        return res
+        fixed, other = _hook_fixed(pend, task_files_map(spec.repo, task)) if pend.get("files") else ([], ["?"])
+        if other:  # F154: only the files the hook named may change after the gate (the fix it asked for)
+            res.verdict = "COMMIT_PENDING"
+            res.lines.append(
+                f"  the task's files changed since its gate passed: not committed (`rerun --from {tid}`)"
+                + (f": {', '.join(other)} (not named by the hook)" if other != ["?"] else "")
+            )
+            return res
+        res.lines.append(f"  changed after the gate, as the hook asked (F154): {', '.join(fixed)}")
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     ledger.update(tid, status="PASS", commit_pending=None, reason=[], history_add={"t": now, "status": "COMMITTED"})
     try:
