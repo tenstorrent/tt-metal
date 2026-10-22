@@ -908,6 +908,12 @@ jobs:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
     runs-on: ubuntu-latest
+    # One run per PR at a time: the summary rewrite carries the ping record
+    # forward from the comment it read, so an overlapping run could drop an
+    # entry another run had just appended.
+    concurrency:
+      group: codeowners-post-comment-${{ needs.find-pr.outputs.pr-number }}
+      cancel-in-progress: false
     steps:
       - name: Checkout scripts
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

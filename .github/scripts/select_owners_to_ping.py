@@ -467,8 +467,9 @@ class Selector:
         return result
 
     # -- rank owners, most available first; the top two are pinged ----------
-    def rank(self, candidates: list[str]) -> list[str]:
-        """Order candidates by preference; the first two are the ones pinged.
+    def rank(self, candidates: list[str]) -> tuple[list[str], list[str]]:
+        """Return (pinged, ranking): the owners to ping, and every candidate in
+        preference order starting with them.
 
         Out-of-office candidates are dropped first, but only if that leaves
         someone: a rule where everyone is away still gets pinged. The two slots
@@ -480,12 +481,13 @@ class Selector:
         than remaining slots, which keeps the presence calls to the one group
         where they change the answer.
 
-        Everyone after the first two is listed by tier, then by login, so the
-        ping record has an escalation order without extra presence calls or
-        random draws.
+        The rest of the ranking is ordered by tier, then by login, so the ping
+        record has an escalation order without extra presence calls or random
+        draws. It can hold out-of-office owners that were skipped for the ping,
+        which is why `pinged` is returned separately rather than as ranking[:2].
         """
         if not candidates:
-            return []
+            return [], []
         pool = [c for c in candidates if self.directory.tier(c, self.now_utc) < TIER_OOO]
         if not pool:
             log("All candidates are marked out of office; pinging them anyway")
@@ -505,9 +507,24 @@ class Selector:
 
         for login in chosen:
             log(f"DEBUG select-owners: {login} tier={self.directory.tier(login, self.now_utc)}")
-        rest = [c for c in candidates if c not in chosen]
-        rest.sort(key=lambda c: (self.directory.tier(c, self.now_utc), c))
-        return chosen + rest
+        return chosen, chosen + self.by_tier([c for c in candidates if c not in chosen])
+
+    def by_tier(self, logins) -> list[str]:
+        return sorted(logins, key=lambda c: (self.directory.tier(c, self.now_utc), c))
+
+    def co_owners(self, files_csv: str, files_to_members: dict[str, str], exclude: list[str]) -> list[str]:
+        """Other owners whose approval also covers this rule's files.
+
+        Mirrors compute_approval(): members of the same file set and of any
+        overlapping one count, so the record's `any_of` stops the reminder on
+        the same approvals that clear the rule here.
+        """
+        files = set(f for f in files_csv.split(",") if f)
+        extra: list[str] = []
+        for key, members in files_to_members.items():
+            if files & set(key.split(",")):
+                extra.extend(m for m in members.split(",") if m)
+        return self.by_tier(set(self.unapproved_filtered(extra)) - set(exclude))
 
     def unapproved_filtered(self, candidates: list[str]) -> list[str]:
         """Drop approved reviewers, moreh members, and the PR author."""
@@ -584,9 +601,11 @@ class Selector:
                     unapproved = [u for u in unapproved if u != API_REQUIRED_REVIEWER]
                     log(f"Added {API_REQUIRED_REVIEWER} as required reviewer (tt_metal/api/)")
 
-            ranked = self.rank(unapproved)
-            selected_owners.extend(required + ranked[:2])
-            record.append({"rule": team, "any_of": required + ranked, "pinged": required + ranked[:2]})
+            pinged, ranked = self.rank(unapproved)
+            pinged, ranked = required + pinged, required + ranked
+            selected_owners.extend(pinged)
+            any_of = ranked + self.co_owners(team_files, files_to_members, ranked)
+            record.append({"rule": team, "any_of": any_of, "pinged": pinged})
 
         # Individual patterns
         for pattern_group in split_nonempty(self.individuals, "§"):
@@ -600,9 +619,10 @@ class Selector:
                 continue
 
             usernames = [pair.split("|", 1)[0] for pair in owners.split(",") if pair != ""]
-            ranked = self.rank(self.unapproved_filtered(usernames))
-            selected_owners.extend(ranked[:2])
-            record.append({"rule": pattern, "any_of": ranked, "pinged": ranked[:2]})
+            pinged, ranked = self.rank(self.unapproved_filtered(usernames))
+            selected_owners.extend(pinged)
+            any_of = ranked + self.co_owners(files, files_to_members, ranked)
+            record.append({"rule": pattern, "any_of": any_of, "pinged": pinged})
 
         # Sort + dedupe individual owners (parity with sort | uniq).
         final_owners = sorted(set(o for o in selected_owners if o))

@@ -44,9 +44,11 @@ BLOCK_OPEN = "<!-- codeowners-ping-record"
 BLOCK_CLOSE = "-->"
 BLOCK_RE = re.compile(re.escape(BLOCK_OPEN) + r"\n(.*?)\n" + re.escape(BLOCK_CLOSE), re.DOTALL)
 
-# A comment body is capped at 65536 characters. Old entries are dropped first;
-# the reminder only ever needs the recent pings.
+# Old entries are dropped first; the reminder only ever needs the recent pings.
 MAX_PINGS = 50
+# GitHub caps a comment body at 65536 characters. Leave headroom so the record
+# can never be what pushes the summary over the limit.
+MAX_BODY_CHARS = 60000
 
 
 def log(msg: str) -> None:
@@ -69,17 +71,27 @@ def extract_pings(body: str) -> list[dict]:
 def render_block(pings: list[dict]) -> str:
     # One entry per line keeps the raw comment readable. `>` is escaped so no
     # value can close the HTML comment early; `>` is still valid JSON.
-    lines = ",\n".join(json.dumps(p, separators=(", ", ": ")) for p in pings[-MAX_PINGS:])
+    lines = ",\n".join(json.dumps(p, separators=(", ", ": ")) for p in pings)
     payload = '{"pings": [\n' + lines + "\n]}"
     return f"{BLOCK_OPEN}\n{payload.replace('>', chr(92) + 'u003e')}\n{BLOCK_CLOSE}"
 
 
-def with_pings(body: str, pings: list[dict]) -> str:
-    """`body` with its record block replaced by `pings` (appended if it had none)."""
-    block = render_block(pings)
-    if BLOCK_RE.search(body):
-        return BLOCK_RE.sub(lambda _: block, body, count=1)
-    return body.rstrip("\n") + "\n\n" + block + "\n"
+def with_pings(body: str, pings: list[dict], max_chars: int = MAX_BODY_CHARS) -> str:
+    """`body` with its record block replaced by `pings` (appended if it had none).
+
+    Oldest entries are dropped until the whole body fits in `max_chars`; if not
+    even the newest one fits, the record is left out and the summary kept.
+    """
+    base = BLOCK_RE.sub("", body, count=1).rstrip("\n")
+    pings = pings[-MAX_PINGS:]
+    while pings:
+        updated = base + "\n\n" + render_block(pings) + "\n"
+        if len(updated) <= max_chars:
+            return updated
+        pings = pings[1:]
+        log("::warning::Codeowners ping record too large for the comment; dropping its oldest entry.")
+    log("::warning::Codeowners ping record does not fit in the comment; leaving it out.")
+    return base + "\n"
 
 
 # --------------------------------------------------------------------------- #
