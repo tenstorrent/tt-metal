@@ -27,6 +27,7 @@ from torch import Tensor
 from models.experimental.timestral.common.timestral_src import require_timestral
 from models.experimental.timestral.tt.attention import TtAttentionInputs
 from models.experimental.timestral.tt.common import (
+    TILE,
     TtTimestralPrecision,
     pad_to_tile,
     rms_norm,
@@ -146,19 +147,27 @@ class TtTimestral:
 
         time_mask = None
         if prepared.time_mask is not None:
-            time_mask = upload(self.device, _additive(_pad_time_mask(prepared.time_mask, padded_seq)))
+            # Time attention runs on an (H, R, S_pad, Dh) view, so the per-row masks sit on dim 1.
+            time_mask = upload(self.device, _additive(_pad_time_mask(prepared.time_mask, padded_seq)).transpose(0, 1))
         variate_mask = None
         if prepared.variate_mask is not None:
             variate_mask = self._upload_small_mask(_additive(_pad_variate_mask(prepared.variate_mask, seq, padded_seq)))
         attention = TtAttentionInputs(
-            cos=upload(self.device, _pad_rope(rope_pair_order(prepared.cos), padded_seq, 1.0)),
-            sin=upload(self.device, _pad_rope(rope_pair_order(prepared.sin), padded_seq, 0.0)),
+            cos=self._upload_rope(prepared.cos, rows, padded_seq, 1.0),
+            sin=self._upload_rope(prepared.sin, rows, padded_seq, 0.0),
+            unit_stats=ttnn.full(
+                ttnn.Shape((1, 1, rows * padded_seq, TILE)),
+                self.config.d_model / TILE,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
             time_mask=time_mask,
             variate_mask=variate_mask,
             rows=rows,
             padded_seq=padded_seq,
             group_size=prepared.group_size,
-            shared_positions=prepared.cos.shape[0] == 1,
         )
         return TtTimestralDeviceInputs(
             tokens=tokens_tt,
@@ -166,6 +175,18 @@ class TtTimestral:
             num_context_patches=prepared.num_context_patches,
             horizon_patches=prepared.horizon_patches,
         )
+
+    def _upload_rope(self, table: Tensor, rows: int, padded_seq: int, identity: float):
+        """``(1 or R, S, Dh)`` -> device ``(1, 1, R * S_pad, Dh)``, one row per token, in ``rope_pair_order``."""
+        import ttnn
+
+        padded = _pad_rope(rope_pair_order(table), padded_seq, identity)
+        flat = upload(self.device, padded.reshape(1, 1, -1, padded.shape[-1]))
+        if padded.shape[0] == rows:
+            return flat
+        out = ttnn.repeat(flat, ttnn.Shape((1, 1, rows, 1)), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(flat)
+        return out
 
     def _upload_small_mask(self, mask: Tensor):
         """A mask whose last dims are not tile-aligned: the tile padding must be -inf, not 0."""
@@ -236,7 +257,7 @@ class TtTimestral:
         import ttnn
 
         att = inputs.attention
-        for t in (inputs.tokens, att.cos, att.sin, att.time_mask, att.variate_mask):
+        for t in (inputs.tokens, att.cos, att.sin, att.unit_stats, att.time_mask, att.variate_mask):
             if t is not None:
                 ttnn.deallocate(t)
 

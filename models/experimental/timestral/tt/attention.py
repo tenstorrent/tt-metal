@@ -7,7 +7,9 @@ reference : models/experimental/timestral/reference/src/timestral/layers.py (``A
     xn = RMSNorm(x)                                   # gain folded into Wqkv and Wg
     q, k, v = heads(xn @ Wqkv)                        # rows reordered to (qkv, heads, head_dim)
     time:    q, k = RoPE(q, k); ctx = SDPA(q, k, v)   # causal, or the uploaded mask
-             q, k and cos / sin use rope_pair_order, so RoPE rotates adjacent pairs
+             q, k, v come out of the matmul as three flat tensors; one fused op per tensor splits
+             the heads head-major (1, H, R * S_pad, Dh) and applies RoPE to q, k (pair order), and
+             SDPA runs on the (H, R, S_pad, Dh) view of that layout
     variate: one row per series -> ctx = v exactly (softmax over one key)
              else SDPA over each series' rows, (S * B, H, V, Dh)
     return (merge(ctx) * sigmoid(xn @ Wg)) @ Wo
@@ -24,6 +26,7 @@ from models.experimental.timestral.tt.common import (
     TtTimestralPrecision,
     linear,
     linear_residual,
+    linear_split,
     rms_norm,
     upload,
     upload_linear,
@@ -37,14 +40,14 @@ _MAX_SDPA_CHUNK = 256
 class TtAttentionInputs:
     """Device tensors shared by every attention sublayer of one forward."""
 
-    cos: object  # (1 or R, 1, S_pad, Dh), head_dim in rope_pair_order
+    cos: object  # (1, 1, R * S_pad, Dh), one row per token, head_dim in rope_pair_order
     sin: object
-    time_mask: object | None  # (R, 1, S_pad, S_pad) additive; None = causal
+    unit_stats: object  # (1, 1, R * S_pad, TILE) row sums of x^2 that make the head-split norm scale exactly 1
+    time_mask: object | None  # (1, R, S_pad, S_pad) additive; None = causal
     variate_mask: object | None  # (S_pad * R / V, 1, V, V) additive; None = all rows of a series visible
     rows: int  # R
     padded_seq: int  # S_pad
     group_size: int  # V
-    shared_positions: bool  # cos/sin broadcast over rows
 
 
 def pair_rotation(n: int) -> torch.Tensor:
@@ -77,7 +80,6 @@ class TtAttention:
         self._ones = upload(device, torch.ones(1, self.d_model))
         if weights.is_time:
             self._rope_trans = upload(device, pair_rotation(TILE).reshape(1, 1, TILE, TILE))
-            self._rope_rotation = upload(device, pair_rotation(self.head_dim))
 
     def __call__(self, x, inputs: TtAttentionInputs, residual=None):
         """Flat device ``(1, 1, R * S_pad, D)`` -> same shape, plus ``residual`` (added in the wo
@@ -113,7 +115,7 @@ class TtAttention:
         ttnn.deallocate(qkv)
         return q, k, v
 
-    def _sdpa(self, q, k, v, *, mask, is_causal: bool):
+    def _sdpa(self, q, k, v, *, mask, is_causal: bool, concat_heads: bool = True):
         import ttnn
 
         chunk = sdpa_chunk(q.padded_shape[-2])
@@ -133,45 +135,51 @@ class TtAttention:
             program_config=program_config,
             compute_kernel_config=self.precision.compute_kernel_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_concat_heads=True,
+            output_concat_heads=concat_heads,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         return ctx
 
-    def _rope(self, t, inputs: TtAttentionInputs):
-        """``t * cos + (t @ pair_rotation) * sin`` on ``(R, H, S_pad, Dh)``; consumes ``t``."""
+    def _heads(self, t, inputs: TtAttentionInputs, *, rope: bool):
+        """Flat ``(1, 1, R * S_pad, D)`` -> head-major ``(1, H, R * S_pad, Dh)``, rotated when ``rope``;
+        consumes ``t``. The op is an RMSNorm; ``unit_stats`` make its scale exactly 1."""
         import ttnn
 
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        # Below HiFi4 the +-1 rotation matmul drops input mantissa bits.
-        kernel = self.precision.compute_kernel_config(math_fidelity=ttnn.MathFidelity.HiFi4)
-        if inputs.shared_positions:
-            out = ttnn.experimental.rotary_embedding_llama(
-                t, inputs.cos, inputs.sin, self._rope_trans, memory_config=dram, compute_kernel_config=kernel
-            )
-            ttnn.deallocate(t)
-            return out
-        rotated = ttnn.matmul(t, self._rope_rotation, memory_config=dram, compute_kernel_config=kernel)
-        rotated_sin = ttnn.mul(rotated, inputs.sin, memory_config=dram)
-        ttnn.deallocate(rotated)
-        t_cos = ttnn.mul(t, inputs.cos, memory_config=dram)
+        rope_args = {}
+        if rope:
+            rope_args = dict(transformation_mat=self._rope_trans, rope_cos=inputs.cos, rope_sin=inputs.sin)
+        out = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+            t,
+            inputs.unit_stats,
+            epsilon=0.0,
+            num_heads_per_device=self.num_heads,
+            # Below HiFi4 the +-1 rotation matmul drops input mantissa bits.
+            compute_kernel_config=self.precision.compute_kernel_config(math_fidelity=ttnn.MathFidelity.HiFi4),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **rope_args,
+        )
         ttnn.deallocate(t)
-        out = ttnn.add(t_cos, rotated_sin, memory_config=dram)
-        ttnn.deallocate(t_cos)
-        ttnn.deallocate(rotated_sin)
         return out
 
     def _time_context(self, xn, inputs: TtAttentionInputs):
         import ttnn
 
-        r, s, d = inputs.rows, inputs.padded_seq, self.d_model
-        qkv = ttnn.reshape(linear(xn, self._wqkv, self.precision), (r, s, 3 * d))
-        q, k, v = self._split_heads(qkv)
-        q, k = self._rope(q, inputs), self._rope(k, inputs)
-        merged = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None)
-        return ttnn.reshape(merged, (1, 1, r * s, d))
+        r, s, h, dh = inputs.rows, inputs.padded_seq, self.num_heads, self.head_dim
+        q, k, v = linear_split(xn, self._wqkv, self.precision, 3)
+        q, k, v = (
+            self._heads(q, inputs, rope=True),
+            self._heads(k, inputs, rope=True),
+            self._heads(v, inputs, rope=False),
+        )
+        q, k, v = (ttnn.reshape(t, (h, r, s, dh)) for t in (q, k, v))
+        ctx = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None, concat_heads=False)
+        merged = ttnn.experimental.nlp_concat_heads(
+            ttnn.reshape(ctx, (1, h, r * s, dh)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(ctx)
+        return merged
 
     def _variate_context(self, xn, inputs: TtAttentionInputs):
         """Attention across the V rows of each series at every time slot: ``(S_pad * B, H, V, Dh)``."""

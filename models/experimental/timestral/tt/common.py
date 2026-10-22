@@ -192,6 +192,29 @@ def linear_residual(x, weight, precision: TtTimestralPrecision, residual, ones):
     return y
 
 
+def linear_split(x, weight, precision: TtTimestralPrecision, chunks: int):
+    """``x @ weight`` as ``chunks`` equal column blocks, each its own ``(1, 1, M, N / chunks)`` tensor."""
+    import ttnn
+
+    x_shape, (k, n) = tuple(x.padded_shape), tuple(weight.padded_shape)[-2:]
+    grid = x.device().compute_with_storage_grid_size()
+    config = program_configs.split_config(
+        (grid.x, grid.y),
+        math.prod(x_shape[:-1]) // TILE,
+        k // TILE,
+        n // (chunks * TILE),
+        max_dest=_max_dest(precision),
+    )
+    return ttnn.experimental.minimal_matmul_split(
+        x,
+        weight,
+        chunks=chunks,
+        config=config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=precision.compute_kernel_config(),
+    )
+
+
 def swiglu(x, weight, precision: TtTimestralPrecision):
     """``(x @ W_mul) * silu(x @ W_silu)`` in one matmul on an ``upload_swiglu`` weight."""
     import ttnn

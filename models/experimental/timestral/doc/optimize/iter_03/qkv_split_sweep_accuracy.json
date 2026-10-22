@@ -1,0 +1,540 @@
+[
+  {
+    "candidate": "2d linear (current)",
+    "pcc": 0.9998888255039249,
+    "ms": 2.75509525090456
+  },
+  {
+    "candidate": "split[4,4,3,sb=2x3]",
+    "pcc": 0.9999760220264855,
+    "ms": 3.8746511563658714
+  },
+  {
+    "candidate": "split[4,4,4,sb=2x4]",
+    "pcc": 0.9999760218803384,
+    "ms": 3.656337969005108
+  },
+  {
+    "candidate": "split[4,4,4,sb=4x2]",
+    "pcc": 0.9999760218803384,
+    "ms": 3.695329185575247
+  },
+  {
+    "candidate": "split[4,4,6,sb=4x2]",
+    "pcc": 0.9999760161350734,
+    "ms": 3.76405892893672
+  },
+  {
+    "candidate": "split[4,4,8,sb=1x8]",
+    "pcc": 0.9999760169214874,
+    "ms": 4.356998950242996
+  },
+  {
+    "candidate": "split[4,4,8,sb=4x2]",
+    "pcc": 0.9999760169214874,
+    "ms": 4.395199939608574
+  },
+  {
+    "candidate": "split[4,4,9,sb=2x3]",
+    "pcc": 0.9999760169214874,
+    "ms": 4.391602240502834
+  },
+  {
+    "candidate": "split[4,4,12,sb=2x4]",
+    "pcc": 0.9999760169214874,
+    "ms": 4.572100937366486
+  },
+  {
+    "candidate": "split[4,4,12,sb=4x2]",
+    "pcc": 0.9999760169214874,
+    "ms": 4.581972025334835
+  },
+  {
+    "candidate": "split[4,6,3,sb=2x3]",
+    "pcc": 0.9999705011980244,
+    "ms": 3.5860734060406685
+  },
+  {
+    "candidate": "split[4,6,4,sb=2x4]",
+    "pcc": 0.9999705014521882,
+    "ms": 3.5480749793350697
+  },
+  {
+    "candidate": "split[4,6,4,sb=4x2]",
+    "pcc": 0.9999705014521882,
+    "ms": 3.5329670645296574
+  },
+  {
+    "candidate": "split[4,6,6,sb=4x2]",
+    "pcc": 0.9999705006788318,
+    "ms": 3.909681923687458
+  },
+  {
+    "candidate": "split[4,6,8,sb=1x8]",
+    "pcc": 0.9999705008549946,
+    "ms": 4.061040934175253
+  },
+  {
+    "candidate": "split[4,6,8,sb=4x2]",
+    "pcc": 0.9999705008549946,
+    "ms": 4.1230907663702965
+  },
+  {
+    "candidate": "split[4,6,9,sb=2x3]",
+    "pcc": 0.9999705008549946,
+    "ms": 4.28064027801156
+  },
+  {
+    "candidate": "split[4,6,12,sb=2x4]",
+    "pcc": 0.9999705008549946,
+    "ms": 4.317550919950008
+  },
+  {
+    "candidate": "split[4,6,12,sb=4x2]",
+    "pcc": 0.9999705008549946,
+    "ms": 4.207035060971975
+  },
+  {
+    "candidate": "split[4,8,3,sb=2x3]",
+    "pcc": 0.9999636855220112,
+    "ms": 3.500796854496002
+  },
+  {
+    "candidate": "split[4,8,4,sb=2x4]",
+    "pcc": 0.9999636856954651,
+    "ms": 3.7248260341584682
+  },
+  {
+    "candidate": "split[4,8,4,sb=4x2]",
+    "pcc": 0.9999636856954651,
+    "ms": 3.704486880451441
+  },
+  {
+    "candidate": "split[4,8,6,sb=4x2]",
+    "pcc": 0.9999636829913483,
+    "ms": 3.8716760464012623
+  },
+  {
+    "candidate": "split[4,8,8,sb=1x8]",
+    "pcc": 0.999963683776248,
+    "ms": 4.536457825452089
+  },
+  {
+    "candidate": "split[4,8,8,sb=4x2]",
+    "pcc": 0.999963683776248,
+    "ms": 4.539119079709053
+  },
+  {
+    "candidate": "split[4,8,9,sb=2x3]",
+    "pcc": 0.999963683776248,
+    "ms": 4.566909745335579
+  },
+  {
+    "candidate": "split[4,8,12,sb=2x4]",
+    "pcc": 0.999963683776248,
+    "ms": 4.564021714031696
+  },
+  {
+    "candidate": "split[4,8,12,sb=4x2]",
+    "pcc": 0.999963683776248,
+    "ms": 4.512384068220854
+  },
+  {
+    "candidate": "split[4,12,3,sb=2x3]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.4682690165936947
+  },
+  {
+    "candidate": "split[4,12,4,sb=2x4]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.8630738854408264
+  },
+  {
+    "candidate": "split[4,12,4,sb=4x2]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.826146014034748
+  },
+  {
+    "candidate": "split[4,12,6,sb=4x2]",
+    "pcc": 0.9999479475774949,
+    "ms": 4.11035493016243
+  },
+  {
+    "candidate": "split[4,12,8,sb=1x8]",
+    "pcc": 0.9999479475774949,
+    "ms": 4.750479012727737
+  },
+  {
+    "candidate": "split[4,12,8,sb=4x2]",
+    "pcc": 0.9999479475774949,
+    "ms": 4.713149741292
+  },
+  {
+    "candidate": "split[4,12,9,sb=2x3]",
+    "pcc": 0.9999479475774949,
+    "ms": 4.739350639283657
+  },
+  {
+    "candidate": "split[4,12,12,sb=2x4]",
+    "pcc": 0.9999479475774949,
+    "ms": 4.689553286880255
+  },
+  {
+    "candidate": "split[4,12,12,sb=4x2]",
+    "pcc": 0.9999479475774949,
+    "ms": 4.704404156655073
+  },
+  {
+    "candidate": "split[8,4,3,sb=8x1]",
+    "pcc": 0.9999760220264855,
+    "ms": 3.7930640392005444
+  },
+  {
+    "candidate": "split[8,4,4,sb=2x4]",
+    "pcc": 0.9999760218803384,
+    "ms": 3.37159913033247
+  },
+  {
+    "candidate": "split[8,4,4,sb=8x1]",
+    "pcc": 0.9999760218803384,
+    "ms": 3.3522499725222588
+  },
+  {
+    "candidate": "split[8,4,6,sb=4x2]",
+    "pcc": 0.9999760161350734,
+    "ms": 3.339760936796665
+  },
+  {
+    "candidate": "split[8,4,6,sb=8x1]",
+    "pcc": 0.9999760161350734,
+    "ms": 3.3346712589263916
+  },
+  {
+    "candidate": "split[8,4,8,sb=1x8]",
+    "pcc": 0.9999760169214874,
+    "ms": 3.5664308816194534
+  },
+  {
+    "candidate": "split[8,4,8,sb=8x1]",
+    "pcc": 0.9999760169214874,
+    "ms": 3.6944998428225517
+  },
+  {
+    "candidate": "split[8,4,9,sb=8x1]",
+    "pcc": 0.9999760169214874,
+    "ms": 3.657821100205183
+  },
+  {
+    "candidate": "split[8,4,12,sb=2x4]",
+    "pcc": 0.9999760169214874,
+    "ms": 3.746812231838703
+  },
+  {
+    "candidate": "split[8,4,12,sb=8x1]",
+    "pcc": 0.9999760169214874,
+    "ms": 3.7197526544332504
+  },
+  {
+    "candidate": "split[8,6,3,sb=8x1]",
+    "pcc": 0.9999705011980244,
+    "ms": 3.552734851837158
+  },
+  {
+    "candidate": "split[8,6,4,sb=2x4]",
+    "pcc": 0.9999705014521882,
+    "ms": 3.2080579549074173
+  },
+  {
+    "candidate": "split[8,6,4,sb=8x1]",
+    "pcc": 0.9999705014521882,
+    "ms": 3.2523982226848602
+  },
+  {
+    "candidate": "split[8,6,6,sb=4x2]",
+    "pcc": 0.9999705006788318,
+    "ms": 3.3767176792025566
+  },
+  {
+    "candidate": "split[8,6,6,sb=8x1]",
+    "pcc": 0.9999705006788318,
+    "ms": 3.3536688424646854
+  },
+  {
+    "candidate": "split[8,6,8,sb=1x8]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.4589599817991257
+  },
+  {
+    "candidate": "split[8,6,8,sb=8x1]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.4660501405596733
+  },
+  {
+    "candidate": "split[8,6,9,sb=8x1]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.6399103701114655
+  },
+  {
+    "candidate": "split[8,6,12,sb=2x4]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.5151811316609383
+  },
+  {
+    "candidate": "split[8,6,12,sb=8x1]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.4962520003318787
+  },
+  {
+    "candidate": "split[8,8,3,sb=8x1]",
+    "pcc": 0.9999636855220112,
+    "ms": 3.301032818853855
+  },
+  {
+    "candidate": "split[8,8,4,sb=2x4]",
+    "pcc": 0.9999636856954651,
+    "ms": 3.131764940917492
+  },
+  {
+    "candidate": "split[8,8,4,sb=8x1]",
+    "pcc": 0.9999636856954651,
+    "ms": 3.105766139924526
+  },
+  {
+    "candidate": "split[8,8,6,sb=4x2]",
+    "pcc": 0.9999636829913483,
+    "ms": 3.2522259280085564
+  },
+  {
+    "candidate": "split[8,8,6,sb=8x1]",
+    "pcc": 0.9999636829913483,
+    "ms": 3.252076916396618
+  },
+  {
+    "candidate": "split[8,8,8,sb=1x8]",
+    "pcc": 0.999963683776248,
+    "ms": 3.5127047449350357
+  },
+  {
+    "candidate": "split[8,8,8,sb=8x1]",
+    "pcc": 0.999963683776248,
+    "ms": 3.5710958763957024
+  },
+  {
+    "candidate": "split[8,8,9,sb=8x1]",
+    "pcc": 0.999963683776248,
+    "ms": 3.5059768706560135
+  },
+  {
+    "candidate": "split[8,8,12,sb=2x4]",
+    "pcc": 0.999963683776248,
+    "ms": 3.518977202475071
+  },
+  {
+    "candidate": "split[8,8,12,sb=8x1]",
+    "pcc": 0.999963683776248,
+    "ms": 3.5183983854949474
+  },
+  {
+    "candidate": "split[8,12,3,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.187299706041813
+  },
+  {
+    "candidate": "split[8,12,4,sb=2x4]",
+    "pcc": 0.9999479475774949,
+    "ms": 2.9803509823977947
+  },
+  {
+    "candidate": "split[8,12,4,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 2.9350710101425648
+  },
+  {
+    "candidate": "split[8,12,6,sb=4x2]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.273229580372572
+  },
+  {
+    "candidate": "split[8,12,6,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.2895412296056747
+  },
+  {
+    "candidate": "split[8,12,8,sb=1x8]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.639780916273594
+  },
+  {
+    "candidate": "split[8,12,8,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.6340910010039806
+  },
+  {
+    "candidate": "split[8,12,9,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.661232069134712
+  },
+  {
+    "candidate": "split[8,12,12,sb=2x4]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[8,12,12,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,4,3,sb=8x1]",
+    "pcc": 0.9999760220264855,
+    "ms": 3.707482945173979
+  },
+  {
+    "candidate": "split[16,4,4,sb=2x4]",
+    "pcc": 0.9999760218803384,
+    "ms": 3.114853985607624
+  },
+  {
+    "candidate": "split[16,4,4,sb=8x1]",
+    "pcc": 0.9999760218803384,
+    "ms": 3.217215184122324
+  },
+  {
+    "candidate": "split[16,4,6,sb=4x2]",
+    "pcc": 0.9999760161350734,
+    "ms": 3.039705101400614
+  },
+  {
+    "candidate": "split[16,4,6,sb=8x1]",
+    "pcc": 0.9999760161350734,
+    "ms": 3.0292351730167866
+  },
+  {
+    "candidate": "split[16,4,8,sb=1x8]",
+    "pcc": 0.9999760169214874,
+    "ms": 2.9480946250259876
+  },
+  {
+    "candidate": "split[16,4,8,sb=8x1]",
+    "pcc": 0.9999760169214874,
+    "ms": 2.918776124715805
+  },
+  {
+    "candidate": "split[16,4,9,sb=8x1]",
+    "pcc": 0.9999760169214874,
+    "ms": 2.8993869200348854
+  },
+  {
+    "candidate": "split[16,4,12,sb=2x4]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,4,12,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,6,3,sb=8x1]",
+    "pcc": 0.9999705011980244,
+    "ms": 3.4957355819642544
+  },
+  {
+    "candidate": "split[16,6,4,sb=2x4]",
+    "pcc": 0.9999705014521882,
+    "ms": 3.047497943043709
+  },
+  {
+    "candidate": "split[16,6,4,sb=8x1]",
+    "pcc": 0.9999705014521882,
+    "ms": 3.1274380162358284
+  },
+  {
+    "candidate": "split[16,6,6,sb=4x2]",
+    "pcc": 0.9999705006788318,
+    "ms": 3.0645979568362236
+  },
+  {
+    "candidate": "split[16,6,6,sb=8x1]",
+    "pcc": 0.9999705006788318,
+    "ms": 3.0816090293228626
+  },
+  {
+    "candidate": "split[16,6,8,sb=1x8]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.0205086804926395
+  },
+  {
+    "candidate": "split[16,6,8,sb=8x1]",
+    "pcc": 0.9999705008549946,
+    "ms": 3.0832900665700436
+  },
+  {
+    "candidate": "split[16,6,9,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,6,12,sb=2x4]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,6,12,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,8,3,sb=8x1]",
+    "pcc": 0.9999636855220112,
+    "ms": 3.5796798765659332
+  },
+  {
+    "candidate": "split[16,8,4,sb=2x4]",
+    "pcc": 0.9999636856954651,
+    "ms": 2.919489983469248
+  },
+  {
+    "candidate": "split[16,8,4,sb=8x1]",
+    "pcc": 0.9999636856954651,
+    "ms": 2.887289971113205
+  },
+  {
+    "candidate": "split[16,8,6,sb=4x2]",
+    "pcc": 0.9999636829913483,
+    "ms": 3.0248109251260757
+  },
+  {
+    "candidate": "split[16,8,6,sb=8x1]",
+    "pcc": 0.9999636829913483,
+    "ms": 3.0312207527458668
+  },
+  {
+    "candidate": "split[16,8,8,sb=1x8]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,8,8,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,8,9,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,12,3,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 3.072560764849186
+  },
+  {
+    "candidate": "split[16,12,4,sb=2x4]",
+    "pcc": 0.9999479475774949,
+    "ms": 2.7895416133105755
+  },
+  {
+    "candidate": "split[16,12,4,sb=8x1]",
+    "pcc": 0.9999479475774949,
+    "ms": 2.692841924726963
+  },
+  {
+    "candidate": "split[16,12,6,sb=4x2]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+    "candidate": "split[16,12,6,sb=8x1]",
+    "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  }
+]
