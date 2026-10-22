@@ -341,34 +341,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t cb_mm_out_tiles = Sq_chunk_t * vWt;
     const uint32_t cb_output_tiles = Sq_chunk_t * vWt;
 
-    {
-        // Refuse configurations that do not fit L1 with a useful message.
-        const uint64_t bf16 = bfloat16_single_tile_size_bytes;
-        const uint64_t fp32 = float32_single_tile_size_bytes;
-        uint64_t l1_bytes = bf16 * (cb_query_tiles + cb_key_tiles + cb_value_tiles + 2U * kNumScalerTiles +
-                                    2U * cb_stat_tiles + cb_output_tiles) +
-                            fp32 * (cb_attention_weights_tiles + 3U * cb_stat_tiles + 2U * cb_mm_out_tiles);
-        if (mask_type != AttentionMaskType::None) {
-            l1_bytes += bf16 * cb_attn_mask_tiles;
-        }
-        if (args.has_gate) {
-            l1_bytes += bf16 * cb_gate_tiles;
-        }
-        if (args.return_intermediates) {
-            l1_bytes += fp32 * cb_intermediate_tiles;
-        }
-        const uint64_t l1_budget_bytes =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        TT_FATAL(
-            l1_bytes <= l1_budget_bytes,
-            "SDPA forward circular buffers need {} bytes of L1 per core but only {} are available. "
-            "Reduce q_chunk_size ({} rows) or k_chunk_size ({} rows).",
-            l1_bytes,
-            l1_budget_bytes,
-            Sq_chunk_t * tt::constants::TILE_HEIGHT,
-            Sk_chunk_t * tt::constants::TILE_HEIGHT);
-    }
-
     [[maybe_unused]] auto cb_query = create_circular_buffer(
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, cb_query_tiles);
 
