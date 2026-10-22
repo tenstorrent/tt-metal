@@ -1,5 +1,10 @@
 # Handoff: fabric_all_gather send modes on an 8-chip ring
 
+> **Status (2026-10-22): done on a Blackhole Galaxy** (`bh-glx-120-d06u14`, `FAG_MESH=8,4 FAG_AXIS=0`). Results and
+> the answer to the question below: [`results/8ring_galaxy_bh/`](results/8ring_galaxy_bh/README.md); the 4-ring rerun
+> on the same box and the new `mcast_split` / `mcast_halves` / multicast `@auto` variants:
+> [`results/README.md`](results/README.md). Not run: the optional `base,d,db` variants.
+
 Branch: `malimpic/ccl_code_gen` (everything CCL-code-gen related goes here). Owner: Milan Alimpic.
 
 ## What you are asked to do

@@ -24,7 +24,9 @@ Copy cores (one per link) write the chip's own shard into its own output, so the
 
 Placement ("auto"): each port core goes in the NoC column of its connection's Ethernet core, directly below the
 Ethernet row. The Ethernet cores are found once per mesh by a probe program that builds each connection on device
-and reports the router's NoC coordinates.
+and reports the router's NoC coordinates. An mcast packet bumps one arrival-counter address on every chip it writes,
+so with per-chip placement the mcast modes keep their counters on *sink* cores (one per ring, direction and link, the
+same core on every chip) that wait for the arrivals instead of the port.
 """
 
 import math
@@ -404,6 +406,26 @@ void kernel_main() {
 """
 )
 
+_SINK_SOURCE = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+
+// Sink core (mcast modes with per-chip port placement): holds the arrival counter of one receiving port, on the same
+// core on every chip so that one mcast packet bumps it everywhere. Waits until everything from upstream has landed,
+// then re-arms the counter for the next call (the sender's tail, moved here).
+void kernel_main() {
+    const uint32_t arrival_addr = get_arg_val<uint32_t>(0);
+    const uint32_t expect_in = get_arg_val<uint32_t>(1);
+    if (expect_in > 0) {
+        DeviceZoneScopedN("K_tail");
+        volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
+        noc_semaphore_wait_min(arrived, expect_in);
+        noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
+        noc_async_atomic_barrier();
+    }
+}
+"""
+
 _PROBE_SOURCE = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -440,7 +462,8 @@ def build_groups(mesh_shape, cluster_axis):
     return [snake]
 
 
-MODES = ("relay", "direct", "mcast")
+MODES = ("relay", "direct", "mcast", "mcast_split", "mcast_halves")
+_MCAST_MODES = ("mcast", "mcast_split", "mcast_halves")
 
 
 def _schedule_routes(p, G, ring, balance, mode):
@@ -454,8 +477,22 @@ def _schedule_routes(p, G, ring, balance, mode):
       mcast:  one multicast toward p+1 over G//2 chips and one toward p-1 over the rest. balance (even G): chips of
               even position swap the two ranges, so the long leg alternates direction around the ring and both
               directions carry the same total. Per link it alternates (G = 4: 2 and 1 shards): a multicast cannot
-              split a shard the way the relay and direct modes do, so the busiest hop stays at G/2."""
-    assert ring and mode in ("direct", "mcast")
+              split a shard the way the relay and direct modes do, so the busiest hop stays at G/2.
+      mcast_split (even G; odd G is plain mcast, already even): the shard goes as two halves, each in both
+              directions: toward p+1 half 1 over G/2 chips and half 2 over G/2 - 1, toward p-1 the reverse. The opposite
+              chip gets one half from each side, every chip both halves, and every hop carries G/2 - 1/2 shards (the
+              relay balance's load) with no relays.
+      mcast_halves: half 1 multicast toward p+1 over all G - 1 other chips, half 2 toward p-1 over all of them; every
+              hop carries (G - 1) / 2 shards, as mcast_split, but every packet goes the whole way round."""
+    assert ring and mode in ("direct",) + _MCAST_MODES
+    one = lambda k, part=0: [] if k == 0 else [(p, part, 1, 0)] if k == 1 else [(p, part, 1, k)]  # noqa: E731
+    if mode == "mcast_halves":
+        return one(G - 1, 1), one(G - 1, 2)
+    if mode == "mcast_split":
+        if G % 2 == 0 and G >= 4:
+            h = G // 2
+            return one(h, 1) + one(h - 1, 2), one(h, 2) + one(h - 1, 1)
+        mode = "mcast"
     kf, kb = G // 2, G - 1 - G // 2
     if mode == "direct":
         if balance and G % 2 == 0 and G >= 4:
@@ -465,7 +502,6 @@ def _schedule_routes(p, G, ring, balance, mode):
         return [(p, 0, h, 0) for h in range(1, kf + 1)], [(p, 0, h, 0) for h in range(1, kb + 1)]
     if balance and G % 2 == 0 and p % 2 == 0:
         kf, kb = kb, kf
-    one = lambda k: [] if k == 0 else [(p, 0, 1, 0)] if k == 1 else [(p, 0, 1, k)]  # noqa: E731
     return one(kf), one(kb)
 
 
@@ -820,10 +856,11 @@ def plan(
     scheme "dual_cycles": one group over the whole mesh (a 2D torus, both sides >= 3) and two rings over it — two
                           edge-disjoint Hamiltonian cycles — each carrying half of every shard (half the DRAM banks).
     mode "relay":  every send goes one hop; intermediate chips relay the shards of chips further away.
-    mode "direct" / "mcast" (ring only): every chip sends only its own shard, routed by the fabric through the chips in
-                   between (see _schedule_routes); nothing is relayed.
+    mode "direct" / "mcast" / "mcast_split" / "mcast_halves" (ring only): every chip sends only its own shard, routed
+                   by the fabric through the chips in between (see _schedule_routes); nothing is relayed.
     placement "uniform": the "auto" placement of the first chip, used on every chip (an mcast packet carries one
-                   arrival-counter address for every chip it writes, so the receiving ports must sit on the same core).
+                   arrival-counter address for every chip it writes, so the receiving ports sit on the same core).
+                   With any other placement the mcast modes add sink cores (ch["sinks"]) that hold those counters.
     The output concatenates the group's shards in row-major chip order, independent of the ring order."""
     import os
 
@@ -980,6 +1017,23 @@ def plan(
         if len(copy) < num_links or any(c is None for c in ports.values()):
             raise ValueError(f"fabric_all_gather: the core grid has too few cores for {len(ports)} ports + copy cores")
         ch["ports"], ch["copy"] = ports, copy
+    if mode in _MCAST_MODES and not isinstance(placement, dict):
+        # Sink cores: one per port key, the same core on every chip, free on every chip (any spot will do: they only
+        # take atomic increments). Middle row down, then up, as the copy cores.
+        used = {(c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + ch["copy"]}
+        ys = sorted({y for _, y in allowed})
+        mid = ys[len(ys) // 2]
+        free = [
+            (x, y)
+            for y in [y for y in ys if y >= mid] + [y for y in ys if y < mid]
+            for x in sorted(x for x, yy in allowed if yy == y)
+            if (x, y) not in used
+        ]
+        keys = list(next(iter(chips.values()))["ports"])
+        if len(free) < len(keys):
+            raise ValueError(f"fabric_all_gather: the core grid has too few cores for {len(keys)} sink cores")
+        for ch in chips.values():
+            ch["sinks"] = {k: ttnn.CoreCoord(*xy) for k, xy in zip(keys, free)}
     for ch in chips.values():
         ch["n_rings"] = n_rings
     return chips, ring
@@ -1064,7 +1118,8 @@ def create_mesh_program_descriptor(
     ct = [CB_CHUNKS, page_bytes, run_pages, num_banks, group, inc_every]
     # The send mode and balance go last in the compile-time args (after the tensor accessors, so no index moves): the
     # program cache keys on compile-time args, not on runtime-arg counts, and the modes' runtime args differ in length.
-    r0 = next(iter(chips.values()))["rings"][0]
+    ch0 = next(iter(chips.values()))
+    r0 = ch0["rings"][0]
     variant_ct = [
         len(r0["fwd"])
         | len(r0["bwd"]) << 4
@@ -1072,6 +1127,7 @@ def create_mesh_program_descriptor(
         | len(r0["bwd_ready_to"]) << 12
         | (max((m for _, m, _ in r0["fwd_route"] + r0["bwd_route"]), default=0) << 16)
         | (max((h for h, _, _ in r0["fwd_route"] + r0["bwd_route"]), default=0) << 20)
+        | int("sinks" in ch0) << 24
     ]
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
@@ -1114,6 +1170,7 @@ def create_mesh_program_descriptor(
             )
         ]
         reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        sinks = ch.get("sinks")
         for (j, d, l), core in ch["ports"].items():
             rg = ch["rings"][j]
             peer = rg["next"] if d == "fwd" else rg["prev"]
@@ -1133,7 +1190,8 @@ def create_mesh_program_descriptor(
             per_part = [_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for part in (0, 1, 2)]
             head = [in_addr, out_addr, shard_pages, first, stride, rot, arrival_addr, full, mine]
             reader_rt[core.x][core.y] = head + [len(sends)] + packed
-            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, expect.get((coord, j, d, l), 0), mine]
+            expect_in = 0 if sinks else expect.get((coord, j, d, l), 0)  # with sinks, they wait for the arrivals
+            args = [out_addr, shard_pages, first, stride, rot, arrival_addr, expect_in, mine]
             args += per_part + [ready_addr]
             # readies: wait for one from every chip I write into; send one to every port that writes into me
             ready_to = rg[f"{d}_ready_to"] if peer is not None else []
@@ -1148,7 +1206,8 @@ def create_mesh_program_descriptor(
                         "fabric_all_gather: mode 'mcast' needs a 1D fabric (2D multicast follows one "
                         "physical direction, which a bent ring does not)"
                     )
-                cores = {(virt(chips[t]["ports"][(j, d, l)]).x, virt(chips[t]["ports"][(j, d, l)]).y) for t in ds}
+                counter = lambda t: virt(chips[t]["sinks" if sinks else "ports"][(j, d, l)])  # noqa: E731
+                cores = {(counter(t).x, counter(t).y) for t in ds}
                 if len(cores) > 1:
                     raise ValueError(
                         "fabric_all_gather: an mcast entry needs its receiving ports on the same core "
@@ -1203,6 +1262,20 @@ def create_mesh_program_descriptor(
                 config=dm("RISCV_0", NOC1),
             ),
         ]
+        if sinks:
+            sink_rt = ttnn.RuntimeArgs()
+            for key, core in sinks.items():
+                sink_rt[core.x][core.y] = [arrival_addr, expect.get((coord,) + key, 0)]
+            program.kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=_SINK_SOURCE,
+                    source_type=src,
+                    core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sinks.values()]),
+                    compile_time_args=[],
+                    runtime_args=sink_rt,
+                    config=dm("RISCV_0", NOC1),
+                )
+            )
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc
@@ -1237,7 +1310,11 @@ def output_shape(input_tensor, G, dim):
 
 def worker_cores(chips):
     """The logical cores the op runs on (the same on every chip: the union over chips)."""
-    cores = {(c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + ch["copy"]}
+    cores = {
+        (c.x, c.y)
+        for ch in chips.values()
+        for c in list(ch["ports"].values()) + ch["copy"] + list(ch.get("sinks", {}).values())
+    }
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(cores)])
 
 
@@ -1265,8 +1342,10 @@ def fabric_all_gather(
     returns the output.
 
     mode: "relay" (default; intermediate chips forward other chips' shards), or, on a ring, "direct" (each chip
-        unicasts its own shard to every other chip, the fabric routing it through the chips in between) or "mcast"
-        (one multicast per direction; 1D fabrics only, and placement="uniform"). See _schedule_routes.
+        unicasts its own shard to every other chip, the fabric routing it through the chips in between), "mcast"
+        (one multicast per direction), "mcast_split" (each half of the shard multicast both ways, the far chip
+        getting one half from each side) or "mcast_halves" (one half multicast all the way round each way); the mcast
+        modes are 1D fabrics only. See _schedule_routes.
 
     scheme="dual_cycles" gathers over the whole 2D torus with two edge-disjoint Hamiltonian cycles (cluster_axis=None,
     topology=Ring). The output is always in row-major chip order (as high_bw_all_gather's), for snakes too.
@@ -1312,7 +1391,9 @@ def fabric_all_gather(
     if ready_semaphore is not None:
         sems = (data_valid_semaphore, ready_semaphore)
     else:
-        port_cores = {(c.x, c.y) for ch in chips.values() for c in ch["ports"].values()}
+        port_cores = {
+            (c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + list(ch.get("sinks", {}).values())
+        }
         key = (id(mesh_device), tuple(sorted(port_cores)))
         if key not in _SEM_CACHE:
             cores = ttnn.CoreRangeSet(

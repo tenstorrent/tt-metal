@@ -30,6 +30,8 @@ _KW = {
     "b": dict(mode="relay", balance=True),
     "m": dict(mode="mcast", balance=False),
     "mb": dict(mode="mcast", balance=True),
+    "ms": dict(mode="mcast_split", balance=False),
+    "mh": dict(mode="mcast_halves", balance=False),
 }
 
 
@@ -88,7 +90,14 @@ def test_fabric_all_gather_zones(mesh_device):
         )
         for links in LINKS:
             for v in VARIANTS:
-                kw = dict(_KW[v], placement="uniform", cluster_axis=AXIS, topology=ttnn.Topology.Ring, num_links=links)
+                name, _, place = v.partition("@")  # "@auto": per-chip placement, as in test_fabric_all_gather_modes.py
+                kw = dict(
+                    _KW[name],
+                    placement=place or "uniform",
+                    cluster_axis=AXIS,
+                    topology=ttnn.Topology.Ring,
+                    num_links=links,
+                )
                 out = fabric_all_gather(inp, **kw)
                 for c, t in enumerate(ttnn.get_device_tensors(out)):
                     expected = _expected(host, c)
@@ -112,7 +121,7 @@ def test_fabric_all_gather_zones(mesh_device):
                     cluster_axis=AXIS,
                     topology=ttnn.Topology.Ring,
                     num_links=links,
-                    placement="uniform",
+                    placement=kw["placement"],
                     balance=kw["balance"],
                     mode=kw["mode"],
                 )

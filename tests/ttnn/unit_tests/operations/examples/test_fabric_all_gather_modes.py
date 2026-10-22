@@ -9,8 +9,12 @@ Variants (env MODES_VARIANTS, comma list):
   m     mcast: one multicast over 2 chips one way + a unicast to the neighbour the other way
   mb    mcast, the 2-chip leg alternating direction by chip parity (busiest hop still 2 shards; the write-and-forward
         first hop of every mcast rides a 1-shard link)
-A suffix "@auto" keeps the probe-based per-chip placement; otherwise every variant uses placement="uniform" (the same
-port cores on every chip; mcast needs it).
+  ms    mcast_split: each half of the shard multicast both ways (toward p+1 half 1 over G/2 chips, half 2 over G/2 - 1;
+        toward p-1 the reverse), so every hop carries G/2 - 1/2 shards, as with b, and nothing is relayed
+  mh    mcast_halves: half 1 multicast toward p+1 over all G - 1 other chips, half 2 toward p-1 over all of them (the
+        same hop load as ms, every packet going the whole way round)
+A suffix "@auto" keeps the probe-based per-chip placement (the mcast variants then keep their arrival counters on sink
+cores); otherwise every variant uses placement="uniform" (the same port cores on every chip).
 
 Per case: bit-exact on every chip, then DEVICE TIME as a traced model sees it: [filler (~113 us ttnn.add), all-gather
 into a reused output] x ROUNDS captured in one trace and replayed REPLAYS times; per call, the slowest chip's program
@@ -56,6 +60,8 @@ _VARIANT_KW = {
     "db": dict(mode="direct", balance=True),
     "m": dict(mode="mcast", balance=False),
     "mb": dict(mode="mcast", balance=True),
+    "ms": dict(mode="mcast_split", balance=False),
+    "mh": dict(mode="mcast_halves", balance=False),
 }
 
 

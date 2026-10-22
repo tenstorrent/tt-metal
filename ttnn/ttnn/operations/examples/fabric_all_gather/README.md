@@ -143,6 +143,33 @@ as on the snake.
 
 Run it on a Galaxy with `--topology 4x8_snake_ring,4x8_dual_cycles` (or the `4x4_` pair on a 4 × 4 sub-torus).
 
+### Send modes on a ring: relay, direct, multicast
+`mode` picks how a ring chip's shard reaches the others (`_schedule_routes` in the code):
+
+| `mode` | each chip sends | busiest hop in shards, G = 8 (relay with `balance=True`) |
+|---|---|---|
+| `relay` *(default)* | one hop at a time; intermediate chips forward the shards of chips further away | 3.5 |
+| `direct` | its own shard only, one unicast per destination, routed through the chips in between | 10 (`balance`: 8) |
+| `mcast` | its own shard: one multicast over G/2 chips one way, one over the rest the other way (`balance` alternates the long leg by chip parity) | 4 |
+| `mcast_split` | two halves, each multicast both ways (half A over G/2 chips + half B over G/2 − 1 toward p+1, the reverse toward p−1) | 3.5 |
+| `mcast_halves` | half A multicast over all G − 1 other chips toward p+1, half B over all of them toward p−1 | 3.5 |
+
+- `direct` and the multicast modes need a ring along one mesh axis on a 1D fabric (`FABRIC_1D_RING`): a 1D route goes
+  straight along the connection's direction, and the host refuses them on 2D fabrics. A ring that turns corners
+  (snake, dual cycles) can only use `relay`.
+- **Placement and sink cores.** A multicast packet bumps one arrival-counter address on every chip it writes. With
+  `placement="uniform"` (chip 0's ports on every chip) the receiving port holds that counter. With per-chip placement
+  (`"auto"`) the multicast modes add a *sink core* per ring, direction and link, on the same core of every chip:
+  it holds the counter, waits for every arrival and re-arms it, while the port cores sit next to their Ethernet
+  cores.
+- Measured on a Blackhole Galaxy (4- and 8-chip rings, 4 to 8,192 tiles): [`results/`](results/README.md). Briefly:
+  at size only the busiest hop's bytes matter (relay ≈ split multicasts, whole-shard multicast G/2 ÷ (G/2 − ½)
+  slower); `mcast_halves` with `auto` placement is the fastest from ~16–64 tiles; whole-shard multicast with `auto`
+  wins below that.
+- Sweep: `tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather_modes.py` (variants `base`, `b`, `d`,
+  `db`, `m`, `mb`, `ms`, `mh`, each optionally `@auto`), per-port device zones:
+  `test_fabric_all_gather_zones.py`; tables: `fag_modes_analyze.py`, `fag_zones_analyze.py`.
+
 ### Reusing one output: preallocated, fenced, inside a sub-device
 `fabric_all_gather(..., output=out)` writes a preallocated output (gathered shape, TILE, DRAM interleaved) in place, so
 a caller can allocate it once. Reuse needs a fence: chip A's next call must not write into chip B's output while B's
@@ -167,5 +194,5 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 with `AG_SHAPE` and one override per row; the exact command is in the report.)
 
 ## Code
-`program_descriptor_with_inline_kernels.py`: the port reader / sender, copy writer and probe kernels; `plan()` (groups,
-schedules, probe-based placement) and the `MeshProgramDescriptor` wiring.
+`program_descriptor_with_inline_kernels.py`: the port reader / sender, copy writer, sink and probe kernels; `plan()`
+(groups, schedules, send-mode routes, probe-based placement, sink cores) and the `MeshProgramDescriptor` wiring.
