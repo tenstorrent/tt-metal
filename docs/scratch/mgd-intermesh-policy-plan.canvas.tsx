@@ -250,7 +250,8 @@ function OverviewTab() {
         or for the whole solve with set_default_edge_policy. The default lives in the constraints, so solve_topology_mapping
         no longer takes a ConnectionValidationMode, and allow_unmatched_target_edges becomes one value of the default. The
         intra-mesh solve sets its mesh's policy as the default; the inter-mesh seat solve sets per-pair demands. The same
-        structure carries the cable PortType: allowed types (hard) and preferred types (soft) per edge or per solve (part 7).
+        structure carries the cable PortType: allowed types (hard) and preferred types (soft) per edge or per solve, plus an
+        implicit tie-break preference from a built-in cable order when the MGD says nothing (part 7).
       </Callout>
       <H2>Worked example: one STRICT seam, one RELAXED seam</H2>
       <ThreeMeshExample />
@@ -541,15 +542,18 @@ const CABLE_SEATS: CableSeat[] = [
 function CableExample() {
   const t = useHostTheme();
   const [useAllowed, setUseAllowed] = useCanvasState<boolean>("cable-allowed", true);
-  const [usePreferred, setUsePreferred] = useCanvasState<boolean>("cable-preferred", true);
+  const [usePreferred, setUsePreferred] = useCanvasState<boolean>("cable-preferred", false);
+  const [useImplicit, setUseImplicit] = useCanvasState<boolean>("cable-implicit", true);
   const allowed = (cable: string) => !useAllowed || cable === "WARP400" || cable === "QSFP_DD";
-  const tier = (cable: string) => (usePreferred ? (cable === "WARP400" ? 0 : 1) : 0);
+  const builtIn = ["TRACE", "LINKING_BOARD_1", "LINKING_BOARD_2", "LINKING_BOARD_3", "WARP400", "WARP100", "QSFP_DD"];
+  const source = usePreferred ? "explicit preferred_port_types (PRIMARY)" : useImplicit ? "built-in order (TIE_BREAK)" : "";
+  const tier = (cable: string) => (usePreferred ? (cable === "WARP400" ? 0 : 1) : useImplicit ? builtIn.indexOf(cable) : 0);
   const valid = CABLE_SEATS.filter((s) => allowed(s.cable));
   const bestTier = Math.min(...valid.map((s) => tier(s.cable)));
   const chosen = valid.filter((s) => tier(s.cable) === bestTier).map((s) => s.id);
   const verdict = (s: CableSeat) => {
     if (!allowed(s.cable)) return "rejected: WARP100 not in allowed_port_types (STRICT)";
-    if (chosen.includes(s.id)) return chosen.length > 1 ? "valid, tied: solver may pick it" : "valid, chosen: best cable tier";
+    if (chosen.includes(s.id)) return chosen.length > 1 ? "valid, tied: no cable preference, either may win" : `valid, chosen by ${source}`;
     return "valid, not chosen: worse cable tier";
   };
   const proto = [
@@ -593,6 +597,9 @@ function CableExample() {
           <span>
             <Pill active={usePreferred} onClick={() => setUsePreferred(!usePreferred)}>preferred_port_types</Pill>
           </span>
+          <span>
+            <Pill active={useImplicit} onClick={() => setUseImplicit(!useImplicit)}>implicit default</Pill>
+          </span>
         </Row>
       </Stack>
       <Stack gap={10}>
@@ -601,7 +608,11 @@ function CableExample() {
           rows={CABLE_SEATS.map((s) => [`${s.label} (${s.cable})`, verdict(s)])}
           rowTone={CABLE_SEATS.map((s) => (!allowed(s.cable) ? "danger" : chosen.includes(s.id) ? "success" : undefined))}
         />
-        <CodeCard path="M0-M1 connection (hypothetical)" language="protobuf" src={proto} />
+        <CodeCard
+          path="the MGD (hypothetical)"
+          language="protobuf"
+          src={useImplicit ? `# M0-M1 connection\n${proto}` : `port_type_defaults { disable: true }\n# M0-M1 connection\n${proto}`}
+        />
       </Stack>
     </Grid>
   );
@@ -640,14 +651,20 @@ void set_default_allowed_channel_classes(std::set<ChannelClass> classes);
 bool set_edge_allowed_channel_classes(TargetNode a, TargetNode b, std::set<ChannelClass> classes);
 
 // Soft: preference tiers, best first. Unlisted classes are in the last tier.
-void set_default_channel_class_preference(std::vector<ChannelClass> best_first);
-bool set_edge_channel_class_preference(TargetNode a, TargetNode b, std::vector<ChannelClass> best_first);
+// PRIMARY ranks above preferred node hits; TIE_BREAK below them.
+enum class PreferenceStrength { PRIMARY, TIE_BREAK };
+void set_default_channel_class_preference(
+    std::vector<ChannelClass> best_first, PreferenceStrength strength = PreferenceStrength::PRIMARY);
+bool set_edge_channel_class_preference(
+    TargetNode a, TargetNode b, std::vector<ChannelClass> best_first,
+    PreferenceStrength strength = PreferenceStrength::PRIMARY);
 
 struct EdgeDemand {
     std::size_t required = 0;
     std::size_t preferred = 0;
-    std::set<ChannelClass> allowed_classes;      // empty = all
-    std::vector<ChannelClass> class_preference;  // best first
+    std::set<ChannelClass> allowed_classes;          // empty = all
+    std::vector<ChannelClass> primary_preference;    // best first; empty = none
+    std::vector<ChannelClass> tie_break_preference;  // best first; empty = none
 };`}
         />
         <CodeCard
@@ -663,6 +680,18 @@ message Channels {
     // Soft: preferred cable types, best first. Unlisted types rank last.
     repeated PortType preferred_port_types = 4;
 }
+
+message PortTypeDefaults {
+    // Replaces the built-in tie-break order for this MGD. Best first.
+    repeated PortType preferred_port_types = 1;
+    // No implicit preference at all; only explicit Channels fields apply.
+    bool disable = 2;
+}
+
+message MeshGraphDescriptor {
+    // ... fields 1-5 unchanged ...
+    optional PortTypeDefaults port_type_defaults = 6;
+}
 // PortType imported from physical_system_descriptor.proto (open question 8).`}
         />
       </Grid>
@@ -672,7 +701,7 @@ message Channels {
         rows={[
           ["Allowed classes (hard)", "usable channels of target edge e on global edge g = g's channels in e's allowed classes; every STRICT / RELAXED / BEST_EFFORT rule uses that count instead of the multiplicity"],
           ["Preference (soft)", "e's tier on g = worst tier among the best c_e allowed channels; minimize edges in the worst tier, then the next (lexicographic); no weight tuning"],
-          ["Objective order", "host cap and host objective, realized preferred edges, channel thresholds, cable tiers, preferred node hits; capacity before cable type (open question 7)"],
+          ["Objective order", "host cap and host objective, realized preferred edges, channel thresholds, PRIMARY cable tiers, preferred node hits, TIE_BREAK cable tiers; capacity before cable type (open question 7)"],
           ["UNKNOWN", "always allowed, last tier, one warning per solve; all-UNKNOWN systems map exactly as today"],
         ]}
       />
@@ -731,9 +760,104 @@ auto result = solve_topology_mapping(logical_graph, physical_graph, c);`}
       </Grid>
       <Text size="small" tone="tertiary">
         Intra-mesh fabric uses every channel between two adjacent chips, so an intra-mesh preference changes which chip pairs a
-        smaller mesh uses, not which channels. TopologyMappingConfig gets optional port_type_preference and allowed_port_types
-        overrides for tools and tests.
+        smaller mesh uses, not which channels.
       </Text>
+      <ImplicitCableSection />
+    </Stack>
+  );
+}
+
+function ImplicitCableSection() {
+  return (
+    <Stack gap={14}>
+      <H2>Implicit preference: on by default</H2>
+      <Text tone="secondary">
+        Most MGDs will never mention cables, and the mapper should still prefer better cables when everything else is equal.
+        Every edge gets a tie-break preference by default: an implicit preferred constraint, added the same way the mapper
+        already adds PGD pinnings as preferred node constraints (add_pgd_pinning_preferred_constraints,
+        topology_mapper_utils.cpp:889, called at :1450).
+      </Text>
+      <Table
+        headers={["Source (highest first)", "Scope", "Strength"]}
+        rows={[
+          ["Channels.preferred_port_types on a connection", "that inter-mesh connection", "PRIMARY"],
+          ["Channels.preferred_port_types on a mesh descriptor", "every intra-mesh edge of that mesh", "PRIMARY"],
+          ["MeshGraphDescriptor.port_type_defaults", "every edge in the MGD", "TIE_BREAK"],
+          ["TopologyMappingConfig::port_type_preference", "every edge in the solve", "TIE_BREAK"],
+          ["built-in default_port_type_preference()", "every edge in the solve", "TIE_BREAK"],
+        ]}
+      />
+      <Grid columns={fit(420)} gap={16} align="start">
+        <Stack gap={8}>
+          <Callout tone="info" title="Why tie-break, below preferred node hits">
+            An implicit preference must never override anything the user or the system asked for. Below the PGD pinning
+            preferences it only chooses among mappings equal on everything else: host use, realized edges, channel counts,
+            pinning hits. The PGD-chosen layout stays stable and golden changes are limited to former ties.
+            port_type_defaults {"{ disable: true }"} or disable_implicit_port_type_preference removes the three tie-break rows.
+          </Callout>
+          <Text size="small" tone="tertiary">
+            Nothing in the codebase ranks port types today (link_health records medium but doesn't order it), so the order
+            needs a sign-off from the hardware and scaleout owners. The proposal is fewest connectors and shortest reach first,
+            to be confirmed.
+          </Text>
+        </Stack>
+        <CodeCard
+          added
+          path="tt_metal/fabric/port_type_preference.hpp  (new)"
+          src={`
+inline std::vector<PortType> default_port_type_preference() {
+    return {PortType::TRACE,
+            PortType::LINKING_BOARD_1, PortType::LINKING_BOARD_2, PortType::LINKING_BOARD_3,
+            PortType::WARP400, PortType::WARP100,
+            PortType::QSFP_DD};
+    // UNKNOWN is never listed: it always ranks last.
+}`}
+        />
+      </Grid>
+      <H3>Implementation: one more family of mapper-built constraints</H3>
+      <Grid columns={fit(420)} gap={16} align="start">
+        <CodeCard
+          added
+          path="topology_mapper_utils.cpp"
+          src={`
+// What one solve needs, resolved once from the MGD and the config.
+struct PortTypeRules {
+    std::set<PortType> default_allowed;       // mesh-level allowed, or empty
+    std::vector<PortType> default_primary;    // mesh-level preferred, or empty
+    std::vector<PortType> tie_break;          // after precedence; empty if disabled
+    std::map<std::pair<MeshId, MeshId>, std::set<PortType>> pair_allowed;     // inter-mesh
+    std::map<std::pair<MeshId, MeshId>, std::vector<PortType>> pair_primary;  // inter-mesh
+};
+
+// Annotates every global edge with its channels per PortType and adds the allowed
+// and preferred port-type constraints for this solve, in precedence order.
+template <typename TargetNode, typename GlobalNode>
+void add_port_type_constraints(
+    MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const PortTypeRules& rules,
+    const std::map<std::pair<GlobalNode, GlobalNode>,
+                   std::map<PortType, std::size_t>>& channels_per_port_type);`}
+        />
+        <Table
+          headers={["Step", "Change"]}
+          rows={[
+            ["1. MGD", "parse per-mesh and per-connection lists and port_type_defaults; get_mesh_port_type_rules, get_inter_mesh_port_type_rules, get_port_type_defaults; conflicting lists on one pair rejected at parse"],
+            ["2. Counts per type", "build_adjacency_graph_physical returns channels per PortType per ASIC pair; AdjacencyMatrixCache counts per type next to saturated_link_count; the seat graph returns a map per seat pair"],
+            ["3. Intra-mesh", "complete_intra_mesh_for_placement calls add_port_type_constraints after the PGD preferred pinnings (:1450); pools and PGD grouping matches use the tie-break only"],
+            ["4. Seat solve", "pair_allowed and pair_primary as per-edge constraints, tie-break as the default"],
+            ["5. Exit nodes", "prefer exit chips whose inter-mesh channels are in the best tier, at tie-break strength"],
+            ["6. Solver", "tie-break objective after preferred node hits; nothing added when one tier covers every global edge"],
+            ["7. Results", "MappingResult reports edges per tier; one log line per solve, so golden diffs say why"],
+            ["8. Control plane", "binding takes allowed channels explicit order first, then the tie-break table"],
+            ["9. unique_shapes", "keep the best-tier representative: SAT finds it first under the objective"],
+          ]}
+        />
+      </Grid>
+      <Callout tone="warning" title="Rollout in two steps">
+        The implicit default changes which mapping wins a tie, so goldens can move on systems whose descriptors carry cabling
+        data. F2 lands with the default off, plus a report test listing every golden that would change; F4 switches it on with
+        those goldens updated and reviewed.
+      </Callout>
     </Stack>
   );
 }
@@ -748,13 +872,14 @@ function ImplicationsTab() {
         ["Hierarchical MGDs", "the compatibility check is per graph, so two graphs may differ today and the first connection silently wins; after, each is honoured. List affected MGDs before landing"],
         ["Solver API", "the mode argument and allow_unmatched_target_edges become one constraint, set_default_edge_policy; old signatures keep working, deprecated"],
         ["Intra-mesh", "same behaviour, expressed as the default edge policy; ready for per-edge intra-mesh policy"],
-        ["Cable type", "opt-in; nothing changes without allowed / preferred port types or on UNKNOWN-only systems; an allowed list can make a STRICT connection UNSAT, and the error names the connection and the types found"],
+        ["Cable type, explicit", "opt-in; an allowed list can make a STRICT connection UNSAT, and the error names the connection and the types found"],
+        ["Cable type, implicit", "on by default after F4; only breaks ties left after every other objective, so the constraints met never change, but which tied mapping wins can; UNKNOWN-only systems unchanged; disable: true restores today's choice"],
         ["Solve time", "mixed MGDs faster than all-RELAXED; uniform unchanged"],
         ["Symmetry", "swapping two same-shape meshes can move a STRICT seam onto a pair with fewer links, so unique_shapes must be off when policies mix"],
         ["Warnings", "zero-link and shortfall warnings name the connection and its policy"],
         ["Pipeline design", "a STRICT pipeline edge over a RELAXED connection may end zero-link: Tier B keeps declared channels as an upper bound, Tier C decides; merging parts with different policies stops failing"],
       ]}
-      rowTone={["success", "success", "warning", undefined, "success", "warning", "success", "warning", undefined, undefined]}
+      rowTone={["success", "success", "warning", undefined, "success", "warning", "warning", "success", "warning", undefined, undefined]}
     />
   );
 }
@@ -777,11 +902,12 @@ function PlanTab() {
           ["C. Mapper", "seat solve and exit nodes read demands; ladder scoped; config override; unique_shapes gate; drop merge-agreement fatals", "merged parts with different policies accepted"],
           ["D. Control plane", "per-boundary quota, validation, downed links, health (#49960)", "device- and mesh-level connections may coexist"],
           ["F1. Solver channel classes", "ChannelClass, set_global_edge_channel_classes, allowed classes and preferences at both scopes; SAT pieces; DFS allowed-class filter", "none: no caller annotates classes"],
-          ["F2. Port types in the mapper", "counts per PortType in build_adjacency_graph_physical and the seat graph; exit-node preference; config override", "none until an MGD or config asks"],
-          ["F3. MGD and control plane", "allowed_port_types / preferred_port_types in Channels; binding in tier order; shortfall counts allowed channels", "MGDs may constrain and prefer cable types"],
+          ["F2. Port types in the mapper", "counts per PortType; PortTypeRules, add_port_type_constraints in both solves, pools, exit nodes; default_port_type_preference(); config fields with the implicit default off", "none"],
+          ["F3. MGD and control plane", "allowed_port_types / preferred_port_types in Channels, port_type_defaults; parse-time conflict check; binding in tier order; shortfall counts allowed channels", "MGDs may constrain and prefer cable types"],
+          ["F4. Implicit default on", "flip disable_implicit_port_type_preference; update the goldens the F2 report listed", "ties go to the better cable"],
           ["E. Allow mixing", "drop the MGD 1.0 'Cannot mix' check; proto and README comments; deprecate is_inter_mesh_policy_relaxed", "MGDs may mix policies"],
         ]}
-        rowTone={[undefined, undefined, undefined, undefined, "warning", "warning", undefined, undefined, "warning", "warning"]}
+        rowTone={[undefined, undefined, undefined, undefined, "warning", "warning", undefined, undefined, "warning", "warning", "warning"]}
       />
       <H3>Tests</H3>
       <Table
@@ -793,6 +919,7 @@ function PlanTab() {
           ["C", "M0-M1 STRICT, M1-M2 RELAXED: no M1-M2 link accepted with a warning, no M0-M1 link rejected; STRICT part merged with RELAXED part succeeds; unique_shapes off when mixed"],
           ["D", "#49960 acceptance criteria; STRICT shortfall throws, RELAXED warns; downed link on a RELAXED boundary not rejected; single- and multi-host goldens"],
           ["F", "equal link counts, one over the preferred type: preferred wins; STRICT edge on only disallowed links is UNSAT, BEST_EFFORT is zero-link with a warning; UNKNOWN always counts; no cabling data maps as today; capacity beats tier (4 QSFP-DD over 2 WARP400 for a RELAXED edge); binding takes preferred channels first"],
+          ["F2, F4", "no MGD fields: a TRACE / QSFP-DD tie goes to TRACE; a PGD preferred pinning beats the implicit order; explicit beats port_type_defaults beats config beats built-in; disable: true gives today's mapping; a report test lists every golden the default would change"],
           ["all", "TopologyMapperUtilsTest, MeshGraphDescriptorTests, control-plane and CPU-only fabric suites unchanged for uniform MGDs"],
         ]}
       />
@@ -809,6 +936,8 @@ function PlanTab() {
           ["7", "Channel count ranks above cable tier. Should a preferred cable type win over more channels instead, or be configurable?"],
           ["8", "Import PortType from physical_system_descriptor.proto (proposed), or define an MGD-owned enum?"],
           ["9", "Lexicographic tiers (proposed), or integer costs per type, e.g. two QSFP-DD links as good as one WARP400?"],
+          ["10", "Who signs off on default_port_type_preference(), and is fewest connectors / shortest reach the right rule? Per arch or cluster type?"],
+          ["11", "Implicit default as tie-break below preferred node hits (proposed), or above them so cables can outrank a PGD-preferred layout?"],
         ]}
       />
     </Stack>
