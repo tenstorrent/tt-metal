@@ -155,7 +155,7 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
     const uint32_t num_inputs = inputs.size();
     const uint32_t dim = operation_attributes.dim;
     const bool width = cc::concats_width(inputs, operation_attributes);
-    const bool two_input = cc::is_two_input_leaf(inputs);
+    const bool two_input = cc::has_two_inputs(inputs);
     const tt::DataFormat format = datatype_to_dataformat_converter(first.dtype());
     const cc::CbPages pages = cc::cb_pages(inputs, operation_attributes);
 

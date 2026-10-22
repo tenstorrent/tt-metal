@@ -18,6 +18,8 @@ namespace ttnn::operations::data_movement::concat_codegen {
 
 inline constexpr int kLastAxis = -1;
 
+// Most inputs the readers take. N-way means three or more inputs; two inputs use the dedicated two-input readers. The
+// cap is an empirical Blackhole bound, not a hardware limit: larger input counts were not exercised.
 inline constexpr uint32_t kConcatMaxNwayInputs = 8;
 
 struct BatchPlan {
@@ -33,7 +35,7 @@ struct CbPages {
 uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 
 bool concats_width(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
-bool is_two_input_leaf(const std::vector<Tensor>& input_tensors);
+bool has_two_inputs(const std::vector<Tensor>& input_tensors);
 
 CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
 
@@ -58,7 +60,8 @@ tt::tt_metal::TensorSpec codegen_output_spec(
 // Budgets the static L1 window so routing and validate agree whatever is allocated at the time.
 bool supported_by_codegen(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
 
-// Routing-only; forced codegen never consults it.
+// Routing-only perf gate; forced codegen never consults it. A case is demoted when codegen is correct but measured
+// slower than native: a row-major width concat of three or more inputs with few output sticks.
 bool is_demoted(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs);
 
 // False when groups or sub_core_grids ask for something the codegen path does not implement.

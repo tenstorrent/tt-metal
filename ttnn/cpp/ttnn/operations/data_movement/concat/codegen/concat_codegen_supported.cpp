@@ -24,7 +24,8 @@ namespace {
 using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
 
-// Batching the CB plan starts from; plan_batches halves it until the plan fits the L1 it is given.
+// Batching the CB plan starts from; plan_batches halves it until the plan fits the L1 it is given. An empirical default
+// from Blackhole runs, not derived from the memory system.
 constexpr uint32_t kBatch = 4;
 
 bool dtype_ok(DataType dtype) {
@@ -56,6 +57,11 @@ bool inputs_supported(const std::vector<Tensor>& input_tensors, const ttnn::prim
     }
     const Tensor& first = input_tensors.front();
     if (first.storage_type() != ttnn::StorageType::DEVICE || first.buffer() == nullptr) {
+        return false;
+    }
+    // Shared by routing and the forced and primitive entries, so none of them runs the kernels on an unsupported
+    // architecture.
+    if (!codegen_supported_on_arch(first)) {
         return false;
     }
     const uint32_t rank = first.logical_shape().rank();
@@ -101,7 +107,7 @@ bool concats_width(const std::vector<Tensor>& input_tensors, const ttnn::prim::C
     return attrs.dim + 1 == input_tensors.front().logical_shape().rank();
 }
 
-bool is_two_input_leaf(const std::vector<Tensor>& input_tensors) { return input_tensors.size() == 2; }
+bool has_two_inputs(const std::vector<Tensor>& input_tensors) { return input_tensors.size() == 2; }
 
 CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs) {
     const Tensor& first = input_tensors.front();
@@ -124,7 +130,7 @@ CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::Con
 
     if (concats_width(input_tensors, attrs)) {
         // The two-input reader stages through a scratch page with one L1 alignment of slack.
-        const uint32_t scratch_slack = is_two_input_leaf(input_tensors) ? tt::tt_metal::hal::get_l1_alignment() : 0;
+        const uint32_t scratch_slack = has_two_inputs(input_tensors) ? tt::tt_metal::hal::get_l1_alignment() : 0;
         return CbPages{
             .out_page = tt::round_up(out_stick, cb_alignment), .scratch_page = max_input_page + scratch_slack};
     }
@@ -202,9 +208,10 @@ bool supported_by_codegen(const std::vector<Tensor>& input_tensors, const ttnn::
 
 namespace {
 
-// The N-way width reader dispatches per input at runtime and builds a TensorAccessor per page, a fixed cost of
-// roughly 80-85 ns per call; it is amortized only when each core streams many sticks. Up to this many output sticks
-// the split leaves about one stick per core, so the native path wins.
+// The N-way width reader dispatches per input at runtime and builds a TensorAccessor per page, a fixed cost the
+// reader pays once per call (estimated at roughly 80-85 ns) that only a longer stream of sticks per core hides. On
+// Blackhole, N-way width concats of up to this many output sticks measured about 7-10% slower than native. The cutoff
+// is an empirical Blackhole figure; no other architecture was measured.
 constexpr uint32_t kMaxSticksForWidthNwayFixedCost = 32;
 constexpr size_t kMinNwayInputs = 3;
 
