@@ -731,14 +731,23 @@ def iter_micro_batch(
         yield prompts[start:end], completions[start:end]
 
 
-def _build_lr_scheduler(optimizer: Any, cfg: GRPOConfig, total_steps: int) -> Any:
-    """LR scheduler for a non-constant ``cfg.lr_scheduler_type``.
+def _build_lr_scheduler(optimizer: Any, cfg: GRPOConfig, total_steps: int) -> Optional[Any]:
+    """LR scheduler for ``cfg.lr_scheduler_type``, or ``None`` for a constant LR.
 
     Warmup trains 0-indexed step ``i`` at ``base_lr * (i + 1) / warmup_steps``; the cosine types then
     decay to ``base_lr * min_lr_rate`` (0 for ``"cosine"``) at ``total_steps``.
     """
-    base_lr = optimizer.get_lr()
     warmup_steps = cfg.warmup_steps
+    # Even a no-op scheduler raises for optimizers with supports_lr_scheduling=False.
+    if cfg.lr_scheduler_type == "constant" or (cfg.lr_scheduler_type == "constant_with_warmup" and warmup_steps <= 1):
+        return None
+    if not getattr(optimizer, "supports_lr_scheduling", True):
+        raise ValueError(
+            f"{type(optimizer).__name__} does not support LR schedules; use lr_scheduler_type='constant', "
+            f"or 'constant_with_warmup' with warmup_steps <= 1 (got lr_scheduler_type="
+            f"{cfg.lr_scheduler_type!r}, warmup_steps={warmup_steps})."
+        )
+    base_lr = optimizer.get_lr()
     warmup = LinearScheduler(optimizer, 1.0 / warmup_steps, 1.0, max(1, warmup_steps - 1)) if warmup_steps > 0 else None
     decay_steps = total_steps - warmup_steps
     if cfg.lr_scheduler_type == "constant_with_warmup" or decay_steps <= 0:
@@ -1143,20 +1152,7 @@ class GRPOTrainer:
         self._extra_dataset_columns = extra_columns
         self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
         total_optimizer_steps = (total_prompts // generation_batch_prompts) * grpo_cfg.num_iterations
-
-        # A constant LR needs no scheduler, so none is created: constructing one, even a no-op,
-        # raises for optimizers with supports_lr_scheduling=False (MuonWithAdamW).
-        constant_lr = grpo_cfg.lr_scheduler_type == "constant" or (
-            grpo_cfg.lr_scheduler_type == "constant_with_warmup" and grpo_cfg.warmup_steps == 0
-        )
-        if not constant_lr and not getattr(optimizer, "supports_lr_scheduling", True):
-            raise ValueError(
-                f"{type(optimizer).__name__} does not support LR schedules; use lr_scheduler_type='constant', "
-                f"or 'constant_with_warmup' with warmup_steps=0 (got lr_scheduler_type="
-                f"{grpo_cfg.lr_scheduler_type!r}, warmup_steps={grpo_cfg.warmup_steps})."
-            )
-        if not constant_lr:
-            self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
+        self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
 
     # -- phase helpers -------------------------------------------------------
     #
