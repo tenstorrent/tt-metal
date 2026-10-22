@@ -45,7 +45,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
@@ -57,7 +57,7 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erfinv_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     log_init<false, false, false>();
