@@ -84,6 +84,8 @@ struct AllReduceAsyncParams {
 
     // Compile-time attributes drive the default program-cache reflection hash and the canonical key
     // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key)
+    // semaphore is excluded because GlobalSemaphore is not part of the structural key;
+    // AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments re-applies semaphore.address().
     static constexpr auto attribute_names = std::forward_as_tuple(
         "num_links",
         "ring_size",
@@ -93,7 +95,8 @@ struct AllReduceAsyncParams {
         "use_noc1_only",
         "use_optimal_ccl_for_llama",
         "cluster_axis",
-        "sub_device_id");
+        "sub_device_id",
+        "fp32_dest_acc");
     auto attribute_values() const {
         return std::make_tuple(
             num_links,
@@ -104,7 +107,8 @@ struct AllReduceAsyncParams {
             use_noc1_only,
             use_optimal_ccl_for_llama,
             cluster_axis,
-            sub_device_id);
+            sub_device_id,
+            fp32_dest_acc);
     }
 };
 

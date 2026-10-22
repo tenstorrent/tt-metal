@@ -92,8 +92,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index],
-            dispatch_params.cq_id);
+            dispatch_params.expected_num_workers_completed[offset_index]);
     }
 
     command_sequence.add_dispatch_write_linear<true, true>(
@@ -199,16 +198,14 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index],
-            dispatch_params.cq_id);
+            dispatch_params.expected_num_workers_completed[offset_index]);
     }
     const uint8_t offset_index = *dispatch_params.sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
         metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-        dispatch_params.expected_num_workers_completed[offset_index],
-        dispatch_params.cq_id);
+        dispatch_params.expected_num_workers_completed[offset_index]);
 
     command_sequence.add_dispatch_write_host(false, dispatch_params.size_bytes, false, 0);
 

@@ -324,6 +324,7 @@ ALWI void copy_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint
     }
 }
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void sign_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
@@ -338,6 +339,7 @@ ALWI void sign_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint
         dfb_in.pop_front(pop);
     }
 }
+#endif  // !ARCH_QUASAR
 
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void add_tiles_to_dfb(
@@ -381,6 +383,37 @@ ALWI void mask_tile_to_dfb(
         ckl::CopyTile<moreh_input<DfbIn>>{dfb_in, itile},
         ckl::CopyTile<moreh_input<DfbMask>, ckl::Dst::D1>{dfb_mask, mtile},
         ckl::Mask<>{},
+        ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
+
+    if (pop) {
+        dfb_in.pop_front(pop);
+    }
+    if (popm) {
+        dfb_mask.pop_front(popm);
+    }
+}
+
+// Same contract as mask_tile_to_dfb, but the masked lanes are written as +inf instead of 0. A MIN
+// pool must treat padding as +inf, otherwise a zeroed pad wins whenever every real lane of the row
+// is positive (see the softmin shift in moreh_softmax_{h,w}(_large).cpp). Mirrors the MINUS_INF
+// handling of the moreh_norm ord_other kernels; ckl::MaskPosInf is backed by mask_posinf_tile.
+template <uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
+ALWI void mask_posinf_tile_to_dfb(
+    DataflowBuffer& dfb_in,
+    DataflowBuffer& dfb_mask,
+    DataflowBuffer& dfb_out,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1) {
+    dfb_in.wait_front(itile + 1);
+    dfb_mask.wait_front(mtile + 1);
+
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        ckl::CopyTile<moreh_input<DfbIn>>{dfb_in, itile},
+        ckl::CopyTile<moreh_input<DfbMask>, ckl::Dst::D1>{dfb_mask, mtile},
+        ckl::MaskPosInf<>{},
         ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
 
     if (pop) {
@@ -568,6 +601,7 @@ ALWI void recip_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uin
     }
 }
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void log_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
     dfb_in.wait_front(itile + 1);
@@ -582,7 +616,9 @@ ALWI void log_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint3
         dfb_in.pop_front(pop);
     }
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     bool AbsX,
     bool RecipFinal,
@@ -643,7 +679,9 @@ ALWI void power_tile_to_dfb_impl(
         ckl::Optional<RecipFinal, ckl::Recip<>>{},
         ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -663,7 +701,9 @@ ALWI void power_tile_to_dfb(
     power_tile_to_dfb_impl<false, false, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbCorrectXpow>(
         dfb_x, dfb_xpow, dfb_logx, dfb_decimal, dfb_exp_logx_mul_decimal, dfb_correct_xpow, p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -683,7 +723,9 @@ ALWI void power_tile_with_abs_x_to_dfb(
     power_tile_to_dfb_impl<true, false, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbCorrectXpow>(
         dfb_x, dfb_xpow, dfb_logx, dfb_decimal, dfb_exp_logx_mul_decimal, dfb_correct_xpow, p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -703,6 +745,7 @@ ALWI void power_and_recip_tile_to_dfb(
     power_tile_to_dfb_impl<false, true, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbRecipXpow>(
         dfb_x, dfb_xpow, dfb_logx, dfb_decimal, dfb_exp_logx_mul_decimal, dfb_recip_xpow, p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
 template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void mul_tiles_to_cb(

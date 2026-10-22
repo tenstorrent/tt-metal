@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -141,5 +142,11 @@ void kernel_main() {
         out_dfb_obj.push_back(Wt);
         sin_interm_dfb_obj.pop_front(Wt);
         cos_interm_dfb_obj.pop_front(Wt);
+        // The output is the borrowed output shard and this kernel is its only producer and consumer (self-loop):
+        // pop each block once it is written so the buffer is left balanced. dummy_unpack orders the pop after
+        // the wait on Quasar (nothing unpacks this buffer).
+        out_dfb_obj.wait_front(Wt);
+        dummy_unpack(out_dfb);
+        out_dfb_obj.pop_front(Wt);
     }
 }
