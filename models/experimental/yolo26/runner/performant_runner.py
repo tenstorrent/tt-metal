@@ -32,6 +32,7 @@ class YOLO26PerformantRunner:
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat8_b,
         torch_input_tensor=None,
+        input_channels: int = 3,
     ):
         self.device = device
         self.batch_size = batch_size
@@ -47,21 +48,29 @@ class YOLO26PerformantRunner:
             act_dtype,
             weight_dtype,
             torch_input_tensor,
+            input_channels,
         )
 
-        # Setup DRAM sharded input
-        (
-            self.tt_inputs_host,
-            sharded_mem_config_DRAM,
-            self.input_mem_config,
-        ) = self.runner_infra.setup_dram_sharded_input(device)
-        self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        # Inputs: raw uint8 image [B, 1, H, W * 3] -> DRAM staging buffer (written on CQ1) -> persistent DRAM
+        # input (copied on CQ0). The trace always reads the persistent input, so its address never changes.
+        # Conversion to bf16, channel padding and normalization happen inside the trace.
+        self.tt_inputs_host = self.runner_infra.setup_uint8_input()
+        self.tt_image_res = self.tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
+        self.input_tensor = ttnn.allocate_tensor_on_device(self.tt_image_res.spec, device)
 
         # Trace state
         self.tid = None
         self.op_event = None
         self.write_event = None
-        self.input_tensor = None
+
+    def _write_input(self, tt_inputs_host):
+        """CQ1: host -> staging; CQ0: staging -> persistent input. Records op_event once staging is consumed."""
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        self.write_event = ttnn.record_event(self.device, 1)
+        ttnn.wait_for_event(0, self.write_event)
+        ttnn.copy(self.tt_image_res, self.input_tensor)
+        self.op_event = ttnn.record_event(self.device, 0)
 
     def capture_trace_2cq(self):
         """
@@ -73,48 +82,21 @@ class YOLO26PerformantRunner:
         3. Trace capture
         """
         logger.info("Capturing YOLO26 trace with 2CQ...")
-
-        # Initialize the op event so we can write
         self.op_event = ttnn.record_event(self.device, 0)
+        self.runner_infra.input_tensor = self.input_tensor
 
-        # === First run: JIT compilation ===
-        ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
-        self.write_event = ttnn.record_event(self.device, 1)
-        ttnn.wait_for_event(0, self.write_event)
-        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
-        spec = self.runner_infra.input_tensor.spec
-        self.op_event = ttnn.record_event(self.device, 0)
-        self.runner_infra.run()
-        self.runner_infra.dealloc_output()
+        # JIT compilation run, then a warm run
+        for _ in range(2):
+            self._write_input(self.tt_inputs_host)
+            self.runner_infra.run()
+            self.runner_infra.dealloc_output()
 
-        # === Second run: Optimized execution ===
-        ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
-        self.write_event = ttnn.record_event(self.device, 1)
-        ttnn.wait_for_event(0, self.write_event)
-        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
-        self.op_event = ttnn.record_event(self.device, 0)
-        self.runner_infra.run()
-        self.runner_infra.dealloc_output()
-
-        # === Capture trace ===
-        ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
-        self.write_event = ttnn.record_event(self.device, 1)
-        ttnn.wait_for_event(0, self.write_event)
-        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
-        self.op_event = ttnn.record_event(self.device, 0)
-
-        trace_input_addr = self.runner_infra.input_tensor.buffer_address()
+        # Capture trace
+        self._write_input(self.tt_inputs_host)
         self.tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         self.runner_infra.run()
-        self.input_tensor = ttnn.allocate_tensor_on_device(spec, self.device)
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
-
-        assert (
-            trace_input_addr == self.input_tensor.buffer_address()
-        ), "Trace input address mismatch - memory allocation changed during trace"
+        ttnn.synchronize_device(self.device)
 
         logger.info("Trace capture complete")
 
@@ -130,23 +112,11 @@ class YOLO26PerformantRunner:
             tt_inputs_host: Optional input tensor (defaults to stored input)
 
         Returns:
-            Output tensor from model
+            Output dict from model
         """
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
-
-        # Wait for previous op to complete before writing new input
-        ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
-        self.write_event = ttnn.record_event(self.device, 1)
-
-        # Wait for write to complete before executing
-        ttnn.wait_for_event(0, self.write_event)
-        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
-        self.op_event = ttnn.record_event(self.device, 0)
-
-        # Execute trace
+        self._write_input(tt_inputs_host)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-
         return self.runner_infra.output_tensor
 
     def run(self, torch_input_tensor=None):
@@ -160,7 +130,7 @@ class YOLO26PerformantRunner:
             Output tensor
         """
         if torch_input_tensor is not None:
-            tt_inputs_host, _ = self.runner_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+            tt_inputs_host = self.runner_infra.setup_uint8_input(torch_input_tensor)
         else:
             tt_inputs_host = self.tt_inputs_host
 

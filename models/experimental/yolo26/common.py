@@ -15,7 +15,7 @@ import torch
 import ttnn
 
 
-def fold_bn_to_conv_weights_bias(conv_weight, bn_weight, bn_bias, bn_running_mean, bn_running_var, eps=1e-5):
+def fold_bn_to_conv_weights_bias(conv_weight, bn_weight, bn_bias, bn_running_mean, bn_running_var, eps=1e-3):
     """
     Fold BatchNorm parameters into Conv2d weights and bias.
 
@@ -28,7 +28,7 @@ def fold_bn_to_conv_weights_bias(conv_weight, bn_weight, bn_bias, bn_running_mea
         bn_bias: BatchNorm beta (shift) [out_ch]
         bn_running_mean: BatchNorm running mean [out_ch]
         bn_running_var: BatchNorm running variance [out_ch]
-        eps: BatchNorm epsilon for numerical stability
+        eps: BatchNorm epsilon for numerical stability (Ultralytics Conv uses BatchNorm2d(eps=0.001))
 
     Returns:
         Tuple of (folded_weight, folded_bias) as ttnn tensors

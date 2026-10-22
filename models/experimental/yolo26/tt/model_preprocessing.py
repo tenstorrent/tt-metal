@@ -126,7 +126,7 @@ def get_conv_bn_weights(
 
 
 def get_folded_conv_weights(
-    state_dict: Dict[str, torch.Tensor], prefix: str, eps: float = 1e-5
+    state_dict: Dict[str, torch.Tensor], prefix: str, eps: float = 1e-3
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """
     Get folded Conv+BN weights ready for TTNN.
@@ -134,7 +134,7 @@ def get_folded_conv_weights(
     Args:
         state_dict: Model state dictionary
         prefix: Layer prefix
-        eps: BatchNorm epsilon
+        eps: BatchNorm epsilon (Ultralytics uses 0.001)
 
     Returns:
         Tuple of (weight, bias) as ttnn tensors

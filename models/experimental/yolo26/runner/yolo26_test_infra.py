@@ -41,6 +41,7 @@ class YOLO26TestInfra:
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat8_b,
         torch_input_tensor=None,
+        input_channels: int = 3,
     ):
         torch.manual_seed(0)
         self.device = device
@@ -59,7 +60,8 @@ class YOLO26TestInfra:
 
         # Create TTNN model
         logger.info("Creating TTNN YOLO26 model...")
-        self.ttnn_model = TtYOLO26(device, variant)
+        # Input is the raw uint8 image (see setup_uint8_input); conversion, padding and normalization run on device
+        self.ttnn_model = TtYOLO26(device, variant, input_channels=input_channels, uint8_input=True)
         self.ttnn_model.load_weights_from_state_dict(state_dict)
 
         # Setup input tensor
@@ -67,7 +69,7 @@ class YOLO26TestInfra:
         if torch_input_tensor is not None:
             self.torch_input_tensor = torch_input_tensor
         else:
-            self.torch_input_tensor = torch.randn(
+            self.torch_input_tensor = torch.rand(
                 self.total_batch_size, self.channels, input_size, input_size, dtype=torch.float32
             )
 
@@ -84,6 +86,18 @@ class YOLO26TestInfra:
             return ttnn.CoreGrid(y=8, x=10)
         else:
             return ttnn.CoreGrid(y=8, x=8)
+
+    def setup_uint8_input(self, torch_input_tensor=None):
+        """
+        Host input for the uint8 path: NCHW float in [0, 1] -> uint8 [B, 1, H, W * 3] (HWC rows).
+
+        One row page per image row (H pages, not H * W) is what makes the host -> device copy fast.
+        """
+        torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        n, c, h, w = torch_input_tensor.shape
+        x = (torch_input_tensor * 255).round().clamp(0, 255).to(torch.uint8)
+        x = x.permute(0, 2, 3, 1).reshape(n, 1, h, w * c)
+        return ttnn.from_torch(x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         """
@@ -127,8 +141,9 @@ class YOLO26TestInfra:
                 device.shape,
             )
         else:
+            # Keep [1, 1, N*H*W, C]: conv2d requires a 4D input
             tt_inputs_host = ttnn.from_torch(
-                torch_input.squeeze(0) if torch_input.shape[0] == 1 else torch_input,
+                torch_input.reshape(1, 1, n * h * w, torch_input.shape[-1]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -205,6 +220,7 @@ def create_test_infra(
     act_dtype=ttnn.bfloat16,
     weight_dtype=ttnn.bfloat8_b,
     torch_input_tensor=None,
+    input_channels: int = 3,
 ):
     """
     Factory function to create YOLO26 test infrastructure.
@@ -217,4 +233,5 @@ def create_test_infra(
         act_dtype,
         weight_dtype,
         torch_input_tensor,
+        input_channels,
     )

@@ -18,6 +18,7 @@ Key optimizations:
 - Tensor deallocation for memory efficiency
 """
 
+import torch
 import ttnn
 from typing import Tuple, List, Optional, Dict
 from models.tt_cnn.tt.builder import (
@@ -32,6 +33,24 @@ from models.experimental.yolo26.common import (
     safe_reshape,
     to_nhwc,
 )
+
+# Attention matmuls/softmax at full precision (N <= 400 tokens, so the cost is small)
+ATTN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+# Channel multiplier relative to the yolo26n layout used throughout this file.
+# n and s share depth (every C3k2 has n=1) and differ only in width (0.25 vs 0.5).
+YOLO26_WIDTH_MULTIPLIER = {"yolo26n": 1, "yolo26s": 2}
+
+
+def get_width_multiplier(variant: str) -> int:
+    if variant not in YOLO26_WIDTH_MULTIPLIER:
+        raise ValueError(f"Unsupported YOLO26 variant '{variant}', supported: {list(YOLO26_WIDTH_MULTIPLIER)}")
+    return YOLO26_WIDTH_MULTIPLIER[variant]
 
 
 class TtConvBNSiLU:
@@ -105,7 +124,7 @@ class TtConvBNSiLU:
         elif ratio < 0.25:
             return WidthShardedStrategyConfiguration()
         else:
-            return BlockShardedStrategyConfiguration()
+            return BlockShardedStrategyConfiguration(reshard_if_not_optimal=True)
 
     def _get_conv(self, batch_size: int, input_height: int, input_width: int):
         """Get or create cached conv layer for given input dimensions."""
@@ -125,7 +144,11 @@ class TtConvBNSiLU:
                 weight=self.weight,
                 bias=self.bias,
                 sharding_strategy=self._get_sharding_strategy(batch_size, input_height, input_width),
-                weights_dtype=ttnn.bfloat8_b,
+                # bfp8 weights drop N5 cls PCC to ~0.8; bf16 + HiFi4 + fp32 accumulation gives cls ~0.999
+                weights_dtype=ttnn.bfloat16,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
                 enable_act_double_buffer=True,
                 enable_weights_double_buffer=True,
             )
@@ -965,20 +988,32 @@ class TtAttention:
 
         # Q @ K^T: [B, heads, N, key_dim] @ [B, heads, key_dim, N] -> [B, heads, N, N]
         k_t = ttnn.permute(k_sdpa, [0, 1, 3, 2])
-        attn = ttnn.matmul(q_sdpa, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.matmul(
+            q_sdpa,
+            k_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.float32,
+            compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG,
+        )
         attn = ttnn.multiply(attn, self.scale)
 
         # Softmax - reshape to 2D for ttnn.softmax, then back
         attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
         attn = ttnn.reshape(attn, [batch_size * self.num_heads * N, N])
         attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
-        attn = ttnn.softmax(attn, dim=-1)
+        attn = ttnn.softmax(attn, dim=-1, numeric_stable=True, compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG)
         attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
         attn = ttnn.reshape(attn, [batch_size, self.num_heads, N, N])
         attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
 
         # Attn @ V: [B, heads, N, N] @ [B, heads, N, head_dim] -> [B, heads, N, head_dim]
-        out = ttnn.matmul(attn, v_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.matmul(
+            attn,
+            v_sdpa,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=ATTN_COMPUTE_KERNEL_CONFIG,
+        )
 
         # Reshape output: [B, heads, N, head_dim] -> [B, C, H, W]
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
@@ -1102,7 +1137,7 @@ class TtC3k2PSA:
         )
 
         # m.0.1 = PSABlock (hidden_channels)
-        self.psa = TtPSABlock(device, hidden_channels, num_heads=2, name=f"{name}.m.0.1")
+        self.psa = TtPSABlock(device, hidden_channels, num_heads=max(hidden_channels // 64, 1), name=f"{name}.m.0.1")
 
     def load_weights(self, weight_loader, prefix: str):
         """Load weights."""
@@ -1189,7 +1224,9 @@ class TtC2PSA:
         )
 
         # PSA blocks process the second branch
-        self.psa_blocks = [TtPSABlock(device, self.c, num_heads=2, name=f"{name}.m.{i}") for i in range(n)]
+        self.psa_blocks = [
+            TtPSABlock(device, self.c, num_heads=max(self.c // 64, 1), name=f"{name}.m.{i}") for i in range(n)
+        ]
 
     def load_weights(self, weight_loader, prefix: str):
         """Load C2PSA weights."""
@@ -1256,44 +1293,52 @@ class TtYOLO26Backbone:
     - model.9: SPPF 256→256 → P5
     """
 
-    def __init__(self, device, variant: str = "yolo26n"):
+    def __init__(self, device, variant: str = "yolo26n", input_channels: int = 3, input_scale: float = 1.0):
         self.device = device
+        self.input_channels = input_channels
+        self.input_scale = input_scale
+        k = get_width_multiplier(variant)
 
-        # YOLO26n exact channels from weights analysis
-        # All C2f layers have n=1 bottleneck (verified from weights)
+        # YOLO26n channels from weights analysis, scaled by k for wider variants
+        # All C3k2 layers have n=1 inner block (verified from weights)
         # hidden_channels varies: 0.25 expansion for early, 0.5 for later stages
 
         # Stem - model.0: 3→16
-        self.stem = TtConvBNSiLU(device, 3, 16, kernel_size=3, stride=2, padding=1, name="model.0")
+        self.stem = TtConvBNSiLU(device, input_channels, 16 * k, kernel_size=3, stride=2, padding=1, name="model.0")
 
         # Stage 1 - model.1: 16→32, model.2: C2f 32→64 (hidden=16, expansion=0.25)
-        self.conv1 = TtConvBNSiLU(device, 16, 32, kernel_size=3, stride=2, padding=1, name="model.1")
-        self.c2f_1 = TtC2f(device, 32, 64, hidden_channels=16, n=1, name="model.2")
+        self.conv1 = TtConvBNSiLU(device, 16 * k, 32 * k, kernel_size=3, stride=2, padding=1, name="model.1")
+        self.c2f_1 = TtC2f(device, 32 * k, 64 * k, hidden_channels=16 * k, n=1, name="model.2")
 
         # Stage 2 - model.3: 64→64, model.4: C2f 64→128 → P3 (hidden=32, expansion=0.25)
-        self.conv2 = TtConvBNSiLU(device, 64, 64, kernel_size=3, stride=2, padding=1, name="model.3")
-        self.c2f_2 = TtC2f(device, 64, 128, hidden_channels=32, n=1, name="model.4")
+        self.conv2 = TtConvBNSiLU(device, 64 * k, 64 * k, kernel_size=3, stride=2, padding=1, name="model.3")
+        self.c2f_2 = TtC2f(device, 64 * k, 128 * k, hidden_channels=32 * k, n=1, name="model.4")
 
-        # Stage 3 - model.5: 128→128, model.6: C2f 128→128 → P4 (hidden=64, expansion=0.5)
-        self.conv3 = TtConvBNSiLU(device, 128, 128, kernel_size=3, stride=2, padding=1, name="model.5")
-        self.c2f_3 = TtC2f(device, 128, 128, hidden_channels=64, n=1, name="model.6")
+        # Stage 3 - model.5: 128→128, model.6: C3k2 (C3k inner) 128→128 → P4 (hidden=64, expansion=0.5)
+        self.conv3 = TtConvBNSiLU(device, 128 * k, 128 * k, kernel_size=3, stride=2, padding=1, name="model.5")
+        self.c3k2_3 = TtC3k2(device, 128 * k, 128 * k, hidden_channels=64 * k, n=1, name="model.6")
 
-        # Stage 4 - model.7: 128→256, model.8: C2f 256→256 (hidden=128, expansion=0.5), model.9: SPPF → P5
-        self.conv4 = TtConvBNSiLU(device, 128, 256, kernel_size=3, stride=2, padding=1, name="model.7")
-        self.c2f_4 = TtC2f(device, 256, 256, hidden_channels=128, n=1, name="model.8")
-        self.sppf = TtSPPF(device, 256, 256, kernel_size=5, name="model.9")
+        # Stage 4 - model.7: 128→256, model.8: C3k2 (C3k inner) 256→256 (hidden=128, expansion=0.5), model.9: SPPF → P5
+        self.conv4 = TtConvBNSiLU(device, 128 * k, 256 * k, kernel_size=3, stride=2, padding=1, name="model.7")
+        self.c3k2_4 = TtC3k2(device, 256 * k, 256 * k, hidden_channels=128 * k, n=1, name="model.8")
+        self.sppf = TtSPPF(device, 256 * k, 256 * k, kernel_size=5, name="model.9")
 
         # Store channel info for neck (actual values from weights)
         self.channels = {
-            "p3": 128,  # From model.4 output
-            "p4": 128,  # From model.6 output (NOT 256!)
-            "p5": 256,  # From model.9 output
+            "p3": 128 * k,  # From model.4 output
+            "p4": 128 * k,  # From model.6 output (NOT 256!)
+            "p5": 256 * k,  # From model.9 output
         }
 
     def load_weights(self, weight_loader):
         """Load backbone weights."""
-        # Stem - model.0
+        # Stem - model.0. Input normalization is folded in (conv(x * s, W) == conv(x, W * s)), and the input
+        # channels are zero-padded when the input is padded (e.g. 3 -> 16)
         w, b = weight_loader.get_conv_bn("model.0")
+        if self.input_channels != w.shape[1] or self.input_scale != 1.0:
+            w_torch = ttnn.to_torch(w) * self.input_scale
+            w_torch = torch.nn.functional.pad(w_torch, (0, 0, 0, 0, 0, self.input_channels - w_torch.shape[1]))
+            w = ttnn.from_torch(w_torch)
         self.stem.load_weights(w, b)
 
         # Stage 1 - model.1, model.2
@@ -1309,26 +1354,42 @@ class TtYOLO26Backbone:
         # Stage 3 - model.5, model.6
         w, b = weight_loader.get_conv_bn("model.5")
         self.conv3.load_weights(w, b)
-        self.c2f_3.load_weights(weight_loader, "model.6")
+        self.c3k2_3.load_weights(weight_loader, "model.6")
 
         # Stage 4 - model.7, model.8, model.9
         w, b = weight_loader.get_conv_bn("model.7")
         self.conv4.load_weights(w, b)
-        self.c2f_4.load_weights(weight_loader, "model.8")
+        self.c3k2_4.load_weights(weight_loader, "model.8")
         self.sppf.load_weights(weight_loader, "model.9")
 
-    def __call__(self, x: ttnn.Tensor) -> Tuple[Tuple, Tuple, Tuple]:
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        batch_size: Optional[int] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        deallocate_input: bool = False,
+    ) -> Tuple[Tuple, Tuple, Tuple]:
         """
         Forward pass.
+
+        Args:
+            x: NHWC input, or flattened [1, 1, N*H*W, C] (e.g. sharded) with batch_size/height/width given
+            deallocate_input: free x after the stem conv (needed for trace capture: the input buffer must be
+                released inside the trace so the re-allocated input lands at the same address)
 
         Returns:
             Tuple of ((p3, h, w), (p4, h, w), (p5, h, w)) feature maps
         """
-        batch_size = x.shape[0]
-        h, w = x.shape[1], x.shape[2]
+        batch_size = x.shape[0] if batch_size is None else batch_size
+        h = x.shape[1] if height is None else height
+        w = x.shape[2] if width is None else width
 
         # Stem
+        x_in = x
         x, h, w = self.stem(x, batch_size, h, w)
+        if deallocate_input:
+            ttnn.deallocate(x_in)
 
         # Stage 1
         x, h, w = self.conv1(x, batch_size, h, w)
@@ -1340,11 +1401,11 @@ class TtYOLO26Backbone:
 
         # Stage 3 → P4 output (128 channels)
         x, h, w = self.conv3(p3, batch_size, p3_h, p3_w)
-        p4, p4_h, p4_w = self.c2f_3(x, batch_size, h, w)
+        p4, p4_h, p4_w = self.c3k2_3(x, batch_size, h, w)
 
         # Stage 4 → P5 output (256 channels)
         x, h, w = self.conv4(p4, batch_size, p4_h, p4_w)
-        x, h, w = self.c2f_4(x, batch_size, h, w)
+        x, h, w = self.c3k2_4(x, batch_size, h, w)
         p5, p5_h, p5_w = self.sppf(x, batch_size, h, w)
 
         return (p3, p3_h, p3_w), (p4, p4_h, p4_w), (p5, p5_h, p5_w)
@@ -1375,33 +1436,35 @@ class TtYOLO26Neck:
     def __init__(self, device, variant: str = "yolo26n"):
         self.device = device
         self.upsample = TtUpsample(scale_factor=2)
+        k = get_width_multiplier(variant)
+        self.k = k
 
         # model.10: C2PSA 256→256
-        self.c2psa_10 = TtC2PSA(device, 256, 256, n=1, name="model.10")
+        self.c2psa_10 = TtC2PSA(device, 256 * k, 256 * k, n=1, name="model.10")
 
         # model.13: C3k2 384→128
-        self.c3k2_13 = TtC3k2(device, 384, 128, hidden_channels=64, n=1, name="model.13")
+        self.c3k2_13 = TtC3k2(device, 384 * k, 128 * k, hidden_channels=64 * k, n=1, name="model.13")
 
         # model.16: C3k2 256→64 → N3 output
-        self.c3k2_16 = TtC3k2(device, 256, 64, hidden_channels=32, n=1, name="model.16")
+        self.c3k2_16 = TtC3k2(device, 256 * k, 64 * k, hidden_channels=32 * k, n=1, name="model.16")
 
         # model.17: Conv 64→64 (downsample)
-        self.conv_17 = TtConvBNSiLU(device, 64, 64, kernel_size=3, stride=2, padding=1, name="model.17")
+        self.conv_17 = TtConvBNSiLU(device, 64 * k, 64 * k, kernel_size=3, stride=2, padding=1, name="model.17")
 
         # model.19: C3k2 192→128 → N4 output
-        self.c3k2_19 = TtC3k2(device, 192, 128, hidden_channels=64, n=1, name="model.19")
+        self.c3k2_19 = TtC3k2(device, 192 * k, 128 * k, hidden_channels=64 * k, n=1, name="model.19")
 
         # model.20: Conv 128→128 (downsample)
-        self.conv_20 = TtConvBNSiLU(device, 128, 128, kernel_size=3, stride=2, padding=1, name="model.20")
+        self.conv_20 = TtConvBNSiLU(device, 128 * k, 128 * k, kernel_size=3, stride=2, padding=1, name="model.20")
 
-        # model.22: C3k2 384→256 → N5 output
-        self.c3k2_22 = TtC3k2(device, 384, 256, hidden_channels=128, n=1, name="model.22")
+        # model.22: C3k2 (Bottleneck + PSABlock inner) 384→256 → N5 output
+        self.c3k2_22 = TtC3k2PSA(device, 384 * k, 256 * k, hidden_channels=128 * k, n=1, name="model.22")
 
         # Output channels
         self.channels = {
-            "n3": 64,  # From model.16
-            "n4": 128,  # From model.19
-            "n5": 256,  # From model.22
+            "n3": 64 * k,  # From model.16
+            "n4": 128 * k,  # From model.19
+            "n5": 256 * k,  # From model.22
         }
 
     def load_weights(self, weight_loader):
@@ -1460,8 +1523,8 @@ class TtYOLO26Neck:
         p5_out, p5_out_h, p5_out_w = self.c2psa_10(p5, batch_size, p5_h, p5_w)
 
         # Upsample P5 output and concat with P4
-        p5_up, _, _ = self.upsample(p5_out, batch_size, p5_out_h, p5_out_w, 256)
-        p4_nhwc = to_nhwc(p4, batch_size, p4_h, p4_w, 128)
+        p5_up, _, _ = self.upsample(p5_out, batch_size, p5_out_h, p5_out_w, 256 * self.k)
+        p4_nhwc = to_nhwc(p4, batch_size, p4_h, p4_w, 128 * self.k)
         if p5_up.memory_config().is_sharded():
             p5_up = ttnn.sharded_to_interleaved(p5_up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         p5_up = ttnn.to_layout(p5_up, ttnn.ROW_MAJOR_LAYOUT)
@@ -1473,8 +1536,8 @@ class TtYOLO26Neck:
         f_p4, f_p4_h, f_p4_w = self.c3k2_13(concat_p4, batch_size, p4_h, p4_w)
 
         # Upsample and concat with P3
-        f_p4_up, _, _ = self.upsample(f_p4, batch_size, f_p4_h, f_p4_w, 128)
-        p3_nhwc = to_nhwc(p3, batch_size, p3_h, p3_w, 128)
+        f_p4_up, _, _ = self.upsample(f_p4, batch_size, f_p4_h, f_p4_w, 128 * self.k)
+        p3_nhwc = to_nhwc(p3, batch_size, p3_h, p3_w, 128 * self.k)
         if f_p4_up.memory_config().is_sharded():
             f_p4_up = ttnn.sharded_to_interleaved(f_p4_up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         f_p4_up = ttnn.to_layout(f_p4_up, ttnn.ROW_MAJOR_LAYOUT)
@@ -1490,8 +1553,8 @@ class TtYOLO26Neck:
         n3_down, n3_down_h, n3_down_w = self.conv_17(n3, batch_size, n3_h, n3_w)
 
         # Concat with f_p4: 64 + 128 = 192 channels
-        n3_down_nhwc = to_nhwc(n3_down, batch_size, n3_down_h, n3_down_w, 64)
-        f_p4_nhwc = to_nhwc(f_p4, batch_size, f_p4_h, f_p4_w, 128)
+        n3_down_nhwc = to_nhwc(n3_down, batch_size, n3_down_h, n3_down_w, 64 * self.k)
+        f_p4_nhwc = to_nhwc(f_p4, batch_size, f_p4_h, f_p4_w, 128 * self.k)
         concat_n4 = ttnn.concat([n3_down_nhwc, f_p4_nhwc], dim=3)
 
         # model.19: C3k2 (192→128) → N4 output
@@ -1501,8 +1564,8 @@ class TtYOLO26Neck:
         n4_down, n4_down_h, n4_down_w = self.conv_20(n4, batch_size, n4_h, n4_w)
 
         # Concat with p5_out: 128 + 256 = 384 channels
-        n4_down_nhwc = to_nhwc(n4_down, batch_size, n4_down_h, n4_down_w, 128)
-        p5_out_nhwc = to_nhwc(p5_out, batch_size, p5_out_h, p5_out_w, 256)
+        n4_down_nhwc = to_nhwc(n4_down, batch_size, n4_down_h, n4_down_w, 128 * self.k)
+        p5_out_nhwc = to_nhwc(p5_out, batch_size, p5_out_h, p5_out_w, 256 * self.k)
         concat_n5 = ttnn.concat([n4_down_nhwc, p5_out_nhwc], dim=3)
 
         # model.22: C3k2 (384→256) → N5 output
@@ -1520,23 +1583,38 @@ class TtDetectHead:
     - cv3: Sequential(DWConv, Conv) -> Sequential(DWConv, Conv) -> Conv2d (cls output, nc channels)
     """
 
-    def __init__(self, device, in_channels: int, scale_idx: int, num_classes: int = 80, name: str = ""):
+    def __init__(
+        self,
+        device,
+        in_channels: int,
+        scale_idx: int,
+        num_classes: int = 80,
+        box_hidden: int = 16,
+        cls_hidden: int = 80,
+        name: str = "",
+    ):
         self.device = device
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.scale_idx = scale_idx
 
         # cv2 branch: bbox (output 4 channels)
-        # Conv 3x3 (in_ch -> 16), Conv 3x3 (16 -> 16), Conv2d 1x1 (16 -> 4)
+        # Conv 3x3 (in_ch -> c2), Conv 3x3 (c2 -> c2), Conv2d 1x1 (c2 -> 4)
         self.cv2_0 = TtConvBNSiLU(
-            device, in_channels, 16, kernel_size=3, stride=1, padding=1, name=f"{name}.one2one_cv2.{scale_idx}.0"
+            device,
+            in_channels,
+            box_hidden,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            name=f"{name}.one2one_cv2.{scale_idx}.0",
         )
         self.cv2_1 = TtConvBNSiLU(
-            device, 16, 16, kernel_size=3, stride=1, padding=1, name=f"{name}.one2one_cv2.{scale_idx}.1"
+            device, box_hidden, box_hidden, kernel_size=3, stride=1, padding=1, name=f"{name}.one2one_cv2.{scale_idx}.1"
         )
         self.cv2_2 = TtConvBNSiLU(
             device,
-            16,
+            box_hidden,
             4,
             kernel_size=1,
             stride=1,
@@ -1561,7 +1639,7 @@ class TtDetectHead:
         self.cv3_0_1 = TtConvBNSiLU(
             device,
             in_channels,
-            num_classes,
+            cls_hidden,
             kernel_size=1,
             stride=1,
             padding=0,
@@ -1569,18 +1647,18 @@ class TtDetectHead:
         )
         self.cv3_1_0 = TtConvBNSiLU(
             device,
-            num_classes,
-            num_classes,
+            cls_hidden,
+            cls_hidden,
             kernel_size=3,
             stride=1,
             padding=1,
-            groups=num_classes,
+            groups=cls_hidden,
             name=f"{name}.one2one_cv3.{scale_idx}.1.0",
         )
         self.cv3_1_1 = TtConvBNSiLU(
             device,
-            num_classes,
-            num_classes,
+            cls_hidden,
+            cls_hidden,
             kernel_size=1,
             stride=1,
             padding=0,
@@ -1588,7 +1666,7 @@ class TtDetectHead:
         )
         self.cv3_2 = TtConvBNSiLU(
             device,
-            num_classes,
+            cls_hidden,
             num_classes,
             kernel_size=1,
             stride=1,
@@ -1652,11 +1730,26 @@ class TtYOLO26Head:
         self.device = device
         self.num_classes = num_classes
         self.reg_max = 1  # YOLO26 uses reg_max=1
+        k = get_width_multiplier(variant)
+        ch = (64 * k, 128 * k, 256 * k)
+
+        # Hidden widths as in Ultralytics Detect: c2 = max(16, ch0 // 4, 4 * reg_max), c3 = max(ch0, min(nc, 100))
+        box_hidden = max(16, ch[0] // 4, 4 * self.reg_max)
+        cls_hidden = max(ch[0], min(num_classes, 100))
 
         # Create detection heads for each scale
-        self.head_n3 = TtDetectHead(device, 64, scale_idx=0, num_classes=num_classes, name="model.23")
-        self.head_n4 = TtDetectHead(device, 128, scale_idx=1, num_classes=num_classes, name="model.23")
-        self.head_n5 = TtDetectHead(device, 256, scale_idx=2, num_classes=num_classes, name="model.23")
+        self.head_n3, self.head_n4, self.head_n5 = [
+            TtDetectHead(
+                device,
+                ch[i],
+                scale_idx=i,
+                num_classes=num_classes,
+                box_hidden=box_hidden,
+                cls_hidden=cls_hidden,
+                name="model.23",
+            )
+            for i in range(3)
+        ]
 
     def load_weights(self, weight_loader):
         """Load head weights."""
@@ -1702,20 +1795,35 @@ class TtYOLO26:
     Combines backbone, neck, and head for end-to-end object detection.
     """
 
-    def __init__(self, device, variant: str = "yolo26n", num_classes: int = 80):
+    def __init__(
+        self,
+        device,
+        variant: str = "yolo26n",
+        num_classes: int = 80,
+        input_channels: int = 3,
+        uint8_input: bool = False,
+    ):
         """
         Initialize YOLO26 model.
 
         Args:
             device: TTNN device
-            variant: Model variant ('yolo26n', 'yolo26s', 'yolo26m', 'yolo26l', 'yolo26x')
+            variant: Model variant ('yolo26n', 'yolo26s')
             num_classes: Number of detection classes (default: 80 for COCO)
+            input_channels: Input channels; > 3 means the input is zero-padded (stem weights are padded to match)
+            uint8_input: Input is the raw uint8 RGB image as [B, 1, H, W * 3] (HWC rows, 0..255). It is converted,
+                reshaped and padded on device; the 1/255 normalization is folded into the stem weights. Wide rows
+                keep the host -> device upload to H pages instead of H * W.
         """
         self.device = device
         self.variant = variant
         self.num_classes = num_classes
+        self.input_channels = input_channels
+        self.uint8_input = uint8_input
 
-        self.backbone = TtYOLO26Backbone(device, variant)
+        self.backbone = TtYOLO26Backbone(
+            device, variant, input_channels, input_scale=1.0 / 255.0 if uint8_input else 1.0
+        )
         self.neck = TtYOLO26Neck(device, variant)
         self.head = TtYOLO26Head(device, variant, num_classes)
 
@@ -1748,21 +1856,42 @@ class TtYOLO26:
         _, state_dict = load_yolo26_from_ultralytics(variant)
         self.load_weights_from_state_dict(state_dict)
 
-    def __call__(self, x: ttnn.Tensor) -> List[ttnn.Tensor]:
+    def preprocess(self, x: ttnn.Tensor) -> Tuple[ttnn.Tensor, int, int, int]:
+        """uint8 [B, 1, H, W * 3] -> bf16 [1, 1, B * H * W, input_channels] (values 0..255, padded with zeros)."""
+        batch_size, height, width = x.shape[0], x.shape[2], x.shape[3] // 3
+        x = ttnn.typecast(x, ttnn.bfloat16)
+        x = ttnn.reshape(x, [1, 1, batch_size * height * width, 3])
+        if self.input_channels > 3:
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, 0), (0, self.input_channels - 3)], 0.0)
+        return x, batch_size, height, width
+
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        batch_size: Optional[int] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        deallocate_input: bool = False,
+    ) -> Dict[str, List[Tuple[ttnn.Tensor, int, int]]]:
         """
         Forward pass.
 
         Args:
-            x: Input tensor [batch, height, width, channels] in NHWC format
+            x: Input tensor [batch, height, width, channels] in NHWC format, or flattened [1, 1, N*H*W, C]
+               (e.g. L1 sharded) with batch_size/height/width given, or with uint8_input the raw image
+               [B, 1, H, W * 3]
+            deallocate_input: free x after the stem conv (used by the trace runner)
 
         Returns:
-            List of detection outputs at each scale (P3, P4, P5)
-            Each output: [batch, h, w, num_classes + 4]
+            Dict with 'boxes' and 'scores': one (tensor, h, w) per scale (P3, P4, P5)
         """
-        batch_size = x.shape[0]
+        if self.uint8_input:
+            x, batch_size, height, width = self.preprocess(x)
+            deallocate_input = True  # x is now the model's own preprocessed copy
+        batch_size = x.shape[0] if batch_size is None else batch_size
 
         # Backbone: extract multi-scale features
-        p3_data, p4_data, p5_data = self.backbone(x)
+        p3_data, p4_data, p5_data = self.backbone(x, batch_size, height, width, deallocate_input)
 
         # Neck: fuse features
         n3_data, n4_data, n5_data = self.neck(p3_data, p4_data, p5_data, batch_size)

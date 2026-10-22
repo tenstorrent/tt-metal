@@ -21,7 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.perf.perf_utils import prep_perf_report
-from models.common.utility_functions import profiler, run_for_wormhole_b0, is_blackhole
+from models.common.utility_functions import profiler, is_blackhole
 from models.experimental.yolo26.runner.performant_runner import YOLO26PerformantRunner
 from models.experimental.yolo26.common import YOLO26_L1_SMALL_SIZE
 
@@ -49,6 +49,11 @@ def get_expected_perf(batch_size: int, input_size: int):
         (8, 640): (120.0, 0.080),  # ~100 FPS target for batch 8
     }
     return perf_targets.get((batch_size, input_size), (120.0, 0.020))
+
+
+def outputs_to_dram(output):
+    """TtYOLO26 returns {'boxes': [(t, h, w)] * 3, 'scores': [(t, h, w)] * 3}; copy all six to DRAM."""
+    return [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for key in ("boxes", "scores") for t, _, _ in output[key]]
 
 
 def run_trace_2cq_model(
@@ -81,12 +86,12 @@ def run_trace_2cq_model(
 
     for _ in range(num_warmup_iterations):
         ttnn.wait_for_event(0, write_event)
-        runner.input_tensor = ttnn.reshard(runner.tt_image_res, runner.input_mem_config, runner.input_tensor)
+        ttnn.copy(runner.tt_image_res, runner.input_tensor)
         first_op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, runner.tid, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
 
-        output_tensor_dram = ttnn.to_memory_config(runner.runner_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        output_tensor_dram = outputs_to_dram(runner.runner_infra.output_tensor)
         last_op_event = ttnn.record_event(device, 0)
 
         ttnn.wait_for_event(1, first_op_event)
@@ -94,7 +99,7 @@ def run_trace_2cq_model(
         write_event = ttnn.record_event(device, 1)
 
         ttnn.wait_for_event(1, last_op_event)
-        outputs.append(ttnn.from_device(output_tensor_dram, blocking=False, cq_id=1))
+        outputs.append([ttnn.from_device(t, blocking=False, cq_id=1) for t in output_tensor_dram])
         read_event = ttnn.record_event(device, 1)
 
     ttnn.synchronize_device(device)
@@ -111,12 +116,12 @@ def run_trace_2cq_model(
     profiler.start("run")
     for _ in range(num_measurement_iterations):
         ttnn.wait_for_event(0, write_event)
-        runner.input_tensor = ttnn.reshard(runner.tt_image_res, runner.input_mem_config, runner.input_tensor)
+        ttnn.copy(runner.tt_image_res, runner.input_tensor)
         first_op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, runner.tid, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
 
-        output_tensor_dram = ttnn.to_memory_config(runner.runner_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        output_tensor_dram = outputs_to_dram(runner.runner_infra.output_tensor)
         last_op_event = ttnn.record_event(device, 0)
 
         ttnn.wait_for_event(1, first_op_event)
@@ -124,7 +129,7 @@ def run_trace_2cq_model(
         write_event = ttnn.record_event(device, 1)
 
         ttnn.wait_for_event(1, last_op_event)
-        outputs.append(ttnn.from_device(output_tensor_dram, blocking=False, cq_id=1))
+        outputs.append([ttnn.from_device(t, blocking=False, cq_id=1) for t in output_tensor_dram])
         read_event = ttnn.record_event(device, 1)
 
     ttnn.synchronize_device(device)
@@ -212,7 +217,6 @@ def run_yolo26_trace_2cq_perf(
 # =============================================================================
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLO26_L1_SMALL_SIZE, "trace_region_size": 8000000, "num_command_queues": 2}],
@@ -220,7 +224,7 @@ def run_yolo26_trace_2cq_perf(
 )
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("input_size", [640])
-@pytest.mark.parametrize("variant", ["yolo26n"])
+@pytest.mark.parametrize("variant", ["yolo26n", "yolo26s"])
 def test_yolo26_trace_2cq_perf(device, batch_size, input_size, variant):
     """
     Test YOLO26 trace 2CQ performance.
@@ -243,7 +247,6 @@ def test_yolo26_trace_2cq_perf(device, batch_size, input_size, variant):
     assert fps > 10.0, f"Performance too low: {fps:.1f} FPS (expected > 10 FPS)"
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
@@ -287,7 +290,6 @@ def test_yolo26_trace_2cq_perf_ci(device, batch_size, input_size, variant, is_si
     logger.info(f"Performance check passed: {fps:.1f} FPS (expected ~{expected_fps} FPS)")
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLO26_L1_SMALL_SIZE, "trace_region_size": 8000000, "num_command_queues": 2}],
