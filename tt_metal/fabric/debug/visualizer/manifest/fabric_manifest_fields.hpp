@@ -45,6 +45,8 @@ struct FieldIndex {
     uint32_t edge = 0;
     // The edge's rank among the router's edges, VC0's before VC1's, which its teardown semaphore is indexed by.
     uint32_t teardown = 0;
+    // Whether the sender channel is its VC's worker channel, fed by a worker or the tensix mux rather than a sibling.
+    bool worker_channel = false;
 };
 
 // When the builder emits a named argument.
@@ -443,8 +445,9 @@ inline constexpr auto k_sender_channel_fields = [] {
             .source = NamedArg{"SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", ArgIndex::FABRIC_POSITION},
             .category = FLOW_CONTROL,
             .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
-            .description = "The channel's free slots: the producer takes one per packet it writes, and the router "
-                           "returns it once the packet completes.",
+            .description = "The channel's slots not holding a packet waiting to be sent: the producer takes one per "
+                           "packet it writes, and the router returns it as soon as it sends the packet over Ethernet. "
+                           "The producer gets its credit back later, at the ack or the completion.",
         },
         RouterField{
             .key = "producer_credit_return_noc",
@@ -466,8 +469,10 @@ inline constexpr auto k_sender_channel_fields = [] {
                 return static_cast<uint32_t>(builder.sender_channels_connection_semaphore_id[index.compact]);
             }},
             .category = CONTROL_INFO,
-            .content = l1<uint32_t>(),
-            .description = "Where the producer opens and closes its connection. In the router's runtime args.",
+            .content = l1<connection_interface::ConnectionValue>(),
+            .description = "The state of the producer's connection: the producer writes open and close requested, and "
+                           "the router writes unused once it has torn the connection down. In the router's runtime "
+                           "args.",
         },
         RouterField{
             .key = "conn_info",
@@ -478,13 +483,18 @@ inline constexpr auto k_sender_channel_fields = [] {
         },
         RouterField{
             .key = "buffer_index_sem",
+            // Only a worker channel's producer keeps a cursor. A sibling router's adapter never reads or writes one,
+            // so the other channels' slot is allocated but unused, and 0 leaves the field null.
             .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, const FieldIndex& index) {
-                return static_cast<uint32_t>(builder.sender_channels_buffer_index_semaphore_id[index.compact]);
+                return index.worker_channel
+                           ? static_cast<uint32_t>(builder.sender_channels_buffer_index_semaphore_id[index.compact])
+                           : 0u;
             }},
             .category = CONTROL_INFO,
             .content = l1<SenderChannelProducerCursor>(),
-            .description = "Where the producer keeps its write cursor across connections. In the producer's runtime "
-                           "args, from the channel's connection spec.",
+            .description = "Where the worker channel's producer keeps its write cursor across connections, for the "
+                           "next producer to pick up. In the producer's runtime args, from the channel's connection "
+                           "spec. Null on the other channels, whose producer keeps none.",
         },
         RouterField{
             .key = k_static_connection_key,
@@ -561,7 +571,8 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .category = FLOW_CONTROL,
             .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The packets the peer's sender has sent the channel that the receiver has not taken yet: "
-                           "the peer adds one per packet it sends over Ethernet.",
+                           "the peer adds one per packet it sends over Ethernet, and the receiver takes one when it "
+                           "acks the packet with first-level ack, or else once it has forwarded or delivered it.",
         },
     };
 }();
@@ -575,7 +586,8 @@ inline constexpr auto k_downstream_edge_fields = [] {
             .category = FLOW_CONTROL,
             .content = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
             .description = "The router's view of the free slots in the sender channel the edge lands on: the router "
-                           "takes one per packet it forwards, and the sibling returns it once the packet completes.",
+                           "takes one per packet it forwards, and the sibling returns it when the packet is acked with "
+                           "first-level ack, or else when it completes.",
         },
         RouterField{
             .key = "teardown_sem",
