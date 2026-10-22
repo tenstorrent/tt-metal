@@ -270,8 +270,31 @@ inline void _triangle_solve_restore_group_layout_(const std::uint32_t base)
  *       last read. Writes LREG0..4 and LREG7.
  */
 template <DataFormat L_FORMAT, bool L_NEGATED>
-inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_t dst_out, const std::uint32_t l1_base)
+inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_t dst_out, const std::uint32_t l1_base);
+
+/**
+ * @brief Forward substitution over the row groups [GROUP_FIRST, GROUP_END) of one 32x32 tile (rows 4 * GROUP_FIRST ..
+ * 4 * GROUP_END - 1), L unit lower-triangular and read in place from L1.
+ *
+ * With SKIP_FACE0_COLS the rows apply only the earlier rows of their own face row (columns 16..31 when GROUP_FIRST is
+ * TRIANGLE_SOLVE_GROUPS_PER_FACE): the contribution of columns 0..15 is already folded into the RHS. With GROUP_FIRST
+ * == 0 and GROUP_END == TRIANGLE_SOLVE_GROUPS and no skip this is the full solve, @ref _triangle_solve_tile_.
+ * Only the rows of the range are written in dst_out (standard tile layout); the earlier rows the range reads must
+ * already be there in standard layout unless SKIP_FACE0_COLS drops them.
+ *
+ * Block split of the WY inverse (L_NEGATED, negN = [[A, 0], [C, B]]): range [0, 4) with RHS = I gives
+ * X_A = (I - A)^-1 in rows 0..15; range [4, 8) with SKIP_FACE0_COLS and RHS rows 16..31 = [C X_A | I] gives the
+ * bottom rows: 240 rank-1 entries instead of 496.
+ */
+template <DataFormat L_FORMAT, bool L_NEGATED, std::uint32_t GROUP_FIRST, std::uint32_t GROUP_END, bool SKIP_FACE0_COLS>
+inline void _triangle_solve_tile_rows_(const std::uint32_t dst_in, const std::uint32_t dst_out, const std::uint32_t l1_base)
 {
+    static_assert(GROUP_FIRST < GROUP_END && GROUP_END <= TRIANGLE_SOLVE_GROUPS, "the row-group range must be non-empty and within the tile");
+    static_assert(
+        !SKIP_FACE0_COLS || (GROUP_FIRST == TRIANGLE_SOLVE_GROUPS_PER_FACE && GROUP_END == TRIANGLE_SOLVE_GROUPS),
+        "skipping the face-0 columns is defined for the bottom face row");
+    static_assert(SKIP_FACE0_COLS || GROUP_FIRST == 0, "a range without the skip must start at row 0 (its rows read every earlier row)");
+
     using l_elem_t                          = _triangle_solve_l_elem_t_<L_FORMAT>;
     volatile tt_l1_ptr l_elem_t* const tile = reinterpret_cast<volatile tt_l1_ptr l_elem_t*>(l1_base);
     const std::uint32_t in_base             = dst_in * TRIANGLE_SOLVE_DEST_TILE_ROWS;
@@ -291,17 +314,21 @@ inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_
     constexpr std::uint32_t DIAG_JUMP = _triangle_solve_elem_(FACE_DIM, FACE_DIM) - _triangle_solve_elem_(FACE_DIM - GROUP_ROWS, FACE_DIM - GROUP_ROWS);
     constexpr std::uint32_t FACE1_COL = _triangle_solve_elem_(0, FACE_DIM) - _triangle_solve_elem_(0, 0); // &L[row][16] - &L[row][0]
 
-    std::uint32_t g_in                  = in_base;  // in_base + group_base(group)
-    std::uint32_t g_out                 = out_base; // out_base + group_base(group)
-    volatile tt_l1_ptr l_elem_t* l_row0 = tile;     // &L[row0][0]
-    volatile tt_l1_ptr l_elem_t* l_diag = tile;     // &L[row0][row0]
-    for (std::uint32_t group = 0; group < TRIANGLE_SOLVE_GROUPS; group++)
+    constexpr std::uint32_t ROW0_FIRST  = GROUP_FIRST * GROUP_ROWS;
+    std::uint32_t g_in                  = in_base + _triangle_solve_group_base_(GROUP_FIRST);  // in_base + group_base(group)
+    std::uint32_t g_out                 = out_base + _triangle_solve_group_base_(GROUP_FIRST); // out_base + group_base(group)
+    volatile tt_l1_ptr l_elem_t* l_row0 = tile + _triangle_solve_elem_(ROW0_FIRST, 0);          // &L[row0][0]
+    volatile tt_l1_ptr l_elem_t* l_diag = tile + _triangle_solve_elem_(ROW0_FIRST, ROW0_FIRST); // &L[row0][row0]
+    for (std::uint32_t group = GROUP_FIRST; group < GROUP_END; group++)
     {
         _triangle_solve_load_group_(g_in);
 
         // Previous groups' columns: those in the first face start at &L[row0][0], those in the second at &L[row0][16].
         const std::uint32_t face0_groups = group < FACE_GROUPS ? group : FACE_GROUPS;
-        _triangle_solve_apply_prev_groups_<L_FORMAT, L_NEGATED>(l_row0, out_base, face0_groups);
+        if constexpr (!SKIP_FACE0_COLS)
+        {
+            _triangle_solve_apply_prev_groups_<L_FORMAT, L_NEGATED>(l_row0, out_base, face0_groups);
+        }
         _triangle_solve_apply_prev_groups_<L_FORMAT, L_NEGATED>(l_row0 + FACE1_COL, out_base + _triangle_solve_group_base_(FACE_GROUPS), group - face0_groups);
 
         // The group's own triangle: row r uses X[row0 + k], k < r, live in LREG k; L[row0 + r][row0 + k] is l_diag[16 r + k].
@@ -340,12 +367,18 @@ inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_
         l_diag += face_row_jump ? DIAG_JUMP : DIAG_STEP;
     }
 
-    std::uint32_t r_out = out_base;
-    for (std::uint32_t group = 0; group < TRIANGLE_SOLVE_GROUPS; group++)
+    std::uint32_t r_out = out_base + _triangle_solve_group_base_(GROUP_FIRST);
+    for (std::uint32_t group = GROUP_FIRST; group < GROUP_END; group++)
     {
         _triangle_solve_restore_group_layout_(r_out);
         r_out += (group + 1 == FACE_GROUPS) ? BASE_JUMP : BASE_STEP;
     }
+}
+
+template <DataFormat L_FORMAT, bool L_NEGATED>
+inline void _triangle_solve_tile_(const std::uint32_t dst_in, const std::uint32_t dst_out, const std::uint32_t l1_base)
+{
+    _triangle_solve_tile_rows_<L_FORMAT, L_NEGATED, 0, TRIANGLE_SOLVE_GROUPS, false>(dst_in, dst_out, l1_base);
 }
 
 } // namespace sfpu

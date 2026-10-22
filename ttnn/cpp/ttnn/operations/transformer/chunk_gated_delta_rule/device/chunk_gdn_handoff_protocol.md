@@ -14,7 +14,9 @@ the two-phase program's. The protocol lives in two dataflow kernels:
 | receiver | `kernels/dataflow/reader_chunk_gdn_scan.cpp` compiled with `GDN_FUSED_RECEIVER` | NCRISC, NOC_0 |
 
 and the constants both sides must agree on are in `kernels/dataflow/chunk_gdn_handoff.hpp`, compiled into the host
-factories and every GDN kernel.
+factories and every GDN kernel. The receiver's reader is also the consumer of its o CB: it writes the o slices to DRAM
+on NOC_0 while it polls for VALID or for a free slot (never blocking on either while compute waits for o space), so
+NOC_1 carries the hand-off alone.
 
 ## 1. Participants
 

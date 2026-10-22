@@ -48,6 +48,9 @@ static_assert(
         cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl && cb_mask == gdn_handoff::kCbU,
     "prep CB indices drifted from ../dataflow/chunk_gdn_handoff.hpp");
 
+// The solve build's exact-copy CB (UnpackToDestFp32 on the host: kGdnTinvExactCb in chunk_gdn_compute_config.hpp).
+static_assert(cb_final == 27, "sfpu_tinv_block's X_A CB drifted from the host's kGdnTinvExactCb");
+
 constexpr GdnPrepCbs CBS{
     .q = cb_q,
     .k = cb_k,
@@ -103,11 +106,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_q, cb_k, cb_u);
 
-    // Constants (loaded once by reader). Initial state is in cb_S (reader pushed it).
+    // Constants (loaded once by reader). The eye now; tril, ones and the masks (Qtl, Qbr, Q10, used by
+    // invert_block) at pp_decay, their first reader: the reader publishes them after the first item's inputs.
     WAIT(cb_eye, cc);
-    WAIT(cb_tril, cc);
-    WAIT(cb_ones, cc);
-    WAIT(cb_mask, gdn_handoff::kMaskTiles);  // Qtl, Qbr, Q10 (used by invert_block)
 
     // PHASE A (prep): state-independent per-chunk quantities. No recurrent state here; the
     // sequential state scan lives in the separate scan kernel. Outputs (per chunk) u, w, k_dec_t,
@@ -115,14 +116,13 @@ void kernel_main() {
     for (uint32_t c = 0; c < NC; c++) {
 #if defined(PROFILE_KERNEL)
         {
-            // Diagnostic only (Tracy device runs): wait for the item's inputs up front so the zone
-            // below measures pure prep math (w_p). Idempotent waits; absent from production binaries.
+            // Diagnostic only (Tracy device runs): wait for the item's first inputs (q/k) up front so the zone
+            // below measures prep math (w_p). v and the gates are published later, after the reader settles the
+            // gates; prep_chunk waits for them at their first readers, which the norm keeps ahead of in steady
+            // state. Idempotent waits; absent from production binaries.
             DeviceZoneScopedN("prep_wait_in");
             WAIT(cb_q, Ct * Kt);
             WAIT(cb_k, Ct * Kt);
-            WAIT(cb_v, Ct * Vt);
-            WAIT(cb_g, Ct);
-            WAIT(cb_beta, Ct);
         }
 #endif
         {

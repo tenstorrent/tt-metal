@@ -4,6 +4,7 @@
 #pragma once
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -84,6 +85,22 @@ inline void validate_gdn_tinv(GdnTinv tinv, uint32_t chunk_size, const Tensor& a
 
 // Compile-time defines of the prep compute kernel: GDN_TINV_SFPU selects the solve; GDN_HOIST_RECONFIG is the
 // fused producer's hoisted WY-path reconfigs (chunk_gdn_math.hpp, kGdnHoistReconfig).
+// The solve build's block WY inverse (sfpu_tinv_block in kernels/compute/chunk_gdn_math.hpp) copies the top-left
+// inverse block back into DEST through this prep CB (c_27, the Horner build's invert_block scratch B, single fp32
+// tile on every prep core): it unpacks straight to DEST in fp32 so the block is not rounded to the tf32 src
+// registers. The prep kernels static_assert the same index.
+inline constexpr uint32_t kGdnTinvExactCb = 27;
+
+// gdn_compute_config for a prep compute kernel (fused producer, phased prep) built with `tinv`.
+inline tt::tt_metal::ComputeConfigDescriptor gdn_prep_compute_config(const DeviceComputeKernelConfig& cfg, GdnTinv tinv) {
+    tt::tt_metal::ComputeConfigDescriptor c = gdn_compute_config(cfg);
+    if (tinv == GdnTinv::SFPU_FP32) {
+        c.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        c.unpack_to_dest_mode[kGdnTinvExactCb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    return c;
+}
+
 inline tt::tt_metal::KernelDescriptor::Defines gdn_prep_defines(GdnTinv tinv, bool hoist_reconfig) {
     tt::tt_metal::KernelDescriptor::Defines defines;
     if (hoist_reconfig) {

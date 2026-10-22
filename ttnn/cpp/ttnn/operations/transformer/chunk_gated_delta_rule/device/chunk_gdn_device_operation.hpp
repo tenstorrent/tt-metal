@@ -151,7 +151,7 @@ struct ChunkGdnDeviceOperation {
 //   the bump two near-equal bounds cost each other (Vtl <= 2); over (NV | Vt, NP, depth in {2, 3}) with a
 //   feasible layout (the row-major fallback is link-bound), and for a pool of P serving every head
 //   (placement 2) over the extras' share from the balanced NX / P down to 0. Ties -> fewer cores, then
-//   smaller NV, then the shallower ring. T_phased(BH) from the measured table.
+//   smaller NV, then the deeper ring. T_phased(BH) from the measured table.
 // The op host uses it for whichever of num_receivers / num_producers / row_local / handoff_depth /
 // pool_extra_share the fused program config leaves free, and to decide fused vs phased when no program
 // config is given; test_chunk_gdn_fused_geometry.py checks it against a Python oracle on several grids.

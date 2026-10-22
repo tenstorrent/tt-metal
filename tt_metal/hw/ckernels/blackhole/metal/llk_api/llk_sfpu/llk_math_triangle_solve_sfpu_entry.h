@@ -78,4 +78,37 @@ inline void llk_math_triangle_solve_sfpu_tile(
     _llk_math_eltwise_sfpu_done_();
 }
 
+/**
+ * @brief @ref llk_math_triangle_solve_sfpu_tile over the row groups [GROUP_FIRST, GROUP_END) only, optionally without
+ * the face-0 columns of the earlier rows (see sfpu::_triangle_solve_tile_rows_). Same contract otherwise: the L tile is
+ * released to UNPACK through the same mailbox, so the UNPACK side pairs each call with
+ * @ref llk_unpack_triangle_solve_wait_l_released.
+ */
+template <
+    DataFormat L_FORMAT,
+    bool L_NEGATED,
+    std::uint32_t GROUP_FIRST,
+    std::uint32_t GROUP_END,
+    bool SKIP_FACE0_COLS,
+    bool L_CACHED = true>
+inline void llk_math_triangle_solve_sfpu_tile_rows(
+    const std::uint32_t l1_base, const std::uint32_t idst_in, const std::uint32_t idst_out) {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_sfpu_assert_dst_index_<DST_SYNC_MODE>(idst_in, "triangle_solve_tile_rows: idst_in out of range");
+    _llk_math_eltwise_sfpu_assert_dst_index_<DST_SYNC_MODE>(idst_out, "triangle_solve_tile_rows: idst_out out of range");
+    LLK_ASSERT(idst_in != idst_out, "triangle_solve_tile_rows: idst_out must differ from idst_in");
+    if constexpr (L_CACHED != kL1DataCacheOnAtEntry) {
+        set_l1_data_cache<L_CACHED>();
+    }
+    invalidate_l1_cache();
+    _llk_math_eltwise_sfpu_start_(0 /*dst_index*/);
+    sfpu::_triangle_solve_tile_rows_<L_FORMAT, L_NEGATED, GROUP_FIRST, GROUP_END, SKIP_FACE0_COLS>(idst_in, idst_out, l1_base);
+    if constexpr (L_CACHED != kL1DataCacheOnAtEntry) {
+        set_l1_data_cache<kL1DataCacheOnAtEntry>();
+        invalidate_l1_cache();
+    }
+    llk_math_triangle_solve_release_l();
+    _llk_math_eltwise_sfpu_done_();
+}
+
 }  // namespace ckernel

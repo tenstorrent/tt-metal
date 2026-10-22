@@ -90,7 +90,8 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("scan_step");
-            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+            // cb_S (reader) and cb_final (writer) are row-major; the ping-pong state is column-major (see scan_step).
+            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst, c != 0, !last);
         }
     }
 }

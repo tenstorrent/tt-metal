@@ -445,10 +445,28 @@ FusedPlacement fused_placement(
                 rem,
                 rem * block_h,
                 grid_y);
+            // A receiver row wider than one column puts receivers east of producers in the columns below them:
+            // NOC_1 has no +x route, so those writes wrap around the whole torus row through other heads' links.
+            // Column form, whenever it fits the same block height: the NV receivers stacked in the block's first
+            // column, producers east of the bottom receiver, then row-major below — every producer east of / in
+            // and below / in its receivers, all routes inside the block.
+            const uint32_t beside = wl - 1;
+            const bool column_form = rw >= 2 && NV + (np > beside ? (np - beside + wl - 1) / wl : 0) <= block_h;
             for (uint32_t kk = 0; kk < rem; kk++) {
                 const uint32_t h = n_row_heads + kk;
                 const uint32_t y_base = kk * block_h;
                 const uint32_t xl = k_per_row * L;  // first leftover column
+                if (column_form) {
+                    for (uint32_t v = 0; v < NV; v++) {
+                        rcv_cores[h * NV + v] = CoreCoord{xl, y_base + v};
+                    }
+                    for (uint32_t j = 0; j < np; j++) {
+                        prod_cores.push_back(
+                            j < beside ? CoreCoord{xl + 1 + j, y_base + NV - 1}
+                                       : CoreCoord{xl + ((j - beside) % wl), y_base + NV + (j - beside) / wl});
+                    }
+                    continue;
+                }
                 for (uint32_t v = 0; v < NV; v++) {
                     rcv_cores[h * NV + v] = CoreCoord{xl + (v % rw), y_base + v / rw};
                 }
@@ -531,9 +549,13 @@ FusedGeometryChoice choose_fused_geometry(
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
     uint32_t best_cores = 0;
-    // Hand-off depths the model chooses between (deeper measured no better); a pinned depth is taken as is.
-    const uint32_t depths[2] = {fixed_nbuf ? fixed_nbuf : 2u, fixed_nbuf ? fixed_nbuf : 3u};
-    const uint32_t n_depths = fixed_nbuf ? 1u : 2u;
+    // Hand-off depths the model chooses between; a pinned depth is taken as is. The model times depths >= 3 alike
+    // and its ties take the deepest ring that fits L1: a receiver credits chunk c + depth - 1 when chunk c arrives, so
+    // depth - 1 steps (~2 us each) cover the credit -> write -> VALID delivery, whose NoC tail (5-8 us under the
+    // hand-off and o traffic of a full grid) stalls the chain at depth 3 once the producers have slack.
+    const uint32_t depths[4] = {
+        fixed_nbuf ? fixed_nbuf : 2u, fixed_nbuf ? fixed_nbuf : 3u, fixed_nbuf ? fixed_nbuf : 4u, fixed_nbuf ? fixed_nbuf : 5u};
+    const uint32_t n_depths = fixed_nbuf ? 1u : 4u;
     // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2)
     // with the extras' share num/den; a pool with no extras (NP = BH*NPH) is the per-head geometry it is.
     auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, uint32_t depth, uint32_t num, uint32_t den) {
@@ -547,11 +569,14 @@ FusedGeometryChoice choose_fused_geometry(
         const uint32_t nx = placement == 2 ? np - BH * nph : 0;
         const PoolLoad load = nx ? pool_load(BH, NC, nph, nx, num, den) : PoolLoad{(NC + nph - 1) / nph, 0};
         const float t = t_fused_us(BH, NC, Vtl, depth, placement, producers, load, nx > 0);
-        // ties -> fewer cores, then smaller NV, then the shallower ring
+        // ties -> fewer cores, then smaller NV, then the deeper ring: where the model ties the depths (production-
+        // bound), depth 2 still exposes each step's credit -> VALID round trip to the chain (a pool's receivers
+        // wait ~2.3 us per step for VALID at depth 2); depth 3 measured equal or faster at the tied anchors, except
+        // the balanced BH=16 pool measured before the wrap-free placement and the NOC_0 extras
         const bool better =
             !have || t < best.t_fused_us ||
             (t == best.t_fused_us &&
-             (cores < best_cores || (cores == best_cores && (nv < best.nv || (nv == best.nv && depth < best.nbuf)))));
+             (cores < best_cores || (cores == best_cores && (nv < best.nv || (nv == best.nv && depth > best.nbuf)))));
         if (better) {
             best.nv = nv;
             best.np = np;
