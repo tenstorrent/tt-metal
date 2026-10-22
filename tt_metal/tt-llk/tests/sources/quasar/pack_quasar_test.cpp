@@ -286,7 +286,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+#ifdef TEST_PACK_BLOCK
+                    const std::uint32_t out = block * tiles_in_block;
+                    // Test coverage: split the first block to exercise changing per-call counts and nonzero
+                    // DEST offsets without reinitializing; pack later blocks in one call to verify the
+                    // full-block path still works afterwards.
+                    if (block == 0)
+                    {
+                        for (std::uint32_t start = 0, count = 1; start < tiles_in_block; ++count)
+                        {
+                            const std::uint32_t ntiles = std::min(count, tiles_in_block - start);
+                            _llk_pack_(start, out + start, tensor_shape_A, ntiles);
+                            start += ntiles;
+                        }
+                    }
+                    else
+                    {
+                        _llk_pack_(0, out, tensor_shape_A, tiles_in_block);
+                    }
+#else
                     _llk_pack_(0 /*start_math_dest_tile_idx*/, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
+#endif
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
