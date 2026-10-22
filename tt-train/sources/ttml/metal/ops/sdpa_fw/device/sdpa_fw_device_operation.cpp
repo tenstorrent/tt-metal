@@ -177,9 +177,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             value_shape);
     }
 
-    // Program config knobs. Both are sequence lengths in elements; 0 means auto. The kernels
-    // iterate whole tiles and the reader rounds causal K counts up to a chunk boundary, so
-    // each knob must be a tile multiple that divides the sequence length.
+    // Knobs: tile multiples dividing S; 0 = auto.
     const auto check_chunk_knob = [qSt](uint32_t value, const char* name) {
         if (value == 0U) {
             return;

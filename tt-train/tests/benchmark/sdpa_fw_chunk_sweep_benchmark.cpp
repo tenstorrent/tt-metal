@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Brute-force sweep of the SDPA forward program-config knobs (q_chunk_size, k_chunk_size)
-// on training-like attention shapes. For every scenario it times the default configuration,
-// then every valid knob combination, checks each one's output against the default's, and
-// prints a table sorted by device time. Pure measurement tool: it changes nothing about how
-// the kernel picks its defaults.
+// Sweep of q_chunk_size x k_chunk_size: times the default, then every valid combination, checks each
+// against the default output and prints a table sorted by time.
 //
 // Usage: sdpa_fw_chunk_sweep_benchmark [scenario-name-substring]
 // Env:   TTML_SDPA_SWEEP_WARMUP (default 2), TTML_SDPA_SWEEP_MEASURE (default 10)
@@ -41,9 +38,7 @@ struct Scenario {
     ttml::metal::AttentionMaskType mask_type;
 };
 
-// Shapes tt-train actually trains: TinyLlama 1.1B (32 q heads / 4 kv heads / 64 dim) and a
-// Llama-3-8B style block (32 / 8 / 128). Causal is the training case; the no-mask row shows
-// the knobs without the triangular work pattern.
+// TinyLlama 1.1B (32/4 heads, D=64) and Llama-3-8B style (32/8, D=128).
 const std::vector<Scenario> kScenarios = {
     {"tinyllama_s2048_causal", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_s4096_causal", 1U, 32U, 4U, 4096U, 64U, ttml::metal::AttentionMaskType::Causal},

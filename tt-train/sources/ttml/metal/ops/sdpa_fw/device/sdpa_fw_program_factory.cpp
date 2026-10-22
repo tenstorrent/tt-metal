@@ -66,10 +66,7 @@ const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 
 const std::string kHasGateDefKey = "HAS_GATE";
 
-// Default K/V chunk when k_chunk_size is left at 0: the largest power of two in {1, 2, 4}
-// that divides St. Four tiles is the fp32 DST budget, so this keeps the softmax exp pass to
-// a single DST cycle; an explicit k_chunk_size may go past it and the kernel then splits the
-// exp pass into sm_block_size-tile DST cycles.
+// k_chunk_size = 0: largest of 4/2/1 tiles dividing St (4 tiles = one fp32 DST cycle).
 uint32_t pick_default_sk_chunk_t(uint32_t St) {
     constexpr uint32_t kMaxSkChunkT = 4U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
@@ -80,9 +77,7 @@ uint32_t pick_default_sk_chunk_t(uint32_t St) {
     return 1U;
 }
 
-// Output tile rectangle (rt_dim x ct_dim) for one matmul_block call: rows must divide
-// `rows`, cols must divide `cols`, and the product must fit the DST budget. Largest area
-// first; between equal areas prefer more columns (contiguous in1 walk, fewer in0 re-unpacks).
+// Largest rt_dim x ct_dim dividing (rows, cols) with product <= dst_size; ties prefer more columns.
 std::pair<uint32_t, uint32_t> pick_matmul_block_dims(uint32_t rows, uint32_t cols, uint32_t dst_size) {
     std::pair<uint32_t, uint32_t> best{1U, 1U};
     for (uint32_t h = 1U; h <= rows; ++h) {
@@ -104,15 +99,8 @@ std::pair<uint32_t, uint32_t> pick_matmul_block_dims(uint32_t rows, uint32_t col
 }
 
 /**
- * Calculate work-balanced pair distribution for causal SDPA.
- *
- * For causal attention, Q chunk i within a sequence attends to roughly (i+1) K/V chunks.
- * By pairing chunk i with chunk (q_num_chunks-1-i), each pair has near-constant work.
- * With one tile per Q chunk this is exactly the row pairing (St+1 K/V tiles per pair).
- *
- * @param total_pairs Total number of pairs = NC * q_num_chunks / 2
- * @param num_cores Number of cores to distribute across
- * @return Vector of (start_pair_idx, num_pairs) for each core
+ * Pair Q chunk i with chunk (q_num_chunks-1-i) so every pair costs about the same.
+ * @return (start_pair_idx, num_pairs) per core
  */
 std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
     uint32_t total_pairs, uint32_t num_cores) {
@@ -246,20 +234,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
     const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
-    // -------------------------------------------------------------------------
-    // Chunk geometry (the two program-config knobs, in tiles)
-    // -------------------------------------------------------------------------
-    // Sq_chunk_t query tile-rows share one pass over K/V: the reader fetches each K/V chunk
-    // once per Q chunk instead of once per row. Sk_chunk_t K/V tiles are consumed per
-    // inner-loop step. The device operation already checked that explicit sizes are tile
-    // multiples dividing the sequence; 0 keeps the historical defaults (1 row, up to 4 K tiles).
+    // Chunk geometry in tiles (0 = default: 1 Q row, up to 4 K tiles).
     const uint32_t Sq_chunk_t = args.q_chunk_size == 0U ? 1U : args.q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t =
         args.k_chunk_size == 0U ? pick_default_sk_chunk_t(St) : args.k_chunk_size / tt::constants::TILE_HEIGHT;
     TT_FATAL(Sq_chunk_t > 0U && (St % Sq_chunk_t == 0U), "Sq_chunk_t={} must be > 0 and divide St={}", Sq_chunk_t, St);
     TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
 
-    // The unit of work handed to a core is one Q chunk (Sq_chunk_t rows of one batch/head).
     const uint32_t q_num_chunks = St / Sq_chunk_t;
     const uint32_t total_q_chunks = NC * q_num_chunks;
 
@@ -278,18 +259,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    // -------------------------------------------------------------------------
-    // Balanced Parallelism Decision
-    // -------------------------------------------------------------------------
-    // For causal SDPA, work per Q chunk grows with its position in the sequence: chunk i
-    // attends to about (i+1) K/V chunks. Pairing chunk i with chunk (q_num_chunks-1-i)
-    // (first with last, second with second-to-last, ...) makes every pair cost about the
-    // same, which is what balances the cores.
-    //
-    // Conditions for balanced parallelism:
-    // 1. Causal mask (triangular workload pattern)
-    // 2. Even number of Q chunks per sequence (q_num_chunks % 2 == 0) for clean pairing
-    // 3. Enough work for all cores (total_pairs >= num_available_cores)
+    // Balanced parallelism: for causal, chunk i attends ~(i+1) K/V chunks; pairing i with
+    // (q_num_chunks-1-i) equalizes pairs. Needs causal, even q_num_chunks, total_pairs >= cores.
     const uint32_t pairs_per_seq = q_num_chunks / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
     const bool use_balanced_parallelism = (mask_type == AttentionMaskType::Causal) && (q_num_chunks % 2 == 0) &&
@@ -323,19 +294,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_units_per_core_group_2 = std::get<5>(work_split);
     }
 
-    // DST register budget. fp32_dest_acc_en=true → 4 slots (FP32 accumulator);
-    // fp32_dest_acc_en=false → 8 slots (BF16). Mirrors TTNN's `dst_size` convention in their
-    // SDPA program factory. Derived granularities (all "block" = tiles held in DST per cycle):
-    //
-    //   * `block_size`   (cap = dst_size - 1) — SFPU ops on one row's output tiles
-    //     (`update_cur_mm_out`, final normalization): `block_size` data tiles plus a 1-tile
-    //     scratch for `unary_bcast<COL>`. Divides vWt.
-    //   * `qk_block_h x qk_block_w` — one QK^T `matmul_block` call: Q rows x K tiles,
-    //     dividing Sq_chunk_t x Sk_chunk_t, product <= dst_size.
-    //   * `pv_block_h x pv_block_w` — one PV `matmul_block` call: Q rows x V feature tiles,
-    //     dividing Sq_chunk_t x vWt, product <= dst_size.
-    //   * `sm_block_size` (cap = dst_size) — score tiles of one row per DST cycle of the
-    //     softmax sub+exp pass. Divides Sk_chunk_t.
+    // DST budget: 4 tiles (fp32 acc) or 8 (bf16). block_size (SFPU, needs 1 scratch), the qk/pv
+    // matmul_block rectangles and sm_block_size (exp pass tiles per DST cycle) derive from it.
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
     const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
@@ -354,9 +314,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    // Tile counts per CB. Q, K, V, gate and the arbitrary mask are double-buffered so the
-    // reader overlaps the next chunk's DRAM reads with compute on the current one. Everything
-    // the softmax keeps per query row is Sq_chunk_t deep: row r of the chunk owns slot r.
+    // Q/K/V/gate/mask double-buffered; per-row softmax state is Sq_chunk_t deep.
     const uint32_t cb_query_tiles = 2U * Sq_chunk_t * qWt;
     const uint32_t cb_key_tiles = 2U * Sk_chunk_t * kWt;
     const uint32_t cb_value_tiles = 2U * Sk_chunk_t * vWt;
@@ -370,8 +328,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t cb_output_tiles = Sq_chunk_t * vWt;
 
     {
-        // Every CB lives in L1 at once; refuse configurations that do not fit instead of
-        // letting the allocator fail inside program creation with a less useful message.
+        // Refuse configurations that do not fit L1 with a useful message.
         const uint64_t bf16 = bfloat16_single_tile_size_bytes;
         const uint64_t fp32 = float32_single_tile_size_bytes;
         uint64_t l1_bytes = bf16 * (cb_query_tiles + cb_key_tiles + cb_value_tiles + 2U * kNumScalerTiles +
@@ -407,18 +364,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb_value_tiles);
 
-    // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly.
-    // Not needed for AttentionMaskType::None.
-    //
-    // Sizing depends on the mask type:
-    //   - Causal (incl. balanced parallelism): two persistently-fronted pre-transformed tiles
-    //     generated on chip
-    //       [0] = causal-diagonal (0.0 on/below diagonal, -1e9 above) — applied where the
-    //             K tile index equals the query row's tile index.
-    //       [1] = all -1e9 — applied on K tiles strictly past a row's diagonal inside the
-    //             chunks that overlap the diagonal band of the Q chunk.
-    //   - Arbitrary: Sq_chunk_t x Sk_chunk_t mask tiles per step are streamed from DRAM;
-    //     double-buffer them.
+    // Mask CB: causal = two on-chip tiles ([0] diagonal pattern, [1] all -1e9); arbitrary = Sq x Sk tiles
+    // per step, double-buffered. None = no CB.
     if (mask_type != AttentionMaskType::None) {
         [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, cb_attn_mask_tiles);
@@ -448,9 +395,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    // Holds the Sq_chunk_t x Sk_chunk_t QK^T score tiles for the current step (row-major:
-    // row r, K tile n at r * Sk_chunk_t + n). Sized to exactly one step (not double-buffered)
-    // since softmax overwrites in-place, then the PV matmul consumes it.
+    // Scores of one step, row-major; single-buffered, softmax rewrites in place.
     //
     // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
     // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
@@ -625,8 +570,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         return mode;
     };
 
-    // Compile-time args shared by every compute kernel instance; only the per-core unit count
-    // (slot 0: Q chunks in standard mode, pairs in balanced mode) differs between core groups.
+    // Shared compute compile args; only slot 0 (units per core) differs between groups.
     const auto make_compute_args = [&](uint32_t units_per_core) {
         return std::vector<uint32_t>{
             units_per_core,  // per_core unit count (Q chunks, or pairs in balanced mode)
@@ -658,9 +602,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     };
 
     if (use_balanced_parallelism) {
-        // For balanced parallelism, all cores are in one group with uniform work.
-        // num_pairs is passed as compile-time arg (max pairs per core); the runtime arg
-        // carries each core's actual count.
+        // Balanced: one group; the runtime arg carries each core's pair count.
         const uint32_t max_pairs_per_core = pair_distribution.empty() ? 0 : pair_distribution[0].second;
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
             program, kComputeKernelPath, all_cores, make_compute_config(make_compute_args(max_pairs_per_core)));
