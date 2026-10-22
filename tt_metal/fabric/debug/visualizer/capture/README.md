@@ -14,7 +14,7 @@ Every read is one of two kinds, and comes from one of two places in the manifest
 | **A register**: one 32-bit word | `archs.<arch>.core_registers`, such as `soft_reset` | stream registers: any node under the router with a `stream_id` and a `register` |
 
 Only local chips' routers are read. A stream register's address is
-`base + stream_id * stride + register_offsets[register]`, from `archs.<arch>.stream_registers`, and each (stream id,
+`base + stream_id * stride + registers[register].offset`, from `archs.<arch>.stream_registers`, and each (stream id,
 register) pair is read once, however many nodes name it.
 
 **The path rule.** A region's path is its keys from the router down, joined by `/`: object keys as they are, array
@@ -152,3 +152,9 @@ owner holds it, after the owner is killed and after it exits, and check that the
 result. Each snapshot would be checked using only its manifest: every router read without an error and, while the
 routers run, each routing table naming its router's mesh and chip, `edm_status` at `ready_for_traffic`, the ERISCs out
 of reset and the wall clock rising. They would run in CI on N300, T3K and Blackhole machines.
+
+**In-depth docs.** This README covers what capture reads and the snapshot's format. Capture needs in-depth docs, one
+per part, like decode's `docs/`: the read plan, and how `reads.py` finds every read in the manifest; the snapshot,
+with the liveness rounds, the main pass's order and how an error stops a router; and how `exalens.py` finds a router's
+chip and core and reads through ttexalens. Each would name the code it relies on, so that a change to that code can
+update the doc with it.

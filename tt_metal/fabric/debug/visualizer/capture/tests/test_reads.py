@@ -138,7 +138,10 @@ MANIFEST = {
                 "base": 0xFFB40000,
                 "stride": 0x1000,
                 "count": 32,
-                "register_offsets": {"buf_space_available": 0x100, "remote_src": 0},
+                "registers": {
+                    "buf_space_available": {"offset": 0x100, "bits": 17},
+                    "remote_src": {"offset": 0, "bits": 24},
+                },
             },
             # Not in the order the manifest writes them, to show that capture keeps the array's order.
             "core_registers": [
@@ -174,7 +177,7 @@ REGIONS = {
     "leftover_l1": L1Read(0x3D660, 1440),
 }
 
-# base + stream_id * stride + register_offsets[register]
+# base + stream_id * stride + registers[register].offset
 STREAMS = {
     (0, "buf_space_available"): RegisterRead(0xFFB40100),
     (4, "buf_space_available"): RegisterRead(0xFFB44100),
@@ -263,6 +266,13 @@ class BadManifests(unittest.TestCase):
         manifest = copy.deepcopy(MANIFEST)
         router_in(manifest)["fields"]["erisc_sync"]["register"] = "remote_dest"
         with self.assertRaisesRegex(ManifestError, rf"{E1}\.fields\.erisc_sync\.register is 'remote_dest'"):
+            get_read_plan(manifest)
+
+    def test_a_register_without_an_offset_is_rejected(self):
+        manifest = copy.deepcopy(MANIFEST)
+        del manifest["archs"]["wormhole_b0"]["stream_registers"]["registers"]["remote_src"]["offset"]
+        named = r"manifest has no archs\.wormhole_b0\.stream_registers\.registers\.remote_src\.offset"
+        with self.assertRaisesRegex(ManifestError, named):
             get_read_plan(manifest)
 
     def test_an_address_without_a_size_is_rejected(self):
