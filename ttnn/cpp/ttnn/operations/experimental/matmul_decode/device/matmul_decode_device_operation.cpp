@@ -363,9 +363,12 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.memory_config().shard_spec().has_value(),
                 "ROW_MAJOR width-sharded input A requires a shard spec");
             const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
+            // Each row is its own 1x32-tile row. Only the full-width two-hub gather restripes several of them
+            // into whole K rows for custom_mm (see reader_full_width_sharded.cpp's IN0_ROW_RESTRIPE).
             TT_FATAL(
-                operation_attributes.M == 1,
-                "ROW_MAJOR width-sharded input A is only supported with M = 1 (1x32 faces), but got M={}",
+                operation_attributes.M == 1 || (!batched && !partial && !operation_attributes.ring_gather),
+                "ROW_MAJOR width-sharded input A with M > 1 is only supported by the full-width two-hub gather "
+                "(not batched, partial_width_sharded or ring_gather), but got M={}",
                 operation_attributes.M);
             const uint32_t expected_shard_h = batched ? static_cast<uint32_t>(operation_attributes.batch)
                                                       : static_cast<uint32_t>(operation_attributes.M);

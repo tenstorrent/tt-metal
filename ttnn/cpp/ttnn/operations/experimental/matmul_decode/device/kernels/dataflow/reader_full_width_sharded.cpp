@@ -16,6 +16,10 @@
 // IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [M, K] on this core.
 // Fill full_in0 from the local shard as 1x32 tiles (K-major) instead of the hub gather.
 //
+// IN0_ROW_RESTRIPE: A is ROW_MAJOR width-sharded with several rows. The gather lands sender-major
+// ([sender][M][K / senders] 1x32 tiles) in cb_gather_in0, and each compute core copies it into
+// full_in0 as [M][K], the whole-K rows custom_mm takes one at a time.
+//
 // in1 (weights) arrive one of two ways:
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
 //     reader only has to declare its tiles available.
@@ -116,6 +120,11 @@ void kernel_main() {
 #endif
     full_in0_cb.push_back(full_num_tiles);
 #else
+#ifdef IN0_ROW_RESTRIPE
+    CircularBuffer gather_cb(get_named_compile_time_arg_val("cb_gather_in0"));
+#else
+    CircularBuffer& gather_cb = full_in0_cb;
+#endif
     const bool is_hub0 = (role == 1);
     const bool is_hub1 = (role == 2);
     if (is_sender) {
@@ -124,8 +133,8 @@ void kernel_main() {
         const uint32_t hub_y = owned_by_hub0 ? hub0_noc_y : hub1_noc_y;
         const uint32_t dst_offset_bytes = sender_id * shard_size_bytes;
 
-        // full_in0_cb is at the same L1 offset on every core, so the local write ptr is the remote dst addr.
-        const uint32_t dst_l1_addr = full_in0_cb.get_write_ptr() + dst_offset_bytes;
+        // gather_cb is at the same L1 offset on every core, so the local write ptr is the remote dst addr.
+        const uint32_t dst_l1_addr = gather_cb.get_write_ptr() + dst_offset_bytes;
         noc.async_write(
             in0_cb, hub, shard_size_bytes, {.offset_bytes = 0}, {.noc_x = hub_x, .noc_y = hub_y, .addr = dst_l1_addr});
         noc.async_write_barrier();
@@ -143,8 +152,8 @@ void kernel_main() {
             stage_sem.wait(region_count);
 
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                use<CircularBuffer::AddrSelector::WRITE_PTR>(full_in0_cb),
-                full_in0_cb,
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(gather_cb),
+                gather_cb,
                 region_size_bytes,
                 num_receivers,
                 {.offset_bytes = region_offset_bytes},
@@ -165,6 +174,23 @@ void kernel_main() {
     }
 
     done_sem.wait(2);
+#ifdef IN0_ROW_RESTRIPE
+    // Only the B cores run compute; the rest of the bounding box just relays the multicast.
+    if (is_in1_receiver) {
+        constexpr uint32_t k_tiles_per_sender = shard_num_tiles / in0_M_tiles;
+        constexpr uint32_t row_chunk_bytes = k_tiles_per_sender * tile_size_bytes;
+        const uint32_t src_base = gather_cb.get_write_ptr();
+        const uint32_t dst_base = full_in0_cb.get_write_ptr();
+        for (uint32_t s = 0; s < num_senders; ++s) {
+            for (uint32_t m = 0; m < in0_M_tiles; ++m) {
+                const uint32_t src = src_base + s * shard_size_bytes + m * row_chunk_bytes;
+                const uint32_t dst = dst_base + (m * in0_K_tiles + s * k_tiles_per_sender) * tile_size_bytes;
+                noc_async_write(src, get_noc_addr(dst), row_chunk_bytes);
+            }
+        }
+        noc.async_write_barrier();
+    }
+#endif
     full_in0_cb.push_back(full_num_tiles);
 #endif  // IN0_REPLICATED
 
