@@ -201,6 +201,7 @@ set +e
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
+    export OMP_NUM_THREADS=\$(nproc); \
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
