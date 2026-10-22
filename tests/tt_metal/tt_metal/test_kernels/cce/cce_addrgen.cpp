@@ -18,13 +18,9 @@ using cce_test::read_cycle_counter;
 using overlay::ADDRGEN_0;
 using overlay::CMDBUF_0;
 
-// Every side gets a one-bank banking loop: with the reset bank size of 0 the bank loop never completes and the inner
-// loop never advances.
 static void setup_pattern(const abi::PatternSpec& pattern, bool src_strided, bool dest_strided) {
     overlay::reset_cmdbuf<CMDBUF_0>();
     overlay::reset_addrgen<ADDRGEN_0>();
-    overlay::setup_src_banking_addrgen<ADDRGEN_0>({.endpoint_id_shift = 0, .size = 1});
-    overlay::setup_dest_banking_addrgen<ADDRGEN_0>({.endpoint_id_shift = 0, .size = 1});
     overlay::setup_src_base_start_addrgen<ADDRGEN_0>(pattern.src.base);
     if (src_strided) {
         overlay::setup_src_inner_loop_addrgen<ADDRGEN_0>(pattern.src.inner.stride, pattern.src.inner.end);
