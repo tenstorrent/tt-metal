@@ -161,7 +161,6 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
 
     Buffer* dst_buffer = tensor_return_value.buffer();
     const auto& out_shape = tensor_return_value.logical_shape();
-    const uint32_t out_stick_bytes = out_shape[cc::kLastAxis] * tensor_return_value.element_size();
     const uint32_t num_output_pages = out_shape.volume() / out_shape[cc::kLastAxis];
 
     std::vector<Buffer*> src_buffers;
@@ -252,7 +251,9 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
         reader_desc.named_compile_time_args = {{"word_copy", 1}, {"direct_read", 1}};
     }
 
-    std::vector<uint32_t> writer_ct_args = {kCbOut, out_stick_bytes, batches->write_batch};
+    // A whole aligned page per write: a sub-burst DRAM write for an unaligned stick costs more than the padding it
+    // saves.
+    std::vector<uint32_t> writer_ct_args = {kCbOut, dst_buffer->aligned_page_size(), batches->write_batch};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelDescriptor writer_desc =
         make_kernel(kCommonKernelDir, kWriterInterleaved, split.all_cores, std::move(writer_ct_args));
