@@ -9,8 +9,9 @@ fabric unicasts (tp_gather's ports, line / ring schedule and call fence): a port
 chunk's rows of its own shard (read from DRAM x), then each of the chunk's shards the upstream port landed here (read
 from the owners' L1). A packet: up to RP tiles of one row tile within one K step, written at the step's owner core
 (the engine's x families' owner tables) and slot. Row tile R (chunk-local lr) goes over link (lr / 2) % links. After each chunk a port
-increments the downstream chip's watcher ((direction, link) counter); the watcher raises XREADY on every engine core
-once all of a chunk's streams arrived (XREADY = m + 1: chunk m is in; the engine loads its own shard itself). x-own is
+increments the downstream chip's watcher ((direction, link) counter) after each shard; the watcher raises XREADY on
+every engine core per shard in the engine's order (own shard first - the engine loads it itself - then by arrival):
+XREADY = m (G - 1) + k once chunk m's shard of rank k is in, so gate / up starts on the own K steps at once. x-own is
 never reused within a call, so no credits: the call fence only."""
 
 from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
@@ -25,7 +26,7 @@ constexpr uint32_t KB = get_compile_time_arg_val(0), MT = get_compile_time_arg_v
 constexpr uint32_t RP = get_compile_time_arg_val(3), CR = get_compile_time_arg_val(4), NCH = get_compile_time_arg_val(5);
 constexpr uint32_t NV = get_compile_time_arg_val(6), KLT = get_compile_time_arg_val(7), GROUP = get_compile_time_arg_val(8);
 constexpr uint32_t INC = get_compile_time_arg_val(9), GX = get_compile_time_arg_val(10), GY = get_compile_time_arg_val(11);
-constexpr uint32_t S0 = get_compile_time_arg_val(12), S1 = get_compile_time_arg_val(13);
+constexpr uint32_t S0 = get_compile_time_arg_val(12), S1 = get_compile_time_arg_val(13), G = get_compile_time_arg_val(14);
 """
 
 _WALK = r"""
@@ -45,11 +46,14 @@ FORCE_INLINE void walk(uint32_t m, uint32_t q, uint32_t part, uint32_t v, F&& f)
         ++cnt;
     }
 }
-// x step j of chunk m, row tile R: its owner core (NoC) and the x-own address there (se_engine3's layout)
-// args at T: fam0[S0] cols, fam1[S1] cols, per column: nown, family-1 base slot; column NoC x [GX]; row NoC y [GY]
+// x step j of chunk m, row tile R on a chip: its processing position there (the chip's shard rank, then the step
+// within the shard), the position's owner core (NoC) and x-own address (se_engine3's layout). args at T: the chip's
+// shard ranks [G]; fam0[S0] cols, fam1[S1] cols; per column: nown, family-1 base slot; column NoC x [GX]; row y [GY]
 struct Dst { uint32_t x, y, addr; };
 FORCE_INLINE Dst dst_of(uint32_t T, uint32_t xown, uint32_t m, uint32_t R, uint32_t j, uint32_t kk0) {
-    const uint32_t f = j & 1, h = j / 2;
+    const uint32_t pos = get_arg_val<uint32_t>(T + j / SPS) * SPS + j % SPS;
+    T += G;
+    const uint32_t f = pos & 1, h = pos / 2;
     const uint32_t col = f ? get_arg_val<uint32_t>(T + S0 + h % S1) : get_arg_val<uint32_t>(T + h % S0);
     const uint32_t t = T + S0 + S1;
     const uint32_t nown = get_arg_val<uint32_t>(t + 2 * col), b1 = get_arg_val<uint32_t>(t + 2 * col + 1);
@@ -63,7 +67,7 @@ FORCE_INLINE Dst dst_of(uint32_t T, uint32_t xown, uint32_t m, uint32_t R, uint3
 _READER = (
     '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n'
     + _CT
-    + "constexpr auto x_args = TensorAccessorArgs<14>();\n"
+    + "constexpr auto x_args = TensorAccessorArgs<15>();\n"
     + _WALK
     + r"""
 void kernel_main() {
@@ -129,7 +133,7 @@ void kernel_main() {
     const uint32_t wx = get_arg_val<uint32_t>(a++), wy = get_arg_val<uint32_t>(a++), watch = get_arg_val<uint32_t>(a++);
     const uint32_t n = get_arg_val<uint32_t>(a++);
     const uint32_t ent = a, T = ent + 3 * n;  // entries (q, part, packets a chunk); tables
-    a = T + S0 + S1 + 3 * GX + GY;  // (past the tables: the fabric connection)
+    a = T + G + S0 + S1 + 3 * GX + GY;  // (past the tables: the fabric connection)
     if (n > 0 || send_ready) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1];
@@ -175,11 +179,11 @@ void kernel_main() {
                         unflushed = 0;
                     }
                 });
+                // this chunk's shard k all sent: the neighbour's watcher (behind its packets on this link)
+                hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(wx, wy, watch), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
             }
-            // chunk m all sent: the neighbour's watcher (behind the chunk's packets on this link)
-            hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(wx, wy, watch), 1, true});
-            conn.wait_for_empty_write_slot();
-            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
         }
         conn.close();
     }
@@ -196,20 +200,28 @@ void kernel_main() {
 _WATCHER = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-// chunk m is in once every incoming stream counted it: XREADY + 1 on every engine core. args: chunks, the XREADY id,
-// streams (counter address) x ns, engine cores (NoC x, y) x nc
+// chunk m's shard of rank k (k = 1 .. G - 1 in the engine's order) is in once each stream carrying it counted it
+// (a stream counts every shard it sends: m entries + its index + 1): then XREADY + 1 on every engine core
+// (XREADY = m (G - 1) + k). args: chunks, the XREADY id, ranks G - 1, engine cores nc, counters ncnt; (counter address,
+// final) x ncnt; cores (x, y) x nc; per rank: nreq, (counter address, the entry's index, the stream's entries a chunk)
 void kernel_main() {
     size_t a = 0;
     const uint32_t nch = get_arg_val<uint32_t>(a++), sem = get_semaphore(get_arg_val<uint32_t>(a++));
-    const uint32_t ns = get_arg_val<uint32_t>(a++), nc = get_arg_val<uint32_t>(a++);
-    const uint32_t s0 = a, c0 = a + ns;
+    const uint32_t nk = get_arg_val<uint32_t>(a++), nc = get_arg_val<uint32_t>(a++), ncnt = get_arg_val<uint32_t>(a++);
+    const uint32_t cnt0 = a, c0 = cnt0 + 2 * ncnt, r0 = c0 + 2 * nc;
     for (uint32_t m = 0; m < nch; ++m) {
-        for (uint32_t i = 0; i < ns; ++i)
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(s0 + i)), m + 1);
-        for (uint32_t c = 0; c < nc; ++c)
-            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(c0 + 2 * c), get_arg_val<uint32_t>(c0 + 2 * c + 1), sem), 1);
+        uint32_t b = r0;
+        for (uint32_t k = 0; k < nk; ++k) {
+            const uint32_t nreq = get_arg_val<uint32_t>(b++);
+            for (uint32_t i = 0; i < nreq; ++i, b += 3)
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(b)),
+                                       m * get_arg_val<uint32_t>(b + 2) + get_arg_val<uint32_t>(b + 1) + 1);
+            for (uint32_t c = 0; c < nc; ++c)
+                noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(c0 + 2 * c), get_arg_val<uint32_t>(c0 + 2 * c + 1), sem), 1);
+        }
     }
-    for (uint32_t i = 0; i < ns; ++i) noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(s0 + i)), 0u - nch);  // (re-arm)
+    for (uint32_t i = 0; i < ncnt; ++i)  // (re-arm)
+        noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(cnt0 + 2 * i)), 0u - get_arg_val<uint32_t>(cnt0 + 2 * i + 1));
     noc_async_atomic_barrier();
 }
 """
@@ -244,6 +256,26 @@ def port_plan(chips, coord, d, v, *, CR, nv, sps, kb, rp, nch):
         for k, (q, part) in enumerate(mine)
     ]
     return dict(peer=peer, up=up, mine=ent, up_ipc=acc, expect_in=nch * acc if ups else 0, has_up=bool(ups))
+
+
+def shard_order(chips, coord, *, CR, nv, sps, kb, rp):
+    """(pure: the device build and the CPU model share it) chip coord's shards in the engine's processing order - its
+    own, then by arrival (the latest entry index carrying it, then the shard) - and per remote shard the (direction,
+    link, entry index, entries a chunk) of the incoming streams carrying a part of it."""
+    rg = chips[coord]["rings"][0]
+    own = (rg["fwd"] or rg["bwd"])[0][0]
+    carry = {}
+    for d in ("fwd", "bwd"):  # data flowing d arrives from the d-upstream chip
+        up = rg["prev"] if d == "fwd" else rg["next"]
+        if up is None:
+            continue
+        ups = chips[up]["rings"][0][d]
+        for j, (q, part) in enumerate(ups):
+            for v in range(nv):
+                if chunk_packets(CR, nv, v, part, sps, kb, rp):
+                    carry.setdefault(q, []).append((d, v, j, len(ups)))
+    rest = sorted(carry, key=lambda q: (max(j for _, _, j, _ in carry[q]), q))
+    return [own] + rest, carry
 
 
 class XGather3:
@@ -294,8 +326,20 @@ class XGather3:
     def watcher_core(self, coord):
         return self.chips[coord]["copy"][0]
 
-    def tables(self):
-        """The owner tables (dst_of's): family 0 / 1 columns, per column (nown, family-1 base slot), NoC x / y."""
+    def order(self, coord):
+        """(this chip's shards in the engine's order, per remote shard its carrying streams): shard_order."""
+        return shard_order(self.chips, coord, CR=self.eng.CR, nv=self.nv, sps=self.sps, kb=self.eng.KB, rp=self.rp)
+
+    def ranks(self, coord):
+        shards, _ = self.order(coord)
+        r = [0] * self.G
+        for k, q in enumerate(shards):
+            r[q] = k
+        return r
+
+    def tables(self, coord):
+        """The owner tables (dst_of's) for chip coord's L1: its shard ranks, family 0 / 1 columns, per column (nown,
+        family-1 base slot), NoC x / y."""
         e, mesh = self.eng, self.mesh
         nf = e.NSG // 2
         per = []
@@ -305,7 +349,7 @@ class XGather3:
             per += [n0 + n1, n0]
         vx = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(e.cx0 + c, 0)).x for c in range(e.GX)]
         vy = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(e.cx0, cy)).y for cy in range(e.GY)]
-        return list(e.fam0) + list(e.fam1) + per + vx + vy
+        return self.ranks(coord) + list(e.fam0) + list(e.fam1) + per + vx + vy
 
     def pieces(self, coord, prog, x, xready_sem):
         """(CBs, kernels) of chip `coord` (fabric connections set up on prog); x: this chip's [rows, kl] in DRAM."""
@@ -321,7 +365,7 @@ class XGather3:
         rg = ch["rings"][0]
         ports = {(d, l): core for (_, d, l), core in ch["ports"].items()}
         xown = e.base + e.off["xown"]
-        T = self.tables()
+        T = self.tables(coord)
         cbs = [
             ttnn.CBDescriptor(
                 total_size=2 * self.group * self.rp * 2048,
@@ -359,7 +403,7 @@ class XGather3:
                         len(mine),
                     ]
                     + ent_s
-                    + T
+                    + self.tables(peer)
                 )
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][v], prog, core))
             else:
@@ -380,6 +424,7 @@ class XGather3:
             e.GY,
             e.S0,
             e.S1,
+            self.G,
         ]
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         kernels = [
@@ -403,8 +448,20 @@ class XGather3:
         ecores = [virt(ttnn.CoreCoord(e.cx0 + c, cy)) for c in range(e.GX) for cy in range(e.GY)]
         wt = ttnn.RuntimeArgs()
         wc = self.watcher_core(coord)
+        shards, carry = self.order(coord)
+        finals, wargs = {}, []
+        for q in shards[1:]:
+            wargs += [len(carry[q])] + [x_ for d, v, j, n in carry[q] for x_ in (self.watch[(d, v)], j, n)]
+        for d in ("fwd", "bwd"):  # (a stream counts all its entries, also those carrying nothing on this link)
+            up = rg["prev"] if d == "fwd" else rg["next"]
+            if up is not None and chips[up]["rings"][0][d]:
+                for v in range(self.nv):
+                    finals[self.watch[(d, v)]] = e.NCH * len(chips[up]["rings"][0][d])
         wt[wc.x][wc.y] = (
-            [e.NCH, xready_sem, len(streams_in), len(ecores)] + streams_in + [v_ for c in ecores for v_ in (c.x, c.y)]
+            [e.NCH, xready_sem, len(shards) - 1, len(ecores), len(finals)]
+            + [x_ for k_, f in finals.items() for x_ in (k_, f)]
+            + [v_ for c in ecores for v_ in (c.x, c.y)]
+            + wargs
         )
         kernels.append(
             ttnn.KernelDescriptor(

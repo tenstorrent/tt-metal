@@ -47,7 +47,8 @@ constexpr uint32_t XREADY = get_compile_time_arg_val(12), HCNT = get_compile_tim
 constexpr auto x_args = TensorAccessorArgs<15>();
 constexpr uint32_t CB_XIN = 0, CB_HOWN = 2, CB_HALL = 3;
 constexpr uint32_t NF = NSG / 2, NOWN0 = NF / S0, NOWN1 = NF / S1;  // (steps a family a pass; per owner)
-// x step j: family j % 2, owner = the family's subset[(j / 2) % S], its local index (j / 2) / S
+// x position j (the j-th K step this chip processes: its own shard's first, then each shard as it lands): family j % 2,
+// owner = the family's subset[(j / 2) % S], its local index (j / 2) / S
 FORCE_INLINE uint32_t own_slot(uint32_t j) { return (j & 1) ? (j / 2) / S1 : (j / 2) / S0; }
 void kernel_main() {
     size_t a = 0;
@@ -57,7 +58,9 @@ void kernel_main() {
     const uint32_t hall = get_arg_val<uint32_t>(a++), po = get_arg_val<uint32_t>(a++), h0 = get_arg_val<uint32_t>(a++);
     const uint32_t i0 = get_arg_val<uint32_t>(a++), i1 = get_arg_val<uint32_t>(a++);  // my index in family 0 / 1 (or GX)
     const uint32_t lx = get_arg_val<uint32_t>(a++), rx = get_arg_val<uint32_t>(a++), ry = get_arg_val<uint32_t>(a++);
-    const uint32_t vx0 = a, need0 = vx0 + GX;  // the row's NoC x; need[m]: XREADY before chunk m's x is here
+    const uint32_t vx0 = a, sps = get_arg_val<uint32_t>(vx0 + GX), g = get_arg_val<uint32_t>(vx0 + GX + 1);
+    const uint32_t ord0 = vx0 + GX + 2;  // (the row's NoC x; steps a shard, shards; the shard order: own, then arrival)
+    auto step_of = [&](uint32_t j) { return get_arg_val<uint32_t>(ord0 + j / sps) * sps + j % sps; };  // (position j)
     const uint32_t nown = (i0 < GX ? NOWN0 : 0) + (i1 < GX ? NOWN1 : 0);  // (my steps a chunk)
     auto mine = [&](uint32_t j) { return (j & 1) ? ((j / 2) % S1 == i1) : ((j / 2) % S0 == i0); };
     // my steps' x-own slot: [chunk][family 0 slots, then family 1][MT][KB]
@@ -69,12 +72,14 @@ void kernel_main() {
         DeviceZoneScopedN("SE-XLOAD");
         const auto xg = TensorAccessor(x_args, x_addr, 2048);
         for (uint32_t m = 0; m < NCH; ++m)
-            for (uint32_t j = 0; j < NSG; ++j)
-                if (mine(j) && j * KB >= x_k0 && j * KB < x_k0 + x_ct)
+            for (uint32_t j = 0; j < NSG; ++j) {
+                const uint32_t s = step_of(j);
+                if (mine(j) && s * KB >= x_k0 && s * KB < x_k0 + x_ct)
                     for (uint32_t r = 0; r < MT; ++r)
                         for (uint32_t kk = 0; kk < KB; ++kk)
-                            noc_async_read(xg.get_noc_addr((m * CR + cy * MT + r) * x_ct + j * KB + kk - x_k0),
+                            noc_async_read(xg.get_noc_addr((m * CR + cy * MT + r) * x_ct + s * KB + kk - x_k0),
                                            own_addr(m, j) + (r * KB + kk) * 2048, 2048);
+            }
         noc_async_read_barrier();
     }
     constexpr auto mx0 = McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
@@ -89,7 +94,6 @@ void kernel_main() {
     auto r1 = mx1.optional_receiver(noc);
     volatile tt_l1_ptr uint32_t* xready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(XREADY));
     for (uint32_t m = 0; m < NCH; ++m) {
-        const uint32_t need = get_arg_val<uint32_t>(need0 + m);
         {
         DeviceZoneScopedN("SE-XROUNDS");
         for (uint32_t pg = 0; pg < NPG; ++pg)
@@ -97,8 +101,8 @@ void kernel_main() {
                 const uint32_t round = (m * NPG + pg) * NF + j / 2;  // (the family's)
                 cb_reserve_back(CB_XIN, MT * KB);
                 const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
-                if (mine(j)) {
-                    if (need) noc_semaphore_wait_min(xready, need);
+                if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
+                    if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
                     if (j & 1) s1->send(own_addr(m, j), dst, MT * KB * 2048); else s0->send(own_addr(m, j), dst, MT * KB * 2048);
                 } else {
                     if (j & 1) r1->receive(round); else r0->receive(round);
@@ -149,6 +153,14 @@ void kernel_main() {
     const uint32_t win = get_arg_val<uint32_t>(a++), words = get_arg_val<uint32_t>(a++), y_addr = get_arg_val<uint32_t>(a++);
     const uint32_t n0d = get_arg_val<uint32_t>(a++);
     const uint32_t wg0 = a, wd0 = wg0 + NPG, ys0 = wd0 + NPD;  // pass widths (gate / up, down); the column's NoC y
+    const uint32_t sps = get_arg_val<uint32_t>(ys0 + GY), ord0 = ys0 + GY + 2;  // (steps a shard; the shard order)
+    // round w's block (natural index): a gate / up pass's steps in this chip's processing order, then down's
+    auto blk = [&](uint32_t w) {
+        const uint32_t c = w % NB;
+        if (c >= NPG * NSG) return c;
+        const uint32_t j = c % NSG;
+        return (c / NSG) * NSG + get_arg_val<uint32_t>(ord0 + j / sps) * sps + j % sps;
+    };
     auto bsize = [&](uint32_t b) {  // (tiles)
         return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD);
     };
@@ -170,34 +182,27 @@ void kernel_main() {
             page += n;
         }
     }
-    uint32_t kb = 0;  // (my next block to send in the first chunk)
     const uint32_t NR = NCH * NB;  // (W rounds a call)
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
     uint32_t nf[NWS] = {};
-    while (ws < NR) {  // (skip rounds I do not hold)
-        if (ws % NB % GY == cy) break;
-        ++ws;
-    }
+    while (ws < NR && blk(ws) % GY != cy) ++ws;  // (skip rounds I do not hold)
     const uint32_t NPY = NCH * NPD;
     while (ws < NR || wr < NR || wc < NR || p < NPY) {
         invalidate_l1_cache();
         if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
-            const uint32_t b = ws % NB, n = bsize(b);
-            if (b < GY) woff = 0;  // (a new chunk: my blocks from the start)
-            if (ws < NB) {  // (first chunk: this block's reads landed)
-                noc_async_read_barrier_with_trid(kb < 14 ? kb + 1 : 15);
-                ++kb;
-            }
+            const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
+            woff = 0;  // (its offset in my W-own: my blocks before it)
+            for (uint32_t b2 = cy; b2 < b; b2 += GY) woff += bsize(b2);
+            if (ws < NB) noc_async_read_barrier_with_trid(kb < 14 ? kb + 1 : 15);  // (first chunk: its reads landed)
             const uint32_t dst = win + (ws % NWS) * WSLOT * WTB, vw = words + (ws & 3) * 16;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vw) = ws + 1;
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), n * WTB, GY);
             noc_async_writes_flushed();
             noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(cxv, by, cxv, ty, get_semaphore(WV + ws % NWS)), GY);
             noc_async_writes_flushed();
-            woff += n;
             if (ws >= NWS) ++nf[ws % NWS];
             ++ws;
-            while (ws < NR && ws % NB % GY != cy) ++ws;
+            while (ws < NR && blk(ws) % GY != cy) ++ws;
         }
         if (wr < NR && *sem(WV + wr % NWS) >= wr + 1) {  // W round wr landed here
             cb_reserve_back(CB_WIN, WSLOT);
@@ -205,7 +210,7 @@ void kernel_main() {
             ++wr;
         }
         if (wc < NR && wc < wr + NWS && cb_pages_reservable_at_back(CB_WIN, WSLOT * (wc - wr + 1))) {  // slot of wc free
-            noc_semaphore_inc(get_noc_addr(cxv, get_arg_val<uint32_t>(ys0 + wc % NB % GY), get_semaphore(WFREE + wc % NWS)), 1);
+            noc_semaphore_inc(get_noc_addr(cxv, get_arg_val<uint32_t>(ys0 + blk(wc) % GY), get_semaphore(WFREE + wc % NWS)), 1);
             ++wc;
         }
         if (p < NPY && cb_pages_available_at_front(CB_OUT, MT * PWDMAX)) {  // down pass p's y (chunk p / NPD)
@@ -482,12 +487,15 @@ class SeEngine3:
         fam, S = (self.fam1, self.S1) if f else (self.fam0, self.S0)
         return fam[(j // 2) % S], f, (j // 2) % S
 
-    def pieces(self, x, w, y, *, x_k0=0, x_ct=None, need=None, extra_sem_cores=()):
+    def pieces(self, x, w, y, *, x_k0=0, x_ct=None, shard_order=None, extra_sem_cores=()):
         """(CBs, kernels, semaphores) of the engine on one chip (the kernel_lib families attached by the caller via
-        attach_mcast). x: DRAM [rows, x_ct tiles] (columns x_k0 .. of the full x; None: all; 0: none). need[m]: XREADY
-        before chunk m's x is in L1 (None: all there)."""
+        attach_mcast). x: DRAM [rows, x_ct tiles] (columns x_k0 .. of the full x; None: all; 0: none). shard_order: this
+        chip's K shards in processing order (own first, then by arrival; XREADY = m (G - 1) + rank once chunk m's shard
+        of that rank is in); None: one shard (all of K, already there)."""
         x_ct, x_k0 = int(self.KT if x_ct is None else x_ct), int(x_k0)
-        need = [int(v) for v in need] if need is not None else [0] * self.NCH
+        so = [int(q) for q in shard_order] if shard_order is not None else [0]
+        assert self.NSG % len(so) == 0
+        sor = [self.NSG // len(so), len(so)] + so  # (steps a shard, shards, the order)
         mesh, GX, GY, cx0, MT = self.mesh, self.GX, self.GY, self.cx0, self.MT
         b, off = self.base, self.off
         virt = lambda cx, cy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0 + cx, cy))  # noqa: E731
@@ -534,7 +542,7 @@ class SeEngine3:
                         virt(c, cy).y,
                     ]
                     + [virt(cc, cy).x for cc in range(GX)]
-                    + need
+                    + sor
                 )
                 n_rt[cx0 + c][cy] = (
                     [
@@ -553,6 +561,7 @@ class SeEngine3:
                     + self.wg[c]
                     + self.wd[c]
                     + [virt(c, yy).y for yy in range(GY)]
+                    + sor
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(

@@ -246,7 +246,7 @@ class HeadSE3:
                     y,
                     x_k0=p * self.xg.klt,
                     x_ct=self.xg.klt,
-                    need=[m + 1 for m in range(e.NCH)],
+                    shard_order=self.xg.order(coord)[0],
                     extra_sem_cores=[self.xg.watcher_core(coord)],
                 )
                 prog.cbs, prog.semaphores = c0 + c1, sems

@@ -10,9 +10,10 @@ Uses the real schedule (fabric_all_gather_py._schedule, balanced on a ring) and 
     (a chunk's entry end closes a batch);
   - sender: the call fence (ready to the neighbour's port facing it; wait its own), then the packets in order over a
     bounded in-order channel (fused write + arrival increment every INC-th packet of an entry and at its end), a
-    watcher increment per chunk, finally waits for every arrival from upstream and re-arms;
-  - watcher: chunk m is complete once each incoming stream counted it: asserts all of chunk m's shards landed, then
-    XREADY = m + 1; re-arms;
+    watcher increment per entry, finally waits for every arrival from upstream and re-arms;
+  - watcher: in the engine's order (x_gather3.shard_order), chunk m's shard of rank k is complete once each incoming
+    stream carrying it counted it (a stream counts every entry it sends): asserts all of it landed, then XREADY + 1;
+    re-arms;
   - calls: two calls back to back, a chip starts call 2 once its call 1 is done (chips drift apart); a packet of
     call 2 landing on a chip still in call 1 is a fence violation.
 A random scheduler runs any enabled action; nothing enabled before everything finished = a deadlock. Checks:
@@ -24,7 +25,7 @@ from collections import deque
 import pytest
 from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, _schedule
 
-from models.demos.moe_block.tt.x_gather3 import INC_EVERY, port_plan
+from models.demos.moe_block.tt.x_gather3 import INC_EVERY, port_plan, shard_order
 
 
 def model_chips(G, ring):
@@ -111,9 +112,10 @@ class Sim:
                                     ub=ub,
                                     i=i,
                                     npk=npk,
-                                    chunk_end=(e == len(pl["mine"]) - 1 and i == npk - 1),
                                 )
                             )
+                        if npk == 0:  # (an entry with nothing on this link still counts at the watcher)
+                            pkts.append(dict(m=m, e=e, q=q, empty=True, i=0, npk=0))
                 peer = pl["peer"]
                 sends_to_me = peer is not None and bool(self.chips[peer]["rings"][0][_OPP[d]])
                 self.port = getattr(self, "port", {})
@@ -131,12 +133,14 @@ class Sim:
                     rearmed=False,
                 )
         self.wm = getattr(self, "wm", {})
-        self.wm[c] = 0  # (the watcher's next chunk)
+        self.wm[c] = 0  # (the watcher's next (chunk, rank) step)
+        self.order = getattr(self, "order", {})
+        self.order[c] = shard_order(self.chips, c, **self.geo)
 
     def chip_done(self, c):
-        return (
-            all(self.port[(c, d, v)]["done"] for d in ("fwd", "bwd") for v in range(self.nv)) and self.wm[c] == self.nch
-        )
+        return all(self.port[(c, d, v)]["done"] for d in ("fwd", "bwd") for v in range(self.nv)) and self.wm[
+            c
+        ] == self.nch * (len(self.order[c][0]) - 1)
 
     # ---- actions
     def actions(self):
@@ -147,7 +151,7 @@ class Sim:
             # reader: next packet into the batch
             if st["rd"] < len(st["pkts"]) and len(st["cb"]) + len(st["batch"]) < 2 * self.group:
                 p = st["pkts"][st["rd"]]
-                if p["e"] == 0:
+                if p["e"] == 0 or p.get("empty"):
                     acts.append(("read", k))
                 else:
                     need = p["m"] * pl["up_ipc"] + p["ub"] + p["idx"] // INC_EVERY + 1
@@ -165,9 +169,11 @@ class Sim:
             if self.chan[k]:
                 acts.append(("deliver", k))
         for c in range(self.G):
-            if self.wm[c] < self.nch:
-                ins = [(c, d, v) for d in ("fwd", "bwd") for v in range(self.nv) if self.plans[(c, d, v)]["has_up"]]
-                if all(self.watch[k] >= self.wm[c] + 1 for k in ins):
+            shards, carry = self.order[c]
+            nk = len(shards) - 1
+            if self.wm[c] < self.nch * nk:
+                m, kk = divmod(self.wm[c], nk)
+                if all(self.watch[(c, d, v)] >= m * n + j + 1 for d, v, j, n in carry[shards[1 + kk]]):
                     acts.append(("watch", c))
             if self.chip_done(c) and self.call[c] < self.calls:
                 acts.append(("next_call", c))
@@ -179,6 +185,11 @@ class Sim:
             st = self.port[k]
             c, d, v = k
             p = st["pkts"][st["rd"]]
+            if p.get("empty"):  # (nothing to read: the entry's end only)
+                st["cb"].extend(st["batch"] + [p])
+                st["batch"] = []
+                st["rd"] += 1
+                return
             if p["e"] > 0:  # relay: the data must have landed here (this call)
                 key = (st["call"], p["m"], p["q"], p["R"], p["st"], p["kk0"])
                 if key not in self.landed[c]:
@@ -198,10 +209,14 @@ class Sim:
         elif kind == "send":
             st = self.port[k]
             p = st["cb"].popleft()
+            if p.get("empty"):
+                self.chan[k].append(dict(kind="watch", call=st["call"]))
+                st["sd"] += 1
+                return
             st["sent_in_entry"] = 1 if p["i"] == 0 else st["sent_in_entry"] + 1
             inc = st["sent_in_entry"] % INC_EVERY == 0 or p["i"] == p["npk"] - 1
             self.chan[k].append(dict(kind="data", call=st["call"], p=p, inc=inc))
-            if p["chunk_end"]:
+            if p["i"] == p["npk"] - 1:  # (the entry's last packet: its watcher increment follows it)
                 self.chan[k].append(dict(kind="watch", call=st["call"]))
             st["sd"] += 1
         elif kind == "finish":
@@ -231,24 +246,25 @@ class Sim:
                     self.watch[(peer, d, v)] += 1
         elif kind == "watch":
             c = k
-            m = self.wm[c]
-            for q in range(self.G):  # every other shard's rows of chunk m, all steps, all pieces
-                if q == c:
-                    continue
-                for lr in range(self.geo["CR"]):
-                    for st in range(self.geo["sps"]):
-                        for kk0 in range(0, self.geo["kb"], self.geo["rp"]):
-                            key = (self.call[c], m, q, m * self.geo["CR"] + lr, q * self.geo["sps"] + st, kk0)
-                            if key not in self.landed[c]:
-                                self.violations.append(f"chip {c} chunk {m} incomplete: missing {key}")
-                                return
+            shards, carry = self.order[c]
+            nk = len(shards) - 1
+            m, kk = divmod(self.wm[c], nk)
+            q = shards[1 + kk]  # (shard q of chunk m: every row, step and piece must be here)
+            for lr in range(self.geo["CR"]):
+                for st in range(self.geo["sps"]):
+                    for kk0 in range(0, self.geo["kb"], self.geo["rp"]):
+                        key = (self.call[c], m, q, m * self.geo["CR"] + lr, q * self.geo["sps"] + st, kk0)
+                        if key not in self.landed[c]:
+                            self.violations.append(f"chip {c} chunk {m} shard {q} incomplete: missing {key}")
+                            return
             self.wm[c] += 1
-            self.xready[c] = m + 1
-            if self.wm[c] == self.nch:  # (re-arm)
+            self.xready[c] = self.wm[c]
+            if self.wm[c] == self.nch * nk:  # (re-arm: each stream counted all its entries)
                 for d in ("fwd", "bwd"):
                     for v in range(self.nv):
-                        if self.plans[(c, d, v)]["has_up"]:
-                            self.watch[(c, d, v)] -= self.nch
+                        pl = self.plans[(c, d, v)]
+                        if pl["has_up"]:
+                            self.watch[(c, d, v)] -= self.nch * len(self.chips[pl["up"]]["rings"][0][d])
         elif kind == "next_call":
             self._start_call(k)
 

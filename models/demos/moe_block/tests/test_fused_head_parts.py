@@ -451,4 +451,8 @@ def test_head_se3(mesh_device, device_params):
         assert min(ps) > 0.999, ps
         ttnn.deallocate(y)
         ttnn.deallocate(xt)
-        ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1)
+        ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1, unfragmented:)
+        del head  # (the gather's global semaphores too)
+        import gc
+
+        gc.collect()

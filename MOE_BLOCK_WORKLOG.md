@@ -365,3 +365,23 @@ GLM 97 -> 113 - reverted; (c) h exchanged all at once with counters instead of 2
   program built and enqueued for GLM-Flash and K3 - pass.
 - Device-tested: the line only (LoudBox). Ring-verified: by the model (protocol) and the host build (plans,
   descriptors); not on ring hardware.
+
+## Toward 2x of the roofline (user target), lever by lever - the 2x4 at chunk 1280 (640 rows a mesh row)
+Floors (LoudBox line: end link 3 shards over 2 links ~48 GB/s; HiFi2 ~304 TFLOP/s on 110 cores; DRAM 512 GB/s):
+x chain = gather + last shard's gate / up + down: GLM-Flash 82 + 4 + 9 ~ 95 us (2x: 190), K3 143 + 23 + 46 ~ 212
+(2x: 424; also >= W load 68 and compute 139). Whole head: GLM ~180 (2x 360), K3 ~330 (2x 660).
+
+### Lever 1: gate / up overlaps the gather inside the chunk (own K steps first, then each shard as it lands)
+The watcher now raises XREADY per shard (each port increments the downstream watcher after every shard it sends),
+in the engine's order (x_gather3.shard_order: own, then by arrival); an x position's owner is fixed by the position
+(the kernel_lib rotation still fits: rounds stay in position order), so the gather lands step j at the destination
+chip's position for it (its shard-rank table) and relays read with the local one; the W stream follows the chip's
+order (holders keep their blocks, a send looks up the block's offset among its holder's). The protocol model follows
+(per-shard watching; 14 / 14 pass). Also fixed: GLM then K3 in one process ran out of L1 (fragmentation by the first
+head's global semaphores) - the test now drops the head and collects.
+| x chain, us (PCC) | GLM-Flash | K3 |
+|---|---|---|
+| before (v3, one chunk) | 196 | 523 |
+| **lever 1** | **180** (0.99982) | **500-502** (0.99973) |
+| floor / 2x target | 95 / 190 - **within 2x (1.89x)** | 212 / 424 - 2.37x |
+K3 per chip: gather ends 279-307 (143 floor: slowed by the engine's traffic), engine 433-496: the engine binds.
