@@ -210,7 +210,13 @@ def test_auto_summary_group_chunks_rejects_more_heads_than_workers(expect_error)
         auto_summary_group_chunks(_BLACKHOLE_GRID, 121, 4, value_tiles=4)
 
 
-@pytest.mark.parametrize("rows", [32 * tiles for tiles in range(10, 129, 3)])
+def _projection_layout(config) -> str:
+    if isinstance(config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig):
+        return "1d"
+    return "2d_transposed" if config.transpose_mcast else "2d"
+
+
+@pytest.mark.parametrize("rows", [32 * tiles for tiles in range(4, 129, 3)])
 @pytest.mark.parametrize(
     "k,n", [(7168, 12440), (3072, 7168), (7168, 6220), (1536, 7168)], ids=["in", "out", "in8", "out8"]
 )
@@ -224,9 +230,16 @@ def test_projection_matmul_config_is_valid_for_any_length(rows, k, n):
 
     config = projection_matmul_config(_BLACKHOLE_GRID, rows, k, n, KIMI_K3_PROJECTION_DTYPE)
     assert config is not None
-    assert config.per_core_M * _BLACKHOLE_GRID.y >= rows // 32
-    assert config.per_core_N * _BLACKHOLE_GRID.x >= -(-n // 32)
-    assert config.per_core_M % config.out_block_h == 0 and config.out_block_h >= min(config.per_core_M, 2)
+    layout = _projection_layout(config)
+    row_cores = {"1d": 1, "2d": _BLACKHOLE_GRID.y, "2d_transposed": _BLACKHOLE_GRID.x}[layout]
+    column_cores = {
+        "1d": _BLACKHOLE_GRID.x * _BLACKHOLE_GRID.y,
+        "2d": _BLACKHOLE_GRID.x,
+        "2d_transposed": _BLACKHOLE_GRID.y,
+    }
+    assert config.per_core_M * row_cores >= rows // 32
+    assert config.per_core_N * column_cores[layout] >= -(-n // 32)
+    assert config.per_core_M % config.out_block_h == 0 and config.out_block_w == config.per_core_N
     assert config.out_block_h % config.out_subblock_h == 0 and config.per_core_N % config.out_subblock_w == 0
     assert config.out_subblock_h * config.out_subblock_w <= 4
     assert (k // 32) % config.in0_block_w == 0
@@ -236,16 +249,74 @@ def test_projection_matmul_config_is_valid_for_any_length(rows, k, n):
     )
 
 
-def test_projection_matmul_config_keeps_tuned_schedules():
-    from models.demos.deepseek_v3_d_p.tt.kda.config import projection_matmul_config
+def test_projection_matmul_config_takes_measured_schedules():
+    from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE, projection_matmul_config
 
-    # Galaxy SP8xTP4 at T=5120: the schedules tuned at 640 rows per device with bf16 weights.
-    projection = projection_matmul_config(_BLACKHOLE_GRID, 640, 7168, 12440, ttnn.bfloat16)
-    assert (projection.per_core_M, projection.out_block_h, projection.in0_block_w) == (2, 2, 4)
-    assert (projection.out_subblock_h, projection.out_subblock_w, projection.per_core_N) == (1, 3, 33)
-    projection = projection_matmul_config(_BLACKHOLE_GRID, 640, 3072, 7168, ttnn.bfloat16)
-    assert (projection.per_core_M, projection.out_block_h, projection.in0_block_w) == (2, 2, 8)
-    assert (projection.out_subblock_h, projection.out_subblock_w, projection.per_core_N) == (2, 1, 19)
-    # Below one row tile per grid row, or in one-row-tile passes, the auto-selected schedule is faster.
-    assert projection_matmul_config(_BLACKHOLE_GRID, 256, 7168, 12440, ttnn.bfloat16) is None
-    assert projection_matmul_config(_BLACKHOLE_GRID, 1280, 7168, 24880, ttnn.bfloat16) is None
+    # Galaxy SP8xTP4 at T=3072 (384 rows per device): 1D, 306 us against 413 us for the 2D schedule on 6 grid rows.
+    projection = projection_matmul_config(_BLACKHOLE_GRID, 384, 7168, 12440, KIMI_K3_PROJECTION_DTYPE)
+    assert _projection_layout(projection) == "1d"
+    assert (projection.per_core_M, projection.per_core_N, projection.out_block_h, projection.in0_block_w) == (
+        12,
+        4,
+        12,
+        7,
+    )
+    # T=10240: two passes of two row tiles with 8-tile K blocks beat one pass with 2-tile K blocks (824 us vs 905 us).
+    projection = projection_matmul_config(_BLACKHOLE_GRID, 1280, 7168, 12440, KIMI_K3_PROJECTION_DTYPE)
+    assert _projection_layout(projection) == "2d"
+    assert (projection.per_core_M, projection.out_block_h, projection.in0_block_w) == (4, 2, 8)
+    # T=11264: rows over the 12 grid columns fit 4 row tiles per core in one pass (1157 us vs 1304 us).
+    projection = projection_matmul_config(_BLACKHOLE_GRID, 1408, 7168, 12440, KIMI_K3_PROJECTION_DTYPE)
+    assert _projection_layout(projection) == "2d_transposed"
+    assert (projection.per_core_M, projection.per_core_N, projection.out_block_h) == (4, 39, 4)
+
+
+@pytest.mark.parametrize("row_tiles", range(4, 45, 4))
+@pytest.mark.parametrize("k_tiles,n_tiles", [(224, 389), (96, 224)], ids=["in", "out"])
+def test_projection_cost_model_picks_the_measured_layout(row_tiles, k_tiles, n_tiles):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import (
+        _MEASURED_PROJECTION_SCHEDULES,
+        KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE,
+        KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
+        KDA_PROJECTION_CB_L1_BYTES_PER_CORE,
+        KDA_PROJECTION_TOTAL_L1_BYTES_PER_CORE,
+        KIMI_K3_PROJECTION_DTYPE,
+        estimated_projection_schedule,
+    )
+
+    # The layer's CB budget and activation placement at this length (kda.py).
+    cores = _BLACKHOLE_GRID.x * _BLACKHOLE_GRID.y
+    rows = row_tiles * 32
+    input_projection_bytes = rows * 12448 * 2
+    budget = KDA_PROJECTION_CB_L1_BYTES_PER_CORE
+    if input_projection_bytes <= KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE * cores:
+        budget = min(budget, KDA_PROJECTION_TOTAL_L1_BYTES_PER_CORE - -(-input_projection_bytes // cores))
+    activation_in_l1 = n_tiles == 224 and rows * 3072 * 2 <= KDA_NORM_OUTPUT_L1_BYTES_PER_CORE * cores
+    schedule = estimated_projection_schedule(
+        _BLACKHOLE_GRID, row_tiles, k_tiles, n_tiles, KIMI_K3_PROJECTION_DTYPE, budget, activation_in_l1
+    )
+    assert schedule[0] == _MEASURED_PROJECTION_SCHEDULES[(row_tiles, k_tiles, n_tiles)][0]
+
+
+@pytest.mark.parametrize(
+    "rows,transposed",
+    [
+        (128, False),
+        (256, False),
+        (384, True),
+        (512, False),
+        (640, False),
+        (768, True),
+        (896, False),
+        (1024, True),
+        (1152, True),
+        (1280, False),
+        (1408, True),
+    ],
+)
+def test_decay_projection_takes_the_orientation_with_fewer_tiles_per_core(rows, transposed):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import decay_projection_program_config
+
+    # Measured on Galaxy SP8xTP4 at every chunk length: e.g. 24.5 us transposed vs 28.8 us at 384 rows.
+    config = decay_projection_program_config(_BLACKHOLE_GRID, rows, 128, 3072, None)
+    assert config.transpose_mcast == transposed

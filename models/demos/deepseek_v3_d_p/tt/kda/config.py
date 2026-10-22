@@ -188,10 +188,51 @@ KDA_PROJECTION_TOTAL_L1_BYTES_PER_CORE = 1360 * 1024
 _FP32_DEST_TILES = 4
 # Narrower K blocks double the per-block overhead without saving bandwidth.
 _MIN_PROJECTION_K_BLOCK = 2
-# Each pass over a core's rows re-reads its weight columns from DRAM for that many row tiles. Passes of one row tile
-# leave the projection bound by its weight stream, and it loses to the auto-selected schedule (LoudBox SP4xTP2's input
-# projection: 5.1 ms in four one-tile passes against 2.5 ms).
-_MIN_PROJECTION_BLOCK_H = 2
+# Projection cost model, measured on one Blackhole Galaxy chip (bfloat8_b weights, HiFi2, FP32 accumulation) over 766
+# schedules of the Kimi-K3 input and output projections at 128 to 1408 rows. A schedule is bound by its most loaded
+# core's tile matmuls, by its weight stream (read once per pass over a core's rows), or, in 1D, by multicasting every
+# row to every core. Who reads the weights sets the stream's rate: the 2D schedule's sender row of 12 cores, the
+# transposed 2D schedule's sender column of 10 cores (2.4x slower), or every core in 1D.
+_PROJECTION_US_PER_TILE_MATMUL = 27.8e-3
+_PROJECTION_WEIGHT_BYTES_PER_US = {"2d": 255e3, "2d_transposed": 108e3, "1d": 330e3}
+# 1D activation multicast rate, by whether the activation is in L1.
+_PROJECTION_ACTIVATION_BYTES_PER_US = {True: 24e3, False: 21e3}
+# A K block of w tiles adds about this / w^2 to each tile matmul (10% at two tiles).
+_PROJECTION_K_BLOCK_OVERHEAD = 0.4
+# Each pass after the first exposes about this fraction of its weight stream.
+_PROJECTION_EXPOSED_PASS_FRACTION = 0.1
+
+
+# Measured-best schedules of the Kimi-K3 Galaxy SP8xTP4 projections (bfloat8_b weights, 12 x 10 grid) at every
+# prefill chunk length, from the 766-schedule sweep plus every K block of the cost model's picks. Keyed by
+# (row tiles, K tiles, N tiles); values are (layout, per_core_M, out_block_h, in0_block_w). The cost model picks the
+# same layout at every length but misjudges some K blocks, by up to 42 us.
+_MEASURED_PROJECTION_SCHEDULES = {
+    # Input projection, K = 7168, N = 12440.
+    (4, 224, 389): ("1d", 4, 4, 2),  # T=1k, 258 us
+    (8, 224, 389): ("1d", 8, 8, 2),  # T=2k, 273 us
+    (12, 224, 389): ("1d", 12, 12, 7),  # T=3k, 306 us
+    (16, 224, 389): ("1d", 16, 16, 8),  # T=4k, 400 us
+    (20, 224, 389): ("2d", 2, 2, 8),  # T=5k, 413 us
+    (24, 224, 389): ("1d", 24, 24, 4),  # T=6k, 605 us
+    (28, 224, 389): ("2d", 3, 3, 7),  # T=7k, 615 us
+    (32, 224, 389): ("1d", 32, 16, 8),  # T=8k, 797 us
+    (36, 224, 389): ("2d", 4, 2, 8),  # T=9k, 824 us
+    (40, 224, 389): ("2d", 4, 2, 8),  # T=10k, 824 us
+    (44, 224, 389): ("2d_transposed", 4, 4, 2),  # T=11k, 1157 us
+    # Output projection, K = 3072, N = 7168.
+    (4, 96, 224): ("1d", 4, 4, 3),  # T=1k, 70 us
+    (8, 96, 224): ("1d", 8, 8, 8),  # T=2k, 76 us
+    (12, 96, 224): ("1d", 12, 12, 12),  # T=3k, 96 us
+    (16, 96, 224): ("2d", 2, 2, 6),  # T=4k, 112 us
+    (20, 96, 224): ("2d", 2, 2, 6),  # T=5k, 112 us
+    (24, 96, 224): ("2d", 3, 3, 6),  # T=6k, 161 us
+    (28, 96, 224): ("2d", 3, 3, 12),  # T=7k, 190 us
+    (32, 96, 224): ("2d", 4, 4, 12),  # T=8k, 245 us
+    (36, 96, 224): ("2d", 4, 4, 8),  # T=9k, 256 us
+    (40, 96, 224): ("2d", 4, 4, 8),  # T=10k, 260 us
+    (44, 96, 224): ("2d_transposed", 4, 4, 8),  # T=11k, 313 us
+}
 
 
 def _divisors(value: int, limit: int | None = None) -> list[int]:
@@ -204,7 +245,7 @@ def _tile_bytes(dtype: ttnn.DataType) -> int:
 
 
 def _projection_cb_bytes(block_h: int, k_block: int, per_core_n: int, weight_dtype: ttnn.DataType) -> int:
-    """Circular-buffer bytes of a 2D-multicast projection: double-buffered bf16 activation and ``weight_dtype`` weight
+    """Circular-buffer bytes of a multicast projection: double-buffered bf16 activation and ``weight_dtype`` weight
     blocks, the bf16 output block and its FP32 accumulation block."""
     activation_tile, weight_tile = _tile_bytes(ttnn.bfloat16), _tile_bytes(weight_dtype)
     return (
@@ -214,6 +255,85 @@ def _projection_cb_bytes(block_h: int, k_block: int, per_core_n: int, weight_dty
     )
 
 
+def _projection_cost_us(
+    layout: str,
+    per_core_m: int,
+    per_core_n: int,
+    block_h: int,
+    k_block: int,
+    k_tiles: int,
+    weight_bytes: int,
+    activation_bytes: int,
+    activation_in_l1: bool,
+) -> float:
+    """Estimated device time of one projection schedule (see _PROJECTION_US_PER_TILE_MATMUL)."""
+    passes = per_core_m // block_h
+    compute = (
+        _PROJECTION_US_PER_TILE_MATMUL
+        * per_core_m
+        * per_core_n
+        * k_tiles
+        * (1 + _PROJECTION_K_BLOCK_OVERHEAD / k_block**2)
+    )
+    weight_pass = weight_bytes / _PROJECTION_WEIGHT_BYTES_PER_US[layout]
+    activation = activation_bytes / _PROJECTION_ACTIVATION_BYTES_PER_US[activation_in_l1] if layout == "1d" else 0.0
+    bound = max(compute, passes * weight_pass, activation)
+    # Each pass's first K block fills the pipeline before compute overlaps the stream.
+    return bound * (1 + k_block / (k_tiles * passes)) + _PROJECTION_EXPOSED_PASS_FRACTION * (passes - 1) * weight_pass
+
+
+def _projection_column_cores(grid: ttnn.CoreCoord, layout: str) -> int:
+    """Cores that split a projection's output columns under ``layout``."""
+    return {"1d": grid.x * grid.y, "2d": grid.x, "2d_transposed": grid.y}[layout]
+
+
+def estimated_projection_schedule(
+    grid: ttnn.CoreCoord,
+    row_tiles: int,
+    k_tiles: int,
+    n_tiles: int,
+    weight_dtype: ttnn.DataType,
+    cb_bytes_per_core: int,
+    activation_in_l1: bool,
+) -> tuple[str, int, int, int, int] | None:
+    """The (layout, per_core_M, per_core_N, out_block_h, in0_block_w) with the lowest _projection_cost_us, or None.
+
+    Candidates are the 2D schedule (rows over the grid's rows, output columns over its columns), the transposed 2D
+    schedule (rows over the columns) and the 1D schedule (every core holds all rows and its own output columns). Each
+    takes the fewest row tiles per core or one more, a pass height that divides them, and any K block whose circular
+    buffers fit ``cb_bytes_per_core``.
+    """
+    k_blocks = [w for w in _divisors(k_tiles) if w >= min(_MIN_PROJECTION_K_BLOCK, k_tiles)]
+    weight_bytes = k_tiles * n_tiles * _tile_bytes(weight_dtype)
+    activation_bytes = row_tiles * k_tiles * _tile_bytes(ttnn.bfloat16)
+    shapes = [("1d", row_tiles, math.ceil(n_tiles / _projection_column_cores(grid, "1d")))]
+    for layout, row_cores in (("2d", grid.y), ("2d_transposed", grid.x)):
+        fewest = math.ceil(row_tiles / row_cores)
+        per_core_n = math.ceil(n_tiles / _projection_column_cores(grid, layout))
+        shapes += [(layout, per_core_m, per_core_n) for per_core_m in range(fewest, min(row_tiles, fewest + 1) + 1)]
+    candidates = [
+        (
+            _projection_cost_us(
+                layout,
+                per_core_m,
+                per_core_n,
+                block_h,
+                k_block,
+                k_tiles,
+                weight_bytes,
+                activation_bytes,
+                activation_in_l1,
+            ),
+            (layout, per_core_m, per_core_n, block_h, k_block),
+        )
+        for layout, per_core_m, per_core_n in shapes
+        for block_h in _divisors(per_core_m)
+        for k_block in k_blocks
+        if _projection_cb_bytes(block_h, k_block, per_core_n, weight_dtype) <= cb_bytes_per_core
+    ]
+    return min(candidates)[1] if candidates else None
+
+
 def projection_matmul_config(
     grid: ttnn.CoreCoord,
     rows: int,
@@ -221,48 +341,46 @@ def projection_matmul_config(
     n: int,
     weight_dtype: ttnn.DataType,
     cb_bytes_per_core: int = KDA_PROJECTION_CB_L1_BYTES_PER_CORE,
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None:
-    """Return a 2D-multicast schedule for a [rows, k] x [k, n] projection on ``grid``, or None for auto.
+    activation_in_l1: bool = False,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
+    """Return the fastest multicast schedule for a [rows, k] x [k, n] projection on ``grid``, or None for auto.
 
-    Rows are spread over the grid's rows and output columns over its columns. A core computes its rows in passes of
-    ``out_block_h`` row tiles and re-reads its weight columns once per pass, so the schedule takes the per-core row
-    count and pass height that minimise (row tiles per core + passes) within ``cb_bytes_per_core``, then the
-    widest K block that fits. None keeps the auto-selected config where a 2D schedule would lose to it: with fewer row
-    tiles than grid rows, which leaves rows of cores idle, or when no pass of _MIN_PROJECTION_BLOCK_H row tiles fits.
+    Measured geometries (_MEASURED_PROJECTION_SCHEDULES) take their measured-best schedule when its circular buffers
+    fit ``cb_bytes_per_core``; any other takes estimated_projection_schedule. None only when nothing fits.
     """
     tile = ttnn.TILE_SIZE
     row_tiles, k_tiles, n_tiles = rows // tile, math.ceil(k / tile), math.ceil(n / tile)
-    if row_tiles < grid.y:
-        return None
-    per_core_n = math.ceil(n_tiles / grid.x)
-    k_blocks = [w for w in _divisors(k_tiles) if w >= min(_MIN_PROJECTION_K_BLOCK, k_tiles)]
+    measured = _MEASURED_PROJECTION_SCHEDULES.get((row_tiles, k_tiles, n_tiles))
+    if measured is not None and (grid.x, grid.y) == (12, 10) and weight_dtype == ttnn.bfloat8_b:
+        layout, per_core_m, block_h, k_block = measured
+        per_core_n = math.ceil(n_tiles / _projection_column_cores(grid, layout))
+        if _projection_cb_bytes(block_h, k_block, per_core_n, weight_dtype) <= cb_bytes_per_core:
+            return _projection_program_config(grid, layout, per_core_m, per_core_n, block_h, k_block)
+    schedule = estimated_projection_schedule(
+        grid, row_tiles, k_tiles, n_tiles, weight_dtype, cb_bytes_per_core, activation_in_l1
+    )
+    return None if schedule is None else _projection_program_config(grid, *schedule)
 
-    def fits(block_h: int, k_block: int) -> bool:
-        return _projection_cb_bytes(block_h, k_block, per_core_n, weight_dtype) <= cb_bytes_per_core
 
-    def tallest_pass(per_core_m: int) -> int | None:
-        return next(
-            (
-                h
-                for h in _divisors(per_core_m)
-                if h >= min(per_core_m, _MIN_PROJECTION_BLOCK_H) and fits(h, k_blocks[-1])
-            ),
-            None,
-        )
-
-    min_per_core_m = math.ceil(row_tiles / grid.y)
-    candidates = [
-        (per_core_m, block_h)
-        for per_core_m in range(min_per_core_m, 2 * min_per_core_m + 1)
-        if (block_h := tallest_pass(per_core_m)) is not None
-    ]
-    if not candidates:
-        return None
-    # Row tiles per core plus weight passes; ties keep the fewest rows per core.
-    per_core_m, block_h = min(candidates, key=lambda c: (c[0] + c[0] // c[1], c[0]))
-    k_block = next(w for w in k_blocks if fits(block_h, w))
+def _projection_program_config(
+    grid: ttnn.CoreCoord, layout: str, per_core_m: int, per_core_n: int, block_h: int, k_block: int
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     subblock_w = _divisors(per_core_n, _FP32_DEST_TILES)[0]
     subblock_h = _divisors(block_h, _FP32_DEST_TILES // subblock_w)[0]
+    if layout == "1d":
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=k_block,
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            out_block_h=block_h,
+            out_block_w=per_core_n,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=k_block,
@@ -272,7 +390,7 @@ def projection_matmul_config(
         out_block_w=per_core_n,
         per_core_M=per_core_m,
         per_core_N=per_core_n,
-        transpose_mcast=False,
+        transpose_mcast=layout == "2d_transposed",
         fused_activation=None,
         fuse_batch=True,
     )
@@ -310,6 +428,9 @@ def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfi
 
 
 _DECAY_OUT_BLOCK_TILES = 32
+# The decay projection is bound by its fused sigmoid, so its time follows the output tiles per core; each extra output
+# block costs about as much as this many more tiles (Blackhole Galaxy, 128 to 1408 rows).
+_DECAY_TILES_PER_EXTRA_BLOCK = 3.5
 
 
 def decay_projection_program_config(
@@ -317,17 +438,26 @@ def decay_projection_program_config(
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
-    Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
+    Rows go over the grid's rows, or over its columns (transposed multicast) when that leaves fewer output tiles per
+    core. Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
     FP32 intermediate circular buffers on geometries with many rows or heads per core (one Kimi-K3 Galaxy SP8xTP4
     core holds a single 2 x 8 block).
     """
     tile = ttnn.TILE_SIZE
-    per_core_M = math.ceil(rows // tile / grid.y)
-    per_core_N = math.ceil(width // tile / grid.x)
-    out_block_w = max(w for w in range(1, min(per_core_N, _DECAY_OUT_BLOCK_TILES) + 1) if per_core_N % w == 0)
-    out_block_h = max(
-        h for h in range(1, per_core_M + 1) if per_core_M % h == 0 and h * out_block_w <= _DECAY_OUT_BLOCK_TILES
-    )
+    row_tiles, width_tiles = rows // tile, width // tile
+    best = None
+    for transpose, row_cores, column_cores in ((False, grid.y, grid.x), (True, grid.x, grid.y)):
+        per_core_M = math.ceil(row_tiles / row_cores)
+        per_core_N = math.ceil(width_tiles / column_cores)
+        out_block_w = max(w for w in range(1, min(per_core_N, _DECAY_OUT_BLOCK_TILES) + 1) if per_core_N % w == 0)
+        out_block_h = max(
+            h for h in range(1, per_core_M + 1) if per_core_M % h == 0 and h * out_block_w <= _DECAY_OUT_BLOCK_TILES
+        )
+        blocks = (per_core_M // out_block_h) * (per_core_N // out_block_w)
+        cost = per_core_M * per_core_N + _DECAY_TILES_PER_EXTRA_BLOCK * (blocks - 1)
+        if best is None or cost < best[0]:
+            best = (cost, transpose, per_core_M, per_core_N, out_block_h, out_block_w)
+    _, transpose, per_core_M, per_core_N, out_block_h, out_block_w = best
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=key_dim // tile,
@@ -338,7 +468,7 @@ def decay_projection_program_config(
         out_block_w=out_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
-        transpose_mcast=False,
+        transpose_mcast=transpose,
         fused_activation=fused_activation,
         fuse_batch=True,
     )

@@ -259,12 +259,22 @@ class ttKDA:
                 projection_cb_bytes,
                 KDA_PROJECTION_TOTAL_L1_BYTES_PER_CORE - math.ceil(input_projection_bytes / (grid.x * grid.y)),
             )
+        # The output projection reads the gated norm's output, which stays in L1 when it fits.
+        output_projection_activation_in_l1 = self.norm_output_memory_config.buffer_type == ttnn.BufferType.L1
         self.input_projection_program_config, self.output_projection_program_config = (
             tuple(
                 projection_matmul_config(
-                    grid, self.active_seq_len_local, *tuple(weight.shape)[-2:], weight.dtype, projection_cb_bytes
+                    grid,
+                    self.active_seq_len_local,
+                    *tuple(weight.shape)[-2:],
+                    weight.dtype,
+                    projection_cb_bytes,
+                    activation_in_l1=activation_in_l1,
                 )
-                for weight in (input_projection, output_projection)
+                for weight, activation_in_l1 in (
+                    (input_projection, False),
+                    (output_projection, output_projection_activation_in_l1),
+                )
             )
             if program_config.derived_projection_matmuls
             else (None, None)
