@@ -40,6 +40,8 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     // on cache miss and hit.
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const bool preserve_fp32_cache = cache_tensor.dtype() == DataType::FLOAT32;
+    fp32_dest_acc_en = fp32_dest_acc_en || preserve_fp32_cache;
 
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
@@ -149,6 +151,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const bool preserve_fp32_cache = cache_tensor.dtype() == DataType::FLOAT32;
+    fp32_dest_acc_en = fp32_dest_acc_en || preserve_fp32_cache;
 
     tt::DataFormat interm_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     std::uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
@@ -171,8 +175,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     std::uint32_t B = input_tensor.padded_shape()[-2];
     std::uint32_t Bcache = cache_tensor.padded_shape()[0];
-    const std::uint32_t granularity =
-        std::min(static_cast<std::uint32_t>(2), Bcache);  // granularity = 2 best for performance
+    // An odd cache batch leaves an odd final tile; process its users one at a time.
+    const std::uint32_t granularity = Bcache % 2 == 0 ? 2 : 1;
     std::uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -209,7 +213,9 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
             num_batched_heads_per_core_group_1,
             num_batched_heads_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_batched_heads, row_major);
-        num_input_tiles = 2 * Wt;  // double buffered
+        // Each head contributes one Wt-tile input block. A single block suffices for
+        // FLOAT32 caches and keeps the wider intermediates within Wormhole L1.
+        num_input_tiles = preserve_fp32_cache ? Wt : 2 * Wt;
     }
 
     const bool input_sharded = shard_spec.has_value();
@@ -217,7 +223,10 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     // ---- Dataflow buffers ----
     std::uint32_t num_cache_tiles = 2 * granularity * Wt;   // double buffered
     std::uint32_t num_interm_tiles = 2 * granularity * Wt;  // double buffered
-    std::uint32_t num_output_tiles = B * Wt;                // must buffer all tiles for a single head
+    // The compute kernel emits one input block (Wt tiles) per head and the writer drains it
+    // before the next. Avoid reserving the cache intermediate's larger FIFO in FLOAT32 L1.
+    const std::uint32_t num_untilized_input_tiles = preserve_fp32_cache ? Wt : num_interm_tiles;
+    std::uint32_t num_output_tiles = B * Wt;  // must buffer all tiles for a single head
 
     const DataflowBufferSpec cache_dfb{
         .unique_id = CACHE_DFB,
@@ -255,7 +264,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     const DataflowBufferSpec interm2_dfb{
         .unique_id = INTERM2_DFB,
         .entry_size = interm_single_tile_size,
-        .num_entries = num_interm_tiles,
+        .num_entries = num_untilized_input_tiles,
         .data_format_metadata = interm_data_format,
     };
     const DataflowBufferSpec output_dfb{
@@ -267,9 +276,6 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     const TensorParameter cache_param{.unique_id = CACHE, .spec = cache_tensor.tensor_spec()};
     const TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
-
-    const std::uint32_t u_range = std::min(static_cast<std::uint32_t>(32), Bcache);
-    const std::uint32_t u_count = u_range / granularity;
 
     // ---- Reader ----
     KernelSpec::CompilerOptions::Defines reader_defines;
@@ -297,7 +303,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
              DFBBinding{
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = reader_tensor_bindings,
-        .compile_time_args = {{"granularity", granularity}, {"u_count", u_count}},
+        .compile_time_args = {{"granularity", granularity}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"Wt",
@@ -334,7 +340,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
                  .accessor_name = "untilized_input",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = CACHE, .accessor_name = "cache"}},
-        .compile_time_args = {{"granularity", granularity}, {"u_count", u_count}},
+        .compile_time_args = {{"granularity", granularity}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"Wt",
@@ -354,20 +360,28 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     // ---- Compute (one KernelSpec per core group; per-group head count stays a CTA) ----
     const auto make_compute = [&](const KernelSpecName& id, std::uint32_t num_batched_heads_per_core_group) {
         auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-        // Metal 2.0 requires an explicit unpack_modes entry for a consumed Float32 DFB when
-        // enable_32_bit_dest (== fp32_dest_acc_en) is set, where legacy silently defaulted. The legacy
-        // op set no unpack_to_dest_mode at all (all Default), so mirror that as UnpackToSrc. The compute
-        // kernel consumes cache (c_0), input (c_1) and interm1 (c_25); interm carries Float32 exactly
-        // when fp32_dest_acc_en, cache/input only if their tensor dtype is FLOAT32.
+        compute_hw.enable_32_bit_dest = fp32_dest_acc_en;
+        // A FLOAT32 cache must unpack directly to the 32-bit destination; unpacking through
+        // SrcA/B truncates untouched values before the tile is written back. Preserve the
+        // legacy UnpackToSrc behavior for other cache dtypes when fp32_dest_acc_en is requested.
+        // The compute kernel consumes cache (c_0), input (c_1), and interm1 (c_25).
         if (fp32_dest_acc_en) {
             auto& um = compute_hw.unpack_modes;
             if (cache_data_format == tt::DataFormat::Float32) {
-                um.emplace(CACHE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+                um.emplace(
+                    CACHE_DFB,
+                    preserve_fp32_cache ? tt::tt_metal::UnpackMode::UnpackToDest
+                                        : tt::tt_metal::UnpackMode::UnpackToSrc);
             }
             if (input_data_format == tt::DataFormat::Float32) {
-                um.emplace(INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+                um.emplace(
+                    INPUT_DFB,
+                    preserve_fp32_cache ? tt::tt_metal::UnpackMode::UnpackToDest
+                                        : tt::tt_metal::UnpackMode::UnpackToSrc);
             }
-            um.emplace(INTERM1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+            um.emplace(
+                INTERM1_DFB,
+                preserve_fp32_cache ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
         }
         return KernelSpec{
             .unique_id = id,
@@ -399,7 +413,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
                 {{"num_batched_heads", num_batched_heads_per_core_group},
                  {"Wt", Wt},
                  {"granularity", granularity},
-                 {"u_count", u_count}},
+                 {"Bcache", Bcache}},
+            .runtime_arg_schema = {.runtime_arg_names = {"batch_start_id"}},
             .hw_config = compute_hw,
         };
     };
@@ -428,6 +443,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_g1_run_args{.kernel = COMPUTE_G1};
+    KernelRunArgs compute_g2_run_args{.kernel = COMPUTE_G2};
     std::uint32_t total_batched_heads = 0;
     for (std::uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
@@ -462,6 +479,8 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
              {"Wbytes", dyn.Wbytes},
              {"offset", dyn.tile_update_offset},
              {"batch_read_offset", dyn.batch_read_offset}});
+        auto& compute_run_args = (i < g1_numcores) ? compute_g1_run_args : compute_g2_run_args;
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"batch_start_id", batch_start_id}});
         total_batched_heads += num_batched_heads_per_core;
     }
 
@@ -473,9 +492,11 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
         .work_units = std::move(work_units),
     };
 
-    // The compute kernels have no runtime args, so they need no KernelRunArgs entry.
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_g1_run_args)};
+    if (has_group_2) {
+        run_args.kernel_run_args.push_back(std::move(compute_g2_run_args));
+    }
     // The cache tensor is the in-place output; bind it from tensor_return_value. Input is the source.
     run_args.tensor_args = {{CACHE, tensor_return_value.mesh_tensor()}, {INPUT, input_tensor.mesh_tensor()}};
 

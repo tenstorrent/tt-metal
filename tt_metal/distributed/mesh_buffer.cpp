@@ -514,49 +514,6 @@ AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), ho
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
     buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
-    // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
-    if (!mesh_device) {
-        const auto sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout);
-        if (address.has_value()) {
-            return AnyBuffer{BufferImpl::create(
-                config.device, *address, config.size, config.page_size, config.buffer_type, sharding_args)};
-        }
-        return AnyBuffer{
-            BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type, sharding_args)};
-    }
-    MeshBufferConfig mesh_config = ReplicatedBufferConfig{
-        .size = config.size,
-    };
-    DeviceLocalBufferConfig local_config{
-        .page_size = config.page_size,
-        .buffer_type = config.buffer_type,
-        .sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout),
-    };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
-}
-
-AnyBuffer AnyBuffer::create(const tt::tt_metal::BufferConfig& config, std::optional<uint64_t> address) {
-    // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
-    if (!mesh_device) {
-        if (address.has_value()) {
-            return AnyBuffer{
-                BufferImpl::create(config.device, *address, config.size, config.page_size, config.buffer_type)};
-        }
-        return AnyBuffer{BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type)};
-    }
-    MeshBufferConfig mesh_config = ReplicatedBufferConfig{
-        .size = config.size,
-    };
-    DeviceLocalBufferConfig local_config{
-        .page_size = config.page_size,
-        .buffer_type = config.buffer_type,
-    };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
-}
-
 Buffer* AnyBuffer::get_buffer() const { return buffer_; }
 
 bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }

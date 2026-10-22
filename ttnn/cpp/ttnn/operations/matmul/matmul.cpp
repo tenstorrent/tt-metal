@@ -452,7 +452,14 @@ Tensor linear(
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const PrefetcherPipeList& prefetcher_pipes) {
+    const PrefetcherPipeList& prefetcher_pipes,
+    std::optional<uint32_t> in0_column_offset) {
+    // Checked before the program config is chosen: an auto-selected config would see mismatched K.
+    TT_FATAL(
+        !in0_column_offset.has_value() ||
+            (program_config.has_value() &&
+             std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value())),
+        "in0_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -474,7 +481,8 @@ Tensor linear(
         output_tile,
         global_cb,
         sub_device_id,
-        prefetcher_pipes};
+        prefetcher_pipes,
+        in0_column_offset};
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 

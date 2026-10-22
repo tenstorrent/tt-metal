@@ -21,6 +21,7 @@ from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
     format_callstack_with_message,
+    serialize_variables,
     run as get_callstack_provider,
     CallstackProvider,
 )
@@ -150,19 +151,6 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
-
-
-def serialize_variables(variables: list[CallstackEntryVariable], assert_code: str) -> str:
-    result = ""
-    for var in variables:
-        var_name = var.name or "?"
-        var_value = var.value if var.value is not None else "?"
-        if var_name in assert_code:
-            serialized = f"- [info]{var_name}[/] = [command]{var_value}[/]\n"
-        else:
-            serialized = f"- {var_name} = {var_value}\n"
-        result += serialized
-    return result
 
 
 def dump_lightweight_asserts(

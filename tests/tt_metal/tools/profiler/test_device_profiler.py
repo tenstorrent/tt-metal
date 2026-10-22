@@ -28,7 +28,7 @@ from tracy.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import is_single_chip, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
@@ -38,6 +38,15 @@ def is_6u_wrapper():
     ctx = mp.get_context("spawn")
     with ctx.Pool() as pool:
         result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
+def is_single_chip_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_single_chip)
         pool.close()
         pool.join()
     return result
@@ -328,19 +337,9 @@ def test_full_buffer():
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
-    statNameEth = "Marker Repeat ETH"
 
     assert statName in stats.keys(), "Wrong device analysis format"
-
-    if statNameEth in stats.keys():
-        assert (
-            stats[statName]["stats"]["Count"] - stats[statNameEth]["stats"]["Count"]
-            in REF_COUNT_DICT[ENV_VAR_ARCH_NAME]
-        ), "Wrong Marker Repeat count"
-        assert stats[statNameEth]["stats"]["Count"] > 0, "Wrong Eth Marker Repeat count"
-        assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
-    else:
-        assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+    assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
 def wildcard_match(pattern, words):
@@ -1105,20 +1104,8 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 3, 6, 16]  # N150, N300, T3K, 6U
     WH_TENSIX_COUNTS = [72, 64, 56]
-    BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
-
-    WH_COMBO_COUNTS = []
-    for T in WH_TENSIX_COUNTS:
-        for E in WH_ERISC_COUNTS:
-            WH_COMBO_COUNTS.append((T, E))
-
-    BH_COMBO_COUNTS = []
-    for T in BH_TENSIX_COUNTS:
-        for E in BH_ERISC_COUNTS:
-            BH_COMBO_COUNTS.append((T, E))
 
     # Quasar's profiler is L1-only, the buffer fills and remaining markers are dropped, only the
     # iterations that fit are captured. Each iteration writes 10 words (zone start + TS_DATA +
@@ -1129,14 +1116,10 @@ def test_timestamped_events():
     QUASAR_EVENTS_PER_ITER = 2  # DeviceTimestampedData + DeviceRecordEvent
 
     REF_COUNT_DICT = {
-        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
-        "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+        "wormhole_b0": [T * RISC_COUNT * OP_COUNT * ZONE_COUNT for T in WH_TENSIX_COUNTS],
+        "blackhole": [T * RISC_COUNT * OP_COUNT * ZONE_COUNT for T in BH_TENSIX_COUNTS],
         # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
         "quasar": [2 * QUASAR_RISC_COUNT * QUASAR_ITER_COUNT * QUASAR_EVENTS_PER_ITER],
-    }
-    REF_ERISC_COUNT = {
-        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
-        "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
     TEST_BIN_DICT = {
         "wormhole_b0": "build/test/tt_metal/tools/profiler/test_timestamped_events",
@@ -1149,17 +1132,44 @@ def test_timestamped_events():
 
     devicesData = run_device_profiler_test(testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME], setupAutoExtract=True)
 
-    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
-        eventCount = len(
-            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
-        )
-        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
-
     if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
         eventCount = len(
             devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
         )
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_active_eth_slow_dispatch():
+    # Fast dispatch to active ethernet has been removed, so active ethernet kernels are only profiled here, under slow
+    # dispatch. Same kernel and loop count as test_timestamped_events, but nothing runs on Tensix.
+    OP_COUNT = 2
+    ZONE_COUNT = 100
+    ERISC_COUNTS = {
+        "wormhole_b0": [3, 6, 16],  # N300, T3K, 6U
+        "blackhole": [1, 6, 8],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    if ENV_VAR_ARCH_NAME not in ERISC_COUNTS:
+        pytest.skip(f"No active ethernet cores on {ENV_VAR_ARCH_NAME}")
+
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_active_eth_slow_dispatch",
+        setupAutoExtract=True,
+        slowDispatch=True,
+    )
+
+    # Device 0 has no profiler data at all when it has no active ethernet cores to program
+    device = devicesData["data"]["devices"].get("0")
+    events = device["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"] if device else {}
+    eriscEventCount = len(events.get("erisc_events", []))
+    if eriscEventCount == 0 and is_single_chip_wrapper():
+        pytest.skip("Single chip, no active ethernet cores")
+
+    assert eriscEventCount in [
+        C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS[ENV_VAR_ARCH_NAME]
+    ], f"Wrong erisc event count {eriscEventCount}"
+    assert len(events.get("all_events", [])) == eriscEventCount, "Events recorded outside the active ethernet cores"
 
 
 def test_noc_event_profiler_linked_multicast_hang():

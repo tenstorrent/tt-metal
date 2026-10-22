@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -51,7 +52,7 @@ struct AllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
 
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
@@ -86,7 +87,7 @@ struct StridedAllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
 
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
@@ -111,13 +112,23 @@ struct ReduceScatterFusedOpSignaler {
 
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
+    void init_reduce_scatter(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        const tt::tt_metal::CoreRangeSet& core_range_to_signal);
 
     void init_fused_op();
 
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
+
+uint32_t add_semaphore_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint32_t initial_value = 0,
+    tt::CoreType core_type = tt::CoreType::WORKER);
 
 enum class MatmulFusedOpSignalerType {
     ALL_GATHER,
@@ -200,7 +211,7 @@ struct MatmulFusedOpSignaler {
     void init_llama_rs_cores_mm(
         const tt::tt_metal::CoreRangeSet& matmul_cores,
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         int privilaged_index = 0);
     // Get the rt values
     // Write the semaphore ID
@@ -212,18 +223,31 @@ struct MatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args,
         tt::tt_metal::CoreCoord current_core,
         tt::tt_metal::NOC writer_noc,
-        const tt::tt_metal::IDevice* device) const;
+        const tt::tt_metal::distributed::MeshDevice* device) const;
 
     void init_fused_op(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::CoreRange& matmul_workers,
         const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
 
     void init_fused_op(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    // ProgramDescriptor forms of the two init_fused_op overloads above: the semaphores they create become
+    // SemaphoreDescriptors in `desc` (ids free on every core they cover); everything else is identical.
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        const tt::tt_metal::CoreRange& matmul_workers,
+        const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        const tt::tt_metal::CoreRangeSet& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
     bool is_all_gather() const;
@@ -271,7 +295,7 @@ struct MinimalMatmulFusedOpSignaler {
 
     void init_fused_op(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
@@ -306,7 +330,7 @@ struct StridedReduceScatterFusedOpSignaler {
 
     void init_strided_reduce_scatter(
         tt::tt_metal::Program& program,
-        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::distributed::MeshDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
 
     void push_strided_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) const;

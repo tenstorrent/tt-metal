@@ -49,11 +49,13 @@ class SubDeviceTraceController:
     _LOAD = "load"
     _CLEAR = "clear"
     _ACK = "ack"  # per-layer migration ack (host shm bump): split the capture here, call the callback at replay
+    _VARIANTS = "variants"  # {name: sub-program}: alternative captures of one region, replay walks exactly one
 
     def __init__(self, mesh_device, cq_id=0):
         self.mesh_device = mesh_device
         self.cq_id = cq_id
-        self._program = []  # ordered (kind, payload): (_TRACE, tid)|(_LOAD, mgr_id)|(_CLEAR, None)|(_ACK, layer_idx)
+        # ordered (kind, payload): (_TRACE, tid)|(_LOAD, mgr_id)|(_CLEAR, None)|(_ACK, layer_idx)|(_VARIANTS, dict)
+        self._program = []
         self._current_tid = None
         self._capturing = False
         # Optional per-layer ack callback (runner: layer_ack_channel.inject(1)). When set, MLA routes its
@@ -81,8 +83,9 @@ class SubDeviceTraceController:
     def end_capture(self):
         """Close the final trace segment."""
         assert self._capturing, "begin_capture() was not called"
-        ttnn.end_trace_capture(self.mesh_device, self._current_tid, cq_id=self.cq_id)
-        self._program.append((self._TRACE, self._current_tid))
+        if self._current_tid is not None:
+            ttnn.end_trace_capture(self.mesh_device, self._current_tid, cq_id=self.cq_id)
+            self._program.append((self._TRACE, self._current_tid))
         self._current_tid = None
         self._capturing = False
 
@@ -117,9 +120,41 @@ class SubDeviceTraceController:
             ttnn.synchronize_device(self.mesh_device)
             self._on_layer_complete(layer_idx)
 
+    def capture_variants(self, variants):
+        """Record each ``variants`` callable as an alternative capture of the same region; ``replay(variant=)``
+        then runs exactly one of them. Idle (not capturing), only the FIRST runs: it must use every program
+        the others do, since a capture cannot absorb a program-cache miss, and must emit the same host-side
+        acks as one replay of any variant would.
+
+        The variants are captured back to back but never replayed together, so each may reuse the
+        addresses of the temporaries the previous one freed. Each must leave the sub-device manager as it
+        found it.
+
+        The region must be the last device work of the capture: no segment is opened after it, because
+        end_trace_capture on a trace with no commands is not supported. end_capture() is the only legal
+        next call."""
+        names = list(variants)
+        if not self._capturing:
+            variants[names[0]]()
+            return
+        ttnn.end_trace_capture(self.mesh_device, self._current_tid, cq_id=self.cq_id)
+        self._program.append((self._TRACE, self._current_tid))
+        outer, recorded = self._program, {}
+        for name in names:
+            self._program = []
+            self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+            variants[name]()
+            ttnn.end_trace_capture(self.mesh_device, self._current_tid, cq_id=self.cq_id)
+            self._program.append((self._TRACE, self._current_tid))
+            recorded[name] = self._program
+        self._program = outer
+        self._program.append((self._VARIANTS, recorded))
+        self._current_tid = None
+
     def _split(self, kind, payload):
         # Close the current segment, perform the real host action (load/clear only; ACK has no
         # capture-time action), open the next segment.
+        assert self._current_tid is not None, "device work after capture_variants(): it must end the capture"
         ttnn.end_trace_capture(self.mesh_device, self._current_tid, cq_id=self.cq_id)
         self._program.append((self._TRACE, self._current_tid))
         if kind == self._LOAD:
@@ -131,7 +166,7 @@ class SubDeviceTraceController:
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
 
     # ------------------------------------------------------------------ replay
-    def replay(self):
+    def replay(self, variant=None):
         """Run the whole segmented forward: execute each trace, load/clear between segments.
 
         Segments are enqueued NON-blocking on one CQ: the device runs them in enqueue order, and the
@@ -141,27 +176,39 @@ class SubDeviceTraceController:
           - BEFORE each per-layer migration ack — the migration worker reads the just-written KV over NoC,
             out-of-band from the CQ, so that segment's writes must be on-device first; and
           - ONCE after the last segment — so the chunk's KV is fully written before replay() returns.
+        ``variant`` picks which capture of each capture_variants() region runs.
         This replaces the old block-every-segment (which serialized dispatch for no reason but the ack)."""
         assert not self._capturing, "still capturing"
         assert self._program, "nothing captured"
-        for kind, payload in self._program:
+        self._replay_steps(self._program, variant)
+        ttnn.synchronize_device(self.mesh_device)
+
+    def _replay_steps(self, program, variant):
+        for kind, payload in program:
             if kind == self._TRACE:
                 ttnn.execute_trace(self.mesh_device, payload, cq_id=self.cq_id, blocking=False)
             elif kind == self._LOAD:
                 self.mesh_device.load_sub_device_manager(payload)
             elif kind == self._CLEAR:
                 self.mesh_device.clear_loaded_sub_device_manager()
+            elif kind == self._VARIANTS:
+                assert variant in payload, f"replay(variant={variant!r}): the capture recorded {sorted(payload)}"
+                self._replay_steps(payload[variant], variant)
             else:  # _ACK: per-layer migration ack (callback set => non-None here). Flush the preceding
                 # segment(s) so the out-of-band migration worker sees post-write KV, THEN fire the ack.
                 ttnn.synchronize_device(self.mesh_device)
                 self._on_layer_complete(payload)
 
-        ttnn.synchronize_device(self.mesh_device)
-
     # ------------------------------------------------------------------ stats / cleanup
     @property
     def num_segments(self):
-        return sum(1 for kind, _ in self._program if kind == self._TRACE)
+        def count(program):
+            return sum(
+                1 if kind == self._TRACE else sum(map(count, payload.values())) if kind == self._VARIANTS else 0
+                for kind, payload in program
+            )
+
+        return count(self._program)
 
     def trace_bytes(self):
         """Total device memory used by all captured trace segments (bytes per device)."""
@@ -177,8 +224,10 @@ class SubDeviceTraceController:
         # the same manager transitions used by replay so every trace ID is resolved under its owner.
         # ACKs are replay-only side effects and must not fire during cleanup.
         manager_loaded = False
-        try:
-            for kind, payload in self._program:
+
+        def release_steps(program):
+            nonlocal manager_loaded
+            for kind, payload in program:
                 if kind == self._TRACE:
                     ttnn.release_trace(self.mesh_device, payload)
                 elif kind == self._LOAD:
@@ -187,6 +236,12 @@ class SubDeviceTraceController:
                 elif kind == self._CLEAR:
                     self.mesh_device.clear_loaded_sub_device_manager()
                     manager_loaded = False
+                elif kind == self._VARIANTS:
+                    for sub in payload.values():
+                        release_steps(sub)
+
+        try:
+            release_steps(self._program)
         finally:
             if manager_loaded:
                 self.mesh_device.clear_loaded_sub_device_manager()

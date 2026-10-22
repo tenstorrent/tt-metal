@@ -121,7 +121,7 @@
 
     kimi_dflash() (
       export MESH_DEVICE=TG
-      export DFLASH_HF_MODEL=/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash
+      export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-DFlash
 
       timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -227,7 +227,9 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -vvv --tb=short
+      export TT_METAL_SHM_TRACKING_DISABLED=1
+      export LOGURU_LEVEL=INFO
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short
     '
   test_type: kimi_moe_perf
   test_tags: [kimi_k2_7, kimi_k3, moe]
@@ -941,6 +943,34 @@
   team: models
   sp_config: sc1
 
+# Gemma4 prefill perf gate: traced 256k prefill at chunks 2k/4k/8k, each failing if the wall or device
+# time to reach 1k/10k/100k/256k context is above its baseline range in test_model_perf_glx.py.
+- name: "(Gemma4-31B-it) D_P prefill perf gate 256k@2k/4k/8k"
+  fabric_profile: 1d
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/gemma4_d_p/tests/test_model_perf_glx.py \
+        -vv --tb=short
+    '
+  test_type: gemma4_d_p_perf
+  test_tags: [gemma4_d_p]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1_high_power:
+      timeout: 10
+      tier: 1
+      release_ready: false
+  owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
 # Gemma4 layer perf at 256k context: first, second, middle and last global chunk and the first two sliding
 # chunks, for 2k, 4k and 8k chunks.
 - name: "(Gemma4-31B-it) D_P layer perf 256k@2k, 256k@4k, 256k@8k"
@@ -1627,7 +1657,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -1671,9 +1701,9 @@
   sp_config: sc4
 
 
-# 4-galaxy (SC4) GLM-5.3 MTP7 prefill KV accuracy and throughput, sharing a launcher with the SC1 MTP7
+# 4-galaxy (SC4) GLM-5.3 MTP1 prefill KV accuracy and throughput, sharing a launcher with the SC1 MTP1
 # entry below. MTP is gated against its own tail-trace golden, not the manifest golden the entries above use.
-- name: "(GLM-5.3-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC4"
+- name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1681,9 +1711,9 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 7
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 1
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -1728,7 +1758,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
@@ -1762,9 +1792,9 @@
   sp_config: sc1
 
 
-# Single-galaxy (SC1) GLM-5.3 MTP7 prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-embedding transport, so a failure here is MTP7 itself.
-- name: "(GLM-5.3-744B) MTP7 prefill KV accuracy + perf 55k@5k, SC1"
+# Single-galaxy (SC1) GLM-5.3 MTP1 prefill KV accuracy, same launcher as the SC4 entry above and the
+# control for it: one rank skips the D2D union-id transport, so a failure here is MTP1 itself.
+- name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1772,21 +1802,22 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) MTP7 prefill KV accuracy + perf 55k@5k, runner ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 7 || exit $?
-    echo "===== [2/2] (GLM-5.3-744B) MTP7 predictor multi-turn accuracy, 8 turn schedules ====="
+    echo "===== [1/2] (GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, runner ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 1 || exit $?
+    echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
       timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP multi-turn: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; every selected case is pretrained, so all would skip and leave the job green"; exit 1; }
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc -k "torus-xy-8x4 and pretrained and levels7" -vvv --tb=short
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc -k "torus-xy-8x4 and pretrained and levels1" -vvv --tb=short
       '
     ) || exit $?
     echo "===== both sections passed ====="
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, mtp]
+  test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
   skus:
     bh_sc1:

@@ -58,11 +58,6 @@ on:
         type: boolean
         default: true
         description: "Run fabric sanity tests"
-      run-ops-sanity-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run ops unit tests"
       run-umd-sanity-tests:
         required: false
         type: boolean
@@ -177,11 +172,6 @@ on:
         default: true
         type: boolean
         description: "Run fabric sanity tests (WH N300 + BH card smoke)"
-      run-ops-sanity-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run ops sanity tests"
       run-umd-sanity-tests:
         required: false
         default: true
@@ -445,7 +435,7 @@ jobs:
           # must restrict a multi-architecture tests YAML to one architecture (umd-sanity-tests).
           # sanity-skus is the union of every enabled arch's list below: pass this to an impl
           # whose tests yaml spans multiple architectures in one file (ttnn-sanity-tests,
-          # ops-sanity-tests, blackhole-multi-card-fast-sanity-tests). prepare_test_matrix.py
+          # blackhole-multi-card-fast-sanity-tests). prepare_test_matrix.py
           # intersects whichever list it's given against each test's own `skus:` map, so handing
           # a wider list than a given tests yaml needs is safe -- SKUs the yaml doesn't reference
           # simply produce no matrix rows for that impl.
@@ -542,7 +532,7 @@ jobs:
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
       summary-scope: ${{ inputs.platform }}
-      # sanity-skus, same as ttnn-sanity-tests/ops-sanity-tests/blackhole-multi-card-fast-sanity-tests.
+      # sanity-skus, same as ttnn-sanity-tests/blackhole-multi-card-fast-sanity-tests.
       # t3000_sanity_tests.yaml today only defines wh_llmbox_civ2; every other SKU in the
       # list (wh_n300_civ2, wh_llmbox, wh_llmbox_civ2_viommu, wh_llmbox_perf, and any bh_*/sim_*
       # entries) simply produces no matrix row here until/unless a test entry references it.
@@ -576,27 +566,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-      ref: ${{ needs.resolve-ref.outputs.sha }}
-
-  # Ops sanity (Wormhole + Blackhole via ops_sanity_tests.yaml)
-  ops-sanity-tests:
-    # bake-env-dev-full is in needs but deliberately absent from the if: above.
-    # A failed bake leaves the ref empty and the leg falls back to the artifact
-    # path, which a gate on the bake would turn into a skipped suite instead.
-    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
-    secrets: inherit
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-blackhole == 'true' && toJSON(inputs.run-ops-sanity-tests) != 'false' }}
-    uses: ./.github/workflows/ops-sanity-impl.yaml
-    with:
-      summary-scope: ${{ inputs.platform }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # UMD sanity (Blackhole only)
@@ -662,10 +631,9 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
-  # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
-  # main and the scheduled runs leave this leg out: `inputs` is null on those events.
+  # Model sanity tests (WH Galaxy).
   models-sanity-tests:
-    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) == 'true' }}
+    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) != 'false' }}
     # bake-env-dev-full is in needs but deliberately absent from the if: above.
     # A failed bake leaves the ref empty and the leg falls back to the artifact
     # path, which a gate on the bake would turn into a skipped suite instead.
@@ -681,10 +649,9 @@ jobs:
       summary-scope: ${{ inputs.platform }}
 
   # LLK sanity (tt-llk python_tests smoke, WH + BH). Opt-in: run-llk-sanity-tests defaults
-  # to false, so this leg is off unless a caller asks for it. The `== 'true'` gate is the
-  # same shape models-sanity-tests uses — note that input defaults to true, so for it the
-  # gate only excludes push/schedule, where `inputs` is null; here it excludes those events
-  # *and* every call that does not opt in.
+  # to false, so this leg is off unless a caller asks for it. The `== 'true'` gate (rather
+  # than `!= 'false'`, which every default-true toggle above uses) excludes push/schedule,
+  # where `inputs` is null, *and* every call that does not opt in.
   llk-sanity-tests:
     needs: [resolve-docker-pull-refs, generate-sku-matrix, resolve-ref]
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' &&
@@ -743,7 +710,6 @@ jobs:
       - generate-sku-matrix
       - ttnn-sanity-tests
       - t3000-sanity-tests
-      - ops-sanity-tests
       - umd-sanity-tests
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests

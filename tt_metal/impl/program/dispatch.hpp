@@ -106,10 +106,12 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size);
 
-// On WH/BH, DFBs are initialised via setup_local_cb_read_write_interfaces and require
-// local_cb_mask to be a proper slot bitmask (one bit per DFB id).  Call this after
-// finalize_dfbs so the mask is set correctly for every kernel group.
+// Write each kernel group's DFBs into its launch message's local_cb_mask. On WH/BH, DFBs are initialised via
+// setup_local_cb_read_write_interfaces and need a slot bitmask (one bit per DFB device slot); on Quasar the firmware
+// reads the DFB count. Call this after finalize_cbs and finalize_dfbs: finalize_cbs sizes the CB config region from
+// local_cb_mask, which must not count DFBs.
 void finalize_dfb_masks(
+    const MetalContext& metal_ctx,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 

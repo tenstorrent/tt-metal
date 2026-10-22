@@ -492,13 +492,13 @@ protected:
         use_exec_buf_ = params.use_exec_buf;
 
         // On the Quasar simulator the command queue is the HAL-reserved DRAM-backed CQ, which lives below dram_base_;
-        // the exec buffer and bank data sit in the unreserved window [dram_base_, physical DRAM size).
-        // Skip only if the exec_buf base alone already overruns physical DRAM (the banked exec_buf top is checked
-        // precisely in build_and_write_exec_buf_to_dram, once num_pages is known).
+        // the exec buffer and bank data sit in [dram_base_, 64 MiB), the size of an emulator DRAM channel. Higher
+        // offsets wrap onto the low 64 MiB. Skip only if the exec_buf base alone already passes 64 MiB (the banked
+        // exec_buf top is checked precisely in build_and_write_exec_buf_to_dram, once num_pages is known).
         if (Common::is_quasar_sim() && compute_exec_buf_base_addr() >= Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) {
-            GTEST_SKIP() << "exec_buf base " << compute_exec_buf_base_addr()
-                         << " overruns Quasar simulator physical DRAM size "
-                         << Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE;
+            GTEST_SKIP() << "exec_buf base " << compute_exec_buf_base_addr() << " overruns the Quasar emulator's "
+                         << Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE
+                         << "-byte (64 MiB) DRAM channel; higher offsets wrap";
         }
     }
 
@@ -720,7 +720,7 @@ public:
             const uint32_t exec_buf_top = exec_buf_base_addr + exec_buf_rows * page_size;
             TT_FATAL(
                 exec_buf_top <= Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
-                "exec_buf top {:#x} overruns Quasar simulator physical DRAM size {:#x}",
+                "exec_buf top {:#x} overruns the Quasar emulator's 64 MiB DRAM channel ({:#x}); higher offsets wrap",
                 exec_buf_top,
                 Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE);
         }
@@ -1294,7 +1294,7 @@ public:
     void run_host_test() {
         const uint32_t num_iterations = get_num_iterations();
 
-        // Scale down data size on the Quasar simulator to avoid exceeding the 64 MB DRAM window.
+        // Scale down data size on the Quasar simulator: the emulator has 64 MiB of DRAM per channel.
         const uint32_t max_data_size = Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
         const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
 
@@ -2785,7 +2785,8 @@ public:
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id);
 
         // Queue backing. WH/BH and Quasar with TT_METAL_DRAM_BACKED_CQ=0 stage commands in the mapped
-        // host region. DRAM-backed Quasar uses the fixed physical-DRAM queue window instead.
+        // host region. DRAM-backed Quasar stages them at fixed addresses in the top 16 MiB of the emulator's
+        // 64 MiB DRAM channel instead.
         uint32_t dev_hugepage_base = 0;
         void* host_hugepage_base = nullptr;
         if (!Common::is_quasar_cq_dram_backed()) {

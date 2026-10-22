@@ -569,7 +569,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceInt32) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceInt32) {
     for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
         for (std::uint32_t num_blocks : {1u, 4u}) {
             run_single_core_sfpu_reduce(

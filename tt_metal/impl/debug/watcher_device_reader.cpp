@@ -380,7 +380,7 @@ private:
     void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
-    const std::string& GetKernelName(uint32_t processor_index) const;
+    std::string GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
     void SetEnableFlags(uint32_t enables) const;
 
@@ -417,9 +417,15 @@ WatcherDeviceReader::WatcherDeviceReader(
     FILE* f,
     ChipId device_id,
     const std::vector<string>& kernel_names,
+    std::mutex& kernel_names_mutex,
     tt::tt_metal::MetalEnvImpl& env,
     WatcherServer& watcher_server) :
-    f(f), device_id(device_id), env(env), watcher_server(watcher_server), kernel_names(kernel_names) {
+    f(f),
+    device_id(device_id),
+    env(env),
+    watcher_server(watcher_server),
+    kernel_names(kernel_names),
+    kernel_names_mutex(kernel_names_mutex) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
@@ -527,15 +533,15 @@ void WatcherDeviceReader::Dump(FILE* file) {
         const auto& hal = env.get_hal();
         if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
-                     soc_d)) {
+            for (const auto& logical_dispatch_core :
+                 tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(soc_d)) {
                 Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }
         }
     }
 
     for (auto k_id : dump_data.used_kernel_names) {
-        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
+        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_name(k_id.first).c_str());
     }
 
     const auto& hal = env.get_hal();
@@ -555,7 +561,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                 processor_name,
                 info.stack_free,
                 info.virtual_coord.str().c_str(),
-                kernel_names[info.kernel_id].c_str());
+                kernel_name(info.kernel_id).c_str());
             if (info.stack_free == 0) {
                 // We had no free stack, this probably means we
                 // overflowed, but it could be a remarkable coincidence.
@@ -567,7 +573,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     device_id,
                     info.virtual_coord.str(),
                     processor_name,
-                    kernel_names[info.kernel_id].c_str());
+                    kernel_name(info.kernel_id).c_str());
             } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
@@ -578,7 +584,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     device_id,
                     info.virtual_coord.str(),
                     processor_name,
-                    kernel_names[info.kernel_id].c_str(),
+                    kernel_name(info.kernel_id).c_str(),
                     info.stack_free);
             }
         }
@@ -1538,14 +1544,14 @@ void WatcherDeviceReader::Core::ValidateKernelIDs() const {
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         uint16_t watcher_kernel_id = launch_msg_.kernel_config().watcher_kernel_ids()[i];
-        if (watcher_kernel_id >= reader_.kernel_names.size()) {
+        if (watcher_kernel_id >= reader_.num_kernel_names()) {
             TT_THROW(
                 "Watcher data corruption, unexpected {} kernel id on Device {} core {}: {} (last valid {})",
                 get_riscv_name(hal, programmable_core_type_, i),
                 reader_.device_id,
                 virtual_coord_.str(),
                 watcher_kernel_id,
-                reader_.kernel_names.size());
+                reader_.num_kernel_names());
         }
         dump_data_.used_kernel_names[watcher_kernel_id] = true;
     }
@@ -1560,9 +1566,22 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
     }
 }
 
-const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
+std::string WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
     TT_FATAL(processor_index < launch_msg_.kernel_config().watcher_kernel_ids().size(), "processor_index out of range");
-    return reader_.kernel_names[launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]];
+    return reader_.kernel_name(launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]);
+}
+
+std::string WatcherDeviceReader::kernel_name(size_t kernel_id) const {
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex);
+    if (kernel_id >= kernel_names.size()) {
+        return fmt::format("<unregistered kernel id {}>", kernel_id);
+    }
+    return kernel_names[kernel_id];
+}
+
+size_t WatcherDeviceReader::num_kernel_names() const {
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex);
+    return kernel_names.size();
 }
 
 }  // namespace tt::tt_metal

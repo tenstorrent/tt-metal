@@ -15,7 +15,7 @@ from quasar.test_eltwise_unary_sfpu_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(
+    mathop_formats_dest_acc_sync_input_dims=generate_sfpu_unary_combinations(
         is_perf=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
@@ -24,13 +24,13 @@ from quasar.test_eltwise_unary_sfpu_quasar import (
 )
 def test_perf_eltwise_unary_sfpu_quasar(
     perf_report,
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop_formats_dest_acc_sync_input_dims,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_eltwise_unary_sfpu_quasar(
-        [mathop_formats_dest_acc_sync_implied_math_input_dims],
+        [mathop_formats_dest_acc_sync_input_dims],
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

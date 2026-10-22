@@ -13,6 +13,8 @@ namespace ckernel::sfpu {
 
 inline void softshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+// The param0 the generated softshrink kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t softshrink_bf16_param0_bits = 0x3f000000u;
 // Whether BF16 DEST runs the generated softshrink kernel as one call over the whole tile.
 inline constexpr bool softshrink_bf16_whole_tile = false;
 // The stock softshrink kernel needs no BF16 setup.

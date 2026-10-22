@@ -56,10 +56,11 @@ enum class EnvVarID {
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
-    QUASAR_ARCH_VARIANT,                      // Quasar IP variant (LLK arch/<variant> directory)
+    TT_METAL_QUASAR_VARIANT,                  // Quasar IP variant (register headers and LLK arch/<variant> directory)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
     TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
@@ -92,8 +93,6 @@ enum class EnvVarID {
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
-    TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
-
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
@@ -122,7 +121,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
-    TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets (on by default)
+    TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
@@ -538,18 +537,29 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_CLUSTER_ID
+        // Cluster id UMD stamps on the cluster descriptor it discovers: a unique string naming the
+        // group of accelerators behind a common host / controller / root complex. Leave unset on
+        // bare metal, where UMD's gethostname() already names that group. Set it in a container or a
+        // VM, where gethostname() names the container or the guest instead.
+        // Default: unset (UMD uses the OS hostname)
+        // Usage: export TT_METAL_CLUSTER_ID=bh-glx-110-c01u02
+        case EnvVarID::TT_METAL_CLUSTER_ID:
+            // Exported but empty is a launcher accident, not a request for an empty cluster id, and
+            // UMD throws on one. Treat it as unset so such a run still gets the OS hostname.
+            if (value[0] != '\0') {
+                this->cluster_id = std::string(value);
+            }
+            break;
+
         // TT_METAL_EMULE_MODE
         // Enable emulated mode: creates SWEmuleChip (with real memory-backed I/O)
         // instead of MockChip.  Requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set.
-        // Automatically forces slow dispatch mode.
+        // Dispatch follows TT_METAL_SLOW_DISPATCH_MODE as on silicon: set, slow dispatch; unset, fast dispatch,
+        // where emulated devices get tt-emule's mesh command queue.
         // Default: Disabled
         // Usage: export TT_METAL_EMULE_MODE=1
-        case EnvVarID::TT_METAL_EMULE_MODE:
-            this->runtime_target_device_ = tt::TargetDevice::Emule;
-            // Emulated mode requires slow dispatch (no HWCommandQueue)
-            this->using_slow_dispatch = true;
-            this->fast_dispatch = false;
-            break;
+        case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
@@ -563,27 +573,36 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export ARCH_NAME=wormhole_b0
         case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
 
-        // QUASAR_ARCH_VARIANT
-        // Build the Quasar LLKs for an IP variant. The name is a directory under
-        // tt_metal/tt-llk/tt_llk_quasar/arch/ whose headers shadow the base Quasar ones.
-        // Default: unset (base Quasar part)
-        // Usage: export QUASAR_ARCH_VARIANT=quasar_4row
-        case EnvVarID::QUASAR_ARCH_VARIANT: {
-            const std::string variant(value);
-            if (variant.empty()) {
+        // TT_METAL_QUASAR_VARIANT
+        // Quasar IP variant. Selects the variant's register headers under tt_metal/hw/inc/internal/tt-2xx/
+        // and, when tt_metal/tt-llk/tt_llk_quasar/arch/<variant> exists, the LLK headers that shadow the
+        // base Quasar ones. The IP numbers 2.0.1 and 2.0.2 are aliases for horizon and trinity.
+        // Default: unset (base Quasar part, also spelled quasar or 2.0.0)
+        // Usage: export TT_METAL_QUASAR_VARIANT=trinity
+        case EnvVarID::TT_METAL_QUASAR_VARIANT: {
+            std::string variant(value);
+            std::transform(
+                variant.begin(), variant.end(), variant.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (variant.empty() || variant == "quasar" || variant == "2.0.0") {
                 break;
+            }
+            if (variant == "2.0.1") {
+                variant = "horizon";
+            } else if (variant == "2.0.2") {
+                variant = "trinity";
             }
             const bool plain_name = std::all_of(variant.begin(), variant.end(), [](unsigned char c) {
                 return std::islower(c) || std::isdigit(c) || c == '_';
             });
-            TT_FATAL(plain_name, "QUASAR_ARCH_VARIANT '{}' must be a plain lowercase name (a-z, 0-9, _)", variant);
+            TT_FATAL(plain_name, "TT_METAL_QUASAR_VARIANT '{}' must be a plain lowercase name (a-z, 0-9, _)", variant);
+            const bool has_register_headers = variant == "horizon" || variant == "trinity";
             const auto dir = std::filesystem::path(get_root_dir()) / "tt_metal/tt-llk/tt_llk_quasar/arch" / variant;
             TT_FATAL(
-                std::filesystem::is_directory(dir),
-                "QUASAR_ARCH_VARIANT '{}' has no directory {}",
+                has_register_headers || std::filesystem::is_directory(dir),
+                "TT_METAL_QUASAR_VARIANT '{}' is not a known IP variant and has no directory {}",
                 variant,
                 dir.string());
-            this->quasar_arch_variant = variant;
+            this->quasar_variant = variant;
             break;
         }
 
@@ -952,14 +971,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS
         // Expose each simulated chip over a per-chip socket so a separate process (a debug tool) can
-        // attach to this run as a client. Set to '0' to keep the simulator private to this process.
-        // Default: true (enabled)
-        // Usage: export TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0
+        // attach to this run as a client.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1
         case EnvVarID::TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS:
-            this->simulator_serve_over_sockets = true;
-            if (std::strncmp(value, "0", 1) == 0) {
-                this->simulator_serve_over_sockets = false;
-            }
+            this->simulator_serve_over_sockets = is_env_enabled(value);
             break;
 
         // TT_METAL_QUASAR_NOC_API_VERSION
@@ -1936,15 +1952,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             const std::string lowered = to_lower_copy(trim_copy(std::string(value)));
             this->topology_mapping_use_sat_engine_ =
                 lowered == "sat" || lowered == "1" || lowered == "true" || lowered == "yes";
-            break;
-        }
-
-        // TT_METAL_DISABLE_XIP_DUMP
-        // Disable XIP dump
-        // Default: false
-        // Usage: export TT_METAL_DISABLE_XIP_DUMP=1
-        case EnvVarID::TT_METAL_DISABLE_XIP_DUMP: {
-            this->disable_xip_dump = is_env_enabled(value);
             break;
         }
 

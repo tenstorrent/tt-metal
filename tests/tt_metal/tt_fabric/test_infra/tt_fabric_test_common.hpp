@@ -413,8 +413,10 @@ public:
         return mesh_adjacency_map;
     }
 
+    tt::ARCH get_arch() const { return mesh_device_->arch(); }
+
     uint32_t get_max_connections_per_device() const override {
-        auto arch = tt::tt_metal::hal::get_arch();
+        auto arch = get_arch();
         switch (arch) {
             case tt::ARCH::BLACKHOLE: return 5;  // N, S, E, W, Z
             default: return 4;                   // N, S, E, W
@@ -1875,8 +1877,8 @@ public:
 
 private:
     // Helper methods for device frequency validation (performance testing)
-    static uint32_t get_expected_baseline_frequency_mhz() {
-        auto arch = tt::tt_metal::hal::get_arch();
+    uint32_t get_expected_baseline_frequency_mhz() const {
+        auto arch = get_arch();
         switch (arch) {
             case tt::ARCH::WORMHOLE_B0: return 1000;
             case tt::ARCH::BLACKHOLE: return 1350;
@@ -1884,9 +1886,9 @@ private:
         }
     }
 
-    static uint32_t get_frequency_tolerance_mhz() {
+    uint32_t get_frequency_tolerance_mhz() const {
         // Note: these tolerances are initally set as placeholders and should be calibrated based on empirical data
-        auto arch = tt::tt_metal::hal::get_arch();
+        auto arch = get_arch();
         switch (arch) {
             case tt::ARCH::WORMHOLE_B0: return 10;
             case tt::ARCH::BLACKHOLE: return 20;

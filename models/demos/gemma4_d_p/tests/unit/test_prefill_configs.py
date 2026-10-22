@@ -3,11 +3,13 @@
 
 """Host checks for the prefill SDPA, matmul and RMSNorm config choices."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
 import ttnn
+from models.demos.gemma4_d_p.tt.attention import ring_prefill
 from models.demos.gemma4_d_p.tt.attention.operations import projection_math_fidelity
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, short_m_sharded_memcfg
@@ -20,23 +22,109 @@ GRID = SimpleNamespace(x=11, y=10)
 @pytest.mark.parametrize(
     "slab, sliding, expected",
     [
-        (256, False, (64, 256, 3, True)),
-        (512, False, (128, 256, 3, True)),
+        (32, False, (32, 224, 4, False)),
+        (256, False, (64, 288, 3, False)),
+        (448, False, (128, 288, 3, False)),
+        (512, False, (128, 256, 3, False)),
+        (768, False, (128, 256, 2, False)),
+        (832, False, (64, 256, 1, True)),
         (1024, False, (96, 256, 1, True)),
-        (256, True, (128, 128, 1, False)),
-        # A quarter slab that is not whole tiles falls back to one tile.
-        (64, False, (32, 256, 3, True)),
-        (160, False, (32, 256, 3, True)),
-        # Segmented accumulation needs one Q chunk per core: 8 heads x ceil(slab / q) <= 110 cores.
+        (256, True, (128, 128, 3, False)),
+        (512, True, (128, 128, 3, False)),
+        (1024, True, (128, 128, 1, False)),
+        (64, False, (64, 256, 4, False)),
+        (160, False, (96, 224, 4, False)),
         (1536, False, (128, 256, 1, True)),
         (1664, False, (128, 256, 1, True)),
-        # Too long for any q tried (chunk 16384: 16 chunks of q 128 per head): q 96 without segments.
         (2048, False, (96, 256, 1, False)),
         (4096, False, (96, 256, 1, False)),
     ],
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
-    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110) == expected
+    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110, use_tuned_configs=True) == expected
+
+
+@pytest.fixture
+def ring_sdpa_table_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(ring_prefill, "__file__", str(tmp_path / "ring_prefill.py"))
+    ring_prefill._load_global_ring_sdpa_configs.cache_clear()
+    yield tmp_path / "ring_sdpa_configs.json"
+    ring_prefill._load_global_ring_sdpa_configs.cache_clear()
+
+
+@pytest.mark.parametrize("contents", [None, "{", "null", "[]", "{}", '{"configs": []}'])
+def test_ring_sdpa_table_unavailable_uses_heuristic(ring_sdpa_table_file, contents):
+    if contents is not None:
+        ring_sdpa_table_file.write_text(contents)
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (96, 256, 1, True)
+    # The old small-slab heuristic could request segments for 112 Q units on 110 cores.
+    assert ring_sdpa_chunk_sizes(448, False, use_tuned_configs=True) == (32, 256, 3, False)
+    assert ring_sdpa_chunk_sizes(448, True, use_tuned_configs=True) == (128, 128, 3, False)
+
+
+def test_ring_sdpa_table_is_relative_to_module_and_cached(ring_sdpa_table_file, tmp_path, monkeypatch):
+    other = tmp_path / "different_working_directory"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    ring_sdpa_table_file.write_text(json.dumps({"configs": {"6144": [128, 256, 3, True]}}))
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (128, 256, 3, True)
+    ring_sdpa_table_file.unlink()
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (128, 256, 3, True)
+
+
+def test_ring_sdpa_tuning_is_optional_and_geometry_specific():
+    assert ring_sdpa_chunk_sizes(768, False) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=False) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, num_heads=4, use_tuned_configs=True) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, num_cores=120, use_tuned_configs=True) == (96, 256, 1, True)
+
+
+@pytest.mark.parametrize(
+    "cp,tp,cols,rows,kv_dtype,expected",
+    [
+        (8, 4, 12, 10, ttnn.bfloat8_b, True),
+        (4, 8, 12, 10, ttnn.bfloat8_b, False),
+        (8, 4, 11, 11, ttnn.bfloat8_b, False),
+        (8, 4, 12, 10, ttnn.bfloat16, False),
+    ],
+)
+def test_ring_sdpa_global_caller_guards_tuned_workload(
+    monkeypatch, expect_error, cp, tp, cols, rows, kv_dtype, expected
+):
+    class SelectionReached(Exception):
+        pass
+
+    def select(*args, **kwargs):
+        assert kwargs["use_tuned_configs"] is expected
+        raise SelectionReached("SDPA configuration selected")
+
+    monkeypatch.setattr(ring_prefill, "ring_sdpa_chunk_sizes", select)
+    with expect_error(SelectionReached, "SDPA configuration selected"):
+        ring_prefill.global_ring_prefill_attention(
+            SimpleNamespace(shape=(1, 8, 768, 512), dtype=ttnn.bfloat16),
+            SimpleNamespace(dtype=kv_dtype),
+            SimpleNamespace(device=SimpleNamespace(arch=lambda: ttnn.Arch.BLACKHOLE), cp_degree=cp, tp_degree=tp),
+            SimpleNamespace(compute_grid_size=SimpleNamespace(x=cols, y=rows)),
+            prefill_metadata=None,
+            num_local_kv_heads=1,
+            max_seq_len=270336,
+            logical_n=262144,
+            kv_actual_global=256000,
+        )
+
+
+@pytest.mark.parametrize(
+    "slab, num_heads, num_cores, k_splits",
+    [
+        # Three bands of every (head, q 128 chunk) unit must fit on the cores.
+        (512, 8, 96, 3),
+        (512, 8, 95, 1),
+        (256, 16, 96, 3),
+        (512, 16, 110, 1),
+    ],
+)
+def test_ring_sdpa_sliding_k_splits(slab, num_heads, num_cores, k_splits):
+    assert ring_sdpa_chunk_sizes(slab, True, num_heads=num_heads, num_cores=num_cores)[2] == k_splits
 
 
 @pytest.mark.parametrize(
@@ -76,8 +164,9 @@ def test_1d_matmul_config_reads_sharded_activation_one_shard_per_k_block():
         _tensor(256, 5376, shard_cols=256), _tensor(5376, 5376), GRID, per_core_n=4
     )
     assert (config.in0_block_w, config.per_core_N) == (8, 4)
-    # fp32 dest: at most 4 tiles per output subblock.
+    # fp32 dest: at most 4 tiles per output subblock, shaped so the output can be width-sharded.
     assert config.out_subblock_h * config.out_subblock_w <= 4
+    assert config.out_subblock_w == config.per_core_N or config.out_subblock_h == 1
 
 
 @pytest.mark.parametrize(
@@ -95,9 +184,21 @@ def test_short_m_sharded_layout_rejects_unshardable_k(k_tiles, expect_error):
         short_m_sharded_memcfg(device, 256, k_tiles)
 
 
-# Rows per device after the TP row split: 64 / 128 / 256 at chunk 2048 / 4096 / 8192.
+# Rows per device after the TP row split: 64 / 128 / 256 at chunk 2048 / 4096 / 8192. Counts the minimum block
+# height doesn't divide (32 / 96 / 160 / 288 / 576) take the smallest divisor that fits.
 @pytest.mark.parametrize(
-    "rows, expected", [(64, (2, 14, 1, 12)), (128, (2, 14, 2, 12)), (256, (2, 14, 4, 12)), (1024, (4, 21, 8, 8))]
+    "rows, expected",
+    [
+        (64, (2, 14, 1, 12)),
+        (128, (2, 14, 2, 12)),
+        (256, (2, 14, 4, 12)),
+        (1024, (4, 21, 8, 8)),
+        (32, (1, 14, 1, 12)),
+        (96, (1, 14, 3, 12)),
+        (160, (1, 14, 5, 12)),
+        (288, (3, 14, 3, 12)),
+        (576, (3, 21, 6, 8)),
+    ],
 )
 def test_rms_norm_block_shard_geometry(rows, expected):
     assert _block_shard_geometry(rows, 5376) == expected

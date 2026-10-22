@@ -21,6 +21,8 @@ This module is the leaf of that dependency: it must not import from golden_gener
 sfpu_domains.
 """
 
+import struct
+
 # exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x), base e^0.5: EXP_WITH_BASE_SCALE_BF16
 # (and its fp32 form for exp_init) in sfpu_operations.h.
 EXP_WITH_BASE_SCALE = 0.5
@@ -82,3 +84,10 @@ SITU_GLU_BETA_UP = 25.0
 # rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
 RAND_FROM = 1.0
 RAND_SCALE = 2.0
+
+# EMA weights, mirrored by kEmaAlphaBits / kEmaBetaBits in sfpu_operations_quasar.h. 0.6 is
+# non-dyadic, so the carry product rounds.
+EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
+EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
+EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
+EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]

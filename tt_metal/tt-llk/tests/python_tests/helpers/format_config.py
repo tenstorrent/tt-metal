@@ -184,6 +184,14 @@ class DataFormat(Enum):
             DataFormat.MxInt2,
         }
 
+    def is_2x_format(self) -> bool:
+        return self in {
+            DataFormat.MxFp4_2x_A,
+            DataFormat.MxFp4_2x_B,
+            DataFormat.Int8_2x,
+            DataFormat.UInt8_2x,
+        }
+
     def is_mx_int_format(self) -> bool:
         """Checks if the data format is an MX integer format."""
         return self in {
@@ -511,20 +519,13 @@ class FormatConfig:
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
-        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1,
-        # math, or pack representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
-        srcab_only = {
-            DataFormat.MxFp4_2x_A,
-            DataFormat.MxFp4_2x_B,
-            DataFormat.Int8_2x,
-            DataFormat.UInt8_2x,
-        }
+        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1
+        # or pack representation, only unpack_A_dst / unpack_B_dst and the matching math format may use them.
         for field_name, value in (
             ("unpack_A_src", self.unpack_A_src),
             ("unpack_B_src", self.unpack_B_src),
             ("unpack_S_src", self.unpack_S_src),
             ("unpack_S_dst", self.unpack_S_dst),
-            ("math", self.math),
             ("sfpu_src", self.sfpu_src),
             ("sfpu_dst", self.sfpu_dst),
             ("pack_src", self.pack_src),
@@ -532,12 +533,20 @@ class FormatConfig:
             ("pack_S_src", self.pack_S_src),
             ("pack_S_dst", self.pack_S_dst),
         ):
-            if value in srcab_only:
+            if value.is_2x_format():
                 raise ValueError(
                     f"{value.name} is a 2x-packed SrcA/SrcB-only format and cannot be used "
-                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst. "
+                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst / math. "
                     f"For L1 input use DataFormat.MxFp4."
                 )
+        if self.math.is_2x_format() and (
+            self.math != self.unpack_A_dst or self.math != self.unpack_B_dst
+        ):
+            raise ValueError(
+                f"math={self.math.name} is a 2x register format but unpack_A_dst is "
+                f"{self.unpack_A_dst.name} and unpack_B_dst is {self.unpack_B_dst.name}: "
+                "the ALU SrcA/SrcB formats must be the formats the unpackers wrote."
+            )
 
     @property
     def output_format(self) -> DataFormat:

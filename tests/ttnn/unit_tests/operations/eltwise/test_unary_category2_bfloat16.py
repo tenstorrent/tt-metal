@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_ftz_band,
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
@@ -46,18 +47,6 @@ Accuracy criteria
   tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
                               test_tanhshrink
 """
-
-
-def assert_ftz_band(result, band_mask, band_desc):
-    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
-
-    The band is a deterministic slice of the exhaustive sweep, so the
-    non-emptiness assertion guards against a future golden/kernel change that
-    shifts a boundary and silently empties the band (which would otherwise let
-    the test pass without ever checking the documented FTZ behavior).
-    """
-    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
-    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

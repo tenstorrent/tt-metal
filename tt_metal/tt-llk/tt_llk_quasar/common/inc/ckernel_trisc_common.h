@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cfg_defines.h>
 #include <ckernel_proj_params.h>
 
 #include <cstdint>
 
-#include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_buf_desc.h"
@@ -264,14 +264,28 @@ struct semaphore
     // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
     // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
     // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
+    // UNPACK_MATH carries data-ready from unpack to math; MATH_PACK carries it from math to pack and, as in the
+    // regular path, throttles math behind pack (math stalls on its max). Neither gates the unpacker. What keeps the
+    // unpacker from overwriting a DEST bank the packer still reads is UNPACK_PACK: unpack posts it per section written,
+    // pack gets it per section released, and unpack stalls on its max (= number of DEST banks). Two separate counters
+    // cannot express that sum.
     //
     // Keep pairwise naming with producer_consumer direction:
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
+    // - UNPACK_PACK = unpack->pack
     // - PACK_UNPACK = pack->unpack
+    // - UNPACK_INIT = unpack->math (startup barrier, see llk_sync.h)
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
+    // Startup barrier for the unpack-to-dest handshake. Each semaphore is seeded by the thread that posts it, in front of
+    // its first post: MATH_PACK by math, UNPACK_MATH / UNPACK_PACK by unpack. The unpack thread raises this one right
+    // after its seeds, and math passes it before its first wait on UNPACK_MATH, so no SEMWAIT is ever pending on a
+    // semaphore when its SEMINIT lands. Pack needs no barrier: its first get on UNPACK_PACK follows math's first
+    // MATH_PACK post, which follows the unpacker's first UNPACK_MATH post. Rest state 0.
+    constexpr static std::uint32_t UNPACK_INIT = 0; // unpack -> math: the unpack-posted semaphores are seeded
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
@@ -305,6 +319,20 @@ inline void t6_semaphore_get(const std::uint8_t index)
     }
 
     TT_SEMGET(0, semaphore::t6_sem(index));
+}
+
+// Tensix thread semaphore init optionally stalled
+// Can stall on up to 3 resources at a time
+template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
+inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_value, const std::uint8_t max_value)
+{
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
+    }
+
+    TT_SEMINIT(max_value, min_value, 0, semaphore::t6_sem(index));
 }
 
 /**

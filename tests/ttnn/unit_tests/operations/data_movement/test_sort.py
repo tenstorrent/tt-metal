@@ -188,11 +188,10 @@ def test_sort_long_tensor(shape, dim, descending, device):
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
-def _sort_fp32_wide(descending, device):
+def _sort_fp32_wide(descending, device, n=151936, fill=float("-inf")):
     # A few finite logits in a sea of -inf, as in masked vocab-size logits.
     torch.manual_seed(0)
-    n = 151936
-    input = torch.full((1, n), float("-inf"), dtype=torch.float32)
+    input = torch.full((1, n), fill, dtype=torch.float32)
     input[..., torch.randperm(n)[:328]] = torch.randn(328) * 8.0
 
     ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
@@ -211,30 +210,21 @@ def test_sort_fp32_wide_values(descending, device):
 
 
 @pytest.mark.parametrize(
-    "descending",
+    "n, descending, fill",
     [
-        False,
-        # Descending order pads the row with -inf, which ties with real -inf
-        # entries and can emit padding indices (>= n) into the output on the
-        # MultiCore DRAM factory. Non-strict: on grids where this padded width
-        # lands on the CrossCore factory instead (e.g. an unharvested 8x8 WH
-        # grid), the index-aware comparator keeps padding entries in place and
-        # the test passes.
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="https://github.com/tenstorrent/tt-metal/issues/53326: padding indices leak",
-            ),
-        ),
+        (151936, False, float("-inf")),
+        (151936, True, float("-inf")),
+        # #53326: W=524288 exceeds CrossCore capacity on any grid, so these run on the
+        # MultiCore DRAM factory, where real ±inf ties with the ±inf padding.
+        (300000, True, float("-inf")),
+        (300000, False, float("inf")),
     ],
 )
-def test_sort_fp32_wide_index_correctness(descending, device):
+def test_sort_fp32_wide_index_correctness(n, descending, fill, device):
     # Ties make exact torch index parity undefined, so check invariants instead:
     # indices form a valid permutation and gather back the sorted values.
-    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device)
+    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device, n, fill)
 
-    n = input.shape[-1]
     values = ttnn.to_torch(ttnn_sort_values)
     indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
 
@@ -244,6 +234,142 @@ def test_sort_fp32_wide_index_correctness(descending, device):
     unique_count = indices.unique().numel()
     assert unique_count == n, f"{n - unique_count} duplicated indices"
     assert_equal(input.reshape(-1)[indices], values.reshape(-1))
+
+
+# #53326: UINT16 has no ±inf, so ttnn.sort pads with 0 (descending) or 65535 (ascending).
+# Real 0 / 65535 values then tie with the padding. UINT16 wider than 64 tiles always
+# runs on the MultiCore DRAM factory, so n=3000 (padded to 4096) covers it on any grid.
+@pytest.mark.parametrize("descending, pad_value", [(True, 0), (False, 65535)], ids=["desc_pad_0", "asc_pad_65535"])
+def test_sort_uint16_pad_value_ties_index_correctness(descending, pad_value, device):
+    torch.manual_seed(0)
+    n = 3000
+    num_other_values = 328
+
+    # Mostly the pad value, plus a few other values at random positions.
+    input = torch.full((1, n), pad_value, dtype=torch.int32)
+    other_positions = torch.randperm(n)[:num_other_values]
+    input[0, other_positions] = torch.randint(1, 65535, (num_other_values,), dtype=torch.int32)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    values = ttnn.to_torch(ttnn_sort_values).reshape(-1).to(torch.int32)
+    indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
+
+    # Ties make exact torch index parity undefined, so check invariants instead.
+    assert indices.max() < n, f"padding index leaked: max index {int(indices.max())} >= n={n}"
+    assert indices.unique().numel() == n, f"{n - indices.unique().numel()} duplicated indices"
+    assert_equal(input.reshape(-1)[indices], values)
+
+
+# Same padding ties on the SingleCore factory: n=1000 pads to 1024 on any grid. This factory still
+# leaks padding indices; strict, so the fix shows up as XPASS(strict) and the marker gets removed.
+@pytest.mark.xfail(strict=True, reason="Padding indices leak on the SingleCore factory #60262")
+@pytest.mark.parametrize(
+    "ttnn_dtype, descending, pad_value",
+    [
+        (ttnn.float32, True, float("-inf")),
+        (ttnn.float32, False, float("inf")),
+        (ttnn.uint16, True, 0),
+        (ttnn.uint16, False, 65535),
+    ],
+    ids=["fp32_desc_neg_inf", "fp32_asc_pos_inf", "uint16_desc_pad_0", "uint16_asc_pad_65535"],
+)
+def test_sort_single_core_pad_value_ties_index_correctness(ttnn_dtype, descending, pad_value, device):
+    torch.manual_seed(0)
+    n = 1000
+    num_other_values = 328
+    torch_dtype = torch.float32 if ttnn_dtype == ttnn.float32 else torch.int32
+
+    # Mostly the pad value, plus a few other values at random positions.
+    input = torch.full((1, n), pad_value, dtype=torch_dtype)
+    other_positions = torch.randperm(n)[:num_other_values]
+    input[0, other_positions] = torch.randint(1, 65535, (num_other_values,)).to(torch_dtype)
+
+    ttnn_input = ttnn.from_torch(input, ttnn_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    values = ttnn.to_torch(ttnn_sort_values).reshape(-1).to(torch_dtype)
+    indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
+
+    assert indices.unique().numel() == n, f"{n - indices.unique().numel()} duplicated indices"
+    assert indices.max() < n, f"padding index leaked: max index {int(indices.max())} >= n={n}"
+    assert_equal(input.reshape(-1)[indices], values)
+
+
+def _sort_factory_name(device, n, ttnn_dtype):
+    """Mirror of SortDeviceOperation::select_program_factory for a TILE row of width n."""
+    wt = max(_next_pow2(n), 2 * TILE_WIDTH) // TILE_WIDTH
+    if wt <= 64:
+        return "SingleCore"
+    if ttnn_dtype != ttnn.uint16 and _crosscore_serves(device, wt * TILE_WIDTH):
+        return "CrossCore"
+    return "MultiCore DRAM"
+
+
+def _assert_indices_in_range(indices, n, factory):
+    leaked = indices >= n
+    assert not leaked.any(), (
+        f"{factory} factory: {int(leaked.sum())} padding indices (>= n={n}) in the output, "
+        f"max index {int(indices.max())}"
+    )
+
+
+# #53326 asks for indices in [0, n) whatever the input holds. Masked logits (a few finite values in a
+# row of the padding value) pass on CrossCore (n=3000) and on MultiCore DRAM (n=300000), but every
+# SingleCore width (padded width <= 2048: n=100, n=2000) still leaks padding indices, bfloat16 included.
+@pytest.mark.parametrize(
+    "descending, fill", [(True, float("-inf")), (False, float("inf"))], ids=["desc_neg_inf", "asc_pos_inf"]
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("n", [100, 2000, 3000, 300000])
+def test_sort_pad_value_ties_index_range_every_factory(n, ttnn_dtype, descending, fill, device):
+    factory = _sort_factory_name(device, n, ttnn_dtype)
+    if factory == "SingleCore":
+        pytest.xfail("Padding indices leak on the SingleCore factory #60262")
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if ttnn_dtype == ttnn.bfloat16 else torch.float32
+    num_finite = n // 4
+
+    input = torch.full((1, n), fill, dtype=torch_dtype)
+    input[0, torch.randperm(n)[:num_finite]] = (torch.randn(num_finite) * 8.0).to(torch_dtype)
+
+    ttnn_input = ttnn.from_torch(input, ttnn_dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    _assert_indices_in_range(indices, n, factory)
+    _assert_unstable_sort_invariants(input, ttnn_values, ttnn_indices, descending)
+
+
+# fp32 NaN leaks padding indices on every factory, with either stability. The SFPU orders values by sign
+# and magnitude, so +NaN sorts above the +inf padding (ascending) and -NaN below the -inf padding
+# (descending). The NaN never ties with the padding, so the index-aware comparator never fires: the NaN
+# lands past the cut, and the slice back to n drops it and keeps a padding element instead.
+# (bfloat16 NaN reaches the comparator as ±inf, so it only leaks where ±inf does.)
+@pytest.mark.xfail(reason="fp32 NaN sorts past the ±inf padding on every factory #60613")
+@pytest.mark.parametrize("stable", [False, True], ids=["unstable", "stable"])
+@pytest.mark.parametrize(
+    "descending, nan_bits",
+    [(False, 0x7FC00000), (True, 0xFFC00000 - (1 << 32))],  # +NaN / -NaN as int32 bit patterns
+    ids=["asc_pos_nan", "desc_neg_nan"],
+)
+@pytest.mark.parametrize("n", [1000, 3000, 300000])
+def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable, device):
+    torch.manual_seed(0)
+    num_nan = 4
+
+    input = torch.randn(1, n) * 8.0
+    input.view(torch.int32)[0, torch.randperm(n)[:num_nan]] = nan_bits
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=stable)
+
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    _assert_indices_in_range(indices, n, _sort_factory_name(device, n, ttnn.float32))
+    assert torch.equal(torch.sort(indices, dim=-1).values, torch.arange(n).unsqueeze(0)), "indices not a permutation"
+    gathered = torch.gather(input, -1, indices)
+    torch.testing.assert_close(ttnn.to_torch(ttnn_values), gathered, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.parametrize(
@@ -1459,8 +1585,9 @@ def test_sort_dim_size_1_row_major_out(device):
 # permutations on ties. The CrossCore factory pins the index-aware comparator
 # for BOTH stabilities, so its unstable output is exactly the torch-stable
 # permutation. Widths here are chosen to land on the CrossCore factory (padded
-# W=4096/8192 on the CI grids); the DRAM factory's separate tie defect is
-# issue #53326 and is not covered by these cells.
+# W=4096/8192 on the CI grids). Grids that send these widths to the MultiCore
+# DRAM factory skip them: a power-of-two width has no padding there, so
+# stable=False does not guarantee torch's stable tie order.
 # ---------------------------------------------------------------------------
 
 
@@ -1468,8 +1595,7 @@ def _crosscore_serves(device, padded_w):
     """Mirror of select_program_factory's CrossCore capacity arm (USE_AS_MANY_CORES,
     interleaved bf16/fp32): Wt <= cores * min(128, max(Wt // cores, 2)). Approximate —
     keep in sync with SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core.
-    Widths past the capacity route to the MultiCore DRAM factory, whose separate tie
-    defect is issue #53326 and out of scope for these cells."""
+    Widths past the capacity route to the MultiCore DRAM factory."""
     grid = device.compute_with_storage_grid_size()
     cores = grid.x * grid.y
     wt = padded_w // 32
@@ -1512,7 +1638,10 @@ def test_sort_unstable_all_ones_permutation(width, layout, descending, device):
     """An all-ones row is one giant tie group, so every compare crosses a tie:
     the harshest input for the unstable index-permutation contract."""
     if not _crosscore_serves(device, width):
-        pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
+        pytest.skip(
+            f"W={width} uses the MultiCore DRAM factory on this grid; with no padding, "
+            "stable=False does not guarantee torch's stable tie order"
+        )
     input_tensor = torch.ones((32, width), dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=layout, device=device)
     ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
@@ -1525,9 +1654,6 @@ def test_sort_unstable_nonpow2_index_range(width, descending, device):
     """Non-pow2 logical widths pad with +/-inf sentinels. Entries tied with a
     sentinel must not leak pad positions: idx.max() has to stay below the
     logical width, else downstream gather/scatter reads out of bounds."""
-    padded = 1 << (width - 1).bit_length()
-    if not _crosscore_serves(device, padded):
-        pytest.skip(f"padded W={padded} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
     input_tensor = torch.full((32, width), -2.0, dtype=torch.bfloat16)
     input_tensor[:, 0] = float("inf")
     input_tensor[:, width - 1] = float("-inf")
@@ -1552,7 +1678,10 @@ def test_sort_unstable_fp32_ties(width, layout, descending, device):
     CrossCore path. These cells stay on CrossCore at every stack position, so
     they are the durable regression pin for the comparator flip."""
     if not _crosscore_serves(device, width):
-        pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
+        pytest.skip(
+            f"W={width} uses the MultiCore DRAM factory on this grid; with no padding, "
+            "stable=False does not guarantee torch's stable tie order"
+        )
     input_tensor = _tie_heavy_tensor(
         (32, width),
         [float("-inf"), -1.5, -0.0, 0.0, 0.5, 1.5, float("inf")],

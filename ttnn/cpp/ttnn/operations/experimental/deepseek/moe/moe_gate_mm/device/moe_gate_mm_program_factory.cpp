@@ -33,7 +33,7 @@ using tt::tt_metal::SemaphoreDescriptor;
 using tt::tt_metal::WriterConfigDescriptor;
 
 constexpr uint32_t kPartialSemaphoreId = 0;
-constexpr uint32_t kRawScoresSemaphoreId = 1;
+constexpr uint32_t kCollectorSemaphoreId = 1;
 
 CBDescriptor make_cb(
     tt::CBIndex index,
@@ -228,8 +228,9 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
         .core_ranges = all_cores,
         .initial_value = 0,
     });
+    // The collector core counts the group-score and top8 partial arrivals from the other 7 cores here.
     program_desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = kRawScoresSemaphoreId,
+        .id = kCollectorSemaphoreId,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores,
         .initial_value = 0,
@@ -274,7 +275,7 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
         runtime_args.push_back(is_sender ? neighbors[3] : 0u);
         runtime_args.push_back(is_sender ? neighbors[4] : 0u);
         runtime_args.push_back(core_id);
-        runtime_args.push_back(kRawScoresSemaphoreId);
+        runtime_args.push_back(kCollectorSemaphoreId);
 
         dm0_kernel.emplace_runtime_args(core, runtime_args);
         dm1_kernel.emplace_runtime_args(core, runtime_args);
