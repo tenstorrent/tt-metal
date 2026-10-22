@@ -983,7 +983,6 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
-    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_predictor_frame_trace.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
@@ -992,6 +991,25 @@
       tier: 2
     bh_p150:
       timeout: 20
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
+- name: Qwen3-TTS 1.7B frame trace tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    pytest --timeout 420 models/demos/audio/qwen3_tts/tests/pcc/test_predictor_frame_trace.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 2
+    bh_p150:
+      timeout: 8
       tier: 2
   owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models
