@@ -56,7 +56,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //   TOPK_XL_CORE_ID:         add_lsb_indices core_id, index bits [15:11] (0 .. 31)
 //   TOPK_XL_ASCENDING:       rebuild direction (false descending, true ascending),
 //                            or, for the single-chunk terminal index ops that never
-//                            rebuild, the local-sort direction
+//                            rebuild, the local-sort direction; fused end-to-end rows
+//                            rebuild only their last chunk in it
 //   TOPK_XL_FUSED_REDUCE:    false unfused merge/rebuild (op path), true fused
 //   TOPK_XL_CHUNK_BASE_MODE: three ways to init chunk_base:
 //                            0 init_static<hi,lo> | 1 init_upper<hi>(lo) | 2 init(runtime)
@@ -224,6 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#include "topk_xl_scrub_dest.h"
 
 using namespace ckernel;
 
@@ -456,7 +458,7 @@ inline void topk_xl_reinit_after_copy(std::uint32_t dst_format)
 // instead of a full init, which is why `dst_format` is needed: the copy init it replays
 // takes it.
 template <std::uint32_t K, bool fused>
-__attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t dst_format)
+__attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t dst_format, bool ascending = TOPK_XL_ASCENDING)
 {
     if constexpr (TOPK_XL_REINIT_AFTER_COPY)
     {
@@ -470,7 +472,7 @@ __attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t ds
     {
         topk_xl_merge<K, fused>(SLOT0);
     }
-    topk_xl_rebuild<K, fused>(SLOT0, TOPK_XL_ASCENDING);
+    topk_xl_rebuild<K, fused>(SLOT0, ascending);
 }
 
 // Save the starting chunk_base through the requested init flavor.
@@ -489,29 +491,6 @@ inline void topk_xl_chunk_base_init()
     {
         topk_xl_separate_indices_row_major_init(TOPK_XL_CHUNK_BASE);
     }
-}
-
-// ZEROACC only sets Dest's zero flags; the words stay. The transpose CFG block
-// disables those flags, so the next kernel's FPU adds onto topk's leftovers.
-// Write real zeros once PACK has released Dest.
-inline void topk_xl_scrub_dest()
-{
-    ckernel::tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-    } // Wait for PACK to release every Dest section before touching it
-
-    // Address Dest absolutely from row 0, whatever the sync mode.
-    reset_dest_offset_id();
-    math::set_dest_section_base<StartZero>();
-
-    constexpr std::uint32_t dest_tiles = get_dest_max_tiles<DstSync::SyncFull, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
-    for (std::uint32_t tile = 0; tile < dest_tiles; tile++)
-    {
-        _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::_calculate_fill_int_<false, InstrModLoadStore::INT32, 8>, tile, VectorMode::RC, 0u /* raw zero word */);
-    }
-    ckernel::tensix_sync();
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -548,7 +527,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
             {
                 copy_sort_rt<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, c, math_format);
-                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format, TOPK_XL_ASCENDING && c + 1 == TOPK_XL_NUM_CHUNKS);
             }
             topk_xl_separate_indices_row_major_global_init();
             if constexpr (TOPK_XL_SEG_BASE != 0)

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // topk_xl_test.cpp's fused K = 512, 1024 and 2048 rows with each chunk split across MATH and PACK (helpers/include/topk_xl_split.h);
-// it takes the same TOPK_XL parameters and must pack the same result bit for bit. Blackhole only.
+// it must pack the same result bit for bit. It reads TOPK_XL_K, FUSED_E2E, NUM_CHUNKS, TAIL_ELEMENTS, NUM_ROWS, SEG_BASE and ASCENDING (the
+// direction of the last chunk's rebuild); the other TOPK_XL parameters must stay at their defaults. Blackhole only.
 
 #include <cstdint>
 
@@ -17,6 +18,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static_assert(
     (TOPK_XL_K == 512 || TOPK_XL_K == 1024 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512, 1024 and 2048 chunks");
+static_assert(
+    TOPK_XL_INDEX_OP == 0 && TOPK_XL_SORT_MODE == 0 && !TOPK_XL_FUSED_REDUCE && !TOPK_XL_LSB_ROW_MAJOR && !TOPK_XL_REINIT_AFTER_COPY,
+    "the split kernel ignores these parameters, so they must stay at their defaults");
 
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 constexpr std::uint32_t TILES_PER_SEQ     = TOPK_XL_K / ELEMENTS_PER_TILE + (TOPK_XL_K < ELEMENTS_PER_TILE ? 1 : 0);
@@ -84,25 +88,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#include "topk_xl_scrub_dest.h"
 #include "topk_xl_split.h"
 
 using namespace ckernel;
-
-static __attribute__((noinline)) void scrub_dest()
-{
-    ckernel::tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-    }
-    reset_dest_offset_id();
-    math::set_dest_section_base<StartZero>();
-    constexpr std::uint32_t dest_tiles = get_dest_max_tiles<DstSync::SyncFull, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
-    for (std::uint32_t tile = 0; tile < dest_tiles; tile++)
-    {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_int_<false, InstrModLoadStore::INT32, 8>, tile, VectorMode::RC, 0u);
-    }
-    ckernel::tensix_sync();
-}
 
 static __attribute__((noinline)) void copy_chunk(std::uint32_t chunk, std::uint32_t tile, std::uint32_t dst_format)
 {
@@ -124,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     ckernel::_llk_math_topk_xl_copy_init_(math_format);
     topk_xl_split::init_tokens();
-    scrub_dest();
+    topk_xl_scrub_dest();
     topk_xl_split::start_pack();
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
@@ -139,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 
-    scrub_dest();
+    topk_xl_scrub_dest();
 }
 
 #endif // LLK_TRISC_MATH
@@ -156,17 +145,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
-    _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     topk_xl_split::wait_start<TOPK_XL_K>();
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
-        topk_xl_split::pack_row<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
+        topk_xl_split::pack_row<TOPK_XL_K, TOPK_XL_ASCENDING>(TOPK_XL_NUM_CHUNKS);
         topk_xl_split::split_indices<TOPK_XL_K>(TOPK_XL_SEG_BASE);
         _llk_packer_wait_for_math_done_();
-        _llk_pack_mop_config_<PackMode::Default, false>(FACE_R_DIM, TILE_C_DIM, 4, 1);
+        _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */);
         for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
         {
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[2 * TILES_PER_SEQ * r + t]));
