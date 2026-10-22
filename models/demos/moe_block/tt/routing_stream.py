@@ -68,6 +68,17 @@ def _plan_fn(subs):
         '    // (5) every packet of the call: core 0 waits, then wakes the others\n    {\n    DeviceZoneScopedN("SE-RPWAIT");\n    if (q == 0) {',
     )
     body = body.replace("    ts[4] = get_timestamp_32b();", "    }\n    ts[4] = get_timestamp_32b();")
+    body = body.replace(
+        "const InterleavedAddrGen<true> dg = {.bank_base_address = dbg_addr, .page_size = 64};\n        noc_async_write(B + O_DBG, get_noc_addr(q, dg), 64);",
+        "const InterleavedAddrGen<true> dg = {.bank_base_address = dbg_addr, .page_size = 128};\n        noc_async_write(B + O_DBG, get_noc_addr(q, dg), 128);",
+    )
+    # (RA_DBG: core 0 stamps each arrival - the debug page's words 16 .. 23 - instead of one blocking wait)
+    body = body.replace(
+        "noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ca), N);",
+        "{ volatile tt_l1_ptr uint32_t* cw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ca); uint32_t seen = 0;\n"
+        "          while (seen < N) { invalidate_l1_cache(); const uint32_t v = *cw; while (seen < v && seen < N) "
+        "{ if (seen < 8) reinterpret_cast<uint32_t*>(B + O_DBG)[16 + seen] = get_timestamp_32b(); ++seen; } } }",
+    )
     fn = "namespace ra {\n" + head + "FORCE_INLINE void plan(uint32_t a0, uint32_t B) {" + body + "}  // namespace ra\n"
     for k, v in subs.items():
         fn = fn.replace(f"__{k}__", str(int(v)))
@@ -81,8 +92,44 @@ def _plan_fn(subs):
 # + increment. args at r0: nd (0: no role), nr (remote), self, my buffer, PCAP, slot tensor address, c0, c1, planner
 # core 0 (x, y), calls (global: this core's call count), ready (global), mesh, then the destinations' chip ids [nd]
 RA_SEND = r"""
+// one packet's way on: to the next hop (kind 0: the destination's DRAM slot page par N + src, its arrival counter on
+// planner core 0; kind 1: the next forwarding port's slot, its flag), chunks of MAXP, the last with the increment
+template <typename C, typename H>
+FORCE_INLINE void ra_hop(C& conn, H hdr, uint32_t src_l1, uint32_t bytes, uint32_t a, uint32_t par, uint32_t srcid,
+                         uint32_t PCAP, uint32_t sl, uint32_t c0, uint32_t c1, uint32_t px, uint32_t py, uint32_t mesh,
+                         uint32_t fbase, uint32_t flags, uint32_t RA_N, uint32_t MAXP) {
+    const uint32_t chip = get_arg_val<uint32_t>(a), kind = get_arg_val<uint32_t>(a + 1);
+    const uint32_t nx = get_arg_val<uint32_t>(a + 2), ny = get_arg_val<uint32_t>(a + 3), slot = get_arg_val<uint32_t>(a + 4);
+    uint64_t dst, inc;
+    if (kind == 0) {
+        const InterleavedAddrGen<true> slg = {.bank_base_address = sl, .page_size = PCAP};
+        dst = get_noc_addr(par * RA_N + srcid, slg);
+        inc = get_noc_addr(px, py, par ? c1 : c0);
+    } else {
+        dst = get_noc_addr(nx, ny, fbase + slot * PCAP);
+        inc = get_noc_addr(nx, ny, flags + 16 * slot);
+    }
+    for (uint32_t off = 0; off < bytes; off += MAXP) {
+        const uint32_t sz = bytes - off < MAXP ? bytes - off : MAXP;
+        noc_async_writes_flushed();  // (the header's previous packet has left)
+        (void)fabric_set_unicast_route(hdr, static_cast<uint16_t>(chip), static_cast<uint16_t>(mesh));
+        if (off + sz >= bytes) {
+            hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst + off, inc, 1, true}, sz);
+        } else {
+            hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst + off}, sz);
+        }
+        conn.wait_for_empty_write_slot();
+        conn.send_current_slot_non_blocking(src_l1 + off, sz, reinterpret_cast<uint32_t>(hdr));
+    }
+}
+FORCE_INLINE uint32_t ra_bytes(uint32_t pb, uint32_t RA_M, uint32_t RA_HBP) {
+    const uint32_t* nq = reinterpret_cast<const uint32_t*>(pb);
+    uint32_t n = 0;
+    for (uint32_t q = 0; q < RA_M; ++q) n += nq[q];
+    return (RA_HBP + 4 * n + 63) / 64 * 64;
+}
 struct RASend {
-    uint32_t r0, nd, nr, self_, B, PCAP, sl, c0, c1, px, py, calls, ready, mesh, done;
+    uint32_t r0, nd, nr, self_, B, PCAP, sl, c0, c1, px, py, calls, ready, mesh, fbase, flags, done;
     void init(uint32_t a) {
         r0 = a; nd = get_arg_val<uint32_t>(a);
         if (!nd) { done = 1; return; }
@@ -90,9 +137,10 @@ struct RASend {
         PCAP = get_arg_val<uint32_t>(a + 4); sl = get_arg_val<uint32_t>(a + 5); c0 = get_arg_val<uint32_t>(a + 6);
         c1 = get_arg_val<uint32_t>(a + 7); px = get_arg_val<uint32_t>(a + 8); py = get_arg_val<uint32_t>(a + 9);
         calls = get_arg_val<uint32_t>(a + 10); ready = get_arg_val<uint32_t>(a + 11); mesh = get_arg_val<uint32_t>(a + 12);
+        fbase = get_arg_val<uint32_t>(a + 13); flags = get_arg_val<uint32_t>(a + 14);
         done = 0;
     }
-    static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 13 + n : 1; }
+    static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 15 + 5 * n : 1; }
     template <typename C, typename H>
     void poll(C& conn, H hdr, bool blocking, uint32_t RA_N, uint32_t RA_M, uint32_t RA_EPC, uint32_t RA_ME, uint32_t RA_HBP, uint32_t RA_BB, uint32_t RA_BBP, uint32_t MAXP) {
         if (done) return;
@@ -109,42 +157,67 @@ struct RASend {
         volatile tt_l1_ptr uint32_t* cl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(calls);
         const uint32_t par = cl[0] & 1;  // (every port core and planner core counts its calls: they stay in step)
         cl[0] = cl[0] + 1;
-        const uint64_t cnt_noc = get_noc_addr(px, py, par ? c1 : c0);
-        const InterleavedAddrGen<true> slg = {.bank_base_address = sl, .page_size = PCAP};
-        const uint64_t my_slot = get_noc_addr(par * RA_N + RA_ME, slg);  // (the same page on every chip: my slot there)
         for (uint32_t j = 0; j < nd; ++j) {
             const uint32_t pb = B + j * PCAP;
             const uint32_t* nq = reinterpret_cast<const uint32_t*>(pb);
-            uint32_t n = 0;
-            for (uint32_t q = 0; q < RA_M; ++q) n += nq[q];
             uint16_t* tot = reinterpret_cast<uint16_t*>(pb + 64);
             for (uint32_t e = 0; e < RA_EPC; ++e) tot[e] = 0;
             for (uint32_t q = 0; q < RA_M; ++q) {
                 const uint16_t* pre = reinterpret_cast<const uint16_t*>(pb + 64 + RA_BB + q * RA_BBP);
                 for (uint32_t e = 0; e < RA_EPC; ++e) tot[e] += pre[e + 1] - pre[e];
             }
-            const uint32_t bytes = (RA_HBP + 4 * n + 63) / 64 * 64;
+            reinterpret_cast<uint32_t*>(pb)[14] = par;  // (for the forwarders: the call's parity, the source)
+            reinterpret_cast<uint32_t*>(pb)[15] = RA_ME;
+            (void)nq;
+            const uint32_t bytes = ra_bytes(pb, RA_M, RA_HBP);
             if (j < nr) {
-                for (uint32_t off = 0; off < bytes; off += MAXP) {
-                    const uint32_t sz = bytes - off < MAXP ? bytes - off : MAXP;
-                    noc_async_writes_flushed();  // (the header's previous packet has left)
-                    (void)fabric_set_unicast_route(hdr, static_cast<uint16_t>(get_arg_val<uint32_t>(r0 + 13 + j)), static_cast<uint16_t>(mesh));
-                    if (off + sz >= bytes) {
-                        hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{my_slot + off, cnt_noc, 1, true}, sz);
-                    } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{my_slot + off}, sz);
-                    }
-                    conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(pb + off, sz, reinterpret_cast<uint32_t>(hdr));
-                }
+                ra_hop(conn, hdr, pb, bytes, r0 + 15 + 5 * j, par, RA_ME, PCAP, sl, c0, c1, px, py, mesh, fbase, flags, RA_N, MAXP);
             } else {  // (SELF: my own chip's packet)
-                noc_async_write(pb, my_slot, bytes);
+                const InterleavedAddrGen<true> slg = {.bank_base_address = sl, .page_size = PCAP};
+                noc_async_write(pb, get_noc_addr(par * RA_N + RA_ME, slg), bytes);
                 noc_async_write_barrier();
-                noc_semaphore_inc(cnt_noc, 1);
+                noc_semaphore_inc(get_noc_addr(px, py, par ? c1 : c0), 1);
             }
         }
         noc_async_writes_flushed();
         done = 1;
+    }
+};
+// a forwarding port's slots: each packet (of another chip, on its way) landed with its flag set - sent on to its next
+// hop once there (any order), the flag re-armed. args at r0: n, buffer base, flags, PCAP, slot tensor, c0, c1, planner
+// core 0 (x, y), mesh, then per slot (next chip, kind, x, y, slot)
+struct RAFwd {
+    uint32_t r0, n, fb, fl, PCAP, sl, c0, c1, px, py, mesh, left;
+    uint32_t sent[16];
+    void init(uint32_t a) {
+        r0 = a; n = get_arg_val<uint32_t>(a); left = n;
+        if (!n) return;
+        fb = get_arg_val<uint32_t>(a + 1); fl = get_arg_val<uint32_t>(a + 2); PCAP = get_arg_val<uint32_t>(a + 3);
+        sl = get_arg_val<uint32_t>(a + 4); c0 = get_arg_val<uint32_t>(a + 5); c1 = get_arg_val<uint32_t>(a + 6);
+        px = get_arg_val<uint32_t>(a + 7); py = get_arg_val<uint32_t>(a + 8); mesh = get_arg_val<uint32_t>(a + 9);
+        for (uint32_t k = 0; k < 16; ++k) sent[k] = 0;
+    }
+    static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 10 + 5 * n : 1; }
+    template <typename C, typename H>
+    void poll(C& conn, H hdr, bool blocking, uint32_t RA_N, uint32_t RA_M, uint32_t RA_HBP, uint32_t MAXP) {
+        while (left) {
+            bool any = false;
+            invalidate_l1_cache();
+            for (uint32_t k = 0; k < n; ++k) {
+                volatile tt_l1_ptr uint32_t* f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl + 16 * k);
+                if (sent[k] || *f == 0) continue;
+                const uint32_t pb = fb + k * PCAP;
+                const uint32_t par = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[14];
+                const uint32_t src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[15];
+                ra_hop(conn, hdr, pb, ra_bytes(pb, RA_M, RA_HBP), r0 + 10 + 5 * k, par, src, PCAP, sl, c0, c1, px, py, mesh, fb, fl, RA_N, MAXP);
+                *f = 0;  // (re-arm: one packet a slot a call)
+                sent[k] = 1;
+                --left;
+                any = true;
+            }
+            if (!blocking && !any) return;
+        }
+        noc_async_writes_flushed();
     }
 };
 """
@@ -189,7 +262,7 @@ class RoutingStream:
     """The routing exchange + planner in the head (module docstring). router: the head's RouterStream (its cores are the
     planner cores; its out tensor the own joint rows); xg: the gather (its ports); watcher: the watcher core."""
 
-    def __init__(self, mesh_device, xg, router, *, S, K, EPC, A, L, luts, nps, rows_cap, ycores, arena):
+    def __init__(self, mesh_device, xg, router, *, S, K, EPC, A, L, luts, nps, rows_cap, ycores, arena, flags):
         """ycores: the logical cores the Y senders run on (BRISC; one a needed Y direction); arena: (base, bytes free
         from offset off0 on the router cores: the planner's region; the ports' and Y cores' buffers in the arena's
         range there)."""
@@ -217,7 +290,20 @@ class RoutingStream:
         base, abytes, off0 = arena
         assert off0 + self.plan_l1 <= abytes, "router cores: no room for the planner's region"
         self.pbase = base + off0  # (the planner's B on the router cores)
-        self.bufbase = base + off0  # (the ports' / Y cores' packet buffers: the same range, on their cores)
+        # the senders' packet buffers (the arena's range on their cores): the gather's ports after their logits buffer,
+        # each Y sender on the watcher core from the arena's start (the second Y direction after the first); the
+        # forwarding slots after a port's own packets
+        al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+        self.xbase = base + al(router.pbuf_sub)
+        self.ybase = base
+        nx = max(len(v) for c in xg.chips for k, v in self.serve(c).items() if k[0] == "x")
+        ny = max([len(v) for c in xg.chips for k, v in self.serve(c).items() if k[0] == "y"] + [0])
+        self.fbase = self.xbase + nx * self.PCAP
+        self.flags = flags  # (the forwarding slots' flags: 16 B a slot, zeroed L1)
+        nf = max([len(v) for v in self.fwd_plan()[0].values()] + [0])
+        assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, "ports: no L1 for the routing buffers"
+        assert 2 * ny * self.PCAP <= abytes, "the watcher core: no L1 for the Y senders' buffers"
+        self.ny = ny
         import torch
 
         sh = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
@@ -242,6 +328,9 @@ class RoutingStream:
             plan=dev(z(1, PLAN_WORDS)),
         )
         self.slots = dev(z(2 * self.N, self.PCAP // 4))
+        import os
+
+        self.dbg = dev(z(16, 32)) if os.environ.get("RA_DBG") else None  # (the planner's phase stamps, a page a core)
         pc = router.crs
         c0 = ttnn.CoreRangeSet([ttnn.CoreRange(router.cores[0], router.cores[0])])
         ports = sorted({(c.x, c.y) for ch in xg.chips.values() for c in ch["ports"].values()})
@@ -277,32 +366,99 @@ class RoutingStream:
         """{sender key: [destinations]} of chip coord: ("x", tp direction, link) the gather's ports, ("y", 2 | 3) the Y
         senders; my own chip last on the Y sender if any, else on the first port."""
         me = coord[0] * self.C + coord[1]
-        ch = self.xg.chips[coord]
-        rg = ch["rings"][0]
-        xdir = {}  # (X+ / X- -> the gather's direction toward it)
-        for d in ("fwd", "bwd"):
-            peer = rg["next"] if d == "fwd" else rg["prev"]
-            if peer is not None and rg.get(f"{d}_links"):
-                xdir[0 if (peer[1] - coord[1]) % self.C == 1 else 1] = d
         out = {}
         for dd in range(self.N):
             if dd == me:
                 continue
-            h = self._first_hop(me, dd)
-            if h < 2:
-                assert h in xdir, f"chip {coord}: no X port toward {dd}"
-                key = ("x", xdir[h], dd % self.L if (xdir[h], dd % self.L) in self._ports(coord) else 0)
-            else:
-                key = ("y", h)
-            out.setdefault(key, []).append(dd)
+            out.setdefault(self.path(me, dd)[0][1], []).append(dd)
         ykeys = sorted(k for k in out if k[0] == "y")
         own = ykeys[0] if ykeys else sorted(out)[0]
         out.setdefault(own, []).append(me)
         assert len(ykeys) <= 2, f"chip {coord}: {len(ykeys)} Y directions"
         return out
 
+    def _xdir(self, coord):
+        """{0 (X+) | 1 (X-): the gather's direction name toward it} at chip coord."""
+        rg = self.xg.chips[coord]["rings"][0]
+        out = {}
+        for d in ("fwd", "bwd"):
+            peer = rg["next"] if d == "fwd" else rg["prev"]
+            if peer is not None and rg.get(f"{d}_links"):
+                out[0 if (peer[1] - coord[1]) % self.C == 1 else 1] = d
+        return out
+
+    def path(self, s, d):
+        """The hops of the packet from chip s to chip d: [(chip, sender key)] - the first at s (its sender), the others
+        forwarding ports (store-and-forward: every hop a local injection, nothing in transit through a busy row);
+        Y first (the idle SP links, transit allowed there), then X along the destination row one chip a hop."""
+        C = self.C
+        sr, sc, dr, dc = s // C, s % C, d // C, d % C
+        steps = []
+        cur = (sr, sc)
+        if sr != dr:
+            steps.append((s, ("y", self._first_hop(s, d))))
+            cur = (dr, sc)
+        while cur[1] != dc:
+            ci = cur[0] * C + cur[1]
+            h = self._first_hop(ci, d)
+            xd = self._xdir(cur)
+            assert h in xd, f"chip {cur}: no X port toward {d}"
+            l = d % self.L if (xd[h], d % self.L) in self._ports(cur) else 0
+            steps.append((ci, ("x", xd[h], l)))
+            cur = (cur[0], (cur[1] + (1 if h == 0 else -1)) % C)
+        return steps
+
+    def fwd_plan(self):
+        """{(chip, key): [(src, dst, hop index)]} - the forwarding ports' slots (every path's hops after its first), in a
+        fixed order; and per (src, dst) the slot index at each forwarding hop."""
+        if getattr(self, "_fwd", None) is None:
+            fw, at = {}, {}
+            for s_ in range(self.N):
+                for d in range(self.N):
+                    if d == s_:
+                        continue
+                    for i, step in enumerate(self.path(s_, d)[1:], 1):
+                        lst = fw.setdefault(step, [])
+                        at[(s_, d, i)] = len(lst)
+                        lst.append((s_, d, i))
+            self._fwd = (fw, at)
+        return self._fwd
+
+    def next_hop(self, s, d, i):
+        """Where hop i of the (s, d) packet goes: (next chip, kind 0 final | 1 forward, NoC x, NoC y, slot)."""
+        steps = self.path(s, d)
+        node = lambda c: self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(c // self.C, c % self.C))  # noqa: E731
+        virt = self.mesh.worker_core_from_logical_core
+        if i + 1 < len(steps):
+            ci, key = steps[i + 1]
+            core = virt(self._core_of((ci // self.C, ci % self.C), key))
+            return [int(node(ci).chip_id), 1, core.x, core.y, self.fwd_plan()[1][(s, d, i + 1)]]
+        return [int(node(d).chip_id), 0, 0, 0, 0]
+
+    def fwd_block(self, coord, key):
+        """A forwarding port's RAFwd args: [n, buffer base, flag base] + per slot its next hop (5 words)."""
+        lst = self.fwd_plan()[0].get((coord[0] * self.C + coord[1], key), [])
+        if not lst:
+            return [0]
+        virt = self.mesh.worker_core_from_logical_core
+        p0 = virt(self.router.cores[0])
+        node = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
+        assert len(lst) <= 16
+        out = [len(lst), self.fbase, self.flags, self.PCAP, int(self.slots.buffer_address()), self.addr["c0"]]
+        out += [self.addr["c1"], p0.x, p0.y, int(node.mesh_id)]
+        for s_, d, i in lst:
+            out += self.next_hop(s_, d, i)
+        return out
+
     def _ports(self, coord):
         return {(d, l): c for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
+
+    def _buf(self, coord, key):
+        """A sender's packet buffer (its destination j at + j PCAP)."""
+        if key[0] == "x":
+            return self.xbase
+        ykeys = sorted(k for k in self.serve(coord) if k[0] == "y")
+        return self.ybase + ykeys.index(key) * self.ny * self.PCAP
 
     def _core_of(self, coord, key):
         if key[0] == "x":
@@ -316,9 +472,9 @@ class RoutingStream:
         virt = self.mesh.worker_core_from_logical_core
         where = {}
         for key, dests in sv.items():
-            core = self._core_of(coord, key)
+            core, b = self._core_of(coord, key), self._buf(coord, key)
             for j, d in enumerate(dests):
-                where[d] = (core, j)
+                where[d] = (core, j, b)
         o = self.outs
         head = [
             int(self.router_out.buffer_address()),
@@ -336,12 +492,12 @@ class RoutingStream:
         pxy = [w for v in pv for w in (v.x, v.y)]
         dst = []
         for d in range(self.N):
-            core, j = where[d]
+            core, j, b = where[d]
             v = virt(core)
-            dst += [v.x, v.y, self.bufbase + j * self.PCAP]
+            dst += [v.x, v.y, b + j * self.PCAP]
         senders = sorted(sv)
         port_args = [w for k in senders for v in [virt(self._core_of(coord, k))] for w in (v.x, v.y)]
-        tail = [0, self.addr["ready"]]
+        tail = [int(self.dbg.buffer_address()) if self.dbg is not None else 0, self.addr["ready"]]
         sems = [self.addr["go"], self.addr["parts"], self.addr["ex"]]
         return lambda q: head + [q, 0, 0] + pxy + dst + port_args + tail + sems
 
@@ -387,7 +543,7 @@ class RoutingStream:
             len(dests),
             nr,
             int(dests[-1] == me),
-            self.bufbase,
+            self._buf(coord, key),
             self.PCAP,
             int(self.slots.buffer_address()),
             self.addr["c0"],
@@ -397,7 +553,9 @@ class RoutingStream:
             self.addr["calls_s"],
             self.addr["ready"],
             int(node(me).mesh_id),
-        ] + [int(node(d).chip_id) for d in dests]
+            self.fbase,
+            self.flags,
+        ] + [w for d in dests for w in (self.next_hop(me, d, 0) if d != me else [0, 0, 0, 0, 0])]
 
     def defines(self, coord):
         me = coord[0] * self.C + coord[1]

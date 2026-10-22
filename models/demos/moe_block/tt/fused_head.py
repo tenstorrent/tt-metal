@@ -331,7 +331,9 @@ class HeadSE3:
         if self.rs_mode == "fused":  # the ports' mailboxes (a word per engine core, zero) and the arrival counters
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-            words = 2 * GX * GY * 4 + 4 * 8  # (SE hand-offs, the router cores', the latent hand-offs)
+            words = (
+                2 * GX * GY * 4 + 4 * 8 + 4 * 16
+            )  # (SE / latent hand-offs, the router cores', the routing's forwards)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -399,6 +401,7 @@ class HeadSE3:
                 rows_cap=rows_cap,
                 ycores=[watcher],
                 arena=(self.eng.base, self.eng.arena_bytes, off0),
+                flags=int(self.mbox.buffer_address()) + 16 * 2 * GX * GY + 128,
             )
             self.router.ra = self.routing
             ttnn.synchronize_device(mesh_device)
@@ -580,5 +583,7 @@ class HeadSE3:
         io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
         if self.routing is not None:
             io += [self.routing.slots] + list(self.routing.outs.values())
+            if self.routing.dbg is not None:
+                io += [self.routing.dbg]
         ttnn.generic_op(io, self.state["desc"])
         return y

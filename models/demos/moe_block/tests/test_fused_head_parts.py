@@ -165,6 +165,17 @@ def _check_plan(head, rows, name):
             bad = (got[: exp.numel()] != exp).nonzero().flatten()
             assert bad.numel() == 0, f"{name} chip {ci} {k}: {bad.numel()} words differ, first {bad[:8].tolist()}"
     logger.info(f"HSE3 {name} routing exchange + planner: all {N} chips bit-exact vs the host model")
+    if rt.dbg is not None:  # (RA_DBG: the planner cores' phase stamps of the last call, us from the earliest)
+        for ci, t in enumerate(ttnn.get_device_tensors(rt.dbg)):
+            d = (ttnn.to_torch(t).to(torch.int64).reshape(-1, 32) & 0xFFFFFFFF)[: rt.M].tolist()
+            t0 = min(r_[0] for r_ in d)
+            logger.info(
+                f"HSE3 {name} chip {ci} planner phases (us): "
+                + " | ".join(" ".join(f"{(v - t0) / 1350:.1f}" for v in r_[:9]) for r_ in d)
+            )
+            logger.info(
+                f"HSE3 {name} chip {ci} arrivals (us): " + " ".join(f"{(v - t0) / 1350:.1f}" for v in d[0][16:24])
+            )
 
 
 def _check_latent(head, xs, w_l, rows, name):

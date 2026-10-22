@@ -375,8 +375,11 @@ void kernel_main() {
     const uint32_t ra0 = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
     RASend ra;
     ra.init(ra0);
-    a = ra0 + RASend::len(ra0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || !ra.done) {
+    const uint32_t rf0 = ra0 + RASend::len(ra0);
+    RAFwd rf;
+    rf.init(rf0);
+    a = rf0 + RAFwd::len(rf0);
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || !ra.done || rf.left) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -384,6 +387,7 @@ void kernel_main() {
             (void)fabric_set_unicast_route(hdrs[h], chip, mesh);
         }
         volatile tt_l1_ptr PACKET_HEADER_TYPE* rahdr = PacketHeaderPool::allocate_header();  // (routing: routed a packet)
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* lshdr = PacketHeaderPool::allocate_header();  // (logits: routed a unit)
         for (uint32_t un = 0; un < lnu && un < 3; ++un) {  // (the latent's destinations: routed a unit)
             const uint32_t w0 = get_arg_val<uint32_t>(la0 + 1 + 2 * un);
             hdrs[GROUP + 1 + un] = PacketHeaderPool::allocate_header();
@@ -414,8 +418,9 @@ void kernel_main() {
 #define RA_MAXP_ 64
 #endif
         auto lpoll = [&]() {
-            ls.poll(conn, hdrs[GROUP], false);
+            ls.poll(conn, lshdr, false);
             ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
+            rf.poll(conn, rahdr, false, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);
         };
         for (uint32_t m = 0; m < NCH && n > 0; ++m) {
             for (uint32_t k = 0; k < n; ++k) {
@@ -456,8 +461,9 @@ void kernel_main() {
         uint32_t rpos = 0;  // (as the reader's pos)
         la_send(la0, conn, hdrs, lpoll, rpos);
         rs_send(rs0, conn, hdrs, lpoll, rpos);
-        ls.poll(conn, hdrs[GROUP], true);  // (whatever is left of the logits)
+        ls.poll(conn, lshdr, true);  // (whatever is left of the logits)
         ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
+        rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)
         noc_async_writes_flushed();
         ls.rearm();
         conn.close();
@@ -776,6 +782,7 @@ class XGather3:
             lab = self.la_block(rs, la, d, v)
             assert lab[0] == 0 or mine, "the latent needs the gather's fence"
             rab = routing.send_block(coord, ("x", d, v)) if routing is not None else [0]
+            rab = rab + (routing.fwd_block(coord, ("x", d, v)) if routing is not None else [0])
             assert rab[0] == 0 or mine or not rab[1], "the routing's fabric packets need the gather's fence"
             rsb = rsb + lab + rab
             assert rsb[0] == 0 or mine, "a port sending reduce-scatter units must have the gather's fence"

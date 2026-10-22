@@ -558,3 +558,31 @@ builds the whole program for both models.
 Next: the routing gather (needs SP-axis ports) + planner + prep in the program (GLM's margin is 4 us); the SFPU top-K
 (the scalar scan is L1-load bound, ~16 us a K3 token); W_r multicast (5 DRAM reads of it slow K3's gather end by
 ~25 us); KB 14 for K3 back (the latent pushed it to 7).
+
+## Toward 1.5x of the floor, fully fused (user: GLM <= 270 us, K3 <= 495 at chunk 1280)
+| piece (commit) | GLM-Flash | K3 |
+|---|---|---|
+| start: x chain + SE RS + router + latent (routing gather / planner / prep separate: +96 / +103) | 254.8 (+96) | 479.8 (+103) |
+| W_r read once, a rotating column multicast down the router cores (26d63670478) | 256.4 | 480.1 |
+| top-K on the SFPU, logits computed transposed (95e78c22b13) | 254.8 | 479.8 |
+| **routing exchange + combine planner in the program** (37c22bcb94d; bit-exact vs combine_plan's host model) | 295 | 534 |
+| joint-row weights in integer math, 2 RISCs; router HiFi3 (same picks as HiFi4; HiFi2 changes them) | 278-287 | 515-540 |
+| logits straight to their owners (no relay chain); routing exchange store-and-forward through the ports | 284-302 | 517-537 |
+| floor (TP-link bytes) / 1.5x target | 180 / 270 | 330 / 495 |
+Everything is in the one program now except dispatch prep (route words + owners' rows into the dispatch buffer).
+- Routing exchange + planner (tt/routing_stream.py): routing_a2a's planner runs on the 5 router cores' BRISC after
+  their joint rows (a barrier among them); its slices go into the senders' L1 packet buffers: same-row destinations
+  on the gather's ports (a polled stream), other rows Y first on the watcher core's BRISC (Galaxy: the second Y
+  direction on its NCRISC after the watch). combine_plan's counts / regions / token_index / table / plan bit-exact vs
+  plan_reference on all 8 chips, both models; mock Galaxy builds it (TP ring, 28-destination Y senders).
+- What binds now: the routing chain, not the links. Per chip (GLM): router 63-71 us, logits in 76-127 (handed off by
+  ~70-80; the rest is transit through rows the x gather saturates), top-K 35, joint rows 14, planner 21 before the
+  exchange, its wait, 25 after. The chips' chains are skewed by up to ~50 us (logits arrival), and the last packets
+  of one mesh row land up to ~35 us after the last send (forwarding / transit through ports busy with the reduce-
+  scatter): GLM's head ends at the routing chain's end (~280-300), K3's too (its logits wait for the x gather by the
+  K3 priority; the exchange waits up to ~110 us). Tried without effect: the logits as a direct all-to-all instead of
+  the relay chain; the routing exchange store-and-forward instead of multi-hop transit (both kept: no relay chain,
+  every hop a local injection - ring-ready). The x chain + SE parts alone are within target (GLM 248, K3 ~450-470).
+- Floors: the TP-link-bytes floor (180 / 330) still holds; the routing chain's own critical path (router compute +
+  logits on the wire + top-K + planner + exchange latency) is ~150 us (GLM) at best - below the link floor, so the
+  floor stands; the gap is the chain's serialization behind the saturated links.
