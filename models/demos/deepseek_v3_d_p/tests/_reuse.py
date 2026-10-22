@@ -7,9 +7,9 @@
 Enabled with ``DS_PREFILL_REUSE_MODEL=1``. The ``mesh_device`` fixture in this directory's conftest
 then hands every test the same open device while its parametrized ``device_params`` stay the same,
 and the chunked-transformer run functions fetch an already built model through
-``acquire_transformer`` instead of loading the weights again. Everything is released at session end,
-when ``device_params`` change, or after any failed test, so a test that leaves the device in an
-unknown state is followed by a fresh open and a fresh build.
+``acquire_transformer`` instead of loading the weights again (other models: ``acquire_model``).
+Everything is released at session end, when ``device_params`` change, or after any failed test, so a
+test that leaves the device in an unknown state is followed by a fresh open and a fresh build.
 """
 
 import json
@@ -47,6 +47,7 @@ class _Registry:
         self.device_gen = None
         self.device_key = None
         self.models = {}
+        self.slots = {}
         self.dirty = False
 
     def get_device(self, request, silicon_arch_name, device_params):
@@ -87,7 +88,29 @@ class _Registry:
         transformer.set_tp_shard_kv(tp_shard_kv)
         return transformer
 
+    def acquire_model(self, kind, key, build, release):
+        slot = self.slots.get(kind)
+        if slot is not None and slot[0] == key:
+            logger.info(f"reusing {kind}")
+            return slot[1]
+        self.release_slot(kind)
+        model = build()
+        self.slots[kind] = (key, model, release)
+        return model
+
+    def release_slot(self, kind):
+        slot = self.slots.pop(kind, None)
+        if slot is None:
+            return
+        _, model, release = slot
+        try:
+            release(model)
+        except Exception as e:
+            logger.warning(f"releasing the cached {kind} failed: {e}")
+
     def release_models(self):
+        for kind in list(self.slots):
+            self.release_slot(kind)
         for transformer in self.models.values():
             try:
                 transformer.set_trace_controller(None)
@@ -100,6 +123,7 @@ class _Registry:
         self.dirty = False
         if self.device is None:
             self.models.clear()
+            self.slots.clear()
             return
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import clear_tt_ccl_cache
 
@@ -121,6 +145,14 @@ def acquire_transformer(transformer_cls, mesh_device, variant, config, **ctor_kw
     if not reuse_enabled():
         return transformer_cls(mesh_device=mesh_device, config=config, **ctor_kwargs)
     return _REGISTRY.acquire_transformer(transformer_cls, mesh_device, variant, config, **ctor_kwargs)
+
+
+def acquire_model(kind, key, build, release):
+    """Build the model, or return the ``kind`` model built earlier under an equal ``key``; one is kept per ``kind``.
+    ``release(model)`` must free what the model registered on the device; it runs on replacement and before close."""
+    if not reuse_enabled():
+        return build()
+    return _REGISTRY.acquire_model(kind, key, build, release)
 
 
 def finish_transformer(transformer):

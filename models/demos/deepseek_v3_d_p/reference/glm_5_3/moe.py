@@ -5,8 +5,8 @@
 
 The routing is the *same* noaux_tc gate the device uses (and that test_ttnn_moe validates the on-device
 gate against): reference.modeling_deepseek.MoEGate with scoring_func="sigmoid", topk_method="noaux_tc",
-norm_topk_prob=True, routed_scaling_factor=route_scale. Each token's selected experts are applied with
-TorchExpert (silu-gated FFN) and summed with the shared expert. This is the mathematical MoE result
+norm_topk_prob=True, routed_scaling_factor=route_scale. Each token's selected experts are applied as
+TorchExpert's silu-gated FFN and summed with the shared expert. This is the mathematical MoE result
 that the distributed TtMoe (dispatch -> experts -> combine) computes, so it composes into the block
 reference without replicating the dispatch machinery.
 """
@@ -14,9 +14,17 @@ reference without replicating the dispatch machinery.
 from types import SimpleNamespace
 
 import torch
+import torch.nn.functional as F
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import apply_glu_activation
+
+
+def _expert(x: torch.Tensor, weights: dict) -> torch.Tensor:
+    """TorchExpert's FFN in bf16, called on the weights directly: building a TorchExpert copies all three to fp32
+    first, which costs more than the FFN itself."""
+    gate_proj, up_proj, down_proj = (weights[name].to(torch.bfloat16) for name in ("gate_proj", "up_proj", "down_proj"))
+    return F.linear(apply_glu_activation(F.linear(x, gate_proj), F.linear(x, up_proj)), down_proj)
 
 
 def glm_moe_reference(
@@ -62,21 +70,17 @@ def glm_moe_reference(
     # returns topk_idx / topk_weight as [tokens, top_k].
     topk_idx, topk_weight = gate(hidden_states.float())
 
-    routed_hidden = routed_expert_weights[0]["gate_proj"].shape[0]
     out = torch.zeros_like(flat, dtype=torch.float32)
     for e in range(n_routed):
         sel = topk_idx == e  # [tokens, top_k]
         if not bool(sel.any()):
             continue
         tok, slot = sel.nonzero(as_tuple=True)
-        expert = TorchExpert(emb_dim, routed_hidden, torch_weights=routed_expert_weights[e]).eval().to(torch.bfloat16)
         with torch.no_grad():
-            ex_out = expert(flat[tok])
+            ex_out = _expert(flat[tok], routed_expert_weights[e])
         out[tok] += topk_weight[tok, slot].unsqueeze(-1).float() * ex_out.float()
 
-    shared_hidden = shared_expert_weights["gate_proj"].shape[0]
-    shared = TorchExpert(emb_dim, shared_hidden, torch_weights=shared_expert_weights).eval().to(torch.bfloat16)
     with torch.no_grad():
-        out += shared(flat).float()
+        out += _expert(flat, shared_expert_weights).float()
 
     return out.reshape(b, s, h).to(hidden_states.dtype)

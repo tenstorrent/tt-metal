@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
     glm_mtp_predictor_reference,
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.tests._reuse import acquire_model
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
@@ -543,6 +544,29 @@ def _turn_chunks(turns) -> list[tuple[int, int]]:
     return chunks
 
 
+# The reference runs attention and the MoE only at these rows; its caches and fused projection still take every row.
+_REF_EDGE_ROWS = 8  # a chip's last K + 1 rows read the next chip's tokens, K <= 7
+_REF_SAMPLE_FRACTION = 0.1
+
+
+def _reference_rows(chunks, total: int, chunk_local: int) -> torch.Tensor:
+    """Positions the reference computes layer outputs at: each chunk's first tile and last rows, both sides of every
+    chip boundary, and a seeded random sample of the rest."""
+    keep = torch.rand(total, generator=torch.Generator().manual_seed(5)) < _REF_SAMPLE_FRACTION
+    for start, end in chunks:
+        keep[start : start + ttnn.TILE_SIZE] = True
+        keep[max(end - _REF_EDGE_ROWS, 0) : end] = True
+    for edge in range(chunk_local, total, chunk_local):
+        keep[edge - _REF_EDGE_ROWS : edge + _REF_EDGE_ROWS] = True
+    return keep.nonzero().flatten()
+
+
+def _release_predictor(predictor):
+    """Remove the predictor's MoE sub-device manager; the sparse-MLA one is the mesh's, released when it closes."""
+    predictor.mesh_device.clear_loaded_sub_device_manager()
+    predictor.module.layer.ffn.release_sub_device_manager()
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
@@ -583,26 +607,31 @@ def test_mtp_multiturn_pcc(
     )
     module_pcc = MTP_MODULE_OUTPUT_PCC[use_pretrained]
     logger.info(f"[mtp multiturn] use_pretrained={use_pretrained} K={num_levels} turns={turns} chunks={chunks}")
-    predictor = TtMTPPredictor(
-        mesh_device,
-        config,
-        GLM53Config,
-        {"mtp": mtp_state_dict, "layer": layer_state_dict},
-        mtp_cfg,
-        seq_len=CHUNK,
-        num_levels=num_levels,
-        layer_idx=layer_idx,
-        tp_axis=TP_AXIS,
-        num_links=num_links,
-        topology=topology,
-        sp_axis=SP_AXIS,
-        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        # Every padding row is identical, so all of them can route to one chip's experts.
-        dispatch_buffer_capacity_factor=8,
-        is_chunked=True,
-        max_seq_len=CACHE_LEN,
-        slot_num=1,
-        layer_num=num_levels,
+    predictor = acquire_model(
+        "mtp_multiturn_predictor",
+        (variant.name, use_pretrained, num_levels, num_links),
+        lambda: TtMTPPredictor(
+            mesh_device,
+            config,
+            GLM53Config,
+            {"mtp": mtp_state_dict, "layer": layer_state_dict},
+            mtp_cfg,
+            seq_len=CHUNK,
+            num_levels=num_levels,
+            layer_idx=layer_idx,
+            tp_axis=TP_AXIS,
+            num_links=num_links,
+            topology=topology,
+            sp_axis=SP_AXIS,
+            gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+            # Every padding row is identical, so all of them can route to one chip's experts.
+            dispatch_buffer_capacity_factor=8,
+            is_chunked=True,
+            max_seq_len=CACHE_LEN,
+            slot_num=1,
+            layer_num=num_levels,
+        ),
+        _release_predictor,
     )
     kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(
         config, mesh_device, CACHE_LEN, num_levels, chunk_size=CHUNK
@@ -699,7 +728,8 @@ def test_mtp_multiturn_pcc(
         for k in range(1, num_levels):
             hiddens[k][start:end] = normeds[k - 1]
 
-    logger.info(f"[mtp multiturn] CPU reference over [0, {total}) in {CHUNK}-token chunks")
+    sel = _reference_rows(chunks, total, CHUNK // sp)
+    logger.info(f"[mtp multiturn] CPU reference over [0, {total}) in {CHUNK}-token chunks, outputs at {len(sel)} rows")
     t0 = time.monotonic()
     refs = [SparseMLAReference(config, mla_weights, seq_len=CACHE_LEN) for _ in range(num_levels)]
     token_ids = torch.tensor(ids)
@@ -723,6 +753,7 @@ def test_mtp_multiturn_pcc(
                 mla_refs=refs,
                 actual_start=ref_start,
                 actual_end=ref_end,
+                rows=sel[(sel >= ref_start) & (sel < ref_end)] - ref_start,
             )
         )
     ref_x, ref_out, ref_normed = (
@@ -731,14 +762,16 @@ def test_mtp_multiturn_pcc(
     logger.info(f"[mtp multiturn] CPU reference took {time.monotonic() - t0:.1f}s")
 
     for i, (start, end, xs, outs, normeds) in enumerate(dev_chunks):
+        picked = (sel >= start) & (sel < end)
+        local = sel[picked] - start
         for k in range(num_levels):
             what = f"[mtp multiturn] chunk {i} L{k + 1}"
             _, msg = assert_with_pcc(ref_x[k][start:end], xs[k], FUSED_MTP_PCC)
             logger.info(f"{what} fused projection PCC: {msg}")
-            _, msg = assert_with_pcc(ref_out[k][start:end], outs[k], module_pcc)
-            logger.info(f"{what} layer output PCC: {msg}")
-            _, msg = assert_with_pcc(ref_normed[k][start:end], normeds[k], module_pcc)
-            logger.info(f"{what} shared_head.norm output PCC: {msg}")
+            _, msg = assert_with_pcc(ref_out[k][picked], outs[k][local], module_pcc)
+            logger.info(f"{what} layer output PCC at {len(local)} rows: {msg}")
+            _, msg = assert_with_pcc(ref_normed[k][picked], normeds[k][local], module_pcc)
+            logger.info(f"{what} shared_head.norm output PCC at {len(local)} rows: {msg}")
 
     # Whole slots, so a row a later turn failed to overwrite fails too; nothing at or past the last tile is written.
     tail = -(-total // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
