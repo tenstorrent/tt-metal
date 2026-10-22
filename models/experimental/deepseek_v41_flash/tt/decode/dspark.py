@@ -23,6 +23,17 @@ hc, D]`` streams), the layout of the V4 prefill blocks. Under TP the query heads
 groups and the experts' ``I`` are split over the ranks; ``wo_b`` and the MoE all-reduce their
 partials, and everything else is replicated.
 
+A stage's projections have the decode layers' shapes, so they are the decode layers'
+``matmul_decode`` :class:`LinearDecode` layers, fed the ``[rows, K]`` ROW_MAJOR replica the decode
+model feeds a batch of users (``rows`` is at most ``main_rows``, which the replica path caps at 8).
+Under ``use_prefetcher`` ``wq_a``, ``wq_b``, ``wkv``, ``wo_b`` and the shared expert's ``w2``
+stream through the drafter's own rings (:func:`dspark_prefetch_rings`): it runs on a pipeline stage
+of its own, so its rings are sized for its dtypes and share no FIFO with a decode step. Each matmul
+queues its own request as it runs, so a ring's requests are sent in the order its matmuls are queued.
+The shared expert's ``w1`` / ``w3`` copy DRAM -> L1 per call, as the decode layers' do. ``wo_a``
+(the decode ``o_a_proj`` is single-row only), ``main_proj`` (whose slab fits no ring), the router
+gate and the head keep plain matmuls.
+
 Two traceable entry points share persistent inputs the host fills per round:
 :meth:`DeepSeekV41DSpark.write_main` writes up to ``main_rows`` verified rows into every ring,
 and :meth:`DeepSeekV41DSpark.draft` drafts the block.
@@ -34,6 +45,8 @@ import torch
 import ttnn
 
 from models.experimental.deepseek_v41_flash.tt.config import dspark_expert_provider, dspark_weights
+from models.experimental.deepseek_v41_flash.tt.decode.attention import DECODE_LAYOUTS as ATTENTION_LAYOUTS
+from models.experimental.deepseek_v41_flash.tt.decode.moe import DECODE_LAYOUTS as MOE_LAYOUTS
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v4_flash.tt.common import (
     _HIFI4,
@@ -41,10 +54,19 @@ from models.experimental.deepseek_v4_flash.tt.common import (
     DeepSeekV4Module,
     width_sharded_l1_config,
 )
-from models.experimental.deepseek_v4_flash.tt.decode.attention import _interleaved_rotate_matrix, make_rope_table
+from models.experimental.deepseek_v4_flash.tt.decode.attention import (
+    _decode_activation,
+    _interleaved_rotate_matrix,
+    make_rope_table,
+)
+from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
+    PrefetchRing,
+    ring_prefetch,
+    tp_gate_up_layout,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.decode.moe import _tp_all_reduce
-from models.experimental.deepseek_v4_flash.tt.layers import Linear
+from models.experimental.deepseek_v4_flash.tt.layers import Linear, LinearDecode
 from models.experimental.deepseek_v4_flash.tt.prefill.decoder_layer import (
     load_norm_gamma,
     mix_streams,
@@ -63,6 +85,31 @@ _KV_ROWS = 160
 # Column width of one stash buffer. paged_update_cache double-buffers whole rows on one core, so a
 # hidden-wide (5120) row needs ~1.75 MB of circular buffers, more than L1.
 STASH_PIECE = 1024
+# Depth of every drafter ring, the streaming floor. GCBs take the same L1 offset on every core, so the
+# five rings stack: ~460 KB a core at bfloat8_b, below which fused_experts' bfloat8_b circular buffers
+# (~840 KB) still fit.
+DSPARK_GCB_PAGES = 2
+
+
+def dspark_prefetch_rings(tp_size: int) -> dict:
+    """The drafter's rings by weight name, at the per-rank shapes of a 1x``tp_size`` stage.
+
+    Each attention ring's page is pinned by a spec that is not a consumer (the same layout over fewer K
+    rows): two whole slabs would not fit (q_a's ``[5120, 160]`` alone is ~870 KB at bfloat8_b). The
+    pages are 80 tiles for q_a and 32 for kv, q_b and o_b at TP4. The shared down keeps whole-slab
+    pages: its A is several ROW_MAJOR rows not height-sharded, which custom_mm takes in one K block only.
+    """
+    q_a, kv = ATTENTION_LAYOUTS["q_a_proj"], ATTENTION_LAYOUTS["kv_proj"]
+    q_b = {**ATTENTION_LAYOUTS["q_b_proj"], "N": ATTENTION_LAYOUTS["q_b_proj"]["N"] // tp_size}
+    o_b = {**ATTENTION_LAYOUTS["o_b_proj"], "K": ATTENTION_LAYOUTS["o_b_proj"]["K"] // tp_size}
+    down = {"K": MOE_LAYOUTS["shared_down_proj"]["K"] // tp_size, "N": MOE_LAYOUTS["shared_down_proj"]["N"]}
+    return {
+        "q_a_proj": PrefetchRing("dspark.q_a", (q_a, {**q_a, "K": 512}), DSPARK_GCB_PAGES),
+        "kv_proj": PrefetchRing("dspark.kv", (kv, {**kv, "K": 1024}), DSPARK_GCB_PAGES),
+        "q_b_proj": PrefetchRing("dspark.q_b", (q_b, {**q_b, "K": 256}), DSPARK_GCB_PAGES),
+        "o_b_proj": PrefetchRing("dspark.o_b", (o_b, {**o_b, "K": 512}), DSPARK_GCB_PAGES),
+        "shared_down_proj": PrefetchRing("dspark.shared_down", (down,), DSPARK_GCB_PAGES),
+    }
 
 
 def _rope_tail(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor) -> ttnn.Tensor:
@@ -81,6 +128,12 @@ def _rope_tail(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Ten
 
 def _rms(x: ttnn.Tensor, gamma: ttnn.Tensor, eps: float) -> ttnn.Tensor:
     return ttnn.multiply(wide_rms_norm(x, eps), gamma)
+
+
+def _rows(x: ttnn.Tensor) -> ttnn.Tensor:
+    """A ``matmul_decode`` result (``[1, 1, R, N]`` width-sharded over its B cores, ROW_MAJOR after the
+    replica path) as the DRAM TILE rows the rest of a stage works on."""
+    return ttnn.to_layout(ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
 
 
 def host_to_device(value: torch.Tensor, dst: ttnn.Tensor) -> None:
@@ -157,12 +210,25 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
 
     ``weights`` comes from :func:`~..config.dspark_weights` and ``experts`` is the stage's
     :class:`~.moe.DeepSeekV41PreloadedExperts` at :func:`dspark_moe_config`. ``rot`` is the shared
-    ``[Rd, Rd]`` rotate matrix. ``weight_dtype`` is for the projections; the router gate,
-    norms, sinks and hyper-connections stay bf16.
+    ``[Rd, Rd]`` rotate matrix. ``weight_dtype`` is for the attention projections and ``shared_dtype``
+    for the shared expert; the router gate, norms, sinks and hyper-connections stay bf16.
+    ``use_prefetcher`` streams the ringed projections (:func:`dspark_prefetch_rings`) through
+    ``prefetch_buffers``, the mapping every stage on ``device`` shares, which builds each ring on first use.
     """
 
     def __init__(
-        self, config, stage: int, weights: dict, experts, device, rot, cache=None, weight_dtype=ttnn.bfloat8_b
+        self,
+        config,
+        stage: int,
+        weights: dict,
+        experts,
+        device,
+        rot,
+        cache=None,
+        weight_dtype=ttnn.bfloat8_b,
+        shared_dtype=ttnn.bfloat8_b,
+        use_prefetcher: bool = False,
+        prefetch_buffers=None,
     ):
         cache = _as_cache(cache)
         tp = experts.tp_size
@@ -179,18 +245,49 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         self.limit = config.swiglu_limit
         self.experts = experts
         tag = f".tp{tp}"
-        col = ttnn.ShardTensorToMesh(device, dim=1) if tp > 1 else None
         row = ttnn.ShardTensorToMesh(device, dim=0) if tp > 1 else None
+        # A LinearDecode weight is [K, N] (or [1, 1, K, N] when prefetched): columns are the last dim.
+        replicate = ttnn.ReplicateTensorToMesh(device) if tp > 1 else None
+        col_k_n = ttnn.ShardTensorToMesh(device, dim=-1) if tp > 1 else None
+        row_k_n = ttnn.ShardTensorToMesh(device, dim=-2) if tp > 1 else None
+        rings = dspark_prefetch_rings(tp) if use_prefetcher else {}
 
         def gamma(name):
             return load_norm_gamma(weights[f"{name}.weight"], device, cache.file(name))
 
-        self.wq_a = Linear(weights["attn.wq_a.weight"], device, cache.file("attn.wq_a"), dtype=weight_dtype)
-        self.q_norm = gamma("attn.q_norm")
-        self.wq_b = Linear(
-            weights["attn.wq_b.weight"], device, cache.file("attn.wq_b" + tag), dtype=weight_dtype, mesh_mapper=col
+        self.wq_a = LinearDecode(
+            weights["attn.wq_a.weight"],
+            device,
+            cache.file("attn.wq_a.decode"),
+            dtype=weight_dtype,
+            mesh_mapper=replicate,
+            **ATTENTION_LAYOUTS["q_a_proj"],
+            **ring_prefetch(rings, "q_a_proj", prefetch_buffers, device, weight_dtype),
+            rectangle_b_grid=True,
+            use_rm_hs=True,
         )
-        self.wkv = Linear(weights["attn.wkv.weight"], device, cache.file("attn.wkv"), dtype=weight_dtype)
+        self.q_norm = gamma("attn.q_norm")
+        self.wq_b = LinearDecode(
+            weights["attn.wq_b.weight"],
+            device,
+            cache.file("attn.wq_b" + tag + ".decode"),
+            dtype=weight_dtype,
+            mesh_mapper=col_k_n,
+            **{**ATTENTION_LAYOUTS["q_b_proj"], "N": ATTENTION_LAYOUTS["q_b_proj"]["N"] // tp},
+            **ring_prefetch(rings, "q_b_proj", prefetch_buffers, device, weight_dtype),
+            rectangle_b_grid=True,
+            use_rm_hs=True,
+        )
+        self.wkv = LinearDecode(
+            weights["attn.wkv.weight"],
+            device,
+            cache.file("attn.wkv.decode"),
+            dtype=weight_dtype,
+            mesh_mapper=replicate,
+            **ATTENTION_LAYOUTS["kv_proj"],
+            **ring_prefetch(rings, "kv_proj", prefetch_buffers, device, weight_dtype),
+            use_rm_hs=True,
+        )
         self.kv_norm = gamma("attn.kv_norm")
         wo_a = _memo(weights["attn.wo_a.weight"])  # [groups * o_lora, heads * head_dim / groups]
         o_lora = config.o_lora_rank
@@ -210,8 +307,16 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             dtype=weight_dtype,
             mesh_mapper=row,
         )
-        self.wo_b = Linear(
-            weights["attn.wo_b.weight"], device, cache.file("attn.wo_b" + tag), dtype=weight_dtype, mesh_mapper=row
+        self.wo_b = LinearDecode(
+            weights["attn.wo_b.weight"],
+            device,
+            cache.file("attn.wo_b" + tag + ".decode"),
+            dtype=weight_dtype,
+            mesh_mapper=row_k_n,
+            **{**ATTENTION_LAYOUTS["o_b_proj"], "K": ATTENTION_LAYOUTS["o_b_proj"]["K"] // tp},
+            **ring_prefetch(rings, "o_b_proj", prefetch_buffers, device, weight_dtype),
+            rectangle_b_grid=True,
+            use_rm_hs=True,
         )
         # Row r = t * local_heads + h of the folded scores: the sink of head h at the sink's key column.
         sink = _memo(weights["attn.attn_sink"])
@@ -263,40 +368,57 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             device,
             cache_file_name=bias_file,
         )
-        self.shared_w1 = Linear(
+        # Gate/up's N / 64 B cores (9 at TP4) divide no ring; their ROW_MAJOR width-sharded outputs are
+        # already the A that down cuts K over.
+        hidden, local_inter = config.hidden_size, config.moe_intermediate_size // tp
+        self.shared_w1 = LinearDecode(
             weights["ffn.shared_experts.w1.weight"],
             device,
-            cache.file("ffn.shared_experts.w1" + tag),
-            dtype=weight_dtype,
-            mesh_mapper=col,
+            cache.file("ffn.shared_experts.w1" + tag + ".decode"),
+            dtype=shared_dtype,
+            mesh_mapper=col_k_n,
+            **tp_gate_up_layout(tp, hidden, local_inter, layouts=MOE_LAYOUTS),
+            rectangle_b_grid=True,
+            use_rm_hs=True,
         )
-        self.shared_w3 = Linear(
+        self.shared_w3 = LinearDecode(
             weights["ffn.shared_experts.w3.weight"],
             device,
-            cache.file("ffn.shared_experts.w3" + tag),
-            dtype=weight_dtype,
-            mesh_mapper=col,
+            cache.file("ffn.shared_experts.w3" + tag + ".decode"),
+            dtype=shared_dtype,
+            mesh_mapper=col_k_n,
+            **tp_gate_up_layout(tp, hidden, local_inter, layouts=MOE_LAYOUTS),
+            rectangle_b_grid=True,
+            use_rm_hs=True,
         )
-        self.shared_w2 = Linear(
+        self.shared_w2 = LinearDecode(
             weights["ffn.shared_experts.w2.weight"],
             device,
-            cache.file("ffn.shared_experts.w2" + tag),
-            dtype=weight_dtype,
-            mesh_mapper=row,
+            cache.file("ffn.shared_experts.w2" + tag + ".decode"),
+            dtype=shared_dtype,
+            mesh_mapper=row_k_n,
+            K=local_inter,
+            N=hidden,
+            num_inputA_cores=max(1, local_inter // 64),
+            **ring_prefetch(rings, "shared_down_proj", prefetch_buffers, device, shared_dtype),
+            rectangle_b_grid=True,
+            use_rm_hs=False,
         )
 
     def _all_reduce(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Sum the TP partials of ``[1, 1, T, D]`` (TILE). The rows go ROW_MAJOR first: the direct
-        reduce-scatter stages its input over every core's L1, and a 32-row padded tile takes ~640 KB per core
-        on the output stage."""
+        """Sum the TP partials of ``[1, 1, T, D]`` (any layout, DRAM or sharded) into DRAM TILE rows. The rows
+        go ROW_MAJOR first: the direct reduce-scatter stages its input over every core's L1, and a 32-row
+        padded tile takes ~640 KB per core on the output stage."""
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if self.tp_size == 1:
-            return x
+            return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         summed = _tp_all_reduce(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), self.device)
         return ttnn.to_layout(summed, ttnn.TILE_LAYOUT)
 
     def _kv(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, R, D]`` -> the RoPE'd ``kv_norm(wkv(x))`` ``[1, 1, R, head_dim]``."""
-        return _rope_tail(_rms(self.wkv(x), self.kv_norm, self.eps), cos, sin, self.rot)
+        kv = _rows(self.wkv(_decode_activation(self.wkv, x)))
+        return _rope_tail(_rms(kv, self.kv_norm, self.eps), cos, sin, self.rot)
 
     def write_main(self, main_x, cos, sin, scatter, keep) -> None:
         """Write the ``main_kv`` of ``main_x`` ``[1, 1, R, D]`` into the ring: ``ring = ring * keep + scatter @ kv``.
@@ -316,7 +438,8 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         empty ring slots and the padding, and the sink row's score is its per-head bias.
         """
         t = x.shape[2]
-        q = self.wq_b(_rms(self.wq_a(x), self.q_norm, self.eps))
+        q_a = _rms(_rows(self.wq_a(_decode_activation(self.wq_a, x))), self.q_norm, self.eps)
+        q = _rows(self.wq_b(_decode_activation(self.wq_b, q_a)))
         q = ttnn.reshape(q, [1, 1, t * self.local_heads, self.head_dim])
         q = _rope_tail(q, q_cos, q_sin, self.rot)
         kv = self._kv(x, kv_cos, kv_sin)
@@ -330,7 +453,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         o = ttnn.reshape(o, [1, t, self.local_groups, -1])
         o = ttnn.matmul(ttnn.permute(o, (0, 2, 1, 3)), self.wo_a, compute_kernel_config=_HIFI4)
         o = ttnn.reshape(ttnn.permute(o, (0, 2, 1, 3)), [1, 1, t, -1])
-        return self._all_reduce(self.wo_b(o))
+        return self._all_reduce(self.wo_b(_decode_activation(self.wo_b, o)))
 
     def moe(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Routed experts plus the shared expert: ``[1, 1, T, D]`` -> ``[1, 1, T, D]`` (all-reduced).
@@ -364,9 +487,10 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             )
             routed.append(ttnn.to_layout(ttnn.reshape(out, [1, 1, 1, d]), ttnn.ROW_MAJOR_LAYOUT))
         routed = ttnn.to_layout(ttnn.concat(routed, dim=2), ttnn.TILE_LAYOUT)
-        gate = ttnn.clamp(self.shared_w1(x), max=self.limit)
-        up = ttnn.clamp(self.shared_w3(x), min=-self.limit, max=self.limit)
-        shared = self.shared_w2(ttnn.multiply(ttnn.silu(gate), up))
+        x_rep = _decode_activation(self.shared_w1, x)
+        gate = ttnn.clamp(self.shared_w1(x_rep), max=self.limit)
+        up = ttnn.clamp(self.shared_w3(_decode_activation(self.shared_w3, x_rep)), min=-self.limit, max=self.limit)
+        shared = _rows(self.shared_w2(ttnn.multiply(ttnn.silu(gate), up)))
         return self._all_reduce(ttnn.add(routed, shared))
 
     def forward(self, streams, pre_mix, rope: dict, bias_row) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -390,10 +514,19 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
     :attr:`stash`, the ring the decode model writes each step's target-layer means into at
     ``pos % stash_rows`` (per target, ``[1, 1, stash_rows, STASH_PIECE]`` column pieces).
 
-    ``expert_dtype`` defaults to bfloat4_b, like the decode MoE: ``fused_experts`` double-buffers a full-K
-    weight slice per core (~700 KB at bfloat8_b), which does not fit below the decode prefetch rings on the
-    output stage. bfloat8_b is more faithful (bfloat4_b flips more of the top-3-of-128 routes) and fits on
-    an otherwise empty device.
+    ``expert_dtype`` defaults to bfloat4_b, like the decode MoE. ``fused_experts`` double-buffers a full-K
+    weight slice per core (~700 KB at bfloat8_b); that fits below the drafter's own rings, so bfloat8_b,
+    which flips fewer of the top-3-of-128 routes, is an option on the drafter's stage.
+
+    ``weight_dtype`` (attention projections and ``main_proj``) and ``shared_dtype`` (shared expert) size
+    the drafter's rings: it runs on a pipeline stage of its own, so with ``use_prefetcher`` it builds its
+    five GCBs (:func:`dspark_prefetch_rings`) on ``device``. The caller owns the prefetcher session, as for
+    the decode layers.
+
+    The stash (and the one-hot that gathers from it) lives on ``stash_device``, the decode stage holding
+    the target layers. When that is not ``device``, ``link`` is a D2D ``(sender, receiver)`` socket pair
+    from it to ``device``: :meth:`send_main` gathers the staged rows there and sends them, and
+    :meth:`write_main` receives them.
     """
 
     def __init__(
@@ -406,13 +539,24 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         cache=None,
         weight_dtype=ttnn.bfloat8_b,
         expert_dtype=ttnn.bfloat4_b,
+        shared_dtype=ttnn.bfloat8_b,
         tp_size: int = 4,
         main_rows: int = 8,
         stash_rows: int = 256,
+        use_prefetcher: bool = False,
+        stash_device=None,
+        link=None,
     ):
+        stash_device = device if stash_device is None else stash_device
+        if (link is None) != (stash_device is device):
+            raise ValueError("a stash on another device needs a link to the drafter's, and only then")
         cache = _as_cache(cache)
+        # Every ring is private, so the mapping starts empty and the stages fill it as they are built.
+        prefetch_buffers = {} if use_prefetcher else None
         self.config = config
         self.device = device
+        self.stash_device = stash_device
+        self.link = link
         self.lm_head = lm_head
         self.cos_half, self.sin_half = rope_main
         self.eps = config.rms_norm_eps
@@ -447,7 +591,17 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             )
             self.stages.append(
                 DeepSeekV41DSparkStage(
-                    config, s, w, experts, device, self.rot, cache=stage_cache, weight_dtype=weight_dtype
+                    config,
+                    s,
+                    w,
+                    experts,
+                    device,
+                    self.rot,
+                    cache=stage_cache,
+                    weight_dtype=weight_dtype,
+                    shared_dtype=shared_dtype,
+                    use_prefetcher=use_prefetcher,
+                    prefetch_buffers=prefetch_buffers,
                 )
             )
         first, last = weights[0], weights[-1]
@@ -474,23 +628,26 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         )
         self.host_embed = loader.get_tensor("embed.weight")  # [V, D] bf16, for the block's input rows
 
-        def zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+        def zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, on=device):
             host = torch.zeros(shape, dtype=torch.int32 if dtype == ttnn.uint32 else torch.float32)
             return ttnn.from_torch(
                 host,
                 dtype=dtype,
                 layout=layout,
-                device=device,
+                device=on,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(on) if tp_size > 1 else None,
             )
 
         w, r, t = main_rows, self.rope_dim, self.block
         self.stash = [
-            [zeros((1, 1, stash_rows, STASH_PIECE)) for _ in range(self.hidden // STASH_PIECE)] for _ in self.targets
+            [zeros((1, 1, stash_rows, STASH_PIECE), on=stash_device) for _ in range(self.hidden // STASH_PIECE)]
+            for _ in self.targets
         ]
+        # Lands where the stash's gathered rows are received, when they come over the link.
+        self.main_in = zeros((1, 1, w, len(self.targets) * self.hidden)) if link is not None else None
         self.inputs = {
-            "gather": zeros((1, 1, w, stash_rows)),
+            "gather": zeros((1, 1, w, stash_rows), on=stash_device),
             "scatter": zeros((1, 1, self.window, w)),
             "keep": zeros((1, 1, self.window, 1)),
             "main_cos": zeros((1, 1, w, r)),
@@ -509,6 +666,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         self.pre_mix_init = ttnn.from_torch(
             one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
         )
+        if use_prefetcher:
+            # The DRISC senders read a weight straight from DRAM when its request arrives, off the command
+            # queue; a session that is already open only fenced the uploads queued before it started.
+            ttnn.synchronize_device(device)
 
     # ------------------------------------------------------------------ host side
     def _rope_rows(self, positions) -> tuple[torch.Tensor, torch.Tensor]:
@@ -556,17 +717,33 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         host_to_device(bias, self.inputs["bias_row"])
 
     # ------------------------------------------------------------------ device side (traceable)
-    def write_main(self) -> None:
-        """Gather the staged rows' target-layer means from :attr:`stash` and write their ``main_kv`` into every ring."""
-        inp = self.inputs
-        rows = ttnn.concat(
+    def _gather_main(self) -> ttnn.Tensor:
+        """The staged rows' target-layer means ``[1, 1, main_rows, targets * D]``, on :attr:`stash_device`."""
+        return ttnn.concat(
             [
-                ttnn.matmul(inp["gather"], piece, compute_kernel_config=_HIFI4)
+                ttnn.matmul(self.inputs["gather"], piece, compute_kernel_config=_HIFI4)
                 for pieces in self.stash
                 for piece in pieces
             ],
             dim=-1,
         )
+
+    def send_main(self) -> None:
+        """On :attr:`stash_device`: gather the staged rows and send them over :attr:`link` to the
+        :meth:`write_main` that follows on :attr:`device`."""
+        rows = self._gather_main()
+        ttnn.experimental.send_direct_async(rows, self.link[0])
+        rows.deallocate(True)
+
+    def write_main(self) -> None:
+        """Take the staged rows' target-layer means (gathered from :attr:`stash` here, or received from
+        :meth:`send_main`) and write their ``main_kv`` into every ring."""
+        inp = self.inputs
+        if self.link is None:
+            rows = self._gather_main()
+        else:
+            ttnn.experimental.recv_direct_async(self.main_in, self.link[1])
+            rows = self.main_in
         main_x = _rms(self.main_proj(rows), self.main_norm, self.eps)
         for stage in self.stages:
             stage.write_main(main_x, inp["main_cos"], inp["main_sin"], inp["scatter"], inp["keep"])

@@ -358,9 +358,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     // resident in DST across the whole traversal -- which is what restricts it to one tile row.
     const bool in0_rm = input_tensor_a.layout() == Layout::ROW_MAJOR;
     const bool custom_mm_streams_ok = operation_attributes.global_cb_k_blocks == 1 || M_tiles == 1;
-    const bool use_custom_mm = in0_rm && (in0_rm_hs || M_tiles == 1) && device->arch() == tt::ARCH::BLACKHOLE &&
-                               !operation_attributes.all_gather && custom_mm_streams_ok &&
-                               is_custom_mm_kt_dim(k_block_tiles) && is_custom_mm_ct_dim(inB_N_tiles_per_core);
+    const bool use_custom_mm = in0_rm && device->arch() == tt::ARCH::BLACKHOLE && !operation_attributes.all_gather &&
+                               custom_mm_streams_ok && is_custom_mm_kt_dim(k_block_tiles) &&
+                               is_custom_mm_ct_dim(inB_N_tiles_per_core);
+    // custom_mm reads each row's K tiles contiguously, but the gather lays A out sender-major
+    // ([sender][M][K / senders]), which is that only for one row. Several rows are gathered into a
+    // staging CB and restriped into full_in0 as [M][K] by the reader.
+    const bool restripe_in0 = use_custom_mm && !in0_rm_hs && M_tiles > 1;
+    TT_FATAL(
+        !in0_rm || in0_rm_hs || M_tiles == 1 || use_custom_mm,
+        "matmul_decode ROW_MAJOR width-sharded input A with M={} needs custom_mm (Blackhole, no fused all-gather, "
+        "one global_cb K block, an even K block of 2..256 tiles and at most 16 output tiles per core)",
+        operation_attributes.M);
     // The RMSNorm statistics want FP32, but custom_mm cannot give DST a 32-bit mode (see the compute
     // config below), and a 16-bit DST cannot read an FP32 circular buffer: the unpacker consumes each
     // FP32 word as two 16-bit datums, which interleaves the tile instead of converting it. The
@@ -370,8 +379,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         std::string_view reason;
         if (!in0_rm) {
             reason = "input A is not ROW_MAJOR";
-        } else if (!in0_rm_hs && M_tiles != 1) {
-            reason = "ROW_MAJOR width-sharded input A requires M_tiles = 1";
         } else if (device->arch() != tt::ARCH::BLACKHOLE) {
             reason = "custom_mm is Blackhole-only";
         } else if (operation_attributes.all_gather) {
@@ -403,6 +410,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t out_full_cb_index = CBIndex::c_5;
     const uint32_t out_stage_cb_index = CBIndex::c_6;
     const uint32_t mm_out_cb_index = CBIndex::c_7;
+    const uint32_t gather_in0_cb_index = CBIndex::c_8;
     const uint32_t rms_local_cb_index = CBIndex::c_10;
     const uint32_t rms_gathered_cb_index = CBIndex::c_11;
     const uint32_t rms_scale_cb_index = CBIndex::c_12;
@@ -684,6 +692,20 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .tile = in0_tile_desc,
         }}},
     });
+    if (restripe_in0) {
+        // The gather's destination: same offset on every core, so a sender addresses the hub's copy
+        // with its own write pointer, as it does full_in0 otherwise.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * K_tiles * in0_tile_size,
+            .core_ranges = all_compute_cores_with_bbox,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = gather_in0_cb_index,
+                .data_format = in0_data_format,
+                .page_size = in0_tile_size,
+                .tile = in0_tile_desc,
+            }}},
+        });
+    }
     // stage: senders bump owning hub after slice write; done: each hub bumps all cores after its mcast half.
     const uint32_t num_senders = inputA_core_range_set.num_cores();
     constexpr uint32_t stage_sem_id = 0;
@@ -753,13 +775,16 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
     // across the phases it merges and rewrites exactly these args, so positional or hard-coded
     // indices would leave the kernels pointing at pre-remap slots.
-    const KernelDescriptor::NamedCompileTimeArgs reader_named_args = {
+    KernelDescriptor::NamedCompileTimeArgs reader_named_args = {
         {"cb_in0", in0_cb_index},
         {"cb_full_in0", full_in0_cb_index},
         {"cb_in1", in1_cb_index},
         {"cb_in1_remote", remote_cb_index},
         {"cb_sync", sync_cb_index},
     };
+    if (restripe_in0) {
+        reader_named_args.emplace_back("cb_gather_in0", gather_in0_cb_index);
+    }
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::map<CoreCoord, uint32_t> sender_id_by_core;
@@ -812,6 +837,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         }
         if (use_custom_mm) {
             reader_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
+        }
+        if (restripe_in0) {
+            reader_kernel_desc.defines.emplace_back("IN0_ROW_RESTRIPE", "1");
         }
 
         reader_kernel_desc.runtime_args.reserve(cores.size());
