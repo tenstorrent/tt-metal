@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_BLOCK_UNPACK true
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -400,10 +402,8 @@ void kernel_main() {
                 }
             } else {
                 tile_regs_acquire();
-                for (uint32_t w = 0; w < subblock_wt; w++) {
-                    index = w + index_subblock_w_offset + index_h_offset;
-                    add_tiles(dfb_in0, dfb_in1, index, index, w);
-                }
+                add_block(
+                    dfb_in0, dfb_in1, index_subblock_w_offset + index_h_offset, index_subblock_w_offset + index_h_offset, 0, subblock_wt);
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
@@ -627,10 +627,15 @@ void kernel_main() {
             dfb_transpose.wait_front(static_cast<uint16_t>(mean_idx + 1));
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !PER_TILE_HANDOFF_GAINS
+                any_tiles_bcast_block<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+                    dfb_in_id, dfb_transpose_id, index_subblock_w_offset, mean_idx, 0, subblock_wt);
+#else
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
                     sub_tiles_bcast_cols(dfb_in_id, dfb_transpose_id, index, mean_idx, w);
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
@@ -660,10 +665,15 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !PER_TILE_HANDOFF_GAINS
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                    dfb_xmm_id, dfb_transpose_id, index_subblock_w_offset + index_h_offset, /*1/sqrt(var+eps) idx*/ 1, 0, subblock_wt);
+#else
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset + index_h_offset;
                     mul_tiles_bcast_cols(dfb_xmm_id, dfb_transpose_id, index, /*1/sqrt(var+eps) idx*/ 1, w);
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
@@ -701,10 +711,15 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !PER_TILE_HANDOFF_GAINS
+                any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                    dfb_im_id, dfb_gamma_id, index_subblock_w_offset + index_h_offset, index_subblock_w_offset, 0, subblock_wt);
+#else
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
                     mul_tiles_bcast_rows(dfb_im_id, dfb_gamma_id, index + index_h_offset, index, w);
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
@@ -741,10 +756,15 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !PER_TILE_HANDOFF_GAINS
+                any_tiles_bcast_block<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(
+                    dfb_beta_src_id, dfb_beta_id, index_subblock_w_offset + index_h_offset, index_subblock_w_offset, 0, subblock_wt);
+#else
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
                     add_tiles_bcast_rows(dfb_beta_src_id, dfb_beta_id, index + index_h_offset, index, w);
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
