@@ -286,18 +286,17 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
     // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
-    // base_l1_address: adds a circular buffer at `cb_index` on `mux_cores` to hold the map, and a semaphore on
-    // `mux_cores` in which the mux publishes the map's address once it is ready for traffic. Persistent L1 on those
+    // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
+    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address once it is ready for traffic.
+    // A circular buffer added later on a mux core must use another index. Persistent L1 on those
     // cores, such as a PrefetcherPipe ring, then stays below the map instead of under it.
     //
     // The config must be built with base_l1_address = 0, so every address getter returns an offset into the map.
     // A client gets the map's address from wait_for_fabric_mux_l1_base() (tt_fabric_mux_interface.hpp) and adds it
     // to those offsets before it connects; get_l1_base_semaphore_id() replaces get_status_address() for that wait.
     // Worker muxes only. Call before get_fabric_mux_compile_time_args().
-    void place_in_program_local_l1(
-        tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores, uint8_t cb_index);
-    void place_in_program_local_l1(
-        tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores, uint8_t cb_index);
+    void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
+    void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
 
     bool is_in_program_local_l1() const;
 
@@ -417,16 +416,15 @@ public:
     size_t get_memory_map_end_address() const;
 
     // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
-    // base_l1_address: adds a circular buffer at `cb_index` on `mux_cores` to hold the map, and a semaphore on
-    // `mux_cores` in which the mux publishes the map's address when it starts. Persistent L1 on those cores, such as
+    // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
+    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address when it starts. A circular
+    // buffer added later on a mux core must use another index. Persistent L1 on those cores, such as
     // a PrefetcherPipe ring, then stays below the map instead of under it. The config must be built with
     // base_l1_address = 0. Clients need no change: append_client_connection_rt_args passes the semaphore, and
     // FabricMuxV2Sender adds the published address before it opens. Call before add_fabric_mux_v2_to_program for
     // any of `mux_cores`.
-    void place_in_program_local_l1(
-        tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores, uint8_t cb_index);
-    void place_in_program_local_l1(
-        tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores, uint8_t cb_index);
+    void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
+    void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
 
 private:
     friend void add_fabric_mux_v2_to_program(

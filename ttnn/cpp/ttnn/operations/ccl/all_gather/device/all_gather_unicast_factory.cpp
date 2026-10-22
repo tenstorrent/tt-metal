@@ -271,7 +271,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     tt::tt_metal::KernelHandle mux_kernel_id = 0;
     if (use_mux && mux_core_range.num_cores() > 0) {
-        mux_config.place_in_program_local_l1(program, mux_core_range, tt::CBIndex::c_31);
+        mux_config.place_in_program_local_l1(program, mux_core_range);
         mux_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",

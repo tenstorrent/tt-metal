@@ -686,7 +686,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         buffer_size_bytes_full_size_channel,
         /*base_l1_address=*/0);
     if (!mux_core_ranges.empty()) {
-        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set, tt::CBIndex::c_31);
+        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set);
     }
 
     // all gather
@@ -862,7 +862,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             /*base_l1_address=*/0);
 
         if (!fsdp_mux_core_ranges.empty()) {
-            fsdp_mux_kernel_config.place_in_program_local_l1(desc, fsdp_mux_core_range_set, tt::CBIndex::c_31);
+            fsdp_mux_kernel_config.place_in_program_local_l1(desc, fsdp_mux_core_range_set);
             fsdp_mux_cores = fsdp_mux_core_range_set;
         }
     }

@@ -270,7 +270,7 @@ auto plan_mux_workers(
         mux_core_range_set.str());
 
     const auto needed_mux_core_range_set = select_from_corerangeset(mux_core_range_set, 0, needed_cores - 1);
-    mux_config.place_in_program_local_l1(desc, needed_mux_core_range_set, tt::CBIndex::c_31);
+    mux_config.place_in_program_local_l1(desc, needed_mux_core_range_set);
 
     std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);

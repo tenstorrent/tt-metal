@@ -1504,7 +1504,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     }
     CoreRangeSet mux_core_range_set(mux_core_ranges);
     if (!mux_core_ranges.empty()) {
-        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set, tt::CBIndex::c_31);
+        mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set);
     }
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.

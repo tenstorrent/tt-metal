@@ -493,7 +493,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // L1 there; its addresses are offsets until the mux publishes the map's base.
     tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, /*base_l1_address=*/0);
-    mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set, tt::CBIndex::c_31);
+    mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
 
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -582,8 +582,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     buffer_size_bytes_full_size_channel,
                     /*base_l1_address=*/0);
                 if (mux_connection_valid) {
-                    mux_v2_config->place_in_program_local_l1(
-                        program, CoreRangeSet(CoreRange(mux_logical_core)), tt::CBIndex::c_31);
+                    mux_v2_config->place_in_program_local_l1(program, CoreRangeSet(CoreRange(mux_logical_core)));
                 }
             }
             if (mux_connection_valid) {

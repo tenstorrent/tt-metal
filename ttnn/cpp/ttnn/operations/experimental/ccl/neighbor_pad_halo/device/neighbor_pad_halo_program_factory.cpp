@@ -385,7 +385,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         CoreRangeSet mux_crset(mux_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : mux_crs);
         occ_w_workers = worker_crset;
         occ_wmux = mux_crset;
-        mux_cfg.place_in_program_local_l1(program, mux_crset, tt::CBIndex::c_31);
+        mux_cfg.place_in_program_local_l1(program, mux_crset);
         ttnn::ccl::fabric_mux_connection_ct_args(
             num_w_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, mux_cfg, mux_writer_ct);
         auto mux_writer_cfg = WriterDataMovementConfig{};
@@ -1243,7 +1243,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         CoreRangeSet hm_crset(hm_crs.empty() ? std::set<CoreRange>{CoreRange({0, 0})} : hm_crs);
         occ_hw_workers = hw_crset;
         occ_hmux = hm_crset;
-        hmux_cfg.place_in_program_local_l1(program, hm_crset, tt::CBIndex::c_31);
+        hmux_cfg.place_in_program_local_l1(program, hm_crset);
 
         // Send CB (hsend) + sender CB (c_in0) on the H worker cores
         {

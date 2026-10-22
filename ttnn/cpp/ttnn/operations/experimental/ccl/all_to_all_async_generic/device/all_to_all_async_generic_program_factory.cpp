@@ -798,7 +798,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             }
         }
         if (!active_mux_core_ranges.empty()) {
-            mux_config.place_in_program_local_l1(desc, CoreRangeSet(active_mux_core_ranges), tt::CBIndex::c_31);
+            mux_config.place_in_program_local_l1(desc, CoreRangeSet(active_mux_core_ranges));
         }
 
         for (uint32_t link = 0; link < routing.num_links; ++link) {

@@ -803,7 +803,7 @@ auto build_ring_reduce_scatter_program_impl(
         buffer_size_bytes_full_size_channel,
         /*base_l1_address=*/0);
     if (!mux_core_range_set.empty()) {
-        mux_config.place_in_program_local_l1(program, mux_core_range_set, tt::CBIndex::c_31);
+        mux_config.place_in_program_local_l1(program, mux_core_range_set);
     }
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
@@ -1479,7 +1479,7 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
         buffer_size_bytes_full_size_channel,
         /*base_l1_address=*/0);
     if (!mux_core_range_set.empty()) {
-        mux_config.place_in_program_local_l1(desc, mux_core_range_set, tt::CBIndex::c_31);
+        mux_config.place_in_program_local_l1(desc, mux_core_range_set);
     }
 
     auto reader_named_compile_args = operations::experimental::ccl::detail::get_ring_reader_named_compile_args(
@@ -2262,7 +2262,7 @@ auto build_line_reduce_scatter_program_impl(
         buffer_size_bytes_full_size_channel,
         /*base_l1_address=*/0);
     if (!mux_core_range_set.empty()) {
-        mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set, tt::CBIndex::c_31);
+        mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
     }
 
     // mux kernel

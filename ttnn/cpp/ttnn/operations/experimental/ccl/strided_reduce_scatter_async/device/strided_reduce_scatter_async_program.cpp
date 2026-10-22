@@ -647,7 +647,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         buffer_size_bytes_full_size_channel,
         /*base_l1_address=*/0);
     if (!mux_core_range_set.empty()) {
-        mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set, tt::CBIndex::c_31);
+        mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
     }
 
     // Kernel push order is mux, reader, writer, reduce. The fused workload override keys on those indices.

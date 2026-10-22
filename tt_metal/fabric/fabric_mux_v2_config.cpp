@@ -280,19 +280,21 @@ uint32_t FabricMuxV2Config::validate_program_local_l1_placement() const {
 }
 
 void FabricMuxV2Config::place_in_program_local_l1(
-    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores, uint8_t cb_index) {
+    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores) {
     const uint32_t map_size = validate_program_local_l1_placement();
-    l1_base_semaphore_id_ = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, cb_index, map_size);
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, map_size);
     in_program_local_l1_ = true;
-    program_local_l1_cb_index_ = cb_index;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
 }
 
 void FabricMuxV2Config::place_in_program_local_l1(
-    tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores, uint8_t cb_index) {
+    tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores) {
     const uint32_t map_size = validate_program_local_l1_placement();
-    l1_base_semaphore_id_ = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, cb_index, map_size);
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, map_size);
     in_program_local_l1_ = true;
-    program_local_l1_cb_index_ = cb_index;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
 }
 
 void add_fabric_mux_v2_to_program(

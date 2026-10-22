@@ -67,7 +67,7 @@ auto launch_mux_workers(
         corerange_to_cores(mux_core_range_set).size());
     const auto needed_mux_core_range_set =
         tt::tt_metal::select_from_corerangeset(mux_core_range_set, 0, num_mux_cores_needed - 1);
-    mux_kernel_config.place_in_program_local_l1(desc, needed_mux_core_range_set, tt::CBIndex::c_31);
+    mux_kernel_config.place_in_program_local_l1(desc, needed_mux_core_range_set);
 
     tt::tt_metal::KernelDescriptor mux_kernel;
     mux_kernel.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
