@@ -86,6 +86,24 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
+      clang-tidy-version:
+        required: false
+        type: choice
+        default: "20"
+        options:
+          - "20"
+          - "23"
+        description: "clang-tidy version for the full scan"
+      disable-ctcache:
+        required: false
+        type: boolean
+        default: false
+        description: "Skip ctcache in the full scan"
+      allow-warnings:
+        required: false
+        type: boolean
+        default: false
+        description: "Do not fail compile edges on clang-tidy findings in the full scan"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
@@ -184,6 +202,9 @@ jobs:
       prereq-targets: ''
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      clang-tidy-version: ${{ inputs.clang-tidy-version || '20' }}
+      disable-ctcache: ${{ inputs.disable-ctcache || false }}
+      allow-warnings: ${{ inputs.allow-warnings || false }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
