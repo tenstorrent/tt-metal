@@ -167,6 +167,12 @@ class DBCacheContext:
     def mark_step_begin(self) -> None:
         self.executed_steps += 1
         self._step_decisions = {}
+        # A computed step breaks the cache streak (cache-dit's ``CachedContext.mark_step_begin``), so
+        # cached steps separated by computed ones never exhaust ``max_continuous_cached_steps``.
+        previous_step = self.current_step - 1
+        for st in self._branches:
+            if not st.cached_steps or st.cached_steps[-1] != previous_step:
+                st.continuous_cached_steps = 0
 
     @property
     def current_step(self) -> int:
@@ -222,8 +228,7 @@ class DBCacheContext:
             return "compute"
 
         if cfg.max_continuous_cached_steps >= 0 and st.continuous_cached_steps >= cfg.max_continuous_cached_steps:
-            # cache-dit resets the continuous counter when the cap forces a compute step.
-            st.continuous_cached_steps = 0
+            # The streak is reset by the next ``mark_step_begin`` once this step computes; ``gate`` stays a pure query.
             return "compute"
 
         thr = cfg.max_accumulated_residual_diff_threshold
@@ -255,12 +260,8 @@ class DBCacheContext:
 
     def add_cached_step(self, branch: int) -> None:
         st = self._branches[branch]
-        step = self.current_step
-        if st.cached_steps and step - st.cached_steps[-1] == 1:
-            st.continuous_cached_steps += 2 if st.continuous_cached_steps == 0 else 1
-        else:
-            st.continuous_cached_steps += 1
-        st.cached_steps.append(step)
+        st.continuous_cached_steps += 1
+        st.cached_steps.append(self.current_step)
         self._step_decisions[branch] = True
 
     def add_computed_step(self, branch: int) -> None:

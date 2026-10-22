@@ -41,6 +41,30 @@ def test_max_continuous_cached_steps_forces_compute():
     assert _run(ctx, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) == ["x", "C", "C", "x", "C", "C", "x"]
 
 
+def test_computed_step_resets_continuous_cache_streak():
+    ctx = DBCacheContext(DBCacheConfig(max_warmup_steps=1, residual_diff_threshold=0.1, max_continuous_cached_steps=2))
+    # A computed step breaks the streak (as in cache-dit), so cache hits separated by computed steps
+    # never exhaust the cap: the cap only bites on the third consecutive cached step.
+    assert _run(ctx, [1.0, 0.0, 1.0, 0.0, 0.0, 0.0]) == ["x", "C", "x", "C", "C", "x"]
+
+
+def test_continuous_cache_run_length_is_exact():
+    ctx = DBCacheContext(DBCacheConfig(max_warmup_steps=1, max_continuous_cached_steps=3))
+    assert _run(ctx, [1.0] + [0.0] * 8) == ["x", "C", "C", "C", "x", "C", "C", "C", "x"]
+
+
+def test_gate_is_a_pure_query():
+    ctx = DBCacheContext(DBCacheConfig(max_warmup_steps=1, max_continuous_cached_steps=2))
+    _run(ctx, [1.0, 0.0, 0.0])  # two consecutive cached steps: the cap is reached
+    ctx.mark_step_begin()
+    assert ctx.gate(0) == "compute"
+    assert ctx.gate(0) == "compute"  # asking again changes neither the answer nor the streak
+    assert ctx.branch(0).continuous_cached_steps == 2
+    ctx.add_computed_step(0)
+    ctx.mark_step_begin()  # the computed step resets the streak
+    assert ctx.branch(0).continuous_cached_steps == 0
+
+
 def test_max_cached_steps_cap():
     ctx = DBCacheContext(DBCacheConfig(max_warmup_steps=1, max_cached_steps=2, max_continuous_cached_steps=-1))
     assert _run(ctx, [1.0, 0.0, 0.0, 0.0, 0.0]) == ["x", "C", "C", "x", "x"]
