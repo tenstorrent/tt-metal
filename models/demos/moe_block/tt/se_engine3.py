@@ -153,7 +153,8 @@ void kernel_main() {
     const uint32_t win = get_arg_val<uint32_t>(a++), words = get_arg_val<uint32_t>(a++), y_addr = get_arg_val<uint32_t>(a++);
     const uint32_t n0d = get_arg_val<uint32_t>(a++);
     const uint32_t wg0 = a, wd0 = wg0 + NPG, ys0 = wd0 + NPD;  // pass widths (gate / up, down); the column's NoC y
-    const uint32_t sps = get_arg_val<uint32_t>(ys0 + GY), ord0 = ys0 + GY + 2;  // (steps a shard; the shard order)
+    const uint32_t wbank = get_arg_val<uint32_t>(ys0 + GY);  // (the DRAM bank holding my W-own region)
+    const uint32_t sps = get_arg_val<uint32_t>(ys0 + GY + 1), ord0 = ys0 + GY + 3;  // (steps a shard; the shard order)
     // round w's block (natural index): a gate / up pass's steps in this chip's processing order, then down's
     auto blk = [&](uint32_t w) {
         const uint32_t c = w % NB;
@@ -164,22 +165,18 @@ void kernel_main() {
     auto bsize = [&](uint32_t b) {  // (tiles)
         return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD);
     };
-    const auto wg = TensorAccessor(w_args, w_addr, WTB);
     const auto yg = TensorAccessor(y_args, y_addr, 2048);
-    // my blocks from DRAM, once: every read issued now, the k-th block's under transaction id min(k, 14) + 1; a block
-    // is sent once its reads landed (the column streams while the weights are still arriving)
+    // my blocks from DRAM, once: my W-own is one contiguous region in one bank (per-bank layout, wbase its offset),
+    // read block by block in large bursts, every read issued now - the k-th block's under transaction id
+    // min(k, 14) + 1; a block is sent once its reads landed (the column streams while the weights are still arriving)
     {
         DeviceZoneScopedN("SE-WISSUE");
-        uint32_t page = wbase, off = 0, k = 0;
-        for (uint32_t b = 0; b < NB; ++b) {
+        uint32_t off = 0, k = 0;
+        for (uint32_t b = cy; b < NB; b += GY, ++k) {
             const uint32_t n = bsize(b);
-            if (b % GY == cy) {
-                noc_async_read_set_trid(k < 14 ? k + 1 : 15);
-                for (uint32_t t = 0; t < n; ++t) noc_async_read(wg.get_noc_addr(page + t), wown + (off + t) * WTB, WTB);
-                off += n;
-                ++k;
-            }
-            page += n;
+            noc_async_read_set_trid(k < 14 ? k + 1 : 15);
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + off * WTB), wown + off * WTB, n * WTB);
+            off += n;
         }
     }
     const uint32_t NR = NCH * NB;  // (W rounds a call)
@@ -368,7 +365,7 @@ class SeEngine3:
         assert rows % (32 * self.CR) == 0
         self.NCH = rows // 32 // self.CR
         self.KT, self.HT, self.NTH = H // 32, I // 32, H // 32
-        self.KB = KB or (8 if H <= 4096 else 4)
+        self.KB = KB or 16  # (fewer, larger rounds: K3 403 -> 341 us at 640 rows; GLM-Flash neutral)
         self.NSG = self.KT // self.KB
         assert self.KT % self.KB == 0 and self.NSG % 2 == 0
         nf = self.NSG // 2
@@ -447,39 +444,35 @@ class SeEngine3:
 
     def upload(self, w_gu, w_down):
         """Per device (row-major mesh order): w_gu [H, 2 I] (glu_weight tile pairs), w_down [I, H] -> one bf8 tensor
-        a chip: per column, its blocks in a chunk's stream order (gate / up [KB x pass width] pass-major, then down
-        [KBD x pass width] pass-major)."""
-        R, C = tuple(self.mesh.shape)
-        KB, KBD, NSG, GX = self.KB, self.KBD, self.NSG, self.GX
+        a chip, per-bank: core (c, cy)'s W-own (its column's blocks b = cy, cy + GY, .. of a chunk's stream order:
+        gate / up [KB x pass width] pass-major, then down [KBD x pass width]) one contiguous region, region c GY + cy in
+        bank (c GY + cy) % banks (flat_expert._bank_sharded) - read in large bursts, every bank equally loaded."""
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import _bank_sharded
+
+        KB, KBD, NSG, GX, GY = self.KB, self.KBD, self.NSG, self.GX, self.GY
         devs = []
         for wgt, wdt in zip(w_gu, w_down):
-            tiles = []
+            regions = []
             for c in range(GX):
+                blocks = []
                 g0 = 2 * self.h0[c]
                 for pg, pw in enumerate(self.wg[c]):
                     c0 = g0 + sum(self.wg[c][:pg])
                     for j in range(NSG):
                         blk = wgt[j * KB * 32 : (j + 1) * KB * 32, c0 * 32 : (c0 + pw) * 32]
-                        tiles.append(blk.reshape(KB, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
+                        blocks.append(blk.reshape(KB, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
                 for pd, pw in enumerate(self.wd[c]):
                     c0 = self.n0d[c] + sum(self.wd[c][:pd])
                     for i in range(self.NSD):
                         blk = wdt[i * KBD * 32 : (i + 1) * KBD * 32, c0 * 32 : (c0 + pw) * 32]
-                        tiles.append(blk.reshape(KBD, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
-            devs.append(torch.cat(tiles))
-        self.wbase, o = [], 0
-        for c in range(GX):
-            self.wbase.append(o)
-            o += sum(self.bsize(c, b) for b in range(self.NB))
-        t = torch.stack(devs).reshape(R, C, -1, 32)
-        return ttnn.from_torch(
-            t,
-            dtype=self.w_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, dims=(0, 1), mesh_shape=(R, C)),
-        )
+                        blocks.append(blk.reshape(KBD, 32, pw, 32).permute(0, 2, 1, 3).reshape(-1, 32))
+                for cy in range(GY):
+                    reg = torch.cat(blocks[cy::GY])
+                    pad = self.wown_t * 32 - reg.shape[0]
+                    regions.append(torch.cat([reg, torch.zeros(pad, 32, dtype=reg.dtype)]) if pad else reg)
+            devs.append([r.reshape(-1, 32, 32) for r in regions])
+        self.nbank = self.mesh.dram_grid_size().x
+        return _bank_sharded(devs, self.nbank, self.w_dtype, self.mesh)
 
     def owner(self, j):
         """(owner column, family, index in the family) of x step j (the same every pass and chunk)."""
@@ -551,7 +544,7 @@ class SeEngine3:
                         virt(c, 0).y,
                         virt(c, GY - 1).y,
                         int(w.buffer_address()),
-                        self.wbase[c],
+                        ((c * GY + cy) // self.nbank) * self.wown_t * self.wtb,
                         b + off["wown"],
                         b + off["win"],
                         b + off["words"],
@@ -561,6 +554,7 @@ class SeEngine3:
                     + self.wg[c]
                     + self.wd[c]
                     + [virt(c, yy).y for yy in range(GY)]
+                    + [(c * GY + cy) % self.nbank]
                     + sor
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE

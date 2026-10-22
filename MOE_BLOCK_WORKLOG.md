@@ -385,3 +385,23 @@ head's global semaphores) - the test now drops the head and collects.
 | **lever 1** | **180** (0.99982) | **500-502** (0.99973) |
 | floor / 2x target | 95 / 190 - **within 2x (1.89x)** | 212 / 424 - 2.37x |
 K3 per chip: gather ends 279-307 (143 floor: slowed by the engine's traffic), engine 433-496: the engine binds.
+
+### Lever 2: K3 engine efficiency - per-bank weights, K steps of 16 (14 in the fused head: whole steps a shard)
+- weights: one contiguous W-own region per engine core in bank (core % 8) (flat_expert._bank_sharded), read in large
+  bursts: GLM-Flash's reads issue in 3 us; K3's gate / up did not move (316 us) - the load was not what binds it;
+- K steps of 16: K3 engine 403 -> 341 us (half the rounds); GLM-Flash neutral;
+- measured where gate / up's unpacker waits (zones around its two cb waits, summed a core): K3 x median 104 us, W
+  35 us of 250; the cores that wait least are the 10-tile columns (48 pairs over 11 columns): **K3's engine is compute
+  bound on its heaviest columns at ~50 cycles a tile multiply (2 x 4 sub-blocks, HiFi2 - mm2d's ~180 TFLOP/s is the
+  same rate)**. The 304 TFLOP/s in the floor is optimistic for this sub-block; at the practical ~190 TFLOP/s K3's
+  shared expert computes in ~220 us, not 139;
+- tried, not kept: the x stream hand-written with 3-4 slots and per-slot credits (owner = position % GX, no helper):
+  x waits unchanged (they are the slow columns, not the handshake), GLM-Flash 93 -> 103-120; W slots 2 / 3 / 4: no
+  effect beyond noise. Kept the kernel_lib x families (saved the hand-written stream in the scratchpad).
+| x chain, us (PCC) | GLM-Flash | K3 |
+|---|---|---|
+| lever 1 | 180 | 500 |
+| **lever 2** | **168** (0.99981) | **499** (0.99973) |
+| floor / 2x target | 95 / 190 - 1.77x | 212 / 424 - 2.35x |
+K3 fused (device 0): gate / up ends 401 - only its first pass (of 3) overlaps the gather (ends ~300 us, slowed from
+the 143 floor by the engine's traffic and the one-column movers); passes 2-3 run after it, then h (20) and down (80).

@@ -203,7 +203,19 @@ class HeadSE3:
     y [rows, H] (this chip's partial), the next chunk arriving meanwhile. Engine on columns 0 .. GX - 1, movers next."""
 
     def __init__(
-        self, mesh_device, *, rows, H, I, glu, GX=11, GY=10, MT=2, KB=8, num_links=2, fidelity=ttnn.MathFidelity.HiFi2
+        self,
+        mesh_device,
+        *,
+        rows,
+        H,
+        I,
+        glu,
+        GX=11,
+        GY=10,
+        MT=2,
+        KB=None,
+        num_links=2,
+        fidelity=ttnn.MathFidelity.HiFi2,
     ):
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
@@ -211,6 +223,9 @@ class HeadSE3:
         self.mesh = mesh_device
         grid = mesh_device.compute_with_storage_grid_size()
         assert GX < grid.x, "no column left for the movers"
+        if KB is None:  # (the largest K step <= 16 tiles that divides a chip's shard: whole steps a shard)
+            klt = H // 32 // tuple(mesh_device.shape)[1]
+            KB = max(d for d in range(1, 17) if klt % d == 0)
         self.eng = SeEngine3(mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, MT=MT, KB=KB, fidelity=fidelity)
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self.xg = XGather3(
