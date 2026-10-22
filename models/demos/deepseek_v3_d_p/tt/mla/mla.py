@@ -2278,7 +2278,6 @@ class ttMLA:
         num_users*num_layers user-major slots) and this selects the slot to attend — the op offsets its
         gather page ids by cache_batch_idx * T in-kernel, so no host slot-slice. None → ``kvpe`` is a
         single [1, 1, T, row_width] slot (single-shot path)."""
-        assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
         seq_len_local = q.shape[2]  # per-chip query rows == S / sp
 
@@ -2377,8 +2376,9 @@ class ttMLA:
         physical block-cyclic pages in-kernel (invP), so the buffer is LEFT in block-cyclic order -- no
         host reorder.
 
-        Each device holds seq_len/(sp*tp) rows in sp*tp row-major order, which is what the snake ring
-        reassembles directly -- no TP-inner stage, no intermediate allocation, and the result lands in the
+        Each device holds seq_len/(sp*tp) rows in SP-major (sp_coord*tp + tp_coord) order. The snake ring
+        gathers with sp_axis outermost (full_mesh_outer_axis), so it reassembles that order directly on
+        either SP axis -- no TP-inner stage, no intermediate allocation, and the result lands in the
         persistent worst-case scratch rather than being transient. Same linear chip-major buffer that
         sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True.
 
@@ -2430,8 +2430,6 @@ class ttMLA:
         )
         assert self._sparse_kv_gather_buffer is not None
         # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
-        # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
-        assert self.sp_axis == 0 and self.tp_axis == 1, "full-mesh KVPE gather assumes sp_axis=0, tp_axis=1"
         # A cache still declaring the legacy kv-head-on-TP layout reports too few stripes and would
         # under-gather. This is the assertion that catches an allocator which forgot tp_axis.
         assert self._declared_seq_shard_factor(storage) == stripes, (
@@ -2452,6 +2450,8 @@ class ttMLA:
             output_tensor=self._sparse_kv_gather_buffer,
             num_links=self.ccl_num_links,
             cluster_axis=None,
+            # SP-major stripes: row-major on the mesh at sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
             **slot_meta_kwargs,
             **extent_kwargs,
         )
