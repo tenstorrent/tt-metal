@@ -29,8 +29,9 @@ namespace sfpu {
 //  - the bit-level range reduction of calculate_log_body (#44419): e = bits(x) - bits(c0),
 //    setman(e, 0), m = bits(x) - e; with c0 = 0.70703125 (bf16 of sqrt(2)/2) m lands in
 //    [0.707, 1.414) without a v_if, as the sqrt(2) reduction did before.
-//  - the 2^f minimax of _sfpu_exp2_fp32_accurate_ (#46024) for the final step; f is already reduced,
-//    so there is no f*ln2 product (the binary path used to go through _sfpu_exp_fp32_accurate_).
+//  - the shape of _sfpu_exp2_fp32_accurate_ (#46024) for the final step, a degree-6 polynomial in the
+//    reduced f, so there is no f*ln2 product (the binary path used to go through
+//    _sfpu_exp_fp32_accurate_). The coefficients are refitted, see pow_df::E1.
 // The programmable constants are not used: the bf16 paths share the init and read vConstFloatPrgm0..2.
 //
 // Registers: the binary path keeps base and pow live across the core, and at its peak (inside
@@ -51,13 +52,16 @@ constexpr float P1 = 0x1.ec709cp+0f;  // 0x3FF6384E
 constexpr float P2 = 0x1.2777d8p+0f;  // 0x3F93BBEC
 constexpr float P3 = 0x1.a58p-1f;     // 0x3F52C000 (fp16)
 constexpr float P4 = 0x1.5c8p-1f;     // 0x3F2E4000 (fp16)
-// 2^f for |f| <= 0.5: the coefficients of _sfpu_exp2_fp32_accurate_ (#46024).
-constexpr float E6 = 0x1.41cp-13f;
-constexpr float E5 = 0x1.5f4p-10f;
-constexpr float E4 = 0x1.3b4p-7f;
-constexpr float E3 = 0x1.c6afd8p-5f;
-constexpr float E2 = 0x1.ebfba0p-3f;
-constexpr float E1 = 0x1.62e42ep-1f;
+// 2^f for |f| <= 0.5: minimax of 1 + f*(E1 + f*(E2 + ...)) in ULPs of the fp32 result (2^-24 below 1,
+// 2^-23 above), 0.067 ULP before the Horner roundings. The #46024 coefficients are 0.33 ULP off here, so
+// the result was correctly rounded less often than on main. E4 keeps the #46024 value; E4..E6 are fp16
+// (one SFPLOADI each) and E1..E3 fp32, as before, so the cost is unchanged.
+constexpr float E6 = 0x1.358p-13f;    // fp16
+constexpr float E5 = 0x1.5f0p-10f;    // fp16
+constexpr float E4 = 0x1.3b4p-7f;     // fp16
+constexpr float E3 = 0x1.c6af92p-5f;
+constexpr float E2 = 0x1.ebfbc2p-3f;
+constexpr float E1 = 0x1.62e43p-1f;
 }  // namespace pow_df
 
 sfpi_inline sfpi::vFloat _pow_df_rnd8_(sfpi::vFloat a) {
@@ -126,7 +130,7 @@ sfpi_inline void _sfpu_pow_z_df_(sfpi::vFloat abs_base, sfpi::vFloat pow, sfpi::
     z_lo = yl * th + h * tl;
 }
 
-// 2^f for |f| <= 0.5 (plus a fraction of an ulp): the minimax of _sfpu_exp2_fp32_accurate_ (#46024).
+// 2^f for |f| <= 0.5 (plus a fraction of an ulp), coefficients in pow_df (see E1).
 sfpi_inline sfpi::vFloat _sfpu_pow_df_exp2_poly_(sfpi::vFloat f) {
     using namespace pow_df;
     sfpi::vFloat r = E6 * f + E5;
