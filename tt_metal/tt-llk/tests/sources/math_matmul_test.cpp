@@ -13,6 +13,7 @@
 #include "params.h"
 #include "perf.h"
 #include "profiler.h"
+#include "tensor_shape_helpers.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -32,10 +33,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t in0_tile_r_dim = params.in0_tile_r_dim;
+    const std::uint32_t in0_tile_c_dim = params.in0_tile_c_dim;
     const std::uint32_t in1_tile_r_dim = params.in1_tile_r_dim;
-
-    const bool PARTIAL_FACE_A = params.PARTIAL_FACE_A;
-    const bool PARTIAL_FACE_B = params.PARTIAL_FACE_B;
+    const std::uint32_t in1_tile_c_dim = params.in1_tile_c_dim;
 
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
@@ -52,6 +52,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -65,17 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_A, // in0
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
-        _llk_unpack_AB_matmul_init_<>(
-            UNPACK_TRANSPOSE_FACES,
-            CT_DIM,
-            RT_DIM,
-            KT_DIM,
-            in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
-            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // in1
-            num_faces_A,     // in0
-            PARTIAL_FACE_B,  // in1
-            PARTIAL_FACE_A); // in0
+        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, in0_tensor_shape, in1_tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -103,9 +96,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             j,
                             j * CT_DIM,
                             TILE_SIZE_UNPACK_B,
-                            TILE_SIZE_UNPACK_A,
-                            PARTIAL_FACE_B,
-                            PARTIAL_FACE_A,
+                            TILE_SIZE_UNPACK_B, // in1 tiles sit in full-size L1 slots; TILE_SIZE_UNPACK_A is scaled for tiny in0
+                            in0_tensor_shape,
+                            in1_tensor_shape,
                             CT_DIM,
                             RT_DIM,
                             KT_DIM);
@@ -136,8 +129,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t in1_tile_r_dim = params.in1_tile_r_dim;
     const std::uint32_t in1_tile_c_dim = params.in1_tile_c_dim;
 
-    const bool PARTIAL_FACE_MATH = params.PARTIAL_FACE_MATH;
-
     const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const int DST_INDEX                    = params.DST_INDEX;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
@@ -149,12 +140,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
 
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(in0_tensor_shape, in1_tensor_shape, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
     {
