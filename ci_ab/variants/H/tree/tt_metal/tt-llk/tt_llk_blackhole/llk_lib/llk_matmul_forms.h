@@ -20,7 +20,7 @@ inline constexpr const char* matmul_forms_table[48] = {
     "....h", "....R", ".rR.R", "..r.r", // k 1, LoFi
     ".R..R", "rr..R", ".rR.R", "rrrrr", // k 1, HiFi2
     "rr.rR", "rr.rR", "rrRrR", "rrr.r", // k 1, HiFi3
-    "rR..R", "rrrrR", ".rr.r", "rrrrr", // k 1, HiFi4
+    ".R..R", "rrrrR", ".rr.r", "rrrrr", // k 1, HiFi4
     ".h..R", "rrrrR", "hRr.R", "..r.R", // k 2-4, LoFi
     "hRRhR", "rRrrR", "hRRhR", "rRrRR", // k 2-4, HiFi2
     "rRRrR", "rRrrR", "rRRRR", "rRRrR", // k 2-4, HiFi3
