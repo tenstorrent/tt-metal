@@ -978,10 +978,42 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint3
     }
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
 
-    // Due to a hardware bug (TEN-3868), we need to have one unpack-to-srcA instruction after the last unpack-to-dest instruction.
+    // Hardware bug (TEN-3868): SrcA tracks the bank the unpackers write in two places. The copy that steers
+    // unpacked datums only advances on a "SrcA done" when unpacker 0's most recent write went to SrcA, and
+    // after an unpack to dest that stays false until the next unpack to SrcA, across kernels too. A done with
+    // no datum write behind it (UNPACR_NOP set-dvalid, SETDVALID) then advances only one copy, and from then
+    // on unpacks fill one bank while math reads the other. One unpack to SrcA after the last unpack to dest
+    // puts it back. It writes one row of the unpacker's own SrcA bank, which nothing reads before the next
+    // unpack to SrcA refills it:
+    // - context number 0, so the current context is used (CfgContextOffset already selects it);
+    // - Float16_b in and out, since SrcA cannot take FP32 or INT32 from the unpacker; the two format words
+    //   are saved and written back afterwards;
+    // - Z/W counters zeroed, so it reads the tile's first datums and writes SrcA row 0.
+    TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC0_REG0_TileDescriptor_ADDR32);
+    TTI_RDCFG(p_gpr_unpack::TMP1, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(to_underlying(DataFormat::Float16_b));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(to_underlying(DataFormat::Float16_b));
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXX(p_setadc::UNP_A, FACE_C_DIM - 1, 0x0);
-    TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);
+    TTI_UNPACR(
+        SrcA,
+        0 /*AddrMode*/,
+        0 /*CfgContextCntInc*/,
+        0 /*CfgContextId*/,
+        0 /*AddrCntContextId*/,
+        1 /*OvrdThreadId*/,
+        0 /*SetDatValid*/,
+        p_unpacr::RAREFYB_DISABLE,
+        0 /*ZeroWrite2*/,
+        0 /*AutoIncContextID*/,
+        0 /*RowSearch*/,
+        0 /*SearchCacheFlush*/,
+        1 /*Last*/);
+    TTI_STALLWAIT(p_stall::STALL_CFG | p_stall::STALL_TDMA, p_stall::UNPACK0);
     TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    TTI_NOP; // the instruction after a WRCFG must not consume what it wrote
 }
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
