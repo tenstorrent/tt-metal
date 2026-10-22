@@ -29,6 +29,13 @@ public:
     void post_teardown() override;
     bool is_initialized() const override;
 
+    // Waits for the device's master router to report the local sync, then signals READY_FOR_TRAFFIC. A device
+    // with a host-bridged router cannot get there until the bridge is armed, so configure() leaves such devices
+    // to the FabricHostBridge, which calls this once it has armed its links.
+    static void wait_for_router_sync_on_device(
+        IDevice* dev, const tt::tt_fabric::ControlPlane& control_plane, const Cluster& cluster, uint32_t timeout_ms);
+    static uint32_t fabric_router_sync_timeout_ms(const llrt::RunTimeOptions& rtoptions);
+
 private:
     // Compile fabric on all devices, parallelized via async.
     // Configure fabric sequentially (Galaxy hangs if parallelized).

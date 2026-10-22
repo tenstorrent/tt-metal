@@ -85,4 +85,16 @@ inline bool link_is_bridged(
            });
 }
 
+inline bool device_has_bridged_router(const std::string& spec, const ControlPlane& control_plane, FabricNodeId node) {
+    if (spec.empty()) {
+        return false;
+    }
+    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+        if (link_is_bridged(spec, control_plane, node, chan)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace tt::tt_fabric::host_bridge

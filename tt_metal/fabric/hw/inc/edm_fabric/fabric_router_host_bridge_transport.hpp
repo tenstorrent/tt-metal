@@ -7,7 +7,8 @@
 // ring to the peer host, which replays the frames on the far router's core.
 //
 // The socket config is written by the host after the router starts, so the socket opens lazily once
-// the host arms the block. Until then is_busy() is true and nothing is sent.
+// the host arms the block. Until then is_busy() is true and nothing is sent; the fabric handshake, which
+// blocks in send_with_context_switch(), is what waits for the host.
 #pragma once
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
@@ -15,6 +16,7 @@
 #include "hostdevcommon/fabric_host_bridge.h"
 #include "hostdev/socket.h"
 #include "api/alignment.h"
+#include "internal/ethernet/tunneling.h"
 
 #include <cstdint>
 
@@ -178,6 +180,14 @@ struct HostBridgeLinkTransport {
     static FORCE_INLINE void send_packet(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
         write_frame(tt::tt_fabric::host_bridge::PACKET, dest_addr, num_bytes, src_addr, num_bytes);
         status()->packets++;
+    }
+
+    // Blocks until the host has armed the bridge and the ring has a free page.
+    static FORCE_INLINE void send_with_context_switch(uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+        while (is_busy()) {
+            internal_::risc_context_switch();
+        }
+        send_packet(src_addr, dest_addr, num_bytes);
     }
 
     // Assumes !is_busy()

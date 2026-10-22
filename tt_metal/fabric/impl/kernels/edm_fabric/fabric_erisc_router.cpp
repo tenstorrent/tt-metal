@@ -3251,9 +3251,7 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
-        if constexpr (link_is_host_bridged) {
-            // No wire: the peer is reached through the host, which arms the bridge after launch.
-        } else if constexpr (is_handshake_sender) {
+        if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
@@ -3270,7 +3268,7 @@ void kernel_main() {
         }
 
         // After handshake completes, extract neighbor info and populate telemetry
-        if constexpr (!link_is_host_bridged) {
+        {
             volatile tt_l1_ptr auto* handshake_info =
                 reinterpret_cast<volatile tt_l1_ptr erisc::datamover::handshake::handshake_info_t*>(handshake_addr);
             volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =

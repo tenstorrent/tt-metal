@@ -968,8 +968,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto eth_chan = location_.eth_chan;
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
-    // Host-bridged link: the router's sends and credits go to a host ring instead of the eth txq
-    // (fabric_router_host_bridge_transport.hpp); a FabricHostBridge on the host carries them to the peer.
+    // Host-bridged link: the router's sends and credits (handshake included) go to a host ring instead of
+    // the eth txq (fabric_router_host_bridge_transport.hpp); a FabricHostBridge on the host carries them.
     const auto& router_cfg = erisc_builder_->config;
     const bool host_bridged = host_bridge::link_is_bridged(
         fabric_context_.get_rtoptions().get_fabric_host_bridge(), control_plane, local_node_, eth_chan);

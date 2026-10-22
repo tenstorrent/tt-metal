@@ -22,6 +22,7 @@
 #include "tt_metal/fabric/host_bridge_links.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/device/firmware/fabric_firmware_initializer.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 #include <algorithm>
@@ -427,6 +428,22 @@ FabricHostBridge::FabricHostBridge(const std::shared_ptr<MeshDevice>& mesh_devic
 
     for (auto& endpoint : impl_->endpoints) {
         RelayLoop::instance().add(endpoint);
+    }
+
+    // The routers handshake through the bridge now that it is armed. Fabric init left the router sync of
+    // these devices to us: wait for it and release the routers for traffic.
+    std::vector<ChipId> synced;
+    for (const auto& end : impl_->ends) {
+        if (std::find(synced.begin(), synced.end(), end.device_id) != synced.end()) {
+            continue;
+        }
+        synced.push_back(end.device_id);
+        FabricFirmwareInitializer::wait_for_router_sync_on_device(
+            mesh_device->get_device(end.coord),
+            control_plane,
+            cluster,
+            FabricFirmwareInitializer::fabric_router_sync_timeout_ms(env.get_rtoptions()));
+        log_info(tt::LogFabric, "FabricHostBridge: fabric routers on device {} ready for traffic", end.device_id);
     }
 }
 
