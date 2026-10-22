@@ -34,6 +34,7 @@ from ..data_transfer_blocks.data_transfer_blocks import (
 )
 from ..data_transfer_blocks.l1_codec import datums_per_tile
 from ..data_transfer_blocks.pack_effects import PackEdgeMask
+from ..data_transfer_blocks.units import Fpu
 from .chain import Chain, Registers, StageRecord, Step
 
 
@@ -133,10 +134,10 @@ class Golden:
     def __init__(self, arch=None, blocks: Optional[DataTransferBlocks] = None):
         """Bind the architecture this golden runs on.
 
-        `arch` is an :class:`.arch.ArchProfile` -- the blocks to use and the
-        FPU's mantissa split. Use one of the factories in :mod:`.arch` rather
-        than passing it by hand. `blocks` overrides the profile's blocks, which
-        a test uses to drive one architecture's op through another's blocks.
+        `arch` is an :class:`.arch.ArchProfile` -- which blocks to use. Use one
+        of the factories in :mod:`.arch` rather than passing it by hand.
+        `blocks` overrides the profile's blocks, which a test uses to drive one
+        architecture's op through another's blocks.
         """
         if arch is None and blocks is None:
             raise TypeError(
@@ -152,14 +153,16 @@ class Golden:
         self.last_dest_format: Optional[DataFormat] = None
 
     @property
-    def mantissa_split(self) -> Optional[Tuple[int, int]]:
-        """The FPU's per-phase mantissa split, or ``None`` if unmodelled.
+    def fpu(self) -> Fpu:
+        """The FPU this operation's maths runs on.
 
-        Comes from the architecture rather than being restated on each
-        operation: it is a property of the FPU, and three ops used to carry
-        identical copies of it.
+        An operation selects *which* instruction runs and in what order; the
+        FPU decides what that instruction does -- how many fidelity phases, how
+        wide the multiplier, when a product is flushed. So an op asks it rather
+        than carrying those facts itself: three ops used to hold identical
+        copies of the mantissa split.
         """
-        return self.arch.mantissa_split if self.arch is not None else None
+        return self.blocks.fpu
 
     # ------------------------------------------------------------------
     # What an operation declares

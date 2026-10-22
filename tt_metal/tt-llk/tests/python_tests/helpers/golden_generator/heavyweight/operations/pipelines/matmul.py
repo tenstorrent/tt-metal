@@ -18,12 +18,6 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 
 from ...data_transfer_blocks.l1_codec import datums_per_tile
 from ..chain import Chain, Registers
-from ..fidelity import (
-    fidelity_phases,
-    operand_halves,
-    resolve_non_finite,
-    warn_unmodelled_split,
-)
 from ..golden import Golden, OpConfig
 
 #: Datums along one edge of a tile. Aliased from the shared tile constants so
@@ -64,12 +58,11 @@ class MatmulGolden(Golden):
     is that the partial product is a matrix product.
 
     **Accumulation is exact within one MVMUL, rounded at every Dest write.**
-    Products enter the FPU's sum-of-products network at full significand width
-    (``SOP_IN_MAN_PREC = (MAN_PREC_A+1) + (MAN_PREC_B+1)``) and are summed in
-    wide fixed point with guard bits (``SOP_PREC``, ``MAN_PREC_ACC = 23``), so
+    Products enter the FPU's sum-of-products network at the combined width of
+    both significands and are summed in wide fixed point with guard bits, so
     there is no per-MAC rounding to model and no per-product denormal flush:
-    an individual product never becomes an FP lane result, so RES_A2 does not
-    reach it.
+    an individual product never becomes a lane result, so the flush rule does
+    not reach it. :meth:`.Fpu.sum_of_products` is where that width lives.
 
     But one MVMUL is only ``D[8,16] += B[8,16] * A[16,16]``, so a 32-wide inner
     dimension takes **two** of them, and the second accumulates onto a Dest the
@@ -106,10 +99,13 @@ class MatmulGolden(Golden):
         super().__init__(arch, blocks)
         self.math_fidelity = math_fidelity
 
-    @property
-    def models_fidelity(self) -> bool:
-        """Whether this runs the product as accumulated partial products."""
-        return self.mantissa_split is not None
+    def models_fidelity(self, cfg: OpConfig) -> bool:
+        """Whether this runs the product as accumulated partial products.
+
+        The FPU's answer, which needs the input format: the decomposition
+        slices a mantissa, and an integer datum has none to slice.
+        """
+        return self.fpu.models_fidelity(cfg.in_formats[0])
 
     def build_chain(self, cfg: OpConfig) -> Chain:
         unpack = {"srcA": self.l1_to_srcA, "srcB": self.l1_to_srcB}
@@ -121,9 +117,9 @@ class MatmulGolden(Golden):
                 for operand, register in enumerate(self.OPERAND_REGISTERS)
             ]
         )
-        if self.models_fidelity:
+        if self.models_fidelity(cfg):
             # One Dest write per (phase, K face) -- see the class docstring.
-            for phase in fidelity_phases(self.math_fidelity):
+            for phase in self.fpu.phases(self.math_fidelity):
                 for k_face in range(K_FACES):
                     chain.then(
                         self.src_to_dest(
@@ -140,7 +136,7 @@ class MatmulGolden(Golden):
                         )
                     )
         else:
-            warn_unmodelled_split(self.op_name, type(self).__name__)
+            self.fpu.warn_split_unmodelled(self.op_name, stacklevel=2)
             # Still one step per K face: the missing mantissa split is a
             # separate gap from the missing Dest rounding, and modelling only
             # the exact product here would hide the second one too.
@@ -210,21 +206,21 @@ class MatmulGolden(Golden):
         still plausible-looking, which is how it was last caught.
 
         The one place operand order lives, so a subclass that diverges does not
-        have to override both the exact and the per-phase paths. Summed in
-        float64: within one MVMUL the hardware's accumulator is wider than its
-        operands, so the model must not introduce a float32 accumulation error
-        the hardware does not have. The rounding the hardware *does* take
-        between K faces is modelled by the caller, which writes Dest once per
-        face rather than once per phase.
+        have to override both the exact and the per-phase paths. The multiply
+        itself is the FPU's -- including the accumulator being wider than the
+        operands -- so this arranges the two registers into the matrices one
+        instruction covers and hands them over. The rounding the hardware takes
+        *between* K faces is the caller's, which writes Dest once per face
+        rather than once per phase.
 
         `k_face` selects the 16-wide slice of the inner dimension this MVMUL
         covers -- columns of SrcB, rows of SrcA.
         """
         lo = k_face * K_FACE_DIM
         hi = lo + K_FACE_DIM
-        product = (
-            self._as_tile(srcB, geometry).double()[:, lo:hi]
-            @ self._as_tile(srcA, geometry).double()[lo:hi, :]
+        product = self.fpu.sum_of_products(
+            self._as_tile(srcB, geometry)[:, lo:hi],
+            self._as_tile(srcA, geometry)[lo:hi, :],
         )
         return self._from_tile(product, geometry)
 
@@ -237,9 +233,9 @@ class MatmulGolden(Golden):
     ) -> torch.Tensor:
         """One fidelity phase: the matrix product of the chosen operand halves.
 
-        Non-finite operands go through :func:`.fidelity.resolve_non_finite`,
-        which carries them on the first phase and zeroes them on the rest.
+        The FPU picks the windows, non-finite operands included -- it carries
+        those on the first phase and zeroes them on the rest, so an infinity
+        reaches every output position that sums over it exactly once.
         """
-        a, b = operand_halves(regs["srcA"], regs["srcB"], self.mantissa_split, phase)
-        a, b = resolve_non_finite(a, b, regs["srcA"], regs["srcB"], phase)
+        a, b = self.fpu.operand_halves(regs["srcA"], regs["srcB"], phase)
         return self._product(a, b, geometry, k_face)

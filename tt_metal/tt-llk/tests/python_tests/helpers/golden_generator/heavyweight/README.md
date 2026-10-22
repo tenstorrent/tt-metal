@@ -27,7 +27,6 @@ heavyweight/
 ├── operations/                 the pipelines, and the engine that runs them
 │   ├── chain.py                Chain · Step · Registers — no hardware at all
 │   ├── golden.py               Golden · OpConfig — blocks into chainable steps
-│   ├── fidelity.py             phase tables, mantissa split, pre-carry flush
 │   ├── arch.py                 ArchProfile + the per-architecture factories
 │   └── pipelines/              one module per operation
 │       ├── datacopy.py · eltwise.py · matmul.py · reuse_dest.py
@@ -40,14 +39,15 @@ heavyweight/
 │   ├── l1_codec.py             bytes ↔ values
 │   ├── pack_effects.py         ReLU, edge masking, stochastic rounding
 │   └── units/                  one module per hardware stage
-│       └── unpack.py · fpu.py · pack.py
+│       ├── unpack.py · fpu.py · pack.py
+│       └── fidelity.py         the multiplier's phases, split and flush
 │
 └── mismatch.py                 failure reporting (lands with the test wiring)
 ```
 
 **Two files named `arch.py`, on purpose.** They answer different questions:
-`operations/arch.py` says which blocks and mantissa split an *operation* runs
-with; `data_transfer_blocks/arch.py` says which units and format tables a
+`operations/arch.py` says which blocks an *operation* runs with;
+`data_transfer_blocks/arch.py` says which units, format tables and multiplier a
 *device* has. The operations one is what a test touches.
 
 ---
@@ -122,9 +122,9 @@ Wormhole and Blackhole have datacopy / eltwise / matmul equivalents —
 come from the same place: `heavyweight.operations`.
 
 They are **factories, not classes**. Each is the generic op bound to an
-`ArchProfile` in [`operations/arch.py`](operations/arch.py), which states the
-architecture's facts — its blocks and its FPU mantissa split — once rather than
-once per operation.
+`ArchProfile` in [`operations/arch.py`](operations/arch.py), which names the
+architecture's blocks once rather than once per operation. Everything else
+about the hardware the operation asks the blocks for.
 
 ### Arguments you will actually use
 
@@ -270,8 +270,8 @@ WormholeMyOpGolden = _factory(MyOpGolden, WORMHOLE)
 ```
 
 No subclass: the architecture is an argument, so there is nothing for one to
-add. If your op models the FPU's fidelity split, read it from
-`self.mantissa_split` — it comes from the profile, so you do not restate it.
+add. If your op multiplies, ask `self.fpu` for the phases and the operand
+windows — the FPU carries them, so you do not restate them.
 
 Three things to get right:
 
