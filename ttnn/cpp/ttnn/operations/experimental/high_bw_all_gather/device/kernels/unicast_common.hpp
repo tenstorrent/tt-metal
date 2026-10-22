@@ -53,6 +53,7 @@ template <
     uint32_t slice_step,
     uint32_t static_output_chunks_per_stripe,
     bool linearized_mesh_ring,
+    bool column_major_stripes,
     ttnn::ccl::snake_ring::Orientation snake_orientation,
     uint32_t mesh_rows,
     uint32_t mesh_cols>
@@ -64,10 +65,15 @@ public:
     // Point at `stripe` for the chunk range [start, start + count).
     FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count, uint32_t output_chunks_per_stripe) {
         if constexpr (linearized_mesh_ring) {
-            // Fabric walks a snake Hamiltonian ring, while tensor shards retain
-            // normal row-major rank order. Translate the ring stripe here so
-            // local copies and relays address the canonical output position.
-            stripe = ttnn::ccl::snake_ring::row_major_index(stripe, mesh_rows, mesh_cols, snake_orientation);
+            // Fabric walks a snake Hamiltonian ring, while tensor shards keep their
+            // canonical rank order (row-major, or column-major when mesh axis 1 is
+            // outermost). Translate the ring stripe here so local copies and relays
+            // address the canonical output position.
+            if constexpr (column_major_stripes) {
+                stripe = ttnn::ccl::snake_ring::column_major_index(stripe, mesh_rows, mesh_cols, snake_orientation);
+            } else {
+                stripe = ttnn::ccl::snake_ring::row_major_index(stripe, mesh_rows, mesh_cols, snake_orientation);
+            }
         }
         if constexpr (static_output_chunks_per_stripe != 0) {
             output_chunks_per_stripe_ = static_output_chunks_per_stripe;
