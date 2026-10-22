@@ -543,10 +543,22 @@ def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
     logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
 
 
+# Fabric-link lease, in the order of test_cross_process_d2d_stream_service.cpp: the inbound grant is
+# primed once before the loop, and then per chunk: receive (activations, then indices), reclaim every
+# link, forward and send, grant the next receive. Each outbound service is granted right after its own
+# send (_compute_and_send), since the index send waits on the activation send. All calls enqueue
+# CQ-ordered kernels, so none needs a host synchronize.
 def _lease_reclaim(d2d_in, d2d_out, idx_in=None, idx_out=None) -> None:
+    # Fence the graph's fabric ops: the receivers are done with this chunk's receive and the senders
+    # with the previous forward.
     for service in (d2d_in, idx_in, d2d_out, idx_out):
         if service is not None:
             service.wait_for_fabric_links()
+
+
+def _lease_grant_receive(d2d_in) -> None:
+    # Grant the next receive. Senders are granted only after a send: an unused grant stays pending,
+    # and the next reclaim's wait on it would never return.
     if d2d_in is not None:
         d2d_in.release_fabric_links()
 
@@ -767,8 +779,9 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    if d2d_in is not None:
+        d2d_in.release_fabric_links()  # fill: grant the first receive
     while not _shutdown:
-        _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
         if cfg.is_first_rank:
             inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
@@ -776,7 +789,9 @@ def run_request_loop(
             inp, meta = _d2d_recv(d2d_in, sockets)
             mtp_tokens = None
         indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
+        _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
         if _is_shutdown_sentinel(meta):
+            # Drain: no inbound grant, as nothing follows the sentinel.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
@@ -810,6 +825,7 @@ def run_request_loop(
             before_first_chunk()
             before_first_chunk = None
         if warmup:
+            _lease_grant_receive(d2d_in)  # nothing was sent, so only the next receive is granted
             continue
         t = _compute_and_send(
             runtime,
@@ -825,6 +841,7 @@ def run_request_loop(
             indices=indices,
             idx_out=idx_out,
         )
+        _lease_grant_receive(d2d_in)
         if first is None:
             first = t
         c += 1
