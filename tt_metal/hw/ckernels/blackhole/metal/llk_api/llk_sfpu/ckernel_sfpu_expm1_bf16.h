@@ -41,6 +41,8 @@ inline void calculate_expm1_bf16_body() {
     ckernel::sfpu::bf16::expm1::calculate_factored_cw_expm1<ckernel::sfpu::Expm1Bf16Config, ITERATIONS>();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
+// Each call records replay slots 0-26, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 32>
 inline void calculate_expm1_bf16() {
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, 0x3f000000u);

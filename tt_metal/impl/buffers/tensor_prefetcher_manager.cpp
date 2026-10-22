@@ -5,6 +5,7 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_device_view_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
@@ -896,7 +897,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     // worker_loop fan-out is O(targets).
     devices_.clear();
     device_index_by_coord_.clear();
-    for (auto* device : mesh_device_->get_view().get_devices()) {
+    for (auto* device : mesh_device_->get_view().impl().get_devices()) {
         const uint32_t d = static_cast<uint32_t>(devices_.size());
         devices_.push_back(device);
         device_index_by_coord_.emplace(mesh_device_->get_view().find_device(device->id()), d);
