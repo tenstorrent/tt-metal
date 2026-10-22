@@ -661,3 +661,23 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
     columns (the x families' owner subsets): 6 cores carry all its units (~10 us each).
 - Whole head with prep: GLM 271.9 / 272.9 us (268.5 before the owned rows), K3 509.7-510.6 (511-515 before: the
   latent's tile writes are gone). Targets 270 / 495.
+
+### What binds after the prep: the RS on the line's end links; on the Galaxy, the routing chain
+- RS probe (SE_PROBE=RSSTAT: the port reader's waits on hand-offs / CB room, the sender's on the reader / fabric slots,
+  the down passes as zones): the end chips' ports send at link rate (K3 23.5 GB/s, fabric-slot waits 18-21 us, no
+  waits on hand-offs) - on a line every byte of an end chip's partials leaves through its one link: 3 blocks (GLM 84,
+  K3 146 us); the middle chips' ports wait on relays paced by them. GLM ~19 -> ~21 GB/s with the logits / routing
+  polled every 4th RS packet (491f0f05a7b). The down passes end 16-20 us after gate / up.
+- 2 row chunks (chunk k's down + RS under chunk k + 1's gather) would turn the line's 6u (gather 3 inbound + RS 3
+  outbound on an end link, sequential) into 5u - a LINE artifact: on the Galaxy's TP ring both balance to 1.5u a
+  direction (3u with or without overlap), and two chunks at 640 rows need MT 1 (K3 engine 403 -> 542 us). Not built.
+- Engine alone (MT 2, x from DRAM): GLM gate / up ends ~60 us (100.4 total), K3 ~237 (318.4; + the latent in the head).
+- Galaxy projection (tests/galaxy_projection.py; rules in its docstring: the ring halves the link-bound gather / RS,
+  gate / up never before its compute, K3's logits shift with the gather, the routing chain + 20 us at N = 32):
+  GLM LoudBox 277.6 -> Galaxy 296 (SE 176, chain 296); K3 509.4 -> 505 (SE 399, chain 505). The routing chain binds
+  both on the Galaxy; its largest piece is the exchange wait (the slowest chip's chain end; paths are short).
+- Routing exchange at N = 32 (mock 8x4 torus, the real RoutingStream): 992 packets, 288 direct / 480 one store-and-
+  forward hop / 224 two; Y legs in transit (<= 4 hops), X legs through the TP ports (29 forwards a chip, <= 15 a
+  port); header 384 B + ~40 (GLM) / ~80 (K3) 4-byte entries. Planner: pre-exchange +4 us (3 N NoC writes), post-arrival
+  22 -> ~29 (2 N DRAM reads, N x M source loops), the slowest of 8 TP groups +9: ~+20 us in all.
+- Tried: the L1 data cache on the planner's post-arrival passes: phases unchanged (reverted).
