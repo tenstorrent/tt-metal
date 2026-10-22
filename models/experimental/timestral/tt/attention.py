@@ -106,13 +106,12 @@ class TtAttention:
             program_config=program_config,
             compute_kernel_config=self.precision.compute_kernel_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_concat_heads=True,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        merged = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(ctx)
-        return merged
+        return ctx
 
     def _rope(self, t, inputs: TtAttentionInputs):
         """``t * cos + rotate_half(t) * sin`` on ``(R, H, S_pad, Dh)``; consumes ``t``."""
