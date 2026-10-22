@@ -13,8 +13,8 @@ monkeypatched to this class for the duration of ``Transformer.__init__``.
 """
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 from models.demos.multimodal.lfm25_vl.tt.short_conv import TtLfm2ShortConv
 
 # Import the *original* TransformerBlock directly from its defining module so this class
@@ -74,7 +74,7 @@ class LfmDecoderLayer(LightweightModule):
         # --- ShortConv layer ---
         self.block = None
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -83,6 +83,7 @@ class LfmDecoderLayer(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
+                norm_type="RMSNorm",
                 is_distributed=args.is_distributed_norm,
                 add_unit_offset=args.rms_norm_add_unit_offset,
                 ccl_topology=args.ccl_topology(),
@@ -104,7 +105,7 @@ class LfmDecoderLayer(LightweightModule):
             dtype=dtype,
         )
         self.ff_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -113,6 +114,7 @@ class LfmDecoderLayer(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
+                norm_type="RMSNorm",
                 is_distributed=args.is_distributed_norm,
                 add_unit_offset=args.rms_norm_add_unit_offset,
                 ccl_topology=args.ccl_topology(),

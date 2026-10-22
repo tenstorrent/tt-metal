@@ -7,12 +7,12 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 """
 
 import ttnn
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 
 
 class Qwen36DecoderLayer:
@@ -138,11 +138,12 @@ class Qwen36DecoderLayer:
         path used. The DistributedNorm wrapper (TP>1) mirrors tt_transformers
         decoder.py and handles the fractured->replicated transition.
         """
-        norm = RMSNorm(
+        norm = LayerNorm(
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             weight_key=weight_key,
+            norm_type=LayerNormTypes.RMSNORM,
             state_dict_prefix=f"layers.{layer_num}.",
             weight_cache_path=tensor_cache_path,
             weight_dtype=ttnn.bfloat16,

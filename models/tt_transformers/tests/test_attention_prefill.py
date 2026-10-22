@@ -82,6 +82,8 @@ def test_attention_inference(
         mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=use_hf_rope
     )
     model_args.n_layers = 1
+    if model_args.model_type == "cohere2" and use_hf_rope:
+        pytest.skip("cohere2 does not support the use_hf_rope rotary path")
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

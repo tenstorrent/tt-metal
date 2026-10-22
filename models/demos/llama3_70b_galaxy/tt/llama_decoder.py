@@ -5,7 +5,7 @@ import ttnn
 from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
 
@@ -84,7 +84,7 @@ class TtTransformerBlock(LightweightModule):
         else:
             attn_norm_output_memcfg = self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 state_dict=state_dict,
@@ -92,6 +92,7 @@ class TtTransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
+                norm_type="RMSNorm",
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
@@ -103,7 +104,7 @@ class TtTransformerBlock(LightweightModule):
             use_sharded_decode=not self.blackhole_no_prefetcher,
         )
         self.ff_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 state_dict=state_dict,
@@ -111,6 +112,7 @@ class TtTransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
+                norm_type="RMSNorm",
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],

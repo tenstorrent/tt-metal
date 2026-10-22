@@ -5,7 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.common.rmsnorm import RMSNorm as TtRMSNorm
+from models.common.layernorm import LayerNorm as TtLayerNorm
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
@@ -70,12 +70,13 @@ def test_llama_rms_norm_inference(
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode=mode)
 
     # Create the inner RMSNormxw
-    tt_inner_norm = TtRMSNorm(
+    tt_inner_norm = TtLayerNorm(
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
+        norm_type="RMSNorm",
         weight_dtype=dtype,
         is_distributed=model_args.is_distributed_norm,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],

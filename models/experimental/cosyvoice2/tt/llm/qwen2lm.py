@@ -76,10 +76,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, LayerNormTypes
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding
@@ -281,7 +281,7 @@ class TtQwen2LM:
         ]
 
         self.norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -290,6 +290,7 @@ class TtQwen2LM:
                 weight_cache_path=None if args.dummy_weights else args.weight_cache_path(dtype),
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
+                norm_type=LayerNormTypes.RMSNORM,
                 add_unit_offset=args.rms_norm_add_unit_offset,
                 is_distributed=args.is_distributed_norm,
                 ccl_topology=args.ccl_topology(),

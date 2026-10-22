@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -351,25 +351,27 @@ class TtLlamaAttention(LightweightModule):
             )
 
             # Create Q norm
-            self.q_norm = RMSNorm(
+            self.q_norm = LayerNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 state_dict=self.state_dict,
                 state_dict_prefix=None,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
+                norm_type="RMSNorm",
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_q_mem_cfg,
             )
 
             # Create K norm
-            self.k_norm = RMSNorm(
+            self.k_norm = LayerNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 state_dict=self.state_dict,
                 state_dict_prefix=None,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
+                norm_type="RMSNorm",
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )

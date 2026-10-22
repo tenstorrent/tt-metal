@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
 from models.demos.qwen25_vl.tt.vision_mlp import MLP
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 
 
 class VisionBlock(LightweightModule):
@@ -60,7 +60,7 @@ class VisionBlock(LightweightModule):
             "olmOCR-2-7B",
         ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
-        self.attention_norm = RMSNorm(
+        self.attention_norm = LayerNorm(
             device=mesh_device,
             dim=args.vision_dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
@@ -69,10 +69,11 @@ class VisionBlock(LightweightModule):
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
             weight_key="norm1",
+            norm_type=LayerNormTypes.RMSNORM,
             **extra_rmsnorm_kwargs,
         )
         # args.dim = 1280
-        self.ff_norm = RMSNorm(
+        self.ff_norm = LayerNorm(
             device=mesh_device,
             dim=args.vision_dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
@@ -81,6 +82,7 @@ class VisionBlock(LightweightModule):
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
             weight_key="norm2",
+            norm_type=LayerNormTypes.RMSNORM,
             **extra_rmsnorm_kwargs,
         )
 
