@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+// Block call only where it reads faster (LoFi, runs of 4 or more tiles); every other instance keeps the per-tile code.
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK (get_arg(args::subblock_w) >= 4 && !PER_TILE_HANDOFF_GAINS)
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -126,8 +126,7 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 #ifdef ARCH_BLACKHOLE
-    // The block call reads slower than per-tile calls for runs under 4 tiles.
-    constexpr bool bcast_block = subblock_w_const >= 4 && !PER_TILE_HANDOFF_GAINS;
+    constexpr bool bcast_block = ELTWISE_BINARY_BCAST_BLOCK_UNPACK;
 #endif
 
     uint32_t index_subblock_w_offset = 0;
@@ -291,12 +290,15 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb_xmm, subblock_w);
-#else
-            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                pack_tile(dst_i, dfb_xmm);
-            }
+            if constexpr (bcast_block) {
+                pack_block_mop(0, dfb_xmm, subblock_w);
+            } else
 #endif
+            {
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_xmm);
+                }
+            }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
@@ -344,12 +346,15 @@ void kernel_main() {
 
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb_im, subblock_w);
-#else
-            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                pack_tile(dst_i, dfb_im);
-            }
+            if constexpr (bcast_block) {
+                pack_block_mop(0, dfb_im, subblock_w);
+            } else
 #endif
+            {
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_im);
+                }
+            }
             tile_regs_release();
 
             index_subblock_w_offset += subblock_w;
@@ -405,12 +410,15 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, dfb_outgamma, subblock_w);
-#else
-                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                    pack_tile(dst_i, dfb_outgamma);
-                }
+                if constexpr (bcast_block) {
+                    pack_block_mop(0, dfb_outgamma, subblock_w);
+                } else
 #endif
+                {
+                    for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                        pack_tile(dst_i, dfb_outgamma);
+                    }
+                }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
                 dfb_outgamma_obj.push_back(subblock_w);
@@ -457,12 +465,15 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, dfb_out, subblock_w);
-#else
-                for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, dfb_out);
-                }
+                if constexpr (bcast_block) {
+                    pack_block_mop(0, dfb_out, subblock_w);
+                } else
 #endif
+                {
+                    for (uint32_t i = 0; i < subblock_w; i++) {
+                        pack_tile(i, dfb_out);
+                    }
+                }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
             }
