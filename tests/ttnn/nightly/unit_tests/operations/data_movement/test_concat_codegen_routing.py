@@ -47,7 +47,7 @@ def _reference(inputs, **kwargs):
     return torch.cat([ttnn.to_torch(t) for t in inputs], dim=kwargs["dim"])
 
 
-# 12 of the ledger's 981 gate-rejected cases, sampled to keep every refusal reason
+# 12 of the ledger's 979 gate-rejected cases, sampled to keep every refusal reason
 # and the extremes of each reason's input and call sizes; the port pipeline checked the full set.
 _ROUTING = [
     (
@@ -158,7 +158,7 @@ _ROUTING = [
             [1, 32, 14, 14],
         ],
         {"dim": 1, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.int32,
+        ttnn.bfloat8_b,
         ttnn.TILE_LAYOUT,
         (
             ttnn.DRAM_MEMORY_CONFIG,
@@ -303,9 +303,9 @@ _ROUTING = [
     (
         [[1, 32, 64], [1, 32, 64], [2, 32, 64]],
         {"dim": 0, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.bfloat16,
+        ttnn.uint32,
         ttnn.TILE_LAYOUT,
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
     ),
     (
         [
@@ -366,25 +366,51 @@ _ROUTING = [
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.DRAM_MEMORY_CONFIG,
+    ),
+    (
+        [
+            [1, 512, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+            [1, 32, 7, 7],
+        ],
+        {"dim": 1, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
+        ttnn.uint32,
+        ttnn.TILE_LAYOUT,
+        (
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),
     ),
     (
         [[32, 32, 33, 7], [32, 32, 33, 16], [32, 32, 33, 16]],
         {"dim": 3, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint32,
+        ttnn.int32,
         ttnn.TILE_LAYOUT,
         (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
     ),
     (
-        [[33, 33, 16], [33, 33, 16], [33, 33, 7], [33, 33, 7]],
-        {"dim": 2, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-    ),
-    (
         [[64, 96, 96, 32], [64, 96, 96, 64], [64, 96, 96, 64]],
         {"dim": 3, "memory_config": ttnn.DRAM_MEMORY_CONFIG},
-        ttnn.uint32,
+        ttnn.bfloat8_b,
         ttnn.TILE_LAYOUT,
         (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
     ),
@@ -394,14 +420,14 @@ _ROUTING_IDS = [
     "[[1, 1, 16], [1, 1, 1]]|dim=-1&memory_config=BufferType.DRAM|bfloat8_b|tile",
     "[[1, 1, 16], [1, 1, 1]]|dim=-1&memory_config=BufferType.DRAM|float32|row_major",
     "[[1, 192, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28], [1, 48, 28, 28]]@L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1|dim=1&memory_config=BufferType.DRAM|uint32|row_major",
-    "[[1, 256, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14]]@DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1|dim=1&memory_config=BufferType.DRAM|int32|tile",
+    "[[1, 256, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14]]@DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1|dim=1&memory_config=BufferType.DRAM|bfloat8_b|tile",
     "[[1, 256, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14], [1, 32, 14, 14]]@L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM|dim=1&memory_config=BufferType.DRAM|bfloat16|row_major",
-    "[[1, 32, 64], [1, 32, 64], [2, 32, 64]]@L1,DRAM,L1|dim=0&memory_config=BufferType.DRAM|bfloat16|tile",
+    "[[1, 32, 64], [1, 32, 64], [2, 32, 64]]@DRAM,L1,DRAM|dim=0&memory_config=BufferType.DRAM|uint32|tile",
     "[[1, 384, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14]]|dim=1&memory_config=BufferType.DRAM|uint32|row_major",
     "[[1, 384, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14], [1, 48, 14, 14]]|dim=1&memory_config=BufferType.DRAM|bfloat16|row_major",
-    "[[32, 32, 33, 7], [32, 32, 33, 16], [32, 32, 33, 16]]@L1,DRAM,L1|dim=3&memory_config=BufferType.DRAM|uint32|tile",
-    "[[33, 33, 16], [33, 33, 16], [33, 33, 7], [33, 33, 7]]|dim=2&memory_config=BufferType.DRAM|bfloat16|tile",
-    "[[64, 96, 96, 32], [64, 96, 96, 64], [64, 96, 96, 64]]@L1,DRAM,L1|dim=3&memory_config=BufferType.DRAM|uint32|tile",
+    "[[1, 512, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7], [1, 32, 7, 7]]@L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM,L1,DRAM|dim=1&memory_config=BufferType.DRAM|uint32|tile",
+    "[[32, 32, 33, 7], [32, 32, 33, 16], [32, 32, 33, 16]]@L1,DRAM,L1|dim=3&memory_config=BufferType.DRAM|int32|tile",
+    "[[64, 96, 96, 32], [64, 96, 96, 64], [64, 96, 96, 64]]@L1,DRAM,L1|dim=3&memory_config=BufferType.DRAM|bfloat8_b|tile",
 ]
 
 
