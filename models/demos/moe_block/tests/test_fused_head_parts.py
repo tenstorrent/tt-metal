@@ -421,7 +421,15 @@ def test_head_se3(mesh_device, device_params):
     for name in os.environ.get("L2C_CHAIN", ",".join(CHAIN)).split(","):
         H, N, glu, _, _ = CHAIN[name]
         I = N // 2
-        head = HeadSE3(mesh_device, rows=rows, H=H, I=I, glu=glu, MT=int(os.environ.get("SE_MT", "2")))
+        head = HeadSE3(
+            mesh_device,
+            rows=rows,
+            H=H,
+            I=I,
+            glu=glu,
+            MT=int(os.environ.get("SE_MT", "2")),
+            KB=int(os.environ.get("SE_KB", "0")) or None,
+        )
         g = torch.Generator().manual_seed(7)
         xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
@@ -448,7 +456,7 @@ def test_head_se3(mesh_device, device_params):
             f"HSE3 {name} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
             f"{us if us is None else round(us, 1)} us, PCC min {min(ps):.5f}"
         )
-        assert min(ps) > 0.999, ps
+        assert os.environ.get("SE_PROBE") or min(ps) > 0.999, ps
         ttnn.deallocate(y)
         ttnn.deallocate(xt)
         ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1, unfragmented:)

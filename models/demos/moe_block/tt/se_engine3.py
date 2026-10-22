@@ -27,8 +27,9 @@ import ttnn
 
 NWS = 3  # (W slots)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
+XLD = 1 + 2 * NWS  # (my own-shard x is loaded: the NCRISC's W load may start)
 HCNT, HFREE = 1 + 2 * NWS, 3 + 2 * NWS  # (unused: the h exchange is the kernel_lib family again)
-NSEM_OWN = 1 + 2 * NWS
+NSEM_OWN = 2 + 2 * NWS
 XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
 ARENA_MAX = 1400 * 1024  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less some slack)
@@ -84,6 +85,13 @@ void kernel_main() {
             }
         noc_async_read_barrier();
     }
+    {  // (my own-shard x is loaded: count it on the gather's ports - they send it from here - and let my W load start)
+        const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0), xl_addr = get_arg_val<uint32_t>(np0 + 1);
+        for (uint32_t i = 0; i < nports; ++i)
+            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(np0 + 2 + 2 * i), get_arg_val<uint32_t>(np0 + 3 + 2 * i), xl_addr), 1);
+        noc_async_atomic_barrier();
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(np0 + 2 + 2 * nports))) = 1;
+    }
     constexpr auto mx0 = McastArgs<get_named_compile_time_arg_val("x0_ct_offset"), get_named_compile_time_arg_val("x0_rt_offset")>();
     constexpr auto mx1 = McastArgs<get_named_compile_time_arg_val("x1_ct_offset"), get_named_compile_time_arg_val("x1_rt_offset")>();
     constexpr auto mh = McastArgs<get_named_compile_time_arg_val("h_ct_offset"), get_named_compile_time_arg_val("h_rt_offset")>();
@@ -108,7 +116,12 @@ void kernel_main() {
                 const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
                     if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
-                    if (j & 1) s1->send(own_addr(m, j), dst, MT * KB * 2048); else s0->send(own_addr(m, j), dst, MT * KB * 2048);
+#ifdef SE_PROBE_NOX
+                    constexpr uint32_t XBYTES = 16;  // (timing probe: no x data)
+#else
+                    constexpr uint32_t XBYTES = MT * KB * 2048;
+#endif
+                    if (j & 1) s1->send(own_addr(m, j), dst, XBYTES); else s0->send(own_addr(m, j), dst, XBYTES);
                 } else {
                     if (j & 1) r1->receive(round); else r0->receive(round);
                 }
@@ -116,18 +129,17 @@ void kernel_main() {
             }
         }
         DeviceZoneScopedN("SE-HX");
-        // h: every core's rows into every row core's h-all slot (m % 2) at its h0 - kernel_lib rotating rounds
-        // (row tile, column); the receivers' readiness ack is the slot's credit
+        // h: every core's h block [MT][POMAX] into every row core's h-all slot (m % 2) as block cx ([GX][MT][POMAX]):
+        // one kernel_lib rotating round a column; the receivers' readiness ack is the slot's credit
+        constexpr uint32_t HA = GX * MT * POMAX;
         cb_wait_front(CB_HOWN, MT * POMAX);
-        cb_reserve_back(CB_HALL, MT * HT);
-        const uint32_t hs = hall + (NCH > 1 ? (m & 1) : 0) * MT * HT * 2048;  // (one slot when there is one chunk)
-        for (uint32_t r = 0; r < MT; ++r)
-            for (uint32_t c = 0; c < GX; ++c) {
-                const uint32_t round = (m * MT + r) * GX + c;
-                if (c == cx) sh->send(hown + r * POMAX * 2048, hs + (r * HT + h0) * 2048, po * 2048);
-                else rh->receive(round);
-            }
-        cb_push_back(CB_HALL, MT * HT);
+        cb_reserve_back(CB_HALL, HA);
+        const uint32_t hs = hall + (NCH > 1 ? (m & 1) : 0) * HA * 2048;  // (one slot when there is one chunk)
+        for (uint32_t c = 0; c < GX; ++c) {
+            if (c == cx) sh->send(hown, hs + c * MT * POMAX * 2048, MT * POMAX * 2048);
+            else rh->receive(m * GX + c);
+        }
+        cb_push_back(CB_HALL, HA);
         cb_pop_front(CB_HOWN, MT * POMAX);
     }
     noc_async_atomic_barrier();
@@ -175,15 +187,33 @@ void kernel_main() {
     // read block by block in large bursts, every read issued now - the k-th block's under transaction id
     // min(k, 14) + 1; a block is sent once its reads landed (the column streams while the weights are still arriving)
     {
-        DeviceZoneScopedN("SE-WISSUE");
-        uint32_t off = 0, k = 0;
-        for (uint32_t b = cy; b < NB; b += GY, ++k) {
-            const uint32_t n = bsize(b);
-            noc_async_read_set_trid(k < 14 ? k + 1 : 15);
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + off * WTB), wown + off * WTB, n * WTB);
-            off += n;
+        {  // (after my core's x load: the DRAM serves the x first - the gather is waiting on it)
+            const uint32_t t0 = ord0 + get_arg_val<uint32_t>(ys0 + GY + 2);  // (past the shard order: the tail)
+            const uint32_t xld = get_arg_val<uint32_t>(t0 + 2 + 2 * get_arg_val<uint32_t>(t0));
+            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(xld)) == 0) invalidate_l1_cache();
         }
     }
+    // the weights' DRAM reads go in stream order a window ahead of the sends (WPF of my blocks in flight): spread
+    // over gate / up at the rate the stream uses them - a burst of all 35 MB at the start starved the gather
+    constexpr uint32_t WPF = 3;
+    uint8_t trid_of[64];
+    uint32_t wi = 0, ni = 0, pending = 0;  // (prefetch cursor over the first chunk's rounds; issued; issued unsent)
+    auto offset_of = [&](uint32_t b) {
+        uint32_t o = 0;
+        for (uint32_t b2 = cy; b2 < b; b2 += GY) o += bsize(b2);
+        return o;
+    };
+    auto prefetch = [&](uint32_t upto) {  // (issue my blocks of rounds < upto, and the window)
+        while (wi < NB && (wi < upto || pending < WPF)) {
+            const uint32_t b = blk(wi++);
+            if (b % GY != cy) continue;
+            const uint32_t t = (ni++ % 14) + 1, o = offset_of(b);
+            trid_of[b / GY] = t;
+            noc_async_read_set_trid(t);
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + o * WTB, bsize(b) * WTB);
+            ++pending;
+        }
+    };
     const uint32_t NR = NCH * NB;  // (W rounds a call)
     uint32_t ws = 0, woff = 0, wr = 0, wc = NWS, p = 0, pm = 0;  // (send, my offset, pushed, credited; y pass / chunk)
     uint32_t nf[NWS] = {};
@@ -191,14 +221,23 @@ void kernel_main() {
     const uint32_t NPY = NCH * NPD;
     while (ws < NR || wr < NR || wc < NR || p < NPY) {
         invalidate_l1_cache();
+        if (wi < NB) prefetch(0);  // (keep the window full)
         if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
             woff = 0;  // (its offset in my W-own: my blocks before it)
             for (uint32_t b2 = cy; b2 < b; b2 += GY) woff += bsize(b2);
-            if (ws < NB) noc_async_read_barrier_with_trid(kb < 14 ? kb + 1 : 15);  // (first chunk: its reads landed)
+            if (ws < NB) {  // (first chunk: its reads issued and landed)
+                prefetch(ws + 1);
+                noc_async_read_barrier_with_trid(trid_of[kb]);
+                --pending;
+            }
             const uint32_t dst = win + (ws % NWS) * WSLOT * WTB, vw = words + (ws & 3) * 16;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vw) = ws + 1;
+#ifdef SE_PROBE_NOW
+            noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), 16, GY);  // (probe)
+#else
             noc_async_write_multicast_loopback_src(wown + woff * WTB, get_noc_multicast_addr(cxv, by, cxv, ty, dst), n * WTB, GY);
+#endif
             noc_async_writes_flushed();
             noc_semaphore_set_multicast_loopback_src(vw, get_noc_multicast_addr(cxv, by, cxv, ty, get_semaphore(WV + ws % NWS)), GY);
             noc_async_writes_flushed();
@@ -255,6 +294,7 @@ constexpr uint32_t NPG = get_compile_time_arg_val(3), NCH = get_compile_time_arg
 constexpr uint32_t POMAX = get_compile_time_arg_val(6), KBD = get_compile_time_arg_val(7), NSD = get_compile_time_arg_val(8);
 constexpr uint32_t NPD = get_compile_time_arg_val(9), WSLOT = get_compile_time_arg_val(10), PWDMAX = get_compile_time_arg_val(11);
 constexpr uint32_t G = get_compile_time_arg_val(12), SPS = get_compile_time_arg_val(13);  // (shards, steps a shard)
+constexpr uint32_t GX = get_compile_time_arg_val(14), HA = GX * MT * POMAX;  // (h-all: [column][MT][POMAX])
 constexpr uint32_t XIN = 0, WIN = 1, HOWN = 2, HALL = 3, OUT = 4, ACC = 5;
 // (runtime args: the column's gate / up pass widths [NPG], then down pass widths [NPD])
 void kernel_main() {
@@ -292,7 +332,9 @@ void kernel_main() {
                 for (uint32_t st = 0; st < SPS; ++st) {
                     cb_wait_front(XIN, MT * KB);
                     cb_wait_front(WIN, WSLOT);
+#ifndef SE_PROBE_NOMATH
                     for (uint32_t kk = 0; kk < KB; ++kk) matmul_block(XIN, WIN, kk, kk * pw, 0, false, pw, MT, KB);
+#endif
                     cb_pop_front(XIN, MT * KB);
                     cb_pop_front(WIN, WSLOT);
                 }
@@ -330,14 +372,22 @@ void kernel_main() {
         }
         DeviceZoneScopedN("SE-DOWN");
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
-        cb_wait_front(HALL, MT * HT);
+        cb_wait_front(HALL, HA);
         for (uint32_t pd = 0; pd < NPD; ++pd) {
             const uint32_t pw = get_arg_val<uint32_t>(NPG + pd);
-            matmul_block_init(HALL, WIN, 0, pw, MT, HT);
+            matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);  // (h rows strided POMAX within a column's block)
+            uint32_t c = 0;  // (the column block of K tile k: k in [h0[c], h0[c + 1]))
             tile_regs_acquire();
             for (uint32_t i = 0; i < NSD; ++i) {
                 cb_wait_front(WIN, WSLOT);
-                for (uint32_t k = 0; k < KBD; ++k) matmul_block(HALL, WIN, i * KBD + k, k * pw, 0, false, pw, MT, HT);
+                for (uint32_t k = 0; k < KBD; ++k) {
+                    const uint32_t kt = i * KBD + k;
+                    while (kt >= get_arg_val<uint32_t>(NPG + NPD + c + 1)) ++c;
+                    const uint32_t a0 = c * MT * POMAX + kt - get_arg_val<uint32_t>(NPG + NPD + c);
+#ifndef SE_PROBE_NOMATH
+                    matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
+#endif
+                }
                 cb_pop_front(WIN, WSLOT);
             }
             tile_regs_commit();
@@ -348,10 +398,17 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(OUT, MT * PWDMAX);
         }
-        cb_pop_front(HALL, MT * HT);
+        cb_pop_front(HALL, HA);
     }
 }
 """
+
+
+def _probes():
+    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept): the results are wrong."""
+    import os
+
+    return "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
 
 
 def _split(n, parts, unit):
@@ -454,7 +511,7 @@ class SeEngine3:
             ("xin", 2 * MT * self.KB * 2048),
             ("win", NWS * self.WSLOT * self.wtb),
             ("hown", MT * self.POMAX * 2048),
-            ("hall", min(self.NCH, 2) * MT * self.HT * 2048),
+            ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048),
             ("acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096),
             ("out", NOUT * MT * self.PWDMAX * 2048),
             ("words", 256),
@@ -520,7 +577,7 @@ class SeEngine3:
         fam, S = (self.fam1, self.S1) if f else (self.fam0, self.S0)
         return fam[(j // 2) % S], f, (j // 2) % S
 
-    def pieces(self, x, w, y, *, x_k0=0, x_ct=None, shard_order=None, extra_sem_cores=()):
+    def pieces(self, x, w, y, *, x_k0=0, x_ct=None, shard_order=None, extra_sem_cores=(), ports=(), xloaded=0):
         """(CBs, kernels, semaphores) of the engine on one chip (the kernel_lib families attached by the caller via
         attach_mcast). x: DRAM [rows, x_ct tiles] (columns x_k0 .. of the full x; None: all; 0: none). shard_order: this
         chip's K shards in processing order (own first, then by arrival; XREADY = m (G - 1) + rank once chunk m's shard
@@ -529,6 +586,8 @@ class SeEngine3:
         so = [int(q) for q in shard_order] if shard_order is not None else [0]
         assert self.NSG % len(so) == 0
         sor = [self.NSG // len(so), len(so)] + so  # (steps a shard, shards, the order)
+        # then: the gather's ports to tell once my own-shard x is loaded (NoC x, y; their counter) and my XLD id
+        tail = [len(ports), int(xloaded)] + [v for p_ in ports for v in p_] + [XLD]
         mesh, GX, GY, cx0, MT = self.mesh, self.GX, self.GY, self.cx0, self.MT
         b, off = self.base, self.off
         virt = lambda cx, cy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0 + cx, cy))  # noqa: E731
@@ -545,7 +604,7 @@ class SeEngine3:
         cb(XIN, "xin", 2 * MT * self.KB * 2048, ttnn.bfloat16, 2048)
         cb(WIN, "win", NWS * self.WSLOT * self.wtb, self.w_dtype, self.wtb)
         cb(HOWN, "hown", MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
-        cb(HALL, "hall", min(self.NCH, 2) * MT * self.HT * 2048, ttnn.bfloat16, 2048)
+        cb(HALL, "hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
         cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
         cb(ACC, "acc", MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, []))) * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
@@ -577,6 +636,7 @@ class SeEngine3:
                     ]
                     + [virt(cc, cy).x for cc in range(GX)]
                     + sor
+                    + tail
                 )
                 n_rt[cx0 + c][cy] = (
                     [
@@ -597,6 +657,7 @@ class SeEngine3:
                     + [virt(c, yy).y for yy in range(GY)]
                     + [(c * GY + cy) % self.nbank]
                     + sor
+                    + tail
                 )
         st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
@@ -640,7 +701,7 @@ class SeEngine3:
             NOUT,
         ]
         self.brisc = ttnn.KernelDescriptor(
-            kernel_source=_BRISC,
+            kernel_source=_probes() + _BRISC,
             source_type=st,
             core_ranges=allc,
             compile_time_args=bct + xa_ct,
@@ -650,7 +711,7 @@ class SeEngine3:
         kernels = [
             self.brisc,
             ttnn.KernelDescriptor(
-                kernel_source=_NCRISC,
+                kernel_source=_probes() + _NCRISC,
                 source_type=st,
                 core_ranges=allc,
                 compile_time_args=nct + w_ct + y_ct,
@@ -674,10 +735,10 @@ class SeEngine3:
             c_rt = ttnn.RuntimeArgs()
             for c in cols:
                 for cy in range(GY):
-                    c_rt[cx0 + c][cy] = list(wg) + list(wd)
+                    c_rt[cx0 + c][cy] = list(wg) + list(wd) + list(self.h0) + [self.HT]  # (+ the h column offsets)
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=f"#define SE_GLU {glu_code}\n" + _COMPUTE,
+                    kernel_source=f"#define SE_GLU {glu_code}\n" + _probes() + _COMPUTE,
                     source_type=st,
                     core_ranges=crs,
                     compile_time_args=[
@@ -695,6 +756,7 @@ class SeEngine3:
                         self.PWDMAX,
                         len(so),
                         self.NSG // len(so),
+                        GX,
                     ],
                     runtime_args=c_rt,
                     config=comp,

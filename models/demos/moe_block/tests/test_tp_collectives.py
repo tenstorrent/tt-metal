@@ -60,6 +60,8 @@ CASES = {
     # name: (rows, cols) per chip of the input, op kind, gather / scatter dim
     "glm_x_ag": ((2560, 1024), "ag", 3),
     "k3_x_ag": ((2560, 1792), "ag", 3),
+    "glm_x_ag640": ((640, 1024), "ag", 3),  # (Galaxy per-chip rows)
+    "k3_x_ag640": ((640, 1792), "ag", 3),
     "glm_tail_ag": ((640, 4096), "ag", 2),
     "k3_tail_ag": ((640, 3584), "ag", 2),
     "glm_se_rs": ((2560, 4096), "rs", 3),
@@ -274,8 +276,14 @@ def test_tp_gather(mesh_device, device_params):
     for name in os.environ.get("TPG_CASES", "glm_x_ag,k3_x_ag").split(","):
         shape, _, _ = CASES[name]
         _, x = _dev(mesh_device, shape, 1)
+        col11 = bool(os.environ.get("TPG_COL11"))  # (the fused head's single mover column, simple placement)
         opts = dict(
-            num_links=int(os.environ.get("TPG_LINKS", "2")), chunk_rows=int(os.environ.get("TPG_CHUNK", "0")) or None
+            num_links=int(os.environ.get("TPG_LINKS", "2")),
+            chunk_rows=int(os.environ.get("TPG_CHUNK", "0")) or None,
+            sub_core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(11, 0), ttnn.CoreCoord(11, 9))])
+            if col11
+            else None,
+            placement="simple" if col11 else "auto",
         )
         run = tp_gather_prepare(mesh_device, *shape, **opts)
         res = {}

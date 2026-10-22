@@ -274,6 +274,8 @@ class HeadSE3:
                     x_k0=p * self.xg.klt,
                     x_ct=self.xg.klt,
                     shard_order=self.xg.order(coord)[0],
+                    ports=self.xg.port_cores(coord),
+                    xloaded=self.xg.xloaded,
                     extra_sem_cores=[self.xg.watcher_core(coord)],
                 )
                 prog.cbs, prog.semaphores = c0 + c1, sems

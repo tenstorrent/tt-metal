@@ -75,6 +75,11 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(a++), xown = get_arg_val<uint32_t>(a++), v = get_arg_val<uint32_t>(a++);
     const uint32_t arrival = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++), up_ipc = get_arg_val<uint32_t>(a++);
     const uint32_t ent = a, T = ent + 4 * n;  // entries (q, part, up_base within a chunk, packets a chunk); tables
+    // (after the tables: the engine's "own shard loaded" counter here and its full count)
+    const uint32_t xl0 = T + G + S0 + S1 + 3 * GX + GY;
+    volatile tt_l1_ptr uint32_t* xloaded = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(xl0));
+    const uint32_t xl_need = get_arg_val<uint32_t>(xl0 + 1);
+    bool xl = false;
     const auto x = TensorAccessor(x_args, x_addr, 2048);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival);
     uint32_t batch = 0, wptr = 0;
@@ -89,8 +94,14 @@ void kernel_main() {
                     wptr = get_write_ptr(0);
                 }
                 const uint32_t dst = wptr + batch * RP * 2048;
-                if (k == 0) {  // my own shard, from DRAM x [rows, KLT]
-                    for (uint32_t t = 0; t < np; ++t) noc_async_read(x.get_noc_addr(R * KLT + kj + t), dst + t * 2048, 2048);
+                if (k == 0) {  // my own shard: from the engine's x-own L1 once every engine core loaded it (no DRAM here:
+                               // the DRAM is the engine's weight load's)
+                    if (!xl) {
+                        noc_semaphore_wait_min(xloaded, xl_need);
+                        xl = true;
+                    }
+                    const Dst d = dst_of(T, xown, m, R, j, kk0);
+                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
                 } else {  // relay: upstream's packet idx of (chunk m, its entry k - 1) landed here
                     noc_semaphore_wait_min(arrived, m * up_ipc + up_base + idx / INC + 1);
                     const Dst d = dst_of(T, xown, m, R, j, kk0);
@@ -105,6 +116,9 @@ void kernel_main() {
                 }
             });
         }
+    noc_semaphore_wait_min(xloaded, xl_need);  // (re-arm: every engine core counted itself on every port)
+    noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(xloaded)), 0u - xl_need);
+    noc_async_atomic_barrier();
 }
 """
 )
@@ -310,9 +324,9 @@ class XGather3:
                 assert all(part == 0 for _, part in ch["rings"][0][d][:-1]), "a relay's upstream entry must be whole"
         cores = sorted({(c.x, c.y) for ch in self.chips.values() for c in list(ch["ports"].values()) + ch["copy"][:1]})
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(2 + 2 * num_links)]
+        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3 + 2 * num_links)]
         addrs = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
-        self.arrival, self.ready = addrs[0], addrs[1]
+        self.arrival, self.ready, self.xloaded = addrs[0], addrs[1], addrs[-1]
         self.watch = {
             (d, v): addrs[2 + i * num_links + v] for i, d in enumerate(("fwd", "bwd")) for v in range(num_links)
         }
@@ -322,6 +336,11 @@ class XGather3:
         e = self.eng
         rows = sum(1 for R in range(e.CR) if (R // 2) % self.nv == v and (part == 0 or (R & 1) == part - 1))
         return rows * self.sps * -(-e.KB // self.rp)
+
+    def port_cores(self, coord):
+        """This chip's port cores (NoC): the engine counts its own-shard x load on each (xloaded)."""
+        virt = self.mesh.worker_core_from_logical_core
+        return [(virt(c).x, virt(c).y) for c in self.chips[coord]["ports"].values()]
 
     def watcher_core(self, coord):
         return self.chips[coord]["copy"][0]
@@ -382,7 +401,12 @@ class XGather3:
                 streams_in.append(self.watch[(d, v)])
             ent_r = [x_ for q, part, ub, npk in mine for x_ in (q, part, ub, npk)]
             ent_s = [x_ for q, part, ub, npk in mine for x_ in (q, part, npk)]
-            rd_rt[core.x][core.y] = [int(x.buffer_address()), xown, v, self.arrival, len(mine), acc] + ent_r + T
+            rd_rt[core.x][core.y] = (
+                [int(x.buffer_address()), xown, v, self.arrival, len(mine), acc]
+                + ent_r
+                + T
+                + [self.xloaded, e.GX * e.GY]
+            )
             args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
             if peer is not None and rg.get(f"{d}_links"):
                 pp = {(dd, ll): cc for (_, dd, ll), cc in chips[peer]["ports"].items()}

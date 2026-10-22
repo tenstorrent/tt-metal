@@ -420,3 +420,22 @@ the same order. h-all single-buffered when there is one chunk (K3's arena was 1.
 Secondary check (chunk 5120 = 2560 rows a mesh row): GLM-Flash 524 us (was 541); K3 does not fit L1 (its x alone is
 334 KB a core even spread over all 11 columns, and the shard-major families concentrate it on 4 owner columns) -
 the fused head now picks the largest K step whose arena fits, and says so when none does.
+
+### Lever 3: the K3 gather starved by the weight load - weights streamed a window ahead; h a block a column
+Narrowing why K3's gather took ~310 us inside the head (182 alone on the same column; GLM-Flash unaffected), each one
+variable: no x data multicast / no W data multicast / both / no matmuls / K steps of 4 (exact 4-tile packets, 7
+owners a family) / the own shard sent from the engine's L1 instead of DRAM with the weights' DRAM reads after the x
+load - the gather stayed at ~300-345 us every time. Per port (device 0, a line end): the ports sending its shard ran
+~6 GB/s a link (23.6 is the link) and finished at ~178 us. The burst it ran into: all 110 cores issuing their whole
+W-own (35 MB) at the start. Fix: **the weights' DRAM reads go in stream order a window of 3 blocks ahead of the
+column's sends** (issued, tracked by transaction id, waited on at send) - spread over gate / up at the stream's rate.
+Kept too: the gather's own shard from the engine's L1 (each engine core counts its x load on the ports; its W reads
+start after it), and h-all as one [MT][POMAX] block a column (11 kernel_lib rounds, not 22).
+| x chain, us (PCC) | GLM-Flash | K3 |
+|---|---|---|
+| lever 2b | 167 | 449 |
+| h a block a column | 161.5 | 444 |
+| **W prefetch window (+ own shard from L1)** | **163** (0.99981) | **377-380** (0.99973) |
+| floor / 2x target | 95 / 190 - **1.72x** | 212 / 424 - **1.78x** |
+K3 per chip: gather ends 222-253 us (was 300-334), engine 326-377. Engine alone: K3 318 us (133 TFLOP/s), GLM 99.
+Both x chains are within 2x of their floors.
