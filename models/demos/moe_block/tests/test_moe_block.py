@@ -153,22 +153,30 @@ def test_moe_block(mesh_device, device_params, model, chunk):
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0))
     logger.info(f"MoEBlock {model}: built in {time.perf_counter() - t0:.1f} s")
     g = block.geometry
-    x = torch.randn(T, H, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
-    xt = ttnn.from_torch(
-        x.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
-    )
+    # (every call its own x - and so its own routing: stale data from the previous call cannot pass the checks)
+    NX = 3 + 2 * ITERS
+    xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(1000 + k)).to(torch.bfloat16) for k in range(NX)]
+    xts = [
+        ttnn.from_torch(
+            x_.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+        )
+        for x_ in xs
+    ]
+    nxt = iter(range(NX))
 
     def run(keep=False):
         block.keep_taps = keep
-        out = block(xt)
+        k = next(nxt)
+        out = block(xts[k])
         ttnn.synchronize_device(mesh_device)
-        return out
+        return out, k
 
-    # correctness: the first call (and a repeat - the exchange is built in the first one)
-    for call in range(2):
-        out = run(keep=True)
+    # correctness: three calls, each on its own x against its own reference (the exchange is built in the first one)
+    for call in range(3):
+        out, k = run(keep=True)
+        x = xs[k]
         y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
         ttnn.deallocate(out)
         ids_d, wts_d = device_routing(block.taps()["rows"], g.tokens_per_chip, m.top_k)
@@ -195,7 +203,7 @@ def test_moe_block(mesh_device, device_params, model, chunk):
 
         block.stage_hook = hook
         for _ in range(ITERS):
-            ttnn.deallocate(run())
+            ttnn.deallocate(run()[0])
         block.stage_hook = None
         total = 0.0
         for name, v in stage.items():
@@ -207,6 +215,7 @@ def test_moe_block(mesh_device, device_params, model, chunk):
     ws = []
     for _ in range(ITERS):
         ttnn.synchronize_device(mesh_device)
+        xt = xts[next(nxt)]
         t0 = time.perf_counter()
         out = block(xt)
         ttnn.synchronize_device(mesh_device)

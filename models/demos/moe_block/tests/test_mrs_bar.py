@@ -15,7 +15,7 @@ from ttnn.operations.ccl import Topology
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
-from models.demos.moe_block.tests.test_tp_collectives import _time
+from models.demos.moe_block.tests.test_tp_collectives import _calls, gen, ncalls
 
 R, C = 2, 4
 
@@ -40,8 +40,8 @@ def test_mrs_bar(mesh_device, device_params):
     for name in os.environ.get("MRS_CASES", ",".join(SHAPES)).split(","):
         I, H, sd = SHAPES[name]
         g = torch.Generator().manual_seed(5)
-        h = torch.randn(R, C, rows, I, generator=g).to(torch.bfloat16)
         w = (torch.randn(R, C, I, H, generator=g) * I**-0.5).to(torch.bfloat16)
+        hs = [torch.randn(R, C, rows, I, generator=gen(5, k)).to(torch.bfloat16) for k in range(ncalls())]  # (per call)
 
         def dev(t, dtype):
             glob = torch.cat([torch.cat(list(t[r]), dim=1) for r in range(R)], dim=0)
@@ -54,22 +54,28 @@ def test_mrs_bar(mesh_device, device_params):
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
             )
 
-        ht, wt = dev(h, ttnn.bfloat16), dev(w, ttnn.bfloat8_b)
+        hts, wt = [dev(h, ttnn.bfloat16) for h in hs], dev(w, ttnn.bfloat8_b)
         wq = ttnn.to_torch(
             wt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(0, 1))
         ).float()
         wq = torch.stack([torch.stack(list(wq[r * I : (r + 1) * I].split(H, dim=1))) for r in range(R)])
-        run = lambda: matmul_reduce_scatter(
-            ht, wt, cluster_axis=1, scatter_dim=sd, topology=Topology.Linear, num_links=links
+        run = lambda k: matmul_reduce_scatter(
+            hts[k], wt, cluster_axis=1, scatter_dim=sd, topology=Topology.Linear, num_links=links
         )
-        us, y = _time(mesh_device, run)
-        ys = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(y)]
-        worst = 1.0
-        for r in range(R):
-            total = sum(h[r, c].float() @ wq[r, c] for c in range(C))
-            for c in range(C):
-                worst = min(worst, pcc(ys[r * C + c].reshape(-1), torch.chunk(total, C, dim=sd)[c].reshape(-1)))
-        logger.info(f"MRS {name} rows {rows} links {links}: {us} us, worst PCC {worst:.6f}")
-        assert worst > 0.999
-        for t in (ht, wt, y):
+
+        def check(k, y):  # (call k against its own h)
+            ys = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(y)]
+            worst = 1.0
+            for r in range(R):
+                total = sum(hs[k][r, c].float() @ wq[r, c] for c in range(C))
+                for c in range(C):
+                    worst = min(worst, pcc(ys[r * C + c].reshape(-1), torch.chunk(total, C, dim=sd)[c].reshape(-1)))
+            assert worst > 0.999, (k, worst)
+            return worst
+
+        us, ws = _calls(mesh_device, run, check)
+        logger.info(
+            f"MRS {name} rows {rows} links {links}: {us} us, worst PCC {min(ws):.6f} ({len(ws)} calls, each its own h)"
+        )
+        for t in hts + [wt]:
             ttnn.deallocate(t)

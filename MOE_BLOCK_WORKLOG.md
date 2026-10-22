@@ -786,3 +786,20 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Plan choices: router_on_engine True for every plan; logits_priority True with the router on the engine (also on
   the line). K3 LoudBox 504 us from the mesh's last launch (524 eager), Galaxy-projected 366 us = 2.15x of 170: the
   SE path binds by ~75 us over the chain. GLM 193-196 us = 2.12-2.15x of 91: the chain binds (SE 162).
+
+### Every multi-call test: its own inputs a call, each call checked against its own reference
+- Two bugs hid behind identical inputs every call (the logits port's send order; the engine-mode hand-offs above).
+  tests/test_tp_collectives.py: _calls(mesh, run(k), check(k, out)) + gen(seed, k) / ncalls() (1 + ITERS with the
+  profiler, call 0 untimed; else 3) replace _time. Converted: test_head_se3 (x per call - its own routing; every check
+  per call: SE / RS output, joint rows vs the host's routing, latent dispatch rows, planner tables, route words),
+  test_se_engine3, test_lin2c, test_lin2c_chain, test_head_xchain, test_se_engine, test_head_se, test_mrs_bar,
+  test_tp_collectives / test_tp_gather / test_agmm_bar (vs host collectives of each call's x, not vs ttnn's output on
+  the same x), test_moe_block (3 checked calls, each its own x; the timing calls on further distinct inputs).
+- The check catches the hand-off bug: the PACK wait off -> GLM picks 6.95% on call 0, assert.
+- Current defaults, 6 calls each its own x, all pass: GLM picks 99.14-99.45% a call, SE+RS PCC 0.99988, dispatch rows
+  / planner / route words bit-exact; LoudBox 262 us from the mesh's last launch (285-290 eager), Galaxy-projected 198
+  (SE 162, chain 198) = 2.17x of 91. K3 picks 99.14-99.49%, PCC 0.99985, latent rows >= 0.99992, plans / route words
+  bit-exact; 494 us (514-522 eager), Galaxy 366 (SE 366, chain 293) = 2.15x of 170.
+- Pass (3 calls each): se_engine3, mrs_bar, lin2c, lin2c_chain, tp_collectives, tp_gather (bit-exact), agmm_bar's
+  ag+mm2d. Failing on HEAD too (legacy, superseded by v3): test_head_xchain (NaN), test_se_engine (0.985),
+  test_head_se (0.85); the fused agmm variants and a2a_generic throw as before.

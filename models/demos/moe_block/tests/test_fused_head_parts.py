@@ -15,7 +15,7 @@ from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.moe_block.moe_block import ExpertActivation, act_host
-from models.demos.moe_block.tests.test_tp_collectives import _time
+from models.demos.moe_block.tests.test_tp_collectives import _calls, gen, ncalls
 
 R, C = 2, 4
 
@@ -35,6 +35,43 @@ def pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1].item()
 
 
+def _repl(mesh, t):
+    return ttnn.from_torch(
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _sharded(mesh, xs, rows, w):
+    """A chip's x slice [rows, w] each (xs: R x C of them) as one mesh tensor."""
+    return ttnn.from_torch(
+        torch.stack(xs).view(R, C, rows, w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, 1), mesh_shape=(R, C)),
+    )
+
+
+def _act(glu):
+    return ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
+
+
+def _lin_ref(x, w, N, glu):
+    ref = x @ w
+    return act_host(_act(glu), ref[:, : N // 2], ref[:, N // 2 :]) if glu else ref
+
+
+def _se_ref(x, wg, wd, I, glu):
+    hh = x @ wg
+    return act_host(_act(glu), hh[:, :I], hh[:, I:]) @ wd
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(4096), l1_small_size=0))],
@@ -50,51 +87,47 @@ def test_lin2c(mesh_device, device_params):
         K, N, glu, GX = LIN[name]
         eng = Lin2c(mesh_device, cx0=0, GX=GX, GY=GY, MC=MC, K=K, N=N, glu=glu, MT=MT)
         g = torch.Generator().manual_seed(3)
-        x = torch.randn(rows, K, generator=g)
         ws = [torch.randn(K, N, generator=g) * 0.02 for _ in range(R * C)]
+        xsk = [torch.randn(rows, K, generator=gen(3, k)) for k in range(ncalls())]  # (every call its own x)
         if glu:  # (W columns [gate | up] -> tile pairs)
             ws_dev = [glu_weight(w[:, : N // 2], w[:, N // 2 :]) for w in ws]
         else:
             ws_dev = ws
         wl = eng.upload(ws_dev)
-        xt = ttnn.from_torch(
-            x.view(1, 1, rows, K),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        us, y = _time(mesh_device, lambda: eng.run_alone(xt, wl))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
-        ps = []
-        for d in range(R * C):
-            ref = x @ ws[d]
-            if glu:
-                ref = act_host(
-                    ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu"),
-                    ref[:, : N // 2],
-                    ref[:, N // 2 :],
-                )
-            ps.append(pcc(ys[d], ref))
-            if d == 0 and os.environ.get("L2C_DIAG"):  # (per chunk x column-group block)
-                M_ = 32 * GY
-                for m in range(MC):
-                    row = [
-                        round(
-                            pcc(ys[0][m * M_ : (m + 1) * M_, c0 : c0 + 32], ref[m * M_ : (m + 1) * M_, c0 : c0 + 32]), 3
-                        )
-                        for c0 in range(0, ys[0].shape[1], 32)
-                    ]
-                    logger.info(f"L2C diag chunk {m}: per output tile column {row}")
+        xts = [_repl(mesh_device, x.view(1, 1, rows, K)) for x in xsk]
+
+        def check(k, y):
+            x = xsk[k]
+            ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+            ps = []
+            for d in range(R * C):
+                ps.append(pcc(ys[d], _lin_ref(x, ws[d], N, glu)))
+                if d == 0 and k == 0 and os.environ.get("L2C_DIAG"):  # (per chunk x column-group block)
+                    ref = _lin_ref(x, ws[d], N, glu)
+                    M_ = 32 * GY
+                    for m in range(MC):
+                        row = [
+                            round(
+                                pcc(
+                                    ys[0][m * M_ : (m + 1) * M_, c0 : c0 + 32], ref[m * M_ : (m + 1) * M_, c0 : c0 + 32]
+                                ),
+                                3,
+                            )
+                            for c0 in range(0, ys[0].shape[1], 32)
+                        ]
+                        logger.info(f"L2C diag chunk {m}: per output tile column {row}")
+            assert min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, ps = _calls(mesh_device, lambda k: eng.run_alone(xts[k], wl), check)
         flops = 2 * rows * K * N
         logger.info(
             f"L2C {name} MT {MT} M {rows} K {K} N {N} glu {glu} GX {GX}: {us if us is None else round(us, 1)} us"
             + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
-            + f", PCC min {min(ps):.5f}"
+            + f", PCC min {min(ps):.5f} ({len(ps)} calls, each its own x)"
         )
-        assert min(ps) > 0.999, ps
-        ttnn.deallocate(y)
+        for xt in xts:
+            ttnn.deallocate(xt)
 
 
 # name: (H, 2 I a chip (gate / up), glu, gate / up columns, down columns)
@@ -324,34 +357,28 @@ def test_lin2c_chain(mesh_device, device_params):
         gu = Lin2c(mesh_device, cx0=0, GX=g1, GY=GY, MC=MC, K=H, N=N, glu=glu, MT=MT)
         dn = Lin2c(mesh_device, cx0=g1, GX=g2, GY=GY, MC=MC, K=I, N=H, xr_need=g1, MT=MT)
         g = torch.Generator().manual_seed(5)
-        x = torch.randn(rows, H, generator=g)
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         wl = gu.upload([glu_weight(w[:, :I], w[:, I:]) for w in wg])
         wld = dn.upload(wd)
-        xt = ttnn.from_torch(
-            x.view(1, 1, rows, H),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        us, y = _time(mesh_device, lambda: gu.run_chain(dn, xt, wl, wld))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
-        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps = []
-        for d in range(R * C):
-            hh = x @ wg[d]
-            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        xsk = [torch.randn(rows, H, generator=gen(5, k)) for k in range(ncalls())]  # (every call its own x)
+        xts = [_repl(mesh_device, x.view(1, 1, rows, H)) for x in xsk]
+
+        def check(k, y):
+            ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+            ps = [pcc(ys[d], _se_ref(xsk[k], wg[d], wd[d], I, glu)) for d in range(R * C)]
+            assert min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, ps = _calls(mesh_device, lambda k: gu.run_chain(dn, xts[k], wl, wld), check)
         flops = 2 * rows * H * N + 2 * rows * I * H
         logger.info(
             f"L2C chain {name} MT {MT} M {rows} H {H} I {I} cols {g1} + {g2}: {us if us is None else round(us, 1)} us"
             + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
-            + f", PCC min {min(ps):.5f}"
+            + f", PCC min {min(ps):.5f} ({len(ps)} calls, each its own x)"
         )
-        assert min(ps) > 0.999, ps
-        ttnn.deallocate(y)
+        for xt in xts:
+            ttnn.deallocate(xt)
 
 
 @pytest.mark.parametrize(
@@ -404,34 +431,29 @@ def test_head_xchain(mesh_device, device_params):
         )
         head = HeadXChain(mesh_device, rows=rows, H=H, I=I, glu=glu, probe=probe, layout=layout)
         g = torch.Generator().manual_seed(7)
-        xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         wts = head.upload([glu_weight(w[:, :I], w[:, I:]) for w in wg], wd)
-        xt = ttnn.from_torch(
-            torch.stack(xs).view(R, C, rows, H // C),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
-        )
-        us, y = _time(mesh_device, lambda: head.run(xt, wts))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
-        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps = []
-        for d in range(R * C):
-            r = d // C
-            xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
-            hh = xf @ wg[d]
-            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        xss = [[torch.randn(rows, H // C, generator=gen(7, k)) for _ in range(R * C)] for k in range(ncalls())]
+        xts = [_sharded(mesh_device, xs, rows, H // C) for xs in xss]
+
+        def check(k, y):
+            ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+            ps = []
+            for d in range(R * C):
+                r = d // C
+                xf = torch.cat([xss[k][r * C + c] for c in range(C)], dim=1)
+                ps.append(pcc(ys[d], _se_ref(xf, wg[d], wd[d], I, glu)))
+            assert probe or min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, ps = _calls(mesh_device, lambda k: head.run(xts[k], wts), check)
         logger.info(
             f"HXC {name} {probe or 'fused'} rows {rows} H {H} I {I} layout {head.layout}: {us if us is None else round(us, 1)} us,"
-            f" PCC min {min(ps):.5f}"
+            f" PCC min {min(ps):.5f} ({len(ps)} calls, each its own x)"
         )
-        assert probe or min(ps) > 0.999, ps
-        ttnn.deallocate(y)
-        ttnn.deallocate(xt)
+        for xt in xts:
+            ttnn.deallocate(xt)
 
 
 @pytest.mark.parametrize(
@@ -460,45 +482,40 @@ def test_se_engine(mesh_device, device_params):
             + ", ".join(f"{k} {eng.base + v:#x}" for k, v in eng.off.items())
         )
         g = torch.Generator().manual_seed(5)
-        x = torch.randn(rows, H, generator=g)
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         w = eng.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
-        xt = ttnn.from_torch(
-            x.view(1, 1, rows, H),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        us, y = _time(mesh_device, lambda: eng.run_alone(xt, w))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
-        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps = []
-        for d in range(R * C):
-            hh = x @ wg[d]
-            ref = act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]
-            ps.append(pcc(ys[d], ref))
-            if os.environ.get("SE_DIAG") and ps[-1] < 0.999:  # (debug) per row tile: per 32-column block PCC (x100)
-                hd = act_host(act, hh[:, :I], hh[:, I:])
-                for r0 in range(0, rows, 32):
-                    row = [
-                        int(100 * pcc(ys[d][r0 : r0 + 32, c0 : c0 + 32], ref[r0 : r0 + 32, c0 : c0 + 32]))
-                        for c0 in range(0, H, 32)
-                    ]
-                    logger.info(f"SEE diag dev {d} row tile {r0 // 32}: {row}")
+        xsk = [torch.randn(rows, H, generator=gen(5, k)) for k in range(ncalls())]  # (every call its own x)
+        xts = [_repl(mesh_device, x.view(1, 1, rows, H)) for x in xsk]
+
+        def check(k, y):
+            ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+            ps = []
+            for d in range(R * C):
+                ref = _se_ref(xsk[k], wg[d], wd[d], I, glu)
+                ps.append(pcc(ys[d], ref))
+                if os.environ.get("SE_DIAG") and ps[-1] < 0.999:  # (debug) per row tile: per 32-column block PCC (x100)
+                    for r0 in range(0, rows, 32):
+                        row = [
+                            int(100 * pcc(ys[d][r0 : r0 + 32, c0 : c0 + 32], ref[r0 : r0 + 32, c0 : c0 + 32]))
+                            for c0 in range(0, H, 32)
+                        ]
+                        logger.info(f"SEE diag call {k} dev {d} row tile {r0 // 32}: {row}")
+            assert min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, ps = _calls(mesh_device, lambda k: eng.run_alone(xts[k], w), check)
         db = eng.dram_bytes()
         flops = 2 * rows * H * N + 2 * rows * I * H
         logger.info(
             f"SEE {name} rows {rows} H {H} I {I} GX {eng.GX} KB {eng.KB} NPD {eng.NPD} arena {eng.arena_bytes // 1024} KB: "
             f"{us if us is None else round(us, 1)} us"
             + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
-            + f", PCC min {min(ps):.5f}; DRAM a call: W {db['w'] / 1e6:.1f} MB (lin2c chain: "
+            + f", PCC min {min(ps):.5f} ({len(ps)} calls, each its own x); DRAM a call: W {db['w'] / 1e6:.1f} MB (lin2c chain: "
             f"{(H * N + I * H) * 1088 / 1024 * 8 / 1e6:.1f}), x {db['x'] / 1e6:.1f}, y {db['y'] / 1e6:.1f}"
         )
-        assert min(ps) > 0.999, ps
-        ttnn.deallocate(y)
+        for xt in xts:
+            ttnn.deallocate(xt)
 
 
 @pytest.mark.parametrize(
@@ -518,34 +535,29 @@ def test_head_se(mesh_device, device_params):
         I = N // 2
         head = HeadSE(mesh_device, rows=rows, H=H, I=I, glu=glu)
         g = torch.Generator().manual_seed(7)
-        xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         w = head.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
-        xt = ttnn.from_torch(
-            torch.stack(xs).view(R, C, rows, H // C),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
-        )
-        us, y = _time(mesh_device, lambda: head.run(xt, w))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
-        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps = []
-        for d in range(R * C):
-            r = d // C
-            xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
-            hh = xf @ wg[d]
-            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        xss = [[torch.randn(rows, H // C, generator=gen(7, k)) for _ in range(R * C)] for k in range(ncalls())]
+        xts = [_sharded(mesh_device, xs, rows, H // C) for xs in xss]
+
+        def check(k, y):
+            ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+            ps = []
+            for d in range(R * C):
+                r = d // C
+                xf = torch.cat([xss[k][r * C + c] for c in range(C)], dim=1)
+                ps.append(pcc(ys[d], _se_ref(xf, wg[d], wd[d], I, glu)))
+            assert min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, ps = _calls(mesh_device, lambda k: head.run(xts[k], w), check)
         logger.info(
             f"HSE {name} rows {rows} H {H} I {I}: {us if us is None else round(us, 1)} us, PCC min {min(ps):.5f}"
-            f" (orders: {[head.xg.order(c)[0] for c in sorted(head.xg.chips)][:4]})"
+            f" ({len(ps)} calls, each its own x; orders: {[head.xg.order(c)[0] for c in sorted(head.xg.chips)][:4]})"
         )
-        assert min(ps) > 0.999, ps
-        ttnn.deallocate(y)
-        ttnn.deallocate(xt)
+        for xt in xts:
+            ttnn.deallocate(xt)
 
 
 @pytest.mark.parametrize(
@@ -574,33 +586,27 @@ def test_se_engine3(mesh_device, device_params):
             f"arena {eng.arena_bytes // 1024} KB"
         )
         g = torch.Generator().manual_seed(5)
-        x = torch.randn(rows, H, generator=g)
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         w = eng.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
-        xt = ttnn.from_torch(
-            x.view(1, 1, rows, H),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        us, y = _time(mesh_device, lambda: eng.run_alone(xt, w))
-        ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
-        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps = []
-        for d in range(R * C):
-            hh = x @ wg[d]
-            ps.append(pcc(ys[d], act_host(act, hh[:, :I], hh[:, I:]) @ wd[d]))
+        xsk = [torch.randn(rows, H, generator=gen(5, k)) for k in range(ncalls())]  # (every call its own x)
+        xts = [_repl(mesh_device, x.view(1, 1, rows, H)) for x in xsk]
+
+        def check(k, y):
+            ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
+            ps = [pcc(ys[d], _se_ref(xsk[k], wg[d], wd[d], I, glu)) for d in range(R * C)]
+            assert min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, ps = _calls(mesh_device, lambda k: eng.run_alone(xts[k], w), check)
         flops = 2 * rows * H * N + 2 * rows * I * H
         logger.info(
             f"SE3 {name} rows {rows} H {H} I {I}: {us if us is None else round(us, 1)} us"
             + ("" if us is None else f" ({flops / us / 1e6:.0f} TFLOP/s)")
-            + f", PCC min {min(ps):.5f}"
+            + f", PCC min {min(ps):.5f} ({len(ps)} calls, each its own x)"
         )
-        assert min(ps) > 0.999, ps
-        ttnn.deallocate(y)
+        for xt in xts:
+            ttnn.deallocate(xt)
         ttnn.deallocate(eng.arena)
 
 
@@ -634,7 +640,6 @@ def test_head_se3(mesh_device, device_params):
             routing=ROUTING[name] if os.environ.get("SE_ROUTING") else None,  # (+ the routing exchange + planner)
         )
         g = torch.Generator().manual_seed(7)
-        xs = [torch.randn(rows, H // C, generator=g) for _ in range(R * C)]
         wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
         wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
         w_l = None
@@ -647,15 +652,52 @@ def test_head_se3(mesh_device, device_params):
             spec = ROUTER[name]
             w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
             head.upload_router(w_r, b_r)
-        xt = ttnn.from_torch(
-            torch.stack(xs).view(R, C, rows, H // C),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
-        )
-        us, y = _time(mesh_device, lambda: head.run(xt, w))
+        # (every call its own x - and so its own routing: each call checked against its own reference)
+        xss = [[torch.randn(rows, H // C, generator=gen(7, k)) for _ in range(R * C)] for k in range(ncalls())]
+        xts = [
+            ttnn.from_torch(
+                torch.stack(xs).view(R, C, rows, H // C),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
+            )
+            for xs in xss
+        ]
+        act = _act(glu)
+
+        def check(k, y):
+            xs = xss[k]
+            if head.router is not None:
+                _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
+            if head.latent and "xbuf" not in head.outputs:
+                _check_latent(head, xs, w_l, rows, name)
+            if "xbuf" in head.outputs:
+                _check_xbuf(head, xs, w_l, rows, name)
+            if head.routing is not None:
+                _check_plan(head, rows, name)
+                if "route" in head.outputs:
+                    _check_route(head, rows, name)
+            ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
+            ps, refs = [], []
+            for d in range(R * C):
+                r = d // C
+                xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
+                hh = xf @ wg[d]
+                refs.append(act_host(act, hh[:, :I], hh[:, I:]) @ wd[d])
+            for d in range(R * C):
+                r, c = divmod(d, C)
+                if head.rs_dim is None:
+                    ps.append(pcc(ys[d], refs[d].reshape(-1)))
+                else:  # (chip (r, c): block c of the sum over its TP row)
+                    tot = sum(refs[r * C + cc] for cc in range(C))
+                    ps.append(pcc(ys[d], torch.chunk(tot, C, dim=head.rs_dim)[c].reshape(-1)))
+            logger.info(f"HSE3 {name} call {k}: PCC min {min(ps):.5f}")
+            assert os.environ.get("SE_PROBE") or min(ps) > 0.999, (k, ps)
+            return min(ps)
+
+        us, pss = _calls(mesh_device, lambda k: head.run(xts[k], w), check)
         if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":  # (the skew-corrected projection's map: each mesh row's
             # devices by TP position, next to the profile - tests/galaxy_projection.py)
             import json
@@ -665,38 +707,13 @@ def test_head_se3(mesh_device, device_params):
                 rmap[coord[0]][ch["rings"][0]["p"]] = mesh_device.get_device_id(ttnn.MeshCoordinate(*coord))
             os.makedirs("generated/profiler/.logs", exist_ok=True)
             json.dump(rmap, open("generated/profiler/.logs/head_map.json", "w"))
-        if head.router is not None:
-            _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
-        if head.latent and "xbuf" not in head.outputs:
-            _check_latent(head, xs, w_l, rows, name)
-        if "xbuf" in head.outputs:
-            _check_xbuf(head, xs, w_l, rows, name)
-        if head.routing is not None:
-            _check_plan(head, rows, name)
-            if "route" in head.outputs:
-                _check_route(head, rows, name)
-        ys = [ttnn.to_torch(t).float().reshape(-1) for t in ttnn.get_device_tensors(y)]
-        act = ExpertActivation(glu, beta=4.0, linear_beta=25.0) if glu == "situ" else ExpertActivation("silu")
-        ps, refs = [], []
-        for d in range(R * C):
-            r = d // C
-            xf = torch.cat([xs[r * C + c] for c in range(C)], dim=1)
-            hh = xf @ wg[d]
-            refs.append(act_host(act, hh[:, :I], hh[:, I:]) @ wd[d])
-        for d in range(R * C):
-            r, c = divmod(d, C)
-            if head.rs_dim is None:
-                ps.append(pcc(ys[d], refs[d].reshape(-1)))
-            else:  # (chip (r, c): block c of the sum over its TP row)
-                tot = sum(refs[r * C + cc] for cc in range(C))
-                ps.append(pcc(ys[d], torch.chunk(tot, C, dim=head.rs_dim)[c].reshape(-1)))
+        ps = pss
         logger.info(
             f"HSE3 {name}{' +RS ' + head.rs_mode if head.rs_dim else ''} rows {rows} H {H} I {I} chunks {head.eng.NCH} x {head.eng.CR * 32}: "
-            f"{us if us is None else round(us, 1)} us, PCC min {min(ps):.5f}"
+            f"{us if us is None else round(us, 1)} us, PCC min {min(ps):.5f} ({len(ps)} calls, each its own x)"
         )
-        assert os.environ.get("SE_PROBE") or min(ps) > 0.999, ps
-        ttnn.deallocate(y)
-        ttnn.deallocate(xt)
+        for xt in xts:
+            ttnn.deallocate(xt)
         if head.eng.arena.is_allocated():
             ttnn.deallocate(head.eng.arena)  # (the next model's arena needs the L1, unfragmented:)
         del head  # (the gather's global semaphores too)

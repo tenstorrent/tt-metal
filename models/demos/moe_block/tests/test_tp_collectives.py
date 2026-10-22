@@ -54,6 +54,64 @@ def _time(mesh, f):
     return statistics.median(ts), out
 
 
+CHECK_CALLS = 3  # (calls without the profiler: each on its own inputs, each checked)
+
+
+def ncalls():
+    """The calls a checked test makes: 1 + ITERS with the profiler (call 0 untimed), else CHECK_CALLS."""
+    return 1 + ITERS if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1" else CHECK_CALLS
+
+
+def gen(seed, k):
+    """Call k's input generator (every call its own inputs: stale data from the previous call cannot pass)."""
+    return torch.Generator().manual_seed(1000 * seed + k)
+
+
+def _calls(mesh, run, check, free=True):
+    """ncalls() calls, call k on its own inputs (run(k) -> out) and checked against its own reference (check(k, out) ->
+    its result; out deallocated after unless not free: a persistent buffer). Returns (median us of the slowest chip's summed program time over calls 1 ..,
+    None without the profiler; the checks' results)."""
+    prof = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    ts, res = [], []
+    for k in range(ncalls()):
+        out = run(k)
+        ttnn.synchronize_device(mesh)
+        if prof:
+            progs = [r for r in per_chip_programs(mesh) if r]
+            if k > 0:
+                ts.append(max(sum(r) for r in progs))
+                if os.environ.get("TIME_SPLIT"):  # (each program's slowest chip)
+                    logger.info(f"TIME_SPLIT {[round(max(r[i] for r in progs), 1) for i in range(len(progs[0]))]}")
+        res.append(check(k, out))
+        if free and out is not None and getattr(out, "is_allocated", lambda: False)():
+            ttnn.deallocate(out)
+    return (statistics.median(ts) if ts else None), res
+
+
+def _shard(xh, shape, r, c):
+    rows, cols = shape
+    return xh[r * rows : (r + 1) * rows, c * cols : (c + 1) * cols]
+
+
+def _coll_ref(xh, shape, kind, dim):
+    """The collective's every chip's output from the host x [R rows, C cols] (ag / rs / a2a over the TP axis), laid
+    out as _host(.., (2, 3)) lays the device's: chips' outputs concatenated by mesh row (dim 2) and column (dim 3)."""
+    d = {2: 0, 3: 1}
+    out = []
+    for r in range(R):
+        sh = [_shard(xh, shape, r, c).float() for c in range(C)]
+        if kind == "ag":
+            per = [torch.cat(sh, dim=d[dim])] * C
+        elif kind == "a2a":
+            ind, outd = dim
+            g = torch.cat(sh, dim=d[outd])
+            per = list(torch.chunk(g, C, dim=d[ind]))
+        else:
+            per = list(torch.chunk(sum(sh), C, dim=d[dim]))
+        out.append(torch.cat(per, dim=1))
+    return torch.cat(out, dim=0)
+
+
 def _host(mesh, t, dims):
     return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(R, C), dims=dims)).float()
 
@@ -90,7 +148,9 @@ def test_tp_collectives(mesh_device, device_params):
     for name, (shape, kind, dim) in CASES.items():
         if sel and name not in sel.split(","):
             continue
-        host, x = _dev(mesh_device, shape, 1, ttnn.float32 if kind == "rs32" else ttnn.bfloat16)
+        xdt = ttnn.float32 if kind == "rs32" else ttnn.bfloat16
+        xk = [_dev(mesh_device, shape, 1000 + k, xdt) for k in range(ncalls())]  # (every call its own x)
+        host, x = xk[0]
         if kind == "rs32":
             kind = "rs"
         rows, cols = shape
@@ -136,25 +196,35 @@ def test_tp_collectives(mesh_device, device_params):
                 cands["fabric_rs"] = lambda: fabric_reduce_scatter(
                     x, cluster_axis=1, topology=ttnn.Topology.Linear, num_links=2
                 )
+        refs = [
+            _coll_ref(h_.to(torch.bfloat16).float() if xdt == ttnn.bfloat16 else h_, shape, kind, dim) for h_, _ in xk
+        ]
+
+        def check(k, out):  # (call k vs the host's collective of its own x: the max error)
+            return (_host(mesh_device, out, (2, 3)) - refs[k]).abs().max().item()
+
         for cname, f in cands.items():
             try:
-                us, out = _time(mesh_device, f)
-                logger.info(f"TPC {name} {cname}: out per chip {list(out.shape)}")
-                y = _host(mesh_device, out, (2, 3))
-                if cname in ("ttnn", "ref_ag_part"):
-                    ref = y
-                err = (y - ref).abs().max().item() if ref is not None else float("nan")
-                res[cname] = (us, err)
-                if cname not in ("high_bw", "fabric_ag"):
-                    ttnn.deallocate(out)
+
+                def run(k, f=f):
+                    nonlocal x
+                    x = xk[k][1]  # (the candidates' lambdas read x)
+                    return f()
+
+                us, errs = _calls(mesh_device, run, check, free=cname not in ("high_bw", "fabric_ag"))
+                res[cname] = (us, max(errs))
             except Exception as e:  # (report and go on: some don't support the dim / layout)
                 res[cname] = (None, f"{type(e).__name__}: {str(e).splitlines()[0][:160]}")
         mb = rows * cols * 2 / 1e6
         logger.info(
             f"TPC {name:16s} {kind} dim {dim} shard {mb:.1f} MB: "
-            + "; ".join(f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err {v[1]})" for k, v in res.items())
+            + "; ".join(
+                f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err vs host, worst call {v[1]})"
+                for k, v in res.items()
+            )
         )
-        ttnn.deallocate(x)
+        for _, t in xk:
+            ttnn.deallocate(t)
 
 
 AGMM_CASES = {
@@ -181,7 +251,8 @@ def test_agmm_bar(mesh_device, device_params):
     )
     for name, (rows, kl, n) in AGMM_CASES.items():
         K = kl * C
-        _, x = _dev(mesh_device, (rows, kl), 1)
+        xk = [_dev(mesh_device, (rows, kl), 1000 + k) for k in range(ncalls())]  # (every call its own x)
+        x = xk[0][1]
         wt = torch.randn(K, n * C, generator=torch.Generator().manual_seed(2)) * 0.02
         res = {}
         for wdt in (ttnn.bfloat8_b,):
@@ -206,7 +277,8 @@ def test_agmm_bar(mesh_device, device_params):
                 ttnn.deallocate(xf)
                 return y
 
-            x8 = ttnn.typecast(x, ttnn.bfloat8_b)
+            x8s = [ttnn.typecast(t, ttnn.bfloat8_b) for _, t in xk]
+            x8 = x8s[0]
             gbuf = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, rows, K]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
             )
@@ -244,28 +316,53 @@ def test_agmm_bar(mesh_device, device_params):
                 "agmm_8x8": lambda: fused(8, 2, 4),
                 "agmm_4x9_1l": lambda: fused(9, 1, 4),
             }
-            ref = None
+            # (call k vs the host's: each mesh row's gathered x [rows, K] @ the chip's W columns)
+            refs = [
+                torch.cat(
+                    [
+                        torch.cat(
+                            [
+                                h_[r * rows : (r + 1) * rows].to(torch.bfloat16).float() @ wt[:, c * n : (c + 1) * n]
+                                for c in range(C)
+                            ],
+                            1,
+                        )
+                        for r in range(R)
+                    ],
+                    0,
+                )
+                for h_, _ in xk
+            ]
+
+            def check(k, out):
+                y = _host(mesh_device, out, (2, 3))
+                return torch.corrcoef(torch.stack([y.flatten(), refs[k].flatten()]))[0, 1].item()
+
             for vn, f in variants.items():
                 try:
-                    us, out = _time(mesh_device, f)
-                    y = _host(mesh_device, out, (2, 3))
-                    ttnn.deallocate(out)
-                    if ref is None:
-                        ref = y
-                    p = torch.corrcoef(torch.stack([y.flatten(), ref.flatten()]))[0, 1].item()
-                    res[vn] = (us, round(p, 5))
+
+                    def run(k, f=f):
+                        nonlocal x, x8
+                        x, x8 = xk[k][1], x8s[k]  # (the variants read x / x8)
+                        return f()
+
+                    us, ps = _calls(mesh_device, run, check)
+                    res[vn] = (us, round(min(ps), 5))
                 except Exception as e:
                     res[vn] = (None, f"{type(e).__name__}: {str(e).splitlines()[0][:200]}")
             ttnn.deallocate(w)
-            ttnn.deallocate(x8)
+            for t in x8s:
+                ttnn.deallocate(t)
             ttnn.deallocate(gbuf)
         logger.info(
             f"AGMM {name} rows {rows} K {K} N/chip {n}: "
             + "; ".join(
-                f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (PCC vs first {v[1]})" for k, v in res.items()
+                f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (PCC vs host, worst call {v[1]})"
+                for k, v in res.items()
             )
         )
-        ttnn.deallocate(x)
+        for _, t in xk:
+            ttnn.deallocate(t)
 
 
 @pytest.mark.parametrize(
@@ -279,7 +376,8 @@ def test_tp_gather(mesh_device, device_params):
 
     for name in os.environ.get("TPG_CASES", "glm_x_ag,k3_x_ag").split(","):
         shape, _, _ = CASES[name]
-        _, x = _dev(mesh_device, shape, 1)
+        xk = [_dev(mesh_device, shape, 1000 + k) for k in range(ncalls())]  # (every call its own x)
+        x = xk[0][1]
         col11 = bool(os.environ.get("TPG_COL11"))  # (the fused head's single mover column, simple placement)
         opts = dict(
             num_links=int(os.environ.get("TPG_LINKS", "2")),
@@ -291,17 +389,25 @@ def test_tp_gather(mesh_device, device_params):
         )
         run = tp_gather_prepare(mesh_device, *shape, **opts)
         res = {}
-        ref = _host(mesh_device, ttnn.all_gather(x, dim=3, cluster_axis=1), (2, 3))
+        refs = [_coll_ref(h_.to(torch.bfloat16).float(), shape, "ag", 3) for h_, _ in xk]
         for cname, f in {
-            "ttnn": lambda: ttnn.all_gather(x, dim=3, cluster_axis=1),
-            "tp_gather": lambda: run(x),
+            "ttnn": lambda t: ttnn.all_gather(t, dim=3, cluster_axis=1),
+            "tp_gather": lambda t: run(t),
         }.items():
-            us, out = _time(mesh_device, f)
-            y = _host(mesh_device, out, (2, 3))
-            ttnn.deallocate(out)
-            res[cname] = (us, (y - ref).abs().max().item())
+            us, errs = _calls(
+                mesh_device,
+                lambda k, f=f: f(xk[k][1]),
+                lambda k, out: (_host(mesh_device, out, (2, 3)) - refs[k]).abs().max().item(),
+            )
+            res[cname] = (us, max(errs))
+            if cname == "tp_gather":
+                assert max(errs) == 0, errs
         logger.info(
             f"TPG {name} shard {shape} {opts}: "
-            + "; ".join(f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err {v[1]})" for k, v in res.items())
+            + "; ".join(
+                f"{k} {v[0] if v[0] is None else round(v[0], 1)} us (max err vs host, worst call {v[1]})"
+                for k, v in res.items()
+            )
         )
-        ttnn.deallocate(x)
+        for _, t in xk:
+            ttnn.deallocate(t)
