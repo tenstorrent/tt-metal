@@ -107,32 +107,28 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
     is_emulated = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
 
-    try {
-        program.impl().allocate_circular_buffers(validation_device);
-        program.impl().validate_circular_buffer_core_ranges(validation_device);
-        program.impl().validate_circular_buffer_region(validation_device);
-        program.impl().allocate_dataflow_buffers(validation_device);
-        // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
-        // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
-        program.impl().reserve_runtime_arg_buffers();
-        // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
-        // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
-        program.impl().allocate_scratchpads(validation_device);
-        program.impl().validate_dataflow_buffer_region(validation_device);
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
+    // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
+    program.impl().reserve_runtime_arg_buffers();
+    // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
+    // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
+    program.impl().allocate_scratchpads(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
 
-        // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on
-        // hardware); a throw here is surfaced as an ASAN panic by the catch below.
-        if constexpr (emule::kEmuleAsanBuild) {
+    // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on hardware). Only its own throw
+    // is an ASAN finding; a CB/L1 allocation error above is the same exception silicon raises.
+    if constexpr (emule::kEmuleAsanBuild) {
+        try {
             emule::check_program_metadata_size(program);
-        }
-    } catch (const std::exception& e) {
-        // Surface the overflow as an ASAN panic when emulating; no-op otherwise.
-        // Routed through the facade so this TU carries no __emule_asan_panic
-        // reference in a non-emule build. Always rethrows.
-        if constexpr (emule::kEmuleAsanBuild) {
+        } catch (const std::exception& e) {
+            // Routed through the facade so this TU carries no __emule_asan_panic reference in a non-emule build.
             emule::report_metadata_overflow(is_emulated, e.what());
+            throw;
         }
-        throw;
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
